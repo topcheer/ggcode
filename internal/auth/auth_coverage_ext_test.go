@@ -254,7 +254,9 @@ func TestPollDeviceToken_OtherError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestValidateJWT_HS256Success(t *testing.T) {
-	tv, _ := NewTokenValidator("my-client", "https://example.com")
+	tv, _ := NewTokenValidator("my-client", "https://example.com",
+		WithHMACSecret("test-hmac-secret"),
+	)
 	claims := jwt.MapClaims{
 		"sub": "hs256-user",
 		"iss": "https://example.com",
@@ -262,7 +264,7 @@ func TestValidateJWT_HS256Success(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString([]byte("my-client"))
+	tokenString, _ := token.SignedString([]byte("test-hmac-secret"))
 
 	result, err := tv.ValidateToken(context.Background(), tokenString)
 	if err != nil {
@@ -273,7 +275,7 @@ func TestValidateJWT_HS256Success(t *testing.T) {
 	}
 }
 
-func TestValidateJWT_HS256NoClientID(t *testing.T) {
+func TestValidateJWT_HS256NoHMACSecret(t *testing.T) {
 	tv, _ := NewTokenValidator("", "https://example.com")
 	claims := jwt.MapClaims{
 		"sub": "user",
@@ -284,7 +286,7 @@ func TestValidateJWT_HS256NoClientID(t *testing.T) {
 
 	_, err := tv.ValidateToken(context.Background(), tokenString)
 	if err == nil {
-		t.Error("expected error: HMAC with no client_id")
+		t.Error("expected error: HMAC with no hmac_secret")
 	}
 }
 
@@ -367,7 +369,8 @@ func TestValidateJWT_RS256Success(t *testing.T) {
 	srv, privateKey := makeRSATestServer(t, "rsa-kid-1")
 
 	tv, _ := NewTokenValidator("test-client", srv.URL+"/.well-known/openid-configuration")
-	claims := jwt.MapClaims{"sub": "rsa-user", "exp": time.Now().Add(time.Hour).Unix()}
+	// OIDC discovery returns issuer "https://rsa-test.example.com" which overwrites issuerURL
+	claims := jwt.MapClaims{"sub": "rsa-user", "aud": "test-client", "iss": "https://rsa-test.example.com", "exp": time.Now().Add(time.Hour).Unix()}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "rsa-kid-1"
 	tokenString, _ := token.SignedString(privateKey)

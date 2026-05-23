@@ -1032,7 +1032,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			}
 		}
 		if issuerURL != "" && clientID != "" {
-			tv, err := auth.NewTokenValidator(clientID, issuerURL)
+			tv, err := auth.NewTokenValidator(clientID, issuerURL,
+				auth.WithHMACSecret(cfg.A2A.Auth.HMACSecret),
+				auth.WithValidIssuers(cfg.A2A.Auth.ValidIssuers),
+			)
 			if err != nil {
 				srv.Stop()
 				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
@@ -1050,7 +1053,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			}
 		}
 		if issuerURL != "" && clientID != "" {
-			tv, err := auth.NewTokenValidator(clientID, issuerURL)
+			tv, err := auth.NewTokenValidator(clientID, issuerURL,
+				auth.WithHMACSecret(cfg.A2A.Auth.HMACSecret),
+				auth.WithValidIssuers(cfg.A2A.Auth.ValidIssuers),
+			)
 			if err != nil {
 				srv.Stop()
 				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)

@@ -356,19 +356,47 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 //   - JWT tokens: verifies signature (via JWKS or HMAC), expiration, issuer, audience
 //   - Opaque tokens: uses token introspection endpoint
 type TokenValidator struct {
-	clientID  string
-	issuerURL string
-	jwksURL   string
-	mu        sync.Mutex
-	jwksKeys  map[string]interface{} // cached JWKS public keys (kid → key)
-	jwksExp   time.Time              // when JWKS cache expires
+	clientID     string
+	issuerURL    string
+	jwksURL      string
+	mu           sync.Mutex
+	jwksKeys     map[string]interface{} // cached JWKS public keys (kid → key)
+	jwksExp      time.Time              // when JWKS cache expires
+	validIssuers []string               // allowed issuer URLs (defaults to issuerURL)
+	hmacSecret   string                 // HMAC signing key (must not be clientID)
+}
+
+// ValidatorOption configures a TokenValidator.
+type ValidatorOption func(*TokenValidator)
+
+// WithValidIssuers sets additional allowed issuer URLs.
+// The configured issuerURL is always allowed; this adds extras for providers
+// that return different issuers in different contexts (e.g. tenant-specific URLs).
+func WithValidIssuers(issuers []string) ValidatorOption {
+	return func(tv *TokenValidator) {
+		tv.validIssuers = issuers
+	}
+}
+
+// WithHMACSecret sets the HMAC signing key. This must be a secret shared
+// between the A2A server and the token issuer — never use clientID which is public.
+func WithHMACSecret(secret string) ValidatorOption {
+	return func(tv *TokenValidator) {
+		tv.hmacSecret = secret
+	}
 }
 
 // NewTokenValidator creates a validator for the given OAuth2/OIDC issuer.
-func NewTokenValidator(clientID, issuerURL string) (*TokenValidator, error) {
+func NewTokenValidator(clientID, issuerURL string, opts ...ValidatorOption) (*TokenValidator, error) {
+	if issuerURL == "" {
+		return nil, fmt.Errorf("issuer URL is required for token validation")
+	}
 	tv := &TokenValidator{
 		clientID:  clientID,
 		issuerURL: issuerURL,
+	}
+	for _, opt := range opts {
+		opt(tv)
 	}
 	// Try OIDC discovery to find JWKS URL
 	if strings.Contains(issuerURL, "/.well-known") {
@@ -424,37 +452,34 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 			}
 			return v.getPublicKey(ctx, kid)
 		case "HS256", "HS384", "HS512":
-			// HMAC — client_secret is the key (for opaque token emulation)
-			if v.clientID == "" {
-				return nil, fmt.Errorf("HMAC token but no client_id configured")
+			// HMAC — must use a dedicated secret, never the public clientID
+			if v.hmacSecret == "" {
+				return nil, fmt.Errorf("HMAC token rejected: no hmac_secret configured (clientID must not be used as HMAC key)")
 			}
-			return []byte(v.clientID), nil
+			return []byte(v.hmacSecret), nil
 		default:
 			return nil, fmt.Errorf("unsupported signing method: %s", alg)
 		}
 	}
 
-	// Parse with full verification
+	// Parse with signature + audience verification
 	token, err := jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc,
-		jwt.WithIssuer(v.issuerURL),
 		jwt.WithAudience(v.clientID),
 	)
 	if err != nil {
-		// If issuer/audience check fails but token is otherwise valid,
-		// return claims anyway — some providers use different issuer URLs
-		if strings.Contains(err.Error(), "token is expired") {
-			return nil, fmt.Errorf("token expired: %w", err)
-		}
-		// Try parsing without strict issuer/audience validation
-		token, err = jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc)
-		if err != nil {
-			return nil, fmt.Errorf("validate JWT: %w", err)
-		}
+		return nil, fmt.Errorf("validate JWT: %w", err)
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return nil, fmt.Errorf("invalid JWT claims")
+	}
+
+	// Verify issuer against whitelist (config URL + any extras)
+	if iss, ok := claims["iss"].(string); ok {
+		if !v.isIssuerAllowed(iss) {
+			return nil, fmt.Errorf("token issuer %q not in allowed list", iss)
+		}
 	}
 
 	// Verify expiration
@@ -467,6 +492,31 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 	}
 
 	return map[string]interface{}(claims), nil
+}
+
+// isIssuerAllowed checks whether the given issuer matches the configured issuer
+// or any of the additional valid issuers.
+func (v *TokenValidator) isIssuerAllowed(iss string) bool {
+	candidates := []string{v.issuerURL}
+	candidates = append(candidates, v.validIssuers...)
+	for _, candidate := range candidates {
+		if iss == candidate {
+			return true
+		}
+		// Normalize trailing slashes
+		if strings.TrimRight(iss, "/") == strings.TrimRight(candidate, "/") {
+			return true
+		}
+		// If candidate contains /.well-known/..., also compare against the base URL
+		// (e.g., issuerURL is ".../.well-known/openid-configuration" but JWT iss is just the base)
+		if idx := strings.Index(candidate, "/.well-known/"); idx >= 0 {
+			baseURL := candidate[:idx]
+			if strings.TrimRight(iss, "/") == strings.TrimRight(baseURL, "/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getPublicKey fetches a public key from JWKS, with caching.
