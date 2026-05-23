@@ -67,7 +67,7 @@ jobs:
           version: latest
           args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
       - name: Render release notes
         if: github.event_name != 'workflow_dispatch'
@@ -77,7 +77,7 @@ jobs:
       - name: Apply release notes
         if: github.event_name != 'workflow_dispatch'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md
       - name: Upload GoReleaser dist artifacts
         uses: actions/upload-artifact@v4
@@ -325,7 +325,7 @@ jobs:
           path: dist/desktop-linux
       - name: Upload all extra assets to release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         shell: bash
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
@@ -376,7 +376,7 @@ jobs:
           path: dist-site/desktop-linux
       - name: Publish release assets into deployment branch
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         shell: bash
         run: |
           chmod +x ./scripts/release/publish-site-branch.sh
