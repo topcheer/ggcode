@@ -128,10 +128,6 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		"write_command_input", "list_commands":
 		return
 	}
-	// cron_list / cron_delete → skip (internal inspection/management tools)
-	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
-		return
-	}
 	// enter_plan_mode → skip tool item, emit IM text only
 	if ts.ToolName == "enter_plan_mode" {
 		label := "Planning..."
@@ -222,10 +218,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	switch ts.ToolName {
 	case "read_command_output", "wait_command", "stop_command",
 		"write_command_input", "list_commands":
-		return
-	}
-	// cron_list / cron_delete → skip (internal inspection/management tools)
-	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
 	}
 	// exit_plan_mode → render plan as assistant message (not a tool card)
