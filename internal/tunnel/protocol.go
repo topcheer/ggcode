@@ -23,9 +23,10 @@ const (
 	EventActiveSession      = "active_session"
 	EventSessionInfo        = "session_info"
 	EventUserMessage        = "user_message" // user text from desktop
-	EventText               = "text"         // streaming text chunk
-	EventTextDone           = "text_done"    // text stream complete
-	EventStatus             = "status"       // agent status change
+	EventSystemMessage      = "system_message"
+	EventText               = "text"      // streaming text chunk
+	EventTextDone           = "text_done" // text stream complete
+	EventStatus             = "status"    // agent status change
 	EventToolCall           = "tool_call"
 	EventToolResult         = "tool_result"
 	EventApprovalRequest    = "approval_request"

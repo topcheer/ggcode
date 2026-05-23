@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -231,6 +232,7 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		title := toolCallDisplayName(name, string(ev.Tool.Arguments))
 		m.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
 		m.tunnelBroker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
+		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventToolResult:
 		content := ev.Result
@@ -241,6 +243,7 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 	case provider.StreamEventSystem:
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
+		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventDone:
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
@@ -249,7 +252,11 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 	case provider.StreamEventError:
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
+		if ev.Error != nil {
+			m.tunnelBroker.PushError(sanitizeAPIError(ev.Error).Error())
+		}
 		m.tunnelBroker.PushStatus(tunnel.StatusError, "error")
+		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 	}
 }
 
@@ -285,6 +292,7 @@ func (m *Model) pushTunnelCancel() {
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		m.tunnelBroker.PushStatus(tunnel.StatusIdle, "cancelled")
+		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 	}
 }
 
@@ -565,10 +573,87 @@ func (m *Model) handleTunnelThemeChangeMsg(msg tunnelThemeChangeMsg) (tea.Model,
 
 // currentSessionMessages returns messages from the current agent session, if any.
 func (m *Model) currentSessionMessages() []provider.Message {
-	if m.agent == nil {
-		return nil
+	if m.agent != nil {
+		if msgs := m.agent.Messages(); len(msgs) > 0 {
+			return msgs
+		}
 	}
-	return m.agent.Messages()
+	if m.session != nil {
+		return m.session.Messages
+	}
+	return nil
+}
+
+func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
+	if m.chatList == nil || m.chatList.Len() == 0 {
+		return tunnelMessagesToHistory(m.currentSessionMessages())
+	}
+
+	history := make([]tunnel.HistoryEntry, 0, m.chatList.Len()*2)
+	for i := 0; i < m.chatList.Len(); i++ {
+		item := m.chatList.ItemAt(i)
+		switch it := item.(type) {
+		case *chat.UserItem:
+			if text := strings.TrimSpace(it.Text()); text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "user", Content: text})
+			}
+		case *chat.AssistantItem:
+			if text := strings.TrimSpace(it.Text()); text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
+			}
+		case *chat.SystemItem:
+			if text := strings.TrimSpace(it.Text()); text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "system", Content: text})
+			}
+		case interface {
+			ID() string
+			ToolName() string
+			Input() string
+			Result() string
+			IsError() bool
+		}:
+			rawArgs := it.Input()
+			present := describeTool(m.currentLanguage(), it.ToolName(), rawArgs)
+			argsStr := rawArgs
+			if len(argsStr) > 200 {
+				argsStr = argsStr[:200] + "..."
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:            "tool_call",
+				ToolID:          it.ID(),
+				ToolName:        it.ToolName(),
+				ToolDisplayName: toolCallDisplayName(it.ToolName(), rawArgs),
+				ToolArgs:        argsStr,
+				ToolDetail:      present.Detail,
+			})
+			if result := strings.TrimSpace(it.Result()); result != "" {
+				history = append(history, tunnel.HistoryEntry{
+					Role:     "tool_result",
+					ToolID:   it.ID(),
+					ToolName: it.ToolName(),
+					Result:   result,
+					IsError:  it.IsError(),
+				})
+			}
+		case *chat.AgentToolItem:
+			history = append(history, tunnel.HistoryEntry{
+				Role:            "tool_call",
+				ToolID:          it.ID(),
+				ToolName:        "spawn_agent",
+				ToolDisplayName: it.Label(),
+			})
+			if result := strings.TrimSpace(it.Result()); result != "" {
+				history = append(history, tunnel.HistoryEntry{
+					Role:     "tool_result",
+					ToolID:   it.ID(),
+					ToolName: "spawn_agent",
+					Result:   result,
+					IsError:  it.Status() == chat.StatusError,
+				})
+			}
+		}
+	}
+	return history
 }
 
 // tunnelMessagesToHistory converts provider messages to tunnel history entries.
@@ -659,8 +744,8 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 		},
 		Status: m.currentTunnelStatus(),
 	}
-	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
-		snapshot.History = tunnelMessagesToHistory(msgs)
+	if history := m.currentTunnelHistory(); len(history) > 0 {
+		snapshot.History = history
 	}
 	return snapshot
 }
@@ -708,14 +793,189 @@ func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
 	return out
 }
 
+func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
+	var history []tunnel.HistoryEntry
+	textByID := make(map[string]string)
+	finalizeText := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		text := strings.TrimSpace(textByID[id])
+		delete(textByID, id)
+		if text == "" {
+			return
+		}
+		history = append(history, tunnel.HistoryEntry{
+			Role:    "assistant",
+			Content: text,
+		})
+	}
+
+	for _, ev := range events {
+		switch ev.Type {
+		case tunnel.EventUserMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if data.Kind == "cron" {
+				text := strings.TrimSpace(data.DisplayText)
+				if text == "" {
+					text = strings.TrimSpace(data.Text)
+				}
+				if text == "" {
+					continue
+				}
+				history = append(history, tunnel.HistoryEntry{
+					Role:    "system",
+					Content: text,
+				})
+				continue
+			}
+			text := strings.TrimSpace(data.Text)
+			if text == "" {
+				text = strings.TrimSpace(data.DisplayText)
+			}
+			if text == "" {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:    "user",
+				Content: text,
+			})
+		case tunnel.EventSystemMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			text := strings.TrimSpace(data.Text)
+			if text == "" {
+				text = strings.TrimSpace(data.DisplayText)
+			}
+			if text == "" {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:    "system",
+				Content: text,
+			})
+		case tunnel.EventText:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
+				continue
+			}
+			textByID[data.ID] += data.Chunk
+			if data.Done {
+				finalizeText(data.ID)
+			}
+		case tunnel.EventTextDone:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			id := data.ID
+			if strings.TrimSpace(id) == "" {
+				id = ev.StreamID
+			}
+			finalizeText(id)
+		case tunnel.EventToolCall:
+			var data tunnel.ToolCallData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:            "tool_call",
+				ToolID:          data.ToolID,
+				ToolName:        data.ToolName,
+				ToolDisplayName: data.DisplayName,
+				ToolArgs:        data.Args,
+				ToolDetail:      data.Detail,
+			})
+		case tunnel.EventToolResult:
+			var data tunnel.ToolResultData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:     "tool_result",
+				ToolID:   data.ToolID,
+				ToolName: data.ToolName,
+				Result:   data.Result,
+				IsError:  data.IsError,
+			})
+		case tunnel.EventError:
+			var data tunnel.ErrorData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			text := strings.TrimSpace(data.Message)
+			if text == "" {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:    "error",
+				Content: text,
+			})
+		}
+	}
+
+	return history
+}
+
+func tunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Role != b[i].Role ||
+			a[i].Content != b[i].Content ||
+			a[i].ToolID != b[i].ToolID ||
+			a[i].ToolName != b[i].ToolName ||
+			a[i].ToolDisplayName != b[i].ToolDisplayName ||
+			a[i].ToolArgs != b[i].ToolArgs ||
+			a[i].ToolDetail != b[i].ToolDetail ||
+			a[i].Result != b[i].Result ||
+			a[i].IsError != b[i].IsError {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Model) prepareCurrentSessionTunnelLedger() {
+	snapshotHistory := m.currentTunnelHistory()
+
 	m.sessionMutex().Lock()
-	if m.session == nil || m.sessionStore == nil || m.session.TunnelEventsComplete {
+	if m.session == nil || m.sessionStore == nil {
 		m.sessionMutex().Unlock()
 		return
 	}
-	m.session.TunnelEvents = nil
-	m.session.TunnelEventsComplete = true
+	needsSave := false
+	switch {
+	case m.session.TunnelEventsComplete:
+		if tunnelHistoryMatches(tunnelEventsToHistory(m.session.TunnelEvents), snapshotHistory) {
+			m.sessionMutex().Unlock()
+			return
+		}
+		m.session.TunnelEvents = nil
+		m.session.TunnelEventsComplete = false
+		needsSave = true
+	case len(snapshotHistory) == 0:
+		m.session.TunnelEvents = nil
+		m.session.TunnelEventsComplete = true
+		needsSave = true
+	case len(m.session.TunnelEvents) > 0:
+		m.session.TunnelEvents = nil
+		needsSave = true
+	}
+	if !needsSave {
+		m.sessionMutex().Unlock()
+		return
+	}
 	ses := m.session
 	store := m.sessionStore
 	m.sessionMutex().Unlock()

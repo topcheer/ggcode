@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -255,6 +258,152 @@ func TestTunnelMessagesToHistory_FullConversation(t *testing.T) {
 		if exp.toolName != "" && history[i].ToolName != exp.toolName {
 			t.Errorf("entry %d: expected toolName %q, got %q", i, exp.toolName, history[i].ToolName)
 		}
+	}
+}
+
+func TestCurrentSessionMessagesFallsBackToSessionStoreMessages(t *testing.T) {
+	m := newTestModel()
+	m.agent = nil
+	m.session = &session.Session{
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hello")}},
+		},
+	}
+
+	msgs := m.currentSessionMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected session-backed messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Fatalf("expected restored user message, got %q", msgs[0].Role)
+	}
+}
+
+func TestCurrentTunnelHistoryPreservesSystemAndToolBoundaries(t *testing.T) {
+	m := newTestModel()
+	m.chatWriteUser("user-1", "check mobile release")
+	m.chatWriteSystem("sys-1", "rerun is still running")
+
+	before := chat.NewAssistantItem("assistant-1", m.chatStyles)
+	before.SetText("I checked the current run.")
+	before.SetFinished()
+	m.chatList.Append(before)
+
+	toolItem := chat.NewToolItem("tool-1", chat.ToolContext{
+		ToolName:    "run_command",
+		DisplayName: "Check status",
+		Detail:      "gh run list --limit 3",
+		RawArgs:     `{"command":"gh run list --limit 3"}`,
+		Lang:        "en",
+	}, chat.StatusSuccess, m.chatStyles)
+	if setter, ok := toolItem.(interface{ SetResult(string, bool) }); ok {
+		setter.SetResult("completed success release", false)
+	}
+	m.chatList.Append(toolItem)
+
+	after := chat.NewAssistantItem("assistant-2", m.chatStyles)
+	after.SetText("The rerun completed successfully.")
+	after.SetFinished()
+	m.chatList.Append(after)
+
+	history := m.currentTunnelHistory()
+	if len(history) != 6 {
+		t.Fatalf("expected 6 history entries, got %d: %+v", len(history), history)
+	}
+	if history[0].Role != "user" || history[0].Content != "check mobile release" {
+		t.Fatalf("unexpected first history entry: %+v", history[0])
+	}
+	if history[1].Role != "system" || history[1].Content != "rerun is still running" {
+		t.Fatalf("unexpected system history entry: %+v", history[1])
+	}
+	if history[2].Role != "assistant" || history[2].Content != "I checked the current run." {
+		t.Fatalf("unexpected assistant-before entry: %+v", history[2])
+	}
+	if history[3].Role != "tool_call" || history[4].Role != "tool_result" {
+		t.Fatalf("expected tool call/result entries, got %+v", history[3:])
+	}
+	if history[5].Role != "assistant" || history[5].Content != "The rerun completed successfully." {
+		t.Fatalf("unexpected assistant-after entry: %+v", history[5])
+	}
+}
+
+func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedger(t *testing.T) {
+	store := newTestSessionStore(t)
+	m := newTestModel()
+	m.sessionStore = store
+
+	ses := &session.Session{
+		ID:        "sess-replay",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("fix the release job")}},
+			{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I checked the failure and found a version-code conflict.")}},
+			{Role: "assistant", Content: []provider.ContentBlock{
+				{Type: "tool_use", ToolID: "tool-1", ToolName: "run_command", Input: json.RawMessage(`{"command":"gh run list --limit 3"}`)},
+			}},
+			{Role: "user", Content: []provider.ContentBlock{
+				{Type: "tool_result", ToolID: "tool-1", ToolName: "run_command", Output: "completed success release"},
+			}},
+			{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Done. The rerun succeeded.")}},
+		},
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID:  "ev-000000010",
+				StreamID: "tool-1",
+				Type:     tunnel.EventToolCall,
+				Data:     json.RawMessage(`{"tool_id":"tool-1","tool_name":"run_command","display_name":"Check Mobile Release rerun status","args":"{\"command\":\"gh run list --limit 3\"}","detail":"gh run list --limit 3"}`),
+			},
+			{
+				EventID:  "ev-000000011",
+				StreamID: "tool-1",
+				Type:     tunnel.EventToolResult,
+				Data:     json.RawMessage(`{"tool_id":"tool-1","tool_name":"run_command","result":"completed success release","is_error":false}`),
+			},
+		},
+	}
+	m.SetSession(ses, store)
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m.prepareCurrentSessionTunnelLedger()
+
+	if m.session.TunnelEventsComplete {
+		t.Fatal("expected partial replay ledger to be downgraded")
+	}
+	if len(m.currentSessionTunnelReplayEvents()) != 0 {
+		t.Fatal("expected downgraded session to fall back to snapshot replay")
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if loaded.TunnelEventsComplete {
+		t.Fatal("expected downgraded replay flag to persist")
+	}
+}
+
+func TestPrepareCurrentSessionTunnelLedgerMarksFreshSessionComplete(t *testing.T) {
+	store := newTestSessionStore(t)
+	m := newTestModel()
+	m.sessionStore = store
+	ses := &session.Session{
+		ID:        "sess-fresh",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
+	}
+	m.SetSession(ses, store)
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m.prepareCurrentSessionTunnelLedger()
+
+	if !m.session.TunnelEventsComplete {
+		t.Fatal("expected fresh tunnel session to arm canonical replay")
 	}
 }
 

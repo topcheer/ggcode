@@ -305,6 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cronPromptMsg:
 		sysMsg := m.t("cron.firing")
+		m.suppressNextTunnelSystem = sysMsg
 		m.chatWriteSystem(nextSystemID(), sysMsg)
 		m.emitIMText(sysMsg)
 		m.setNextTunnelUserMessageOverride(tunnel.MessageData{

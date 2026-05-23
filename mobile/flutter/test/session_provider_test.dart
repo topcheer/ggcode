@@ -433,4 +433,70 @@ void main() {
     expect(container.read(sessionInfoProvider)?.mode, 'bypass');
     expect(container.read(currentModeProvider), 'bypass');
   });
+
+  test('ConnectionNotifier renders system messages and preserves post-tool text ordering',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000001',
+      type: 'text',
+      data: {'id': 'msg-before', 'chunk': 'I checked the current run.', 'done': false},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000002',
+      type: 'text_done',
+      data: {'id': 'msg-before', 'done': true},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000003',
+      type: 'tool_call',
+      data: {
+        'tool_id': 'tool-1',
+        'tool_name': 'run_command',
+        'display_name': 'Check status',
+        'args': '{"command":"gh run list --limit 3"}',
+        'detail': 'gh run list --limit 3',
+      },
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000004',
+      type: 'tool_result',
+      data: {
+        'tool_id': 'tool-1',
+        'tool_name': 'run_command',
+        'result': 'completed success release',
+        'is_error': false,
+      },
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000005',
+      type: 'system_message',
+      data: {'text': 'rerun is still running'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000006',
+      type: 'text',
+      data: {'id': 'msg-after', 'chunk': 'The rerun completed successfully.', 'done': false},
+    ));
+
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(4));
+    expect(messages[0].id, 'msg-before');
+    expect(messages[0].text, 'I checked the current run.');
+    expect(messages[1].toolId, 'tool-1');
+    expect(messages[1].toolResult, 'completed success release');
+    expect(messages[2].text, 'rerun is still running');
+    expect(messages[2].isUser, isFalse);
+    expect(messages[3].id, 'msg-after');
+    expect(messages[3].text, 'The rerun completed successfully.');
+  });
 }

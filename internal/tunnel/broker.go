@@ -495,6 +495,14 @@ func (b *Broker) PushUserMessageData(data MessageData) {
 	b.enqueue(EventUserMessage, data)
 }
 
+func (b *Broker) PushSystemMessage(text string) {
+	b.PushSystemMessageData(MessageData{Text: text})
+}
+
+func (b *Broker) PushSystemMessageData(data MessageData) {
+	b.enqueue(EventSystemMessage, data)
+}
+
 // ─── Streaming text (batched) ───
 
 func (b *Broker) PushText(id, chunk string) {
@@ -654,6 +662,10 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 			if entry.Content != "" {
 				b.PushUserMessage(entry.Content)
 			}
+		case "system":
+			if entry.Content != "" {
+				b.PushSystemMessage(entry.Content)
+			}
 		case "assistant":
 			if entry.Content == "" {
 				continue
@@ -674,6 +686,10 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 			b.PushToolCall(entry.ToolID, entry.ToolName, displayName, entry.ToolArgs, detail)
 		case "tool_result":
 			b.PushToolResult(entry.ToolID, entry.ToolName, entry.Result, entry.IsError)
+		case "error":
+			if entry.Content != "" {
+				b.PushError(entry.Content)
+			}
 		}
 	}
 }

@@ -382,7 +382,7 @@ func TestSubagentToolResultDataJSON(t *testing.T) {
 
 func TestEventConstants(t *testing.T) {
 	events := []string{
-		EventConnected, EventSessionInfo, EventUserMessage, EventText,
+		EventConnected, EventSessionInfo, EventUserMessage, EventSystemMessage, EventText,
 		EventTextDone, EventStatus, EventToolCall, EventToolResult,
 		EventApprovalRequest, EventApprovalResult, EventAskUserRequest,
 		EventAskUserResponse, EventSubagentSpawn, EventSubagentText,

@@ -365,6 +365,23 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markEventApplied(msg);
         break;
 
+      case 'system_message':
+        if (!_shouldApplyEvent(msg)) break;
+        if (msg.data != null) {
+          final data = proto.MessageData.fromJson(msg.data!);
+          final displayText =
+              data.displayText.isNotEmpty ? data.displayText : data.text;
+          if (displayText.isNotEmpty) {
+            chatNotifier.addRemoteSystemMessage(
+              displayText,
+              messageId: msg.eventId ??
+                  'remote-system-${DateTime.now().millisecondsSinceEpoch}',
+            );
+          }
+        }
+        _markEventApplied(msg);
+        break;
+
       case 'text':
       case 'stream_text':
         if (!_shouldApplyEvent(msg)) break;

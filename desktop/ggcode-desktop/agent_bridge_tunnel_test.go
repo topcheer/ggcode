@@ -2,7 +2,10 @@ package main
 
 import (
 	"testing"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -74,5 +77,71 @@ func TestBuildAskUserResponseFromTunnelBuildsStructuredAnswers(t *testing.T) {
 	}
 	if !resp.Answers[1].Answered {
 		t.Fatal("expected text answer to be marked answered")
+	}
+}
+
+func TestDesktopChatMessagesToTunnelHistoryPreservesSystemAndToolBoundaries(t *testing.T) {
+	history := desktopChatMessagesToTunnelHistory([]ChatMessage{
+		{Role: "user", Content: "check release", Time: time.Now()},
+		{Role: "system", Content: "rerun is still running", Time: time.Now()},
+		{Role: "assistant", Content: "I checked the current run.", Time: time.Now()},
+		{
+			Role:     "tool",
+			ToolName: "run_command",
+			ToolID:   "tool-1",
+			ToolArgs: "gh run list --limit 3",
+			ToolRaw:  `{"command":"gh run list --limit 3"}`,
+			Content:  "completed success release",
+			Time:     time.Now(),
+		},
+		{Role: "assistant", Content: "The rerun completed successfully.", Time: time.Now()},
+	})
+
+	if len(history) != 6 {
+		t.Fatalf("expected 6 history entries, got %d: %+v", len(history), history)
+	}
+	if history[1].Role != "system" || history[1].Content != "rerun is still running" {
+		t.Fatalf("unexpected system history entry: %+v", history[1])
+	}
+	if history[3].Role != "tool_call" || history[4].Role != "tool_result" {
+		t.Fatalf("expected tool call/result entries, got %+v", history[3:])
+	}
+	if history[5].Role != "assistant" || history[5].Content != "The rerun completed successfully." {
+		t.Fatalf("unexpected trailing assistant entry: %+v", history[5])
+	}
+}
+
+func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedgerDesktop(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	bridge.sessionStore = store
+	bridge.currentSes = &session.Session{
+		ID:        "sess-desktop",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("check release")}},
+			{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I checked the current run.")}},
+		},
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID: "ev-000000010",
+				Type:    tunnel.EventToolCall,
+				Data:    []byte(`{"tool_id":"tool-1","tool_name":"run_command","display_name":"Check status","args":"{\"command\":\"gh run list --limit 3\"}","detail":"gh run list --limit 3"}`),
+			},
+		},
+	}
+	if err := store.Save(bridge.currentSes); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	bridge.PrepareCurrentSessionTunnelLedger()
+
+	if bridge.currentSes.TunnelEventsComplete {
+		t.Fatal("expected partial replay ledger to be downgraded")
 	}
 }
