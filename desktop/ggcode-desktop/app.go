@@ -289,12 +289,14 @@ func (a *App) showShareDialog() {
 			})
 
 			snapshot := a.tunnelSnapshot()
+			switchedSession := false
 			if current := a.agentBridge.CurrentSession(); current != nil {
 				broker.SwitchSession(current.ID)
+				switchedSession = true
 			}
 			a.agentBridge.PrepareCurrentSessionTunnelLedger()
 			if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
-				broker.ReplayEvents(events, false)
+				broker.ReplayEvents(events, !switchedSession)
 			} else {
 				broker.SendSnapshot(snapshot)
 			}
@@ -682,11 +684,8 @@ func (a *App) resumeSession(id string) {
 	// Push updated session info + history to mobile client
 	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
 		a.tunnelBroker.SwitchSession(a.agentBridge.CurrentSession().ID)
-		if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
-			a.tunnelBroker.ReplayEvents(events, false)
-		} else {
-			a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
-		}
+		a.agentBridge.ResetCurrentSessionTunnelLedger()
+		a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
 	}
 
 	// Refresh sidebar.
@@ -788,14 +787,10 @@ func (a *App) startChat() {
 		a.tunnelBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 			bridge.RecordTunnelEvent(ev)
 		})
-		bridge.PrepareCurrentSessionTunnelLedger()
 		if current := bridge.CurrentSession(); current != nil {
 			a.tunnelBroker.SwitchSession(current.ID)
-			if events := bridge.CurrentSessionTunnelEvents(); len(events) > 0 {
-				a.tunnelBroker.ReplayEvents(events, false)
-			} else {
-				a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
-			}
+			bridge.ResetCurrentSessionTunnelLedger()
+			a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
 		}
 	}
 

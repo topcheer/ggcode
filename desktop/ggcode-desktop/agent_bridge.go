@@ -1777,6 +1777,21 @@ func (b *AgentBridge) PrepareCurrentSessionTunnelLedger() {
 	_ = store.Save(ses)
 }
 
+func (b *AgentBridge) ResetCurrentSessionTunnelLedger() {
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil {
+		b.mu.Unlock()
+		return
+	}
+	b.currentSes.TunnelEvents = nil
+	b.currentSes.TunnelEventsComplete = false
+	ses := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	_ = store.Save(ses)
+}
+
 func (b *AgentBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {
 	if msg.EventID == "" || msg.Type == tunnel.EventSnapshotReset {
 		return

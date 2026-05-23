@@ -527,6 +527,112 @@ void main() {
     expect(container.read(displayedMessagesProvider).last.text, 'cached world');
   });
 
+  test('workspace cache reattaches a cached session after scanning a new room',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached from old room',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    final adopted = await cache.attachSessionToActiveWorkspace('sess-room');
+
+    expect(adopted, isTrue);
+    final cacheState = container.read(workspaceCacheProvider);
+    final snapshot = cache.snapshotFor(
+      cacheState.selectedWorkspaceKey!,
+      'sess-room',
+    );
+    expect(cacheState.selectedSessionId, 'sess-room');
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages.single.text, 'cached from old room');
+    final sessionRecord = container
+        .read(workspaceCacheProvider)
+        .sessions['${cacheState.selectedWorkspaceKey!}::sess-room'];
+    expect(sessionRecord?.lastEventId, 'ev-000000120');
+  });
+
+  test(
+      'ConnectionNotifier restores cached session after active_session moves to a new room',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached after room switch',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    container.read(chatProvider.notifier).clearMessages();
+    container.read(sessionInfoProvider.notifier).set(null);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-room',
+      type: 'active_session',
+      data: {'session_id': 'sess-room'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(container.read(displayedMessagesProvider), hasLength(1));
+    expect(
+      container.read(displayedMessagesProvider).single.text,
+      'cached after room switch',
+    );
+  });
+
   test(
       'ConnectionNotifier renders system messages and preserves post-tool text ordering',
       () {
