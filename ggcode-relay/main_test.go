@@ -208,3 +208,54 @@ func TestPeerHandleActiveSessionBindsRoomAndNotifiesClients(t *testing.T) {
 		t.Fatal("expected active_session broadcast")
 	}
 }
+
+func TestHubGetOrLoadClientRoomRejectsUnknownToken(t *testing.T) {
+	h := newHub(nil)
+	if room, ok := h.getOrLoadClientRoom("token-1234567890abcdef"); ok || room != nil {
+		t.Fatalf("expected unknown client room lookup to fail, got ok=%v room=%v", ok, room)
+	}
+}
+
+func TestHubDestroyRoomClearsMemoryAndStore(t *testing.T) {
+	store := newStoreForTest(t)
+	token := "token-1234567890abcdef"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+
+	h := newHub(store)
+	room := h.getOrCreateServerRoom(token)
+	room.sessionID = "sess-1"
+	client := &peer{
+		room:   room,
+		role:   "client",
+		sendCh: make(chan []byte, 2),
+		done:   make(chan struct{}),
+	}
+	room.clients[client] = struct{}{}
+
+	h.destroyRoom(token, relayMessage{Type: "sharing_stopped"})
+
+	if _, ok := h.rooms[token]; ok {
+		t.Fatal("expected destroyed room to be removed from memory")
+	}
+
+	select {
+	case raw := <-client.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "sharing_stopped" {
+			t.Fatalf("unexpected destroy notice: %+v", msg)
+		}
+	default:
+		t.Fatal("expected destroy notice for client")
+	}
+
+	state, err := store.loadRoom(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID != "" || len(state.history) != 0 {
+		t.Fatalf("expected destroyed room persistence to be empty, got session=%q history=%d", state.sessionID, len(state.history))
+	}
+}

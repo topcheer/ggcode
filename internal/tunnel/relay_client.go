@@ -43,6 +43,11 @@ type RelayConnectedState struct {
 	HistoryCount int
 }
 
+const (
+	relayPingInterval = 20 * time.Second
+	relayReadTimeout  = 75 * time.Second
+)
+
 func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 	crypto, err := NewCrypto(token)
 	if err != nil {
@@ -130,7 +135,7 @@ func (rc *RelayClient) run() {
 func (rc *RelayClient) writePump(done func()) {
 	defer done()
 	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(relayPingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -184,12 +189,12 @@ func (rc *RelayClient) readPump(done func()) {
 
 	rc.conn.SetReadLimit(1 << 20)
 	rc.conn.SetPongHandler(func(string) error {
-		rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+		rc.conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
 		return nil
 	})
 
 	for {
-		rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+		rc.conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
 		_, raw, err := rc.conn.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
@@ -299,12 +304,7 @@ func (rc *RelayClient) SendActiveSession(sessionID string) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case rc.sendCh <- data:
-		return nil
-	case <-rc.stopCh:
-		return fmt.Errorf("relay client closed")
-	}
+	return rc.enqueueRaw(data)
 }
 
 func mustRawJSON(v interface{}) json.RawMessage {
@@ -368,6 +368,28 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 		return err
 	}
 
+	return rc.enqueueRaw(data)
+}
+
+func (rc *RelayClient) DestroyRoom() error {
+	data, err := json.Marshal(struct {
+		Type string `json:"type"`
+	}{
+		Type: "destroy_room",
+	})
+	if err != nil {
+		return err
+	}
+	return rc.enqueueRaw(data)
+}
+
+func (rc *RelayClient) enqueueRaw(data []byte) error {
+	rc.closeMu.Lock()
+	if rc.closed {
+		rc.closeMu.Unlock()
+		return fmt.Errorf("relay client closed")
+	}
+	rc.closeMu.Unlock()
 	select {
 	case rc.sendCh <- data:
 		return nil

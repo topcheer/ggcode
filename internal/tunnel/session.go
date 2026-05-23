@@ -136,3 +136,10 @@ func (s *Session) StopGracefully(timeout time.Duration) {
 		s.client.CloseGracefully(timeout)
 	}
 }
+
+func (s *Session) DestroyGracefully(timeout time.Duration) {
+	if s.client != nil {
+		_ = s.client.DestroyRoom()
+		s.client.CloseGracefully(timeout)
+	}
+}
