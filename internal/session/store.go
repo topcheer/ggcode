@@ -20,16 +20,17 @@ import (
 
 // Session represents a single conversation session.
 type Session struct {
-	ID           string             `json:"id"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-	Title        string             `json:"title"`
-	Workspace    string             `json:"workspace,omitempty"`
-	Vendor       string             `json:"vendor"`
-	Endpoint     string             `json:"endpoint"`
-	Model        string             `json:"model"`
-	Messages     []provider.Message `json:"messages,omitempty"`
-	TunnelEvents []TunnelEvent      `json:"tunnel_events,omitempty"`
+	ID                   string             `json:"id"`
+	CreatedAt            time.Time          `json:"created_at"`
+	UpdatedAt            time.Time          `json:"updated_at"`
+	Title                string             `json:"title"`
+	Workspace            string             `json:"workspace,omitempty"`
+	Vendor               string             `json:"vendor"`
+	Endpoint             string             `json:"endpoint"`
+	Model                string             `json:"model"`
+	Messages             []provider.Message `json:"messages,omitempty"`
+	TunnelEvents         []TunnelEvent      `json:"tunnel_events,omitempty"`
+	TunnelEventsComplete bool               `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 }
@@ -235,18 +236,19 @@ func sessionToIndexEntry(s *Session) indexEntry {
 
 // jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type        string            `json:"type"` // "meta", "message", "cost", or "checkpoint"
-	SessionID   string            `json:"session_id,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Workspace   string            `json:"workspace,omitempty"`
-	Vendor      string            `json:"vendor,omitempty"`
-	Endpoint    string            `json:"endpoint,omitempty"`
-	Model       string            `json:"model,omitempty"`
-	CreatedAt   time.Time         `json:"created_at,omitempty"`
-	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
-	Message     *provider.Message `json:"message,omitempty"`
-	TunnelEvent *TunnelEvent      `json:"tunnel_event,omitempty"`
-	CostJSON    json.RawMessage   `json:"cost,omitempty"`
+	Type                 string            `json:"type"` // "meta", "message", "cost", or "checkpoint"
+	SessionID            string            `json:"session_id,omitempty"`
+	Title                string            `json:"title,omitempty"`
+	Workspace            string            `json:"workspace,omitempty"`
+	Vendor               string            `json:"vendor,omitempty"`
+	Endpoint             string            `json:"endpoint,omitempty"`
+	Model                string            `json:"model,omitempty"`
+	CreatedAt            time.Time         `json:"created_at,omitempty"`
+	UpdatedAt            time.Time         `json:"updated_at,omitempty"`
+	TunnelEventsComplete bool              `json:"tunnel_events_complete,omitempty"`
+	Message              *provider.Message `json:"message,omitempty"`
+	TunnelEvent          *TunnelEvent      `json:"tunnel_event,omitempty"`
+	CostJSON             json.RawMessage   `json:"cost,omitempty"`
 	// Checkpoint fields: compacted messages snapshot after summarize.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
@@ -304,15 +306,16 @@ func (s *JSONLStore) Save(ses *Session) error {
 
 	// Meta record
 	meta := jsonlRecord{
-		Type:      "meta",
-		SessionID: ses.ID,
-		Title:     ses.Title,
-		Workspace: ses.Workspace,
-		Vendor:    ses.Vendor,
-		Endpoint:  ses.Endpoint,
-		Model:     ses.Model,
-		CreatedAt: ses.CreatedAt,
-		UpdatedAt: ses.UpdatedAt,
+		Type:                 "meta",
+		SessionID:            ses.ID,
+		Title:                ses.Title,
+		Workspace:            ses.Workspace,
+		Vendor:               ses.Vendor,
+		Endpoint:             ses.Endpoint,
+		Model:                ses.Model,
+		CreatedAt:            ses.CreatedAt,
+		UpdatedAt:            ses.UpdatedAt,
+		TunnelEventsComplete: ses.TunnelEventsComplete,
 	}
 	if err := enc.Encode(meta); err != nil {
 		f.Close()
@@ -441,6 +444,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		ses.Model = rec.Model
 		ses.CreatedAt = rec.CreatedAt
 		ses.UpdatedAt = rec.UpdatedAt
+		ses.TunnelEventsComplete = rec.TunnelEventsComplete
 	}
 
 	// Build messages
@@ -785,15 +789,16 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	meta := jsonlRecord{
-		Type:      "meta",
-		SessionID: ses.ID,
-		Title:     ses.Title,
-		Workspace: ses.Workspace,
-		Vendor:    ses.Vendor,
-		Endpoint:  ses.Endpoint,
-		Model:     ses.Model,
-		CreatedAt: ses.CreatedAt,
-		UpdatedAt: ses.UpdatedAt,
+		Type:                 "meta",
+		SessionID:            ses.ID,
+		Title:                ses.Title,
+		Workspace:            ses.Workspace,
+		Vendor:               ses.Vendor,
+		Endpoint:             ses.Endpoint,
+		Model:                ses.Model,
+		CreatedAt:            ses.CreatedAt,
+		UpdatedAt:            ses.UpdatedAt,
+		TunnelEventsComplete: ses.TunnelEventsComplete,
 	}
 	if err := enc.Encode(meta); err != nil {
 		os.Remove(path)

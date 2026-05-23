@@ -683,6 +683,7 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 			m.tunnelBroker.AnnounceActiveSession(m.session.ID)
 		}
 	}
+	m.prepareCurrentSessionTunnelLedger()
 	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
 		m.tunnelBroker.ReplayEvents(events, false)
 		return
@@ -691,7 +692,7 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
-	if m.session == nil || len(m.session.TunnelEvents) == 0 {
+	if m.session == nil || !m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
 		return nil
 	}
 	out := make([]tunnel.GatewayMessage, 0, len(m.session.TunnelEvents))
@@ -705,6 +706,21 @@ func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
 		})
 	}
 	return out
+}
+
+func (m *Model) prepareCurrentSessionTunnelLedger() {
+	m.sessionMutex().Lock()
+	if m.session == nil || m.sessionStore == nil || m.session.TunnelEventsComplete {
+		m.sessionMutex().Unlock()
+		return
+	}
+	m.session.TunnelEvents = nil
+	m.session.TunnelEventsComplete = true
+	ses := m.session
+	store := m.sessionStore
+	m.sessionMutex().Unlock()
+
+	_ = store.Save(ses)
 }
 
 func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {

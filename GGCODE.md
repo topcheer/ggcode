@@ -53,31 +53,45 @@ Linter config (`.golangci.yml`): `gofmt`, `govet`, `errcheck`, `staticcheck`, `u
 cmd/ggcode/            CLI entrypoint, root command, pipe mode, resume, harness/mcp subcommands
 cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
 desktop/               Desktop GUI application (Fyne-based, separate Go module)
-  ggcode-desktop/      Main desktop app — visual chat, IM integration, tool approval dialogs
-internal/              334 Go source files (~101k LOC non-test, ~69k LOC test)
+  ggcode-desktop/      Main desktop app — visual chat, IM integration, tool approval dialogs, tunnel relay
+  markdownx/           Extended Markdown widget (Fyne, Mermaid support)
+ggcode-relay/          Standalone relay server for mobile tunnel (WebSocket, SQLite event persistence)
+internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
-  webui/              WebUI HTTP server + WebSocket chat, SPA, config/session REST API, ChatBridge interface
+  webui/               WebUI HTTP server + WebSocket chat, SPA, config/session REST API, ChatBridge interface
   im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, outbound routing, daemon bridge with slash commands (/listim, /muteim, /muteall, /muteself, /restart)
+  tunnel/              Tunnel broker for mobile relay: event persistence to JSONL, replay on reconnect, active session tracking, relay client with backpressure, multi-session switching
+  swarm/               Team-based multi-agent coordination: teammates with own agent loop and inbox, shared task board, assignee-based delivery
   daemon/              Daemon mode: follow display, background forking, session picker, i18n labels
   tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
   tool/                Built-in tools (file ops, search, commands, git, web, agents, productivity)
-  harness/             Harness-engineering workflow engine (~6.2k LOC, 28 files — task management, worktrees, review, release)
+  harness/             Harness-engineering workflow engine (task management, worktrees, review, release)
   mcp/                 MCP client: JSON-RPC, process management, install, migration, presets, OAuth 2.1 auth
   config/              YAML config loading, env expansion, API key handling, Anthropic bootstrap, A2A auth config (api_key, oauth2, oidc, mtls)
   memory/              Project memory loading (GGCODE.md, AGENTS.md, etc.) + auto-memory persistence
   subagent/            Sub-agent spawning, tracking, coordination (manager + runner)
   knight/              Knight background agent: autonomous code monitoring, daily token budget
-  a2a/                 Agent-to-Agent protocol: server (multi-auth), client (auto-negotiate), registry, MCP bridge, 5-instance mesh E2E test
+  a2a/                 Agent-to-Agent protocol: server (multi-auth), client (auto-negotiate), registry, MCP bridge, E2E mesh test
+  acp/                 Agent Client Protocol support (JetBrains, Zed, ACP-compatible editors)
+  lsp/                 LSP client integration (gopls, rust-analyzer, clangd, etc.)
   commands/            Slash command registry (bundled + loaded), usage formatting, skill templates
   context/             Conversation context window management and tokenization (imported as `ctxpkg`)
-  session/             JSONL-backed session persistence (NOT SQLite — sessions stored as .jsonl files)
+  session/             JSONL-backed session persistence with tunnel event recording
+  cron/                Scheduled job management (cron expressions, one-shot reminders)
   checkpoint/          In-memory file checkpointing for undo/revert support
   permission/          Permission modes + per-tool policy enforcement + sandbox + dangerous tool classification
   plugin/              External tool plugins (command-based, MCP-based)
   hooks/               Pre/post hooks runner
   cost/                Token usage tracking (local TokenUsage type to avoid circular deps)
   auth/                Full auth stack: GitHub Copilot token mgmt, OAuth2 PKCE/Device Flow, OIDC Discovery, JWT validation (HS256/RS256/ECDSA), JWKS polling, token introspection, token cache with per-client isolation
+  chat/                Chat utilities and shared types
+  markdown/            Markdown rendering helpers
+  extract/             Content extraction utilities
+  stream/              Stream processing utilities
+  task/                Task tracking primitives
+  safego/              Safe goroutine helpers with panic recovery
+  restart/             Process restart support
   image/               Image processing, clipboard integration (platform-specific: darwin, linux, windows)
   install/             Self-update and install logic
   update/              Version checking and auto-update
@@ -106,6 +120,8 @@ config/                MCP preset configuration (mcporter.json)
 - **Knight** (`internal/knight/`): Background autonomous agent with daily token budget, activity-driven code monitoring.
 - **Swarm/Teammates** (`internal/swarm/`): Team-based multi-agent coordination. Teammates are spawned with their own agent loop and inbox. System prompts include the working directory via `SetWorkingDir()`. `CancelAll()` cancels all working teammates across all teams (used on interrupt). Task board supports assignee-based direct delivery.
 - **A2A** (`internal/a2a/`): Agent-to-Agent protocol with multi-auth server (apiKey, OAuth2+PKCE, Device Flow, OIDC+JWKS, mTLS), auto-negotiating client, local registry with PID-based instance detection, MCP bridge for transparent cross-instance tool calls. Instance-level config override via `.ggcode/a2a.yaml`.
+- **Tunnel/Broker** (`internal/tunnel/`): WebSocket tunnel broker for mobile relay. `Broker` manages connected clients, records tunnel events to session JSONL via `AppendTunnelEventToDisk()`, and replays canonical events on reconnect. Supports active session tracking (`AnnounceActiveSession`), multi-session switching (`SwitchSession`), and in-flight text recovery. `RelayClient` connects to the relay server with backpressure (30s write deadline). Protocol events include text streaming, snapshots, tool results, and session metadata.
+- **Relay server** (`ggcode-relay/`): Standalone binary that acts as a WebSocket relay between desktop instances and mobile clients. Rooms are keyed by workspace. Events are persisted to SQLite with deduplication by eventID. Supports `active_session` binding and `snapshot_reset` control events. Peer writes use blocking sends with write deadline instead of channel drops to prevent silent data loss.
 - **Auth stack** (`internal/auth/`): Full authentication subsystem — OAuth2 PKCE and Device Flow flows, OIDC Discovery with JWKS key rotation, JWT validation (HS256/RS256/ECDSA), opaque token introspection, token cache with per-`{provider}-{clientID}` isolation (`~/.ggcode/oauth-tokens/`). Provider presets for GitHub, Google, Auth0, Azure.
 
 ## Configuration
@@ -224,12 +240,17 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 
 **File operations**: `read_file`, `multi_file_read`, `write_file`, `edit_file`, `multi_edit_file`, `multi_file_edit`, `list_directory`, `search_files`, `glob`
 **Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
-**Git** (3): `git_status`, `git_diff`, `git_log`
+**Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`
 **Web** (2): `web_fetch`, `web_search`
+**Search**: `grep` (ripgrep-based, supports regex, glob, file type, context lines)
+**LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`
 **Productivity** (3, in `builtin.go`): `ask_user`, `todo_write` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
+**Swarm** (10, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
+**Cron** (3, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`
 **Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
+**Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
 
 Plus dynamically registered MCP-adapted tools and external plugin tools.
 
@@ -310,3 +331,6 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Follow strip grace period**: Completed/failed/cancelled sub-agents remain visible in the TUI follow strip for 1 minute (`subAgentGracePeriod`) so users can review results, then are removed to prevent clutter. Swarm teammate slots are managed separately (lifecycle via team deletion).
 - **swarm_task_create assignee**: The `assignee` parameter is strongly recommended — always set it when you know which teammate should do the task. When set, the task is pushed directly to the assignee's inbox for immediate execution. Only leave empty when no specific teammate can be determined.
 - **send_message vs swarm_task_create**: `send_message` is for unstructured follow-ups, clarifications, or non-tracked communication. For assigning tracked tasks to teammates, prefer `swarm_task_create` (which auto-delivers to the assignee's inbox). Do NOT use `send_message` to follow up on an already-assigned task.
+- **Tunnel event completeness**: `Session.TunnelEventsComplete` marks whether a session's tunnel events are fully recorded. Only complete event sets are used for replay; incomplete ones fall back to snapshot-based recovery. `PrepareCurrentSessionTunnelLedger()` clears stale incomplete events before starting a new recording session.
+- **Relay event deduplication**: `room.upsertHistoryEvent()` deduplicates relay events by sessionID+eventID instead of appending, preventing history bloat when events are replayed after reconnect. Events with empty eventID (e.g., `snapshot_reset`) are not persisted to SQLite.
+- **snapshot_reset does not consume eventID**: `Broker.enqueueControl()` handles `snapshot_reset` without incrementing the event ordinal, ensuring event IDs remain contiguous after replay.

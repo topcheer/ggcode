@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-26
+> Last updated: 2026-05-23
 
 ## Overview
 
@@ -28,6 +28,10 @@ The A2A subsystem enables multiple ggcode instances to discover each other, auth
 
 ```
 cmd/ggcode/              # CLI entrypoint (main.go, root.go, pipe.go, daemon.go)
+ggcode-relay/            # Standalone relay server for mobile tunnel (main.go, store.go)
+desktop/                 # Desktop GUI application (Fyne, separate Go module)
+  ggcode-desktop/        # Main desktop app — visual chat, IM, tool approval, tunnel relay
+  markdownx/             # Extended Markdown widget (Fyne, Mermaid diagram support)
 internal/
   agent/                 # Agent: agentic loop, provider abstraction
     agent.go             # Agent struct, Run/RunStream, core orchestration
@@ -171,6 +175,34 @@ internal/
     markdown.go          # Markdown rendering with glamour
     preview_panel.go     # File preview, markdown rendering, syntax highlighting
     app.go               # Minimal package marker
+  tunnel/                # Tunnel broker for mobile relay
+    broker.go            # Broker: client management, event recording, replay, active session tracking
+    relay_client.go      # WebSocket client to relay server with backpressure
+    session.go           # Tunnel session helpers (SendText, SendSnapshot, etc.)
+    protocol.go          # Event types and gateway message structs
+  swarm/                 # Team-based multi-agent coordination
+    team.go              # Team creation, deletion, teammate management
+    task_board.go        # Shared task board with assignee-based delivery
+  cron/                  # Scheduled jobs
+    cron.go              # Cron expression parsing, recurring and one-shot jobs
+  lsp/                   # LSP client integration
+    client.go            # Generic LSP client for gopls, rust-analyzer, etc.
+  markdown/              # Markdown rendering
+    render.go            # Glamour-based markdown rendering helpers
+  chat/                  # Chat utilities
+    types.go             # Shared chat types and helpers
+  extract/               # Content extraction
+    extract.go           # File content extraction utilities
+  stream/                # Stream processing
+    stream.go            # Stream utilities
+  task/                  # Task tracking
+    task.go              # Task primitives
+  safego/                # Safe goroutine helpers
+    safego.go            # Panic recovery wrappers for goroutines
+  restart/               # Process restart
+    restart.go           # Restart support
+  acp/                   # Agent Client Protocol
+    acp.go               # ACP support for JetBrains, Zed, etc.
   util/                  # Shared utilities
     truncate.go          # String truncation
 docs/                    # Documentation
@@ -194,6 +226,10 @@ docs/                    # Documentation
   - `DaemonBridge` (daemon mode): Injects webchat messages through `pendingInterruptions` into agent's `SetInterruptionHandler`. Broadcasts events from agent stream callback.
   - `TUIChatBridge` (TUI mode): Routes webchat messages through `program.Send(webchatUserMsg)` into bubbletea event loop. No direct agent access — TUI handles queuing/interruption identically to keyboard input. Events broadcast via `BroadcastEvent()` called from TUI's stream callback.
 - **WebUI WebSocket**: Per-connection write goroutine with buffered channel (cap 256). Read and write goroutines fully separated to satisfy gorilla/webstack concurrency requirements. Slow subscribers drop events (non-blocking send) instead of blocking the broadcast path.
+- **Tunnel event persistence**: Tunnel events are appended to session JSONL via `AppendTunnelEventToDisk()` without rewriting the whole file. On reconnect, `replayCanonicalEvents()` replays recorded events. `TunnelEventsComplete` flag ensures only fully-recorded event sets are used for replay; incomplete sets fall back to snapshot-based recovery.
+- **Relay backpressure**: Peer writes in `ggcode-relay` use blocking sends with a 30s write deadline instead of buffered channel drops, preventing silent data loss during slow connections.
+- **Relay event dedup**: `room.upsertHistoryEvent()` deduplicates by sessionID+eventID so replayed events don't accumulate. `snapshot_reset` (empty eventID) is not persisted to SQLite.
+- **Swarm task board**: Tasks are assigned to specific teammates via `swarm_task_create` with `assignee`, which pushes directly to the assignee's inbox. Unassigned tasks can be claimed by any idle teammate. Task completion is tracked on a shared board visible to all teammates.
 
 ## A2A Authentication Architecture
 
