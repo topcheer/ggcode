@@ -63,7 +63,9 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	timeout := cfg.Manager.Timeout()
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cfg.Manager.SetCancel(cfg.SubAgentID, cancel)
+	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
+		return
+	}
 
 	sa, _ := cfg.Manager.Get(cfg.SubAgentID)
 	if sa != nil {

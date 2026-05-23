@@ -222,8 +222,8 @@ func TestManager_CancelAll(t *testing.T) {
 	// id3 stays pending
 
 	cancelled := m.CancelAll()
-	if cancelled != 2 {
-		t.Fatalf("expected 2 cancelled, got %d", cancelled)
+	if cancelled != 3 {
+		t.Fatalf("expected 3 cancelled, got %d", cancelled)
 	}
 
 	sa1, _ := m.Get(id1)
@@ -236,8 +236,8 @@ func TestManager_CancelAll(t *testing.T) {
 	if sa2.Status != StatusCancelled {
 		t.Errorf("expected a2 cancelled, got %s", sa2.Status)
 	}
-	if sa3.Status == StatusCancelled {
-		t.Errorf("expected a3 NOT cancelled (was pending), got %s", sa3.Status)
+	if sa3.Status != StatusCancelled {
+		t.Errorf("expected a3 cancelled, got %s", sa3.Status)
 	}
 }
 

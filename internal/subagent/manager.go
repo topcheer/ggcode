@@ -404,24 +404,31 @@ func (m *Manager) Cancel(id string) bool {
 		return false
 	}
 	sa.mu.Lock()
-	defer sa.mu.Unlock()
-	if sa.Status != StatusRunning {
+	switch sa.Status {
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		sa.mu.Unlock()
 		return false
 	}
 	if sa.cancel != nil {
 		sa.cancel()
+		sa.cancel = nil
 	}
 	sa.Status = StatusCancelled
+	sa.CurrentPhase = "cancelled"
+	sa.Error = context.Canceled
 	sa.EndedAt = time.Now()
+	sa.mu.Unlock()
+	m.notifyUpdate(sa)
 	return true
 }
 
-// CancelAll cancels all running sub-agents. Returns the number cancelled.
+// CancelAll cancels all pending or running sub-agents. Returns the number cancelled.
 func (m *Manager) CancelAll() int {
 	m.mu.Lock()
 	ids := make([]string, 0)
 	for id, sa := range m.agents {
-		if sa.getStatus() == StatusRunning {
+		status := sa.getStatus()
+		if status == StatusPending || status == StatusRunning {
 			ids = append(ids, id)
 		}
 	}
@@ -437,20 +444,34 @@ func (m *Manager) CancelAll() int {
 }
 
 // SetCancel stores the cancel function for a sub-agent.
-func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
+// Returns false if the sub-agent is already terminal and must not be started.
+func (m *Manager) SetCancel(id string, cancel context.CancelFunc) bool {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
 	m.mu.Unlock()
-	if ok {
-		sa.mu.Lock()
-		sa.cancel = cancel
-		sa.Status = StatusRunning
-		if sa.StartedAt.IsZero() {
-			sa.StartedAt = time.Now()
+	if !ok {
+		if cancel != nil {
+			cancel()
 		}
-		sa.mu.Unlock()
-		m.notifyUpdate(sa)
+		return false
 	}
+	sa.mu.Lock()
+	switch sa.Status {
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		sa.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return false
+	}
+	sa.cancel = cancel
+	sa.Status = StatusRunning
+	if sa.StartedAt.IsZero() {
+		sa.StartedAt = time.Now()
+	}
+	sa.mu.Unlock()
+	m.notifyUpdate(sa)
+	return true
 }
 
 // Complete marks a sub-agent as completed or failed.
