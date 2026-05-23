@@ -435,6 +435,34 @@ func TestResetCurrentSessionTunnelLedgerClearsCanonicalReplay(t *testing.T) {
 	}
 }
 
+func TestTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) {
+	seeded := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		Status:      tunnel.StatusData{Status: tunnel.StatusRunning, Message: "bash"},
+		History: []tunnel.HistoryEntry{
+			{Role: "system", Content: "Starting tunnel..."},
+			{Role: "tool_call", ToolID: "tool-1", ToolName: "bash", ToolDisplayName: "Run bash", ToolArgs: `{"command":"sleep 1"}`},
+		},
+	}
+	latest := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		Status:      tunnel.StatusData{Status: tunnel.StatusIdle, Message: ""},
+		History: []tunnel.HistoryEntry{
+			{Role: "system", Content: "Starting tunnel..."},
+			{Role: "tool_call", ToolID: "tool-1", ToolName: "bash", ToolDisplayName: "Run bash", ToolArgs: `{"command":"sleep 1"}`},
+			{Role: "tool_result", ToolID: "tool-1", ToolName: "bash", Result: "done"},
+			{Role: "assistant", Content: "All builds are running."},
+		},
+	}
+
+	if tunnelSnapshotMatches(seeded, latest) {
+		t.Fatal("expected changed live projection to force snapshot reseed")
+	}
+	if !tunnelSnapshotMatches(latest, latest) {
+		t.Fatal("expected identical snapshots to match")
+	}
+}
+
 // ─── Nil broker safety tests ───
 
 func TestPushTunnelEvent_NilBroker(t *testing.T) {

@@ -171,6 +171,22 @@ func (b *AgentBridge) DetachTunnelBroker() {
 	b.tunnelBroker = nil
 }
 
+func (b *AgentBridge) ClearCurrentSession() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.currentSes = nil
+}
+
+func (b *AgentBridge) markTunnelSubagentSpawned(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.spawnedSet[id] {
+		return false
+	}
+	b.spawnedSet[id] = true
+	return true
+}
+
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
 	b := &AgentBridge{
 		cfg:        cfg,
@@ -242,56 +258,55 @@ func (b *AgentBridge) setupAgent() error {
 		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
 
 		// Push to mobile client
-		if b.tunnelBroker != nil {
+		if broker := b.currentTunnelBroker(); broker != nil {
 			switch sa.Status {
 			case subagent.StatusRunning:
-				if !b.spawnedSet[sa.ID] {
-					b.spawnedSet[sa.ID] = true
-					b.tunnelBroker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
+				if b.markTunnelSubagentSpawned(sa.ID) {
+					broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
 				}
-				b.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
+				broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
 
 			case subagent.StatusCompleted:
 				if sa.Result != "" {
 					msgID := fmt.Sprintf("sa-%s", sa.ID)
-					b.tunnelBroker.PushSubagentText(sa.ID, msgID, sa.Result, true)
+					broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
 				}
-				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
+				broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
 
 			case subagent.StatusFailed:
 				errMsg := ""
 				if sa.Error != nil {
 					errMsg = sa.Error.Error()
 				}
-				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
+				broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
 
 			case subagent.StatusCancelled:
-				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
+				broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 			}
 		}
 	})
 
 	// Forward sub-agent text chunks to mobile (unthrottled).
 	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
-		if b.tunnelBroker != nil {
+		if broker := b.currentTunnelBroker(); broker != nil {
 			msgID := fmt.Sprintf("sa-%s", agentID)
-			b.tunnelBroker.PushSubagentText(agentID, msgID, text, false)
+			broker.PushSubagentText(agentID, msgID, text, false)
 		}
 	})
 
 	// Forward sub-agent tool calls/results to mobile.
 	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
-		if b.tunnelBroker != nil {
+		if broker := b.currentTunnelBroker(); broker != nil {
 			summary := detail
 			if summary == "" {
 				summary = toolArgSummary(toolName, args)
 			}
-			b.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
+			broker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
 		}
 	})
 	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
-		if b.tunnelBroker != nil {
-			b.tunnelBroker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
 		}
 	})
 
@@ -337,9 +352,9 @@ func (b *AgentBridge) setupAgent() error {
 			if !last.IsZero() && now.Sub(last) < 500*time.Millisecond {
 				b.swarmTextMu.Unlock()
 				// Still push to mobile tunnel (lightweight)
-				if b.tunnelBroker != nil {
+				if broker := b.currentTunnelBroker(); broker != nil {
 					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-					b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+					broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
 				}
 				return
 			}
@@ -371,20 +386,20 @@ func (b *AgentBridge) setupAgent() error {
 		}
 
 		// Push to mobile client
-		if b.tunnelBroker != nil {
+		if broker := b.currentTunnelBroker(); broker != nil {
 			switch ev.Type {
 			case "teammate_tool_call":
 				detail := toolArgSummary(ev.CurrentTool, ev.ToolArgs)
-				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, toolDisplayName(ev.CurrentTool, ev.ToolArgs), ev.ToolArgs, detail)
-				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
+				broker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, toolDisplayName(ev.CurrentTool, ev.ToolArgs), ev.ToolArgs, detail)
+				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 			case "teammate_tool_result":
-				b.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 
 			case "teammate_text":
 				// Already handled above in throttle block if skipped
 				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-				b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+				broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
 
 			case "teammate_spawned":
 				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
@@ -392,33 +407,33 @@ func (b *AgentBridge) setupAgent() error {
 				if ok {
 					color = snap.Color
 				}
-				b.tunnelBroker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
+				broker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
 
 			case "teammate_working":
-				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
+				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
 				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
 				if ok && len(snap.Events) > 0 {
 					last := snap.Events[len(snap.Events)-1]
 					if last.Type == swarm.TeammateEventText && last.Text != "" {
 						msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-						b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
+						broker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
 					}
 				}
 
 			case "teammate_idle":
 				if ev.Result != "" {
 					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-					b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
+					broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
 				}
 				success := ev.Error == nil
 				summary := ev.Result
 				if ev.Error != nil {
 					summary = ev.Error.Error()
 				}
-				b.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
+				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
 
 			case "teammate_shutdown":
-				b.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
+				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
 			}
 		}
 	})
@@ -449,11 +464,11 @@ func (b *AgentBridge) setupAgent() error {
 		requestID := ""
 		b.setPendingApproval(requestID, toolName, resp)
 		// Push to mobile tunnel client
-		if b.tunnelBroker != nil {
+		if broker := b.currentTunnelBroker(); broker != nil {
 			requestID = b.nextTunnelRequestID()
 			b.setPendingApproval(requestID, toolName, resp)
-			b.tunnelBroker.PushApprovalRequest(requestID, toolName, input)
-			b.tunnelBroker.PushStatus("waiting", "approval")
+			broker.PushApprovalRequest(requestID, toolName, input)
+			broker.PushStatus("waiting", "approval")
 		}
 		fyne.Do(func() {
 			var d dialog.Dialog
@@ -1529,8 +1544,8 @@ func (b *AgentBridge) ensureSession() {
 	ses := session.NewSession(vendor, endpoint, model)
 	_ = b.sessionStore.Save(ses)
 	b.currentSes = ses
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.AnnounceActiveSession(ses.ID)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.AnnounceActiveSession(ses.ID)
 	}
 }
 
@@ -1541,17 +1556,22 @@ func (b *AgentBridge) SessionStore() session.Store {
 
 // CurrentSession returns the current session.
 func (b *AgentBridge) CurrentSession() *session.Session {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.currentSes
 }
 
 func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
-	if b.currentSes == nil || !b.currentSes.TunnelEventsComplete || len(b.currentSes.TunnelEvents) == 0 {
+	b.mu.Lock()
+	currentSes := b.currentSes
+	b.mu.Unlock()
+	if currentSes == nil || !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 {
 		return nil
 	}
-	out := make([]tunnel.GatewayMessage, 0, len(b.currentSes.TunnelEvents))
-	for _, ev := range b.currentSes.TunnelEvents {
+	out := make([]tunnel.GatewayMessage, 0, len(currentSes.TunnelEvents))
+	for _, ev := range currentSes.TunnelEvents {
 		out = append(out, tunnel.GatewayMessage{
-			SessionID: b.currentSes.ID,
+			SessionID: currentSes.ID,
 			EventID:   ev.EventID,
 			StreamID:  ev.StreamID,
 			Type:      ev.Type,
@@ -1927,9 +1947,11 @@ func (b *AgentBridge) ResumeSession(id string) error {
 		b.agent.AddMessage(msg)
 	}
 
+	b.mu.Lock()
 	b.currentSes = ses
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.AnnounceActiveSession(ses.ID)
+	b.mu.Unlock()
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.AnnounceActiveSession(ses.ID)
 	}
 	return nil
 }
@@ -2003,11 +2025,11 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 	requestID := ""
 	b.setPendingAskUser(requestID, req, resp)
 	// Push to mobile tunnel client
-	if b.tunnelBroker != nil {
+	if broker := b.currentTunnelBroker(); broker != nil {
 		requestID = b.nextTunnelRequestID()
 		b.setPendingAskUser(requestID, req, resp)
-		b.tunnelBroker.PushAskUserRequest(requestID, req.Title, buildTunnelAskUserQuestions(req))
-		b.tunnelBroker.PushStatus("waiting", "ask_user")
+		broker.PushAskUserRequest(requestID, req.Title, buildTunnelAskUserQuestions(req))
+		broker.PushStatus("waiting", "ask_user")
 	}
 	fyne.Do(func() {
 		// Build form from questions
@@ -2355,15 +2377,17 @@ func (b *AgentBridge) hideDialog(dlg dialog.Dialog) {
 }
 
 func (b *AgentBridge) pushTunnelApprovalResult(id, decision string) {
-	if b.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+	broker := b.currentTunnelBroker()
+	if broker == nil || strings.TrimSpace(id) == "" {
 		return
 	}
-	b.tunnelBroker.PushApprovalResult(id, decision)
-	b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	broker.PushApprovalResult(id, decision)
+	broker.PushStatus(tunnel.StatusRunning, "")
 }
 
 func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
-	if b.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+	broker := b.currentTunnelBroker()
+	if broker == nil || strings.TrimSpace(id) == "" {
 		return
 	}
 	answers := make([]tunnel.AskUserAnswer, len(response.Answers))
@@ -2374,8 +2398,8 @@ func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUser
 			FreeformText: answer.FreeformText,
 		}
 	}
-	b.tunnelBroker.PushAskUserResponse(id, response.Status, answers)
-	b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	broker.PushAskUserResponse(id, response.Status, answers)
+	broker.PushStatus(tunnel.StatusRunning, "")
 }
 
 func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
@@ -2402,8 +2426,8 @@ func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseD
 	case ch <- decision:
 	default:
 	}
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushStatus(tunnel.StatusRunning, "")
 	}
 }
 
@@ -2418,8 +2442,8 @@ func (b *AgentBridge) handleMobileAskUserResponse(data tunnel.AskUserResponseDat
 	case ch <- response:
 	default:
 	}
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushStatus(tunnel.StatusRunning, "")
 	}
 }
 

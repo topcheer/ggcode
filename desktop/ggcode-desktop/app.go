@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -56,9 +60,33 @@ type App struct {
 	agentBridge *AgentBridge
 
 	// Mobile tunnel.
+	tunnelMu      sync.RWMutex
 	tunnelSession *tunnel.Session
 	tunnelBroker  *tunnel.Broker
 	shareDialog   dialog.Dialog
+}
+
+func (a *App) currentTunnelSession() *tunnel.Session {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelSession
+}
+
+func (a *App) currentTunnelBroker() *tunnel.Broker {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelBroker
+}
+
+func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	a.tunnelSession = sess
+	a.tunnelBroker = broker
+}
+
+func (a *App) clearTunnelState() {
+	a.setTunnelState(nil, nil)
 }
 
 // NewApp creates the desktop app.
@@ -191,9 +219,9 @@ func (a *App) showAbout() {
 
 // showShareDialog starts a tunnel and shows the connection QR code + URL.
 func (a *App) showShareDialog() {
-	if a.tunnelSession != nil {
+	if sess := a.currentTunnelSession(); sess != nil {
 		// Already running — show current info
-		info := a.tunnelSession.Info()
+		info := sess.Info()
 		if info != nil {
 			a.showTunnelInfo(info)
 		}
@@ -276,8 +304,7 @@ func (a *App) showShareDialog() {
 			}
 		})
 
-		a.tunnelSession = sess
-		a.tunnelBroker = broker
+		a.setTunnelState(sess, broker)
 		if a.agentBridge != nil {
 			a.agentBridge.ensureSession()
 			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
@@ -294,8 +321,10 @@ func (a *App) showShareDialog() {
 				switchedSession = true
 			}
 			a.agentBridge.PrepareCurrentSessionTunnelLedger()
+			replayedCanonical := false
 			if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
 				broker.ReplayEvents(events, !switchedSession)
+				replayedCanonical = true
 			} else {
 				broker.SendSnapshot(snapshot)
 			}
@@ -303,6 +332,9 @@ func (a *App) showShareDialog() {
 				return a.tunnelSnapshot()
 			})
 			a.agentBridge.AttachTunnelBroker(broker)
+			if !replayedCanonical {
+				a.reseedTunnelSnapshotAfterAttach(broker, snapshot)
+			}
 		}
 
 		fyne.Do(func() {
@@ -327,7 +359,175 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	}
 	snapshot.Status = a.agentBridge.CurrentTunnelStatus()
 	snapshot.History = a.agentBridge.CurrentTunnelHistory()
+	snapshot.ExtraEvents = a.currentTunnelAgentSnapshotEvents()
 	return snapshot
+}
+
+func desktopTunnelSnapshotMatches(a, b tunnel.BrokerSnapshot) bool {
+	if a.SessionInfo != b.SessionInfo || a.Status != b.Status {
+		return false
+	}
+	if !desktopTunnelHistoryMatches(a.History, b.History) {
+		return false
+	}
+	if len(a.ExtraEvents) != len(b.ExtraEvents) {
+		return false
+	}
+	for i := range a.ExtraEvents {
+		if a.ExtraEvents[i].Type != b.ExtraEvents[i].Type ||
+			a.ExtraEvents[i].StreamID != b.ExtraEvents[i].StreamID ||
+			!bytes.Equal(a.ExtraEvents[i].Data, b.ExtraEvents[i].Data) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) reseedTunnelSnapshotAfterAttach(broker *tunnel.Broker, seeded tunnel.BrokerSnapshot) {
+	if broker == nil {
+		return
+	}
+	latest := a.tunnelSnapshot()
+	if desktopTunnelSnapshotMatches(seeded, latest) {
+		return
+	}
+	if a.agentBridge != nil {
+		if current := a.agentBridge.CurrentSession(); current != nil && current.ID != "" {
+			broker.SwitchSession(current.ID)
+		} else {
+			broker.ResetSession()
+		}
+	} else {
+		broker.ResetSession()
+	}
+	broker.SendSnapshot(latest)
+}
+
+func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
+	if a.agentBridge == nil {
+		return nil
+	}
+	panels := append([]AgentPanelData{}, a.agentBridge.SubAgentPanels()...)
+	panels = append(panels, a.agentBridge.SwarmPanels()...)
+	sort.Slice(panels, func(i, j int) bool { return panels[i].ID < panels[j].ID })
+	out := make([]tunnel.SnapshotEvent, 0)
+	for _, panel := range panels {
+		if panel.ID == "" {
+			continue
+		}
+		task := panel.Task
+		if task == "" && panel.Kind == "teammate" {
+			task = "teammate"
+		}
+		out = append(out, desktopSnapshotEvent(
+			tunnel.EventSubagentSpawn,
+			panel.ID,
+			tunnel.SubagentSpawnData{AgentID: panel.ID, Name: panel.Name, Task: task, ParentID: panel.TeamID},
+		))
+		textID := "sa-" + panel.ID
+		if panel.Kind == "teammate" {
+			textID = "tm-" + panel.ID
+		}
+		textBuf := strings.Builder{}
+		flushText := func(done bool) {
+			if textBuf.Len() == 0 {
+				return
+			}
+			out = append(out, desktopSnapshotEvent(
+				tunnel.EventSubagentText,
+				panel.ID,
+				tunnel.SubagentTextData{AgentID: panel.ID, ID: textID, Chunk: textBuf.String(), Done: done},
+			))
+			textBuf.Reset()
+		}
+		for _, ev := range panel.Events {
+			switch ev.Type {
+			case "tool_call":
+				flushText(false)
+				detail := ev.Content
+				if detail == "" {
+					detail = toolArgSummary(ev.ToolName, ev.ToolArgs)
+				}
+				out = append(out, desktopSnapshotEvent(
+					tunnel.EventSubagentToolCall,
+					panel.ID,
+					tunnel.SubagentToolCallData{
+						AgentID:     panel.ID,
+						ToolID:      ev.ToolID,
+						ToolName:    ev.ToolName,
+						DisplayName: toolDisplayName(ev.ToolName, ev.ToolArgs),
+						Args:        ev.ToolArgs,
+						Detail:      detail,
+					},
+				))
+			case "tool_result":
+				flushText(false)
+				out = append(out, desktopSnapshotEvent(
+					tunnel.EventSubagentToolResult,
+					panel.ID,
+					tunnel.SubagentToolResultData{
+						AgentID:  panel.ID,
+						ToolID:   ev.ToolID,
+						ToolName: ev.ToolName,
+						Result:   ev.Content,
+						IsError:  ev.IsError,
+					},
+				))
+			default:
+				if ev.Content != "" {
+					if ev.Type == "error" && textBuf.Len() > 0 {
+						textBuf.WriteString("\n")
+					}
+					textBuf.WriteString(ev.Content)
+				}
+			}
+		}
+		if textBuf.Len() == 0 {
+			switch {
+			case panel.Result != "":
+				textBuf.WriteString(panel.Result)
+			case panel.Error != "":
+				textBuf.WriteString(panel.Error)
+			}
+		}
+		completed := panel.Status == "completed" || panel.Status == "failed" || panel.Status == "idle"
+		flushText(completed)
+		if completed {
+			summary := panel.Result
+			success := panel.Error == ""
+			if summary == "" {
+				summary = panel.Error
+			}
+			if summary == "" {
+				summary = panel.Status
+			}
+			out = append(out, desktopSnapshotEvent(
+				tunnel.EventSubagentComplete,
+				panel.ID,
+				tunnel.SubagentCompleteData{AgentID: panel.ID, Name: panel.Name, Summary: summary, Success: success},
+			))
+			continue
+		}
+		statusMessage := panel.Task
+		if statusMessage == "" {
+			statusMessage = panel.Name
+		}
+		out = append(out, desktopSnapshotEvent(
+			tunnel.EventSubagentStatus,
+			panel.ID,
+			tunnel.SubagentStatusData{AgentID: panel.ID, Status: tunnel.StatusRunning, Message: statusMessage},
+		))
+	}
+	return out
+}
+
+func desktopSnapshotEvent(eventType, streamID string, data interface{}) tunnel.SnapshotEvent {
+	raw, _ := json.Marshal(data)
+	return tunnel.SnapshotEvent{
+		Type:     eventType,
+		StreamID: streamID,
+		Data:     raw,
+	}
 }
 
 func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
@@ -388,13 +588,14 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 }
 
 func (a *App) closeTunnelGracefully(timeout time.Duration) {
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.StopSharingGracefully(timeout)
-	} else if a.tunnelSession != nil {
-		a.tunnelSession.StopGracefully(timeout)
+	broker := a.currentTunnelBroker()
+	sess := a.currentTunnelSession()
+	if broker != nil {
+		broker.StopSharingGracefully(timeout)
+	} else if sess != nil {
+		sess.StopGracefully(timeout)
 	}
-	a.tunnelSession = nil
-	a.tunnelBroker = nil
+	a.clearTunnelState()
 }
 
 // openUpdates checks for the latest release on GitHub.
@@ -682,10 +883,10 @@ func (a *App) resumeSession(id string) {
 	}
 
 	// Push updated session info + history to mobile client
-	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-		a.tunnelBroker.SwitchSession(a.agentBridge.CurrentSession().ID)
+	if broker := a.currentTunnelBroker(); broker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+		broker.SwitchSession(a.agentBridge.CurrentSession().ID)
 		a.agentBridge.ResetCurrentSessionTunnelLedger()
-		a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
+		broker.SendSnapshot(a.tunnelSnapshot())
 	}
 
 	// Refresh sidebar.
@@ -700,7 +901,7 @@ func (a *App) newSession() {
 
 	// 1. Detach broker from bridge FIRST so Cancel() won't enqueue messages.
 	if a.agentBridge != nil {
-		a.agentBridge.tunnelBroker = nil
+		a.agentBridge.DetachTunnelBroker()
 	}
 
 	// 2. Cancel current work (won't push to broker now).
@@ -715,7 +916,7 @@ func (a *App) newSession() {
 
 	// 4. Clear session ID so startChat creates and publishes a fresh active session.
 	if a.agentBridge != nil {
-		a.agentBridge.currentSes = nil
+		a.agentBridge.ClearCurrentSession()
 	}
 
 	// Clear chat view immediately (lightweight — just clear widgets).
@@ -779,18 +980,18 @@ func (a *App) startChat() {
 	if bridge.CurrentSession() == nil {
 		bridge.ensureSession()
 	}
-	if a.tunnelBroker != nil {
-		bridge.tunnelBroker = a.tunnelBroker
-		a.tunnelBroker.SetReplayProvider(func() []tunnel.GatewayMessage {
+	if broker := a.currentTunnelBroker(); broker != nil {
+		bridge.AttachTunnelBroker(broker)
+		broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 			return bridge.CurrentSessionTunnelEvents()
 		})
-		a.tunnelBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 			bridge.RecordTunnelEvent(ev)
 		})
 		if current := bridge.CurrentSession(); current != nil {
-			a.tunnelBroker.SwitchSession(current.ID)
+			broker.SwitchSession(current.ID)
 			bridge.ResetCurrentSessionTunnelLedger()
-			a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
+			broker.SendSnapshot(a.tunnelSnapshot())
 		}
 	}
 
@@ -856,8 +1057,8 @@ func (a *App) applyLanguageChange(language string) {
 	}
 	a.dc.Language = language
 	_ = a.dc.Save()
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.SendLanguageChange(language)
+	if broker := a.currentTunnelBroker(); broker != nil {
+		broker.SendLanguageChange(language)
 	}
 	if a.agentBridge != nil && a.imManager != nil && a.dc != nil {
 		a.agentBridge.Emitter = im.NewIMEmitter(a.imManager, language, a.dc.WorkDir)
@@ -908,8 +1109,8 @@ func (a *App) applyThemeChange(themeName string) {
 	a.dc.Theme = themeName
 	a.dc.Save()
 	// Notify mobile clients
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.SendThemeChange(themeName)
+	if broker := a.currentTunnelBroker(); broker != nil {
+		broker.SendThemeChange(themeName)
 	}
 	fyne.Do(func() {
 		a.fyneApp.Settings().SetTheme(newThemeForScheme(themeName))

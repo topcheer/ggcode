@@ -66,35 +66,62 @@ func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 
 // Connect starts the connection loop. It connects, runs pumps, and auto-reconnects.
 func (rc *RelayClient) Connect() error {
-	if err := rc.dial(); err != nil {
+	conn, err := rc.dial()
+	if err != nil {
 		return err
 	}
-	go rc.run()
+	go rc.run(conn)
 	return nil
 }
 
-func (rc *RelayClient) dial() error {
+func (rc *RelayClient) dial() (*websocket.Conn, error) {
 	url := fmt.Sprintf("%s/ws?role=server&token=%s", rc.relayURL, rc.token)
 	conn, _, err := websocket.DefaultDialer.Dial(url, http.Header{})
 	if err != nil {
-		return fmt.Errorf("relay dial: %w", err)
+		return nil, fmt.Errorf("relay dial: %w", err)
 	}
+	rc.connMu.Lock()
 	rc.conn = conn
-	return nil
+	rc.connMu.Unlock()
+	return conn, nil
 }
 
-func (rc *RelayClient) run() {
+func (rc *RelayClient) clearConn(conn *websocket.Conn) {
+	rc.connMu.Lock()
+	defer rc.connMu.Unlock()
+	if rc.conn == conn {
+		rc.conn = nil
+	}
+}
+
+func (rc *RelayClient) currentConn() *websocket.Conn {
+	rc.connMu.Lock()
+	defer rc.connMu.Unlock()
+	return rc.conn
+}
+
+func (rc *RelayClient) run(conn *websocket.Conn) {
 	defer close(rc.runDone)
 	for {
 		done := make(chan struct{})
 		var once sync.Once
 		closeDone := func() { once.Do(func() { close(done) }) }
+		var wg sync.WaitGroup
+		wg.Add(2)
 
-		go rc.writePump(closeDone)
-		go rc.readPump(closeDone)
+		go func(activeConn *websocket.Conn) {
+			defer wg.Done()
+			rc.writePump(activeConn, closeDone)
+		}(conn)
+		go func(activeConn *websocket.Conn) {
+			defer wg.Done()
+			rc.readPump(activeConn, closeDone)
+		}(conn)
 
 		<-done // Wait for either pump to exit
-		rc.conn.Close()
+		_ = conn.Close()
+		wg.Wait()
+		rc.clearConn(conn)
 
 		rc.closeMu.Lock()
 		if rc.closed {
@@ -113,7 +140,8 @@ func (rc *RelayClient) run() {
 			}
 			rc.closeMu.Unlock()
 
-			if err := rc.dial(); err != nil {
+			nextConn, err := rc.dial()
+			if err != nil {
 				backoff := time.Duration(attempt+1) * time.Second
 				if backoff > 10*time.Second {
 					backoff = 10 * time.Second
@@ -127,12 +155,13 @@ func (rc *RelayClient) run() {
 				}
 			}
 			debug.Log("tunnel", "relay-client: reconnected")
+			conn = nextConn
 			break
 		}
 	}
 }
 
-func (rc *RelayClient) writePump(done func()) {
+func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	defer done()
 	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
 	ticker := time.NewTicker(relayPingInterval)
@@ -144,37 +173,32 @@ func (rc *RelayClient) writePump(done func()) {
 			if !ok {
 				return
 			}
-			rc.connMu.Lock()
-			err := rc.conn.WriteMessage(websocket.TextMessage, msg)
-			rc.connMu.Unlock()
+			err := conn.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
 				return
 			}
 		case <-ticker.C:
-			rc.connMu.Lock()
-			err := rc.conn.WriteMessage(websocket.TextMessage, pingMsg)
-			rc.connMu.Unlock()
+			err := conn.WriteMessage(websocket.TextMessage, pingMsg)
 			if err != nil {
 				return
 			}
 		case <-rc.gracefulStopCh:
 			for {
 				select {
-				case msg := <-rc.sendCh:
-					rc.connMu.Lock()
-					err := rc.conn.WriteMessage(websocket.TextMessage, msg)
-					rc.connMu.Unlock()
+				case msg, ok := <-rc.sendCh:
+					if !ok {
+						return
+					}
+					err := conn.WriteMessage(websocket.TextMessage, msg)
 					if err != nil {
 						return
 					}
 				default:
-					rc.connMu.Lock()
-					_ = rc.conn.WriteControl(
+					_ = conn.WriteControl(
 						websocket.CloseMessage,
 						websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 						time.Now().Add(time.Second),
 					)
-					rc.connMu.Unlock()
 					return
 				}
 			}
@@ -184,18 +208,18 @@ func (rc *RelayClient) writePump(done func()) {
 	}
 }
 
-func (rc *RelayClient) readPump(done func()) {
+func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 	defer done()
 
-	rc.conn.SetReadLimit(1 << 20)
-	rc.conn.SetPongHandler(func(string) error {
-		rc.conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
+	conn.SetReadLimit(1 << 20)
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
 		return nil
 	})
 
 	for {
-		rc.conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
-		_, raw, err := rc.conn.ReadMessage()
+		conn.SetReadDeadline(time.Now().Add(relayReadTimeout))
+		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
 				debug.Log("tunnel", "relay-client: read error: %v", err)
@@ -416,21 +440,18 @@ func (rc *RelayClient) Close() {
 	rc.closeMu.Unlock()
 	rc.stopOnce.Do(func() {
 		close(rc.stopCh)
-		rc.connMu.Lock()
-		if rc.conn != nil {
-			_ = rc.conn.Close()
+		if conn := rc.currentConn(); conn != nil {
+			_ = conn.Close()
 		}
-		rc.connMu.Unlock()
 	})
 }
 
 func (rc *RelayClient) CloseGracefully(timeout time.Duration) {
 	rc.closeMu.Lock()
 	rc.closed = true
-	hasConn := rc.conn != nil
 	rc.closeMu.Unlock()
 
-	if !hasConn {
+	if rc.currentConn() == nil {
 		rc.Close()
 		return
 	}

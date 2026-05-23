@@ -63,22 +63,29 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	}
 	s.client = client
 
+	// Wire handlers before connect so the initial relay callbacks cannot race
+	// with handler registration.
+	client.OnMessage(func(msg GatewayMessage) {
+		s.mu.RLock()
+		fn := s.onMsg
+		s.mu.RUnlock()
+		if fn != nil {
+			fn(msg)
+		}
+	})
+	client.OnConnected(func(info RelayConnectedState) {
+		s.mu.RLock()
+		fn := s.onConn
+		s.mu.RUnlock()
+		if fn != nil {
+			fn(info)
+		}
+	})
+
 	// Connect to relay
 	if err := client.Connect(); err != nil {
 		return nil, err
 	}
-
-	// Wire handlers
-	client.OnMessage(func(msg GatewayMessage) {
-		if s.onMsg != nil {
-			s.onMsg(msg)
-		}
-	})
-	client.OnConnected(func(info RelayConnectedState) {
-		if s.onConn != nil {
-			s.onConn(info)
-		}
-	})
 
 	// Build connect URL
 	connectURL := client.ConnectURL()
@@ -104,10 +111,14 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 }
 
 func (s *Session) OnMessage(fn func(msg GatewayMessage)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.onMsg = fn
 }
 
 func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.onConn = fn
 }
 
