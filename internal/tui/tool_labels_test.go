@@ -20,3 +20,13 @@ func TestFirstLine(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribeToolSwarmTaskCreateUsesSubject(t *testing.T) {
+	got := describeTool(LangEnglish, "swarm_task_create", `{"team_id":"team-1","subject":"Fix replay gaps","description":"## details\n- not for header"}`)
+	if got.DisplayName != "Fix replay gaps" {
+		t.Fatalf("expected subject display name, got %q", got.DisplayName)
+	}
+	if got.Detail != "" {
+		t.Fatalf("expected empty detail, got %q", got.Detail)
+	}
+}

@@ -452,16 +452,16 @@ const (
 // GetToolBodyBehavior returns the body rendering behavior for a given tool name.
 func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	switch toolName {
-	case "save_memory", "team_create", "team_delete",
-		"teammate_spawn", "teammate_shutdown", "teammate_list",
-		"swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list",
+	case "save_memory", "team_delete",
+		"teammate_shutdown", "teammate_list",
+		"swarm_task_claim", "swarm_task_complete", "swarm_task_list",
 		"send_message", "config",
 		"enter_plan_mode",
 		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource",
 		"enter_worktree", "exit_worktree",
 		"skill":
 		return BodySuppress
-	case "exit_plan_mode":
+	case "exit_plan_mode", "swarm_task_create":
 		return BodyMarkdown
 	case "cron_create":
 		return BodyFormatJSON

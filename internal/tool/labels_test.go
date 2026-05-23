@@ -99,6 +99,13 @@ func TestDescribeTool(t *testing.T) {
 
 		// Commands
 		{
+			name: "swarm_task_create prefers subject", toolName: "swarm_task_create",
+			rawArgs:     `{"team_id":"team-1","subject":"Fix tunnel replay","description":"## plan\n- step"}`,
+			wantName:    "Fix tunnel replay",
+			wantDetail:  "",
+			wantDisplay: "Fix tunnel replay",
+		},
+		{
 			name: "run_command simple", toolName: "run_command",
 			rawArgs:     `{"command":"go test ./..."}`,
 			wantName:    "go test ./...",
@@ -414,7 +421,6 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Run",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			present := DescribeTool(tt.toolName, tt.rawArgs)
@@ -429,6 +435,20 @@ func TestDescribeTool(t *testing.T) {
 				t.Errorf("FormatToolInline = %q, want %q", got, tt.wantDisplay)
 			}
 		})
+	}
+}
+
+func TestSwarmTaskCreateResultMarkdown(t *testing.T) {
+	got := SwarmTaskCreateResultMarkdown(`{"ID":"task-1","Subject":"Fix tunnel replay","Description":"## Summary\n- keep markdown"}`)
+	if got != "## Summary\n- keep markdown" {
+		t.Fatalf("expected extracted markdown description, got %q", got)
+	}
+}
+
+func TestTeamCreateResultText(t *testing.T) {
+	got := TeamCreateResultText(`{"ID":"team-1","Name":"research-squad"}`)
+	if got != "Team research-squad Created" {
+		t.Fatalf("expected formatted team_create result, got %q", got)
 	}
 }
 

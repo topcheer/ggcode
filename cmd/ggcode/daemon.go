@@ -1205,6 +1205,11 @@ loop:
 }
 
 func daemonToolDisplayName(toolName, rawArgs string) string {
+	if toolName == "swarm_task_create" {
+		if subject := tool.SwarmTaskCreateSubject(rawArgs); strings.TrimSpace(subject) != "" {
+			return strings.TrimSpace(subject)
+		}
+	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil {
 		if v, ok := args["description"]; ok {

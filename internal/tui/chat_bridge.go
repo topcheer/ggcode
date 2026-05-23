@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/chat"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // chatWrite appends an item to chatList.
@@ -315,8 +316,34 @@ func suppressToolResult(toolName, result string) string {
 		return formatAskUserResult(result)
 	case "multi_file_edit", "multi_edit_file":
 		return formatMultiEditResult(result)
+	case "team_create":
+		return tool.TeamCreateResultText(result)
+	case "teammate_spawn":
+		return formatTeammateSpawnResult(result)
+	case "swarm_task_create":
+		return tool.SwarmTaskCreateResultMarkdown(result)
 	}
 	return result
+}
+
+func formatTeammateSpawnResult(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return result
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return result
+	}
+	name, _ := raw["Name"].(string)
+	if name == "" {
+		name, _ = raw["name"].(string)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return result
+	}
+	return fmt.Sprintf("Teammate %s Created", name)
 }
 
 // formatMultiEditResult formats multi_file_edit JSON into a human-readable summary.

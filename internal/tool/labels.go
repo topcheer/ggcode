@@ -144,6 +144,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 			argStr(args, "description"),
 			argStr(args, "prompt"),
 		)))
+	case "swarm_task_create":
+		return toolPres(displayTarget(SwarmTaskCreateSubject(rawArgs)), "")
 	case "wait_agent":
 		return toolPres("Wait Agent", displayTarget(argStr(args, "task_id")))
 	case "list_agents":
@@ -232,6 +234,57 @@ func displayFileTarget(s string) string {
 		return ""
 	}
 	return strings.TrimRight(s, `/\`)
+}
+
+// SwarmTaskCreateSubject returns the human-facing task subject for swarm_task_create.
+func SwarmTaskCreateSubject(rawArgs string) string {
+	args := parseToolArgs(rawArgs)
+	return firstNonEmpty(
+		displayTarget(argStr(args, "subject")),
+		displayTarget(argStr(args, "description")),
+	)
+}
+
+// SwarmTaskCreateResultMarkdown extracts the markdown description from a swarm_task_create result.
+func SwarmTaskCreateResultMarkdown(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return result
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return result
+	}
+	description, _ := raw["Description"].(string)
+	if description == "" {
+		description, _ = raw["description"].(string)
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return result
+	}
+	return description
+}
+
+// TeamCreateResultText extracts the created team name from a team_create result.
+func TeamCreateResultText(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return result
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return result
+	}
+	name, _ := raw["Name"].(string)
+	if name == "" {
+		name, _ = raw["name"].(string)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return result
+	}
+	return fmt.Sprintf("Team %s Created", name)
 }
 
 func extractFileTarget(toolName, rawArgs string) string {

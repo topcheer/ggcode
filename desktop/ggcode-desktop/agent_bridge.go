@@ -916,6 +916,11 @@ func (b *AgentBridge) SwarmPanels() []AgentPanelData {
 // ── Helpers ──────────────────────────────────────────
 
 func toolDisplayName(toolName, rawArgs string) string {
+	if toolName == "swarm_task_create" {
+		if subject := tool.SwarmTaskCreateSubject(rawArgs); subject != "" {
+			return subject
+		}
+	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil {
 		if v, ok := args["description"]; ok {
@@ -943,6 +948,10 @@ func toolDescription(toolName, rawArgs string) string {
 			}
 		}
 		return ""
+	}
+
+	if toolName == "swarm_task_create" {
+		return tool.SwarmTaskCreateSubject(rawArgs)
 	}
 
 	// First check for explicit description field from LLM.
@@ -1270,6 +1279,11 @@ func toolArgSummary(toolName, rawArgs string) string {
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
+	case "swarm_task_create":
+		if assignee, ok := args["assignee"].(string); ok && strings.TrimSpace(assignee) != "" {
+			return strings.TrimSpace(assignee)
+		}
+		return ""
 	}
 	for _, v := range args {
 		if s, ok := v.(string); ok && len(s) > 0 {
