@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
+import 'package:ggcode_mobile/core/theme/app_theme.dart';
 import 'package:ggcode_mobile/features/chat/chat_screen.dart';
 import 'package:ggcode_mobile/features/chat/input_bar.dart';
 import 'package:ggcode_mobile/features/connect/connect_screen.dart';
@@ -236,6 +237,40 @@ void main() {
     );
     expect(find.descendant(of: find.byType(TabBar), matching: find.byType(Tab)),
         findsNWidgets(2));
+  });
+
+  testWidgets('ChatScreen uses readable tab text colors in light theme',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    container.read(themeProvider.notifier).setTheme('light');
+    final notifier = container.read(connectionProvider.notifier);
+
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-light',
+        eventId: 'ev-000000011',
+        type: 'subagent_tool_call',
+        data: {
+          'agent_id': 'sa-light',
+          'tool_id': 'tool-1',
+          'tool_name': 'read_file',
+          'display_name': 'Read File',
+          'args': '{"path":"a.txt"}',
+          'detail': 'a.txt',
+        },
+      ),
+    );
+    await tester.pump();
+
+    final label = tester.widget<Text>(find.text('sa-light'));
+    expect(label.style?.color, AppColors.textPrimary);
   });
 
   testWidgets('InputBar stays enabled while agent is busy',

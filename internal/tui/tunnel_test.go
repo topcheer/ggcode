@@ -576,6 +576,30 @@ func TestHandleSubAgentTunnelToolMsgsPushEvents(t *testing.T) {
 	}
 }
 
+func TestHandleSubAgentTunnelToolCallMsgFillsDetailFallback(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	next, _ := m.handleSubAgentTunnelToolCallMsg(subAgentTunnelToolCallMsg{
+		AgentID:  "sa-1",
+		ToolID:   "tool-1",
+		ToolName: "read_file",
+		Args:     `{"path":"a.txt"}`,
+	})
+	m = &next
+
+	if len(m.session.TunnelEvents) != 1 {
+		t.Fatalf("expected 1 tunnel event, got %d", len(m.session.TunnelEvents))
+	}
+
+	var data tunnel.SubagentToolCallData
+	if err := json.Unmarshal(m.session.TunnelEvents[0].Data, &data); err != nil {
+		t.Fatalf("unmarshal tool call data: %v", err)
+	}
+	if data.Detail != "a.txt" {
+		t.Fatalf("expected formatted detail %q, got %q", "a.txt", data.Detail)
+	}
+}
+
 func TestHandleSwarmTunnelEventMsgPushesEvents(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 

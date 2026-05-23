@@ -315,9 +315,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 controller: _tabController,
                 isScrollable: true,
                 tabAlignment: TabAlignment.start,
-                labelColor: Colors.white,
-                unselectedLabelColor: Colors.white54,
-                indicatorColor: Colors.blueAccent,
+                labelColor: AppColors.textPrimary,
+                unselectedLabelColor: AppColors.textMuted,
+                indicatorColor: AppColors.accent,
                 labelStyle: const TextStyle(fontSize: 13),
                 tabs: List.generate(_tabIds.length, (i) {
                   final id = _tabIds[i];
@@ -355,16 +355,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         Text(
                           name,
                           style: TextStyle(
-                            color: isCompleted ? Colors.white38 : Colors.white,
+                            color: isCompleted
+                                ? AppColors.textMuted
+                                : AppColors.textPrimary,
                           ),
                         ),
                         if (isCompleted && id != 'main')
                           GestureDetector(
                             onTap: () => _closeTab(id),
-                            child: const Padding(
+                            child: Padding(
                               padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.close,
-                                  size: 14, color: Colors.white38),
+                              child: Icon(
+                                Icons.close,
+                                size: 14,
+                                color: AppColors.textMuted,
+                              ),
                             ),
                           ),
                       ],

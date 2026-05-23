@@ -77,13 +77,17 @@ func (m Model) handleSubAgentTunnelStreamTextMsg(msg subAgentTunnelStreamTextMsg
 
 func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
+		detail := msg.Detail
+		if detail == "" {
+			detail = describeTool(LangEnglish, msg.ToolName, msg.Args).Detail
+		}
 		m.pushSubAgentTunnelToolCall(
 			msg.AgentID,
 			msg.ToolID,
 			msg.ToolName,
 			toolCallDisplayName(msg.ToolName, msg.Args),
 			msg.Args,
-			msg.Detail,
+			detail,
 		)
 	}
 	return m, nil
