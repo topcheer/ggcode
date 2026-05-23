@@ -152,28 +152,44 @@ func Normalize(text string) string {
 	}
 	lines := strings.Split(text, "\n")
 	inFence := false
+	out := make([]string, 0, len(lines)+4)
+	prevWasNormalizedHeading := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
 			if !inFence && isBareFence(trimmed) {
-				lines[i] = line + "text"
+				line = line + "text"
 			}
 			inFence = !inFence
+			out = append(out, line)
+			prevWasNormalizedHeading = false
 			continue
 		}
 		if inFence {
+			out = append(out, line)
+			prevWasNormalizedHeading = false
 			continue
 		}
-		lines[i] = normalizeHeading(line)
+		normalized, isHeading := normalizeHeading(line)
+		if isHeading && len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		} else if prevWasNormalizedHeading && trimmed != "" && !isHeading && len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+		out = append(out, normalized)
+		prevWasNormalizedHeading = isHeading
+		if i == len(lines)-1 {
+			prevWasNormalizedHeading = false
+		}
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n")
 }
 
 func isBareFence(line string) bool {
 	return line == "```" || line == "~~~"
 }
 
-func normalizeHeading(line string) string {
+func normalizeHeading(line string) (string, bool) {
 	indentLen := 0
 	for indentLen < len(line) && indentLen < 3 && line[indentLen] == ' ' {
 		indentLen++
@@ -184,13 +200,13 @@ func normalizeHeading(line string) string {
 		level++
 	}
 	if level == 0 || level >= len(rest) || !unicode.IsSpace(rune(rest[level])) {
-		return line
+		return line, false
 	}
 	content := strings.TrimSpace(rest[level:])
 	content = strings.TrimRight(content, "#")
 	content = strings.TrimSpace(content)
 	if content == "" {
-		return line
+		return line, false
 	}
-	return strings.Repeat(" ", indentLen) + content
+	return strings.Repeat(" ", indentLen) + content, true
 }

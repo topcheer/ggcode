@@ -808,6 +808,34 @@ func TestBrokerHandleRelayConnectedReseedsSnapshotWhenRelayStateLost(t *testing.
 	}
 }
 
+func TestBrokerSendSnapshotIncludesExtraEvents(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.SendSnapshot(BrokerSnapshot{
+		SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		ExtraEvents: []SnapshotEvent{
+			{
+				Type:     EventSubagentSpawn,
+				StreamID: "agent-1",
+				Data:     json.RawMessage(`{"agent_id":"agent-1","name":"Researcher","task":"teammate"}`),
+			},
+		},
+		Status: StatusData{Status: "running", Message: "processing"},
+	})
+
+	msgs := d.drain()
+	if len(msgs) != 3 {
+		t.Fatalf("expected session_info + extra event + status, got %d", len(msgs))
+	}
+	if msgs[1].Type != EventSubagentSpawn {
+		t.Fatalf("expected extra snapshot event to be replayed, got %q", msgs[1].Type)
+	}
+	if msgs[2].Type != EventStatus {
+		t.Fatalf("expected final status event, got %q", msgs[2].Type)
+	}
+}
+
 func TestBrokerHandleRelayConnectedReseedsCurrentStatusAfterHistory(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

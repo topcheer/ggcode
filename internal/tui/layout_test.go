@@ -1645,6 +1645,14 @@ func TestNormalizeTerminalMarkdownAnnotatesBareCodeFencesAsText(t *testing.T) {
 	}
 }
 
+func TestNormalizeTerminalMarkdownKeepsOrderedListsAfterHeadings(t *testing.T) {
+	input := "## Phase 2 — 短期修复（3-5 天）\n5. S01 + S02\n6. C-2\n"
+	normalized := markdown.Normalize(input)
+	if !strings.Contains(normalized, "Phase 2 — 短期修复（3-5 天）\n\n5. S01 + S02") {
+		t.Fatalf("expected heading/list block separation, got %q", normalized)
+	}
+}
+
 func TestMarkdownStyleConfigUsesCalmerCodeColors(t *testing.T) {
 	dark := markdown.StyleConfigForDarkMode(true)
 	if dark.Code.BackgroundColor != nil {

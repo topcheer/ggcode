@@ -144,6 +144,100 @@ void main() {
     expect(find.byKey(const Key('toolStatusDone-ev-tool-2')), findsOneWidget);
   });
 
+  testWidgets(
+      'ChatScreen shows an agent tab when activity arrives before spawn',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(connectionProvider.notifier);
+
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000001',
+        type: 'subagent_tool_call',
+        data: {
+          'agent_id': 'sa-1',
+          'tool_id': 'tool-1',
+          'tool_name': 'read_file',
+          'display_name': 'Read',
+          'args': '{"path":"a.txt"}',
+          'detail': 'a.txt',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(TabBar), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(TabBar),
+        matching: find.text('sa-1'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: find.byType(TabBar), matching: find.byType(Tab)),
+        findsNWidgets(2));
+  });
+
+  testWidgets(
+      'ChatScreen shows an agent tab for live session activity after active_session',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(connectionProvider.notifier);
+
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-live',
+        type: 'active_session',
+        data: {'session_id': 'sess-live'},
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-live',
+        eventId: 'ev-000000010',
+        type: 'subagent_tool_call',
+        data: {
+          'agent_id': 'sa-live',
+          'tool_id': 'tool-1',
+          'tool_name': 'read_file',
+          'display_name': 'Read',
+          'args': '{"path":"a.txt"}',
+          'detail': 'a.txt',
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(TabBar), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(TabBar),
+        matching: find.text('sa-live'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: find.byType(TabBar), matching: find.byType(Tab)),
+        findsNWidgets(2));
+  });
+
   testWidgets('InputBar stays enabled while agent is busy',
       (WidgetTester tester) async {
     final controller = TextEditingController();

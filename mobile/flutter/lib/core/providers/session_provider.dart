@@ -124,11 +124,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final crypto = TunnelCrypto(token);
     service = ConnectionService(url: url, crypto: crypto);
     await _loadResumeState();
+    var restoredProjection = false;
     if (!clearState && _hasEmptyUiProjection()) {
-      _restoreProjectionFromCache(adoptCursor: false);
+      restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
     }
     if (clearState) {
-      var restoredProjection =
+      restoredProjection =
           !_hasEmptyUiProjection() || _restoreProjectionFromCache();
       if (!restoredProjection && _sessionId.isNotEmpty) {
         restoredProjection = await cache.attachSessionToActiveWorkspace(
@@ -145,6 +146,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _pendingReplayEvents.clear();
       _recentEventIds.clear();
       _recentEventSet.clear();
+    }
+    if (!restoredProjection && _hasEmptyUiProjection()) {
+      // A stale cursor without restored local UI can skip earlier subagent_spawn
+      // events, which leaves teammate/subagent tabs missing after reconnect.
+      _lastAppliedEventId = '';
     }
 
     // Listen to connection status changes
@@ -511,16 +517,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentSpawnData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(ref.read(subagentProvider));
-          agents[data.agentId] = SubagentInfo(
+          _upsertSubagent(
             agentId: data.agentId,
             name: data.name,
             task: data.task,
             color: data.color,
             parentId: data.parentId,
+            status: 'running',
           );
-          ref.read(subagentProvider.notifier).set(agents);
         }
         _markEventApplied(msg);
         break;
@@ -528,8 +532,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'subagent_text':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
-          chatNotifier
-              .handleSubagentText(proto.SubagentTextData.fromJson(msg.data!));
+          final data = proto.SubagentTextData.fromJson(msg.data!);
+          _upsertSubagent(
+            agentId: data.agentId,
+            status: 'running',
+          );
+          chatNotifier.handleSubagentText(data);
         }
         _markEventApplied(msg);
         break;
@@ -538,13 +546,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentStatusData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(ref.read(subagentProvider));
-          if (agents.containsKey(data.agentId)) {
-            agents[data.agentId] =
-                agents[data.agentId]!.copyWith(status: data.status);
-            ref.read(subagentProvider.notifier).set(agents);
-          }
+          _upsertSubagent(
+            agentId: data.agentId,
+            status: data.status,
+          );
         }
         _markEventApplied(msg);
         break;
@@ -553,17 +558,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(ref.read(subagentProvider));
-          if (agents.containsKey(data.agentId)) {
-            agents[data.agentId] = agents[data.agentId]!.copyWith(
-              status: 'completed',
-              completed: true,
-              success: data.success,
-              summary: data.summary,
-            );
-            ref.read(subagentProvider.notifier).set(agents);
-          }
+          _upsertSubagent(
+            agentId: data.agentId,
+            name: data.name,
+            status: 'completed',
+            completed: true,
+            success: data.success,
+            summary: data.summary,
+          );
           // Auto-remove completed agent tab after 5 seconds
           Future.delayed(const Duration(seconds: 5), () {
             final current =
@@ -584,8 +586,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentToolCallData.fromJson(msg.data!);
-          final agents = ref.read(subagentProvider);
-          final agent = agents[data.agentId];
+          final agent = _upsertSubagent(
+            agentId: data.agentId,
+            status: 'running',
+          );
           final chatNotifier = ref.read(chatProvider.notifier);
           chatNotifier.addSubagentToolCall(
             messageId: msg.eventId ?? data.toolId,
@@ -595,8 +599,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             displayName: data.displayName,
             args: data.args,
             detail: data.detail,
-            sourceName: agent?.name ?? data.agentId,
-            sourceColor: agent?.color ?? '#4CAF50',
+            sourceName: agent.name,
+            sourceColor: agent.color,
           );
         }
         _markEventApplied(msg);
@@ -606,6 +610,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentToolResultData.fromJson(msg.data!);
+          _upsertSubagent(agentId: data.agentId);
           final chatNotifier = ref.read(chatProvider.notifier);
           chatNotifier.updateSubagentToolResult(
             agentId: data.agentId,
@@ -878,6 +883,47 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   bool restoreProjectionFromCacheForTest({bool adoptCursor = true}) {
     return _restoreProjectionFromCache(adoptCursor: adoptCursor);
+  }
+
+  SubagentInfo _upsertSubagent({
+    required String agentId,
+    String? name,
+    String? task,
+    String? color,
+    String? parentId,
+    String? status,
+    bool? completed,
+    bool? success,
+    String? summary,
+  }) {
+    final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+    final existing = agents[agentId];
+    final next = SubagentInfo(
+      agentId: agentId,
+      name: (name != null && name.trim().isNotEmpty)
+          ? name.trim()
+          : existing?.name ?? agentId,
+      task: (task != null && task.trim().isNotEmpty)
+          ? task.trim()
+          : existing?.task ?? '',
+      color: (color != null && color.trim().isNotEmpty)
+          ? color.trim()
+          : existing?.color ?? '#4CAF50',
+      parentId: (parentId != null && parentId.trim().isNotEmpty)
+          ? parentId.trim()
+          : existing?.parentId ?? '',
+      status: (status != null && status.trim().isNotEmpty)
+          ? status.trim()
+          : existing?.status ?? 'running',
+      completed: completed ?? existing?.completed ?? false,
+      success: success ?? existing?.success ?? false,
+      summary: (summary != null && summary.trim().isNotEmpty)
+          ? summary.trim()
+          : existing?.summary,
+    );
+    agents[agentId] = next;
+    ref.read(subagentProvider.notifier).set(agents);
+    return next;
   }
 
   void _persistResumeState() {
@@ -1176,7 +1222,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult: result,
+              toolResult: _formatToolResultForDisplay(toolName, result),
               toolCompleted: true,
               isToolError: isError,
             )
@@ -1221,7 +1267,10 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult: data.result,
+              toolResult: _formatToolResultForDisplay(
+                data.toolName,
+                data.result,
+              ),
               toolCompleted: true,
               isToolError: data.isError,
             )
@@ -1229,6 +1278,76 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             state[i],
       ];
     }
+  }
+
+  String _formatToolResultForDisplay(String toolName, String result) {
+    switch (toolName) {
+      case 'team_create':
+        return _formatTeamCreateResult(result);
+      case 'teammate_spawn':
+        return _formatTeammateSpawnResult(result);
+      case 'swarm_task_create':
+        return _formatSwarmTaskCreateResult(result);
+      default:
+        return result;
+    }
+  }
+
+  String _formatTeamCreateResult(String result) {
+    final trimmed = result.trim();
+    if (trimmed.isEmpty) {
+      return result;
+    }
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map<String, dynamic>) {
+        final rawName = decoded['Name'] ?? decoded['name'];
+        if (rawName is String && rawName.trim().isNotEmpty) {
+          return 'Team ${rawName.trim()} Created';
+        }
+      }
+    } catch (_) {
+      return result;
+    }
+    return result;
+  }
+
+  String _formatTeammateSpawnResult(String result) {
+    final trimmed = result.trim();
+    if (trimmed.isEmpty) {
+      return result;
+    }
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map<String, dynamic>) {
+        final rawName = decoded['Name'] ?? decoded['name'];
+        if (rawName is String && rawName.trim().isNotEmpty) {
+          return 'Teammate ${rawName.trim()} Created';
+        }
+      }
+    } catch (_) {
+      return result;
+    }
+    return result;
+  }
+
+  String _formatSwarmTaskCreateResult(String result) {
+    final trimmed = result.trim();
+    if (trimmed.isEmpty) {
+      return result;
+    }
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is Map<String, dynamic>) {
+        final rawDescription = decoded['Description'] ?? decoded['description'];
+        if (rawDescription is String && rawDescription.trim().isNotEmpty) {
+          return rawDescription.trim();
+        }
+      }
+    } catch (_) {
+      return result;
+    }
+    return result;
   }
 
   SubagentInfo? _findSubagent(String id) {

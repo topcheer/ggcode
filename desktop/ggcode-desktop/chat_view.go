@@ -22,6 +22,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/tool"
 
 	"github.com/topcheer/ggcode/internal/provider"
 
@@ -800,7 +801,12 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		return
 	}
 
-	resultBlock := newMD("```\n" + truncateRunes(formatted, 3000, "\n...(truncated)") + "\n```")
+	var resultBlock fyne.CanvasObject
+	if toolResultUsesMarkdown(ref.toolName) {
+		resultBlock = newMD(truncateRunes(formatted, 3000, "\n...(truncated)"))
+	} else {
+		resultBlock = newMD("```\n" + truncateRunes(formatted, 3000, "\n...(truncated)") + "\n```")
+	}
 	label := "Output"
 	if tc == tcFile {
 		label = "Content"
@@ -953,6 +959,9 @@ func classifyToolGUI(name string) toolClass {
 	}
 }
 func (cv *ChatView) renderTool(msg *ChatMessage) fyne.CanvasObject {
+	if msg.ToolName == "teammate_spawn" {
+		return cv.renderGenericTool(msg)
+	}
 	switch classifyToolGUI(msg.ToolName) {
 	case tcBash:
 		return cv.renderBashTool(msg)
@@ -1077,8 +1086,13 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 2000, "...")
-	resultBlock := newCodeBlock(result)
+	result := truncateRunes(cv.formatToolResult(msg.ToolName, msg.Content), 2000, "...")
+	var resultBlock fyne.CanvasObject
+	if toolResultUsesMarkdown(msg.ToolName) {
+		resultBlock = newMD(result)
+	} else {
+		resultBlock = newCodeBlock(result)
+	}
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
 }
 
@@ -1965,9 +1979,39 @@ func (cv *ChatView) formatToolResult(toolName, result string) string {
 		return extractRecentOutput(result)
 	case "ask_user":
 		return formatAskUserResult(result)
+	case "team_create":
+		return tool.TeamCreateResultText(result)
+	case "teammate_spawn":
+		return formatTeammateSpawnResult(result)
+	case "swarm_task_create":
+		return tool.SwarmTaskCreateResultMarkdown(result)
 	default:
 		return result
 	}
+}
+
+func toolResultUsesMarkdown(toolName string) bool {
+	return toolName == "swarm_task_create"
+}
+
+func formatTeammateSpawnResult(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return result
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return result
+	}
+	name, _ := raw["Name"].(string)
+	if name == "" {
+		name, _ = raw["name"].(string)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return result
+	}
+	return fmt.Sprintf("Teammate %s Created", name)
 }
 
 // formatMultiEditResult formats multi_file_edit JSON into a human-readable summary.

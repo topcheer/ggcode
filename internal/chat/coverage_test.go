@@ -75,6 +75,12 @@ func TestPrettifyJSONKey(t *testing.T) {
 	}
 }
 
+func TestSwarmTaskCreateUsesMarkdownBody(t *testing.T) {
+	if got := GetToolBodyBehavior("swarm_task_create"); got != BodyMarkdown {
+		t.Fatalf("expected swarm_task_create markdown body, got %v", got)
+	}
+}
+
 func TestNewSpacerItem(t *testing.T) {
 	item := NewSpacerItem(5)
 	if item == nil {
@@ -194,6 +200,12 @@ func TestGetToolBodyBehaviorCoverage(t *testing.T) {
 	_ = bh
 	bh = GetToolBodyBehavior("unknown_tool")
 	_ = bh
+	if got := GetToolBodyBehavior("team_create"); got == BodySuppress {
+		t.Fatalf("team_create body should remain visible, got %v", got)
+	}
+	if got := GetToolBodyBehavior("teammate_spawn"); got == BodySuppress {
+		t.Fatalf("teammate_spawn body should remain visible, got %v", got)
+	}
 }
 
 func TestStylesStringCoverage(t *testing.T) {

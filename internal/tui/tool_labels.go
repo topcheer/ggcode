@@ -8,6 +8,7 @@ import (
 
 	"github.com/mattn/go-runewidth"
 	"github.com/topcheer/ggcode/internal/hooks"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -28,6 +29,13 @@ const maxPreviewLines = 5
 func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := displayToolFileTarget(hooks.ExtractFilePath(toolName, rawArgs))
+
+	if toolName == "swarm_task_create" {
+		subject := toolpkg.SwarmTaskCreateSubject(rawArgs)
+		if subject != "" {
+			return toolPresentation{DisplayName: subject, Activity: subject}
+		}
+	}
 
 	// Universal priority: if the LLM provided a description field, use it as DisplayName.
 	// This mirrors GUI's toolDescription() and IM's DescribeTool() behavior.

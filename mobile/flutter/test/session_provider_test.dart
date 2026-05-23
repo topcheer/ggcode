@@ -120,6 +120,129 @@ void main() {
     expect(message.toolResult, '');
   });
 
+  test('ChatNotifier formats teammate_spawn tool results', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-spawn',
+        toolName: 'teammate_spawn',
+        displayName: 'Spawn teammate',
+        args: '{"team_id":"team-1","name":"researcher"}',
+        detail: 'Create researcher',
+      ),
+      messageId: 'ev-spawn',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-spawn',
+        toolName: 'teammate_spawn',
+        result: '{"ID":"tm-1","Name":"researcher","Status":"idle"}',
+        isError: false,
+      ),
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolResult, 'Teammate researcher Created');
+    expect(message.toolCompleted, isTrue);
+  });
+
+  test('ChatNotifier formats team_create tool results', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-team',
+        toolName: 'team_create',
+        displayName: 'Create team',
+        args: '{"name":"research-squad"}',
+        detail: 'research-squad',
+      ),
+      messageId: 'ev-team',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-team',
+        toolName: 'team_create',
+        result: '{"ID":"team-1","Name":"research-squad"}',
+        isError: false,
+      ),
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolResult, 'Team research-squad Created');
+    expect(message.toolCompleted, isTrue);
+  });
+
+  test('ChatNotifier formats swarm_task_create tool results as markdown', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-task',
+        toolName: 'swarm_task_create',
+        displayName: 'Fix replay gaps',
+        args:
+            '{"team_id":"team-1","subject":"Fix replay gaps","description":"## Plan\\n- ignore for header"}',
+        detail: '',
+      ),
+      messageId: 'ev-task',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-task',
+        toolName: 'swarm_task_create',
+        result:
+            '{"ID":"task-1","Subject":"Fix replay gaps","Description":"## Plan\\n1. Keep markdown\\n2. Render it"}',
+        isError: false,
+      ),
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolDisplayName, 'Fix replay gaps');
+    expect(message.toolResult, '## Plan\n1. Keep markdown\n2. Render it');
+    expect(message.toolCompleted, isTrue);
+  });
+
+  test(
+      'ConnectionNotifier creates subagent state from tool activity without spawn',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000001',
+        type: 'subagent_tool_call',
+        data: {
+          'agent_id': 'sa-1',
+          'tool_id': 'tool-1',
+          'tool_name': 'read_file',
+          'display_name': 'Read',
+          'args': '{"path":"a.txt"}',
+          'detail': 'a.txt',
+        },
+      ),
+    );
+
+    final agents = container.read(subagentProvider);
+    expect(agents.containsKey('sa-1'), isTrue);
+    expect(agents['sa-1']!.name, 'sa-1');
+    expect(agents['sa-1']!.status, 'running');
+
+    final messages = container.read(chatProvider);
+    expect(messages.single.sourceId, 'sa-1');
+    expect(messages.single.toolDisplayName, 'Read');
+  });
+
   test('ChatNotifier absorbs matching remote user echo', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
