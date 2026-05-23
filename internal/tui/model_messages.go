@@ -8,6 +8,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/update"
 )
 
@@ -93,6 +94,31 @@ type projectMemoryLoadedMsg struct {
 
 type subAgentUpdateMsg struct {
 	AgentID string // empty for general update
+}
+
+type subAgentTunnelStreamTextMsg struct {
+	AgentID string
+	Text    string
+}
+
+type subAgentTunnelToolCallMsg struct {
+	AgentID  string
+	ToolID   string
+	ToolName string
+	Args     string
+	Detail   string
+}
+
+type subAgentTunnelToolResultMsg struct {
+	AgentID  string
+	ToolID   string
+	ToolName string
+	Result   string
+	IsError  bool
+}
+
+type swarmTunnelEventMsg struct {
+	Event swarm.Event
 }
 
 // subAgentDoneMsg is sent when a sub-agent or swarm teammate completes its task.

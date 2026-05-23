@@ -316,22 +316,27 @@ func TestFormatIMStartCommandResult(t *testing.T) {
 		{
 			name: "error case with cmd",
 			tr:   &ToolResultInfo{IsError: true, Result: "failed", Args: `{"command":"go build"}`},
-			want: "go build",
+			want: "Failed",
 		},
 		{
 			name: "success with command",
 			tr:   &ToolResultInfo{IsError: false, Args: `{"command":"npm run dev"}`},
-			want: "npm run dev",
+			want: "Started",
 		},
 		{
 			name: "success no command",
 			tr:   &ToolResultInfo{IsError: false, Result: ""},
-			want: "后台命令",
+			want: "Started",
 		},
 		{
 			name: "success with detail fallback",
 			tr:   &ToolResultInfo{IsError: false, Detail: "ls -la", Args: `{"command":"ls -la"}`},
-			want: "ls -la",
+			want: "Started",
+		},
+		{
+			name: "failure",
+			tr:   &ToolResultInfo{IsError: true, Result: "permission denied"},
+			want: "Failed",
 		},
 	}
 	for _, tt := range tests {

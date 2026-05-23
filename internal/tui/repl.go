@@ -211,10 +211,8 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 		}
-		r.model.pushSubAgentTunnelEvent(sa)
 	})
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
-		r.model.pushSubAgentTunnelEvent(sa)
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 			r.program.Send(subAgentDoneMsg{
@@ -222,6 +220,33 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 				AgentName: sa.Name,
 				IsError:   sa.Status == subagent.StatusFailed,
 				Kind:      "subagent",
+			})
+		}
+	})
+	mgr.SetOnStreamText(func(agentID, text string) {
+		if r.program != nil {
+			r.program.Send(subAgentTunnelStreamTextMsg{AgentID: agentID, Text: text})
+		}
+	})
+	mgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
+		if r.program != nil {
+			r.program.Send(subAgentTunnelToolCallMsg{
+				AgentID:  agentID,
+				ToolID:   toolID,
+				ToolName: toolName,
+				Args:     args,
+				Detail:   detail,
+			})
+		}
+	})
+	mgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
+		if r.program != nil {
+			r.program.Send(subAgentTunnelToolResultMsg{
+				AgentID:  agentID,
+				ToolID:   toolID,
+				ToolName: toolName,
+				Result:   result,
+				IsError:  isError,
 			})
 		}
 	})
@@ -301,10 +326,10 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	swarmTextThrottle := newTextThrottleMap(500 * time.Millisecond)
 
 	mgr.SetOnUpdate(func(ev swarm.Event) {
-		r.model.pushSwarmTunnelEvent(ev)
 		if r.program == nil {
 			return
 		}
+		r.program.Send(swarmTunnelEventMsg{Event: ev})
 		switch ev.Type {
 		case "teammate_text":
 			// Throttle: at most one subAgentUpdateMsg per teammate per 500ms.

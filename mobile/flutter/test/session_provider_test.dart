@@ -261,6 +261,54 @@ void main() {
     expect(message.toolCompleted, isTrue);
   });
 
+  test('ChatNotifier formats start_command tool results as Started/Failed', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-start',
+        toolName: 'start_command',
+        displayName: 'Run in background',
+        args: '{"command":"npm run dev"}',
+        detail: 'npm run dev',
+      ),
+      messageId: 'ev-start',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-start',
+        toolName: 'start_command',
+        result: 'Job ID: cmd-1\nStatus: running\nDuration: 1s',
+        isError: false,
+      ),
+    );
+
+    expect(container.read(chatProvider).single.toolResult, 'Started');
+
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-start-fail',
+        toolName: 'start_command',
+        displayName: 'Run in background',
+        args: '{"command":"npm run dev"}',
+        detail: 'npm run dev',
+      ),
+      messageId: 'ev-start-fail',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-start-fail',
+        toolName: 'start_command',
+        result: 'permission denied',
+        isError: true,
+      ),
+    );
+
+    expect(container.read(chatProvider).last.toolResult, 'Failed');
+  });
+
   test(
       'ConnectionNotifier creates subagent state from tool activity without spawn',
       () {

@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/chat"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -498,6 +500,96 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_working", TeammateID: "x", TeammateName: "coder"})
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_idle", TeammateID: "x", TeammateName: "coder", Result: "done"})
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_shutdown", TeammateID: "x", TeammateName: "coder"})
+}
+
+func newTunnelRecordingModel(t *testing.T) *Model {
+	t.Helper()
+
+	m := newTestModel()
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	ses := session.NewSession("", "", "")
+	m.SetSession(ses, store)
+
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+	broker := tunnel.NewBroker(sess)
+	broker.Stop()
+	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		m.recordTunnelEvent(ev)
+	})
+	m.tunnelBroker = broker
+	m.tunnelSpawned = make(map[string]bool)
+	return &m
+}
+
+func TestHandleSubAgentUpdateMsgPushesTunnelLifecycle(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	mgr := subagent.NewManager(config.SubAgentConfig{})
+	m.subAgentMgr = mgr
+
+	agentID := mgr.Spawn("reviewer", "review code", "review code", nil, context.Background())
+	mgr.SetCancel(agentID, func() {})
+
+	next, _ := m.handleSubAgentUpdateMsg(subAgentUpdateMsg{AgentID: agentID})
+	m = &next
+
+	if len(m.session.TunnelEvents) < 2 {
+		t.Fatalf("expected lifecycle events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentSpawn {
+		t.Fatalf("expected first event %q, got %q", tunnel.EventSubagentSpawn, got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentStatus {
+		t.Fatalf("expected second event %q, got %q", tunnel.EventSubagentStatus, got)
+	}
+}
+
+func TestHandleSubAgentTunnelToolMsgsPushEvents(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	next, _ := m.handleSubAgentTunnelToolCallMsg(subAgentTunnelToolCallMsg{
+		AgentID:  "sa-1",
+		ToolID:   "tool-1",
+		ToolName: "read_file",
+		Args:     `{"path":"a.txt"}`,
+		Detail:   "a.txt",
+	})
+	m = &next
+	next, _ = m.handleSubAgentTunnelToolResultMsg(subAgentTunnelToolResultMsg{
+		AgentID:  "sa-1",
+		ToolID:   "tool-1",
+		ToolName: "read_file",
+		Result:   "ok",
+	})
+	m = &next
+
+	if len(m.session.TunnelEvents) != 2 {
+		t.Fatalf("expected 2 tunnel events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentToolCall {
+		t.Fatalf("expected tool call event, got %q", got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentToolResult {
+		t.Fatalf("expected tool result event, got %q", got)
+	}
+}
+
+func TestHandleSwarmTunnelEventMsgPushesEvents(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	next, _ := m.handleSwarmTunnelEventMsg(swarmTunnelEventMsg{
+		Event: swarm.Event{Type: "teammate_spawned", TeammateID: "tm-1", TeammateName: "reviewer"},
+	})
+	m = &next
+
+	if len(m.session.TunnelEvents) != 1 {
+		t.Fatalf("expected 1 tunnel event, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentSpawn {
+		t.Fatalf("expected teammate spawn to normalize to %q, got %q", tunnel.EventSubagentSpawn, got)
+	}
 }
 
 // ─── handleTunnelClientCommand nil-safety tests ───

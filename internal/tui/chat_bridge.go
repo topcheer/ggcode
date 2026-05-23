@@ -268,7 +268,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			Lang:        string(m.currentLanguage()),
 		}
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
-		result := suppressToolResult(ts.ToolName, ts.Result)
+		result := suppressToolResult(ts.ToolName, ts.Result, ts.IsError)
 		m.setToolResult(item, result)
 		m.chatList.Append(item)
 		return
@@ -276,7 +276,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 
 	// Update existing item
 	m.chatUpdateToolStatus(id, status)
-	result := suppressToolResult(ts.ToolName, ts.Result)
+	result := suppressToolResult(ts.ToolName, ts.Result, ts.IsError)
 	m.setToolResult(existing, result)
 }
 
@@ -303,11 +303,13 @@ func (m *Model) setToolResult(item chat.Item, result string) {
 
 // suppressToolResult returns empty string for tools whose result body should
 // not be rendered inline in the TUI chat list.
-func suppressToolResult(toolName, result string) string {
+func suppressToolResult(toolName, result string, isError bool) string {
 	switch toolName {
 	case "web_fetch", "web_search":
 		return ""
-	case "start_command", "stop_command", "todo_write", "list_agents":
+	case "start_command":
+		return tool.StartCommandResultText(result, isError)
+	case "stop_command", "todo_write", "list_agents":
 		return ""
 	case "read_command_output":
 		// Only keep the actual output content, strip structured metadata

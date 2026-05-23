@@ -121,7 +121,7 @@ func TestFormatIMStartCommandResult_WithCommand(t *testing.T) {
 		Lang:     "en",
 	}
 	got := formatIMStartCommandResult(tr)
-	if !strings.Contains(got, "```\nnpm run dev\n```") {
-		t.Errorf("expected command in code block, got: %s", got)
+	if got != "⚡ Started" {
+		t.Errorf("expected concise started label, got: %s", got)
 	}
 }

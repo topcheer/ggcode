@@ -286,6 +286,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case subAgentUpdateMsg:
 		return m.handleSubAgentUpdateMsg(msg)
 
+	case subAgentTunnelStreamTextMsg:
+		return m.handleSubAgentTunnelStreamTextMsg(msg)
+
+	case subAgentTunnelToolCallMsg:
+		return m.handleSubAgentTunnelToolCallMsg(msg)
+
+	case subAgentTunnelToolResultMsg:
+		return m.handleSubAgentTunnelToolResultMsg(msg)
+
+	case swarmTunnelEventMsg:
+		return m.handleSwarmTunnelEventMsg(msg)
+
 	case subAgentFollowRefreshMsg:
 		return m.handleSubAgentFollowRefreshMsg(msg)
 

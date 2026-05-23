@@ -1232,7 +1232,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult: _formatToolResultForDisplay(toolName, result),
+              toolResult: _formatToolResultForDisplay(toolName, result, isError),
               toolCompleted: true,
               isToolError: isError,
             )
@@ -1280,6 +1280,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
               toolResult: _formatToolResultForDisplay(
                 data.toolName,
                 data.result,
+                data.isError,
               ),
               toolCompleted: true,
               isToolError: data.isError,
@@ -1290,7 +1291,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
-  String _formatToolResultForDisplay(String toolName, String result) {
+  String _formatToolResultForDisplay(
+    String toolName,
+    String result,
+    bool isError,
+  ) {
     switch (toolName) {
       case 'team_create':
         return _formatTeamCreateResult(result);
@@ -1298,9 +1303,39 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         return _formatTeammateSpawnResult(result);
       case 'swarm_task_create':
         return _formatSwarmTaskCreateResult(result);
+      case 'start_command':
+        return _formatStartCommandResult(result, isError);
       default:
         return result;
     }
+  }
+
+  String _formatStartCommandResult(String result, bool isError) {
+    if (isError) {
+      return 'Failed';
+    }
+    final trimmed = result.trim();
+    if (trimmed.isEmpty) {
+      return 'Started';
+    }
+    for (final rawLine in trimmed.split('\n')) {
+      final line = rawLine.trim();
+      if (!line.startsWith('Status:')) {
+        continue;
+      }
+      final status = line.substring('Status:'.length).trim().toLowerCase();
+      switch (status) {
+        case 'failed':
+        case 'error':
+        case 'cancelled':
+        case 'timed_out':
+        case 'timeout':
+          return 'Failed';
+        default:
+          return 'Started';
+      }
+    }
+    return 'Started';
   }
 
   String _formatTeamCreateResult(String result) {

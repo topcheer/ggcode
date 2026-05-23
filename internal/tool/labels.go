@@ -287,6 +287,31 @@ func TeamCreateResultText(result string) string {
 	return fmt.Sprintf("Team %s Created", name)
 }
 
+// StartCommandResultText normalizes start_command results to a simple status label.
+func StartCommandResultText(result string, isError bool) string {
+	if isError {
+		return "Failed"
+	}
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return "Started"
+	}
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Status:") {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "Status:")))
+		switch status {
+		case "failed", "error", "cancelled", "timed_out", "timeout":
+			return "Failed"
+		default:
+			return "Started"
+		}
+	}
+	return "Started"
+}
+
 func extractFileTarget(toolName, rawArgs string) string {
 	// Try known file-path fields first
 	args := parseToolArgs(rawArgs)
