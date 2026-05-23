@@ -264,16 +264,15 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		b.followSink.OnUserMessage(text)
 	}
 
-	// If an agent run is already active, inject as interruption instead of
-	// cancelling the running stream. The agent's main loop will pick up the
-	// message after the current tool call / LLM round finishes.
+	// Atomically check for an active run and either queue as interruption
+	// or claim the run slot. This eliminates the TOCTOU window where two
+	// concurrent IM messages could both see cancelFunc==nil and start
+	// duplicate agent runs.
 	b.mu.Lock()
-	activeCancel := b.cancelFunc
-	b.mu.Unlock()
 
-	if activeCancel != nil {
+	if b.cancelFunc != nil {
+		// Agent run already active — queue as interruption.
 		debug.Log("daemon-bridge", "agent running, queuing interruption: %s", truncateStr(text, 80))
-		b.mu.Lock()
 		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{
 			Content: []provider.ContentBlock{{Type: "text", Text: text}},
 		})
@@ -281,7 +280,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
-	// No active run — start a new one.
+	// No active run — claim the slot under a single lock acquisition.
 	// Use context.Background() rather than the caller's ctx because the
 	// agent run (including ask_user waiting for IM replies) must survive
 	// beyond the lifetime of a single WS event callback. The caller's ctx
@@ -289,9 +288,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// that event processing completes or the WS reconnects.
 	ctx2, cancel := context.WithCancel(context.Background())
 
-	// Set up interruption handler so mid-run IM messages get injected
-	// into the agent's conversation instead of cancelling the stream.
-	b.mu.Lock()
 	b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
 	b.agent.SetInterruptionHandler(func() string {
 		b.mu.Lock()
