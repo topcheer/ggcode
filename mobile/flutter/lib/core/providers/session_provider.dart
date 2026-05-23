@@ -134,6 +134,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final crypto = TunnelCrypto(token);
     service = ConnectionService(url: url, crypto: crypto);
     await _loadResumeState();
+    if (!clearState && _hasEmptyUiProjection()) {
+      _restoreProjectionFromCache(adoptCursor: false);
+    }
     if (clearState) {
       if (!_restoreProjectionFromCache()) {
         _sessionId = '';
@@ -801,7 +804,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _awaitingReplay = _pendingReplayEvents.isNotEmpty;
   }
 
-  bool _restoreProjectionFromCache() {
+  bool _hasEmptyUiProjection() {
+    return ref.read(chatProvider).isEmpty &&
+        ref.read(subagentProvider).isEmpty &&
+        ref.read(sessionInfoProvider) == null;
+  }
+
+  bool _restoreProjectionFromCache({bool adoptCursor = true}) {
     final cacheState = ref.read(workspaceCacheProvider);
     final workspaceKey = cacheState.selectedWorkspaceKey;
     final sessionId = cacheState.selectedSessionId;
@@ -831,8 +840,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
     final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
     final record = cacheState.sessions[sessionKey];
-    _sessionId = sessionId;
-    _lastAppliedEventId = record?.lastEventId ?? '';
+    if (adoptCursor) {
+      _sessionId = sessionId;
+      _lastAppliedEventId = record?.lastEventId ?? '';
+    }
     return true;
   }
 
@@ -840,8 +851,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _dispatchMessage(msg);
   }
 
-  bool restoreProjectionFromCacheForTest() {
-    return _restoreProjectionFromCache();
+  bool restoreProjectionFromCacheForTest({bool adoptCursor = true}) {
+    return _restoreProjectionFromCache(adoptCursor: adoptCursor);
   }
 
   void _persistResumeState() {
@@ -868,6 +879,7 @@ class ChatMessage {
   final String? toolDisplayName;
   final String? toolDetail;
   final String? toolResult;
+  final bool toolCompleted;
   final bool isToolError;
   final DateTime time;
 
@@ -884,6 +896,7 @@ class ChatMessage {
     this.toolDisplayName,
     this.toolDetail,
     this.toolResult,
+    this.toolCompleted = false,
     this.isToolError = false,
     required this.time,
   });
@@ -893,6 +906,7 @@ class ChatMessage {
     String? text,
     bool? streaming,
     String? toolResult,
+    bool? toolCompleted,
     bool? isToolError,
   }) =>
       ChatMessage(
@@ -908,6 +922,7 @@ class ChatMessage {
         toolDisplayName: toolDisplayName,
         toolDetail: toolDetail,
         toolResult: toolResult ?? this.toolResult,
+        toolCompleted: toolCompleted ?? this.toolCompleted,
         isToolError: isToolError ?? this.isToolError,
         time: time,
       );
@@ -925,6 +940,7 @@ class ChatMessage {
         'tool_display_name': toolDisplayName,
         'tool_detail': toolDetail,
         'tool_result': toolResult,
+        'tool_completed': toolCompleted,
         'is_tool_error': isToolError,
         'time': time.toIso8601String(),
       };
@@ -942,6 +958,7 @@ class ChatMessage {
         toolDisplayName: json['tool_display_name'] as String?,
         toolDetail: json['tool_detail'] as String?,
         toolResult: json['tool_result'] as String?,
+        toolCompleted: json['tool_completed'] as bool? ?? false,
         isToolError: json['is_tool_error'] as bool? ?? false,
         time:
             DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
@@ -1133,7 +1150,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       state = [
         for (int i = 0; i < state.length; i++)
           if (i == idx)
-            msg.copyWith(toolResult: result, isToolError: isError)
+            msg.copyWith(
+              toolResult: result,
+              toolCompleted: true,
+              isToolError: isError,
+            )
           else
             state[i],
       ];
@@ -1174,7 +1195,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       state = [
         for (int i = 0; i < state.length; i++)
           if (i == idx)
-            msg.copyWith(toolResult: data.result, isToolError: data.isError)
+            msg.copyWith(
+              toolResult: data.result,
+              toolCompleted: true,
+              isToolError: data.isError,
+            )
           else
             state[i],
       ];
@@ -1226,7 +1251,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       state = [
         for (int i = 0; i < state.length; i++)
           if (i == idx)
-            msg.copyWith(toolResult: answer, isToolError: false)
+            msg.copyWith(
+              toolResult: answer,
+              toolCompleted: true,
+              isToolError: false,
+            )
           else
             state[i],
       ];

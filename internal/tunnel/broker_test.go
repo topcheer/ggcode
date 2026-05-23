@@ -961,6 +961,64 @@ func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *test
 	}
 }
 
+func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIsIncomplete(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	textJSON, err := json.Marshal(TextData{ID: "msg-1", Chunk: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			Status:      StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      infoJSON,
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      textJSON,
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 1,
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) != 3 {
+		t.Fatalf("expected snapshot reset plus canonical replay, got %d messages", len(msgs))
+	}
+	if msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected first event snapshot_reset, got %q", msgs[0].Type)
+	}
+	if msgs[1].Type != EventSessionInfo {
+		t.Fatalf("expected session_info replay after reset, got %q", msgs[1].Type)
+	}
+	if msgs[2].Type != EventText {
+		t.Fatalf("expected text replay after session_info, got %q", msgs[2].Type)
+	}
+}
+
 func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

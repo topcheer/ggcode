@@ -97,9 +97,51 @@ void main() {
 
     await tester.pump();
 
-    expect(find.text('Build Android APK'), findsOneWidget);
-    expect(find.text('flutter build apk'), findsOneWidget);
+    expect(find.textContaining('Build Android APK'), findsOneWidget);
+    expect(find.textContaining('flutter build apk'), findsOneWidget);
     expect(find.text('(Run Command)'), findsNothing);
+  });
+
+  testWidgets('Tool cards show a working badge until the result arrives',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(chatProvider.notifier);
+
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-2',
+        toolName: 'run_command',
+        displayName: 'Run command',
+        args: '{"command":"go test ./..."}',
+        detail: 'go test ./...',
+      ),
+      messageId: 'ev-tool-2',
+    );
+    await tester.pump();
+
+    expect(
+        find.byKey(const Key('toolStatusWorking-ev-tool-2')), findsOneWidget);
+    expect(find.byKey(const Key('toolStatusDone-ev-tool-2')), findsNothing);
+
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-2',
+        toolName: 'run_command',
+        result: 'ok',
+        isError: false,
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('toolStatusWorking-ev-tool-2')), findsNothing);
+    expect(find.byKey(const Key('toolStatusDone-ev-tool-2')), findsOneWidget);
   });
 
   testWidgets('InputBar stays enabled while agent is busy',
