@@ -879,7 +879,7 @@ func TestBrokerHandleRelayConnectedSkipsReseedWhenRelayStateRetained(t *testing.
 	}
 }
 
-func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshot(t *testing.T) {
+func TestBrokerHandleClientConnectedSkipsAuthoritativeSnapshotWhenStateRetained(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -898,6 +898,62 @@ func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshot(t *testing.T)
 		Role:         "client",
 		SessionID:    "sess-local",
 		HistoryCount: 1,
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 0 {
+		t.Fatalf("expected no snapshot broadcast when state is retained, got %d messages", len(msgs))
+	}
+}
+
+func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.PushText("msg-live", "partial answer")
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 1,
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) != 1 {
+		t.Fatalf("expected only buffered live text to flush, got %d messages", len(msgs))
+	}
+	if msgs[0].Type != EventText {
+		t.Fatalf("expected retained-state connect to flush text, got %q", msgs[0].Type)
+	}
+	var data TextData
+	if err := json.Unmarshal(msgs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.ID != "msg-live" || data.Chunk != "partial answer" {
+		t.Fatalf("unexpected flushed live text: %+v", data)
+	}
+}
+
+func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "world"},
+			},
+			Status: StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 0,
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -935,7 +991,7 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	b.flushAllText()
 	d.drain()
 
-	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 1})
+	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 0})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
