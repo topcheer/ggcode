@@ -22,7 +22,9 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestTokenValidatorHS256JWT(t *testing.T) {
-	tv, err := NewTokenValidator("test-client", "https://example.com")
+	tv, err := NewTokenValidator("test-client", "https://example.com",
+		WithHMACSecret("test-hmac-secret"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,7 @@ func TestTokenValidatorHS256JWT(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte("test-client"))
+	tokenString, err := token.SignedString([]byte("test-hmac-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}

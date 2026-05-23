@@ -348,6 +348,17 @@ type A2AAuthConfig struct {
 	// By default, unauthenticated requests are only allowed from localhost.
 	// Set to true to allow remote unauthenticated access (NOT recommended for production).
 	AllowUnauthenticated bool `yaml:"allow_unauthenticated,omitempty"`
+
+	// HMACSecret is the shared secret for HS256/HS384/HS512 JWT signing.
+	// MUST NOT be the clientID (which is public). Set this only if your IdP
+	// uses HMAC-signed JWTs; most providers use RS256/ES256 instead.
+	// Supports ${ENV_VAR} expansion.
+	HMACSecret string `yaml:"hmac_secret,omitempty"`
+
+	// ValidIssuers lists additional issuer URLs to accept in JWT validation.
+	// The configured issuer_url is always allowed. Use this when your IdP
+	// returns different issuer URLs in different contexts.
+	ValidIssuers []string `yaml:"valid_issuers,omitempty"`
 }
 
 // A2AOAuth2Config for OAuth2 Authorization Code + PKCE or Device Flow.
