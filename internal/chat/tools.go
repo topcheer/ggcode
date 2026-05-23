@@ -71,6 +71,12 @@ func (t *BaseToolItem) Status() ToolStatus { return t.status }
 // Input returns the raw input JSON.
 func (t *BaseToolItem) Input() string { return t.input }
 
+// Result returns the current rendered tool result body.
+func (t *BaseToolItem) Result() string { return t.result }
+
+// IsError reports whether the current result is an error.
+func (t *BaseToolItem) IsError() bool { return t.isError }
+
 // RenderParams returns the display parameters for the tool header.
 func (t *BaseToolItem) RenderParams() string {
 	return t.params
@@ -913,6 +919,12 @@ func NewAgentToolItem(id, label string, status ToolStatus, styles Styles) *Agent
 }
 
 func (a *AgentToolItem) ID() string { return a.id }
+
+func (a *AgentToolItem) Label() string { return a.label }
+
+func (a *AgentToolItem) Result() string { return a.result }
+
+func (a *AgentToolItem) Status() ToolStatus { return a.status }
 
 // SetStatus updates the agent status.
 func (a *AgentToolItem) SetStatus(s ToolStatus) {

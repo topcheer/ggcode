@@ -507,6 +507,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: "(cancelled)",
 					Time:    time.Now(),
 				})
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushSystemMessage("(cancelled)")
+				}
 			}
 
 			// Check for queued message from user while busy.
@@ -516,6 +519,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: "Processing queued message...",
 					Time:    time.Now(),
 				})
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushSystemMessage("Processing queued message...")
+				}
 				_ = b.Send(msg)
 			}
 		}()
@@ -565,6 +571,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
 					b.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
 					b.tunnelBroker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
+					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
 				}
 
 			case provider.StreamEventToolResult:
@@ -611,6 +618,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				})
 				if b.tunnelBroker != nil {
 					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+					b.tunnelBroker.PushSystemMessage(ev.Text)
+					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
 				}
 
 			case provider.StreamEventReasoning:
@@ -649,6 +658,12 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: err.Error(),
 					Time:    time.Now(),
 				})
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+					b.tunnelBroker.PushError(err.Error())
+					b.tunnelBroker.PushStatus(tunnel.StatusError, "error")
+					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+				}
 			}
 		}
 	}()
@@ -677,6 +692,7 @@ func (b *AgentBridge) Cancel() {
 	if b.tunnelBroker != nil {
 		b.tunnelBroker.PushTextDone(b.tunnelMsgID)
 		b.tunnelBroker.PushStatus(tunnel.StatusIdle, "cancelled")
+		b.tunnelMsgID = b.tunnelBroker.NextMessageID()
 	}
 }
 
@@ -706,6 +722,18 @@ func (b *AgentBridge) CurrentTunnelStatus() tunnel.StatusData {
 func (b *AgentBridge) PushUserMessageToMobile(text string) {
 	if b.tunnelBroker != nil {
 		b.tunnelBroker.PushUserMessage(text)
+	}
+}
+
+func (b *AgentBridge) PushSystemMessageToMobile(text string) {
+	if b.tunnelBroker != nil && strings.TrimSpace(text) != "" {
+		b.tunnelBroker.PushSystemMessage(text)
+	}
+}
+
+func (b *AgentBridge) PushErrorToMobile(text string) {
+	if b.tunnelBroker != nil && strings.TrimSpace(text) != "" {
+		b.tunnelBroker.PushError(text)
 	}
 }
 
@@ -1452,14 +1480,296 @@ func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 	return out
 }
 
+func desktopSessionMessagesToTunnelHistory(messages []provider.Message) []tunnel.HistoryEntry {
+	history := make([]tunnel.HistoryEntry, 0, len(messages)*2)
+	for _, msg := range messages {
+		if msg.Role == "user" || msg.Role == "tool" {
+			var textParts []string
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
+				case "tool_result":
+					result := block.Output
+					if len(result) > 500 {
+						result = result[:500] + "..."
+					}
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   result,
+						IsError:  block.IsError,
+					})
+				}
+			}
+			if len(textParts) > 0 {
+				history = append(history, tunnel.HistoryEntry{
+					Role:    "user",
+					Content: strings.Join(textParts, "\n"),
+				})
+			}
+			continue
+		}
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, block := range msg.Content {
+			switch block.Type {
+			case "text":
+				if strings.TrimSpace(block.Text) != "" {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "assistant",
+						Content: strings.TrimSpace(block.Text),
+					})
+				}
+			case "tool_use":
+				argsStr := string(block.Input)
+				if len(argsStr) > 200 {
+					argsStr = argsStr[:200] + "..."
+				}
+				title := toolDisplayName(block.ToolName, string(block.Input))
+				detail := toolArgSummary(block.ToolName, string(block.Input))
+				if detail == title {
+					detail = ""
+				}
+				history = append(history, tunnel.HistoryEntry{
+					Role:            "tool_call",
+					ToolID:          block.ToolID,
+					ToolName:        block.ToolName,
+					ToolDisplayName: title,
+					ToolArgs:        argsStr,
+					ToolDetail:      detail,
+				})
+			}
+		}
+	}
+	return history
+}
+
+func desktopChatMessagesToTunnelHistory(messages []ChatMessage) []tunnel.HistoryEntry {
+	history := make([]tunnel.HistoryEntry, 0, len(messages)*2)
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "user", Content: strings.TrimSpace(msg.Content)})
+			}
+		case "assistant":
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: strings.TrimSpace(msg.Content)})
+			}
+		case "system":
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "system", Content: strings.TrimSpace(msg.Content)})
+			}
+		case "error":
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "error", Content: strings.TrimSpace(msg.Content)})
+			}
+		case "tool":
+			argsStr := msg.ToolRaw
+			if len(argsStr) > 200 {
+				argsStr = argsStr[:200] + "..."
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:            "tool_call",
+				ToolID:          msg.ToolID,
+				ToolName:        msg.ToolName,
+				ToolDisplayName: toolDisplayName(msg.ToolName, msg.ToolRaw),
+				ToolArgs:        argsStr,
+				ToolDetail:      msg.ToolArgs,
+			})
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{
+					Role:     "tool_result",
+					ToolID:   msg.ToolID,
+					ToolName: msg.ToolName,
+					Result:   strings.TrimSpace(msg.Content),
+					IsError:  msg.IsError,
+				})
+			}
+		}
+	}
+	return history
+}
+
+func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
+	var history []tunnel.HistoryEntry
+	textByID := make(map[string]string)
+	finalizeText := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		text := strings.TrimSpace(textByID[id])
+		delete(textByID, id)
+		if text == "" {
+			return
+		}
+		history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
+	}
+
+	for _, ev := range events {
+		switch ev.Type {
+		case tunnel.EventUserMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if data.Kind == "cron" {
+				text := strings.TrimSpace(data.DisplayText)
+				if text == "" {
+					text = strings.TrimSpace(data.Text)
+				}
+				if text != "" {
+					history = append(history, tunnel.HistoryEntry{Role: "system", Content: text})
+				}
+				continue
+			}
+			text := strings.TrimSpace(data.Text)
+			if text == "" {
+				text = strings.TrimSpace(data.DisplayText)
+			}
+			if text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "user", Content: text})
+			}
+		case tunnel.EventSystemMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			text := strings.TrimSpace(data.Text)
+			if text == "" {
+				text = strings.TrimSpace(data.DisplayText)
+			}
+			if text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "system", Content: text})
+			}
+		case tunnel.EventText:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
+				continue
+			}
+			textByID[data.ID] += data.Chunk
+			if data.Done {
+				finalizeText(data.ID)
+			}
+		case tunnel.EventTextDone:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			id := data.ID
+			if strings.TrimSpace(id) == "" {
+				id = ev.StreamID
+			}
+			finalizeText(id)
+		case tunnel.EventToolCall:
+			var data tunnel.ToolCallData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:            "tool_call",
+				ToolID:          data.ToolID,
+				ToolName:        data.ToolName,
+				ToolDisplayName: data.DisplayName,
+				ToolArgs:        data.Args,
+				ToolDetail:      data.Detail,
+			})
+		case tunnel.EventToolResult:
+			var data tunnel.ToolResultData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			history = append(history, tunnel.HistoryEntry{
+				Role:     "tool_result",
+				ToolID:   data.ToolID,
+				ToolName: data.ToolName,
+				Result:   data.Result,
+				IsError:  data.IsError,
+			})
+		case tunnel.EventError:
+			var data tunnel.ErrorData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if text := strings.TrimSpace(data.Message); text != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "error", Content: text})
+			}
+		}
+	}
+
+	return history
+}
+
+func desktopTunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Role != b[i].Role ||
+			a[i].Content != b[i].Content ||
+			a[i].ToolID != b[i].ToolID ||
+			a[i].ToolName != b[i].ToolName ||
+			a[i].ToolDisplayName != b[i].ToolDisplayName ||
+			a[i].ToolArgs != b[i].ToolArgs ||
+			a[i].ToolDetail != b[i].ToolDetail ||
+			a[i].Result != b[i].Result ||
+			a[i].IsError != b[i].IsError {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *AgentBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
+	if b.ui != nil {
+		if msgs := b.ui.TakeMessages(); len(msgs) > 0 {
+			return desktopChatMessagesToTunnelHistory(msgs)
+		}
+	}
+	if b.currentSes != nil {
+		return desktopSessionMessagesToTunnelHistory(b.currentSes.Messages)
+	}
+	return nil
+}
+
 func (b *AgentBridge) PrepareCurrentSessionTunnelLedger() {
 	b.mu.Lock()
-	if b.currentSes == nil || b.sessionStore == nil || b.currentSes.TunnelEventsComplete {
+	if b.currentSes == nil || b.sessionStore == nil {
 		b.mu.Unlock()
 		return
 	}
-	b.currentSes.TunnelEvents = nil
-	b.currentSes.TunnelEventsComplete = true
+	snapshotHistory := b.CurrentTunnelHistory()
+	needsSave := false
+	switch {
+	case b.currentSes.TunnelEventsComplete:
+		if desktopTunnelHistoryMatches(desktopTunnelEventsToHistory(b.currentSes.TunnelEvents), snapshotHistory) {
+			b.mu.Unlock()
+			return
+		}
+		b.currentSes.TunnelEvents = nil
+		b.currentSes.TunnelEventsComplete = false
+		needsSave = true
+	case len(snapshotHistory) == 0:
+		b.currentSes.TunnelEvents = nil
+		b.currentSes.TunnelEventsComplete = true
+		needsSave = true
+	case len(b.currentSes.TunnelEvents) > 0:
+		b.currentSes.TunnelEvents = nil
+		needsSave = true
+	}
+	if !needsSave {
+		b.mu.Unlock()
+		return
+	}
 	ses := b.currentSes
 	store := b.sessionStore
 	b.mu.Unlock()

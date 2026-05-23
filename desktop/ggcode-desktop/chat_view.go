@@ -465,8 +465,10 @@ func (cv *ChatView) onSend() {
 	}
 
 	if cv.bridge.IsWorking() {
+		cv.bridge.PushUserMessageToMobile(text)
 		cv.bridge.QueueMessage(text)
 		cv.ui.AppendChat(ChatMessage{Role: "system", Content: "(queued)", Time: time.Now()})
+		cv.bridge.PushSystemMessageToMobile("(queued)")
 		return
 	}
 	// Show thinking indicator while waiting for agent response.
@@ -477,6 +479,7 @@ func (cv *ChatView) onSend() {
 
 	if err := cv.bridge.SendContent(content); err != nil {
 		cv.ui.AppendChat(ChatMessage{Role: "error", Content: err.Error(), Time: time.Now()})
+		cv.bridge.PushErrorToMobile(err.Error())
 	}
 }
 

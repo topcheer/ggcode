@@ -266,6 +266,32 @@ func TestBrokerPushUserMessage(t *testing.T) {
 	}
 }
 
+func TestBrokerPushSystemMessage(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushSystemMessage("still waiting")
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	found := false
+	for _, m := range msgs {
+		if m.Type == EventSystemMessage {
+			found = true
+			var data MessageData
+			if err := json.Unmarshal(m.Data, &data); err != nil {
+				t.Fatal(err)
+			}
+			if data.Text != "still waiting" {
+				t.Fatalf("system text = %q, want %q", data.Text, "still waiting")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected system_message event")
+	}
+}
+
 func TestBrokerPushUserMessageData(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

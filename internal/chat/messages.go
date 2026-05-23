@@ -30,6 +30,8 @@ func NewUserItem(id, text string, styles Styles) *UserItem {
 
 func (u *UserItem) ID() string { return u.id }
 
+func (u *UserItem) Text() string { return u.text }
+
 func (u *UserItem) SetPrefix(prefix string) {
 	u.prefix = prefix
 	u.Invalidate()
@@ -142,6 +144,8 @@ func NewAssistantItem(id string, styles Styles) *AssistantItem {
 }
 
 func (a *AssistantItem) ID() string { return a.id }
+
+func (a *AssistantItem) Text() string { return a.text }
 
 // SetText updates the assistant content (for streaming).
 func (a *AssistantItem) SetText(text string) {
@@ -287,6 +291,8 @@ func NewSystemItem(id, text string, styles Styles) *SystemItem {
 }
 
 func (s *SystemItem) ID() string { return s.id }
+
+func (s *SystemItem) Text() string { return s.text }
 
 func (s *SystemItem) SetText(text string) {
 	s.text = text
