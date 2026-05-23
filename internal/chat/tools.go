@@ -762,14 +762,8 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		}
 		return item
 	case catCmd:
-		if ctx.ToolName == "start_command" {
-			item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
-			item.BaseToolItem.suppressBody = true
-			return item
-		}
 		item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
 		item.BaseToolItem.suppressBody = true
-		item.BaseToolItem.suppressHeader = true
 		return item
 	case catLSP:
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
@@ -777,7 +771,6 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		if GetToolBodyBehavior(ctx.ToolName) == BodyMarkdown {
 			item := NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
 			if ctx.ToolName == "exit_plan_mode" {
-				item.suppressHeader = true
 				item.rawArgs = ctx.RawArgs
 			}
 			return item
