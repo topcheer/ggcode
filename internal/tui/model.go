@@ -175,6 +175,7 @@ type Model struct {
 	streamBuffer        *bytes.Buffer
 	shellBuffer         *bytes.Buffer
 	shellOutputID       string // ID of the system message for shell command output
+	shellOutputIDs      map[string]struct{}
 	streamPrefixWritten bool
 	harnessRunRemainder string
 	harnessRunLiveTail  string

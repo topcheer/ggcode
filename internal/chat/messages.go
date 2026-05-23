@@ -32,6 +32,8 @@ func (u *UserItem) ID() string { return u.id }
 
 func (u *UserItem) Text() string { return u.text }
 
+func (u *UserItem) Prefix() string { return u.prefix }
+
 func (u *UserItem) SetPrefix(prefix string) {
 	u.prefix = prefix
 	u.Invalidate()

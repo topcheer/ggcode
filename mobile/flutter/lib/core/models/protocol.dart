@@ -74,13 +74,19 @@ class TextData {
   final String id;
   final String chunk;
   final bool done;
+  final String kind;
 
-  TextData({required this.id, required this.chunk, required this.done});
+  TextData(
+      {required this.id,
+      required this.chunk,
+      required this.done,
+      this.kind = ''});
 
   factory TextData.fromJson(Map<String, dynamic> d) => TextData(
         id: d['id'] as String? ?? '',
         chunk: d['chunk'] as String? ?? '',
         done: d['done'] as bool? ?? false,
+        kind: d['kind'] as String? ?? '',
       );
 }
 
