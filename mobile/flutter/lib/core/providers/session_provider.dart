@@ -952,6 +952,7 @@ class ChatMessage {
   final String? sourceId; // null = main agent
   final String? sourceName;
   final String? sourceColor;
+  final String kind;
   final bool isUser;
   final String text;
   final bool streaming;
@@ -969,6 +970,7 @@ class ChatMessage {
     this.sourceId,
     this.sourceName,
     this.sourceColor,
+    this.kind = '',
     this.isUser = false,
     this.text = '',
     this.streaming = false,
@@ -985,6 +987,7 @@ class ChatMessage {
   ChatMessage copyWith({
     String? id,
     String? text,
+    String? kind,
     bool? streaming,
     String? toolResult,
     bool? toolCompleted,
@@ -995,6 +998,7 @@ class ChatMessage {
         sourceId: sourceId,
         sourceName: sourceName,
         sourceColor: sourceColor,
+        kind: kind ?? this.kind,
         isUser: isUser,
         text: text ?? this.text,
         streaming: streaming ?? this.streaming,
@@ -1013,6 +1017,7 @@ class ChatMessage {
         'source_id': sourceId,
         'source_name': sourceName,
         'source_color': sourceColor,
+        'kind': kind,
         'is_user': isUser,
         'text': text,
         'streaming': streaming,
@@ -1031,6 +1036,7 @@ class ChatMessage {
         sourceId: json['source_id'] as String?,
         sourceName: json['source_name'] as String?,
         sourceColor: json['source_color'] as String?,
+        kind: json['kind'] as String? ?? '',
         isUser: json['is_user'] as bool? ?? false,
         text: json['text'] as String? ?? '',
         streaming: json['streaming'] as bool? ?? false,
@@ -1072,23 +1078,26 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     });
   }
 
-  void addRemoteUserMessage(String text, {String? messageId}) {
+  void addRemoteUserMessage(String text, {String? messageId, String kind = ''}) {
     state = [
       ...state,
       ChatMessage(
         id: messageId ?? 'remote-user-${_msgCounter++}',
         isUser: true,
+        kind: kind,
         text: text,
         time: DateTime.now(),
       ),
     ];
   }
 
-  void addRemoteSystemMessage(String text, {String? messageId}) {
+  void addRemoteSystemMessage(String text,
+      {String? messageId, String kind = ''}) {
     state = [
       ...state,
       ChatMessage(
         id: messageId ?? 'remote-system-${_msgCounter++}',
+        kind: kind,
         text: text,
         time: DateTime.now(),
       ),
@@ -1126,7 +1135,11 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       state = [
         for (int i = 0; i < state.length; i++)
           if (i == idx)
-            msg.copyWith(text: msg.text + data.chunk, streaming: !data.done)
+            msg.copyWith(
+              text: msg.text + data.chunk,
+              kind: data.kind.isNotEmpty ? data.kind : null,
+              streaming: !data.done,
+            )
           else
             state[i],
       ];
@@ -1135,6 +1148,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         ...state,
         ChatMessage(
           id: data.id,
+          kind: data.kind,
           text: data.chunk,
           streaming: !data.done,
           time: DateTime.now(),

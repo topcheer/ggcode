@@ -280,6 +280,19 @@ func (m *Model) pushTunnelUserMessage(text string) {
 	}
 }
 
+func tunnelShellCommandData(prefix, text string) (tunnel.MessageData, bool) {
+	text = strings.TrimSpace(text)
+	prefix = strings.TrimSpace(prefix)
+	if text == "" || (prefix != "$" && prefix != "!") {
+		return tunnel.MessageData{}, false
+	}
+	return tunnel.MessageData{
+		Text:        prefix + " " + text,
+		DisplayText: text,
+		Kind:        tunnel.MessageKindShellCommand,
+	}, true
+}
+
 func (m *Model) setNextTunnelUserMessageOverride(data tunnel.MessageData) {
 	m.tunnelUserMessageOverride = &data
 }
@@ -610,7 +623,16 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 		switch it := item.(type) {
 		case *chat.UserItem:
 			if text := strings.TrimSpace(it.Text()); text != "" {
-				history = append(history, tunnel.HistoryEntry{Role: "user", Content: text})
+				if data, ok := tunnelShellCommandData(it.Prefix(), text); ok {
+					history = append(history, tunnel.HistoryEntry{
+						Role:        "user",
+						Content:     data.Text,
+						DisplayText: data.DisplayText,
+						Kind:        data.Kind,
+					})
+				} else {
+					history = append(history, tunnel.HistoryEntry{Role: "user", Content: text})
+				}
 			}
 		case *chat.AssistantItem:
 			if text := strings.TrimSpace(it.Text()); text != "" {
@@ -618,7 +640,15 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 			}
 		case *chat.SystemItem:
 			if text := strings.TrimSpace(it.Text()); text != "" {
-				history = append(history, tunnel.HistoryEntry{Role: "system", Content: text})
+				if _, ok := m.shellOutputIDs[it.ID()]; ok {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "assistant",
+						Content: text,
+						Kind:    tunnel.MessageKindShellOutput,
+					})
+				} else {
+					history = append(history, tunnel.HistoryEntry{Role: "system", Content: text})
+				}
 			}
 		case interface {
 			ID() string
@@ -1042,6 +1072,7 @@ func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
 func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
 	textByID := make(map[string]string)
+	textKindByID := make(map[string]string)
 	finalizeText := func(id string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -1049,12 +1080,15 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 		}
 		text := strings.TrimSpace(textByID[id])
 		delete(textByID, id)
+		kind := strings.TrimSpace(textKindByID[id])
+		delete(textKindByID, id)
 		if text == "" {
 			return
 		}
 		history = append(history, tunnel.HistoryEntry{
 			Role:    "assistant",
 			Content: text,
+			Kind:    kind,
 		})
 	}
 
@@ -1065,7 +1099,7 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
 			}
-			if data.Kind == "cron" {
+			if data.Kind == tunnel.MessageKindCron {
 				text := strings.TrimSpace(data.DisplayText)
 				if text == "" {
 					text = strings.TrimSpace(data.Text)
@@ -1087,8 +1121,10 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				continue
 			}
 			history = append(history, tunnel.HistoryEntry{
-				Role:    "user",
-				Content: text,
+				Role:        "user",
+				Content:     text,
+				DisplayText: strings.TrimSpace(data.DisplayText),
+				Kind:        data.Kind,
 			})
 		case tunnel.EventSystemMessage:
 			var data tunnel.MessageData
@@ -1103,8 +1139,10 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				continue
 			}
 			history = append(history, tunnel.HistoryEntry{
-				Role:    "system",
-				Content: text,
+				Role:        "system",
+				Content:     text,
+				DisplayText: strings.TrimSpace(data.DisplayText),
+				Kind:        data.Kind,
 			})
 		case tunnel.EventText:
 			var data tunnel.TextData
@@ -1115,6 +1153,9 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				continue
 			}
 			textByID[data.ID] += data.Chunk
+			if strings.TrimSpace(data.Kind) != "" && strings.TrimSpace(textKindByID[data.ID]) == "" {
+				textKindByID[data.ID] = strings.TrimSpace(data.Kind)
+			}
 			if data.Done {
 				finalizeText(data.ID)
 			}

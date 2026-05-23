@@ -123,6 +123,7 @@ func newTunnelSessionID() string {
 type textEntry struct {
 	agentID string
 	text    string
+	kind    string
 }
 
 // senderLoop drains the outbound queue. Never blocks the producer.
@@ -185,20 +186,26 @@ func (b *Broker) flushAllText() {
 		if entry.agentID != "" {
 			b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 		} else {
-			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text})
+			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text, Kind: entry.kind})
 		}
 	}
 }
 
-func (b *Broker) appendTextLocked(msgID, agentID, chunk string) {
+func (b *Broker) appendTextLocked(msgID, agentID, chunk, kind string) {
 	if b.textBuf[msgID] == nil {
-		b.textBuf[msgID] = &textEntry{agentID: agentID}
+		b.textBuf[msgID] = &textEntry{agentID: agentID, kind: kind}
 	}
 	b.textBuf[msgID].text += chunk
+	if kind != "" && b.textBuf[msgID].kind == "" {
+		b.textBuf[msgID].kind = kind
+	}
 	if b.activeText[msgID] == nil {
-		b.activeText[msgID] = &textEntry{agentID: agentID}
+		b.activeText[msgID] = &textEntry{agentID: agentID, kind: kind}
 	}
 	b.activeText[msgID].text += chunk
+	if kind != "" && b.activeText[msgID].kind == "" {
+		b.activeText[msgID].kind = kind
+	}
 }
 
 // flushText flushes the buffer for a specific msgID immediately.
@@ -215,7 +222,7 @@ func (b *Broker) flushText(msgID string) {
 	if entry.agentID != "" {
 		b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 	} else {
-		b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text})
+		b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text, Kind: entry.kind})
 	}
 }
 
@@ -249,7 +256,7 @@ func (b *Broker) replayActiveText(active map[string]textEntry) {
 		if entry.agentID != "" {
 			b.enqueueWithStream(EventSubagentText, id, SubagentTextData{AgentID: entry.agentID, ID: id, Chunk: entry.text})
 		} else {
-			b.enqueueWithStream(EventText, id, TextData{ID: id, Chunk: entry.text})
+			b.enqueueWithStream(EventText, id, TextData{ID: id, Chunk: entry.text, Kind: entry.kind})
 		}
 	}
 }
@@ -538,7 +545,13 @@ func (b *Broker) PushSystemMessageData(data MessageData) {
 
 func (b *Broker) PushText(id, chunk string) {
 	b.textMu.Lock()
-	b.appendTextLocked(id, "", chunk)
+	b.appendTextLocked(id, "", chunk, "")
+	b.textMu.Unlock()
+}
+
+func (b *Broker) PushTextData(data TextData) {
+	b.textMu.Lock()
+	b.appendTextLocked(data.ID, "", data.Chunk, data.Kind)
 	b.textMu.Unlock()
 }
 
@@ -620,7 +633,7 @@ func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) 
 func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
 	if !done {
 		b.textMu.Lock()
-		b.appendTextLocked(msgID, agentID, chunk)
+		b.appendTextLocked(msgID, agentID, chunk, "")
 		b.textMu.Unlock()
 	} else {
 		b.flushText(msgID)
@@ -674,8 +687,10 @@ func (b *Broker) NextMessageID() string {
 var msgCount atomic.Int64
 
 type HistoryEntry struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role        string `json:"role"`
+	Content     string `json:"content"`
+	DisplayText string `json:"display_text,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 	// Tool fields (role == "tool_call" or "tool_result")
 	ToolID          string `json:"tool_id,omitempty"`
 	ToolName        string `json:"tool_name,omitempty"`
@@ -691,19 +706,27 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 		switch entry.Role {
 		case "user":
 			if entry.Content != "" {
-				b.PushUserMessage(entry.Content)
+				b.PushUserMessageData(MessageData{
+					Text:        entry.Content,
+					DisplayText: entry.DisplayText,
+					Kind:        entry.Kind,
+				})
 			}
 		case "system":
 			if entry.Content != "" {
-				b.PushSystemMessage(entry.Content)
+				b.PushSystemMessageData(MessageData{
+					Text:        entry.Content,
+					DisplayText: entry.DisplayText,
+					Kind:        entry.Kind,
+				})
 			}
 		case "assistant":
 			if entry.Content == "" {
 				continue
 			}
 			msgID := b.NextMessageID()
-			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content})
-			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true})
+			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content, Kind: entry.Kind})
+			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true, Kind: entry.Kind})
 		case "tool_call":
 			displayName := strings.TrimSpace(entry.ToolDisplayName)
 			if displayName == "" {

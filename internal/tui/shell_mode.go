@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 const (
@@ -82,6 +83,11 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	item := chat.NewUserItem(nextChatID(), command, m.chatStyles)
 	item.SetPrefix("$ ")
 	m.chatWrite(item)
+	m.setNextTunnelUserMessageOverride(tunnel.MessageData{
+		Text:        "$ " + command,
+		DisplayText: command,
+		Kind:        tunnel.MessageKindShellCommand,
+	})
 	m.appendUserMessage("$ " + command)
 	m.loading = true
 	m.runCanceled = false
@@ -111,10 +117,23 @@ func (m *Model) appendShellChunk(chunk string) {
 	// grows incrementally like a terminal, not as separate bubbles.
 	if m.shellOutputID == "" {
 		m.shellOutputID = nextSystemID()
-		m.chatWriteSystem(m.shellOutputID, strings.TrimRight(chunk, "\n"))
+		if m.shellOutputIDs == nil {
+			m.shellOutputIDs = make(map[string]struct{})
+		}
+		m.shellOutputIDs[m.shellOutputID] = struct{}{}
+		firstChunk := strings.TrimRight(chunk, "\n")
+		m.suppressNextTunnelSystem = firstChunk
+		m.chatWriteSystem(m.shellOutputID, firstChunk)
 	} else {
 		// Append only the new incremental chunk text.
 		m.chatAppendSystemText(m.shellOutputID, "\n"+strings.TrimRight(chunk, "\n"))
+	}
+	if m.tunnelBroker != nil && m.shellOutputID != "" {
+		m.tunnelBroker.PushTextData(tunnel.TextData{
+			ID:    m.shellOutputID,
+			Chunk: chunk,
+			Kind:  tunnel.MessageKindShellOutput,
+		})
 	}
 	m.chatListScrollToBottom()
 }

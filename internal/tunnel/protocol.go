@@ -147,10 +147,17 @@ type ResumeAckData struct {
 
 // TextData carries a streaming text chunk.
 type TextData struct {
-	ID    string `json:"id"`    // message ID to group chunks
-	Chunk string `json:"chunk"` // text content
-	Done  bool   `json:"done"`  // true on last chunk
+	ID    string `json:"id"`             // message ID to group chunks
+	Chunk string `json:"chunk"`          // text content
+	Done  bool   `json:"done"`           // true on last chunk
+	Kind  string `json:"kind,omitempty"` // optional semantic hint for rendering
 }
+
+const (
+	MessageKindCron         = "cron"
+	MessageKindShellCommand = "shell_command"
+	MessageKindShellOutput  = "shell_output"
+)
 
 // StatusData carries an agent status change.
 type StatusData struct {
