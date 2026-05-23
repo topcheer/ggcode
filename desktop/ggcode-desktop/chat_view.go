@@ -658,7 +658,7 @@ func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
 	}
 
 	// Add result accordion if applicable.
-	cv.addToolResult(ref, result)
+	cv.addToolResult(ref, result, isError)
 	cv.scroll.ScrollToBottom()
 }
 
@@ -781,7 +781,7 @@ func findToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
 	}
 }
 
-func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
+func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string, isError bool) {
 	if result == "" {
 		return
 	}
@@ -790,13 +790,13 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 	if tc == tcSuppress || tc == tcTodo {
 		return
 	}
-	// Web, start/stop command, list_agents: suppress output entirely.
-	if tc == tcWeb || ref.toolName == "start_command" || ref.toolName == "stop_command" || ref.toolName == "list_agents" {
+	// Web, stop command, list_agents: suppress output entirely.
+	if tc == tcWeb || ref.toolName == "stop_command" || ref.toolName == "list_agents" {
 		return
 	}
 
 	// Format result based on tool type.
-	formatted := cv.formatToolResult(ref.toolName, result)
+	formatted := cv.formatToolResult(ref.toolName, result, isError)
 	if formatted == "" {
 		return
 	}
@@ -1048,11 +1048,16 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	formatted := cv.formatToolResult(msg.ToolName, msg.Content)
+	formatted := cv.formatToolResult(msg.ToolName, msg.Content, msg.IsError)
 	if formatted == "" {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
-	resultBlock := newCodeBlock(truncateRunes(formatted, 2000, "..."))
+	var resultBlock fyne.CanvasObject
+	if toolResultUsesMarkdown(msg.ToolName) {
+		resultBlock = newMD(truncateRunes(formatted, 2000, "..."))
+	} else {
+		resultBlock = newCodeBlock(truncateRunes(formatted, 2000, "..."))
+	}
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
 }
 
@@ -1086,7 +1091,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(cv.formatToolResult(msg.ToolName, msg.Content), 2000, "...")
+	result := truncateRunes(cv.formatToolResult(msg.ToolName, msg.Content, msg.IsError), 2000, "...")
 	var resultBlock fyne.CanvasObject
 	if toolResultUsesMarkdown(msg.ToolName) {
 		resultBlock = newMD(result)
@@ -1108,7 +1113,7 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := cv.formatToolResult(msg.ToolName, truncateRunes(msg.Content, 2000, "..."))
+	result := cv.formatToolResult(msg.ToolName, truncateRunes(msg.Content, 2000, "..."), msg.IsError)
 	if result == "" {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
@@ -1578,7 +1583,7 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 				if ref.icon != nil {
 					ref.icon.Refresh()
 				}
-				cv.addToolResult(ref, ev.Content)
+				cv.addToolResult(ref, ev.Content, ev.IsError)
 				break
 			}
 
@@ -1971,7 +1976,7 @@ func interceptFileLinks(obj fyne.CanvasObject, app *App) {
 }
 
 // formatToolResult transforms raw tool result into a human-readable summary.
-func (cv *ChatView) formatToolResult(toolName, result string) string {
+func (cv *ChatView) formatToolResult(toolName, result string, isError bool) string {
 	switch toolName {
 	case "multi_file_edit", "multi_edit_file":
 		return formatMultiEditResult(result)
@@ -1985,13 +1990,15 @@ func (cv *ChatView) formatToolResult(toolName, result string) string {
 		return formatTeammateSpawnResult(result)
 	case "swarm_task_create":
 		return tool.SwarmTaskCreateResultMarkdown(result)
+	case "start_command":
+		return tool.StartCommandResultText(result, isError)
 	default:
 		return result
 	}
 }
 
 func toolResultUsesMarkdown(toolName string) bool {
-	return toolName == "swarm_task_create"
+	return toolName == "swarm_task_create" || toolName == "start_command"
 }
 
 func formatTeammateSpawnResult(result string) string {

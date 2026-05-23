@@ -82,7 +82,7 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 						status = chat.StatusError
 					}
 					m.chatUpdateToolStatus(block.ToolID, status)
-					m.setToolResult(item, suppressToolResult(block.ToolName, block.Output))
+					m.setToolResult(item, suppressToolResult(block.ToolName, block.Output, block.IsError))
 				}
 			}
 		}

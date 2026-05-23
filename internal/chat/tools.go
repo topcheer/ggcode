@@ -769,7 +769,7 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		return item
 	case catCmd:
 		item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
-		item.BaseToolItem.suppressBody = true
+		item.BaseToolItem.suppressBody = ctx.ToolName != "start_command"
 		return item
 	case catLSP:
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)

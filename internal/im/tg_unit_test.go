@@ -193,7 +193,7 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_result_read_offset", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`, Result: "line100\nline101"}}, "📖 log.txt [lines 100-149]"},
 
 		// Background commands — English
-		{"tool_result_start_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "start_command", Lang: "en", Result: ""}}, "⚡ Background command started"},
+		{"tool_result_start_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "start_command", Lang: "en", Result: ""}}, "⚡ Started"},
 		{"tool_result_stop_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "stop_command", Lang: "en", Result: ""}}, ""},
 		{"tool_result_wait_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_command", Lang: "en", Result: ""}}, ""},
 		{"tool_result_write_input", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_command_input", Lang: "en", Result: ""}}, ""},

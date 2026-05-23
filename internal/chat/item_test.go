@@ -471,12 +471,16 @@ func TestCmdToolHeadersVisible(t *testing.T) {
 				t.Errorf("expected render to contain %q, got:\n%s", tt.wantIn, clean)
 			}
 
-			// Body should be suppressed — no result content visible
+			// Most command tool bodies should be suppressed; start_command should retain its summary.
 			if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
 				setter.SetResult("some long output that should not be visible", false)
 				rendered = item.Render(80)
 				clean = stripTestAnsi(rendered)
-				if strings.Contains(clean, "some long output") {
+				shouldShowBody := tt.toolName == "start_command"
+				if shouldShowBody && !strings.Contains(clean, "some long output") {
+					t.Errorf("start_command body should be visible, got:\n%s", clean)
+				}
+				if !shouldShowBody && strings.Contains(clean, "some long output") {
 					t.Errorf("cmd tool body should be suppressed, got:\n%s", clean)
 				}
 			}

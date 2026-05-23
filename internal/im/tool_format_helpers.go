@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // imLabel returns a localized label string for IM tool display.
@@ -231,25 +233,7 @@ func formatIMAskUserResult(tr *ToolResultInfo) string {
 
 // formatIMStartCommandResult renders start_command result.
 func formatIMStartCommandResult(tr *ToolResultInfo) string {
-	lang := toolLang(tr.Lang)
-	cmd := extractCommand(tr.Args)
-	output := strings.TrimSpace(tr.Result)
-	if tr.IsError {
-		if cmd != "" {
-			return fmt.Sprintf("⚡ %s: %s\n```\n%s\n```", imLabel(lang, "bg_command"), cmd, output)
-		}
-		return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
-	}
-	if output == "" {
-		if cmd != "" {
-			return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command_started"), cmd)
-		}
-		return fmt.Sprintf("⚡ %s", imLabel(lang, "bg_command_started"))
-	}
-	if cmd != "" {
-		return fmt.Sprintf("⚡ %s: %s\n```\n%s\n```", imLabel(lang, "bg_command"), cmd, output)
-	}
-	return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
+	return "⚡ " + tool.StartCommandResultText(tr.Result, tr.IsError)
 }
 
 // formatIMStopCommandResult renders stop_command result.

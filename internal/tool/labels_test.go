@@ -438,6 +438,28 @@ func TestDescribeTool(t *testing.T) {
 	}
 }
 
+func TestStartCommandResultText(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  string
+		isError bool
+		want    string
+	}{
+		{name: "success empty", result: "", want: "Started"},
+		{name: "success snapshot", result: "Job ID: cmd-1\nStatus: running\nDuration: 1s", want: "Started"},
+		{name: "failed snapshot", result: "Job ID: cmd-1\nStatus: failed\nError: boom", want: "Failed"},
+		{name: "error flag wins", result: "permission denied", isError: true, want: "Failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StartCommandResultText(tt.result, tt.isError); got != tt.want {
+				t.Fatalf("StartCommandResultText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSwarmTaskCreateResultMarkdown(t *testing.T) {
 	got := SwarmTaskCreateResultMarkdown(`{"ID":"task-1","Subject":"Fix tunnel replay","Description":"## Summary\n- keep markdown"}`)
 	if got != "## Summary\n- keep markdown" {

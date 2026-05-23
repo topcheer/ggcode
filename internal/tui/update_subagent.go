@@ -5,10 +5,29 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // handleSubAgentUpdateMsg handles the corresponding message case.
 func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
+	if msg.AgentID != "" && m.subAgentMgr != nil {
+		if snap, ok := m.subAgentMgr.Snapshot(msg.AgentID); ok {
+			sa := &subagent.SubAgent{
+				ID:          snap.ID,
+				Name:        snap.Name,
+				Task:        snap.Task,
+				Status:      snap.Status,
+				CurrentTool: snap.CurrentTool,
+				Result:      snap.Result,
+			}
+			if snap.Error != "" {
+				sa.Error = fmt.Errorf("%s", snap.Error)
+			}
+			m.pushSubAgentTunnelEvent(sa)
+		}
+	}
+
 	m.subAgentFollow.markDirty(msg.AgentID)
 
 	if m.subAgentFollow.isActive() {
@@ -47,6 +66,45 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 	}
 	return m, nil
 
+}
+
+func (m Model) handleSubAgentTunnelStreamTextMsg(msg subAgentTunnelStreamTextMsg) (Model, tea.Cmd) {
+	if msg.AgentID != "" && msg.Text != "" {
+		m.pushSubAgentTunnelStreamText(msg.AgentID, msg.Text)
+	}
+	return m, nil
+}
+
+func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (Model, tea.Cmd) {
+	if msg.AgentID != "" {
+		m.pushSubAgentTunnelToolCall(
+			msg.AgentID,
+			msg.ToolID,
+			msg.ToolName,
+			toolCallDisplayName(msg.ToolName, msg.Args),
+			msg.Args,
+			msg.Detail,
+		)
+	}
+	return m, nil
+}
+
+func (m Model) handleSubAgentTunnelToolResultMsg(msg subAgentTunnelToolResultMsg) (Model, tea.Cmd) {
+	if msg.AgentID != "" {
+		m.pushSubAgentTunnelToolResult(
+			msg.AgentID,
+			msg.ToolID,
+			msg.ToolName,
+			msg.Result,
+			msg.IsError,
+		)
+	}
+	return m, nil
+}
+
+func (m Model) handleSwarmTunnelEventMsg(msg swarmTunnelEventMsg) (Model, tea.Cmd) {
+	m.pushSwarmTunnelEvent(msg.Event)
+	return m, nil
 }
 
 // handleSubAgentDoneMsg handles the corresponding message case.

@@ -308,7 +308,7 @@ func TestBuildToolRefFindsBodyAndAddsResultSectionWithTimelineRow(t *testing.T) 
 		t.Fatal("expected tool body container to be found")
 	}
 
-	cv.addToolResult(ref, "hello world")
+	cv.addToolResult(ref, "hello world", false)
 	if len(ref.body.Objects) < 2 {
 		t.Fatalf("expected body to contain header and result section, got %d objects", len(ref.body.Objects))
 	}
@@ -321,6 +321,27 @@ func TestBuildToolRefFindsBodyAndAddsResultSectionWithTimelineRow(t *testing.T) 
 	}
 	if !foundSection {
 		t.Fatal("expected collapsible result section in tool body")
+	}
+}
+
+func TestAddToolResultShowsStartCommandStatus(t *testing.T) {
+	cv := &ChatView{}
+	msg := &ChatMessage{
+		Role:     "tool",
+		ToolName: "start_command",
+		ToolDesc: "Run in background",
+		ToolID:   "tool-start",
+	}
+
+	w := cv.renderGenericTool(msg)
+	ref := cv.buildToolRef(msg, w)
+	if ref == nil || ref.body == nil {
+		t.Fatal("expected tool body container")
+	}
+
+	cv.addToolResult(ref, "Job ID: cmd-1\nStatus: running\nDuration: 1s", false)
+	if len(ref.body.Objects) < 2 {
+		t.Fatalf("expected start_command result section, got %d objects", len(ref.body.Objects))
 	}
 }
 
