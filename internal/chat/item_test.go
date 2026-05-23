@@ -398,6 +398,121 @@ func TestNewToolItemDetailFlowsToRender(t *testing.T) {
 	}
 }
 
+// TestCmdToolHeadersVisible verifies that command management tools (read_command_output,
+// stop_command, etc.) render their headers in the chat area. Previously these were
+// fully suppressed (suppressHeader=true), making them invisible.
+func TestCmdToolHeadersVisible(t *testing.T) {
+	styles := DefaultStyles()
+
+	tests := []struct {
+		name     string
+		toolName string
+		display  string
+		detail   string
+		wantIn   string // must appear in rendered output
+	}{
+		{
+			name:     "read_command_output shows header",
+			toolName: "read_command_output",
+			display:  "Read output",
+			detail:   "cmd-1",
+			wantIn:   "Read output",
+		},
+		{
+			name:     "stop_command shows header",
+			toolName: "stop_command",
+			display:  "Stop",
+			detail:   "cmd-3",
+			wantIn:   "Stop",
+		},
+		{
+			name:     "wait_command shows header",
+			toolName: "wait_command",
+			display:  "Wait",
+			detail:   "cmd-2",
+			wantIn:   "Wait",
+		},
+		{
+			name:     "write_command_input shows header",
+			toolName: "write_command_input",
+			display:  "Input",
+			detail:   "cmd-1",
+			wantIn:   "Input",
+		},
+		{
+			name:     "list_commands shows header",
+			toolName: "list_commands",
+			display:  "List jobs",
+			detail:   "",
+			wantIn:   "List jobs",
+		},
+		{
+			name:     "start_command shows header",
+			toolName: "start_command",
+			display:  "Run in background",
+			detail:   "npm run dev",
+			wantIn:   "npm run dev",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := ToolContext{
+				ToolName:    tt.toolName,
+				DisplayName: tt.display,
+				Detail:      tt.detail,
+				RawArgs:     "{}",
+			}
+			item := NewToolItem("test-id", ctx, StatusSuccess, styles)
+			rendered := item.Render(80)
+			clean := stripTestAnsi(rendered)
+
+			if !strings.Contains(clean, tt.wantIn) {
+				t.Errorf("expected render to contain %q, got:\n%s", tt.wantIn, clean)
+			}
+
+			// Body should be suppressed — no result content visible
+			if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
+				setter.SetResult("some long output that should not be visible", false)
+				rendered = item.Render(80)
+				clean = stripTestAnsi(rendered)
+				if strings.Contains(clean, "some long output") {
+					t.Errorf("cmd tool body should be suppressed, got:\n%s", clean)
+				}
+			}
+		})
+	}
+}
+
+// TestExitPlanModeHeaderVisible verifies that exit_plan_mode renders its header.
+// Previously suppressHeader=true caused the header to be hidden.
+func TestExitPlanModeHeaderVisible(t *testing.T) {
+	styles := DefaultStyles()
+	ctx := ToolContext{
+		ToolName:    "exit_plan_mode",
+		DisplayName: "Exit Plan",
+		Detail:      "",
+		RawArgs:     `{"report":"Here is my plan..."}`,
+	}
+	item := NewToolItem("test-id", ctx, StatusSuccess, styles)
+	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
+		setter.SetResult("# Plan\n\nDo the thing.", false)
+	}
+
+	rendered := item.Render(80)
+	clean := stripTestAnsi(rendered)
+
+	// Header must be visible
+	if !strings.Contains(clean, "Exit Plan") {
+		t.Errorf("expected render to contain 'Exit Plan', got:\n%s", clean)
+	}
+
+	// Body (markdown) should also be visible
+	if !strings.Contains(clean, "Plan") {
+		t.Errorf("expected render to contain plan body, got:\n%s", clean)
+	}
+}
+
 func TestAssistantItemPrefixOnSameLine(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewAssistantItem("a1", styles)
