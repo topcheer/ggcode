@@ -175,7 +175,7 @@ func TestAutoRunCheckDisplaysAndRecordsUserOnce(t *testing.T) {
 		Title:     "New session",
 	}
 
-	cmd := m.startAutoRunCheck("fix auth bug", "fix auth bug")
+	cmd := m.startAutoRunCheck("fix auth bug", "fix auth bug", true)
 	if cmd == nil {
 		t.Fatal("startAutoRunCheck should return a routing command")
 	}
@@ -195,7 +195,7 @@ func TestAutoRunCheckDisplaysAndRecordsUserOnce(t *testing.T) {
 func TestAutoRunFallbackUsesNormalDisplayedPath(t *testing.T) {
 	m := newTestModel()
 	m.config = &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}
-	_ = m.startAutoRunCheck("what does auth do?", "what does auth do?")
+	_ = m.startAutoRunCheck("what does auth do?", "what does auth do?", true)
 
 	model, cmd := m.Update(autoRunCheckResultMsg{
 		Text:        "what does auth do?",

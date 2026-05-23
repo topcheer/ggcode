@@ -2572,7 +2572,7 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected queued submission not to start a new agent immediately")
 	}
-	if len(m.pending.items) != 1 || m.pending.items[0] != "hi" {
+	if len(m.pending.items) != 1 || m.pending.items[0].Text != "hi" {
 		t.Fatalf("expected one queued submission, got %#v", m.pending.items)
 	}
 	if m.input.Value() != "" {
@@ -2697,7 +2697,7 @@ func TestProjectMemoryLoadingQueuesSubmissionBeforeFirstRun(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected submission to queue while project memory is still loading")
 	}
-	if len(m.pending.items) != 1 || m.pending.items[0] != "hi" {
+	if len(m.pending.items) != 1 || m.pending.items[0].Text != "hi" {
 		t.Fatalf("expected queued submission, got %#v", m.pending.items)
 	}
 	if m.projectMemoryLoading != true {
@@ -2709,7 +2709,7 @@ func TestProjectMemoryLoadedConsumesQueuedSubmissionAndInjectsMemory(t *testing.
 	ag := agent.NewAgent(nil, tool.NewRegistry(), "base", 1)
 	m := NewModel(ag, permission.NewConfigPolicy(nil, nil))
 	m.projectMemoryLoading = true
-	m.pending.items = []string{"hello"}
+	m.pending.items = []pendingSubmission{{Text: "hello"}}
 
 	model, cmd := m.Update(projectMemoryLoadedMsg{
 		Content: "repo guidance",
@@ -2738,7 +2738,7 @@ func TestProjectMemoryLoadedConsumesQueuedSubmissionAndInjectsMemory(t *testing.
 func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.pending.items = []string{"first question", "second question"}
+	m.pending.items = []pendingSubmission{{Text: "first question"}, {Text: "second question"}}
 	m.streamBuffer = &bytes.Buffer{}
 
 	model, cmd := m.Update(doneMsg{})
@@ -2817,7 +2817,7 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	cancelled := false
 	m.loading = true
 	m.cancelFunc = func() { cancelled = true }
-	m.pending.items = []string{"first question", "second question"}
+	m.pending.items = []pendingSubmission{{Text: "first question"}, {Text: "second question"}}
 	m.input.SetValue("draft")
 
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})

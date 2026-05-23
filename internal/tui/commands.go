@@ -139,6 +139,14 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 }
 
 func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
+	return m.submitTextWithDisplay(text, addToHistory, true)
+}
+
+func (m *Model) submitHiddenText(text string) tea.Cmd {
+	return m.submitTextWithDisplay(text, false, false)
+}
+
+func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInChat bool) tea.Cmd {
 	// Notify Knight that user is active (resets idle timer)
 	if m.knight != nil && strings.TrimSpace(text) != "" {
 		m.knight.NotifyActivity()
@@ -151,7 +159,7 @@ func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
 		}
 	}
 	debug.Log("tui", "handleCommand: %s", text)
-	return m.handleCommand(text)
+	return m.handleCommandWithDisplay(text, displayInChat)
 }
 
 // shouldExecuteWhileBusy returns true for commands that should run immediately
@@ -187,6 +195,10 @@ func shouldExecuteWhileBusy(text string) bool {
 }
 
 func (m *Model) handleCommand(text string) tea.Cmd {
+	return m.handleCommandWithDisplay(text, true)
+}
+
+func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cmd {
 	if m.knight != nil && strings.TrimSpace(text) != "" {
 		m.knight.NotifyActivity()
 	}
@@ -426,18 +438,20 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	}
 
 	if m.shouldCheckAutoRun() {
-		return m.startAutoRunCheck(text, displayText)
+		return m.startAutoRunCheck(text, displayText, displayInChat)
 	}
 
-	return m.startNormalTextRun(text, displayText)
+	return m.startNormalTextRun(text, displayText, displayInChat)
 }
 
-func (m *Model) startNormalTextRun(text string, displayText string) tea.Cmd {
-	m.chatWriteUser(nextChatID(), displayText)
-	m.chatListScrollToBottom()
+func (m *Model) startNormalTextRun(text string, displayText string, displayInChat bool) tea.Cmd {
+	if displayInChat {
+		m.chatWriteUser(nextChatID(), displayText)
+		m.chatListScrollToBottom()
 
-	// Save original user message to session
-	m.appendUserMessage(text)
+		// Save original user message to session
+		m.appendUserMessage(text)
+	}
 
 	return m.continueDisplayedNormalTextRun(text)
 }
@@ -496,7 +510,7 @@ func (m *Model) shouldCheckAutoRun() bool {
 
 // startAutoRunCheck evaluates harness auto-run routing off the Bubble Tea
 // update path so the optional LLM classifier cannot freeze the TUI.
-func (m *Model) startAutoRunCheck(text string, displayText string) tea.Cmd {
+func (m *Model) startAutoRunCheck(text string, displayText string, displayInChat bool) tea.Cmd {
 	mode := m.config.Harness.AutoRunMode()
 	// In strict mode, apply write guard immediately regardless of route outcome.
 	// This ensures the main agent cannot write to the project even if the input
@@ -506,9 +520,11 @@ func (m *Model) startAutoRunCheck(text string, displayText string) tea.Cmd {
 	}
 
 	// Show the user's input immediately — don't wait for the async routing check.
-	m.chatWriteUser(nextChatID(), displayText)
-	m.chatListScrollToBottom()
-	m.appendUserMessage(text)
+	if displayInChat {
+		m.chatWriteUser(nextChatID(), displayText)
+		m.chatListScrollToBottom()
+		m.appendUserMessage(text)
+	}
 
 	cfg := m.config
 	workDir, _ := os.Getwd()

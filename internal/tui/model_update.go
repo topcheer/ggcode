@@ -251,7 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			debug.Log("tui", "project memory load failed: %v", msg.Err)
 			if m.pendingSubmissionCount() > 0 && !m.loading {
-				return m, m.submitText(m.consumePendingSubmission(), false)
+				return m, m.submitPendingSubmissionCmd()
 			}
 			return m, nil
 		}
@@ -267,7 +267,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.shellMode {
 				return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 			}
-			return m, m.submitText(m.consumePendingSubmission(), false)
+			return m, m.submitPendingSubmissionCmd()
 		}
 		return m, nil
 
@@ -320,17 +320,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suppressNextTunnelSystem = sysMsg
 		m.chatWriteSystem(nextSystemID(), sysMsg)
 		m.emitIMText(sysMsg)
-		m.setNextTunnelUserMessageOverride(tunnel.MessageData{
+		override := tunnel.MessageData{
 			Text:        msg.Prompt,
 			DisplayText: sysMsg,
 			Kind:        "cron",
-		})
+		}
 		// If agent is idle, submit the cron prompt immediately.
 		// Otherwise queue it for processing after the current run finishes.
 		if !m.loading {
+			m.setNextTunnelUserMessageOverride(override)
 			return m, m.submitText(msg.Prompt, true)
 		}
-		m.queuePendingSubmissionHidden(msg.Prompt)
+		m.queuePendingSubmissionHiddenWithOverride(msg.Prompt, &override)
 		return m, nil
 
 	case skillsChangedMsg:
@@ -528,6 +529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
+		m.pushTunnelCurrentStatus()
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentStatusMsg:
@@ -540,6 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
+		m.pushTunnelCurrentStatus()
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentRoundProgressMsg:

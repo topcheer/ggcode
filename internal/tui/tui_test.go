@@ -1664,7 +1664,7 @@ func TestBusyEnterStillQueuesNonHarnessCommands(t *testing.T) {
 		t.Fatal("expected busy /run_command to stay queued")
 	}
 	updated := next.(Model)
-	if len(updated.pending.items) != 1 || updated.pending.items[0] != "/run_command echo hi" {
+	if len(updated.pending.items) != 1 || updated.pending.items[0].Text != "/run_command echo hi" {
 		t.Fatalf("expected /run_command to remain queued, got %+v", updated.pending.items)
 	}
 	if updated.harnessPanel != nil {

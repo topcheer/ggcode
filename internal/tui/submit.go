@@ -78,6 +78,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	m.cancelFunc = cancel
 	m.activeAgentRunID++
 	runID := m.activeAgentRunID
+	initialTunnelStatus := m.currentTunnelStatus()
 	if m.agent != nil {
 		m.agent.SetInterruptionHandler(func() string {
 			return m.drainPendingInterrupt(runID)
@@ -99,7 +100,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 				cancel()
 			}()
 
-			m.pushTunnelStatusThinking()
+			m.pushTunnelStatus(initialTunnelStatus.Status, initialTunnelStatus.Message)
 			if err := m.runAgentSubmission(ctx, runID, text, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}

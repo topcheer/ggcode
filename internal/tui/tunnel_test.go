@@ -484,7 +484,8 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.tunnelBroker = nil
 	// None of these should panic
 	m.pushTunnelUserMessage("test")
-	m.pushTunnelStatusThinking()
+	m.pushTunnelStatus(tunnel.StatusThinking, "processing")
+	m.pushTunnelCurrentStatus()
 	m.pushTunnelCancel()
 	m.pushSubAgentTunnelStreamText("sa-1", "text")
 	m.pushSubAgentTunnelToolCall("sa-1", "t1", "tool", "Tool", "{}", "")
@@ -500,6 +501,66 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_working", TeammateID: "x", TeammateName: "coder"})
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_idle", TeammateID: "x", TeammateName: "coder", Result: "done"})
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_shutdown", TeammateID: "x", TeammateName: "coder"})
+}
+
+func TestPushTunnelCurrentStatusUsesLiveActivity(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.loading = true
+	m.statusActivity = "Collecting project knowledge..."
+
+	m.pushTunnelCurrentStatus()
+
+	if len(m.session.TunnelEvents) != 1 {
+		t.Fatalf("expected 1 tunnel event, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventStatus {
+		t.Fatalf("expected status event, got %q", got)
+	}
+	var data tunnel.StatusData
+	if err := json.Unmarshal(m.session.TunnelEvents[0].Data, &data); err != nil {
+		t.Fatalf("unmarshal status data: %v", err)
+	}
+	if data.Status != tunnel.StatusThinking || data.Message != "Collecting project knowledge..." {
+		t.Fatalf("expected thinking/collecting status, got %+v", data)
+	}
+}
+
+func TestCancelActiveRunEmitsCancelledToolResult(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.loading = true
+	m.cancelFunc = func() {}
+	m.chatStartTool(ToolStatusMsg{
+		ToolID:      "tool-1",
+		ToolName:    "read_file",
+		DisplayName: "Read File",
+		Detail:      "a.txt",
+		Running:     true,
+	})
+
+	m.cancelActiveRun()
+
+	found := false
+	for _, ev := range m.session.TunnelEvents {
+		if ev.Type != tunnel.EventToolResult {
+			continue
+		}
+		var data tunnel.ToolResultData
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("unmarshal tool result data: %v", err)
+		}
+		if data.ToolID == "tool-1" {
+			found = true
+			if data.Result != "Cancelled" {
+				t.Fatalf("expected cancelled tool result, got %q", data.Result)
+			}
+			if !data.IsError {
+				t.Fatal("expected cancelled tool result to be marked as error")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected cancelled tool result event")
+	}
 }
 
 func newTunnelRecordingModel(t *testing.T) *Model {
