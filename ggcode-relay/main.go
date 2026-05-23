@@ -57,6 +57,18 @@ func newRoom(token string) *room {
 	}
 }
 
+func (r *room) notifyServerClientConnected() {
+	if r.server == nil {
+		return
+	}
+	r.server.sendJSON(relayMessage{
+		Type:      "connected",
+		Role:      "client",
+		SessionID: r.sessionID,
+		Count:     len(r.history),
+	})
+}
+
 // ─── Peer ───
 //
 // writePump is the ONLY goroutine that writes to conn.
@@ -416,6 +428,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		rm.server = p
 	} else {
 		rm.clients[p] = struct{}{}
+		rm.notifyServerClientConnected()
 	}
 	rm.mu.Unlock()
 

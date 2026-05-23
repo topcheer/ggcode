@@ -688,9 +688,24 @@ class _WorkspaceScannerScreen extends StatefulWidget {
 
 class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
   bool _handled = false;
+  final _manualUrlController = TextEditingController();
+
+  void _submitManualUrl() {
+    final raw = _manualUrlController.text.trim();
+    if (_handled || raw.isEmpty) return;
+    _handled = true;
+    Navigator.of(context).pop(raw);
+  }
+
+  @override
+  void dispose() {
+    _manualUrlController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final manualUrl = _manualUrlController.text.trim();
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -728,11 +743,74 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                t('workspace.scan_hint'),
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                textAlign: TextAlign.center,
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    t('workspace.scan_hint'),
+                    style:
+                        TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 16),
+                  Text(
+                    t('workspace.manual_hint'),
+                    style: TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  TextField(
+                    key: const Key('workspaceScannerManualUrlField'),
+                    controller: _manualUrlController,
+                    style:
+                        TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: t('workspace.url_placeholder'),
+                      hintStyle: TextStyle(color: AppColors.textMuted),
+                      filled: true,
+                      fillColor: AppColors.surface,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.md),
+                        borderSide: BorderSide.none,
+                      ),
+                      prefixIcon:
+                          Icon(Icons.link, color: AppColors.textSecondary),
+                      suffixIcon: manualUrl.isNotEmpty
+                          ? IconButton(
+                              icon: Icon(Icons.clear,
+                                  color: AppColors.textSecondary),
+                              onPressed: () {
+                                _manualUrlController.clear();
+                                setState(() {});
+                              },
+                            )
+                          : null,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _submitManualUrl(),
+                  ),
+                  SizedBox(height: 12),
+                  FilledButton(
+                    key: const Key('workspaceScannerManualConnectButton'),
+                    onPressed: manualUrl.isEmpty ? null : _submitManualUrl,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.md),
+                      ),
+                    ),
+                    child: Text(t('workspace.connect_direct')),
+                  ),
+                ],
               ),
             ),
           ],

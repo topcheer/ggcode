@@ -135,4 +135,21 @@ void main() {
     expect(find.byIcon(Icons.stop_circle), findsOneWidget);
     expect(find.byIcon(Icons.send), findsOneWidget);
   });
+
+  testWidgets('workspace scanner allows manual URL entry',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    await tester.tap(find.byIcon(Icons.qr_code_scanner));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('workspaceScannerManualUrlField')),
+        findsOneWidget);
+    expect(find.byKey(const Key('workspaceScannerManualConnectButton')),
+        findsOneWidget);
+  });
 }

@@ -88,6 +88,22 @@ func TestBrokerOnCommand(t *testing.T) {
 	b.OnCommand(func(cmd GatewayMessage) {})
 }
 
+func TestBrokerOnRelayConnected(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+
+	var got RelayConnectedState
+	b.OnRelayConnected(func(info RelayConnectedState) {
+		got = info
+	})
+
+	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-1", HistoryCount: 3})
+
+	if got.Role != "client" || got.SessionID != "sess-1" || got.HistoryCount != 3 {
+		t.Fatalf("relay connected callback mismatch: %+v", got)
+	}
+}
+
 func TestBrokerPushTextAndFlush(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

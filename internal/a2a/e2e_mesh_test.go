@@ -115,7 +115,7 @@ func TestFiveInstanceMesh(t *testing.T) {
 		Port: 0,
 	}, workerBHandler)
 	// Use a test TokenValidator that accepts our test JWT
-	workerBTV, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	workerBTV, _ := auth.NewTokenValidator("test-client", "https://example.com", auth.WithHMACSecret("test-client"))
 	workerBSrv.SetTokenValidator(workerBTV)
 	if err := workerBSrv.Start(); err != nil {
 		t.Fatalf("Instance 3 start: %v", err)

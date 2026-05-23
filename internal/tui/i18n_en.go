@@ -1280,6 +1280,8 @@ Mouse:
 		return "Tunnel stopped."
 	case "tunnel.not_active":
 		return "No active sharing session."
+	case "tunnel.mobile_connected":
+		return "Mobile client connected."
 	default:
 		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
 			return v

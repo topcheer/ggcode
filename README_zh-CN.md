@@ -82,6 +82,7 @@ GGCode Mobile 是一个移动端伴侣应用，可以通过 QR 码连接桌面 a
 | --- | --- | --- |
 | iOS (TestFlight) | [加入 Beta](https://testflight.apple.com/join/J34wVD6p) | 在 iPhone 的 Safari 中打开 |
 | Android (Closed Testing) | [先加入 Google Group](https://groups.google.com/g/gg-studio-ai-products) | **必须先加入群组才能获得权限**，然后在 [Play Store 测试页](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) 加入测试 |
+| Discord 社区 | [加入 Discord](https://discord.gg/F2v4mJmfG) | 获取发布动态、提问交流，并跟进移动端 Beta 进展 |
 
 ### 从源码构建
 
@@ -448,7 +449,7 @@ im:
 | **OpenID Connect** | `a2a.auth.oidc` | 企业 SSO |
 | **双向 TLS** | `a2a.auth.mtls` | 机器对机器、零信任网络 |
 
-> **安全默认值：** 未配置认证时，仅允许 `localhost`（`127.0.0.1`、`::1`）访问。如需暴露给远程 agent，**必须**配置至少一种认证方案，或显式设置 `allow_unauthenticated: true`（不推荐用于生产环境）。
+> **安全默认值：** 未配置认证时，仅允许来自同一台机器的请求访问（`localhost`、回环地址或本机网卡 IP）。如需暴露给远程 agent，**必须**配置至少一种认证方案，或显式设置 `allow_unauthenticated: true`（不推荐用于生产环境）。
 
 ```yaml
 # 最简：共享 API Key

@@ -10,6 +10,8 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
+const qrOverlayDiscordURL = "https://discord.gg/F2v4mJmfG"
+
 // qrOverlayState holds the state for the QR code overlay panel.
 type qrOverlayState struct {
 	title       string // e.g. "Telegram — Scan to Add Bot"
@@ -97,6 +99,7 @@ func (m Model) renderQROverlay() string {
 		dimStyle.Render(" Get GGCode Mobile:"),
 		dimStyle.Render("   iOS:     https://testflight.apple.com/join/J34wVD6p"),
 		dimStyle.Render("   Android: https://play.google.com/apps/testing/gg.ai.ggcode.mobile"),
+		dimStyle.Render(fmt.Sprintf("   Discord: %s", qrOverlayDiscordURL)),
 		"",
 	)
 

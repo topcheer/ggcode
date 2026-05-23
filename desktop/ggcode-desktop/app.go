@@ -416,6 +416,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	getAppLabel := widget.NewLabelWithStyle(t("share.get_app"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	iosLink := widget.NewHyperlink("iOS (TestFlight)", mustParseURL("https://testflight.apple.com/join/J34wVD6p"))
 	androidLink := widget.NewHyperlink("Android (Closed Testing)", mustParseURL("https://play.google.com/apps/testing/gg.ai.ggcode.mobile"))
+	discordLink := widget.NewHyperlink("Discord", mustParseURL("https://discord.gg/F2v4mJmfG"))
 
 	content := container.NewVBox(
 		widget.NewLabelWithStyle(t("share.mobile_connection"), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
@@ -429,7 +430,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		getAppLabel,
 		container.NewHBox(
 			widget.NewLabel("  "),
-			container.NewVBox(iosLink, androidLink),
+			container.NewVBox(iosLink, androidLink, discordLink),
 		),
 	)
 

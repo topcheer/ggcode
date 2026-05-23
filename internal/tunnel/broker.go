@@ -25,6 +25,7 @@ import (
 type Broker struct {
 	session   *Session
 	onCommand func(cmd GatewayMessage)
+	onConnect func(info RelayConnectedState)
 
 	// Session-scoped event identity.
 	sessionMu sync.RWMutex
@@ -200,6 +201,10 @@ func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.onCommand = fn
 }
 
+func (b *Broker) OnRelayConnected(fn func(info RelayConnectedState)) {
+	b.onConnect = fn
+}
+
 func (b *Broker) SetSnapshotProvider(fn func() BrokerSnapshot) {
 	b.snapshotMu.Lock()
 	defer b.snapshotMu.Unlock()
@@ -297,6 +302,9 @@ func (b *Broker) StopSharingGracefully(timeout time.Duration) {
 }
 
 func (b *Broker) handleRelayConnected(info RelayConnectedState) {
+	if b.onConnect != nil {
+		b.onConnect(info)
+	}
 	if info.Role != "server" {
 		return
 	}

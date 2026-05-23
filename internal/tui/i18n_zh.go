@@ -538,6 +538,8 @@ func zhCatalog(key string) string {
 		return "当前没有活跃的共享会话。"
 	case "tunnel.stopped":
 		return "隧道已停止。"
+	case "tunnel.mobile_connected":
+		return "移动端已连接。"
 	case "pairing.rejected":
 		return "当前配对请求已被拒绝，如需继续请重新发起。"
 	case "pairing.blacklisted":

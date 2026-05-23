@@ -117,6 +117,7 @@ GGCode Mobile is a companion app that lets you interact with your desktop agent 
 | --- | --- | --- |
 | iOS (TestFlight) | [Join Beta](https://testflight.apple.com/join/J34wVD6p) | Open in Safari on iPhone |
 | Android (Closed Testing) | [Join Google Group first](https://groups.google.com/g/gg-studio-ai-products) | **You must join the group to get access**, then opt in at [Play Store testing page](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) |
+| Discord Community | [Join Discord](https://discord.gg/F2v4mJmfG) | Get release updates, ask questions, and follow mobile beta progress |
 
 ### Build from source
 
@@ -487,7 +488,7 @@ Five schemes can be enabled individually or combined:
 | **OpenID Connect** | `a2a.auth.oidc` | Enterprise SSO |
 | **Mutual TLS** | `a2a.auth.mtls` | Machine-to-machine, zero-trust |
 
-> **Security default:** When no authentication is configured, only `localhost` (`127.0.0.1`, `::1`) requests are allowed. To expose A2A to remote agents, you **must** configure at least one auth scheme, or explicitly set `allow_unauthenticated: true` (not recommended for production).
+> **Security default:** When no authentication is configured, only requests from the same machine are allowed (`localhost`, loopback, or the host's own interface IPs). To expose A2A to remote agents, you **must** configure at least one auth scheme, or explicitly set `allow_unauthenticated: true` (not recommended for production).
 
 ```yaml
 # Simplest: shared API key
