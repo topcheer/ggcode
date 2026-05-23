@@ -413,7 +413,16 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if b.onConnect != nil {
 		b.onConnect(info)
 	}
+	currentSessionID := b.SessionID()
 	if info.Role == "client" {
+		// A newly joined mobile client should NOT force-reset existing clients when
+		// the room already has retained history for the current active session.
+		if info.HistoryCount > 0 && info.SessionID == currentSessionID {
+			// Still flush any buffered live text so the joining client's resume replay
+			// can observe the latest assistant chunks without resetting the room.
+			b.flushAllText()
+			return
+		}
 		b.snapshotMu.RLock()
 		provider := b.snapshotProvider
 		b.snapshotMu.RUnlock()
@@ -430,7 +439,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			return
 		}
 		go func() {
-			debug.Log("tunnel", "broker: client connected, publishing authoritative snapshot")
+			debug.Log("tunnel", "broker: client connected (relay session=%q count=%d local session=%q), publishing authoritative snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 			b.flushAllText()
 			_ = b.session.SendActiveSession(b.SessionID())
 			if replayed := b.replayCanonicalEvents(true); replayed {
@@ -446,7 +455,6 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role != "server" {
 		return
 	}
-	currentSessionID := b.SessionID()
 	if info.SessionID == currentSessionID && info.HistoryCount > 0 {
 		return
 	}
