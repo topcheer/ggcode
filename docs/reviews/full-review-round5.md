@@ -1,171 +1,147 @@
-# Full Codebase Review — Round 5
+# Full Code Review — Round 5
 
-**Date**: 2025-05-21
-**Scope**: Full codebase across all internal packages
-**Method**: 4 parallel reviewers (TUI, Core, Security, Infra)
-
----
-
-## Executive Summary
-
-| Severity | TUI | Core | Security | Infra | Total |
-|----------|-----|------|----------|-------|-------|
-| CRITICAL | 0 | 0 | 1 | 0 | 1 |
-| HIGH | 3 | 1 | 3 | 1 | 8 |
-| MEDIUM | 10 | 8 | 5 | 12 | 35 |
-| LOW | 8 | 11 | 4 | 16 | 39 |
-
-**Most urgent finding**: JWT issuer/audience fallback bypass in A2A auth (CRITICAL).
+**Date**: 2025-05-23
+**Review Team**: 6 sub-agents (Go Backend / Flutter / Desktop / SRE / Security / UX)
+**Commit Baseline**: `8fb669c5`
 
 ---
 
-## 1. TUI Layer (`internal/tui/`)
+## 综合统计
 
-### HIGH
-- **Hard-coded Chinese strings** in `model.go:626` — should go through i18n
-- **Unlocalized "Tunnel stopped."** in `model_update.go:357`
-- **`swarmTextLastNotify` map leak** in `repl.go:303` — map grows unbounded, never cleaned up
-
-### MEDIUM
-- i18n bypasses in `view_panels.go` and `inspector_panel.go`
-- `tunnelSpawned` map leak — never cleaned up
-- Double rendering in `View()` — potential performance issue
-- Silent session save errors — failures logged but not surfaced to user
-- Permissive approval prefix matching — `strings.HasPrefix(userChoice, "y")` matches "yellow"
-- CJK truncation issues — `lipgloss.Width` may not handle fullwidth chars correctly
-
-### LOW
-- Inline i18n patterns in `activity_groups.go`
-- Duplicated tool filter lists across multiple files
-- Non-atomic counters in stats
-- `View()` mutating state (rendering side effects)
-
-### Positive
-- Strong concurrency discipline via `program.Send()`
-- Well-designed batch streaming with `sync.Once`
-- API key sanitization
-- Proper sub-agent cleanup on interrupt
-- Consistent run ID tracking for stale message filtering
+| 审查维度 | Critical | High | Medium | Low | 合计 |
+|----------|----------|------|--------|-----|------|
+| Go 后端 (API/错误/资源) | 0 | 3 | 13 | 11 | 27 |
+| Flutter 移动端 | 3 | 13 | 16 | 12 | 44 |
+| Desktop GUI | 0 | 2 | 10 | 8 | 20 |
+| SRE 可靠性 | 0 | 4 | 15 | 11 | 30 |
+| 安全 | 2 | 4 | 9 | 6 | 21 |
+| TUI/UX 一致性 | 0 | 2 | 12 | 8 | 22 |
+| **合计** | **5** | **28** | **75** | **56** | **164** |
 
 ---
 
-## 2. Core Agent, Provider, Tool, Config (`internal/agent/`, `internal/provider/`, `internal/tool/`, `internal/config/`, `internal/session/`, `internal/context/`, `internal/memory/`)
+## Critical — 必须立即修复 (5)
 
-### HIGH
-- **Atomic rollback data loss** (`multi_file_tools.go:455-467`): When rollback write fails during multi_file_edit, the error is silently discarded (`_ = atomicWriteFile(...)`). User gets no indication of which files couldn't be reverted.
-
-### MEDIUM
-- **Autopilot loop guard threshold** hardcoded at 2 — could create confusing UX
-- **Gemini duplicate tool IDs** (`gemini.go:186-188`): When `FunctionCall.ID` is empty, falls back to function name, causing duplicate IDs for same tool called twice
-- **Token estimation heuristics** — can be off by 20-40% for code-heavy content
-- **Bypass mode allows dangerous commands** — `curl`, `pip install` allowed without confirmation
-- **Config compound read-modify-write** — mutex protects individual ops but not multi-step sequences
-- **Checkpoint non-atomic rewrite** (`session/store.go`): `WriteCheckpoint` truncates then writes — crash mid-write = data loss
-- **Microcompact truncates recent tool results** — one-way transformation, no undo
-- **Symlink attack in memory loading** (`memory/project.go`): `./GGCODE.md -> /etc/shadow` would read sensitive files
-
-### LOW
-- Agent loop runs N+1 iterations instead of N when `max_iterations` is set
-- Session index rewritten on every append (O(n) per message)
-- Token estimation doesn't account for per-message overhead
-- Various minor issues and positive observations
-
-### Positive
-- Tool-use/tool-result pairing on cancellation handled correctly
-- JSONL append is crash-safe at record level
-- Env expansion immune to shell injection
-- Summarization TOCTOU race properly addressed
-- Multi-file tool parameter validation is thorough
-- Legacy config schema explicitly rejected with clear error
+| ID | 组件 | 问题 | 影响 |
+|----|------|------|------|
+| SEC-001 | ggcode-relay | Relay 服务器无认证，任何能到达的人可创建/加入 room 并拦截 tunnel 流量 (CWE-306) | 全部 tunnel 通信暴露 |
+| SEC-002 | relay + webui | WebSocket `CheckOrigin` 返回 `true`，CSRF 攻击可伪造连接 (CWE-346) | 跨站 WebSocket 劫持 |
+| FL-01 | session_provider.dart | 2518 行巨型 god file，含 10+ Notifier/Model/Provider，无法维护和测试 | 代码质量灾难 |
+| FL-02 | session_provider.dart:151-176 | Stream subscription 永不 cancel，reconnect 时泄漏 3 个监听器，导致重复事件处理 | 聊天状态损坏 |
+| FL-03 | .env (committed) | 包含 Apple App Store Connect 真实 API 凭证 | 凭证泄露 |
 
 ---
 
-## 3. Security (`internal/auth/`, `internal/a2a/`, `internal/permission/`, `internal/tunnel/crypto.go`)
+## High — 优先修复 (18)
 
-### CRITICAL
-- **JWT issuer/audience fallback bypass** (`a2a_oauth.go:443-453`): When strict JWT validation fails, code falls back to parsing **without** issuer/audience check. An attacker with a validly-signed JWT from a different issuer can authenticate.
+### 安全 (4)
+| ID | 问题 |
+|----|------|
+| SEC-003 | Relay token 在 URL query param 中传输，可通过日志/Referrer 泄露 (CWE-598) |
+| SEC-004 | Relay 无 TLS，`http.ListenAndServe()` 接受明文 `ws://` (CWE-319) |
+| SEC-005 | IM adapter 的 `bot_token`/`appsecret` 通过 config API 泄露（sanitizeMap 只检查 api_key/api_secret） |
+| SEC-013 | WebUI REST API 无 CSRF 保护 (CWE-352) |
 
-### HIGH
-- **A2A auth methods OR-combined** (`server.go:229-271`): Multiple auth methods checked with OR logic — attacker can bypass stronger method by satisfying a weaker one
-- **Push notification SSRF** (`server.go:754-793`): Unrestricted URLs fired via `http.DefaultClient` with no validation
-- (Third HIGH from earlier review)
+### 可靠性 (4)
+| ID | 问题 |
+|----|------|
+| SRE-004 | 整个代码库零 metrics 基础设施，无 Prometheus/counters |
+| SRE-009 | WebUI `Server.Close()` 只关闭 listener，不优雅 drain WebSocket |
+| SRE-021 | 无 Dockerfile，relay 部署不可复现 |
+| SRE-026 | WebUI API 无 rate limiting，可被 flood 攻击耗尽 token |
 
-### MEDIUM
-- **HMAC key uses public clientID** — anyone knowing client ID can forge HMAC JWTs
-- **Agent Card MITM enables auth downgrade** — served over plain HTTP in LAN
-- **Sandbox path traversal via symlinks** (`sandbox.go`): `filepath.Abs` doesn't resolve symlinks
-- **Dangerous command classification gaps** — doesn't detect base64/eval/exec/pipe chains
-- **Crypto token truncation** — tokens >32 bytes silently truncated
+### Flutter (4)
+| ID | 问题 |
+|----|------|
+| FL-04 | `ChatMessage.toJson()` 可能序列化 `streaming: true`，缓存恢复后显示卡住的流式指示器 |
+| FL-05 | `ChatMessage` 不实现 `==`/`hashCode`，`copyWith` 无法设置 nullable 字段回 null |
+| FL-06 | 无路由框架，无 deep link 支持，Android 返回键直接退出 |
+| FL-07 | 测试几乎为零：smoke test 空实现，无 widget/integration test |
 
-### LOW
-- PID-based instance detection unreliable
-- Mode transitions without re-authentication
-- Env expansion confirmed safe
+### Desktop (2)
+| ID | 问题 |
+|----|------|
+| D-003 | `startChat()` 直接写 `chatViewRef.bridge` 无锁，与 `pollRefresh` 数据竞争 |
+| D-010 | TUI/Desktop ~1500 行重复代码（formatAskUserResult 等），将产生行为漂移 |
 
-### Positive
-- keys.env permissions correctly set (0600 with forced chmod)
-- Plaintext API key detection and migration
-- AES-GCM AEAD construction is correct with fresh random nonces
-- Env expansion is safe from injection
+### Go 后端 (3)
+| ID | 问题 |
+|----|------|
+| RES-01 | swarm `Manager.Shutdown()` 不等待 goroutine 退出，teardown 时可能访问已释放资源 |
+| ERR-01 | MCP `Client.Close()` 丢弃 `cmd.Wait()` 错误，可能泄漏僵尸进程 |
+| RES-05 | MCP `Client.Close()` 不关闭 `httpClient`，HTTP 连接池永不释放 |
 
----
-
-## 4. Infrastructure (`internal/daemon/`, `internal/im/`, `internal/webui/`, `internal/harness/`, `internal/mcp/`, `internal/subagent/`, `internal/swarm/`)
-
-### HIGH
-- **Harness: No cycle detection in task dependencies** (`task.go:282-319`): If task A depends on B and B depends on A, both stuck in `TaskBlocked` forever with no error. No topological sort or cycle detection.
-
-### MEDIUM
-- **Daemon: No terminal state restoration on crash** (`background.go`, `follow.go`): SIGKILL/OOM leaves terminal in broken state (raw mode, alternate screen buffer)
-- **Harness: Event store — no corruption recovery** (`events.go`): Partial lines from crash cause parse errors, no repair mechanism
-- **Harness: Promotion race condition** (`promotion.go:41-65`): Read-modify-write not atomic under mutex — concurrent promotions could double-merge
-- **Harness: Worktree cleanup on failure** (`worktree.go`): Requires explicit `CleanupStaleWorktrees()` call, no auto-cleanup on startup
-- **IM: Outbound routing fire-and-forget** (`runtime_bindings.go:634-660`): Message delivery failures not retried or queued — messages silently lost on flaky connections
-- **MCP: Process management zombie risk** (`client.go:262-273`): 3-second wait on Close could leave orphan zombie processes
-- **MCP: WebSocket transport — no reconnection** (`client.go:470-501`): Temporary network hiccup permanently breaks WebSocket MCP servers
-- **Swarm: Idle runner goroutine accumulation** (`swarm/idle_runner.go`): Long-lived daemons with many teams could accumulate idle goroutines
-- **Update: No post-update version verification** (`update.go:349-364`): Failed partial update could result in older/corrupt binary without warning
-- **Update: Helper runs detached — no feedback** (`update.go:173-176`): No mechanism to report helper failure to user
-- **WebUI: No CORS configuration** (`server.go`): Acceptable for localhost-only but limits proxy/extension use
-
-### LOW
-- Daemon: Zombie process prevention adequate (Setpgid)
-- IM: Echo suppression per-channel design is sound
-- IM: Adapter lifecycle — well-structured 3-step shutdown
-- IM: Dedup map memory bounded (5-min TTL)
-- WebUI: WebSocket goroutine leak protection present
-- WebUI: REST API input validation minimal but adequate
-- WebUI: Auth token generation cryptographically sound
-- MCP: JSON-RPC ordering correct (single mutex)
-- MCP: OAuth 2.1 token refresh implemented correctly
-- SubAgent: Semaphore correctness — well implemented
-- SubAgent/Swarm: Cancel propagation cascaded correctly
-- Swarm: Team/teammate lifecycle — clean cleanup
-- SubAgent: Graceful panic recovery in runner
-- Install: Binary replacement atomic with temp file
-- Install: Checksum verification SHA-256
-- Install: Checksum from same source as binary (standard for GitHub Releases)
+### TUI (2)
+| ID | 问题 |
+|----|------|
+| TUI-006 | `/knight` 命令约 34 个用户可见字符串硬编码英文，零 i18n |
+| TUI-012 | TUI/Desktop 各自独立 tool 分类系统，渲染逻辑差异大（截断阈值差 15 倍） |
 
 ---
 
-## Priority Fixes (Recommended Order)
+## Medium — 按类别分组 (75)
 
-### Immediate (CRITICAL/HIGH)
-1. **Fix JWT fallback** — Remove `jwt.ParseWithClaims` without issuer/audience check in `a2a_oauth.go`
-2. **Fix A2A auth method combination** — Use AND logic or require specific scheme match
-3. **Fix push notification SSRF** — Validate URLs against private IP ranges
-4. **Fix atomic rollback error reporting** — Log/report failed rollbacks in `multi_file_edit`
-5. **Fix i18n hard-coded strings** — Move Chinese strings and "Tunnel stopped." to i18n catalogs
-6. **Fix map leaks** — Clean up `swarmTextLastNotify` and `tunnelSpawned` maps
-7. **Add harness task dependency cycle detection** — DFS cycle check at CreateTask/SaveTask
+### 架构 & 代码质量
+- broker `onCommand`/`onConnect` 回调无锁保护
+- broker `outbound` 切片无上限，OOM 风险
+- relay `room.history` 无界增长
+- TUI Model 120+ 字段值语义拷贝，map 拷贝开销大
+- TUI 20+ optional panel pointer fields，应重构为 panel stack
+- Flutter `AppColors` 全局可变状态绕过 widget tree rebuild
+- Flutter 翻译系统用可变全局 Map，语言切换不触发 rebuild
 
-### Short-term (MEDIUM)
-8. Fix sandbox symlink traversal — use `filepath.EvalSymlinks()`
-9. Fix memory loading symlink attack — use `os.Lstat` + check `Mode()&os.ModeSymlink`
-10. Fix Gemini duplicate tool IDs — generate unique IDs when API doesn't provide them
-11. Make checkpoint writes atomic — temp file + rename pattern
-12. Add bypass-mode command restrictions — "high-danger" category not overridable
-13. Fix approval prefix matching — use exact match for "y"/"n" choices
-14. Fix harness promotion race — extend mutex over entire PromoteTask operation
-15. Add auto worktree cleanup on harness startup
-16. Add MCP WebSocket reconnection logic
+### 数据持久化
+- session JSONL 崩溃后可能有残缺 JSON 行，Load 会失败
+- harness event log 不调 `f.Sync()`
+- agent loop panic 未在 `RunStreamWithContent` 顶层 recover
+
+### SRE 运维
+- 无结构化日志（纯文本格式）
+- 无 log level（只有 verbose/normal 两档）
+- relay 无 TLS、无 signal handler、无优雅关停
+- 无 circuit breaker，provider 20 次重试最坏 10 分钟
+- 无内存限制、无磁盘用量限制
+- CI integration test 无 retry 机制
+
+### Flutter UI
+- `ChatScreen` 1169 行违反 SRP
+- Message bubble `_parseTextSegments` 每次 build 重新解析
+- `ask_user_screen` 无 SafeArea，键盘遮挡输入
+- crypto.dart key 派生不安全（直接 UTF-8 编码，无长度校验）
+- Android release 未启用 minify/shrink
+
+### Desktop
+- `pollRefresh` 100ms 无 dirty check 浪费 CPU
+- `SetChatMessages` 每次流式 chunk 替换整个切片
+- HTML 预览开放整个目录的 HTTP 访问
+- Mermaid 代码无大小限制直接发到外部服务
+
+---
+
+## 修复路线图
+
+### Phase 1 — 紧急修复（1-2 天）
+1. SEC-001/002: Relay 加认证 + WebSocket CheckOrigin 校验
+2. FL-02: Stream subscription 生命周期管理
+3. FL-03: 轮换 .env 中暴露的 Apple 凭证
+4. SEC-005: sanitizeMap 增加 bot_token/appsecret 等字段
+
+### Phase 2 — 短期修复（1 周）
+5. RES-01/ERR-01/RES-05: 资源管理修复
+6. SRE-009/011: 优雅关停
+7. SRE-026: WebUI API rate limiting
+8. D-003: Desktop bridge swap 加锁
+9. TUI-006: `/knight` 命令 i18n 化
+
+### Phase 3 — 中期改进（2-4 周）
+10. FL-01: 拆分 session_provider.dart
+11. D-010/TUI-012: 提取共享 display 包
+12. SRE-004: 添加 metrics 基础设施
+13. FL-06/07: 添加 go_router + 测试
+14. SEC-003/004: Relay token 移到 header + TLS
+
+### Phase 4 — 长期重构（1-2 月）
+15. TUI-004/005: Panel 系统重构
+16. SRE-021: 添加 Dockerfile + 运维文档
+17. FL-04/05: ChatMessage 用 freezed
+18. 全量 i18n 覆盖
