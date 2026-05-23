@@ -20,17 +20,26 @@ import (
 
 // Session represents a single conversation session.
 type Session struct {
-	ID        string             `json:"id"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
-	Title     string             `json:"title"`
-	Workspace string             `json:"workspace,omitempty"`
-	Vendor    string             `json:"vendor"`
-	Endpoint  string             `json:"endpoint"`
-	Model     string             `json:"model"`
-	Messages  []provider.Message `json:"messages,omitempty"`
+	ID           string             `json:"id"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+	Title        string             `json:"title"`
+	Workspace    string             `json:"workspace,omitempty"`
+	Vendor       string             `json:"vendor"`
+	Endpoint     string             `json:"endpoint"`
+	Model        string             `json:"model"`
+	Messages     []provider.Message `json:"messages,omitempty"`
+	TunnelEvents []TunnelEvent      `json:"tunnel_events,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
+}
+
+// TunnelEvent is the canonical persisted tunnel event for a session.
+type TunnelEvent struct {
+	EventID  string          `json:"event_id"`
+	StreamID string          `json:"stream_id,omitempty"`
+	Type     string          `json:"type"`
+	Data     json.RawMessage `json:"data,omitempty"`
 }
 
 // Store is the interface for session persistence.
@@ -226,17 +235,18 @@ func sessionToIndexEntry(s *Session) indexEntry {
 
 // jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type      string            `json:"type"` // "meta", "message", "cost", or "checkpoint"
-	SessionID string            `json:"session_id,omitempty"`
-	Title     string            `json:"title,omitempty"`
-	Workspace string            `json:"workspace,omitempty"`
-	Vendor    string            `json:"vendor,omitempty"`
-	Endpoint  string            `json:"endpoint,omitempty"`
-	Model     string            `json:"model,omitempty"`
-	CreatedAt time.Time         `json:"created_at,omitempty"`
-	UpdatedAt time.Time         `json:"updated_at,omitempty"`
-	Message   *provider.Message `json:"message,omitempty"`
-	CostJSON  json.RawMessage   `json:"cost,omitempty"`
+	Type        string            `json:"type"` // "meta", "message", "cost", or "checkpoint"
+	SessionID   string            `json:"session_id,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	Workspace   string            `json:"workspace,omitempty"`
+	Vendor      string            `json:"vendor,omitempty"`
+	Endpoint    string            `json:"endpoint,omitempty"`
+	Model       string            `json:"model,omitempty"`
+	CreatedAt   time.Time         `json:"created_at,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
+	Message     *provider.Message `json:"message,omitempty"`
+	TunnelEvent *TunnelEvent      `json:"tunnel_event,omitempty"`
+	CostJSON    json.RawMessage   `json:"cost,omitempty"`
 	// Checkpoint fields: compacted messages snapshot after summarize.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
@@ -321,6 +331,16 @@ func (s *JSONLStore) Save(ses *Session) error {
 		}
 	}
 
+	for i := range ses.TunnelEvents {
+		ev := ses.TunnelEvents[i]
+		rec := jsonlRecord{Type: "tunnel_event", SessionID: ses.ID, TunnelEvent: &ev}
+		if err := enc.Encode(rec); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("encoding tunnel event %d: %w", i, err)
+		}
+	}
+
 	// Cost record (if present)
 	if len(ses.CostJSON) > 0 {
 		costRec := jsonlRecord{Type: "cost", SessionID: ses.ID, CostJSON: ses.CostJSON}
@@ -399,7 +419,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			lastCpMessages = rec.CheckpointMessages
 			postCPEntries = nil
 			haveCheckpoint = true
-		case "message", "cost":
+		case "message", "cost", "tunnel_event":
 			if haveCheckpoint {
 				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 			} else {
@@ -438,6 +458,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "cost":
 			if e.record.CostJSON != nil {
 				ses.CostJSON = []byte(e.record.CostJSON)
+			}
+		case "tunnel_event":
+			if e.record.TunnelEvent != nil {
+				ses.TunnelEvents = append(ses.TunnelEvents, *e.record.TunnelEvent)
 			}
 		}
 	}
@@ -714,6 +738,21 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	path := s.sessionPath(ses.ID)
 
 	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+	if err := appendRecordLine(path, rec); err != nil {
+		return err
+	}
+
+	return s.updateIndex(ses)
+}
+
+// AppendTunnelEventToDisk persists a canonical tunnel event to the session's
+// JSONL file and updates the index, but does NOT mutate the Session object.
+func (s *JSONLStore) AppendTunnelEventToDisk(ses *Session, ev TunnelEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.sessionPath(ses.ID)
+
+	rec := jsonlRecord{Type: "tunnel_event", SessionID: ses.ID, TunnelEvent: &ev}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
 	}

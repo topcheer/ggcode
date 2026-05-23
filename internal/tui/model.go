@@ -503,6 +503,7 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
 	m.bindIMSession()
+	m.announceTunnelActiveSession()
 	// Register this instance for multi-instance detection and auto-mute
 	// if another instance is already running in the same workspace.
 	// This must happen here (not just in SetIMManager) because the session

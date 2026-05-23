@@ -11,6 +11,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const peerWriteTimeout = 30 * time.Second
+
 // relayMessage is the wire format. Metadata fields remain plaintext so relay
 // can manage replay and ordering without decrypting business payloads.
 type relayMessage struct {
@@ -87,18 +89,20 @@ type peer struct {
 }
 
 // sendJSON enqueues a message for sending. Never panics — sendCh is never closed.
+// It applies backpressure instead of dropping messages; replay gaps are more
+// harmful than temporarily slowing a room.
 func (p *peer) sendJSON(msg relayMessage) {
 	data, _ := json.Marshal(msg)
 	select {
 	case p.sendCh <- data:
-	default:
+	case <-p.done:
 	}
 }
 
 func (p *peer) sendRaw(raw []byte) {
 	select {
 	case p.sendCh <- raw:
-	default:
+	case <-p.done:
 	}
 }
 
@@ -115,14 +119,27 @@ func (p *peer) writePump() {
 	}
 	p.room.mu.RUnlock()
 	connMsg, _ := json.Marshal(connState)
+	_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
 	if err := p.conn.WriteMessage(websocket.TextMessage, connMsg); err != nil {
 		return
+	}
+	if connState.SessionID != "" {
+		activeMsg, _ := json.Marshal(relayMessage{
+			Type:      "active_session",
+			SessionID: connState.SessionID,
+			Data:      mustJSON(activeSessionData{SessionID: connState.SessionID}),
+		})
+		_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
+		if err := p.conn.WriteMessage(websocket.TextMessage, activeMsg); err != nil {
+			return
+		}
 	}
 
 	// 2. Normal pump — resume ack/replay/live messages all flow through sendCh.
 	for {
 		select {
 		case msg := <-p.sendCh:
+			_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
 			if err := p.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
@@ -199,6 +216,11 @@ func (p *peer) readPump(h *hub) {
 		switch msg.Type {
 		case "ping":
 			p.sendJSON(relayMessage{Type: "pong"})
+			continue
+		case "active_session":
+			if p.role == "server" {
+				p.handleActiveSession(msg)
+			}
 			continue
 		case "resume_hello", "resume_from":
 			if p.role == "client" {
@@ -280,6 +302,62 @@ func (p *peer) readPump(h *hub) {
 			if err := p.hub.store.persistEvent(p.room.token, persistMsg, persistRaw); err != nil {
 				log.Printf("[relay] persist event failed: room=%s err=%v", p.room.token[:8], err)
 			}
+		}
+	}
+}
+
+type activeSessionData struct {
+	SessionID string `json:"session_id"`
+}
+
+func mustJSON(v interface{}) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return data
+}
+
+func activeSessionID(msg relayMessage) string {
+	if msg.SessionID != "" {
+		return msg.SessionID
+	}
+	if len(msg.Data) == 0 {
+		return ""
+	}
+	var data activeSessionData
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		return ""
+	}
+	return data.SessionID
+}
+
+func (p *peer) handleActiveSession(msg relayMessage) {
+	sessionID := activeSessionID(msg)
+	if sessionID == "" {
+		return
+	}
+	var clients []*peer
+	p.room.mu.Lock()
+	changed := p.room.sessionID != sessionID
+	p.room.sessionID = sessionID
+	if changed {
+		p.room.history = nil
+	}
+	for c := range p.room.clients {
+		clients = append(clients, c)
+	}
+	token := p.room.token
+	p.room.mu.Unlock()
+
+	active := relayMessage{
+		Type:      "active_session",
+		SessionID: sessionID,
+		Data:      mustJSON(activeSessionData{SessionID: sessionID}),
+	}
+	for _, c := range clients {
+		c.sendJSON(active)
+	}
+	if p.hub != nil && p.hub.store != nil {
+		if err := p.hub.store.persistActiveSession(token, sessionID); err != nil {
+			log.Printf("[relay] persist active session failed: room=%s err=%v", token[:8], err)
 		}
 	}
 }

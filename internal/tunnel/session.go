@@ -115,6 +115,10 @@ func (s *Session) Send(msg GatewayMessage) error {
 	return s.client.Send(msg)
 }
 
+func (s *Session) SendActiveSession(sessionID string) error {
+	return s.client.SendActiveSession(sessionID)
+}
+
 func (s *Session) Info() *SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

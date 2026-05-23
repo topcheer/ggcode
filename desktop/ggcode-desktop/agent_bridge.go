@@ -1420,6 +1420,9 @@ func (b *AgentBridge) ensureSession() {
 	ses := session.NewSession(vendor, endpoint, model)
 	_ = b.sessionStore.Save(ses)
 	b.currentSes = ses
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.AnnounceActiveSession(ses.ID)
+	}
 }
 
 // SessionStore returns the session store for external use (e.g., sidebar).
@@ -1430,6 +1433,50 @@ func (b *AgentBridge) SessionStore() session.Store {
 // CurrentSession returns the current session.
 func (b *AgentBridge) CurrentSession() *session.Session {
 	return b.currentSes
+}
+
+func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
+	if b.currentSes == nil || len(b.currentSes.TunnelEvents) == 0 {
+		return nil
+	}
+	out := make([]tunnel.GatewayMessage, 0, len(b.currentSes.TunnelEvents))
+	for _, ev := range b.currentSes.TunnelEvents {
+		out = append(out, tunnel.GatewayMessage{
+			SessionID: b.currentSes.ID,
+			EventID:   ev.EventID,
+			StreamID:  ev.StreamID,
+			Type:      ev.Type,
+			Data:      ev.Data,
+		})
+	}
+	return out
+}
+
+func (b *AgentBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {
+	if msg.EventID == "" || msg.Type == tunnel.EventSnapshotReset {
+		return
+	}
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil {
+		b.mu.Unlock()
+		return
+	}
+	record := session.TunnelEvent{
+		EventID:  msg.EventID,
+		StreamID: msg.StreamID,
+		Type:     msg.Type,
+		Data:     append([]byte(nil), msg.Data...),
+	}
+	b.currentSes.TunnelEvents = append(b.currentSes.TunnelEvents, record)
+	ses := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
+	} else {
+		_ = store.Save(ses)
+	}
 }
 
 // ResetAgent clears the cached agent so the next request recreates it
@@ -1460,6 +1507,9 @@ func (b *AgentBridge) ResumeSession(id string) error {
 	}
 
 	b.currentSes = ses
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.AnnounceActiveSession(ses.ID)
+	}
 	return nil
 }
 

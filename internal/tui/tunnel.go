@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -173,11 +174,16 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		}
 	})
 
-	snapshot := m.tunnelSnapshot()
-	msg.broker.SendSnapshot(snapshot)
 	msg.broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 		return m.tunnelSnapshot()
 	})
+	msg.broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+		return m.currentSessionTunnelReplayEvents()
+	})
+	msg.broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		m.recordTunnelEvent(ev)
+	})
+	m.publishTunnelSnapshotForCurrentSession(true)
 
 	// Open QR overlay with connect URL and QR code.
 	m.openQROverlayDirect(
@@ -657,6 +663,74 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 		snapshot.History = tunnelMessagesToHistory(msgs)
 	}
 	return snapshot
+}
+
+func (m *Model) announceTunnelActiveSession() {
+	if m.tunnelBroker == nil || m.session == nil || m.session.ID == "" {
+		return
+	}
+	m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+}
+
+func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
+	if m.tunnelBroker == nil {
+		return
+	}
+	if m.session != nil && m.session.ID != "" {
+		if reset {
+			m.tunnelBroker.SwitchSession(m.session.ID)
+		} else {
+			m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+		}
+	}
+	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
+		m.tunnelBroker.ReplayEvents(events, false)
+		return
+	}
+	m.tunnelBroker.SendSnapshot(m.tunnelSnapshot())
+}
+
+func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
+	if m.session == nil || len(m.session.TunnelEvents) == 0 {
+		return nil
+	}
+	out := make([]tunnel.GatewayMessage, 0, len(m.session.TunnelEvents))
+	for _, ev := range m.session.TunnelEvents {
+		out = append(out, tunnel.GatewayMessage{
+			SessionID: m.session.ID,
+			EventID:   ev.EventID,
+			StreamID:  ev.StreamID,
+			Type:      ev.Type,
+			Data:      ev.Data,
+		})
+	}
+	return out
+}
+
+func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {
+	m.sessionMutex().Lock()
+	if m.session == nil || m.sessionStore == nil || ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
+		m.sessionMutex().Unlock()
+		return
+	}
+	record := session.TunnelEvent{
+		EventID:  ev.EventID,
+		StreamID: ev.StreamID,
+		Type:     ev.Type,
+		Data:     append([]byte(nil), ev.Data...),
+	}
+	m.session.TunnelEvents = append(m.session.TunnelEvents, record)
+	ses := m.session
+	store := m.sessionStore
+	m.sessionMutex().Unlock()
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
+	} else {
+		m.sessionMutex().Lock()
+		_ = store.Save(ses)
+		m.sessionMutex().Unlock()
+	}
 }
 
 func (m *Model) currentTunnelStatus() tunnel.StatusData {

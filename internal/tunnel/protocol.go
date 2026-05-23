@@ -20,6 +20,7 @@ type GatewayMessage struct {
 // Server → Client event types.
 const (
 	EventConnected          = "connected"
+	EventActiveSession      = "active_session"
 	EventSessionInfo        = "session_info"
 	EventUserMessage        = "user_message" // user text from desktop
 	EventText               = "text"         // streaming text chunk
@@ -98,6 +99,12 @@ type SessionInfoData struct {
 	Version   string `json:"version"`
 	Language  string `json:"language,omitempty"`
 	Theme     string `json:"theme,omitempty"`
+}
+
+// ActiveSessionData declares the authoritative TUI/GUI session bound to the
+// current tunnel room.
+type ActiveSessionData struct {
+	SessionID string `json:"session_id"`
 }
 
 // LanguageChangeData carries a language preference change (bidirectional sync).

@@ -122,6 +122,16 @@ class ConnectionService {
       case 'pong':
         break;
 
+      case 'active_session':
+        _messageController.add(proto.WsMessage(
+          sessionId: map['session_id'] as String?,
+          type: type,
+          data: Map<String, dynamic>.from(map)
+            ..remove('type')
+            ..remove('session_id'),
+        ));
+        break;
+
       case 'server_offline':
       case 'sharing_stopped':
         _cleanup();

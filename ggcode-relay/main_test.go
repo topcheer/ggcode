@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestRoomNotifyServerClientConnected(t *testing.T) {
@@ -110,5 +111,81 @@ func TestPeerHandleResumeQueuesAckAndReplay(t *testing.T) {
 	}
 	if replay.EventID != "ev-000000002" {
 		t.Fatalf("expected replay to start after cursor, got %+v", replay)
+	}
+}
+
+func TestPeerSendRawBackpressuresInsteadOfDropping(t *testing.T) {
+	p := &peer{
+		sendCh: make(chan []byte, 1),
+		done:   make(chan struct{}),
+	}
+	p.sendCh <- []byte("first")
+
+	sent := make(chan struct{})
+	go func() {
+		p.sendRaw([]byte("second"))
+		close(sent)
+	}()
+
+	select {
+	case <-sent:
+		t.Fatal("sendRaw returned while send queue was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if got := string(<-p.sendCh); got != "first" {
+		t.Fatalf("first queued message = %q", got)
+	}
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("sendRaw did not enqueue after queue drained")
+	}
+	if got := string(<-p.sendCh); got != "second" {
+		t.Fatalf("second queued message = %q", got)
+	}
+}
+
+func TestPeerHandleActiveSessionBindsRoomAndNotifiesClients(t *testing.T) {
+	r := &room{
+		token:       "token-1234567890abcdef",
+		sessionID:   "old-session",
+		history:     []roomEvent{{sessionID: "old-session", eventID: "ev-000000001"}},
+		clients:     map[*peer]struct{}{},
+		clientsByID: map[string]*peer{},
+	}
+	client := &peer{
+		room:   r,
+		role:   "client",
+		sendCh: make(chan []byte, 2),
+		done:   make(chan struct{}),
+	}
+	r.clients[client] = struct{}{}
+	server := &peer{
+		room:   r,
+		role:   "server",
+		sendCh: make(chan []byte, 2),
+		done:   make(chan struct{}),
+	}
+
+	server.handleActiveSession(relayMessage{Type: "active_session", SessionID: "new-session"})
+
+	if r.sessionID != "new-session" {
+		t.Fatalf("room sessionID = %q, want new-session", r.sessionID)
+	}
+	if len(r.history) != 0 {
+		t.Fatalf("history should be cleared on active session switch, got %d", len(r.history))
+	}
+	select {
+	case raw := <-client.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "active_session" || msg.SessionID != "new-session" {
+			t.Fatalf("unexpected active session broadcast: %+v", msg)
+		}
+	default:
+		t.Fatal("expected active_session broadcast")
 	}
 }
