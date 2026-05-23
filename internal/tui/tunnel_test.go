@@ -327,6 +327,39 @@ func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
 	m.handleTunnelClientCommand(cmd) // should not panic
 }
 
+func TestHandleTunnelClientConnectedMsg_ClosesQROverlayAndWritesSystemMessage(t *testing.T) {
+	m := newTestModel()
+	m.tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
+	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
+
+	got, _ := m.handleTunnelClientConnectedMsg()
+	updated := got.(*Model)
+
+	if updated.qrOverlay != nil {
+		t.Fatal("expected QR overlay to close after mobile connect")
+	}
+	rendered := stripAnsi(renderedOutput(updated))
+	if !strings.Contains(rendered, updated.t("tunnel.mobile_connected")) {
+		t.Fatalf("expected connected system message, got: %s", rendered)
+	}
+}
+
+func TestHandleTunnelClientConnectedMsg_IgnoresInactiveTunnel(t *testing.T) {
+	m := newTestModel()
+	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
+
+	got, _ := m.handleTunnelClientConnectedMsg()
+	updated := got.(*Model)
+
+	if updated.qrOverlay == nil {
+		t.Fatal("expected QR overlay to remain when tunnel is inactive")
+	}
+	rendered := stripAnsi(renderedOutput(updated))
+	if strings.Contains(rendered, updated.t("tunnel.mobile_connected")) {
+		t.Fatalf("did not expect connected system message without active tunnel, got: %s", rendered)
+	}
+}
+
 // ─── handleTunnelModeChangeMsg tests ───
 
 func TestHandleTunnelModeChangeMsg_ValidMode(t *testing.T) {

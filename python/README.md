@@ -108,5 +108,6 @@ Download from [GitHub Releases](https://github.com/topcheer/ggcode/releases/late
 
 - GitHub Releases: https://github.com/topcheer/ggcode/releases
 - Desktop app downloads: available on the same releases page
+- Discord community: https://discord.gg/F2v4mJmfG
 - Repository: https://github.com/topcheer/ggcode
 - Issues: https://github.com/topcheer/ggcode/issues

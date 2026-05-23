@@ -267,7 +267,7 @@ func TestDingtalkStreamOpen_SuccessfulMarshal(t *testing.T) {
 	}
 }
 
-func TestDingtalkSendTextViaWebhook_MarshalError(t *testing.T) {
+func TestDingtalkSendMarkdownViaWebhook_MarshalError(t *testing.T) {
 	a := &dingtalkAdapter{
 		name:      "test",
 		appKey:    "key123",
@@ -275,19 +275,19 @@ func TestDingtalkSendTextViaWebhook_MarshalError(t *testing.T) {
 	}
 
 	// Test that an empty webhook URL returns nil (fast path)
-	err := a.sendTextViaWebhook(context.Background(), "", "hello", "robot1")
+	err := a.sendMarkdownViaWebhook(context.Background(), "", "hello", "robot1")
 	if err != nil {
 		t.Errorf("expected nil for empty webhook URL, got: %v", err)
 	}
 
 	// Test that empty text returns nil (fast path)
-	err = a.sendTextViaWebhook(context.Background(), "http://example.com/webhook", "", "robot1")
+	err = a.sendMarkdownViaWebhook(context.Background(), "http://example.com/webhook", "", "robot1")
 	if err != nil {
 		t.Errorf("expected nil for empty text, got: %v", err)
 	}
 }
 
-func TestDingtalkSendTextViaWebhook_SuccessfulMarshal(t *testing.T) {
+func TestDingtalkSendMarkdownViaWebhook_SuccessfulMarshal(t *testing.T) {
 	var receivedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -306,27 +306,30 @@ func TestDingtalkSendTextViaWebhook_SuccessfulMarshal(t *testing.T) {
 	a := &dingtalkAdapter{
 		name: "test",
 	}
-	err := a.sendTextViaWebhook(context.Background(), server.URL, "Hello world", "robot123")
+	err := a.sendMarkdownViaWebhook(context.Background(), server.URL, "# Hello world\n\n- item", "robot123")
 	if err != nil {
-		t.Fatalf("sendTextViaWebhook: %v", err)
+		t.Fatalf("sendMarkdownViaWebhook: %v", err)
 	}
 
-	if receivedBody["msgtype"] != "text" {
-		t.Errorf("msgtype = %v, want text", receivedBody["msgtype"])
+	if receivedBody["msgtype"] != "markdown" {
+		t.Errorf("msgtype = %v, want markdown", receivedBody["msgtype"])
 	}
 	if receivedBody["robotCode"] != "robot123" {
 		t.Errorf("robotCode = %v, want robot123", receivedBody["robotCode"])
 	}
-	textObj, ok := receivedBody["text"].(map[string]any)
+	textObj, ok := receivedBody["markdown"].(map[string]any)
 	if !ok {
-		t.Fatalf("text field is not a map: %v", receivedBody["text"])
+		t.Fatalf("markdown field is not a map: %v", receivedBody["markdown"])
 	}
-	if textObj["content"] != "Hello world" {
-		t.Errorf("text.content = %v, want 'Hello world'", textObj["content"])
+	if textObj["title"] != "Hello world" {
+		t.Errorf("markdown.title = %v, want 'Hello world'", textObj["title"])
+	}
+	if textObj["text"] != "# Hello world\n\n- item" {
+		t.Errorf("markdown.text = %v, want markdown body", textObj["text"])
 	}
 }
 
-func TestDingtalkSendTextViaAPI_MarshalError(t *testing.T) {
+func TestDingtalkSendMarkdownViaAPI_MarshalError(t *testing.T) {
 	a := &dingtalkAdapter{
 		name:      "test",
 		appKey:    "key123",
@@ -337,7 +340,7 @@ func TestDingtalkSendTextViaAPI_MarshalError(t *testing.T) {
 	a.mu.Unlock()
 
 	// No access token should return error
-	err := a.sendTextViaAPI(context.Background(), ChannelBinding{ChannelID: "user123"}, "hello")
+	err := a.sendMarkdownViaAPI(context.Background(), ChannelBinding{ChannelID: "user123"}, "hello")
 	if err == nil {
 		t.Fatal("expected error with no access token")
 	}
@@ -349,7 +352,7 @@ func TestDingtalkSendTextViaAPI_MarshalError(t *testing.T) {
 	a.mu.Lock()
 	a.accessToken = "valid-token"
 	a.mu.Unlock()
-	err = a.sendTextViaAPI(context.Background(), ChannelBinding{ChannelID: ""}, "hello")
+	err = a.sendMarkdownViaAPI(context.Background(), ChannelBinding{ChannelID: ""}, "hello")
 	if err == nil {
 		t.Fatal("expected error with empty ChannelID")
 	}
@@ -358,7 +361,7 @@ func TestDingtalkSendTextViaAPI_MarshalError(t *testing.T) {
 	}
 }
 
-func TestDingtalkSendTextViaAPI_SuccessfulMarshal(t *testing.T) {
+func TestDingtalkSendMarkdownViaAPI_SuccessfulMarshal(t *testing.T) {
 	var receivedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -392,8 +395,8 @@ func TestDingtalkSendTextViaAPI_SuccessfulMarshal(t *testing.T) {
 	body := map[string]any{
 		"robotCode": a.appKey,
 		"userIds":   []string{"staff123"},
-		"msgKey":    "sampleText",
-		"msgParam":  `{"content":"Hello world"}`,
+		"msgKey":    "sampleMarkdown",
+		"msgParam":  `{"title":"Hello world","text":"# Hello world\n\n- item"}`,
 	}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
@@ -407,12 +410,33 @@ func TestDingtalkSendTextViaAPI_SuccessfulMarshal(t *testing.T) {
 	if decoded["robotCode"] != "testRobotCode" {
 		t.Errorf("robotCode = %v, want testRobotCode", decoded["robotCode"])
 	}
-	if decoded["msgKey"] != "sampleText" {
-		t.Errorf("msgKey = %v, want sampleText", decoded["msgKey"])
+	if decoded["msgKey"] != "sampleMarkdown" {
+		t.Errorf("msgKey = %v, want sampleMarkdown", decoded["msgKey"])
 	}
 	userIDs, ok := decoded["userIds"].([]any)
 	if !ok || len(userIDs) != 1 || userIDs[0] != "staff123" {
 		t.Errorf("userIds = %v, want [staff123]", decoded["userIds"])
+	}
+	msgParam, ok := decoded["msgParam"].(string)
+	if !ok {
+		t.Fatalf("msgParam = %T, want string", decoded["msgParam"])
+	}
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(msgParam), &msg); err != nil {
+		t.Fatalf("unmarshal msgParam: %v", err)
+	}
+	if msg["title"] != "Hello world" {
+		t.Errorf("msgParam.title = %v, want Hello world", msg["title"])
+	}
+	if msg["text"] != "# Hello world\n\n- item" {
+		t.Errorf("msgParam.text = %v, want markdown body", msg["text"])
+	}
+}
+
+func TestDingtalkMarkdownTitle(t *testing.T) {
+	got := dingtalkMarkdownTitle("# [Deploy report](https://example.com)\n\n![img](https://example.com/a.png)\n| col | value |")
+	if got != "Deploy report" {
+		t.Fatalf("dingtalkMarkdownTitle = %q, want %q", got, "Deploy report")
 	}
 }
 

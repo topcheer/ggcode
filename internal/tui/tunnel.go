@@ -65,6 +65,8 @@ type tunnelThemeChangeMsg struct {
 	theme string
 }
 
+type tunnelClientConnectedMsg struct{}
+
 // ─── Slash command handler ───
 
 func (m *Model) handleTunnelCommand(text string) tea.Cmd {
@@ -165,6 +167,11 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	msg.broker.OnCommand(func(cmd tunnel.GatewayMessage) {
 		m.handleTunnelClientCommand(cmd)
 	})
+	msg.broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
+		if info.Role == "client" && m.program != nil {
+			m.program.Send(tunnelClientConnectedMsg{})
+		}
+	})
 
 	snapshot := m.tunnelSnapshot()
 	msg.broker.SendSnapshot(snapshot)
@@ -180,6 +187,18 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.ConnectURL,
 	)
 
+	return m, nil
+}
+
+func (m *Model) handleTunnelClientConnectedMsg() (tea.Model, tea.Cmd) {
+	if m.tunnelSession == nil {
+		return m, nil
+	}
+	if m.qrOverlay != nil {
+		m.closeQROverlay()
+	}
+	m.chatWriteSystem(nextSystemID(), m.t("tunnel.mobile_connected"))
+	m.chatListScrollToBottom()
 	return m, nil
 }
 

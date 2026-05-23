@@ -5,6 +5,36 @@ import (
 	"testing"
 )
 
+func TestRoomNotifyServerClientConnected(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{sessionID: "sess-1", eventID: "ev-000000001"},
+	}
+	server := &peer{
+		room:   r,
+		role:   "server",
+		sendCh: make(chan []byte, 1),
+		done:   make(chan struct{}),
+	}
+	r.server = server
+
+	r.notifyServerClientConnected()
+
+	select {
+	case raw := <-server.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "connected" || msg.Role != "client" || msg.SessionID != "sess-1" || msg.Count != 1 {
+			t.Fatalf("unexpected notify payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server notification for client connection")
+	}
+}
+
 func TestRoomResumePlanModes(t *testing.T) {
 	r := &room{
 		sessionID: "sess-1",

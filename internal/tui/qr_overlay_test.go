@@ -141,3 +141,15 @@ func TestQROverlay_Render_ContainsEscHint(t *testing.T) {
 		t.Fatalf("expected Esc hint in QR overlay, got:\n%s", rendered)
 	}
 }
+
+func TestQROverlay_Render_ContainsDiscordChannel(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.width = 120
+	m.height = 40
+	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
+
+	rendered := m.renderQROverlay()
+	if !strings.Contains(rendered, qrOverlayDiscordURL) {
+		t.Fatalf("expected Discord link in QR overlay, got:\n%s", rendered)
+	}
+}

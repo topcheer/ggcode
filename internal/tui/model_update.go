@@ -369,6 +369,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelInboundMsg:
 		return m.handleTunnelInboundMsg(msg)
 
+	case tunnelClientConnectedMsg:
+		return m.handleTunnelClientConnectedMsg()
+
 	case tunnelModeChangeMsg:
 		return m.handleTunnelModeChangeMsg(msg)
 

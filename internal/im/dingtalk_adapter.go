@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,11 @@ const (
 	wsPingInterval = 120 * time.Second
 	wsPongWait     = 5 * time.Second
 	reconnectDelay = 3 * time.Second
+)
+
+var (
+	dingtalkMarkdownLinkRe      = regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
+	dingtalkOrderedListPrefixRe = regexp.MustCompile(`^\d+[.)]\s+`)
 )
 
 // ---- DataFrame protocol ----
@@ -388,7 +394,7 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		_ = a.sendTextViaWebhook(ctx, callbackData.SessionWebhook, pairingResult.ReplyText, callbackData.RobotCode)
+		_ = a.sendMarkdownViaWebhook(ctx, callbackData.SessionWebhook, pairingResult.ReplyText, callbackData.RobotCode)
 		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
 			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
 				Kind: OutboundEventText,
@@ -404,7 +410,7 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	debug.Log("dingtalk", "adapter=%s calling HandleInbound channel=%s sender=%s", a.name, channelID, senderID)
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
-			_ = a.sendTextViaWebhook(ctx, callbackData.SessionWebhook, "你是未授权用户", callbackData.RobotCode)
+			_ = a.sendMarkdownViaWebhook(ctx, callbackData.SessionWebhook, "你是未授权用户", callbackData.RobotCode)
 			return
 		}
 		if err != ErrNoChannelBound {
@@ -601,7 +607,7 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 
 	if webhook != "" {
 		debug.Log("dingtalk", "adapter=%s Send via webhook text_len=%d", a.name, len(content))
-		err := a.sendTextViaWebhook(ctx, webhook, content, robotCode)
+		err := a.sendMarkdownViaWebhook(ctx, webhook, content, robotCode)
 		if err == nil {
 			debug.Log("dingtalk", "adapter=%s Send webhook OK", a.name)
 			return nil
@@ -611,7 +617,7 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 
 	// Fallback: use REST API with userId (staffId from ChannelID).
 	debug.Log("dingtalk", "adapter=%s Send via API userId=%s text_len=%d", a.name, binding.ChannelID, len(content))
-	err := a.sendTextViaAPI(ctx, binding, content)
+	err := a.sendMarkdownViaAPI(ctx, binding, content)
 	if err != nil {
 		debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
 	} else {
@@ -620,17 +626,19 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	return err
 }
 
-// sendTextViaWebhook sends a reply using the sessionWebhook URL from the callback.
+// sendMarkdownViaWebhook sends a reply using the sessionWebhook URL from the callback.
 // This is the official SDK's method for replying to bot messages.
-func (a *dingtalkAdapter) sendTextViaWebhook(ctx context.Context, webhookURL, text, robotCode string) error {
+func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL, text, robotCode string) error {
 	if webhookURL == "" || text == "" {
 		return nil
 	}
+	title := dingtalkMarkdownTitle(text)
 
 	body := map[string]any{
-		"msgtype": "text",
-		"text": map[string]string{
-			"content": text,
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"title": title,
+			"text":  text,
 		},
 		"robotCode": robotCode,
 	}
@@ -657,9 +665,9 @@ func (a *dingtalkAdapter) sendTextViaWebhook(ctx context.Context, webhookURL, te
 	return nil
 }
 
-// sendTextViaAPI sends a message via the DingTalk REST API (for outbound messages
+// sendMarkdownViaAPI sends a message via the DingTalk REST API (for outbound messages
 // not triggered by a callback, e.g. proactive messages).
-func (a *dingtalkAdapter) sendTextViaAPI(ctx context.Context, binding ChannelBinding, text string) error {
+func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding ChannelBinding, text string) error {
 	a.mu.RLock()
 	token := a.accessToken
 	a.mu.RUnlock()
@@ -673,12 +681,13 @@ func (a *dingtalkAdapter) sendTextViaAPI(ctx context.Context, binding ChannelBin
 	if userID == "" {
 		return fmt.Errorf("no userId in binding (ChannelID is empty)")
 	}
+	title := dingtalkMarkdownTitle(text)
 
 	body := map[string]any{
 		"robotCode": a.appKey,
 		"userIds":   []string{userID},
-		"msgKey":    "sampleText",
-		"msgParam":  fmt.Sprintf(`{"content":"%s"}`, escapeJSONString(text)),
+		"msgKey":    "sampleMarkdown",
+		"msgParam":  fmt.Sprintf(`{"title":"%s","text":"%s"}`, escapeJSONString(title), escapeJSONString(text)),
 	}
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
@@ -733,4 +742,40 @@ func escapeJSONString(s string) string {
 	s = strings.ReplaceAll(s, "\r", `\r`)
 	s = strings.ReplaceAll(s, "\t", `\t`)
 	return s
+}
+
+func dingtalkMarkdownTitle(text string) string {
+	const fallback = "ggcode"
+	const maxRunes = 64
+
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			continue
+		}
+		if strings.Trim(line, "| :-") == "" {
+			continue
+		}
+
+		title := markdownImageRe.ReplaceAllString(line, "$1")
+		title = dingtalkMarkdownLinkRe.ReplaceAllString(title, "$1")
+		title = strings.TrimLeft(title, "#>*-+ \t")
+		title = dingtalkOrderedListPrefixRe.ReplaceAllString(title, "")
+		title = strings.NewReplacer("`", "", "*", "", "_", "", "~", "", "|", " ").Replace(title)
+		title = strings.Join(strings.Fields(title), " ")
+		if title == "" {
+			continue
+		}
+
+		runes := []rune(title)
+		if len(runes) > maxRunes {
+			return string(runes[:maxRunes-3]) + "..."
+		}
+		return title
+	}
+
+	return fallback
 }
