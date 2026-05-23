@@ -306,8 +306,9 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	return nil
 }
 
-// CancelAll cancels all running teammates across all teams.
-// Used when the main agent is interrupted (ctrl+c/esc) to avoid orphaned work.
+// CancelAll cancels all live teammates across all teams.
+// Used when the main agent is interrupted (ctrl+c/esc) to avoid orphaned work
+// or queued work starting after the UI has already marked the team as cancelled.
 func (m *Manager) CancelAll() {
 	m.mu.Lock()
 	teams := make([]*Team, 0, len(m.teams))
@@ -320,7 +321,7 @@ func (m *Manager) CancelAll() {
 		team.mu.Lock()
 		for _, tm := range team.Teammates {
 			tm.mu.Lock()
-			if tm.Status == TeammateWorking {
+			if tm.Status != TeammateShuttingDown {
 				if tm.cancel != nil {
 					tm.cancel()
 				}

@@ -542,6 +542,44 @@ func (a *blockingAgent) RunStream(ctx context.Context, _ string, onEvent func(pr
 	}
 }
 
+func TestIdleRunnerDoesNotStartQueuedWorkAfterCancel(t *testing.T) {
+	agent := &countingAgent{}
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "worker",
+		Status: TeammateIdle,
+		Inbox:  make(chan MailMessage, 16),
+	}
+	team := &Team{
+		ID:        "team-1",
+		Name:      "test",
+		LeaderID:  "leader",
+		Teammates: map[string]*Teammate{"tm-1": tm},
+	}
+	mgr := newTestManager()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tm.ctx = ctx
+	tm.cancel = cancel
+	tm.Inbox <- MailMessage{Type: "task", Content: "should-not-run"}
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected teammate loop to exit after cancel")
+	}
+	if agent.getCalls() != 0 {
+		t.Fatalf("expected 0 agent calls after cancel, got %d", agent.getCalls())
+	}
+}
+
 func TestIdleRunner_SkipsAssignedToOtherTeammate(t *testing.T) {
 	agent := &countingAgent{}
 	tm := &Teammate{

@@ -563,19 +563,14 @@ func TestManager_CancelAll(t *testing.T) {
 		}
 	}
 
-	// CancelAll should find and stop the two working ones
+	// CancelAll should stop every live teammate, including idle ones that could
+	// otherwise pick up queued work after the UI already shows cancellation.
 	m.CancelAll()
 
 	snap := m.ListTeams()
 	for _, tm := range snap[0].Teammates {
-		if tm.Name == "w1" || tm.Name == "w2" {
-			if tm.Status != TeammateShuttingDown {
-				t.Errorf("expected %s shutting_down, got %s", tm.Name, tm.Status)
-			}
-		}
-		// w3 was idle — should stay idle
-		if tm.Name == "w3" && tm.Status == TeammateShuttingDown {
-			t.Errorf("expected %s to remain idle, got %s", tm.Name, tm.Status)
+		if tm.Status != TeammateShuttingDown {
+			t.Errorf("expected %s shutting_down, got %s", tm.Name, tm.Status)
 		}
 	}
 }

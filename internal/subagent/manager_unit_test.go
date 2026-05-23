@@ -175,9 +175,12 @@ func TestManagerCancelNonexistent(t *testing.T) {
 func TestManagerCancelPendingAgent(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
 	id := mgr.Spawn("pending", "task", "", nil, context.Background())
-	// Agent is still pending (not running)
-	if mgr.Cancel(id) {
-		t.Error("expected false for canceling pending agent")
+	if !mgr.Cancel(id) {
+		t.Error("expected true for canceling pending agent")
+	}
+	sa, _ := mgr.Get(id)
+	if sa.Status != StatusCancelled {
+		t.Errorf("expected cancelled, got %q", sa.Status)
 	}
 }
 
@@ -233,8 +236,8 @@ func TestManagerCancelAllMixed(t *testing.T) {
 	mgr.SetCancel(id1, cancel1)
 
 	cancelled := mgr.CancelAll()
-	if cancelled != 1 {
-		t.Errorf("expected 1 cancelled (only running), got %d", cancelled)
+	if cancelled != 2 {
+		t.Errorf("expected 2 cancelled, got %d", cancelled)
 	}
 
 	sa1, _ := mgr.Get(id1)
@@ -243,8 +246,28 @@ func TestManagerCancelAllMixed(t *testing.T) {
 	}
 
 	sa2, _ := mgr.Get(id2)
-	if sa2.Status != StatusPending {
-		t.Errorf("expected pending agent to remain pending, got %q", sa2.Status)
+	if sa2.Status != StatusCancelled {
+		t.Errorf("expected pending agent to be cancelled, got %q", sa2.Status)
+	}
+}
+
+func TestManagerSetCancelDoesNotResurrectCancelledAgent(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{MaxConcurrent: 5})
+	id := mgr.Spawn("pending", "task", "", nil, context.Background())
+	if !mgr.Cancel(id) {
+		t.Fatal("expected cancel to succeed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if mgr.SetCancel(id, cancel) {
+		t.Fatal("expected SetCancel to refuse cancelled agent")
+	}
+	sa, _ := mgr.Get(id)
+	if sa.Status != StatusCancelled {
+		t.Fatalf("expected cancelled agent to remain cancelled, got %q", sa.Status)
+	}
+	if ctx.Err() != context.Canceled {
+		t.Fatalf("expected SetCancel to cancel the provided context, got %v", ctx.Err())
 	}
 }
 

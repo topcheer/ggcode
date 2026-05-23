@@ -71,15 +71,24 @@ func runTeammateLoop(
 			case "shutdown":
 				return
 			case "task_available":
+				if ctx.Err() != nil {
+					return
+				}
 				// Hint: try claiming immediately instead of waiting for poller.
 				if tm.getStatus() == TeammateIdle {
 					tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
 				}
 			case "task", "message", "":
+				if ctx.Err() != nil {
+					return
+				}
 				handleMessage(ctx, tm, team, agent, mgr, onEvent, taskTimeout, msg)
 			}
 
 		case <-poller.C:
+			if ctx.Err() != nil {
+				return
+			}
 			// Only poll when idle — skip if already working on something.
 			if tm.getStatus() != TeammateIdle {
 				continue
@@ -226,16 +235,17 @@ func tryClaimPendingTask(
 		msg := MailMessage{Content: prompt, Type: "task"}
 		result := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
 
-		// Mark task completed.
-		completed := task.StatusCompleted
-		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
-
 		tm.setLastResult(result)
 
 		if ctx.Err() != nil {
+			pending := task.StatusPending
+			owner := ""
+			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
 			tm.setStatus(TeammateShuttingDown)
 			return
 		}
+		completed := task.StatusCompleted
+		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
 		tm.mu.Lock()
