@@ -1436,7 +1436,7 @@ func (b *AgentBridge) CurrentSession() *session.Session {
 }
 
 func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
-	if b.currentSes == nil || len(b.currentSes.TunnelEvents) == 0 {
+	if b.currentSes == nil || !b.currentSes.TunnelEventsComplete || len(b.currentSes.TunnelEvents) == 0 {
 		return nil
 	}
 	out := make([]tunnel.GatewayMessage, 0, len(b.currentSes.TunnelEvents))
@@ -1450,6 +1450,21 @@ func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 		})
 	}
 	return out
+}
+
+func (b *AgentBridge) PrepareCurrentSessionTunnelLedger() {
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil || b.currentSes.TunnelEventsComplete {
+		b.mu.Unlock()
+		return
+	}
+	b.currentSes.TunnelEvents = nil
+	b.currentSes.TunnelEventsComplete = true
+	ses := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	_ = store.Save(ses)
 }
 
 func (b *AgentBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {

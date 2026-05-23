@@ -293,6 +293,7 @@ func (a *App) showShareDialog() {
 			if current := a.agentBridge.CurrentSession(); current != nil {
 				broker.SwitchSession(current.ID)
 			}
+			a.agentBridge.PrepareCurrentSessionTunnelLedger()
 			if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
 				broker.ReplayEvents(events, false)
 			} else {
@@ -855,6 +856,7 @@ func (a *App) startChat() {
 		a.tunnelBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 			bridge.RecordTunnelEvent(ev)
 		})
+		bridge.PrepareCurrentSessionTunnelLedger()
 		if current := bridge.CurrentSession(); current != nil {
 			a.tunnelBroker.SwitchSession(current.ID)
 			if events := bridge.CurrentSessionTunnelEvents(); len(events) > 0 {

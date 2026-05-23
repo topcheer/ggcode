@@ -113,6 +113,7 @@ func TestSaveLoadTunnelEvents(t *testing.T) {
 		{EventID: "ev-000000001", Type: "user_message", Data: json.RawMessage(`{"text":"Hello"}`)},
 		{EventID: "ev-000000002", StreamID: "msg-1", Type: "text", Data: json.RawMessage(`{"id":"msg-1","chunk":"Hi"}`)},
 	}
+	ses.TunnelEventsComplete = true
 
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
@@ -127,6 +128,9 @@ func TestSaveLoadTunnelEvents(t *testing.T) {
 	}
 	if loaded.TunnelEvents[0].EventID != "ev-000000001" || loaded.TunnelEvents[1].StreamID != "msg-1" {
 		t.Fatalf("unexpected tunnel events: %+v", loaded.TunnelEvents)
+	}
+	if !loaded.TunnelEventsComplete {
+		t.Fatal("expected tunnel event completeness flag to survive load")
 	}
 }
 
