@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -488,6 +489,43 @@ func TestCancelActiveRun_NilCancelFunc(t *testing.T) {
 	m.cancelActiveRun()
 	if !m.runCanceled {
 		t.Error("expected runCanceled to be true even with nil cancelFunc")
+	}
+}
+
+func TestCancelActiveRun_FinalizesRunningToolAsCancelled(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.cancelFunc = func() {}
+	m.chatStartTool(ToolStatusMsg{
+		ToolID:      "tool-1",
+		ToolName:    "read_file",
+		DisplayName: "Read File",
+		Detail:      "a.txt",
+		Running:     true,
+	})
+
+	m.cancelActiveRun()
+
+	item := m.chatList.FindByID("tool-1")
+	if item == nil {
+		t.Fatal("expected tool item to exist")
+	}
+	toolItem, ok := item.(interface {
+		Status() chat.ToolStatus
+		Result() string
+		IsError() bool
+	})
+	if !ok {
+		t.Fatal("expected tool item accessor")
+	}
+	if toolItem.Status() != chat.StatusCanceled {
+		t.Fatalf("expected cancelled status, got %v", toolItem.Status())
+	}
+	if toolItem.Result() != "Cancelled" {
+		t.Fatalf("expected cancelled result, got %q", toolItem.Result())
+	}
+	if !toolItem.IsError() {
+		t.Fatal("expected cancelled tool item to be marked as error")
 	}
 }
 

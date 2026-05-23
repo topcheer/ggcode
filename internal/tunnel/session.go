@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -123,10 +124,16 @@ func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
 }
 
 func (s *Session) Send(msg GatewayMessage) error {
+	if s.client == nil {
+		return fmt.Errorf("tunnel session: no relay client")
+	}
 	return s.client.Send(msg)
 }
 
 func (s *Session) SendActiveSession(sessionID string) error {
+	if s.client == nil {
+		return fmt.Errorf("tunnel session: no relay client")
+	}
 	return s.client.SendActiveSession(sessionID)
 }
 
