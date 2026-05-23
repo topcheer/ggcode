@@ -89,19 +89,18 @@ jobs:
           storeFile=upload.jks
           EOF
 
-      - name: Sync version
+      - name: Show version
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
             REF="${{ github.ref_name }}"
             if [[ "$REF" == v* ]]; then
               VERSION="${REF#v}"
-            else
-              VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
             fi
           fi
-          echo "Using version: $VERSION"
-          bash scripts/version_sync.sh "$VERSION"
+          echo "Version: ${VERSION}"
+          grep '^version:' pubspec.yaml
+          # Version numbers are synced by pre-push hook; no CI bump
 
       - name: Build AAB
         run: flutter build appbundle --release
@@ -113,16 +112,6 @@ jobs:
           bundle install --jobs 4 --retry 3
           bundle exec fastlane deploy
 
-      - name: Commit build number
-        if: always() && steps.deploy_android.outcome != 'skipped'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .build-number android/app/build.gradle.kts
-          git diff --cached --quiet || git commit -m "chore(mobile): android build number update [skip ci]"
-          git fetch origin main
-          git rebase origin/main || true
-          git push origin HEAD:main || true
 
   # ── iOS ─────────────────────────────────────────────────────
   build-ios:
@@ -190,19 +179,18 @@ jobs:
           echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
           echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
 
-      - name: Sync version
+      - name: Show version
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
             REF="${{ github.ref_name }}"
             if [[ "$REF" == v* ]]; then
               VERSION="${REF#v}"
-            else
-              VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
             fi
           fi
-          echo "Using version: $VERSION"
-          bash scripts/version_sync.sh "$VERSION"
+          echo "Version: ${VERSION}"
+          grep '^version:' pubspec.yaml
+          # Version numbers are synced by pre-push hook; no CI bump
 
       - name: Install iOS dependencies
         run: |
@@ -250,17 +238,6 @@ jobs:
           cd ios
           bundle install --jobs 4 --retry 3
           bundle exec fastlane deploy_external
-
-      - name: Commit build number
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .build-number ios/Runner/Info.plist
-          git diff --cached --quiet || git commit -m "chore(mobile): ios build number update [skip ci]"
-          git fetch origin main
-          git rebase origin/main || true
-          git push origin HEAD:main || true
 
       - name: Clean up keychain
         if: always()
