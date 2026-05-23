@@ -48,7 +48,20 @@ type room struct {
 	sessionID    string
 	history      []roomEvent
 	mu           sync.RWMutex
-	offlineTimer *time.Timer // grace period before notifying clients
+	offlineTimer *time.Timer
+}
+
+func (r *room) upsertHistoryEvent(ev roomEvent) {
+	if ev.sessionID == "" || ev.eventID == "" {
+		return
+	}
+	for i := range r.history {
+		if r.history[i].sessionID == ev.sessionID && r.history[i].eventID == ev.eventID {
+			r.history[i] = ev
+			return
+		}
+	}
+	r.history = append(r.history, ev) // grace period before notifying clients
 }
 
 func newRoom(token string) *room {
@@ -277,7 +290,7 @@ func (p *peer) readPump(h *hub) {
 				p.room.history = nil
 			}
 			if msg.SessionID != "" {
-				p.room.history = append(p.room.history, roomEvent{
+				p.room.upsertHistoryEvent(roomEvent{
 					sessionID: msg.SessionID,
 					eventID:   msg.EventID,
 					streamID:  msg.StreamID,

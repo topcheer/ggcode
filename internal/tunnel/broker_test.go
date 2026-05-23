@@ -654,6 +654,9 @@ func TestBrokerResetSession(t *testing.T) {
 			if m.SessionID == "" || m.SessionID == oldSessionID {
 				t.Fatalf("expected rotated session id after reset, got old=%q new=%q", oldSessionID, m.SessionID)
 			}
+			if m.EventID != "" {
+				t.Fatalf("snapshot_reset should not consume an event id, got %q", m.EventID)
+			}
 		}
 	}
 	if !found {
@@ -1188,6 +1191,36 @@ func TestBrokerReplayEventsPreservesExistingIDs(t *testing.T) {
 	msgs = d.drain()
 	if len(msgs) != 1 || msgs[0].EventID != "ev-000000009" {
 		t.Fatalf("expected next event id to continue after replayed events, got %+v", msgs)
+	}
+}
+
+func TestBrokerReplayResetDoesNotConsumeEventOrdinal(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.SwitchSession("sess-ledger")
+	d.drain()
+
+	b.ReplayEvents([]GatewayMessage{
+		{SessionID: "sess-ledger", EventID: "ev-000000007", Type: EventUserMessage, Data: json.RawMessage(`{"text":"hello"}`)},
+		{SessionID: "sess-ledger", EventID: "ev-000000008", StreamID: "msg-1", Type: EventText, Data: json.RawMessage(`{"id":"msg-1","chunk":"world"}`)},
+	}, true)
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 3 {
+		t.Fatalf("expected snapshot reset plus 2 replayed messages, got %d", len(msgs))
+	}
+	if msgs[0].Type != EventSnapshotReset || msgs[0].EventID != "" {
+		t.Fatalf("expected snapshot_reset without event id, got %+v", msgs[0])
+	}
+	if msgs[1].EventID != "ev-000000007" || msgs[2].EventID != "ev-000000008" {
+		t.Fatalf("replayed event ids changed after reset: %+v", msgs)
+	}
+
+	b.PushStatus("idle", "")
+	time.Sleep(50 * time.Millisecond)
+	msgs = d.drain()
+	if len(msgs) != 1 || msgs[0].EventID != "ev-000000009" {
+		t.Fatalf("expected next live event to continue after replay max, got %+v", msgs)
 	}
 }
 

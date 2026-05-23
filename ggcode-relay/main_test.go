@@ -62,6 +62,25 @@ func TestRoomResumePlanModes(t *testing.T) {
 	}
 }
 
+func TestRoomUpsertHistoryEventDedupesByEventID(t *testing.T) {
+	r := &room{
+		sessionID: "sess-1",
+		history: []roomEvent{
+			{sessionID: "sess-1", eventID: "ev-000000001", typ: "text", raw: []byte("old")},
+		},
+	}
+
+	r.upsertHistoryEvent(roomEvent{sessionID: "sess-1", eventID: "ev-000000001", typ: "status", raw: []byte("new")})
+	r.upsertHistoryEvent(roomEvent{sessionID: "sess-1", eventID: "", typ: "snapshot_reset", raw: []byte("reset")})
+
+	if len(r.history) != 1 {
+		t.Fatalf("expected duplicate event id to replace in place and empty ids to be skipped, got %d", len(r.history))
+	}
+	if r.history[0].typ != "status" || string(r.history[0].raw) != "new" {
+		t.Fatalf("expected latest duplicate payload to win, got %+v", r.history[0])
+	}
+}
+
 func TestPeerHandleResumeQueuesAckAndReplay(t *testing.T) {
 	raw1, _ := json.Marshal(relayMessage{
 		Type:      "encrypted",
