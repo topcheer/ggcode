@@ -23,6 +23,13 @@ func (m *Model) chatWriteUser(id, text string) {
 // chatWriteSystem appends a system/status message to chatList.
 func (m *Model) chatWriteSystem(id, text string) {
 	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
+	if m.suppressNextTunnelSystem == text {
+		m.suppressNextTunnelSystem = ""
+		return
+	}
+	if m.tunnelBroker != nil && strings.TrimSpace(text) != "" {
+		m.tunnelBroker.PushSystemMessage(text)
+	}
 }
 
 // chatUpdateSystemText updates the text of an existing system message.
@@ -121,12 +128,6 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		"write_command_input", "list_commands":
 		return
 	}
-	// Secondary git tools → skip (no header/body needed)
-	switch ts.ToolName {
-	case "git_show", "git_blame", "git_branch_list", "git_remote",
-		"git_stash_list", "git_add", "git_commit", "git_stash":
-		return
-	}
 	// cron_list / cron_delete → skip (internal inspection/management tools)
 	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
@@ -221,12 +222,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	switch ts.ToolName {
 	case "read_command_output", "wait_command", "stop_command",
 		"write_command_input", "list_commands":
-		return
-	}
-	// Secondary git tools → skip (no header/body needed)
-	switch ts.ToolName {
-	case "git_show", "git_blame", "git_branch_list", "git_remote",
-		"git_stash_list", "git_add", "git_commit", "git_stash":
 		return
 	}
 	// cron_list / cron_delete → skip (internal inspection/management tools)
