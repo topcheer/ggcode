@@ -405,7 +405,7 @@ func (b *Broker) StopSharingGracefully(timeout time.Duration) {
 	}
 	b.Stop()
 	if b.session != nil {
-		b.session.StopGracefully(timeout)
+		b.session.DestroyGracefully(timeout)
 	}
 }
 

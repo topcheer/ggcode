@@ -89,3 +89,21 @@ func TestRelayStoreCleanupExpiredSessions(t *testing.T) {
 		t.Fatalf("expected cleaned room state, got session=%q history=%d", state.sessionID, len(state.history))
 	}
 }
+
+func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
+	store := newStoreForTest(t)
+	token := "token-1234567890abcdef"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+
+	if err := store.destroyRoom(token); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.loadRoom(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID != "" || len(state.history) != 0 {
+		t.Fatalf("expected destroyed room state to be empty, got session=%q history=%d", state.sessionID, len(state.history))
+	}
+}

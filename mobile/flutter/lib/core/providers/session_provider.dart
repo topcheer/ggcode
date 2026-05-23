@@ -631,6 +631,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markEventApplied(msg);
         break;
 
+      case 'server_offline':
+        // Server went offline — ConnectionService auto-reconnects every 15s.
+        // Keep UI intact so the user sees cached messages while waiting.
+        ref.read(workspaceCacheProvider.notifier).markDisconnected();
+        state = state.copyWith(status: ConnectionStatus.disconnected);
+        break;
+
       case 'sharing_stopped':
         _clearUiProjection();
         service?.disconnect();

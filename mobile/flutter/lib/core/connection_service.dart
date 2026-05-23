@@ -18,6 +18,7 @@ class ConnectionService {
   final TunnelCrypto crypto;
   WebSocket? _socket;
   bool _disposed = false;
+  bool _serverOfflineReconnect = false;
   int _reconnectAttempts = 0;
   static const _maxReconnectAttempts = 30;
   Timer? _reconnectTimer;
@@ -49,7 +50,11 @@ class ConnectionService {
       if (!_disposed) {
         _errorController.add('Connection failed: $e');
         _statusController.add(ConnectionStatus.disconnected);
-        _scheduleReconnect();
+        if (_serverOfflineReconnect) {
+          _scheduleServerOfflineReconnect();
+        } else {
+          _scheduleReconnect();
+        }
       }
       return;
     }
@@ -60,6 +65,7 @@ class ConnectionService {
     }
 
     _reconnectAttempts = 0;
+    _serverOfflineReconnect = false;
     _queue = Future.value();
 
     _socketSub = _socket!.listen(
@@ -109,6 +115,19 @@ class ConnectionService {
     _reconnectTimer = null;
   }
 
+  /// Reconnect every 15 seconds after server goes offline.
+  /// Retries indefinitely until the server comes back online.
+  void _scheduleServerOfflineReconnect() {
+    _cancelReconnect();
+    _serverOfflineReconnect = true;
+    debugPrint('[connection] server offline, reconnecting in 15s...');
+    _reconnectTimer = Timer(const Duration(seconds: 15), () {
+      if (!_disposed) {
+        connect();
+      }
+    });
+  }
+
   Future<void> _handleRelayMessage(String raw) async {
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final type = map['type'] as String? ?? '';
@@ -133,7 +152,19 @@ class ConnectionService {
         break;
 
       case 'server_offline':
+        // Server went offline — schedule auto-reconnect every 15s.
+        // Do NOT mark disposed; keep retrying until the server comes back.
+        // Also forward to session_provider so it can update UI state.
+        _cleanup();
+        if (!_disposed) {
+          _messageController.add(proto.WsMessage(type: 'server_offline'));
+          _statusController.add(ConnectionStatus.disconnected);
+          _scheduleServerOfflineReconnect();
+        }
+        break;
+
       case 'sharing_stopped':
+        // User explicitly stopped sharing — permanent disconnect.
         _cleanup();
         if (!_disposed) {
           _disposed = true;

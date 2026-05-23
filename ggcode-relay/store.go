@@ -230,6 +230,35 @@ func (s *relayStore) persistActiveSession(token, sessionID string) error {
 	return nil
 }
 
+func (s *relayStore) destroyRoom(token string) error {
+	if s == nil {
+		return nil
+	}
+	tokenHash := hashToken(token)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin destroy room tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.Exec(`DELETE FROM relay_events WHERE token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete room events: %w", err)
+	}
+	if _, err = tx.Exec(`DELETE FROM relay_sessions WHERE token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete room sessions: %w", err)
+	}
+	if _, err = tx.Exec(`DELETE FROM relay_rooms WHERE token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete room: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit destroy room tx: %w", err)
+	}
+	return nil
+}
+
 func (s *relayStore) cleanupExpired(now time.Time) error {
 	if s == nil {
 		return nil

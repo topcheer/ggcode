@@ -88,6 +88,19 @@ func TestSessionStopGracefullyWithClient(t *testing.T) {
 	}
 }
 
+func TestSessionDestroyGracefullyWithClient(t *testing.T) {
+	sess := NewSession("wss://relay.example.com")
+	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.client = rc
+	sess.DestroyGracefully(50 * time.Millisecond)
+	if !rc.closed {
+		t.Error("client should be closed after session DestroyGracefully")
+	}
+}
+
 func TestSessionInfoRWMutex(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
 	// Set info directly

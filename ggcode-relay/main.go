@@ -11,7 +11,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const peerWriteTimeout = 30 * time.Second
+const (
+	peerWriteTimeout  = 30 * time.Second
+	peerReadTimeout   = 75 * time.Second
+	relayOfflineGrace = 30 * time.Second
+)
 
 // relayMessage is the wire format. Metadata fields remain plaintext so relay
 // can manage replay and ordering without decrypting business payloads.
@@ -163,6 +167,7 @@ func (p *peer) writePump() {
 }
 
 func (p *peer) readPump(h *hub) {
+	roomDestroyed := false
 	defer func() {
 		close(p.done) // signal writePump to stop
 		p.conn.Close()
@@ -170,33 +175,10 @@ func (p *peer) readPump(h *hub) {
 		if p.role == "server" {
 			p.room.server = nil
 			token := p.room.token
-			clients := make([]*peer, 0, len(p.room.clients))
-			for c := range p.room.clients {
-				clients = append(clients, c)
-			}
-			// Cancel any pending offline timer
-			if p.room.offlineTimer != nil {
-				p.room.offlineTimer.Stop()
-				p.room.offlineTimer = nil
-			}
-			p.room.offlineTimer = time.AfterFunc(30*time.Second, func() {
-				p.room.mu.Lock()
-				defer p.room.mu.Unlock()
-				if p.room.server != nil {
-					return // reconnected during grace period
-				}
-				log.Printf("[relay] server grace period expired: room=%s", token[:8])
-				for _, c := range clients {
-					c.sendJSON(relayMessage{Type: "server_offline"})
-				}
-				p.room.offlineTimer = nil
-			})
 			p.room.mu.Unlock()
-			// Keep room alive for reconnection
-			go func() {
-				time.Sleep(5 * time.Minute)
-				h.removeRoomIfEmpty(h.getOrCreateRoom(token))
-			}()
+			if !roomDestroyed {
+				h.scheduleRoomExpiry(token)
+			}
 		} else {
 			delete(p.room.clients, p)
 			if p.clientID != "" {
@@ -205,18 +187,19 @@ func (p *peer) readPump(h *hub) {
 				}
 			}
 			p.room.mu.Unlock()
+			h.removeRoomIfEmpty(p.room)
 		}
 		log.Printf("[relay] %s disconnected: room=%s", p.role, p.room.token[:8])
 	}()
 
 	p.conn.SetReadLimit(1 << 20)
 	p.conn.SetPongHandler(func(string) error {
-		p.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(peerReadTimeout))
 		return nil
 	})
 
 	for {
-		p.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(peerReadTimeout))
 		_, raw, err := p.conn.ReadMessage()
 		if err != nil {
 			return
@@ -229,6 +212,13 @@ func (p *peer) readPump(h *hub) {
 		switch msg.Type {
 		case "ping":
 			p.sendJSON(relayMessage{Type: "pong"})
+			continue
+		case "destroy_room":
+			if p.role == "server" {
+				roomDestroyed = true
+				h.destroyRoom(p.room.token, relayMessage{Type: "sharing_stopped"})
+				return
+			}
 			continue
 		case "active_session":
 			if p.role == "server" {
@@ -444,7 +434,7 @@ func newHub(store *relayStore) *hub {
 	return &hub{rooms: make(map[string]*room), store: store}
 }
 
-func (h *hub) getOrCreateRoom(token string) *room {
+func (h *hub) getOrCreateServerRoom(token string) *room {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if r, ok := h.rooms[token]; ok {
@@ -464,6 +454,38 @@ func (h *hub) getOrCreateRoom(token string) *room {
 	return r
 }
 
+func (h *hub) getOrLoadClientRoom(token string) (*room, bool) {
+	h.mu.RLock()
+	if r, ok := h.rooms[token]; ok {
+		h.mu.RUnlock()
+		return r, true
+	}
+	h.mu.RUnlock()
+
+	if h.store == nil {
+		return nil, false
+	}
+	state, err := h.store.loadRoom(token)
+	if err != nil {
+		log.Printf("[relay] load room failed: room=%s err=%v", token[:8], err)
+		return nil, false
+	}
+	if state.sessionID == "" && len(state.history) == 0 {
+		return nil, false
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r, ok := h.rooms[token]; ok {
+		return r, true
+	}
+	r := newRoom(token)
+	r.sessionID = state.sessionID
+	r.history = state.history
+	h.rooms[token] = r
+	return r, true
+}
+
 func (h *hub) removeRoomIfEmpty(r *room) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -472,6 +494,84 @@ func (h *hub) removeRoomIfEmpty(r *room) {
 	r.mu.RUnlock()
 	if empty {
 		delete(h.rooms, r.token)
+	}
+}
+
+func (h *hub) scheduleRoomExpiry(token string) {
+	h.mu.RLock()
+	r := h.rooms[token]
+	h.mu.RUnlock()
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.offlineTimer != nil {
+		r.offlineTimer.Stop()
+	}
+	r.offlineTimer = time.AfterFunc(relayOfflineGrace, func() {
+		h.expireRoomIfServerOffline(token)
+	})
+	r.mu.Unlock()
+}
+
+func (h *hub) expireRoomIfServerOffline(token string) {
+	h.mu.RLock()
+	r := h.rooms[token]
+	h.mu.RUnlock()
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.server != nil {
+		r.offlineTimer = nil
+		r.mu.Unlock()
+		return
+	}
+	r.offlineTimer = nil
+	r.mu.Unlock()
+	log.Printf("[relay] server grace period expired: room=%s", token[:8])
+	h.destroyRoom(token, relayMessage{Type: "server_offline"})
+}
+
+func (h *hub) destroyRoom(token string, notice relayMessage) {
+	h.mu.Lock()
+	r := h.rooms[token]
+	if r != nil {
+		delete(h.rooms, token)
+	}
+	h.mu.Unlock()
+
+	var clients []*peer
+	if r != nil {
+		r.mu.Lock()
+		if r.offlineTimer != nil {
+			r.offlineTimer.Stop()
+			r.offlineTimer = nil
+		}
+		for c := range r.clients {
+			clients = append(clients, c)
+		}
+		r.server = nil
+		r.clients = make(map[*peer]struct{})
+		r.clientsByID = make(map[string]*peer)
+		r.sessionID = ""
+		r.history = nil
+		r.mu.Unlock()
+	}
+	if h.store != nil {
+		if err := h.store.destroyRoom(token); err != nil {
+			log.Printf("[relay] destroy room failed: room=%s err=%v", token[:8], err)
+		}
+	}
+	if notice.Type != "" {
+		for _, c := range clients {
+			c.sendJSON(notice)
+		}
+		time.AfterFunc(500*time.Millisecond, func() {
+			for _, c := range clients {
+				_ = c.conn.Close()
+			}
+		})
 	}
 }
 
@@ -491,12 +591,23 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var rm *room
+	var ok bool
+	if role == "server" {
+		rm = h.getOrCreateServerRoom(token)
+	} else {
+		rm, ok = h.getOrLoadClientRoom(token)
+		if !ok {
+			http.Error(w, "room not found", http.StatusGone)
+			return
+		}
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 
-	rm := h.getOrCreateRoom(token)
 	rm.mu.Lock()
 
 	if role == "server" && rm.server != nil {
@@ -516,6 +627,10 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if role == "server" {
+		if rm.offlineTimer != nil {
+			rm.offlineTimer.Stop()
+			rm.offlineTimer = nil
+		}
 		rm.server = p
 	} else {
 		rm.clients[p] = struct{}{}
