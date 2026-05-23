@@ -80,11 +80,16 @@ func (r *room) notifyServerClientConnected() {
 	if r.server == nil {
 		return
 	}
+	lastEventID := ""
+	if n := len(r.history); n > 0 {
+		lastEventID = r.history[n-1].eventID
+	}
 	r.server.sendJSON(relayMessage{
-		Type:      "connected",
-		Role:      "client",
-		SessionID: r.sessionID,
-		Count:     len(r.history),
+		Type:        "connected",
+		Role:        "client",
+		SessionID:   r.sessionID,
+		Count:       len(r.history),
+		LastEventID: lastEventID,
 	})
 }
 
@@ -128,11 +133,16 @@ func (p *peer) writePump() {
 
 	// 1. Send connected confirmation directly.
 	p.room.mu.RLock()
+	lastEventID := ""
+	if n := len(p.room.history); n > 0 {
+		lastEventID = p.room.history[n-1].eventID
+	}
 	connState := relayMessage{
-		Type:      "connected",
-		Role:      p.role,
-		SessionID: p.room.sessionID,
-		Count:     len(p.room.history),
+		Type:        "connected",
+		Role:        p.role,
+		SessionID:   p.room.sessionID,
+		Count:       len(p.room.history),
+		LastEventID: lastEventID,
 	}
 	p.room.mu.RUnlock()
 	connMsg, _ := json.Marshal(connState)

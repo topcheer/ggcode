@@ -509,7 +509,11 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 	if len(events) == 0 {
 		return true
 	}
-	return len(events) == info.HistoryCount
+	if len(events) != info.HistoryCount {
+		return false
+	}
+	lastEventID := events[len(events)-1].EventID
+	return lastEventID != "" && lastEventID == info.LastEventID
 }
 
 // ─── User message ───

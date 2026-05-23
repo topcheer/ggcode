@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ggcode_mobile/core/connection_service.dart';
@@ -28,6 +30,55 @@ class _FakeConnectionService extends ConnectionService {
     replayClientId = clientId;
     replaySessionId = sessionId;
     replayLastEventId = lastEventId;
+  }
+}
+
+class _CaptureResumeHelloService extends _FakeConnectionService {
+  final _status = StreamController<ConnectionStatus>.broadcast();
+  final _messages = StreamController<proto.WsMessage>.broadcast();
+  String? resumeClientId;
+  String? resumeSessionId;
+  String? resumeLastEventId;
+
+  @override
+  Stream<ConnectionStatus> get statusStream => _status.stream;
+
+  @override
+  Stream<String> get errorStream => const Stream<String>.empty();
+
+  @override
+  Stream<proto.WsMessage> get messageStream => _messages.stream;
+
+  @override
+  Future<void> connect() async {
+    _status.add(ConnectionStatus.connected);
+  }
+
+  @override
+  void sendResumeHello({
+    required String clientId,
+    String? sessionId,
+    String? lastEventId,
+  }) {
+    resumeClientId = clientId;
+    resumeSessionId = sessionId;
+    resumeLastEventId = lastEventId;
+  }
+
+  @override
+  void dispose() {
+    _status.close();
+    _messages.close();
+    super.dispose();
+  }
+}
+
+class _TestConnectionNotifier extends ConnectionNotifier {
+  static ConnectionService Function(String url, TunnelCrypto crypto)? factory;
+
+  @override
+  ConnectionService createConnectionService(String url, TunnelCrypto crypto) {
+    return factory!(url, crypto);
   }
 }
 
@@ -587,6 +638,64 @@ void main() {
     expect(container.read(currentModeProvider), 'bypass');
   });
 
+  test('fresh connect does not reuse cached resume cursor before live attach',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+      'ggcode_tunnel_session_id': 'sess-122',
+      'ggcode_tunnel_last_event_id': 'ev-000000120',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'bypass',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-122', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=abc');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(container.read(chatProvider).single.text, 'cached hello');
+    expect(service.resumeClientId, 'client-1');
+    expect(service.resumeSessionId, isNull);
+    expect(service.resumeLastEventId, isNull);
+  });
+
   test(
       'ConnectionNotifier keeps cached messages visible when live session attaches after cold restore',
       () async {
@@ -830,4 +939,5 @@ void main() {
     expect(messages[3].id, 'msg-after');
     expect(messages[3].text, 'The rerun completed successfully.');
   });
+
 }

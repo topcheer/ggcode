@@ -97,6 +97,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await connect(url, clearState: clearState);
   }
 
+  ConnectionService createConnectionService(String url, TunnelCrypto crypto) =>
+      ConnectionService(url: url, crypto: crypto);
+
   Future<void> connect(String url, {bool clearState = true}) async {
     url = normalizeTunnelUrl(url);
     final cache = ref.read(workspaceCacheProvider.notifier);
@@ -122,18 +125,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     final crypto = TunnelCrypto(token);
-    service = ConnectionService(url: url, crypto: crypto);
+    service = createConnectionService(url, crypto);
     await _loadResumeState();
+    final resumeSessionId = _sessionId;
     var restoredProjection = false;
     if (!clearState && _hasEmptyUiProjection()) {
       restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
     }
     if (clearState) {
       restoredProjection =
-          !_hasEmptyUiProjection() || _restoreProjectionFromCache();
-      if (!restoredProjection && _sessionId.isNotEmpty) {
+          !_hasEmptyUiProjection() || _restoreProjectionFromCache(adoptCursor: false);
+      if (!restoredProjection && resumeSessionId.isNotEmpty) {
         restoredProjection = await cache.attachSessionToActiveWorkspace(
-          _sessionId,
+          resumeSessionId,
         );
         if (restoredProjection) {
           restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
@@ -142,6 +146,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       if (!restoredProjection) {
         _clearUiProjection();
       }
+      // Fresh connects can restore cached UI immediately, but the server still
+      // needs to authoritatively bind the active session before we reuse any
+      // resume cursor. Carrying a stale cursor here can hide live main-agent
+      // text/tool events from the newly attached room.
+      _sessionId = '';
+      _lastAppliedEventId = '';
       _awaitingReplay = false;
       _pendingReplayEvents.clear();
       _recentEventIds.clear();
