@@ -374,7 +374,7 @@ func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
 		b.activeText = make(map[string]*textEntry)
 	}
 	b.textMu.Unlock()
-	b.enqueue(EventSnapshotReset, nil)
+	b.enqueueControl(EventSnapshotReset, nil)
 }
 
 func (b *Broker) PushSharingStopped() {
@@ -437,7 +437,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			activeText := b.activeTextSnapshot()
-			b.enqueue(EventSnapshotReset, nil)
+			b.enqueueControl(EventSnapshotReset, nil)
 			b.SendSnapshot(snapshot)
 			b.replayActiveText(activeText)
 		}()
@@ -697,6 +697,19 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 func (b *Broker) enqueueRecorded(msg GatewayMessage) {
 	b.bumpNextEvent(msg.EventID)
 	b.enqueueOut(msg)
+}
+
+func (b *Broker) enqueueControl(eventType string, data interface{}) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		debug.Log("tunnel", "broker: marshal control error for %s: %v", eventType, err)
+		return
+	}
+	b.enqueueOut(GatewayMessage{
+		SessionID: b.SessionID(),
+		Type:      eventType,
+		Data:      dataBytes,
+	})
 }
 
 func (b *Broker) trackSend(eventID string) <-chan struct{} {
