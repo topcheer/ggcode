@@ -227,6 +227,13 @@ func (rc *RelayClient) readPump(done func()) {
 				})
 			}
 
+		case EventActiveSession:
+			rc.deliver(GatewayMessage{
+				Type:      EventActiveSession,
+				SessionID: relayMsg.SessionID,
+				Data:      relayMsg.Data,
+			})
+
 		case "pong":
 			// keepalive
 
@@ -268,6 +275,41 @@ func (rc *RelayClient) readPump(done func()) {
 			})
 		}
 	}
+}
+
+func (rc *RelayClient) SendActiveSession(sessionID string) error {
+	rc.closeMu.Lock()
+	if rc.closed {
+		rc.closeMu.Unlock()
+		return fmt.Errorf("relay client closed")
+	}
+	rc.closeMu.Unlock()
+	if strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	data, err := json.Marshal(struct {
+		Type      string          `json:"type"`
+		SessionID string          `json:"session_id,omitempty"`
+		Data      json.RawMessage `json:"data,omitempty"`
+	}{
+		Type:      EventActiveSession,
+		SessionID: sessionID,
+		Data:      mustRawJSON(ActiveSessionData{SessionID: sessionID}),
+	})
+	if err != nil {
+		return err
+	}
+	select {
+	case rc.sendCh <- data:
+		return nil
+	case <-rc.stopCh:
+		return fmt.Errorf("relay client closed")
+	}
+}
+
+func mustRawJSON(v interface{}) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return data
 }
 
 // deliver calls the onMessage callback safely.

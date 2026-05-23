@@ -95,6 +95,41 @@ func TestAppendMessage(t *testing.T) {
 	}
 }
 
+func TestSaveLoadTunnelEvents(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "Tunnel Event Session"
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	ses.TunnelEvents = []TunnelEvent{
+		{EventID: "ev-000000001", Type: "user_message", Data: json.RawMessage(`{"text":"Hello"}`)},
+		{EventID: "ev-000000002", StreamID: "msg-1", Type: "text", Data: json.RawMessage(`{"id":"msg-1","chunk":"Hi"}`)},
+	}
+
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.TunnelEvents) != 2 {
+		t.Fatalf("expected 2 tunnel events, got %d", len(loaded.TunnelEvents))
+	}
+	if loaded.TunnelEvents[0].EventID != "ev-000000001" || loaded.TunnelEvents[1].StreamID != "msg-1" {
+		t.Fatalf("unexpected tunnel events: %+v", loaded.TunnelEvents)
+	}
+}
+
 func TestExportMarkdown(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)

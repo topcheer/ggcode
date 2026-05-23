@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tunnel"
-	"github.com/topcheer/ggcode/internal/version"
 )
 
 // handleClearChat creates a new session, clears the conversation view,
@@ -47,16 +46,7 @@ func (m *Model) handleClearChat() {
 	m.resetConversationView()
 
 	// Notify mobile client.
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.ResetSession()
-		m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: m.sidebarWorkingDirectory(),
-			Model:     m.activeModel,
-			Provider:  m.activeVendor,
-			Mode:      m.mode.String(),
-			Version:   version.Version,
-		})
-	}
+	m.publishTunnelSnapshotForCurrentSession(true)
 
 	m.chatWriteSystem(nextSystemID(), m.t("session.new", ses.ID))
 }

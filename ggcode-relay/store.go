@@ -190,6 +190,46 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 	return nil
 }
 
+func (s *relayStore) persistActiveSession(token, sessionID string) error {
+	if s == nil || sessionID == "" {
+		return nil
+	}
+	tokenHash := hashToken(token)
+	now := time.Now().UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin active session tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.Exec(
+		`INSERT INTO relay_rooms(token_hash, current_session_id, updated_at)
+		 VALUES(?, ?, ?)
+		 ON CONFLICT(token_hash) DO UPDATE SET
+		   current_session_id = excluded.current_session_id,
+		   updated_at = excluded.updated_at`,
+		tokenHash, sessionID, now,
+	); err != nil {
+		return fmt.Errorf("upsert active room: %w", err)
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO relay_sessions(token_hash, session_id, last_event_at)
+		 VALUES(?, ?, ?)
+		 ON CONFLICT(token_hash, session_id) DO UPDATE SET
+		   last_event_at = excluded.last_event_at`,
+		tokenHash, sessionID, now,
+	); err != nil {
+		return fmt.Errorf("upsert active session: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit active session tx: %w", err)
+	}
+	return nil
+}
+
 func (s *relayStore) cleanupExpired(now time.Time) error {
 	if s == nil {
 		return nil

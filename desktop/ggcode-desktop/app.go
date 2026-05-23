@@ -281,9 +281,23 @@ func (a *App) showShareDialog() {
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = broker
+			a.agentBridge.ensureSession()
+			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+				return a.agentBridge.CurrentSessionTunnelEvents()
+			})
+			broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+				a.agentBridge.RecordTunnelEvent(ev)
+			})
 
 			snapshot := a.tunnelSnapshot()
-			broker.SendSnapshot(snapshot)
+			if current := a.agentBridge.CurrentSession(); current != nil {
+				broker.SwitchSession(current.ID)
+			}
+			if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
+				broker.ReplayEvents(events, false)
+			} else {
+				broker.SendSnapshot(snapshot)
+			}
 			broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 				return a.tunnelSnapshot()
 			})
@@ -734,108 +748,12 @@ func (a *App) resumeSession(id string) {
 
 	// Push updated session info + history to mobile client
 	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-		a.tunnelBroker.ResetSession()
-		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: a.dc.WorkDir,
-			Version:   Version,
-			Language:  a.cfg.Language,
-			Theme:     normalizeThemeName(a.dc.Theme),
-		})
-		session := a.agentBridge.CurrentSession()
-		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
-		for _, msg := range session.Messages {
-			if msg.Role == "user" || msg.Role == "tool" {
-				var textParts []string
-				for _, block := range msg.Content {
-					switch block.Type {
-					case "text":
-						if strings.TrimSpace(block.Text) != "" {
-							textParts = append(textParts, strings.TrimSpace(block.Text))
-						}
-					case "tool_result":
-						result := block.Output
-						if len(result) > 500 {
-							result = result[:500] + "..."
-						}
-						history = append(history, tunnel.HistoryEntry{
-							Role:     "tool_result",
-							ToolID:   block.ToolID,
-							ToolName: block.ToolName,
-							Result:   result,
-							IsError:  block.IsError,
-						})
-					}
-				}
-				if len(textParts) > 0 {
-					history = append(history, tunnel.HistoryEntry{
-						Role:    "user",
-						Content: strings.Join(textParts, "\n"),
-					})
-				}
-			} else if msg.Role == "assistant" {
-				for _, block := range msg.Content {
-					switch block.Type {
-					case "text":
-						if strings.TrimSpace(block.Text) != "" {
-							history = append(history, tunnel.HistoryEntry{
-								Role:    "assistant",
-								Content: strings.TrimSpace(block.Text),
-							})
-						}
-					case "tool_use":
-						argsStr := string(block.Input)
-						if len(argsStr) > 200 {
-							argsStr = argsStr[:200] + "..."
-						}
-						title := toolDisplayName(block.ToolName, string(block.Input))
-						detail := toolArgSummary(block.ToolName, string(block.Input))
-						if detail == title {
-							detail = ""
-						}
-						history = append(history, tunnel.HistoryEntry{
-							Role:            "tool_call",
-							ToolID:          block.ToolID,
-							ToolName:        block.ToolName,
-							ToolDisplayName: title,
-							ToolArgs:        argsStr,
-							ToolDetail:      detail,
-						})
-					}
-				}
-			} else if msg.Role == "user" || msg.Role == "tool" {
-				var textParts []string
-				for _, block := range msg.Content {
-					switch block.Type {
-					case "text":
-						if strings.TrimSpace(block.Text) != "" {
-							textParts = append(textParts, strings.TrimSpace(block.Text))
-						}
-					case "tool_result":
-						result := block.Output
-						if len(result) > 500 {
-							result = result[:500] + "..."
-						}
-						history = append(history, tunnel.HistoryEntry{
-							Role:     "tool_result",
-							ToolID:   block.ToolID,
-							ToolName: block.ToolName,
-							Result:   result,
-							IsError:  block.IsError,
-						})
-					}
-				}
-				if len(textParts) > 0 {
-					history = append(history, tunnel.HistoryEntry{
-						Role:    "user",
-						Content: strings.Join(textParts, "\n"),
-					})
-				}
-			}
+		a.tunnelBroker.SwitchSession(a.agentBridge.CurrentSession().ID)
+		if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
+			a.tunnelBroker.ReplayEvents(events, false)
+		} else {
+			a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
 		}
-		if len(history) > 0 {
-			a.tunnelBroker.SeedHistory(history)
-		}
-		a.tunnelBroker.PushStatus(tunnel.StatusIdle, t("status.ready"))
 	}
 
 	// Refresh sidebar.
@@ -863,16 +781,7 @@ func (a *App) newSession() {
 		a.agentBridge.saveSession()
 	}
 
-	// 4. Notify mobile client about new session (don't close tunnel).
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.ResetSession()
-	}
-	// Re-attach broker so startChat can send SessionInfo.
-	if a.agentBridge != nil && a.tunnelBroker != nil {
-		a.agentBridge.tunnelBroker = a.tunnelBroker
-	}
-
-	// Clear session ID so startChat creates a fresh one.
+	// 4. Clear session ID so startChat creates and publishes a fresh active session.
 	if a.agentBridge != nil {
 		a.agentBridge.currentSes = nil
 	}
@@ -934,6 +843,26 @@ func (a *App) startChat() {
 	// Resume previous session into new bridge to preserve history.
 	if prevSessionID != "" {
 		_ = bridge.ResumeSession(prevSessionID)
+	}
+	if bridge.CurrentSession() == nil {
+		bridge.ensureSession()
+	}
+	if a.tunnelBroker != nil {
+		bridge.tunnelBroker = a.tunnelBroker
+		a.tunnelBroker.SetReplayProvider(func() []tunnel.GatewayMessage {
+			return bridge.CurrentSessionTunnelEvents()
+		})
+		a.tunnelBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+			bridge.RecordTunnelEvent(ev)
+		})
+		if current := bridge.CurrentSession(); current != nil {
+			a.tunnelBroker.SwitchSession(current.ID)
+			if events := bridge.CurrentSessionTunnelEvents(); len(events) > 0 {
+				a.tunnelBroker.ReplayEvents(events, false)
+			} else {
+				a.tunnelBroker.SendSnapshot(a.tunnelSnapshot())
+			}
+		}
 	}
 
 	// Create or reuse chat view and sidebar.

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,9 +25,11 @@ import (
 //   - The broker only produces ordered events for the current active session.
 //   - Relay owns per-client replay; broker only emits the canonical event stream.
 type Broker struct {
-	session   *Session
-	onCommand func(cmd GatewayMessage)
-	onConnect func(info RelayConnectedState)
+	session        *Session
+	onCommand      func(cmd GatewayMessage)
+	onConnect      func(info RelayConnectedState)
+	replayProvider func() []GatewayMessage
+	eventRecorder  func(msg GatewayMessage)
 
 	// Session-scoped event identity.
 	sessionMu sync.RWMutex
@@ -52,10 +56,11 @@ type Broker struct {
 	hasCurrentStatus bool
 
 	// Text batching
-	textMu   sync.Mutex
-	textBuf  map[string]*textEntry // msgID → accumulated text entry
-	textTick *time.Ticker
-	textDone chan struct{} // stop text flusher
+	textMu     sync.Mutex
+	textBuf    map[string]*textEntry // msgID → unflushed text entry
+	activeText map[string]*textEntry // msgID → full in-flight text entry
+	textTick   *time.Ticker
+	textDone   chan struct{} // stop text flusher
 }
 
 type BrokerSnapshot struct {
@@ -70,6 +75,7 @@ func NewBroker(sess *Session) *Broker {
 		sessionID:   newTunnelSessionID(),
 		outDone:     make(chan struct{}),
 		textBuf:     make(map[string]*textEntry),
+		activeText:  make(map[string]*textEntry),
 		textTick:    time.NewTicker(300 * time.Millisecond),
 		textDone:    make(chan struct{}),
 		sendWaiters: make(map[string]chan struct{}),
@@ -177,6 +183,17 @@ func (b *Broker) flushAllText() {
 	}
 }
 
+func (b *Broker) appendTextLocked(msgID, agentID, chunk string) {
+	if b.textBuf[msgID] == nil {
+		b.textBuf[msgID] = &textEntry{agentID: agentID}
+	}
+	b.textBuf[msgID].text += chunk
+	if b.activeText[msgID] == nil {
+		b.activeText[msgID] = &textEntry{agentID: agentID}
+	}
+	b.activeText[msgID].text += chunk
+}
+
 // flushText flushes the buffer for a specific msgID immediately.
 func (b *Broker) flushText(msgID string) {
 	b.textMu.Lock()
@@ -195,6 +212,41 @@ func (b *Broker) flushText(msgID string) {
 	}
 }
 
+func (b *Broker) activeTextSnapshot() map[string]textEntry {
+	b.textMu.Lock()
+	defer b.textMu.Unlock()
+	if len(b.activeText) == 0 {
+		return nil
+	}
+	out := make(map[string]textEntry, len(b.activeText))
+	for id, entry := range b.activeText {
+		if entry == nil || entry.text == "" {
+			continue
+		}
+		out[id] = *entry
+	}
+	return out
+}
+
+func (b *Broker) replayActiveText(active map[string]textEntry) {
+	if len(active) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(active))
+	for id := range active {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		entry := active[id]
+		if entry.agentID != "" {
+			b.enqueueWithStream(EventSubagentText, id, SubagentTextData{AgentID: entry.agentID, ID: id, Chunk: entry.text})
+		} else {
+			b.enqueueWithStream(EventText, id, TextData{ID: id, Chunk: entry.text})
+		}
+	}
+}
+
 // ─── Lifecycle ───
 
 func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
@@ -209,6 +261,18 @@ func (b *Broker) SetSnapshotProvider(fn func() BrokerSnapshot) {
 	b.snapshotMu.Lock()
 	defer b.snapshotMu.Unlock()
 	b.snapshotProvider = fn
+}
+
+func (b *Broker) SetReplayProvider(fn func() []GatewayMessage) {
+	b.snapshotMu.Lock()
+	defer b.snapshotMu.Unlock()
+	b.replayProvider = fn
+}
+
+func (b *Broker) SetEventRecorder(fn func(msg GatewayMessage)) {
+	b.snapshotMu.Lock()
+	defer b.snapshotMu.Unlock()
+	b.eventRecorder = fn
 }
 
 func (b *Broker) Stop() {
@@ -261,11 +325,55 @@ func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 }
 
 func (b *Broker) ResetSession() {
-	// Clear text buffers too
+	b.resetSessionAndEnqueue(true)
+}
+
+func (b *Broker) SwitchSession(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	b.sessionMu.Lock()
+	changed := b.sessionID != sessionID
+	b.sessionID = sessionID
+	if changed {
+		b.nextEvent.Store(0)
+	}
+	b.sessionMu.Unlock()
+	_ = b.session.SendActiveSession(sessionID)
+	b.resetProjectionAndEnqueue(true)
+}
+
+func (b *Broker) AnnounceActiveSession(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	b.sessionMu.Lock()
+	changed := b.sessionID != sessionID
+	b.sessionID = sessionID
+	if changed {
+		b.nextEvent.Store(0)
+	}
+	b.sessionMu.Unlock()
+	_ = b.session.SendActiveSession(sessionID)
+}
+
+func (b *Broker) resetSessionPreservingActiveText() {
+	b.resetSessionAndEnqueue(false)
+}
+
+func (b *Broker) resetSessionAndEnqueue(clearActive bool) {
+	b.resetSession()
+	b.resetProjectionAndEnqueue(clearActive)
+}
+
+func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
+	// Clear text buffers too.
 	b.textMu.Lock()
 	b.textBuf = make(map[string]*textEntry)
+	if clearActive {
+		b.activeText = make(map[string]*textEntry)
+	}
 	b.textMu.Unlock()
-	b.resetSession()
 	b.enqueue(EventSnapshotReset, nil)
 }
 
@@ -305,6 +413,36 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if b.onConnect != nil {
 		b.onConnect(info)
 	}
+	if info.Role == "client" {
+		b.snapshotMu.RLock()
+		provider := b.snapshotProvider
+		b.snapshotMu.RUnlock()
+		if provider == nil {
+			return
+		}
+		snapshot := provider()
+		if snapshot.Status.Status == "" {
+			if status, ok := b.CurrentStatus(); ok {
+				snapshot.Status = status
+			}
+		}
+		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && snapshot.Status.Status == "" {
+			return
+		}
+		go func() {
+			debug.Log("tunnel", "broker: client connected, publishing authoritative snapshot")
+			b.flushAllText()
+			_ = b.session.SendActiveSession(b.SessionID())
+			if replayed := b.replayCanonicalEvents(true); replayed {
+				return
+			}
+			activeText := b.activeTextSnapshot()
+			b.enqueue(EventSnapshotReset, nil)
+			b.SendSnapshot(snapshot)
+			b.replayActiveText(activeText)
+		}()
+		return
+	}
 	if info.Role != "server" {
 		return
 	}
@@ -329,7 +467,13 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	}
 	go func() {
 		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
+		b.flushAllText()
+		if replayed := b.replayCanonicalEvents(false); replayed {
+			return
+		}
+		activeText := b.activeTextSnapshot()
 		b.SendSnapshot(snapshot)
+		b.replayActiveText(activeText)
 	}()
 }
 
@@ -347,10 +491,7 @@ func (b *Broker) PushUserMessageData(data MessageData) {
 
 func (b *Broker) PushText(id, chunk string) {
 	b.textMu.Lock()
-	if b.textBuf[id] == nil {
-		b.textBuf[id] = &textEntry{agentID: ""}
-	}
-	b.textBuf[id].text += chunk
+	b.appendTextLocked(id, "", chunk)
 	b.textMu.Unlock()
 }
 
@@ -358,6 +499,9 @@ func (b *Broker) PushTextDone(id string) {
 	// Flush remaining text immediately, then send text_done
 	b.flushText(id)
 	b.enqueueWithStream(EventTextDone, id, TextData{ID: id, Done: true})
+	b.textMu.Lock()
+	delete(b.activeText, id)
+	b.textMu.Unlock()
 }
 
 // ─── Status ───
@@ -429,13 +573,13 @@ func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) 
 func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
 	if !done {
 		b.textMu.Lock()
-		if b.textBuf[msgID] == nil {
-			b.textBuf[msgID] = &textEntry{agentID: agentID}
-		}
-		b.textBuf[msgID].text += chunk
+		b.appendTextLocked(msgID, agentID, chunk)
 		b.textMu.Unlock()
 	} else {
 		b.flushText(msgID)
+		b.textMu.Lock()
+		delete(b.activeText, msgID)
+		b.textMu.Unlock()
 	}
 }
 
@@ -550,6 +694,11 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 	b.outCond.Signal()
 }
 
+func (b *Broker) enqueueRecorded(msg GatewayMessage) {
+	b.bumpNextEvent(msg.EventID)
+	b.enqueueOut(msg)
+}
+
 func (b *Broker) trackSend(eventID string) <-chan struct{} {
 	ch := make(chan struct{})
 	b.waitMu.Lock()
@@ -577,6 +726,7 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 	if msg.Type == "" {
 		return
 	}
+	b.recordEvent(msg)
 	b.enqueueOut(msg)
 }
 
@@ -585,6 +735,7 @@ func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{})
 	if msg.Type == "" {
 		return
 	}
+	b.recordEvent(msg)
 	b.enqueueOut(msg)
 }
 
@@ -603,5 +754,70 @@ func (b *Broker) newMessage(eventType, streamID string, data interface{}) Gatewa
 		StreamID:  streamID,
 		Type:      eventType,
 		Data:      dataBytes,
+	}
+}
+
+func (b *Broker) recordEvent(msg GatewayMessage) {
+	b.snapshotMu.RLock()
+	recorder := b.eventRecorder
+	b.snapshotMu.RUnlock()
+	if recorder != nil {
+		recorder(msg)
+	}
+}
+
+func (b *Broker) replayCanonicalEvents(reset bool) bool {
+	b.snapshotMu.RLock()
+	provider := b.replayProvider
+	b.snapshotMu.RUnlock()
+	if provider == nil {
+		return false
+	}
+	events := provider()
+	if len(events) == 0 {
+		return false
+	}
+	if reset {
+		b.resetProjectionAndEnqueue(false)
+	}
+	for _, msg := range events {
+		b.enqueueRecorded(msg)
+	}
+	return true
+}
+
+func (b *Broker) ReplayEvents(events []GatewayMessage, reset bool) {
+	if len(events) == 0 {
+		return
+	}
+	if reset {
+		b.resetProjectionAndEnqueue(false)
+	}
+	for _, msg := range events {
+		b.enqueueRecorded(msg)
+	}
+}
+
+func (b *Broker) bumpNextEvent(eventID string) {
+	if eventID == "" {
+		return
+	}
+	idx := strings.LastIndex(eventID, "-")
+	raw := eventID
+	if idx >= 0 {
+		raw = eventID[idx+1:]
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return
+	}
+	for {
+		cur := b.nextEvent.Load()
+		if cur >= n {
+			return
+		}
+		if b.nextEvent.CompareAndSwap(cur, n) {
+			return
+		}
 	}
 }

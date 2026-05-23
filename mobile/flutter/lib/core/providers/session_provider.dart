@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -58,6 +59,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _sessionId = '';
   String _lastAppliedEventId = '';
   bool _awaitingReplay = false;
+  final SplayTreeMap<int, proto.WsMessage> _pendingReplayEvents =
+      SplayTreeMap<int, proto.WsMessage>();
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
 
@@ -111,6 +114,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _clearUiProjection();
       _lastAppliedEventId = '';
       _awaitingReplay = false;
+      _pendingReplayEvents.clear();
       _recentEventIds.clear();
       _recentEventSet.clear();
     }
@@ -130,6 +134,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final crypto = TunnelCrypto(token);
     service = ConnectionService(url: url, crypto: crypto);
     await _loadResumeState();
+    if (clearState) {
+      if (!_restoreProjectionFromCache()) {
+        _sessionId = '';
+        _lastAppliedEventId = '';
+      }
+      _awaitingReplay = false;
+      _pendingReplayEvents.clear();
+      _recentEventIds.clear();
+      _recentEventSet.clear();
+    }
 
     // Listen to connection status changes
     service!.statusStream.listen(
@@ -137,12 +151,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         state = state.copyWith(status: status);
         if (status == ConnectionStatus.connected) {
           _saveUrl(url);
-          final hasProjection = ref.read(chatProvider).isNotEmpty ||
-              ref.read(subagentProvider).isNotEmpty;
           service?.sendResumeHello(
             clientId: _clientId,
-            sessionId: _sessionId,
-            lastEventId: hasProjection ? _lastAppliedEventId : null,
+            sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+            lastEventId:
+                _lastAppliedEventId.isNotEmpty ? _lastAppliedEventId : null,
           );
         }
       },
@@ -193,6 +206,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = '';
     _lastAppliedEventId = '';
     _awaitingReplay = false;
+    _pendingReplayEvents.clear();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
@@ -218,16 +232,37 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final chatNotifier = ref.read(chatProvider.notifier);
 
     switch (msg.type) {
+      case 'active_session':
+        final sessionId =
+            msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
+        if (sessionId.isEmpty) break;
+        if (_sessionId.isNotEmpty && _sessionId != sessionId) {
+          _clearUiProjection();
+          _lastAppliedEventId = '';
+          _pendingReplayEvents.clear();
+          _awaitingReplay = false;
+          _recentEventIds.clear();
+          _recentEventSet.clear();
+        }
+        _sessionId = sessionId;
+        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
+            sessionId, ref.read(sessionInfoProvider),
+            lastEventId: _lastAppliedEventId));
+        _persistResumeState();
+        break;
+
       case 'resume_ack':
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
-        _awaitingReplay = false;
+        _awaitingReplay = _pendingReplayEvents.isNotEmpty;
         if (resumeMode == 'full_history') {
           chatNotifier.clearMessages();
           ref.read(subagentProvider.notifier).clear();
           _lastAppliedEventId = '';
+          _pendingReplayEvents.clear();
+          _awaitingReplay = false;
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
@@ -239,6 +274,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'resume_miss':
+        _pendingReplayEvents.clear();
         _awaitingReplay = false;
         break;
 
@@ -265,6 +301,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         chatNotifier.clearMessages();
         ref.read(subagentProvider.notifier).clear();
         _lastAppliedEventId = '';
+        _pendingReplayEvents.clear();
+        _awaitingReplay = false;
         _recentEventIds.clear();
         _recentEventSet.clear();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
@@ -651,6 +689,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       final previousSessionId = _sessionId;
       ref.read(chatProvider.notifier).clearMessages();
       ref.read(subagentProvider.notifier).clear();
+      _pendingReplayEvents.clear();
+      _awaitingReplay = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
       _lastAppliedEventId = '';
@@ -672,15 +712,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final last = _parseEventOrdinal(_lastAppliedEventId);
     if (last != null && next != null) {
       if (next <= last) {
+        _pendingReplayEvents.remove(next);
         return false;
       }
-      if (next > last + 1 && !_awaitingReplay) {
-        _awaitingReplay = true;
-        service?.requestReplayFrom(
-          clientId: _clientId,
-          sessionId: _sessionId,
-          lastEventId: _lastAppliedEventId,
-        );
+      if (next > last + 1) {
+        _pendingReplayEvents[next] = msg;
+        if (!_awaitingReplay) {
+          _awaitingReplay = true;
+          service?.requestReplayFrom(
+            clientId: _clientId,
+            sessionId: _sessionId,
+            lastEventId: _lastAppliedEventId,
+          );
+        }
         return false;
       }
     }
@@ -701,6 +745,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _awaitingReplay = false;
     _lastAppliedEventId = eventId;
+    final ordinal = _parseEventOrdinal(eventId);
+    if (ordinal != null) {
+      _pendingReplayEvents.remove(ordinal);
+    }
     _recentEventSet.add(eventId);
     _recentEventIds.add(eventId);
     if (_recentEventIds.length > 1000) {
@@ -711,6 +759,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     unawaited(ref
         .read(workspaceCacheProvider.notifier)
         .updateLiveCursor(_sessionId, _lastAppliedEventId));
+    _drainBufferedReplayEvents();
   }
 
   int? _parseEventOrdinal(String? eventId) {
@@ -718,6 +767,64 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final idx = eventId.lastIndexOf('-');
     final raw = idx >= 0 ? eventId.substring(idx + 1) : eventId;
     return int.tryParse(raw);
+  }
+
+  void _drainBufferedReplayEvents() {
+    while (true) {
+      final last = _parseEventOrdinal(_lastAppliedEventId);
+      if (last == null) {
+        break;
+      }
+      final pending = _pendingReplayEvents.remove(last + 1);
+      if (pending == null) {
+        break;
+      }
+      _dispatchMessage(pending);
+    }
+    _awaitingReplay = _pendingReplayEvents.isNotEmpty;
+  }
+
+  bool _restoreProjectionFromCache() {
+    final cacheState = ref.read(workspaceCacheProvider);
+    final workspaceKey = cacheState.selectedWorkspaceKey;
+    final sessionId = cacheState.selectedSessionId;
+    if (workspaceKey == null ||
+        workspaceKey.isEmpty ||
+        sessionId == null ||
+        sessionId.isEmpty) {
+      return false;
+    }
+    final snapshot = ref
+        .read(workspaceCacheProvider.notifier)
+        .snapshotFor(workspaceKey, sessionId);
+    if (snapshot == null) {
+      return false;
+    }
+    ref
+        .read(chatProvider.notifier)
+        .set(List<ChatMessage>.from(snapshot.messages));
+    ref.read(subagentProvider.notifier).set(
+          Map<String, SubagentInfo>.from(snapshot.subagents),
+        );
+    ref.read(sessionInfoProvider.notifier).set(snapshot.sessionInfo);
+    if (snapshot.sessionInfo != null && snapshot.sessionInfo!.mode.isNotEmpty) {
+      ref.read(currentModeProvider.notifier).set(snapshot.sessionInfo!.mode);
+    }
+    _setAgentStatus(snapshot.agentStatus, snapshot.agentStatusMessage);
+
+    final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
+    final record = cacheState.sessions[sessionKey];
+    _sessionId = sessionId;
+    _lastAppliedEventId = record?.lastEventId ?? '';
+    return true;
+  }
+
+  void handleIncomingForTest(proto.WsMessage msg) {
+    _dispatchMessage(msg);
+  }
+
+  bool restoreProjectionFromCacheForTest() {
+    return _restoreProjectionFromCache();
   }
 
   void _persistResumeState() {
