@@ -714,6 +714,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			}
 			fmt.Fprintf(os.Stderr, "🌙 Knight started (budget: %dM tokens/day)\n", cfg.Knight().DailyTokenBudget/1_000_000)
 		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Knight is disabled. Use /knight on to enable.\n")
 	}
 
 	// Start A2A server if enabled.

@@ -722,8 +722,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetKnight(knightAgent)
+	// Show knight status hint at startup (conflict takes priority, then general status)
 	if knightConflictHint != "" {
 		repl.SetKnightStartupHint(knightConflictHint)
+	} else if cfg.Knight().Enabled {
+		repl.SetKnightStartupHint("Knight auto-evolution is enabled. Use /knight off to disable.")
+	} else {
+		repl.SetKnightStartupHint("Knight is disabled. Use /knight on to enable.")
 	}
 	trace.Mark("wire repl dependencies")
 
