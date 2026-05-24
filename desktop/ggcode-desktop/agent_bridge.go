@@ -718,9 +718,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: ev.Text,
 					Time:    time.Now(),
 				})
+				// Mirror TUI: just close the current text stream and rotate.
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
-					broker.PushSystemMessage(ev.Text)
 				}
 
 			case provider.StreamEventReasoning:
@@ -740,10 +740,21 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.imRound.ToolSuccesses = 0
 					b.imRound.ToolFailures = 0
 				}
+				// Mirror TUI: only close text stream + rotate msgID.
+				// Do NOT push idle/clear-activity here — that happens only
+				// when the entire agent run finishes (via RunStreamWithContent
+				// returning).
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
-					broker.PushStatus(tunnel.StatusIdle, "")
-					broker.PushActivity("")
+				}
+
+			case provider.StreamEventError:
+				// Mirror TUI: close text stream, push error, rotate.
+				if broker := b.currentTunnelBroker(); broker != nil {
+					b.flushTunnelTextStream(broker)
+					if ev.Error != nil {
+						broker.PushError(ev.Error.Error())
+					}
 				}
 			}
 		}
@@ -762,10 +773,14 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
 					broker.PushError(err.Error())
-					broker.PushStatus(tunnel.StatusIdle, "")
-					broker.PushActivity("")
 				}
 			}
+		}
+		// Mirror TUI handleDoneMsg: always push idle + clear activity
+		// when the entire agent run finishes (success or error).
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushStatus(tunnel.StatusIdle, "")
+			broker.PushActivity("")
 		}
 	}()
 
