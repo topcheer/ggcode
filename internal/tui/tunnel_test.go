@@ -544,6 +544,12 @@ func TestStartAgentWithExpandPushesInitialTunnelBusyAndActivity(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 	m.loading = true
 	m.statusActivity = "Thinking..."
+	_, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	t.Cleanup(func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	})
 	m.agent = agent.NewAgent(&testStreamProvider{events: []provider.StreamEvent{
 		{Type: provider.StreamEventText, Text: "hello"},
 		{Type: provider.StreamEventDone},
