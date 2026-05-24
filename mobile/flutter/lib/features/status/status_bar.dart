@@ -16,8 +16,8 @@ class StatusBar extends ConsumerWidget {
     final detail = _statusDetail(status, message);
 
     return Container(
-      margin:  EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      margin: EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadii.md),
@@ -60,11 +60,11 @@ class StatusBar extends ConsumerWidget {
             ),
           ),
           if (detail.isNotEmpty) ...[
-             SizedBox(width: 10),
+            SizedBox(width: 10),
             Expanded(
               child: Text(
                 detail,
-                style:  TextStyle(
+                style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12,
                 ),
@@ -82,14 +82,8 @@ class StatusBar extends ConsumerWidget {
     switch (status) {
       case 'idle':
         return AppColors.textMuted;
-      case 'thinking':
-        return AppColors.warning;
-      case 'running':
+      case 'busy':
         return AppColors.accent;
-      case 'waiting':
-        return const Color(0xFFFF9C54);
-      case 'error':
-        return AppColors.danger;
       default:
         return AppColors.textMuted;
     }
@@ -99,14 +93,8 @@ class StatusBar extends ConsumerWidget {
     switch (status) {
       case 'idle':
         return t('status.idle');
-      case 'thinking':
-        return t('status.thinking');
-      case 'running':
+      case 'busy':
         return t('status.running');
-      case 'waiting':
-        return t('status.approval_needed');
-      case 'error':
-        return t('tool.error');
       default:
         return status;
     }
@@ -117,7 +105,7 @@ class StatusBar extends ConsumerWidget {
     if (trimmed.isEmpty) return '';
     final normalized = trimmed.toLowerCase();
     if ((status == 'idle' && normalized == 'ready') ||
-        (status == 'thinking' && normalized == 'processing')) {
+        (status == 'busy' && normalized == 'processing')) {
       return '';
     }
     return trimmed;

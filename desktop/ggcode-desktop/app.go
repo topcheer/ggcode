@@ -355,17 +355,18 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		},
 	}
 	if a.agentBridge == nil {
-		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle, Message: t("status.ready")}
+		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
 		return snapshot
 	}
 	snapshot.Status = a.agentBridge.CurrentTunnelStatus()
+	snapshot.Activity = tunnel.ActivityData{Activity: a.agentBridge.CurrentTunnelActivity()}
 	snapshot.History = a.agentBridge.CurrentTunnelHistory()
 	snapshot.ExtraEvents = a.currentTunnelAgentSnapshotEvents()
 	return snapshot
 }
 
 func desktopTunnelSnapshotMatches(a, b tunnel.BrokerSnapshot) bool {
-	if a.SessionInfo != b.SessionInfo || a.Status != b.Status {
+	if a.SessionInfo != b.SessionInfo || a.Status != b.Status || a.Activity != b.Activity {
 		return false
 	}
 	if !desktopTunnelHistoryMatches(a.History, b.History) {

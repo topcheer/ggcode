@@ -917,12 +917,24 @@ func TestBrokerHandleRelayConnectedReseedsCurrentStatusAfterHistory(t *testing.T
 	if len(msgs) < 4 {
 		t.Fatalf("expected reseeded snapshot plus status, got %d", len(msgs))
 	}
-	if msgs[len(msgs)-1].Type != EventStatus {
-		t.Fatalf("expected final event status, got %q", msgs[len(msgs)-1].Type)
-	}
 	var status StatusData
-	if err := json.Unmarshal(msgs[len(msgs)-1].Data, &status); err != nil {
-		t.Fatalf("unmarshal status: %v", err)
+	found := false
+	for _, msg := range msgs {
+		if msg.Type != EventStatus {
+			continue
+		}
+		if err := json.Unmarshal(msg.Data, &status); err != nil {
+			t.Fatalf("unmarshal status: %v", err)
+		}
+		found = true
+		break
+	}
+	if !found {
+		types := make([]string, 0, len(msgs))
+		for _, msg := range msgs {
+			types = append(types, msg.Type)
+		}
+		t.Fatalf("expected reseeded status event, got types %+v", types)
 	}
 	if status.Status != "running" || status.Message != "read_file" {
 		t.Fatalf("unexpected reseeded status: %+v", status)

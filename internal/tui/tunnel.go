@@ -234,7 +234,6 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		}
 		present := describeTool(m.currentLanguage(), name, string(ev.Tool.Arguments))
 		title := toolCallDisplayName(name, string(ev.Tool.Arguments))
-		m.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
 		m.tunnelBroker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
@@ -251,7 +250,6 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 	case provider.StreamEventDone:
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
-		m.tunnelBroker.PushStatus(tunnel.StatusIdle, "")
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventError:
@@ -259,7 +257,6 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		if ev.Error != nil {
 			m.tunnelBroker.PushError(sanitizeAPIError(ev.Error).Error())
 		}
-		m.tunnelBroker.PushStatus(tunnel.StatusError, "error")
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 	}
 }
@@ -310,9 +307,19 @@ func (m *Model) pushTunnelStatus(status, message string) {
 	}
 }
 
+func (m *Model) pushTunnelActivity(activity string) {
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushActivity(strings.TrimSpace(activity))
+	}
+}
+
 func (m *Model) pushTunnelCurrentStatus() {
 	status := m.currentTunnelStatus()
 	m.pushTunnelStatus(status.Status, status.Message)
+}
+
+func (m *Model) pushTunnelCurrentActivity() {
+	m.pushTunnelActivity(m.currentTunnelActivity())
 }
 
 // pushTunnelCancel notifies mobile that the current run was cancelled.
@@ -320,6 +327,7 @@ func (m *Model) pushTunnelCancel() {
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		m.pushTunnelStatus(tunnel.StatusIdle, "cancelled")
+		m.pushTunnelActivity("")
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 	}
 }
@@ -788,6 +796,9 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 			Version:   version.Version,
 		},
 		Status: m.currentTunnelStatus(),
+		Activity: tunnel.ActivityData{
+			Activity: m.currentTunnelActivity(),
+		},
 	}
 	if history := m.currentTunnelHistory(); len(history) > 0 {
 		snapshot.History = history
@@ -1027,7 +1038,7 @@ func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tu
 }
 
 func tunnelSnapshotMatches(a, b tunnel.BrokerSnapshot) bool {
-	if a.SessionInfo != b.SessionInfo || a.Status != b.Status {
+	if a.SessionInfo != b.SessionInfo || a.Status != b.Status || a.Activity != b.Activity {
 		return false
 	}
 	return tunnelHistoryMatches(a.History, b.History) && tunnelSnapshotEventMatches(a.ExtraEvents, b.ExtraEvents)
@@ -1321,20 +1332,14 @@ func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {
 }
 
 func (m *Model) currentTunnelStatus() tunnel.StatusData {
-	switch {
-	case m.pendingApproval != nil:
-		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "approval"}
-	case m.pendingQuestionnaire != nil:
-		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "ask_user"}
-	case strings.TrimSpace(m.statusToolName) != "":
-		return tunnel.StatusData{Status: tunnel.StatusRunning, Message: strings.TrimSpace(m.statusToolName)}
-	case m.loading && strings.TrimSpace(m.statusActivity) != "":
-		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: strings.TrimSpace(m.statusActivity)}
-	case m.loading:
-		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: "processing"}
-	default:
-		return tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
+	if m.loading {
+		return tunnel.StatusData{Status: tunnel.StatusBusy}
 	}
+	return tunnel.StatusData{Status: tunnel.StatusIdle}
+}
+
+func (m *Model) currentTunnelActivity() string {
+	return strings.TrimSpace(m.statusActivity)
 }
 
 // truncateRunes truncates a string to maxRunes runes, appending suffix if truncated.

@@ -163,6 +163,7 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	if status.Status != "" {
 		broker.PushStatus(status.Status, status.Message)
 	}
+	broker.PushActivity(b.CurrentTunnelActivity())
 }
 
 func (b *AgentBridge) DetachTunnelBroker() {
@@ -468,7 +469,8 @@ func (b *AgentBridge) setupAgent() error {
 			requestID = b.nextTunnelRequestID()
 			b.setPendingApproval(requestID, toolName, resp)
 			broker.PushApprovalRequest(requestID, toolName, input)
-			broker.PushStatus("waiting", "approval")
+			broker.PushStatus(tunnel.StatusBusy, "")
+			broker.PushActivity(b.CurrentTunnelActivity())
 		}
 		fyne.Do(func() {
 			var d dialog.Dialog
@@ -582,7 +584,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				Version:   Version,
 				Language:  b.cfg.Language,
 			})
-			broker.PushStatus(tunnel.StatusThinking, "processing")
+			broker.PushStatus(tunnel.StatusBusy, "")
+			broker.PushActivity(b.CurrentTunnelActivity())
 		}
 
 		defer func() {
@@ -670,7 +673,6 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				}
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
-					broker.PushStatus(tunnel.StatusRunning, name)
 					broker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
 				}
 
@@ -741,6 +743,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
 					broker.PushStatus(tunnel.StatusIdle, "")
+					broker.PushActivity("")
 				}
 			}
 		}
@@ -759,7 +762,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
 					broker.PushError(err.Error())
-					broker.PushStatus(tunnel.StatusError, "error")
+					broker.PushStatus(tunnel.StatusIdle, "")
+					broker.PushActivity("")
 				}
 			}
 		}
@@ -789,6 +793,7 @@ func (b *AgentBridge) Cancel() {
 	if broker := b.currentTunnelBroker(); broker != nil {
 		b.flushTunnelTextStream(broker)
 		broker.PushStatus(tunnel.StatusIdle, "cancelled")
+		broker.PushActivity("")
 	}
 }
 
@@ -800,15 +805,25 @@ func (b *AgentBridge) CurrentTunnelStatus() tunnel.StatusData {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.working {
+		return tunnel.StatusData{Status: tunnel.StatusBusy}
+	}
+	return tunnel.StatusData{Status: tunnel.StatusIdle}
+}
+
+func (b *AgentBridge) CurrentTunnelActivity() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	switch {
 	case b.approvalRequestID != "":
-		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "approval"}
+		return "approval"
 	case b.askUserRequestID != "":
-		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "ask_user"}
+		return "ask_user"
 	case b.working:
-		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: "processing"}
+		return "processing"
 	default:
-		return tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
+		return ""
 	}
 }
 
@@ -2043,7 +2058,8 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 		requestID = b.nextTunnelRequestID()
 		b.setPendingAskUser(requestID, req, resp)
 		broker.PushAskUserRequest(requestID, req.Title, buildTunnelAskUserQuestions(req))
-		broker.PushStatus("waiting", "ask_user")
+		broker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushActivity(b.CurrentTunnelActivity())
 	}
 	fyne.Do(func() {
 		// Build form from questions
@@ -2396,7 +2412,8 @@ func (b *AgentBridge) pushTunnelApprovalResult(id, decision string) {
 		return
 	}
 	broker.PushApprovalResult(id, decision)
-	broker.PushStatus(tunnel.StatusRunning, "")
+	broker.PushStatus(tunnel.StatusBusy, "")
+	broker.PushActivity(b.CurrentTunnelActivity())
 }
 
 func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
@@ -2413,7 +2430,8 @@ func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUser
 		}
 	}
 	broker.PushAskUserResponse(id, response.Status, answers)
-	broker.PushStatus(tunnel.StatusRunning, "")
+	broker.PushStatus(tunnel.StatusBusy, "")
+	broker.PushActivity(b.CurrentTunnelActivity())
 }
 
 func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
@@ -2441,7 +2459,8 @@ func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseD
 	default:
 	}
 	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushStatus(tunnel.StatusRunning, "")
+		broker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushActivity(b.CurrentTunnelActivity())
 	}
 }
 
@@ -2457,7 +2476,8 @@ func (b *AgentBridge) handleMobileAskUserResponse(data tunnel.AskUserResponseDat
 	default:
 	}
 	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushStatus(tunnel.StatusRunning, "")
+		broker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushActivity(b.CurrentTunnelActivity())
 	}
 }
 

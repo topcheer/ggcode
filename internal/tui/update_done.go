@@ -28,6 +28,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.pushTunnelCurrentStatus()
+	m.pushTunnelCurrentActivity()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 		m.renderStreamBuffer(true)
 		m.streamBuffer = nil
@@ -66,6 +67,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.pushTunnelCurrentStatus()
+	m.pushTunnelCurrentActivity()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 		m.renderStreamBuffer(true)
 		m.streamBuffer = nil
@@ -88,10 +90,15 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
+	m.statusActivity = ""
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}
-	m.pushTunnelStatus(tunnel.StatusError, "error")
+	m.pushTunnelStatus(tunnel.StatusIdle, "")
+	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
 	m.chatListScrollToBottom()
 	return m, nil
@@ -111,9 +118,15 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
+	m.statusActivity = ""
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}
+	m.pushTunnelStatus(tunnel.StatusIdle, "")
+	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.chatListScrollToBottom()

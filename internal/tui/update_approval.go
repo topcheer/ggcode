@@ -28,7 +28,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	if m.tunnelBroker != nil {
 		m.tunnelPendingApprovalID = m.nextTunnelRequestID()
 		m.tunnelBroker.PushApprovalRequest(m.tunnelPendingApprovalID, msg.ToolName, msg.Input)
-		m.tunnelBroker.PushStatus(tunnel.StatusWaiting, "approval")
+		m.tunnelBroker.PushStatus(tunnel.StatusBusy, "")
 	}
 	return m, nil
 
@@ -92,7 +92,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 			}
 		}
 		m.tunnelBroker.PushAskUserRequest(m.tunnelPendingAskUserID, msg.Request.Title, questions)
-		m.tunnelBroker.PushStatus(tunnel.StatusWaiting, "ask_user")
+		m.tunnelBroker.PushStatus(tunnel.StatusBusy, "")
 	}
 	return m, nil
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -440,7 +441,8 @@ func TestResetCurrentSessionTunnelLedgerClearsCanonicalReplay(t *testing.T) {
 func TestTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) {
 	seeded := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
-		Status:      tunnel.StatusData{Status: tunnel.StatusRunning, Message: "bash"},
+		Status:      tunnel.StatusData{Status: tunnel.StatusBusy},
+		Activity:    tunnel.ActivityData{Activity: "Collecting project knowledge..."},
 		History: []tunnel.HistoryEntry{
 			{Role: "system", Content: "Starting tunnel..."},
 			{Role: "tool_call", ToolID: "tool-1", ToolName: "bash", ToolDisplayName: "Run bash", ToolArgs: `{"command":"sleep 1"}`},
@@ -485,7 +487,9 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	// None of these should panic
 	m.pushTunnelUserMessage("test")
 	m.pushTunnelStatus(tunnel.StatusThinking, "processing")
+	m.pushTunnelActivity("processing")
 	m.pushTunnelCurrentStatus()
+	m.pushTunnelCurrentActivity()
 	m.pushTunnelCancel()
 	m.pushSubAgentTunnelStreamText("sa-1", "text")
 	m.pushSubAgentTunnelToolCall("sa-1", "t1", "tool", "Tool", "{}", "")
@@ -503,15 +507,16 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_shutdown", TeammateID: "x", TeammateName: "coder"})
 }
 
-func TestPushTunnelCurrentStatusUsesLiveActivity(t *testing.T) {
+func TestPushTunnelCurrentStatusUsesBusyLifecycle(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 	m.loading = true
 	m.statusActivity = "Collecting project knowledge..."
 
 	m.pushTunnelCurrentStatus()
+	m.pushTunnelCurrentActivity()
 
-	if len(m.session.TunnelEvents) != 1 {
-		t.Fatalf("expected 1 tunnel event, got %d", len(m.session.TunnelEvents))
+	if len(m.session.TunnelEvents) != 2 {
+		t.Fatalf("expected 2 tunnel events, got %d", len(m.session.TunnelEvents))
 	}
 	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventStatus {
 		t.Fatalf("expected status event, got %q", got)
@@ -520,8 +525,95 @@ func TestPushTunnelCurrentStatusUsesLiveActivity(t *testing.T) {
 	if err := json.Unmarshal(m.session.TunnelEvents[0].Data, &data); err != nil {
 		t.Fatalf("unmarshal status data: %v", err)
 	}
-	if data.Status != tunnel.StatusThinking || data.Message != "Collecting project knowledge..." {
-		t.Fatalf("expected thinking/collecting status, got %+v", data)
+	if data.Status != tunnel.StatusBusy {
+		t.Fatalf("expected busy status, got %+v", data)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventActivity {
+		t.Fatalf("expected activity event, got %q", got)
+	}
+	var activity tunnel.ActivityData
+	if err := json.Unmarshal(m.session.TunnelEvents[1].Data, &activity); err != nil {
+		t.Fatalf("unmarshal activity data: %v", err)
+	}
+	if activity.Activity != "Collecting project knowledge..." {
+		t.Fatalf("expected collecting activity, got %+v", activity)
+	}
+}
+
+func TestStartAgentWithExpandPushesInitialTunnelBusyAndActivity(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.loading = true
+	m.statusActivity = "Thinking..."
+	m.agent = agent.NewAgent(&testStreamProvider{events: []provider.StreamEvent{
+		{Type: provider.StreamEventText, Text: "hello"},
+		{Type: provider.StreamEventDone},
+	}}, toolpkg.NewRegistry(), "", 1)
+
+	cmd := m.startAgentWithExpand("hello")
+	if cmd == nil {
+		t.Fatal("expected startAgentWithExpand command")
+	}
+	cmd()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(m.session.TunnelEvents) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(m.session.TunnelEvents) < 2 {
+		t.Fatalf("expected initial tunnel status/activity events, got %d", len(m.session.TunnelEvents))
+	}
+
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventStatus {
+		t.Fatalf("expected first event %q, got %q", tunnel.EventStatus, got)
+	}
+	var status tunnel.StatusData
+	if err := json.Unmarshal(m.session.TunnelEvents[0].Data, &status); err != nil {
+		t.Fatalf("unmarshal status data: %v", err)
+	}
+	if status.Status != tunnel.StatusBusy {
+		t.Fatalf("expected busy status, got %+v", status)
+	}
+
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventActivity {
+		t.Fatalf("expected second event %q, got %q", tunnel.EventActivity, got)
+	}
+	var activity tunnel.ActivityData
+	if err := json.Unmarshal(m.session.TunnelEvents[1].Data, &activity); err != nil {
+		t.Fatalf("unmarshal activity data: %v", err)
+	}
+	if activity.Activity != "Thinking..." {
+		t.Fatalf("expected thinking activity, got %+v", activity)
+	}
+}
+
+func TestPushTunnelEventDoneDoesNotFlipMainAgentIdleMidLoop(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.loading = true
+	m.statusActivity = "Working..."
+	m.pushTunnelCurrentStatus()
+	m.pushTunnelCurrentActivity()
+
+	m.pushTunnelEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolCallDone,
+		Tool: provider.ToolCallDelta{
+			ID:        "tool-1",
+			Name:      "bash",
+			Arguments: json.RawMessage(`{"command":"echo hi"}`),
+		},
+	})
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventDone})
+
+	for _, ev := range m.session.TunnelEvents {
+		if ev.Type != tunnel.EventStatus {
+			continue
+		}
+		var data tunnel.StatusData
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("unmarshal status data: %v", err)
+		}
+		if data.Status == tunnel.StatusIdle {
+			t.Fatalf("stream turn completion must not emit idle while loop is still running: %+v", data)
+		}
 	}
 }
 

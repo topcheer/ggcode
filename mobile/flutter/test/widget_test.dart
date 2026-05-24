@@ -382,7 +382,7 @@ void main() {
       status: ConnectionStatus.connected,
       url: 'wss://example.test/ws?token=abc',
     ));
-    container.read(agentStatusProvider.notifier).set('running');
+    container.read(agentStatusProvider.notifier).set('busy');
     container.read(agentStatusMessageProvider.notifier).set('read_file');
     await tester.pump();
 

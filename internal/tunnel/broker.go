@@ -55,6 +55,10 @@ type Broker struct {
 	currentStatus    StatusData
 	hasCurrentStatus bool
 
+	activityMu         sync.RWMutex
+	currentActivity    ActivityData
+	hasCurrentActivity bool
+
 	toolMu           sync.Mutex
 	toolArgs         map[string]string
 	subagentToolArgs map[string]string
@@ -71,6 +75,7 @@ type BrokerSnapshot struct {
 	SessionInfo SessionInfoData
 	History     []HistoryEntry
 	Status      StatusData
+	Activity    ActivityData
 	ExtraEvents []SnapshotEvent
 }
 
@@ -343,7 +348,18 @@ func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 		b.enqueueSnapshotEvent(ev)
 	}
 	if snapshot.Status.Status != "" {
-		b.PushStatus(snapshot.Status.Status, snapshot.Status.Message)
+		b.statusMu.Lock()
+		b.currentStatus = snapshot.Status
+		b.hasCurrentStatus = true
+		b.statusMu.Unlock()
+		b.enqueue(EventStatus, snapshot.Status)
+	}
+	if snapshot.Activity.Activity != "" {
+		b.activityMu.Lock()
+		b.currentActivity = snapshot.Activity
+		b.hasCurrentActivity = true
+		b.activityMu.Unlock()
+		b.enqueue(EventActivity, snapshot.Activity)
 	}
 }
 
@@ -458,7 +474,12 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				snapshot.Status = status
 			}
 		}
-		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" {
+		if snapshot.Activity.Activity == "" {
+			if activity, ok := b.CurrentActivity(); ok {
+				snapshot.Activity = activity
+			}
+		}
+		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
 			return
 		}
 		go func() {
@@ -493,7 +514,12 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			snapshot.Status = status
 		}
 	}
-	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" {
+	if snapshot.Activity.Activity == "" {
+		if activity, ok := b.CurrentActivity(); ok {
+			snapshot.Activity = activity
+		}
+	}
+	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
 		return
 	}
 	go func() {
@@ -574,6 +600,10 @@ func (b *Broker) PushTextDone(id string) {
 
 func (b *Broker) PushStatus(status, message string) {
 	b.statusMu.Lock()
+	if b.hasCurrentStatus && b.currentStatus.Status == status && b.currentStatus.Message == message {
+		b.statusMu.Unlock()
+		return
+	}
 	b.currentStatus = StatusData{Status: status, Message: message}
 	b.hasCurrentStatus = status != ""
 	b.statusMu.Unlock()
@@ -584,6 +614,24 @@ func (b *Broker) CurrentStatus() (StatusData, bool) {
 	b.statusMu.RLock()
 	defer b.statusMu.RUnlock()
 	return b.currentStatus, b.hasCurrentStatus
+}
+
+func (b *Broker) PushActivity(activity string) {
+	b.activityMu.Lock()
+	if b.hasCurrentActivity && b.currentActivity.Activity == activity {
+		b.activityMu.Unlock()
+		return
+	}
+	b.currentActivity = ActivityData{Activity: activity}
+	b.hasCurrentActivity = activity != ""
+	b.activityMu.Unlock()
+	b.enqueue(EventActivity, ActivityData{Activity: activity})
+}
+
+func (b *Broker) CurrentActivity() (ActivityData, bool) {
+	b.activityMu.RLock()
+	defer b.activityMu.RUnlock()
+	return b.currentActivity, b.hasCurrentActivity
 }
 
 // ─── Tool calls ───
