@@ -37,3 +37,11 @@ func TestFormatStartCommandResult(t *testing.T) {
 		t.Fatalf("expected Failed, got %q", got)
 	}
 }
+
+func TestClassifyToolGUICronToolsAreNotSuppressed(t *testing.T) {
+	for _, name := range []string{"cron_create", "cron_delete", "cron_list"} {
+		if got := classifyToolGUI(name); got == tcSuppress {
+			t.Fatalf("expected %s to render results, got tcSuppress", name)
+		}
+	}
+}

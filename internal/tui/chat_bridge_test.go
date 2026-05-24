@@ -43,3 +43,34 @@ func TestSuppressToolResultFormatsTaskSummary(t *testing.T) {
 		t.Fatalf("unexpected task summary: %q", got)
 	}
 }
+
+func TestSuppressToolResultFormatsCronCreateSummary(t *testing.T) {
+	got := suppressToolResult(
+		"cron_create",
+		`{"cron":"*/5 * * * *","prompt":"check status"}`,
+		`{"ID":"job-1","CronExpr":"*/5 * * * *","Prompt":"check status","Recurring":true,"NextFire":"2026-05-24T17:30:00+08:00"}`,
+		false,
+	)
+	if got != "Scheduled */5 * * * * — job-1" {
+		t.Fatalf("unexpected cron_create summary: %q", got)
+	}
+}
+
+func TestSuppressToolResultFormatsCronDeleteSummary(t *testing.T) {
+	got := suppressToolResult("cron_delete", `{"jobId":"job-1"}`, `Job job-1 deleted`, false)
+	if got != "Deleted job-1" {
+		t.Fatalf("unexpected cron_delete summary: %q", got)
+	}
+}
+
+func TestSuppressToolResultFormatsCronListSummary(t *testing.T) {
+	got := suppressToolResult(
+		"cron_list",
+		`{}`,
+		"- job-1 [recurring] */5 * * * * next=2026-05-24T17:30:00+08:00\n- job-2 [one-shot] 0 9 * * * next=2026-05-25T09:00:00+08:00\n",
+		false,
+	)
+	if got != "2 scheduled jobs" {
+		t.Fatalf("unexpected cron_list summary: %q", got)
+	}
+}

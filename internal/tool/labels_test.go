@@ -479,6 +479,60 @@ func TestDescribeTaskListResult(t *testing.T) {
 	}
 }
 
+func TestDescribeToolResultCronCreate(t *testing.T) {
+	present, ok := DescribeToolResult(
+		"cron_create",
+		`{"cron":"*/5 * * * *","prompt":"check status"}`,
+		`{"ID":"job-1","CronExpr":"*/5 * * * *","Prompt":"check status","Recurring":true,"NextFire":"2026-05-24T17:30:00+08:00"}`,
+		false,
+	)
+	if !ok {
+		t.Fatal("expected cron result presentation")
+	}
+	if present.Summary != "Scheduled */5 * * * * — job-1" {
+		t.Fatalf("unexpected summary: %q", present.Summary)
+	}
+	if present.PayloadMode != "cron_job" {
+		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
+	}
+	if want := "Prompt: check status"; !strings.Contains(present.Payload, want) {
+		t.Fatalf("payload %q missing %q", present.Payload, want)
+	}
+}
+
+func TestDescribeToolResultCronDelete(t *testing.T) {
+	present, ok := DescribeToolResult(
+		"cron_delete",
+		`{"jobId":"job-1"}`,
+		`Job job-1 deleted`,
+		false,
+	)
+	if !ok {
+		t.Fatal("expected cron_delete result presentation")
+	}
+	if present.Summary != "Deleted job-1" {
+		t.Fatalf("unexpected summary: %q", present.Summary)
+	}
+}
+
+func TestDescribeToolResultCronList(t *testing.T) {
+	present, ok := DescribeToolResult(
+		"cron_list",
+		`{}`,
+		"- job-1 [recurring] */5 * * * * next=2026-05-24T17:30:00+08:00\n- job-2 [one-shot] 0 9 * * * next=2026-05-25T09:00:00+08:00\n",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected cron_list result presentation")
+	}
+	if present.Summary != "2 scheduled jobs" {
+		t.Fatalf("unexpected summary: %q", present.Summary)
+	}
+	if present.PayloadMode != "cron_list" {
+		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
+	}
+}
+
 func TestStartCommandResultText(t *testing.T) {
 	tests := []struct {
 		name    string

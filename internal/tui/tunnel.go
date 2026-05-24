@@ -921,7 +921,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 			))
 		case subagent.AgentEventToolResult:
 			flushText(false)
-			present, _ := toolpkg.DescribeTaskToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Result, ev.IsError)
+			present, _ := toolpkg.DescribeToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Result, ev.IsError)
 			delete(toolArgsByID, ev.ToolID)
 			out = append(out, snapshotEvent(
 				tunnel.EventSubagentToolResult,

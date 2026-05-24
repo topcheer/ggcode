@@ -287,12 +287,8 @@ func SwarmTaskCreateResultMarkdown(result string) string {
 	return description
 }
 
-// DescribeTaskToolResult returns shared summary/payload semantics for task_* tools.
-func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
-	if !isTaskTool(toolName) {
-		return ToolResultPresentation{}, false
-	}
-
+// DescribeToolResult returns shared summary/payload semantics for structured tool results.
+func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
 	trimmed := strings.TrimSpace(result)
 	if trimmed == "" {
 		return ToolResultPresentation{}, true
@@ -312,12 +308,32 @@ func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (Too
 		return describeTaskStopResult(rawArgs, trimmed), true
 	case "task_output":
 		return describeTaskOutputResult(rawArgs, trimmed), true
+	case "cron_create":
+		if pres, ok := describeCronCreateResult(trimmed); ok {
+			return pres, true
+		}
+	case "cron_delete":
+		return describeCronDeleteResult(trimmed), true
+	case "cron_list":
+		return describeCronListResult(trimmed), true
+	}
+
+	if !isTaskTool(toolName) && toolName != "cron_create" && toolName != "cron_delete" && toolName != "cron_list" {
+		return ToolResultPresentation{}, false
 	}
 
 	return ToolResultPresentation{
 		Summary: compactSingleLine(trimmed),
 		Payload: trimmed,
 	}, true
+}
+
+// DescribeTaskToolResult returns shared summary/payload semantics for task_* tools.
+func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
+	if !isTaskTool(toolName) {
+		return ToolResultPresentation{}, false
+	}
+	return DescribeToolResult(toolName, rawArgs, result, isError)
 }
 
 // TeamCreateResultText extracts the created team name from a team_create result.
@@ -347,6 +363,98 @@ func isTaskTool(toolName string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+type cronJobResultView struct {
+	ID        string `json:"ID"`
+	CronExpr  string `json:"CronExpr"`
+	Prompt    string `json:"Prompt"`
+	Recurring bool   `json:"Recurring"`
+	NextFire  string `json:"NextFire"`
+}
+
+func describeCronCreateResult(trimmed string) (ToolResultPresentation, bool) {
+	var job cronJobResultView
+	if err := json.Unmarshal([]byte(trimmed), &job); err != nil {
+		return ToolResultPresentation{}, false
+	}
+	job.ID = strings.TrimSpace(job.ID)
+	job.CronExpr = strings.TrimSpace(job.CronExpr)
+	job.Prompt = strings.TrimSpace(job.Prompt)
+	job.NextFire = strings.TrimSpace(job.NextFire)
+	if job.CronExpr == "" {
+		return ToolResultPresentation{}, false
+	}
+
+	summary := "Scheduled " + job.CronExpr
+	if !job.Recurring {
+		summary = "Scheduled one-shot " + job.CronExpr
+	}
+	if job.ID != "" {
+		summary += " — " + job.ID
+	}
+
+	var payload []string
+	if job.ID != "" {
+		payload = append(payload, "Job ID: "+job.ID)
+	}
+	payload = append(payload, "Cron: "+job.CronExpr)
+	if job.Recurring {
+		payload = append(payload, "Mode: recurring")
+	} else {
+		payload = append(payload, "Mode: one-shot")
+	}
+	if job.NextFire != "" {
+		payload = append(payload, "Next fire: "+job.NextFire)
+	}
+	if job.Prompt != "" {
+		payload = append(payload, "Prompt: "+job.Prompt)
+	}
+
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     strings.Join(payload, "\n"),
+		PayloadMode: "cron_job",
+	}, true
+}
+
+func describeCronDeleteResult(trimmed string) ToolResultPresentation {
+	if trimmed == "" {
+		return ToolResultPresentation{}
+	}
+	if strings.HasPrefix(trimmed, "Job ") && strings.HasSuffix(trimmed, " deleted") {
+		jobID := strings.TrimSuffix(strings.TrimPrefix(trimmed, "Job "), " deleted")
+		jobID = strings.TrimSpace(jobID)
+		if jobID != "" {
+			return ToolResultPresentation{Summary: "Deleted " + jobID}
+		}
+	}
+	return ToolResultPresentation{Summary: compactSingleLine(trimmed)}
+}
+
+func describeCronListResult(trimmed string) ToolResultPresentation {
+	if trimmed == "" {
+		return ToolResultPresentation{}
+	}
+	lines := strings.Split(trimmed, "\n")
+	count := 0
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			count++
+		}
+	}
+	if count == 0 {
+		return ToolResultPresentation{Summary: compactSingleLine(trimmed)}
+	}
+	summary := fmt.Sprintf("%d scheduled jobs", count)
+	if count == 1 {
+		summary = "1 scheduled job"
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     trimmed,
+		PayloadMode: "cron_list",
 	}
 }
 

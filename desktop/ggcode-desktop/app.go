@@ -472,7 +472,7 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 				))
 			case "tool_result":
 				flushText(false)
-				present, _ := tool.DescribeTaskToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Content, ev.IsError)
+				present, _ := tool.DescribeToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Content, ev.IsError)
 				delete(toolArgsByID, ev.ToolID)
 				out = append(out, desktopSnapshotEvent(
 					tunnel.EventSubagentToolResult,

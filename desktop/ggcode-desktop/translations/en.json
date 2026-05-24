@@ -1,6 +1,7 @@
 {
   "status.ready": "Ready",
   "status.thinking": "Thinking...",
+  "cron.firing": "⏰ Cron job triggered",
   "status.loading": "Loading...",
   "status.failed": "Failed",
   "status.establishing_tunnel": "Establishing tunnel...",

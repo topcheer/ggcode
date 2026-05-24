@@ -800,7 +800,7 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string, isError boo
 	if formatted == "" {
 		return
 	}
-	if sections := cv.taskToolResultSections(ref.toolName, ref.rawArgs, result, isError); len(sections) > 0 {
+	if sections := cv.structuredToolResultSections(ref.toolName, ref.rawArgs, result, isError); len(sections) > 0 {
 		for _, section := range sections {
 			ref.body.Add(section)
 		}
@@ -950,7 +950,6 @@ func classifyToolGUI(name string) toolClass {
 	case "save_memory", "config", "skill",
 		"enter_plan_mode", "enter_worktree", "exit_worktree",
 		"task_create", "task_get", "task_update", "task_list", "task_stop",
-		"cron_create", "cron_delete", "cron_list",
 		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource":
 		return tcSuppress
 	case "ask_user":
@@ -1119,7 +1118,7 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	if msg.Content == "" {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
-	if sections := cv.taskToolResultSections(msg.ToolName, msg.ToolRaw, msg.Content, msg.IsError); len(sections) > 0 {
+	if sections := cv.structuredToolResultSections(msg.ToolName, msg.ToolRaw, msg.Content, msg.IsError); len(sections) > 0 {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(append([]fyne.CanvasObject{header}, sections...)...))
 	}
 
@@ -1138,8 +1137,8 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
 }
 
-func (cv *ChatView) taskToolResultSections(toolName, rawArgs, result string, isError bool) []fyne.CanvasObject {
-	present, ok := tool.DescribeTaskToolResult(toolName, rawArgs, result, isError)
+func (cv *ChatView) structuredToolResultSections(toolName, rawArgs, result string, isError bool) []fyne.CanvasObject {
+	present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError)
 	if !ok {
 		return nil
 	}
