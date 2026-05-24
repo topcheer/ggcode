@@ -211,7 +211,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			status = chat.StatusError
 		}
 		m.chatUpdateToolStatus(id, status)
-		m.setToolResult(item, ts.Result)
+		m.setToolResult(item, ts.Result, ts.IsError)
 		return
 	}
 
@@ -268,16 +268,16 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			Lang:        string(m.currentLanguage()),
 		}
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
-		result := suppressToolResult(ts.ToolName, ts.Result, ts.IsError)
-		m.setToolResult(item, result)
+		result := suppressToolResult(ts.ToolName, ts.RawArgs, ts.Result, ts.IsError)
+		m.setToolResult(item, result, ts.IsError)
 		m.chatList.Append(item)
 		return
 	}
 
 	// Update existing item
 	m.chatUpdateToolStatus(id, status)
-	result := suppressToolResult(ts.ToolName, ts.Result, ts.IsError)
-	m.setToolResult(existing, result)
+	result := suppressToolResult(ts.ToolName, ts.RawArgs, ts.Result, ts.IsError)
+	m.setToolResult(existing, result, ts.IsError)
 }
 
 // chatUpdateToolStatus updates the status of a tool item.
@@ -295,15 +295,15 @@ func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
 }
 
 // setToolResult sets the result on the appropriate tool item type.
-func (m *Model) setToolResult(item chat.Item, result string) {
+func (m *Model) setToolResult(item chat.Item, result string, isError bool) {
 	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
-		setter.SetResult(result, false)
+		setter.SetResult(result, isError)
 	}
 }
 
 // suppressToolResult returns empty string for tools whose result body should
 // not be rendered inline in the TUI chat list.
-func suppressToolResult(toolName, result string, isError bool) string {
+func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 	switch toolName {
 	case "web_fetch", "web_search":
 		return ""
@@ -324,6 +324,10 @@ func suppressToolResult(toolName, result string, isError bool) string {
 		return formatTeammateSpawnResult(result)
 	case "swarm_task_create":
 		return tool.SwarmTaskCreateResultMarkdown(result)
+	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
+		if present, ok := tool.DescribeTaskToolResult(toolName, rawArgs, result, isError); ok {
+			return present.Summary
+		}
 	}
 	return result
 }

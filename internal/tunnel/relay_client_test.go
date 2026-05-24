@@ -232,3 +232,31 @@ func TestRelayClientSendWaitsForBufferSpace(t *testing.T) {
 		t.Fatal("Send did not resume after buffer space was freed")
 	}
 }
+
+func TestRelayClientPendingMessagesTakePriorityOverSendChannel(t *testing.T) {
+	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+
+	rc.sendCh <- []byte("queued")
+	rc.pushPendingFront([]byte("retry"))
+
+	first, ok := rc.popPendingFront()
+	if !ok {
+		t.Fatal("expected pending retry message")
+	}
+	if string(first) != "retry" {
+		t.Fatalf("pending retry = %q, want retry", string(first))
+	}
+
+	select {
+	case next := <-rc.sendCh:
+		if string(next) != "queued" {
+			t.Fatalf("queued message = %q, want queued", string(next))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued message")
+	}
+}

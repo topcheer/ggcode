@@ -151,18 +151,27 @@ class ToolResultData {
   final String toolId;
   final String toolName;
   final String result;
+  final String summary;
+  final String payload;
+  final String payloadMode;
   final bool isError;
 
   ToolResultData(
       {required this.toolId,
       required this.toolName,
       required this.result,
+      this.summary = '',
+      this.payload = '',
+      this.payloadMode = '',
       required this.isError});
 
   factory ToolResultData.fromJson(Map<String, dynamic> d) => ToolResultData(
         toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         result: d['result'] as String? ?? '',
+        summary: d['summary'] as String? ?? '',
+        payload: d['payload'] as String? ?? '',
+        payloadMode: d['payload_mode'] as String? ?? '',
         isError: d['is_error'] as bool? ?? false,
       );
 }
@@ -436,6 +445,9 @@ class SubagentToolResultData {
   final String toolId;
   final String toolName;
   final String result;
+  final String summary;
+  final String payload;
+  final String payloadMode;
   final bool isError;
 
   SubagentToolResultData({
@@ -443,6 +455,9 @@ class SubagentToolResultData {
     required this.toolId,
     required this.toolName,
     required this.result,
+    this.summary = '',
+    this.payload = '',
+    this.payloadMode = '',
     this.isError = false,
   });
 
@@ -452,6 +467,9 @@ class SubagentToolResultData {
         toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         result: d['result'] as String? ?? '',
+        summary: d['summary'] as String? ?? '',
+        payload: d['payload'] as String? ?? '',
+        payloadMode: d['payload_mode'] as String? ?? '',
         isError: d['is_error'] as bool? ?? false,
       );
 }

@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/tool"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -429,6 +430,7 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 			textID = "tm-" + panel.ID
 		}
 		textBuf := strings.Builder{}
+		toolArgsByID := make(map[string]string)
 		flushText := func(done bool) {
 			if textBuf.Len() == 0 {
 				return
@@ -444,6 +446,9 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 			switch ev.Type {
 			case "tool_call":
 				flushText(false)
+				if ev.ToolID != "" {
+					toolArgsByID[ev.ToolID] = ev.ToolArgs
+				}
 				detail := ev.Content
 				if detail == "" {
 					detail = toolArgSummary(ev.ToolName, ev.ToolArgs)
@@ -462,15 +467,20 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 				))
 			case "tool_result":
 				flushText(false)
+				present, _ := tool.DescribeTaskToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Content, ev.IsError)
+				delete(toolArgsByID, ev.ToolID)
 				out = append(out, desktopSnapshotEvent(
 					tunnel.EventSubagentToolResult,
 					panel.ID,
 					tunnel.SubagentToolResultData{
-						AgentID:  panel.ID,
-						ToolID:   ev.ToolID,
-						ToolName: ev.ToolName,
-						Result:   ev.Content,
-						IsError:  ev.IsError,
+						AgentID:     panel.ID,
+						ToolID:      ev.ToolID,
+						ToolName:    ev.ToolName,
+						Result:      ev.Content,
+						Summary:     present.Summary,
+						Payload:     present.Payload,
+						PayloadMode: present.PayloadMode,
+						IsError:     ev.IsError,
 					},
 				))
 			default:

@@ -54,6 +54,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   static const _resumeClientIdKey = 'ggcode_tunnel_client_id';
   static const _resumeSessionIdKey = 'ggcode_tunnel_session_id';
   static const _resumeEventIdKey = 'ggcode_tunnel_last_event_id';
+  static const _defaultReplayWatchdogTimeout = Duration(seconds: 2);
+  static const _defaultReplayRetryBackoffs = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+  ];
+  static const _defaultReplayFallbackTimeout = Duration(seconds: 4);
 
   String _clientId = '';
   String _sessionId = '';
@@ -63,10 +70,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       SplayTreeMap<int, proto.WsMessage>();
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
+  Timer? _replayWatchdogTimer;
+  int _replayRetryCount = 0;
+  bool _replayFullHistoryRequested = false;
+  Duration _replayWatchdogTimeout = _defaultReplayWatchdogTimeout;
+  List<Duration> _replayRetryBackoffs =
+      List<Duration>.from(_defaultReplayRetryBackoffs);
+  Duration _replayFallbackTimeout = _defaultReplayFallbackTimeout;
 
   @override
-  TunnelConnectionState build() =>
-      TunnelConnectionState(status: ConnectionStatus.disconnected);
+  TunnelConnectionState build() {
+    ref.onDispose(_cancelReplayWatchdog);
+    return TunnelConnectionState(status: ConnectionStatus.disconnected);
+  }
 
   String get currentSessionId => _sessionId;
   String get lastAppliedEventId => _lastAppliedEventId;
@@ -111,6 +127,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       service!.dispose();
       service = null;
     }
+    _resetReplayRecoveryState();
 
     state = state.copyWith(
         status: ConnectionStatus.connecting, url: url, error: null);
@@ -154,6 +171,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _lastAppliedEventId = '';
       _awaitingReplay = false;
       _pendingReplayEvents.clear();
+      _resetReplayRecoveryState();
       _recentEventIds.clear();
       _recentEventSet.clear();
     }
@@ -213,6 +231,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void disconnect() {
     service?.disconnect();
+    _resetReplayRecoveryState();
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
@@ -225,6 +244,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _awaitingReplay = false;
     _pendingReplayEvents.clear();
+    _resetReplayRecoveryState();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
@@ -276,12 +296,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
         _awaitingReplay = _pendingReplayEvents.isNotEmpty;
+        _updateReplayWatchdog();
         if (resumeMode == 'full_history') {
           chatNotifier.clearMessages();
           ref.read(subagentProvider.notifier).clear();
           _lastAppliedEventId = '';
           _pendingReplayEvents.clear();
           _awaitingReplay = false;
+          _resetReplayRecoveryState();
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
@@ -296,6 +318,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'resume_miss':
         _pendingReplayEvents.clear();
         _awaitingReplay = false;
+        _resetReplayRecoveryState();
         break;
 
       case 'language_change':
@@ -323,6 +346,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _lastAppliedEventId = '';
         _pendingReplayEvents.clear();
         _awaitingReplay = false;
+        _resetReplayRecoveryState();
         _recentEventIds.clear();
         _recentEventSet.clear();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
@@ -635,6 +659,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             toolId: data.toolId,
             toolName: data.toolName,
             result: data.result,
+            summary: data.summary,
+            payload: data.payload,
+            payloadMode: data.payloadMode,
             isError: data.isError,
           );
         }
@@ -743,6 +770,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       ref.read(subagentProvider.notifier).clear();
       _pendingReplayEvents.clear();
       _awaitingReplay = false;
+      _resetReplayRecoveryState();
       _recentEventIds.clear();
       _recentEventSet.clear();
       _lastAppliedEventId = '';
@@ -770,12 +798,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       if (next > last + 1) {
         _pendingReplayEvents[next] = msg;
         if (!_awaitingReplay) {
-          _awaitingReplay = true;
-          service?.requestReplayFrom(
-            clientId: _clientId,
-            sessionId: _sessionId,
-            lastEventId: _lastAppliedEventId,
-          );
+          _beginReplayRecovery();
+        } else {
+          _updateReplayWatchdog();
         }
         return false;
       }
@@ -795,7 +820,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           .updateLiveCursor(_sessionId, _lastAppliedEventId));
       return;
     }
-    _awaitingReplay = false;
     _lastAppliedEventId = eventId;
     final ordinal = _parseEventOrdinal(eventId);
     if (ordinal != null) {
@@ -834,6 +858,88 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _dispatchMessage(pending);
     }
     _awaitingReplay = _pendingReplayEvents.isNotEmpty;
+    _updateReplayWatchdog();
+  }
+
+  void _beginReplayRecovery() {
+    _awaitingReplay = true;
+    _replayRetryCount = 0;
+    _replayFullHistoryRequested = false;
+    service?.requestReplayFrom(
+      clientId: _clientId,
+      sessionId: _sessionId,
+      lastEventId: _lastAppliedEventId,
+    );
+    _updateReplayWatchdog();
+  }
+
+  void _cancelReplayWatchdog() {
+    _replayWatchdogTimer?.cancel();
+    _replayWatchdogTimer = null;
+  }
+
+  void _resetReplayRecoveryState() {
+    _cancelReplayWatchdog();
+    _replayRetryCount = 0;
+    _replayFullHistoryRequested = false;
+  }
+
+  void _updateReplayWatchdog() {
+    if (!_awaitingReplay || _pendingReplayEvents.isEmpty) {
+      _awaitingReplay = false;
+      _resetReplayRecoveryState();
+      return;
+    }
+    if (_replayWatchdogTimer != null && _replayWatchdogTimer!.isActive) {
+      return;
+    }
+    final delay = _replayFullHistoryRequested
+        ? _replayFallbackTimeout
+        : (_replayRetryCount == 0
+            ? _replayWatchdogTimeout
+            : _replayRetryBackoffs[(_replayRetryCount - 1)
+                .clamp(0, _replayRetryBackoffs.length - 1)]);
+    _replayWatchdogTimer = Timer(delay, _handleReplayWatchdogTimeout);
+  }
+
+  void _handleReplayWatchdogTimeout() {
+    _replayWatchdogTimer = null;
+    if (!_awaitingReplay || _pendingReplayEvents.isEmpty) {
+      _resetReplayRecoveryState();
+      return;
+    }
+
+    if (!_replayFullHistoryRequested) {
+      if (_replayRetryCount < _replayRetryBackoffs.length) {
+        _replayRetryCount++;
+        service?.requestReplayFrom(
+          clientId: _clientId,
+          sessionId: _sessionId,
+          lastEventId: _lastAppliedEventId,
+        );
+        _updateReplayWatchdog();
+        return;
+      }
+
+      _replayFullHistoryRequested = true;
+      service?.sendResumeHello(
+        clientId: _clientId,
+        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+      );
+      _updateReplayWatchdog();
+      return;
+    }
+
+    final url = state.url;
+    _pendingReplayEvents.clear();
+    _awaitingReplay = false;
+    _lastAppliedEventId = '';
+    _recentEventIds.clear();
+    _recentEventSet.clear();
+    _resetReplayRecoveryState();
+    if (url != null && url.isNotEmpty) {
+      unawaited(connect(url, clearState: false));
+    }
   }
 
   bool _hasEmptyUiProjection() {
@@ -903,6 +1009,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return _restoreProjectionFromCache(adoptCursor: adoptCursor);
   }
 
+  void configureReplayRecoveryForTest({
+    Duration? watchdogTimeout,
+    List<Duration>? retryBackoffs,
+    Duration? fallbackTimeout,
+  }) {
+    _replayWatchdogTimeout = watchdogTimeout ?? _defaultReplayWatchdogTimeout;
+    _replayRetryBackoffs = retryBackoffs != null
+        ? List<Duration>.from(retryBackoffs)
+        : List<Duration>.from(_defaultReplayRetryBackoffs);
+    _replayFallbackTimeout = fallbackTimeout ?? _defaultReplayFallbackTimeout;
+    _resetReplayRecoveryState();
+  }
+
   SubagentInfo _upsertSubagent({
     required String agentId,
     String? name,
@@ -969,6 +1088,8 @@ class ChatMessage {
   final String? toolDisplayName;
   final String? toolDetail;
   final String? toolResult;
+  final String? toolPayload;
+  final String? toolPayloadMode;
   final bool toolCompleted;
   final bool isToolError;
   final DateTime time;
@@ -987,6 +1108,8 @@ class ChatMessage {
     this.toolDisplayName,
     this.toolDetail,
     this.toolResult,
+    this.toolPayload,
+    this.toolPayloadMode,
     this.toolCompleted = false,
     this.isToolError = false,
     required this.time,
@@ -998,6 +1121,8 @@ class ChatMessage {
     String? kind,
     bool? streaming,
     String? toolResult,
+    String? toolPayload,
+    String? toolPayloadMode,
     bool? toolCompleted,
     bool? isToolError,
   }) =>
@@ -1015,6 +1140,8 @@ class ChatMessage {
         toolDisplayName: toolDisplayName,
         toolDetail: toolDetail,
         toolResult: toolResult ?? this.toolResult,
+        toolPayload: toolPayload ?? this.toolPayload,
+        toolPayloadMode: toolPayloadMode ?? this.toolPayloadMode,
         toolCompleted: toolCompleted ?? this.toolCompleted,
         isToolError: isToolError ?? this.isToolError,
         time: time,
@@ -1034,6 +1161,8 @@ class ChatMessage {
         'tool_display_name': toolDisplayName,
         'tool_detail': toolDetail,
         'tool_result': toolResult,
+        'tool_payload': toolPayload,
+        'tool_payload_mode': toolPayloadMode,
         'tool_completed': toolCompleted,
         'is_tool_error': isToolError,
         'time': time.toIso8601String(),
@@ -1053,6 +1182,8 @@ class ChatMessage {
         toolDisplayName: json['tool_display_name'] as String?,
         toolDetail: json['tool_detail'] as String?,
         toolResult: json['tool_result'] as String?,
+        toolPayload: json['tool_payload'] as String?,
+        toolPayloadMode: json['tool_payload_mode'] as String?,
         toolCompleted: json['tool_completed'] as bool? ?? false,
         isToolError: json['is_tool_error'] as bool? ?? false,
         time:
@@ -1232,6 +1363,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     required String toolId,
     required String toolName,
     required String result,
+    String summary = '',
+    String payload = '',
+    String payloadMode = '',
     required bool isError,
   }) {
     // Match by toolId (exact), fallback to agentId+toolName
@@ -1256,7 +1390,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           if (i == idx)
             msg.copyWith(
               toolResult:
-                  _formatToolResultForDisplay(toolName, result, isError),
+                  _resolvedToolSummary(toolName, result, summary, isError),
+              toolPayload: _resolvedToolPayload(
+                toolName,
+                result,
+                payload,
+                payloadMode,
+              ),
+              toolPayloadMode: payloadMode,
               toolCompleted: true,
               isToolError: isError,
             )
@@ -1301,11 +1442,19 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult: _formatToolResultForDisplay(
+              toolResult: _resolvedToolSummary(
                 data.toolName,
                 data.result,
+                data.summary,
                 data.isError,
               ),
+              toolPayload: _resolvedToolPayload(
+                data.toolName,
+                data.result,
+                data.payload,
+                data.payloadMode,
+              ),
+              toolPayloadMode: data.payloadMode,
               toolCompleted: true,
               isToolError: data.isError,
             )
@@ -1332,6 +1481,33 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       default:
         return result;
     }
+  }
+
+  String _resolvedToolSummary(
+    String toolName,
+    String result,
+    String summary,
+    bool isError,
+  ) {
+    if (summary.isNotEmpty) {
+      return summary;
+    }
+    return _formatToolResultForDisplay(toolName, result, isError);
+  }
+
+  String? _resolvedToolPayload(
+    String toolName,
+    String result,
+    String payload,
+    String payloadMode,
+  ) {
+    if (payload.isNotEmpty) {
+      return payload;
+    }
+    if (payloadMode.isNotEmpty) {
+      return '';
+    }
+    return null;
   }
 
   String _formatStartCommandResult(String result, bool isError) {

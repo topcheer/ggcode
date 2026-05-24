@@ -176,10 +176,13 @@ type ToolCallData struct {
 
 // ToolResultData carries a tool result.
 type ToolResultData struct {
-	ToolID   string `json:"tool_id"`
-	ToolName string `json:"tool_name"`
-	Result   string `json:"result,omitempty"`
-	IsError  bool   `json:"is_error,omitempty"`
+	ToolID      string `json:"tool_id"`
+	ToolName    string `json:"tool_name"`
+	Result      string `json:"result,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	Payload     string `json:"payload,omitempty"`
+	PayloadMode string `json:"payload_mode,omitempty"`
+	IsError     bool   `json:"is_error,omitempty"`
 }
 
 // ApprovalRequestData carries an approval request to the mobile client.
@@ -293,11 +296,14 @@ type SubagentToolCallData struct {
 
 // SubagentToolResultData carries tool result from a sub-agent.
 type SubagentToolResultData struct {
-	AgentID  string `json:"agent_id"`
-	ToolID   string `json:"tool_id"`
-	ToolName string `json:"tool_name"`
-	Result   string `json:"result"`
-	IsError  bool   `json:"is_error"`
+	AgentID     string `json:"agent_id"`
+	ToolID      string `json:"tool_id"`
+	ToolName    string `json:"tool_name"`
+	Result      string `json:"result"`
+	Summary     string `json:"summary,omitempty"`
+	Payload     string `json:"payload,omitempty"`
+	PayloadMode string `json:"payload_mode,omitempty"`
+	IsError     bool   `json:"is_error"`
 }
 
 // SubagentCompleteData notifies that a sub-agent has finished.

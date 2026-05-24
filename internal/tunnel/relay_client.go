@@ -24,6 +24,8 @@ type RelayClient struct {
 	conn           *websocket.Conn
 	connMu         sync.Mutex
 	sendCh         chan []byte
+	pendingMu      sync.Mutex
+	pendingFront   [][]byte
 	closed         bool
 	closeMu        sync.Mutex
 	stopCh         chan struct{}
@@ -169,6 +171,13 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	defer ticker.Stop()
 
 	for {
+		if msg, ok := rc.popPendingFront(); ok {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				rc.pushPendingFront(msg)
+				return
+			}
+			continue
+		}
 		select {
 		case msg, ok := <-rc.sendCh:
 			if !ok {
@@ -176,6 +185,7 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 			}
 			err := conn.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
+				rc.pushPendingFront(msg)
 				return
 			}
 		case <-ticker.C:
@@ -192,6 +202,7 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 					}
 					err := conn.WriteMessage(websocket.TextMessage, msg)
 					if err != nil {
+						rc.pushPendingFront(msg)
 						return
 					}
 				default:
@@ -207,6 +218,26 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 			return
 		}
 	}
+}
+
+func (rc *RelayClient) pushPendingFront(msg []byte) {
+	if len(msg) == 0 {
+		return
+	}
+	rc.pendingMu.Lock()
+	defer rc.pendingMu.Unlock()
+	rc.pendingFront = append([][]byte{append([]byte(nil), msg...)}, rc.pendingFront...)
+}
+
+func (rc *RelayClient) popPendingFront() ([]byte, bool) {
+	rc.pendingMu.Lock()
+	defer rc.pendingMu.Unlock()
+	if len(rc.pendingFront) == 0 {
+		return nil, false
+	}
+	msg := rc.pendingFront[0]
+	rc.pendingFront = rc.pendingFront[1:]
+	return msg, true
 }
 
 func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {

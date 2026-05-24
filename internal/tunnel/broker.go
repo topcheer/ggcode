@@ -55,6 +55,10 @@ type Broker struct {
 	currentStatus    StatusData
 	hasCurrentStatus bool
 
+	toolMu           sync.Mutex
+	toolArgs         map[string]string
+	subagentToolArgs map[string]string
+
 	// Text batching
 	textMu     sync.Mutex
 	textBuf    map[string]*textEntry // msgID → unflushed text entry
@@ -78,14 +82,16 @@ type SnapshotEvent struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:     sess,
-		sessionID:   newTunnelSessionID(),
-		outDone:     make(chan struct{}),
-		textBuf:     make(map[string]*textEntry),
-		activeText:  make(map[string]*textEntry),
-		textTick:    time.NewTicker(300 * time.Millisecond),
-		textDone:    make(chan struct{}),
-		sendWaiters: make(map[string]chan struct{}),
+		session:          sess,
+		sessionID:        newTunnelSessionID(),
+		outDone:          make(chan struct{}),
+		textBuf:          make(map[string]*textEntry),
+		activeText:       make(map[string]*textEntry),
+		textTick:         time.NewTicker(300 * time.Millisecond),
+		textDone:         make(chan struct{}),
+		sendWaiters:      make(map[string]chan struct{}),
+		toolArgs:         make(map[string]string),
+		subagentToolArgs: make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
@@ -583,6 +589,14 @@ func (b *Broker) CurrentStatus() (StatusData, bool) {
 // ─── Tool calls ───
 
 func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string) {
+	if toolID != "" {
+		b.toolMu.Lock()
+		if b.toolArgs == nil {
+			b.toolArgs = make(map[string]string)
+		}
+		b.toolArgs[toolID] = args
+		b.toolMu.Unlock()
+	}
 	b.enqueueWithStream(EventToolCall, toolID, ToolCallData{
 		ToolID:      toolID,
 		ToolName:    toolName,
@@ -593,7 +607,20 @@ func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string
 }
 
 func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
-	b.enqueueWithStream(EventToolResult, toolID, ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError})
+	rawArgs := ""
+	if toolID != "" {
+		b.toolMu.Lock()
+		rawArgs = b.toolArgs[toolID]
+		delete(b.toolArgs, toolID)
+		b.toolMu.Unlock()
+	}
+	payload := ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError}
+	if present, ok := toolpkg.DescribeTaskToolResult(toolName, rawArgs, result, isError); ok {
+		payload.Summary = present.Summary
+		payload.Payload = present.Payload
+		payload.PayloadMode = present.PayloadMode
+	}
+	b.enqueueWithStream(EventToolResult, toolID, payload)
 }
 
 // ─── Approval ───
@@ -658,6 +685,12 @@ func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, ar
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
 	}
+	b.toolMu.Lock()
+	if b.subagentToolArgs == nil {
+		b.subagentToolArgs = make(map[string]string)
+	}
+	b.subagentToolArgs[fmt.Sprintf("%s:%s", agentID, streamID)] = args
+	b.toolMu.Unlock()
 	b.enqueueWithStream(EventSubagentToolCall, streamID, SubagentToolCallData{
 		AgentID:     agentID,
 		ToolID:      toolID,
@@ -673,8 +706,23 @@ func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
 	}
-	b.enqueueWithStream(EventSubagentToolResult, streamID, SubagentToolResultData{
+	rawArgs := ""
+	key := fmt.Sprintf("%s:%s", agentID, streamID)
+	b.toolMu.Lock()
+	rawArgs = b.subagentToolArgs[key]
+	delete(b.subagentToolArgs, key)
+	b.toolMu.Unlock()
+	payload := SubagentToolResultData{
 		AgentID: agentID, ToolID: toolID, ToolName: toolName, Result: result, IsError: isError,
+	}
+	if present, ok := toolpkg.DescribeTaskToolResult(toolName, rawArgs, result, isError); ok {
+		payload.Summary = present.Summary
+		payload.Payload = present.Payload
+		payload.PayloadMode = present.PayloadMode
+	}
+	b.enqueueWithStream(EventSubagentToolResult, streamID, SubagentToolResultData{
+		AgentID: payload.AgentID, ToolID: payload.ToolID, ToolName: payload.ToolName, Result: payload.Result,
+		Summary: payload.Summary, Payload: payload.Payload, PayloadMode: payload.PayloadMode, IsError: payload.IsError,
 	})
 }
 
