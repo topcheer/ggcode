@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -630,6 +631,44 @@ func TestDrainPendingInterrupt_WithPending(t *testing.T) {
 	}
 	if m.pendingSubmissionCount() != 0 {
 		t.Fatalf("expected pending cleared, got %d", m.pendingSubmissionCount())
+	}
+}
+
+func TestDrainPendingInterrupt_HiddenPendingStaysHidden(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.pending.enqueueHidden("scheduled hidden prompt", nil)
+
+	got := m.drainPendingInterrupt(1)
+	if got != "scheduled hidden prompt" {
+		t.Fatalf("expected hidden prompt, got %q", got)
+	}
+	if len(m.session.Messages) != 0 {
+		t.Fatalf("expected hidden interrupt to skip session user message, got %d messages", len(m.session.Messages))
+	}
+	for _, ev := range m.session.TunnelEvents {
+		if ev.Type == tunnel.EventUserMessage {
+			t.Fatalf("expected hidden interrupt to skip tunnel user_message, got %+v", ev)
+		}
+	}
+}
+
+func TestPendingQueueConsumeDetailedKeepsHiddenEntriesSeparate(t *testing.T) {
+	var q pendingQueue
+	q.enqueue("visible one")
+	q.enqueueHidden("hidden cron", nil)
+	q.enqueue("visible two")
+
+	text, hidden, override := q.consumeDetailed()
+	if text != "visible one" || hidden || override != nil {
+		t.Fatalf("unexpected first consume: text=%q hidden=%v override=%+v", text, hidden, override)
+	}
+	text, hidden, override = q.consumeDetailed()
+	if text != "hidden cron" || !hidden || override != nil {
+		t.Fatalf("unexpected second consume: text=%q hidden=%v override=%+v", text, hidden, override)
+	}
+	text, hidden, override = q.consumeDetailed()
+	if text != "visible two" || hidden || override != nil {
+		t.Fatalf("unexpected third consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
 }
 

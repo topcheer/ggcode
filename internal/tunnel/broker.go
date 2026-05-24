@@ -663,7 +663,7 @@ func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
 		b.toolMu.Unlock()
 	}
 	payload := ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError}
-	if present, ok := toolpkg.DescribeTaskToolResult(toolName, rawArgs, result, isError); ok {
+	if present, ok := toolpkg.DescribeToolResult(toolName, rawArgs, result, isError); ok {
 		payload.Summary = present.Summary
 		payload.Payload = present.Payload
 		payload.PayloadMode = present.PayloadMode
@@ -763,7 +763,7 @@ func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string
 	payload := SubagentToolResultData{
 		AgentID: agentID, ToolID: toolID, ToolName: toolName, Result: result, IsError: isError,
 	}
-	if present, ok := toolpkg.DescribeTaskToolResult(toolName, rawArgs, result, isError); ok {
+	if present, ok := toolpkg.DescribeToolResult(toolName, rawArgs, result, isError); ok {
 		payload.Summary = present.Summary
 		payload.Payload = present.Payload
 		payload.PayloadMode = present.PayloadMode

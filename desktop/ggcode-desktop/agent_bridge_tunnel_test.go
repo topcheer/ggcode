@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -202,5 +203,55 @@ func TestDesktopTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) 
 	}
 	if !desktopTunnelSnapshotMatches(latest, latest) {
 		t.Fatal("expected identical snapshots to match")
+	}
+}
+
+func TestAgentBridgeSetupAgentRegistersCronTools(t *testing.T) {
+	bridge := NewAgentBridge(&config.Config{}, nil, &config.ResolvedEndpoint{}, t.TempDir(), NewUIState())
+	bridge.currentSes = session.NewSession("", "", "")
+	if err := bridge.setupAgent(); err != nil {
+		t.Fatalf("setupAgent: %v", err)
+	}
+	for _, name := range []string{"cron_create", "cron_delete", "cron_list"} {
+		if _, ok := bridge.registry.Get(name); !ok {
+			t.Fatalf("expected %s to be registered", name)
+		}
+	}
+}
+
+func TestAgentBridgeHandleCronPromptWhileWorkingQueuesHidden(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	bridge.working = true
+
+	bridge.handleCronPrompt("check status")
+
+	if len(bridge.ui.ChatMsgs) != 1 || bridge.ui.ChatMsgs[0].Role != "system" {
+		t.Fatalf("expected cron system message in UI, got %+v", bridge.ui.ChatMsgs)
+	}
+	pending, ok := bridge.drainPending()
+	if !ok {
+		t.Fatal("expected hidden cron prompt to be queued")
+	}
+	if !pending.Hidden || pending.Text != "check status" {
+		t.Fatalf("unexpected pending entry: %+v", pending)
+	}
+}
+
+func TestAgentBridgeDrainPendingInterruptHiddenSkipsPersistence(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	bridge.sessionStore = store
+	bridge.currentSes = &session.Session{ID: "sess-hidden", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	bridge.QueueHiddenMessage("check status")
+
+	got := bridge.drainPendingInterrupt()
+	if got != "check status" {
+		t.Fatalf("unexpected drained text: %q", got)
+	}
+	if len(bridge.currentSes.Messages) != 0 {
+		t.Fatalf("expected hidden pending to skip persistence, got %d messages", len(bridge.currentSes.Messages))
 	}
 }

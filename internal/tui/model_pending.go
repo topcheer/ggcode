@@ -151,12 +151,14 @@ func (m *Model) restorePendingInput() {
 }
 
 func (m *Model) drainPendingInterrupt(runID int) string {
-	text := m.consumePendingSubmission()
+	text, hidden, _ := m.consumePendingSubmissionDetailed()
 	if text == "" {
 		return ""
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
-	m.appendUserMessage(text)
+	if !hidden {
+		m.appendUserMessage(text)
+	}
 	// Don't send agentInterruptMsg — the user already saw their input rendered
 	// in the conversation when it was queued. No extra "[delivered]" hint needed.
 	return text
@@ -233,24 +235,25 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {
 	if len(q.items) == 0 {
 		return "", false, nil
 	}
-	parts := make([]string, 0, len(q.items))
-	hidden := true
-	var override *tunnel.MessageData
-	for _, item := range q.items {
+
+	first := q.items[0]
+	if first.Hidden || first.TunnelOverride != nil {
+		q.items = q.items[1:]
+		return strings.TrimSpace(first.Text), true, cloneTunnelMessageData(first.TunnelOverride)
+	}
+
+	parts := []string{first.Text}
+	consumed := 1
+	for consumed < len(q.items) {
+		item := q.items[consumed]
+		if item.Hidden || item.TunnelOverride != nil {
+			break
+		}
 		parts = append(parts, item.Text)
-		if !item.Hidden {
-			hidden = false
-		}
-		if item.TunnelOverride != nil {
-			override = cloneTunnelMessageData(item.TunnelOverride)
-		}
+		consumed++
 	}
-	if !hidden {
-		override = nil
-	}
-	joined := strings.TrimSpace(strings.Join(parts, "\n\n"))
-	q.items = nil
-	return joined, hidden, override
+	q.items = q.items[consumed:]
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil
 }
 
 func stripImagePlaceholder(value, placeholder string) string {

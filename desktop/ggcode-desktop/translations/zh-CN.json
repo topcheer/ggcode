@@ -1,6 +1,7 @@
 {
   "status.ready": "就绪",
   "status.thinking": "思考中...",
+  "cron.firing": "⏰ 定时任务已触发",
   "status.loading": "加载中...",
   "status.failed": "失败",
   "status.establishing_tunnel": "正在建立隧道...",

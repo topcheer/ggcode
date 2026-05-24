@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -44,9 +45,8 @@ type AgentBridge struct {
 	cancelled bool
 	working   bool
 
-	pendingMu  sync.Mutex
-	pendingMsg string
-	hasPending bool
+	pendingMu   sync.Mutex
+	pendingMsgs []pendingMessage
 
 	startTime time.Time // when current agent loop started
 
@@ -83,6 +83,12 @@ type AgentBridge struct {
 	askUserRequestID  string
 	askUserRequest    tool.AskUserRequest
 	askUserDialog     dialog.Dialog
+	cronScheduler     *cron.Scheduler
+}
+
+type pendingMessage struct {
+	Text   string
+	Hidden bool
 }
 
 func (b *AgentBridge) currentTunnelBroker() *tunnel.Broker {
@@ -225,6 +231,15 @@ func (b *AgentBridge) setupAgent() error {
 	if err := tool.RegisterBuiltinTools(b.registry, nil, b.workingDir); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
+	if b.cronScheduler == nil {
+		b.cronScheduler = cron.NewScheduler(nil)
+	}
+	b.cronScheduler.SetEnqueue(func(prompt string) {
+		b.handleCronPrompt(prompt)
+	})
+	_ = b.registry.Register(tool.CronCreateTool{Scheduler: b.cronScheduler})
+	_ = b.registry.Register(tool.CronDeleteTool{Scheduler: b.cronScheduler})
+	_ = b.registry.Register(tool.CronListTool{Scheduler: b.cronScheduler})
 
 	mergedServers, _ := mcp.MergeStartupServers(b.workingDir, b.cfg.MCPServers)
 	mcpMgr := plugin.NewMCPManager(mergedServers, b.registry)
@@ -555,12 +570,21 @@ func (b *AgentBridge) setupAgent() error {
 
 func (b *AgentBridge) Send(userMsg string) error {
 	log.Printf("[agent-bridge] Send called: %q", userMsg)
-	return b.SendContent([]provider.ContentBlock{provider.TextBlock(userMsg)})
+	return b.sendContent([]provider.ContentBlock{provider.TextBlock(userMsg)}, true)
 }
 
 func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
+	return b.sendContent(content, true)
+}
+
+func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser bool) error {
 	if err := b.setupAgent(); err != nil {
 		return err
+	}
+	if b.agent != nil {
+		b.agent.SetInterruptionHandler(func() string {
+			return b.drainPendingInterrupt()
+		})
 	}
 
 	b.mu.Lock()
@@ -570,8 +594,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	b.cancel = cancel
 	b.mu.Unlock()
 
-	// Persist user message to disk immediately (incremental), same as TUI.
-	b.appendUserMessageContent(content)
+	// Persist visible user messages immediately (incremental), same as TUI.
+	if persistUser {
+		b.appendUserMessageContent(content)
+	}
 
 	go func() {
 		if broker := b.currentTunnelBroker(); broker != nil {
@@ -617,16 +643,20 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			}
 
 			// Check for queued message from user while busy.
-			if msg, ok := b.drainPending(); ok {
-				b.ui.AppendChat(ChatMessage{
-					Role:    "system",
-					Content: "Processing queued message...",
-					Time:    time.Now(),
-				})
-				if broker := b.currentTunnelBroker(); broker != nil {
-					broker.PushSystemMessage("Processing queued message...")
+			if pending, ok := b.drainPending(); ok {
+				if pending.Hidden {
+					_ = b.SendHiddenText(pending.Text)
+				} else {
+					b.ui.AppendChat(ChatMessage{
+						Role:    "system",
+						Content: "Processing queued message...",
+						Time:    time.Now(),
+					})
+					if broker := b.currentTunnelBroker(); broker != nil {
+						broker.PushSystemMessage("Processing queued message...")
+					}
+					_ = b.Send(pending.Text)
 				}
-				_ = b.Send(msg)
 			}
 		}()
 
@@ -783,8 +813,15 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			broker.PushActivity("")
 		}
 	}()
-
 	return nil
+}
+
+func (b *AgentBridge) SendHiddenText(text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	return b.sendContent([]provider.ContentBlock{provider.TextBlock(text)}, false)
 }
 
 // syncAgentPanels reads all sub-agents and updates UIState.
@@ -814,6 +851,9 @@ func (b *AgentBridge) Cancel() {
 
 func (b *AgentBridge) Close() {
 	b.Cancel()
+	if b.cronScheduler != nil {
+		b.cronScheduler.Shutdown()
+	}
 }
 
 func (b *AgentBridge) CurrentTunnelStatus() tunnel.StatusData {
@@ -857,6 +897,25 @@ func (b *AgentBridge) PushSystemMessageToMobile(text string) {
 	}
 }
 
+func (b *AgentBridge) handleCronPrompt(prompt string) {
+	sysMsg := t("cron.firing")
+	if strings.TrimSpace(sysMsg) == "" || sysMsg == "cron.firing" {
+		sysMsg = "⏰ Cron job triggered"
+	}
+	if b.ui != nil {
+		b.ui.AppendChat(ChatMessage{Role: "system", Content: sysMsg, Time: time.Now()})
+	}
+	b.PushSystemMessageToMobile(sysMsg)
+	if strings.TrimSpace(prompt) == "" {
+		return
+	}
+	if b.IsWorking() {
+		b.QueueHiddenMessage(prompt)
+		return
+	}
+	_ = b.SendHiddenText(prompt)
+}
+
 func (b *AgentBridge) PushErrorToMobile(text string) {
 	if broker := b.currentTunnelBroker(); broker != nil && strings.TrimSpace(text) != "" {
 		broker.PushError(text)
@@ -866,20 +925,37 @@ func (b *AgentBridge) PushErrorToMobile(text string) {
 // QueueMessage stores a user message to be sent after the current agent turn.
 func (b *AgentBridge) QueueMessage(msg string) {
 	b.pendingMu.Lock()
-	b.pendingMsg = msg
-	b.hasPending = true
+	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg})
 	b.pendingMu.Unlock()
 }
 
-// drainPending returns and clears any queued message.
-func (b *AgentBridge) drainPending() (string, bool) {
+func (b *AgentBridge) QueueHiddenMessage(msg string) {
 	b.pendingMu.Lock()
-	msg := b.pendingMsg
-	has := b.hasPending
-	b.pendingMsg = ""
-	b.hasPending = false
+	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg, Hidden: true})
 	b.pendingMu.Unlock()
-	return msg, has
+}
+
+// drainPending returns and clears the next queued message.
+func (b *AgentBridge) drainPending() (pendingMessage, bool) {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	if len(b.pendingMsgs) == 0 {
+		return pendingMessage{}, false
+	}
+	msg := b.pendingMsgs[0]
+	b.pendingMsgs = b.pendingMsgs[1:]
+	return msg, true
+}
+
+func (b *AgentBridge) drainPendingInterrupt() string {
+	pending, ok := b.drainPending()
+	if !ok {
+		return ""
+	}
+	if !pending.Hidden {
+		b.appendUserMessageContent([]provider.ContentBlock{provider.TextBlock(pending.Text)})
+	}
+	return strings.TrimSpace(pending.Text)
 }
 
 func (b *AgentBridge) IsWorking() bool {

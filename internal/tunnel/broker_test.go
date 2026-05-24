@@ -425,6 +425,35 @@ func TestBrokerPushTaskToolResultIncludesStructuredFields(t *testing.T) {
 	t.Fatal("expected structured tool_result event")
 }
 
+func TestBrokerPushCronCreateResultIncludesStructuredFields(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushToolCall("t-cron", "cron_create", "Schedule Job", `{"cron":"*/5 * * * *","prompt":"check status"}`, "*/5 * * * *")
+	b.PushToolResult("t-cron", "cron_create", `{"ID":"job-1","CronExpr":"*/5 * * * *","Prompt":"check status","Recurring":true,"NextFire":"2026-05-24T17:30:00+08:00"}`, false)
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	for _, m := range msgs {
+		if m.Type != EventToolResult {
+			continue
+		}
+		var td ToolResultData
+		json.Unmarshal(m.Data, &td)
+		if td.ToolID != "t-cron" {
+			continue
+		}
+		if td.Summary != "Scheduled */5 * * * * — job-1" {
+			t.Fatalf("unexpected summary: %+v", td)
+		}
+		if td.PayloadMode != "cron_job" || !strings.Contains(td.Payload, "Prompt: check status") {
+			t.Fatalf("unexpected payload: %+v", td)
+		}
+		return
+	}
+	t.Fatal("expected structured cron tool_result event")
+}
+
 func TestBrokerPushApprovalRequest(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
