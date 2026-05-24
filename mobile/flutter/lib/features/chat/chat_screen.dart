@@ -739,6 +739,8 @@ class _ToolMessageCardState extends State<_ToolMessageCard>
               if (hasResultBody)
                 _ToolResultCard(
                   result: widget.message.toolResult!,
+                  payload: widget.message.toolPayload,
+                  payloadMode: widget.message.toolPayloadMode,
                   toolName: widget.message.toolName,
                   isError: widget.message.isToolError,
                 ),
@@ -997,10 +999,14 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
 /// Collapsible tool result card. Default collapsed, tap to expand.
 class _ToolResultCard extends StatefulWidget {
   final String result;
+  final String? payload;
+  final String? payloadMode;
   final String? toolName;
   final bool isError;
   const _ToolResultCard({
     required this.result,
+    this.payload,
+    this.payloadMode,
     this.toolName,
     this.isError = false,
   });
@@ -1014,6 +1020,14 @@ class _ToolResultCardState extends State<_ToolResultCard> {
 
   bool get _rendersMarkdown =>
       !widget.isError && widget.toolName == 'swarm_task_create';
+
+  bool get _usesPayload =>
+      (widget.payload?.isNotEmpty ?? false) && widget.payload != widget.result;
+
+  bool get _payloadIsText => widget.payloadMode == 'text' || widget.isError;
+
+  bool get _structuredPayload =>
+      (widget.payloadMode?.isNotEmpty ?? false) && !_payloadIsText;
 
   @override
   Widget build(BuildContext context) {
@@ -1066,13 +1080,13 @@ class _ToolResultCardState extends State<_ToolResultCard> {
               _buildMarkdownResult()
             else
               Text(
-                _expanded ? widget.result : preview,
+                _expanded && _usesPayload ? widget.payload! : preview,
                 style: TextStyle(
                   color: widget.isError
                       ? AppColors.danger
                       : AppColors.textSecondary,
                   fontSize: 11,
-                  fontFamily: 'monospace',
+                  fontFamily: _structuredPayload ? null : 'monospace',
                 ),
                 maxLines: _expanded ? null : 2,
                 overflow: _expanded ? null : TextOverflow.ellipsis,

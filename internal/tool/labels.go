@@ -15,6 +15,13 @@ type ToolPresentation struct {
 	Detail      string // e.g. "/tmp/test.go", ""
 }
 
+// ToolResultPresentation holds shared semantic fields for a rendered tool result.
+type ToolResultPresentation struct {
+	Summary     string // compact always-visible summary
+	Payload     string // optional expanded detail payload
+	PayloadMode string // "", "text", "task_fields", "task_list"
+}
+
 // DescribeTool returns a human-readable presentation for a tool call.
 // It picks the key argument(s) for each tool and formats them compactly.
 // This is the shared implementation used by TUI, daemon, IM, and ACP.
@@ -144,6 +151,20 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 			argStr(args, "description"),
 			argStr(args, "prompt"),
 		)))
+	case "task_create":
+		return toolPres("Task", displayTarget(firstNonEmpty(
+			argStr(args, "subject"),
+			argStr(args, "description"),
+		)))
+	case "task_get", "task_update", "task_stop":
+		return toolPres("Task", displayTarget(argStr(args, "taskId")))
+	case "task_list":
+		return toolPres("Tasks", "")
+	case "task_output":
+		return toolPres("Task Output", displayTarget(firstNonEmpty(
+			argStr(args, "task_id"),
+			argStr(args, "taskId"),
+		)))
 	case "swarm_task_create":
 		return toolPres(displayTarget(SwarmTaskCreateSubject(rawArgs)), "")
 	case "wait_agent":
@@ -266,6 +287,39 @@ func SwarmTaskCreateResultMarkdown(result string) string {
 	return description
 }
 
+// DescribeTaskToolResult returns shared summary/payload semantics for task_* tools.
+func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
+	if !isTaskTool(toolName) {
+		return ToolResultPresentation{}, false
+	}
+
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return ToolResultPresentation{}, true
+	}
+	if isError {
+		return ToolResultPresentation{Summary: compactSingleLine(trimmed)}, true
+	}
+
+	switch toolName {
+	case "task_create", "task_get", "task_update":
+		if pres, ok := describeTaskObjectResult(toolName, rawArgs, trimmed); ok {
+			return pres, true
+		}
+	case "task_list":
+		return describeTaskListResult(trimmed), true
+	case "task_stop":
+		return describeTaskStopResult(rawArgs, trimmed), true
+	case "task_output":
+		return describeTaskOutputResult(rawArgs, trimmed), true
+	}
+
+	return ToolResultPresentation{
+		Summary: compactSingleLine(trimmed),
+		Payload: trimmed,
+	}, true
+}
+
 // TeamCreateResultText extracts the created team name from a team_create result.
 func TeamCreateResultText(result string) string {
 	trimmed := strings.TrimSpace(result)
@@ -285,6 +339,216 @@ func TeamCreateResultText(result string) string {
 		return result
 	}
 	return fmt.Sprintf("Team %s Created", name)
+}
+
+func isTaskTool(toolName string) bool {
+	switch toolName {
+	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
+		return true
+	default:
+		return false
+	}
+}
+
+type taskResultView struct {
+	ID          string            `json:"id"`
+	Subject     string            `json:"subject"`
+	Description string            `json:"description"`
+	Status      string            `json:"status"`
+	Owner       string            `json:"owner"`
+	ActiveForm  string            `json:"activeForm"`
+	Blocks      []string          `json:"blocks"`
+	BlockedBy   []string          `json:"blockedBy"`
+	Metadata    map[string]string `json:"metadata"`
+}
+
+func describeTaskObjectResult(toolName, rawArgs, trimmed string) (ToolResultPresentation, bool) {
+	var tk taskResultView
+	if err := json.Unmarshal([]byte(trimmed), &tk); err != nil {
+		return ToolResultPresentation{}, false
+	}
+
+	summary := taskIdentitySummary(tk.Subject, tk.Status, tk.ID)
+	switch toolName {
+	case "task_create":
+		summary = prefixTaskSummary("Created", summary)
+	case "task_update":
+		if changeText := taskUpdateChangeSummary(rawArgs); changeText != "" {
+			summary = prefixTaskSummary("Updated", summary) + " (" + changeText + ")"
+		} else {
+			summary = prefixTaskSummary("Updated", summary)
+		}
+	}
+
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     formatTaskPayload(tk),
+		PayloadMode: "task_fields",
+	}, true
+}
+
+func describeTaskListResult(trimmed string) ToolResultPresentation {
+	if strings.EqualFold(trimmed, "No tasks.") {
+		return ToolResultPresentation{Summary: "0 tasks"}
+	}
+	lines := nonEmptyTrimmedLines(trimmed)
+	return ToolResultPresentation{
+		Summary:     fmt.Sprintf("%d tasks", len(lines)),
+		Payload:     strings.Join(lines, "\n"),
+		PayloadMode: "task_list",
+	}
+}
+
+func describeTaskStopResult(rawArgs, trimmed string) ToolResultPresentation {
+	args := parseToolArgs(rawArgs)
+	taskID := firstNonEmpty(argStr(args, "taskId"), argStr(args, "task_id"))
+	summary := "Stopped task"
+	if taskID != "" {
+		summary = "Stopped " + taskID
+	}
+	payload := trimmed
+	if compactSingleLine(trimmed) == summary {
+		payload = ""
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     payload,
+		PayloadMode: "text",
+	}
+}
+
+func describeTaskOutputResult(rawArgs, trimmed string) ToolResultPresentation {
+	args := parseToolArgs(rawArgs)
+	taskID := firstNonEmpty(argStr(args, "task_id"), argStr(args, "taskId"))
+	lineCount := len(nonEmptyTrimmedLines(trimmed))
+	summary := "Fetched task output"
+	if taskID != "" {
+		summary = "Fetched output for " + taskID
+	}
+	if lineCount > 0 {
+		summary = fmt.Sprintf("%s (%d lines)", summary, lineCount)
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     trimmed,
+		PayloadMode: "text",
+	}
+}
+
+func taskIdentitySummary(subject, status, id string) string {
+	subject = strings.TrimSpace(subject)
+	id = strings.TrimSpace(id)
+	status = humanTaskStatus(status)
+	switch {
+	case subject != "" && status != "" && id != "":
+		return fmt.Sprintf("%s [%s] — %s", subject, status, id)
+	case subject != "" && status != "":
+		return fmt.Sprintf("%s [%s]", subject, status)
+	case subject != "" && id != "":
+		return fmt.Sprintf("%s — %s", subject, id)
+	case subject != "":
+		return subject
+	case id != "" && status != "":
+		return fmt.Sprintf("%s [%s]", id, status)
+	case id != "":
+		return id
+	default:
+		return firstNonEmpty(status, "task")
+	}
+}
+
+func prefixTaskSummary(prefix, summary string) string {
+	if summary == "" {
+		return prefix
+	}
+	return prefix + " " + summary
+}
+
+func humanTaskStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "in_progress":
+		return "in progress"
+	case "completed":
+		return "completed"
+	case "pending":
+		return "pending"
+	default:
+		return strings.TrimSpace(status)
+	}
+}
+
+func taskUpdateChangeSummary(rawArgs string) string {
+	args := parseToolArgs(rawArgs)
+	if args == nil {
+		return ""
+	}
+	var changes []string
+	for _, key := range []string{"status", "subject", "owner", "activeForm", "metadata", "addBlocks", "addBlockedBy"} {
+		if _, ok := args[key]; !ok {
+			continue
+		}
+		switch key {
+		case "activeForm":
+			changes = append(changes, "activity")
+		case "addBlocks":
+			changes = append(changes, "blocks")
+		case "addBlockedBy":
+			changes = append(changes, "blocked by")
+		default:
+			changes = append(changes, key)
+		}
+		if len(changes) >= 3 {
+			break
+		}
+	}
+	return strings.Join(changes, ", ")
+}
+
+func formatTaskPayload(tk taskResultView) string {
+	var lines []string
+	if tk.ID != "" {
+		lines = append(lines, "Task ID: "+tk.ID)
+	}
+	if status := humanTaskStatus(tk.Status); status != "" {
+		lines = append(lines, "Status: "+status)
+	}
+	if tk.Subject != "" {
+		lines = append(lines, "Subject: "+tk.Subject)
+	}
+	if tk.Owner != "" {
+		lines = append(lines, "Owner: "+tk.Owner)
+	}
+	if tk.ActiveForm != "" {
+		lines = append(lines, "Activity: "+tk.ActiveForm)
+	}
+	if tk.Description != "" {
+		lines = append(lines, "Description: "+tk.Description)
+	}
+	if len(tk.BlockedBy) > 0 {
+		lines = append(lines, "Blocked By: "+strings.Join(tk.BlockedBy, ", "))
+	}
+	if len(tk.Blocks) > 0 {
+		lines = append(lines, "Blocks: "+strings.Join(tk.Blocks, ", "))
+	}
+	if len(tk.Metadata) > 0 {
+		meta, err := json.Marshal(tk.Metadata)
+		if err == nil {
+			lines = append(lines, "Metadata: "+string(meta))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func nonEmptyTrimmedLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // StartCommandResultText normalizes start_command results to a simple status label.

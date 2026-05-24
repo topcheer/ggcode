@@ -145,6 +145,54 @@ void main() {
     expect(find.byKey(const Key('toolStatusDone-ev-tool-2')), findsOneWidget);
   });
 
+  testWidgets('Task tool cards show summary collapsed and payload expanded',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(chatProvider.notifier);
+
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-task',
+        toolName: 'task_get',
+        displayName: 'Task',
+        args: '{"taskId":"task-1"}',
+        detail: 'task-1',
+      ),
+      messageId: 'ev-tool-task',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-task',
+        toolName: 'task_get',
+        result:
+            '{"id":"task-1","subject":"Fix tunnel parity","status":"in_progress"}',
+        summary: 'Fix tunnel parity [in progress] — task-1',
+        payload:
+            'Task ID: task-1\nStatus: in progress\nSubject: Fix tunnel parity',
+        payloadMode: 'task_fields',
+        isError: false,
+      ),
+    );
+
+    await tester.pump();
+
+    expect(
+        find.text('Fix tunnel parity [in progress] — task-1'), findsOneWidget);
+    expect(find.text('Task ID: task-1'), findsNothing);
+
+    await tester.tap(find.text('Fix tunnel parity [in progress] — task-1'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Task ID: task-1'), findsOneWidget);
+  });
+
   testWidgets(
       'ChatScreen renders shell commands and terminal output distinctly',
       (WidgetTester tester) async {

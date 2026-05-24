@@ -36,6 +36,7 @@ class _FakeConnectionService extends ConnectionService {
 class _CaptureResumeHelloService extends _FakeConnectionService {
   final _status = StreamController<ConnectionStatus>.broadcast();
   final _messages = StreamController<proto.WsMessage>.broadcast();
+  int resumeHelloRequests = 0;
   String? resumeClientId;
   String? resumeSessionId;
   String? resumeLastEventId;
@@ -60,6 +61,7 @@ class _CaptureResumeHelloService extends _FakeConnectionService {
     String? sessionId,
     String? lastEventId,
   }) {
+    resumeHelloRequests++;
     resumeClientId = clientId;
     resumeSessionId = sessionId;
     resumeLastEventId = lastEventId;
@@ -169,6 +171,43 @@ void main() {
     final message = container.read(chatProvider).single;
     expect(message.toolCompleted, isTrue);
     expect(message.toolResult, '');
+  });
+
+  test('ChatNotifier stores task summaries and expanded payload separately',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-task',
+        toolName: 'task_get',
+        displayName: 'Task',
+        args: '{"taskId":"task-1"}',
+        detail: 'task-1',
+      ),
+      messageId: 'ev-task',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-task',
+        toolName: 'task_get',
+        result:
+            '{"id":"task-1","subject":"Fix tunnel parity","status":"in_progress"}',
+        summary: 'Fix tunnel parity [in progress] — task-1',
+        payload:
+            'Task ID: task-1\nStatus: in progress\nSubject: Fix tunnel parity',
+        payloadMode: 'task_fields',
+        isError: false,
+      ),
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolResult, 'Fix tunnel parity [in progress] — task-1');
+    expect(message.toolPayload, contains('Task ID: task-1'));
+    expect(message.toolPayloadMode, 'task_fields');
+    expect(message.toolCompleted, isTrue);
   });
 
   test('ChatNotifier formats teammate_spawn tool results', () {
@@ -639,6 +678,53 @@ void main() {
     expect(notifier.currentSessionId, 'sess-new');
     expect(notifier.lastAppliedEventId, 'ev-000000001');
     expect(container.read(chatProvider).single.text, 'fresh snapshot');
+  });
+
+  test('ConnectionNotifier retries replay gaps and falls back to full history',
+      () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    final fakeService = _CaptureResumeHelloService();
+    notifier.service = fakeService;
+    notifier.configureReplayRecoveryForTest(
+      watchdogTimeout: const Duration(milliseconds: 5),
+      retryBackoffs: const [
+        Duration(milliseconds: 5),
+        Duration(milliseconds: 5),
+        Duration(milliseconds: 5),
+      ],
+      fallbackTimeout: const Duration(milliseconds: 5),
+    );
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000001',
+      type: 'text',
+      data: {'id': 'msg-1', 'chunk': 'first', 'done': false},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000003',
+      type: 'text',
+      data: {'id': 'msg-1', 'chunk': 'third', 'done': false},
+    ));
+
+    expect(fakeService.replayRequests, 1);
+
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+    expect(fakeService.replayRequests, 2);
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+    expect(fakeService.replayRequests, 3);
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+    expect(fakeService.replayRequests, 4);
+    await Future<void>.delayed(const Duration(milliseconds: 8));
+
+    expect(fakeService.resumeHelloRequests, 1);
+    expect(fakeService.resumeClientId, isNotNull);
+    expect(fakeService.resumeSessionId, 'sess-1');
+    expect(fakeService.resumeLastEventId, isNull);
   });
 
   test('ConnectionNotifier follows active session control message', () {

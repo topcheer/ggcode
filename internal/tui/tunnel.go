@@ -876,6 +876,7 @@ func tunnelSnapshotEventsFromTeammate(tm swarm.TeammateSnapshot, teamID string) 
 func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.AgentEvent, result, errText, status, statusMessage, name string) []tunnel.SnapshotEvent {
 	var out []tunnel.SnapshotEvent
 	textBuf := strings.Builder{}
+	toolArgsByID := make(map[string]string)
 	flushText := func(done bool) {
 		if textBuf.Len() == 0 {
 			return
@@ -891,6 +892,9 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 		switch ev.Type {
 		case subagent.AgentEventToolCall:
 			flushText(false)
+			if ev.ToolID != "" {
+				toolArgsByID[ev.ToolID] = ev.ToolArgs
+			}
 			detail := describeTool(LangEnglish, ev.ToolName, ev.ToolArgs).Detail
 			out = append(out, snapshotEvent(
 				tunnel.EventSubagentToolCall,
@@ -906,15 +910,20 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 			))
 		case subagent.AgentEventToolResult:
 			flushText(false)
+			present, _ := toolpkg.DescribeTaskToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Result, ev.IsError)
+			delete(toolArgsByID, ev.ToolID)
 			out = append(out, snapshotEvent(
 				tunnel.EventSubagentToolResult,
 				agentID,
 				tunnel.SubagentToolResultData{
-					AgentID:  agentID,
-					ToolID:   ev.ToolID,
-					ToolName: ev.ToolName,
-					Result:   ev.Result,
-					IsError:  ev.IsError,
+					AgentID:     agentID,
+					ToolID:      ev.ToolID,
+					ToolName:    ev.ToolName,
+					Result:      ev.Result,
+					Summary:     present.Summary,
+					Payload:     present.Payload,
+					PayloadMode: present.PayloadMode,
+					IsError:     ev.IsError,
 				},
 			))
 		case subagent.AgentEventError:

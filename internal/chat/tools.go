@@ -465,8 +465,7 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		return BodyMarkdown
 	case "cron_create":
 		return BodyFormatJSON
-	case "task_create", "task_get", "task_update", "task_list", "task_stop",
-		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task",
+	case "a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task",
 		"a2a_remote", "a2a_send_task":
 		return BodySuppress
 	case "teammate_results", "wait_agent":

@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,13 +22,15 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	d := &drainHelper{}
 
 	b := &Broker{
-		session:     sess,
-		outDone:     make(chan struct{}),
-		textBuf:     make(map[string]*textEntry),
-		activeText:  make(map[string]*textEntry),
-		textTick:    time.NewTicker(300 * time.Millisecond),
-		textDone:    make(chan struct{}),
-		sendWaiters: make(map[string]chan struct{}),
+		session:          sess,
+		outDone:          make(chan struct{}),
+		textBuf:          make(map[string]*textEntry),
+		activeText:       make(map[string]*textEntry),
+		textTick:         time.NewTicker(300 * time.Millisecond),
+		textDone:         make(chan struct{}),
+		sendWaiters:      make(map[string]chan struct{}),
+		toolArgs:         make(map[string]string),
+		subagentToolArgs: make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
@@ -391,6 +394,35 @@ func TestBrokerPushToolResult(t *testing.T) {
 	if !found {
 		t.Error("expected tool_result event")
 	}
+}
+
+func TestBrokerPushTaskToolResultIncludesStructuredFields(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushToolCall("t-task", "task_get", "Task", `{"taskId":"task-1"}`, "task-1")
+	b.PushToolResult("t-task", "task_get", `{"id":"task-1","subject":"Fix parity","status":"in_progress"}`, false)
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	for _, m := range msgs {
+		if m.Type != EventToolResult {
+			continue
+		}
+		var td ToolResultData
+		json.Unmarshal(m.Data, &td)
+		if td.ToolID != "t-task" {
+			continue
+		}
+		if td.Summary != "Fix parity [in progress] — task-1" {
+			t.Fatalf("unexpected summary: %+v", td)
+		}
+		if td.PayloadMode != "task_fields" || !strings.Contains(td.Payload, "Task ID: task-1") {
+			t.Fatalf("unexpected payload: %+v", td)
+		}
+		return
+	}
+	t.Fatal("expected structured tool_result event")
 }
 
 func TestBrokerPushApprovalRequest(t *testing.T) {

@@ -800,6 +800,13 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string, isError boo
 	if formatted == "" {
 		return
 	}
+	if sections := cv.taskToolResultSections(ref.toolName, ref.rawArgs, result, isError); len(sections) > 0 {
+		for _, section := range sections {
+			ref.body.Add(section)
+		}
+		ref.body.Refresh()
+		return
+	}
 
 	var resultBlock fyne.CanvasObject
 	if toolResultUsesMarkdown(ref.toolName) {
@@ -1112,6 +1119,9 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	if msg.Content == "" {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
+	if sections := cv.taskToolResultSections(msg.ToolName, msg.ToolRaw, msg.Content, msg.IsError); len(sections) > 0 {
+		return cv.iconRow(toolIcon(msg), container.NewVBox(append([]fyne.CanvasObject{header}, sections...)...))
+	}
 
 	result := cv.formatToolResult(msg.ToolName, truncateRunes(msg.Content, 2000, "..."), msg.IsError)
 	if result == "" {
@@ -1126,6 +1136,35 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 	resultBlock := newMD("```\n" + result + "\n```")
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
+}
+
+func (cv *ChatView) taskToolResultSections(toolName, rawArgs, result string, isError bool) []fyne.CanvasObject {
+	present, ok := tool.DescribeTaskToolResult(toolName, rawArgs, result, isError)
+	if !ok {
+		return nil
+	}
+
+	var sections []fyne.CanvasObject
+	if summary := strings.TrimSpace(present.Summary); summary != "" {
+		label := widget.NewLabel(summary)
+		label.Wrapping = fyne.TextWrapWord
+		sections = append(sections, label)
+	}
+	payload := strings.TrimSpace(present.Payload)
+	if payload == "" || payload == strings.TrimSpace(present.Summary) {
+		return sections
+	}
+
+	var resultBlock fyne.CanvasObject
+	label := "Details"
+	if present.PayloadMode == "text" || isError {
+		label = "Output"
+		resultBlock = newMD("```\n" + truncateRunes(payload, 3000, "\n...(truncated)") + "\n```")
+	} else {
+		resultBlock = newMD(truncateRunes(payload, 3000, "\n...(truncated)"))
+	}
+	sections = append(sections, newCollapsibleSection(label, resultBlock))
+	return sections
 }
 
 // renderTodoTool: checkbox list, no tool name header.

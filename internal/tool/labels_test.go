@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -421,6 +422,7 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Run",
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			present := DescribeTool(tt.toolName, tt.rawArgs)
@@ -435,6 +437,45 @@ func TestDescribeTool(t *testing.T) {
 				t.Errorf("FormatToolInline = %q, want %q", got, tt.wantDisplay)
 			}
 		})
+	}
+}
+
+func TestDescribeTaskToolResult(t *testing.T) {
+	present, ok := DescribeTaskToolResult(
+		"task_update",
+		`{"taskId":"task-1","status":"in_progress","owner":"agent-1"}`,
+		`{"id":"task-1","subject":"Fix mobile parity","status":"in_progress","owner":"agent-1"}`,
+		false,
+	)
+	if !ok {
+		t.Fatal("expected task result presentation")
+	}
+	if present.Summary != "Updated Fix mobile parity [in progress] — task-1 (status, owner)" {
+		t.Fatalf("unexpected summary: %q", present.Summary)
+	}
+	if present.PayloadMode != "task_fields" {
+		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
+	}
+	if want := "Task ID: task-1"; !strings.Contains(present.Payload, want) {
+		t.Fatalf("payload %q missing %q", present.Payload, want)
+	}
+}
+
+func TestDescribeTaskListResult(t *testing.T) {
+	present, ok := DescribeTaskToolResult(
+		"task_list",
+		`{}`,
+		"- task-1 [pending] one\n- task-2 [in_progress] two\n",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected task list presentation")
+	}
+	if present.Summary != "2 tasks" {
+		t.Fatalf("unexpected summary: %q", present.Summary)
+	}
+	if present.PayloadMode != "task_list" {
+		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
 	}
 }
 
