@@ -302,6 +302,10 @@ func (a *App) showShareDialog() {
 					return
 				}
 				a.applyThemeChange(data.Theme)
+			case tunnel.CmdInterrupt:
+				if a.agentBridge != nil {
+					a.agentBridge.Cancel()
+				}
 			}
 		})
 
