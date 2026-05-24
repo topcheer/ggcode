@@ -203,6 +203,27 @@ func (k *Knight) Running() bool {
 	return k.running
 }
 
+// Enable starts Knight if not already running. It updates the internal config
+// to Enabled=true before calling Start, so the guard in Start() passes.
+func (k *Knight) Enable(ctx context.Context) error {
+	k.mu.Lock()
+	if k.running {
+		k.mu.Unlock()
+		return nil
+	}
+	k.cfg.Enabled = true
+	k.mu.Unlock()
+	return k.Start(ctx)
+}
+
+// Disable stops Knight if running and marks it as disabled.
+func (k *Knight) Disable() {
+	k.mu.Lock()
+	k.cfg.Enabled = false
+	k.mu.Unlock()
+	k.Stop()
+}
+
 // SetEmitter sets the IM emitter for Knight notifications.
 func (k *Knight) SetEmitter(e Emitter) {
 	k.mu.Lock()

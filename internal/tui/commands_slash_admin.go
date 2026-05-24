@@ -307,7 +307,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		subcmd = parts[1]
 	}
 
-	// /knight on and /knight off work in all modes (they just persist config).
+	// /knight on and /knight off work in all modes (they persist config + toggle runtime).
 	switch subcmd {
 	case "on":
 		if m.config == nil {
@@ -318,7 +318,15 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to enable Knight: %v", err))
 			return nil
 		}
-		m.chatWriteSystem(nextSystemID(), "Knight enabled. Restart to apply.")
+		if m.knight != nil {
+			if err := m.knight.Enable(context.Background()); err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight config saved, but failed to start: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), "Knight enabled and started.")
+		} else {
+			m.chatWriteSystem(nextSystemID(), "Knight enabled. Restart to apply.")
+		}
 		return nil
 	case "off":
 		if m.config == nil {
@@ -329,7 +337,12 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to disable Knight: %v", err))
 			return nil
 		}
-		m.chatWriteSystem(nextSystemID(), "Knight disabled. Restart to apply.")
+		if m.knight != nil {
+			m.knight.Disable()
+			m.chatWriteSystem(nextSystemID(), "Knight disabled and stopped.")
+		} else {
+			m.chatWriteSystem(nextSystemID(), "Knight disabled. Restart to apply.")
+		}
 		return nil
 	}
 
