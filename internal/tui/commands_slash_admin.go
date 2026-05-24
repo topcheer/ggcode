@@ -302,14 +302,41 @@ func (m *Model) syncSessionSelection() {
 }
 
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
-	if m.knight == nil {
-		m.chatWriteSystem(nextSystemID(), "Knight is not available (only in daemon mode)")
-		return nil
-	}
-
 	subcmd := ""
 	if len(parts) > 1 {
 		subcmd = parts[1]
+	}
+
+	// /knight on and /knight off work in all modes (they just persist config).
+	switch subcmd {
+	case "on":
+		if m.config == nil {
+			m.chatWriteSystem(nextSystemID(), "Config not available")
+			return nil
+		}
+		if err := m.config.SaveKnightEnabled(true); err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to enable Knight: %v", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), "Knight enabled. Restart to apply.")
+		return nil
+	case "off":
+		if m.config == nil {
+			m.chatWriteSystem(nextSystemID(), "Config not available")
+			return nil
+		}
+		if err := m.config.SaveKnightEnabled(false); err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to disable Knight: %v", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), "Knight disabled. Restart to apply.")
+		return nil
+	}
+
+	// All other subcommands require Knight to be running.
+	if m.knight == nil {
+		m.chatWriteSystem(nextSystemID(), "Knight is not available (only in daemon mode). Use /knight on to enable.")
+		return nil
 	}
 
 	switch subcmd {

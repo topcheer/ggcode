@@ -237,6 +237,23 @@ func (c *Config) SaveDefaultModePreference(mode string) error {
 	return nil
 }
 
+// SaveKnightEnabled persists the knight.enabled setting to the config file.
+func (c *Config) SaveKnightEnabled(enabled bool) error {
+	if err := c.patchConfigFile(func(raw map[string]interface{}) {
+		knightMap, _ := raw["knight"].(map[string]interface{})
+		if knightMap == nil {
+			knightMap = map[string]interface{}{}
+		}
+		knightMap["enabled"] = enabled
+		raw["knight"] = knightMap
+	}); err != nil {
+		return err
+	}
+	c.KnightConfig.Enabled = enabled
+	c.KnightConfig.SetEnabledExplicitly()
+	return nil
+}
+
 func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")

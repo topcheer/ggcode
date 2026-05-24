@@ -515,7 +515,8 @@ tool_permissions:
 # and maintains project health during idle time.
 # Enabled by default; set enabled: false to disable.
 knight:
-  enabled: true
+  # Knight is disabled by default. Enable with /knight on or set to true.
+  enabled: false
   # Trust level: readonly (analyze only), staged (write, user approves), auto (auto-promote)
   # trust_level: staged
   # Daily token budget (default 5M tokens; set to 0 for unlimited)

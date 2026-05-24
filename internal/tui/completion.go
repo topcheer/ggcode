@@ -264,7 +264,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/provider":    "<vendor> [endpoint]",
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
-	"/knight":      "<subcommand>",
+	"/knight":      "<on|off|status|run|skills|budget|...>",
 	"/resume":      "<session-id>",
 	"/lang":        "<en|zh-CN>",
 	"/memory":      "<subcommand>",

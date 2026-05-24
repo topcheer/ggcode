@@ -44,7 +44,7 @@ type KnightConfig struct {
 // DefaultKnightConfig returns the default Knight configuration.
 func DefaultKnightConfig() KnightConfig {
 	return KnightConfig{
-		Enabled:          true,
+		Enabled:          false,
 		TrustLevel:       "staged",
 		DailyTokenBudget: 50_000_000,
 		Capabilities: []string{
@@ -85,6 +85,12 @@ func (kc KnightConfig) HasExplicitDailyTokenBudget() bool {
 	return kc.dailyTokenBudgetSet
 }
 
+// SetEnabledExplicitly marks the Enabled field as explicitly set (from a slash command)
+// so that subsequent SetDefaults() calls will not overwrite it.
+func (kc *KnightConfig) SetEnabledExplicitly() {
+	kc.enabledSet = true
+}
+
 // Knight returns the Knight configuration, applying defaults for zero values.
 func (c *Config) Knight() KnightConfig {
 	kc := c.KnightConfig
@@ -98,9 +104,6 @@ func (c *Config) Knight() KnightConfig {
 
 // SetDefaults fills in default values for any zero-valued fields.
 func (kc *KnightConfig) SetDefaults() {
-	if !kc.enabledSet {
-		kc.Enabled = true
-	}
 	if kc.DailyTokenBudget < 0 {
 		kc.DailyTokenBudget = 50_000_000
 	}
