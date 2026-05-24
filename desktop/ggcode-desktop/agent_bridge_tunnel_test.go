@@ -179,7 +179,8 @@ func TestResetCurrentSessionTunnelLedgerDesktopClearsCanonicalReplay(t *testing.
 func TestDesktopTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) {
 	seeded := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
-		Status:      tunnel.StatusData{Status: tunnel.StatusRunning, Message: "bash"},
+		Status:      tunnel.StatusData{Status: tunnel.StatusBusy},
+		Activity:    tunnel.ActivityData{Activity: "processing"},
 		History: []tunnel.HistoryEntry{
 			{Role: "system", Content: "Starting tunnel..."},
 			{Role: "tool_call", ToolID: "tool-1", ToolName: "bash", ToolDisplayName: "Run bash", ToolArgs: `{"command":"sleep 1"}`},

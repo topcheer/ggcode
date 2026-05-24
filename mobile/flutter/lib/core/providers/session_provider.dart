@@ -381,6 +381,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             ));
         break;
 
+      case 'activity':
+        if (!_shouldApplyEvent(msg)) break;
+        if (msg.data != null) {
+          final data = proto.ActivityData.fromJson(msg.data!);
+          _setAgentActivity(data.activity);
+        }
+        _markEventApplied(msg);
+        break;
+
       case 'user_message':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
@@ -467,9 +476,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'status':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
-          final status = msg.data!['status'] as String? ?? 'idle';
-          final message = msg.data!['message'] as String? ?? '';
-          _setAgentStatus(status, message);
+          final data = proto.StatusData.fromJson(msg.data!);
+          final normalized = _normalizeAgentStatus(data.status);
+          _setAgentStatus(normalized, '');
+          if (normalized == 'idle') {
+            _setAgentActivity('');
+          } else if (data.message.isNotEmpty) {
+            // Backward compatibility with older tunnel senders that packed the
+            // transient activity text into status.message.
+            _setAgentActivity(data.message);
+          }
         }
         _markEventApplied(msg);
         break;
@@ -705,11 +721,31 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     ref.read(sessionInfoProvider.notifier).set(null);
     ref.read(currentModeProvider.notifier).set('supervised');
     _setAgentStatus('idle', '');
+    _setAgentActivity('');
   }
 
   void _setAgentStatus(String status, String message) {
-    ref.read(agentStatusProvider.notifier).set(status);
-    ref.read(agentStatusMessageProvider.notifier).set(message);
+    ref.read(agentStatusProvider.notifier).set(_normalizeAgentStatus(status));
+    if (message.isNotEmpty) {
+      ref.read(agentStatusMessageProvider.notifier).set(message);
+    }
+  }
+
+  void _setAgentActivity(String activity) {
+    ref.read(agentStatusMessageProvider.notifier).set(activity);
+  }
+
+  String _normalizeAgentStatus(String status) {
+    switch (status) {
+      case 'busy':
+      case 'running':
+      case 'thinking':
+      case 'waiting':
+      case 'error':
+        return 'busy';
+      default:
+        return 'idle';
+    }
   }
 
   void _restoreCachedAgentStatus({String? workspaceKey, String? sessionId}) {
@@ -729,7 +765,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         .read(workspaceCacheProvider.notifier)
         .snapshotFor(resolvedWorkspaceKey, resolvedSessionId);
     if (snapshot == null) return;
-    _setAgentStatus(snapshot.agentStatus, snapshot.agentStatusMessage);
+    _setAgentStatus(snapshot.agentStatus, '');
+    _setAgentActivity(snapshot.agentStatusMessage);
   }
 
   Future<void> _saveUrl(String url) async {
@@ -933,13 +970,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final url = state.url;
     _pendingReplayEvents.clear();
     _awaitingReplay = false;
+    _sessionId = '';
     _lastAppliedEventId = '';
     _recentEventIds.clear();
     _recentEventSet.clear();
     _resetReplayRecoveryState();
     if (url != null && url.isNotEmpty) {
-      unawaited(connect(url, clearState: false));
+      unawaited(_reconnectAfterReplayFailure(url));
     }
+  }
+
+  Future<void> _reconnectAfterReplayFailure(String url) async {
+    await _persistResumeStateNow();
+    await connect(url, clearState: false);
   }
 
   bool _hasEmptyUiProjection() {
@@ -974,7 +1017,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (snapshot.sessionInfo != null && snapshot.sessionInfo!.mode.isNotEmpty) {
       ref.read(currentModeProvider.notifier).set(snapshot.sessionInfo!.mode);
     }
-    _setAgentStatus(snapshot.agentStatus, snapshot.agentStatusMessage);
+    _setAgentStatus(snapshot.agentStatus, '');
+    _setAgentActivity(snapshot.agentStatusMessage);
 
     final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
     final record = cacheState.sessions[sessionKey];
@@ -1064,11 +1108,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   void _persistResumeState() {
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.setString(_resumeClientIdKey, _clientId);
-      prefs.setString(_resumeSessionIdKey, _sessionId);
-      prefs.setString(_resumeEventIdKey, _lastAppliedEventId);
-    });
+    unawaited(_persistResumeStateNow());
+  }
+
+  Future<void> _persistResumeStateNow() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_resumeClientIdKey, _clientId);
+    await prefs.setString(_resumeSessionIdKey, _sessionId);
+    await prefs.setString(_resumeEventIdKey, _lastAppliedEventId);
   }
 }
 
@@ -2030,7 +2077,7 @@ class CachedSessionSnapshot {
         'messages': messages.map((m) => m.toJson()).toList(),
         'subagents': subagents.map((k, v) => MapEntry(k, v.toJson())),
         'session_info': _sessionInfoToJson(sessionInfo),
-        'agent_status': agentStatus,
+        'agent_status': _normalizedCachedAgentStatus(agentStatus),
         'agent_status_message': agentStatusMessage,
       };
 
@@ -2049,7 +2096,9 @@ class CachedSessionSnapshot {
             ? Map<String, dynamic>.from(json['session_info'])
             : null,
       ),
-      agentStatus: json['agent_status'] as String? ?? 'idle',
+      agentStatus: _normalizedCachedAgentStatus(
+        json['agent_status'] as String? ?? 'idle',
+      ),
       agentStatusMessage: json['agent_status_message'] as String? ?? '',
     );
   }
@@ -2459,7 +2508,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       messages: List<ChatMessage>.from(trimmedMessages),
       subagents: Map<String, SubagentInfo>.from(subagents),
       sessionInfo: sessionInfo,
-      agentStatus: agentStatus,
+      agentStatus: _normalizedCachedAgentStatus(agentStatus),
       agentStatusMessage: agentStatusMessage,
     );
     final snapshotKey = _sessionCacheKey(workspaceKey, sessionId);
@@ -2695,7 +2744,7 @@ final displayedSessionInfoProvider = Provider<proto.SessionInfoData?>((ref) {
 final displayedAgentStatusProvider = Provider<String>((ref) {
   final cache = ref.watch(workspaceCacheProvider);
   if (_isViewingLive(cache)) {
-    return ref.watch(agentStatusProvider);
+    return _normalizedCachedAgentStatus(ref.watch(agentStatusProvider));
   }
   final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
@@ -2705,11 +2754,11 @@ final displayedAgentStatusProvider = Provider<String>((ref) {
       sessionId.isEmpty) {
     return 'idle';
   }
-  return ref
+  return _normalizedCachedAgentStatus(ref
           .watch(workspaceCacheProvider.notifier)
           .snapshotFor(workspaceKey, sessionId)
           ?.agentStatus ??
-      'idle';
+      'idle');
 });
 
 final displayedAgentStatusMessageProvider = Provider<String>((ref) {
@@ -2762,6 +2811,19 @@ bool _isViewingLive(WorkspaceCacheState state) {
   }
   return workspaceKey == state.liveWorkspaceKey &&
       sessionId == state.liveSessionId;
+}
+
+String _normalizedCachedAgentStatus(String status) {
+  switch (status) {
+    case 'busy':
+    case 'running':
+    case 'thinking':
+    case 'waiting':
+    case 'error':
+      return 'busy';
+    default:
+      return 'idle';
+  }
 }
 
 String _workspaceKeyForUrl(String url) =>

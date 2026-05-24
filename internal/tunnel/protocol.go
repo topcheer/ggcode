@@ -22,6 +22,7 @@ const (
 	EventConnected          = "connected"
 	EventActiveSession      = "active_session"
 	EventSessionInfo        = "session_info"
+	EventActivity           = "activity"     // main-agent activity text change
 	EventUserMessage        = "user_message" // user text from desktop
 	EventSystemMessage      = "system_message"
 	EventText               = "text"      // streaming text chunk
@@ -63,6 +64,7 @@ const (
 // Agent status values.
 const (
 	StatusIdle     = "idle"
+	StatusBusy     = "busy"
 	StatusThinking = "thinking"
 	StatusRunning  = "running"
 	StatusWaiting  = "waiting" // waiting for approval
@@ -163,6 +165,11 @@ const (
 type StatusData struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+}
+
+// ActivityData carries the current main-agent activity text.
+type ActivityData struct {
+	Activity string `json:"activity,omitempty"`
 }
 
 // ToolCallData carries a tool call notification.

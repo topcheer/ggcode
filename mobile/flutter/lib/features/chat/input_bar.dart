@@ -35,7 +35,7 @@ class _InputBarState extends ConsumerState<InputBar>
   @override
   Widget build(BuildContext context) {
     final status = ref.watch(displayedAgentStatusProvider);
-    final isRunning = status == 'thinking' || status == 'running';
+    final isRunning = status == 'busy';
     final canSend = ref.watch(canSendMessagesProvider);
     final isHistorical = ref.watch(isHistoricalViewProvider);
     final connState = ref.watch(connectionProvider);
@@ -60,8 +60,8 @@ class _InputBarState extends ConsumerState<InputBar>
     }
 
     return Container(
-      padding:  EdgeInsets.fromLTRB(12, 8, 12, 14),
-      decoration:  BoxDecoration(
+      padding: EdgeInsets.fromLTRB(12, 8, 12, 14),
+      decoration: BoxDecoration(
         color: AppColors.background,
       ),
       child: Row(
@@ -97,11 +97,10 @@ class _InputBarState extends ConsumerState<InputBar>
               },
               child: TextField(
                 controller: widget.controller,
-                style:
-                    	TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: hintText,
-                  hintStyle: 	TextStyle(color: AppColors.textMuted),
+                  hintStyle: TextStyle(color: AppColors.textMuted),
                   filled: true,
                   fillColor: AppColors.surface,
                   border: OutlineInputBorder(
@@ -123,7 +122,7 @@ class _InputBarState extends ConsumerState<InputBar>
               ),
             ),
           ),
-           SizedBox(width: 10),
+          SizedBox(width: 10),
           if (isRunning && canSend)
             _ActionButton(
               icon: Icons.stop_circle,
@@ -136,7 +135,7 @@ class _InputBarState extends ConsumerState<InputBar>
               },
               tooltip: 'Interrupt',
             ),
-           SizedBox(width: 10),
+          SizedBox(width: 10),
           _ActionButton(
             icon: Icons.send,
             color: inputEnabled ? AppColors.accent : AppColors.textMuted,

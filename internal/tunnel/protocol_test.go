@@ -119,6 +119,16 @@ func TestStatusDataOmitEmptyMessage(t *testing.T) {
 	}
 }
 
+func TestActivityDataJSON(t *testing.T) {
+	d := ActivityData{Activity: "Collecting project knowledge..."}
+	b, _ := json.Marshal(d)
+	var got ActivityData
+	json.Unmarshal(b, &got)
+	if got.Activity != d.Activity {
+		t.Errorf("mismatch: %+v", got)
+	}
+}
+
 // --- ToolCallData ---
 
 func TestToolCallDataJSON(t *testing.T) {
@@ -411,6 +421,7 @@ func TestCommandConstants(t *testing.T) {
 func TestStatusConstants(t *testing.T) {
 	statuses := map[string]string{
 		"idle":     StatusIdle,
+		"busy":     StatusBusy,
 		"thinking": StatusThinking,
 		"running":  StatusRunning,
 		"waiting":  StatusWaiting,

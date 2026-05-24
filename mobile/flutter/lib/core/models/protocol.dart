@@ -104,6 +104,16 @@ class StatusData {
       );
 }
 
+class ActivityData {
+  final String activity;
+
+  ActivityData({required this.activity});
+
+  factory ActivityData.fromJson(Map<String, dynamic> d) => ActivityData(
+        activity: d['activity'] as String? ?? '',
+      );
+}
+
 class MessageData {
   final String text;
   final String displayText;

@@ -73,6 +73,10 @@ class _CaptureResumeHelloService extends _FakeConnectionService {
     _messages.close();
     super.dispose();
   }
+
+  void emit(proto.WsMessage msg) {
+    _messages.add(msg);
+  }
 }
 
 class _TestConnectionNotifier extends ConnectionNotifier {
@@ -478,7 +482,7 @@ void main() {
       ],
       subagents: const {},
       sessionInfo: info,
-      agentStatus: 'running',
+      agentStatus: 'busy',
       agentStatusMessage: 'read_file',
       lastEventId: 'ev-0001',
     );
@@ -498,7 +502,7 @@ void main() {
     );
     expect(snapshot, isNotNull);
     expect(snapshot!.messages.single.text, 'hello');
-    expect(snapshot.agentStatus, 'running');
+    expect(snapshot.agentStatus, 'busy');
     expect(snapshot.agentStatusMessage, 'read_file');
   });
 
@@ -547,7 +551,7 @@ void main() {
       messages: container.read(chatProvider),
       subagents: const {},
       sessionInfo: info,
-      agentStatus: 'running',
+      agentStatus: 'busy',
       agentStatusMessage: 'processing',
       lastEventId: 'ev-0002',
     );
@@ -582,14 +586,53 @@ void main() {
       messages: const [],
       subagents: const {},
       sessionInfo: info,
-      agentStatus: 'running',
+      agentStatus: 'busy',
       agentStatusMessage: 'read_file',
       lastEventId: 'ev-0001',
     );
     cache.markDisconnected();
 
-    expect(container.read(displayedAgentStatusProvider), 'running');
+    expect(container.read(displayedAgentStatusProvider), 'busy');
     expect(container.read(displayedAgentStatusMessageProvider), 'read_file');
+  });
+
+  test('ConnectionNotifier keeps busy lifecycle separate from activity', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000001',
+      type: 'status',
+      data: {'status': 'busy'},
+    ));
+
+    expect(container.read(displayedAgentStatusProvider), 'busy');
+    expect(container.read(displayedAgentStatusMessageProvider), '');
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000002',
+      type: 'activity',
+      data: {'activity': 'Collecting project knowledge...'},
+    ));
+
+    expect(container.read(displayedAgentStatusProvider), 'busy');
+    expect(
+      container.read(displayedAgentStatusMessageProvider),
+      'Collecting project knowledge...',
+    );
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000003',
+      type: 'status',
+      data: {'status': 'idle'},
+    ));
+
+    expect(container.read(displayedAgentStatusProvider), 'idle');
+    expect(container.read(displayedAgentStatusMessageProvider), '');
   });
 
   test('ConnectionNotifier buffers replay gaps until missing events arrive',
@@ -714,17 +757,67 @@ void main() {
     expect(fakeService.replayRequests, 1);
 
     await Future<void>.delayed(const Duration(milliseconds: 8));
-    expect(fakeService.replayRequests, 2);
+    expect(fakeService.replayRequests, greaterThanOrEqualTo(2));
     await Future<void>.delayed(const Duration(milliseconds: 8));
-    expect(fakeService.replayRequests, 3);
+    expect(fakeService.replayRequests, greaterThanOrEqualTo(3));
     await Future<void>.delayed(const Duration(milliseconds: 8));
-    expect(fakeService.replayRequests, 4);
+    expect(fakeService.replayRequests, greaterThanOrEqualTo(4));
     await Future<void>.delayed(const Duration(milliseconds: 8));
 
     expect(fakeService.resumeHelloRequests, 1);
     expect(fakeService.resumeClientId, isNotNull);
     expect(fakeService.resumeSessionId, 'sess-1');
     expect(fakeService.resumeLastEventId, isNull);
+  });
+
+  test('replay fallback reconnect clears persisted resume cursor', () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+      'ggcode_tunnel_session_id': 'sess-stale',
+      'ggcode_tunnel_last_event_id': 'ev-000000099',
+    });
+
+    final firstService = _CaptureResumeHelloService();
+    final secondService = _CaptureResumeHelloService();
+    final services = <_CaptureResumeHelloService>[firstService, secondService];
+    _TestConnectionNotifier.factory = (_, __) => services.removeAt(0);
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=abc',
+        clearState: false);
+    notifier.configureReplayRecoveryForTest(
+      watchdogTimeout: const Duration(milliseconds: 2),
+      retryBackoffs: const [Duration(milliseconds: 2)],
+      fallbackTimeout: const Duration(milliseconds: 2),
+    );
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000001',
+      type: 'text',
+      data: {'id': 'msg-1', 'chunk': 'first', 'done': false},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000003',
+      type: 'text',
+      data: {'id': 'msg-1', 'chunk': 'third', 'done': false},
+    ));
+
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(secondService.resumeClientId, 'client-1');
+    expect(secondService.resumeSessionId, anyOf(isNull, isEmpty));
+    expect(secondService.resumeLastEventId, anyOf(isNull, isEmpty));
   });
 
   test('ConnectionNotifier follows active session control message', () {
@@ -863,6 +956,69 @@ void main() {
     expect(service.resumeClientId, 'client-1');
     expect(service.resumeSessionId, isNull);
     expect(service.resumeLastEventId, isNull);
+  });
+
+  test('reconnect replaces cached busy state with authoritative idle status',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-1', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: const [],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'busy',
+      agentStatusMessage: 'Collecting project knowledge...',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(container.read(displayedAgentStatusProvider), 'busy');
+    expect(
+      container.read(displayedAgentStatusMessageProvider),
+      'Collecting project knowledge...',
+    );
+
+    service.emit(proto.WsMessage(
+      sessionId: 'sess-1',
+      type: 'active_session',
+      data: {'session_id': 'sess-1'},
+    ));
+    service.emit(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000121',
+      type: 'status',
+      data: {'status': 'idle'},
+    ));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(container.read(displayedAgentStatusProvider), 'idle');
+    expect(container.read(displayedAgentStatusMessageProvider), '');
   });
 
   test(

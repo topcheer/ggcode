@@ -529,7 +529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
-		m.pushTunnelCurrentStatus()
+		m.pushTunnelCurrentActivity()
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentStatusMsg:
@@ -542,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
-		m.pushTunnelCurrentStatus()
+		m.pushTunnelCurrentActivity()
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentRoundProgressMsg:
