@@ -55,15 +55,23 @@ if [[ -f "$sync_script" ]]; then
   # Extract current version from pubspec (e.g. 1.3.31)
   current_version=$(grep '^version:' mobile/flutter/pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
   if [[ -n "$current_version" ]]; then
-    echo "[pre-push] bumping mobile build number for v${current_version}..."
-    (cd mobile/flutter && bash scripts/version_sync.sh "$current_version")
-    git add mobile/flutter/.build-number \
-            mobile/flutter/pubspec.yaml \
-            mobile/flutter/android/app/build.gradle.kts \
-            mobile/flutter/ios/Runner/Info.plist
-    if ! git diff --cached --quiet; then
-      git commit --no-verify -m "chore(mobile): bump build number for v${current_version}"
-      echo "[pre-push] build number committed"
+    # ── Skip if HEAD is already a bump commit for this version ──
+    # This prevents the infinite push loop: hook bumps → new commit
+    # left unpushed → next push bumps again → ...
+    last_msg=$(git log -1 --format=%s)
+    if [[ "$last_msg" == "chore(mobile): bump build number for v${current_version}" ]]; then
+      echo "[pre-push] build number already bumped for v${current_version}, skipping"
+    else
+      echo "[pre-push] bumping mobile build number for v${current_version}..."
+      (cd mobile/flutter && bash scripts/version_sync.sh "$current_version")
+      git add mobile/flutter/.build-number \
+              mobile/flutter/pubspec.yaml \
+              mobile/flutter/android/app/build.gradle.kts \
+              mobile/flutter/ios/Runner/Info.plist
+      if ! git diff --cached --quiet; then
+        git commit --no-verify -m "chore(mobile): bump build number for v${current_version}"
+        echo "[pre-push] build number committed"
+      fi
     fi
   fi
 fi
