@@ -45,22 +45,24 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   fi
 fi
 
-# ── Mobile version sync on release push ──────────────────
-# When the top commit is a release, bump the mobile build number
-# and commit it. CI will use the version already in the files.
-latest_msg=$(git log -1 --format=%s)
-if [[ "$latest_msg" =~ ^release:\ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-  rel_version="${BASH_REMATCH[1]}"
-  sync_script="mobile/flutter/scripts/version_sync.sh"
-  if [[ -f "$sync_script" ]]; then
-    echo "[pre-push] release v${rel_version} detected, syncing mobile build number..."
-    (cd mobile/flutter && bash scripts/version_sync.sh "$rel_version")
+# ── Mobile version sync on every push ──────────────────
+# Always bump the mobile build number on push so CI never hits
+# a duplicate build number on TestFlight / Google Play.
+# Detect version from pubspec.yaml (not commit message) so it works
+# for any push (release, fix, chore, etc.).
+sync_script="mobile/flutter/scripts/version_sync.sh"
+if [[ -f "$sync_script" ]]; then
+  # Extract current version from pubspec (e.g. 1.3.31)
+  current_version=$(grep '^version:' mobile/flutter/pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
+  if [[ -n "$current_version" ]]; then
+    echo "[pre-push] bumping mobile build number for v${current_version}..."
+    (cd mobile/flutter && bash scripts/version_sync.sh "$current_version")
     git add mobile/flutter/.build-number \
             mobile/flutter/pubspec.yaml \
             mobile/flutter/android/app/build.gradle.kts \
             mobile/flutter/ios/Runner/Info.plist
     if ! git diff --cached --quiet; then
-      git commit --no-verify -m "chore(mobile): bump build number for v${rel_version}"
+      git commit --no-verify -m "chore(mobile): bump build number for v${current_version}"
       echo "[pre-push] build number committed"
     fi
   fi

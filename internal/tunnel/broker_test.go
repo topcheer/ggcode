@@ -1125,6 +1125,43 @@ func TestBrokerHandleClientConnectedSkipsAuthoritativeSnapshotWhenStateRetained(
 	}
 }
 
+func TestBrokerHandleClientConnectedDoesNotTrustRelayHistoryWhenLocalReplayIsEmpty(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "world"},
+			},
+			Status: StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return nil
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 1,
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 5 {
+		t.Fatalf("expected authoritative snapshot when local replay is empty, got %d messages", len(msgs))
+	}
+	if msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected first event snapshot_reset, got %q", msgs[0].Type)
+	}
+	if msgs[1].Type != EventSessionInfo {
+		t.Fatalf("expected session_info after snapshot_reset, got %q", msgs[1].Type)
+	}
+}
+
 func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
