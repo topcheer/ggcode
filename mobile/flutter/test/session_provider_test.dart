@@ -1353,6 +1353,54 @@ void main() {
   });
 
   test(
+      'ConnectionNotifier restores snapshot cursor instead of newer session record cursor',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'bypass',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-122', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+    await cache.updateLiveCursor('sess-122', 'ev-000000120');
+
+    container.read(chatProvider.notifier).clearMessages();
+    container.read(sessionInfoProvider.notifier).set(null);
+    container.read(currentModeProvider.notifier).set('supervised');
+
+    final notifier = container.read(connectionProvider.notifier);
+    final restored = notifier.restoreProjectionFromCacheForTest();
+
+    expect(restored, isTrue);
+    expect(notifier.currentSessionId, 'sess-122');
+    expect(notifier.lastAppliedEventId, 'ev-000000100');
+    expect(container.read(chatProvider).single.text, 'cached hello');
+  });
+
+  test(
       'cached snapshot seeds resume cursor so reconnect and gap recovery stay incremental',
       () async {
     SharedPreferences.setMockInitialValues({
@@ -1420,6 +1468,65 @@ void main() {
     expect(service.replaySessionId, 'sess-122');
     expect(service.replayLastEventId, 'ev-000000120');
     expect(service.resumeHelloRequests, 1);
+  });
+
+  test(
+      'cached reconnect resumes from snapshot cursor when session record advanced ahead',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'bypass',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-122', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+    await cache.updateLiveCursor('sess-122', 'ev-000000120');
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=abc',
+        clearState: false);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.resumeClientId, 'client-1');
+    expect(service.resumeSessionId, 'sess-122');
+    expect(service.resumeLastEventId, 'ev-000000100');
+    expect(container.read(chatProvider).single.text, 'cached hello');
   });
 
   test('fresh connect defers cached projection restore until live attach',

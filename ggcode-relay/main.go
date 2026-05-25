@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -164,16 +165,23 @@ func (p *peer) writePump() {
 	}
 	p.room.mu.RUnlock()
 	connMsg, _ := json.Marshal(connState)
+	if p.hub != nil {
+		p.hub.traceRelayMessage("peer_init", p.room.token, p.clientID, connState, "")
+	}
 	_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
 	if err := p.conn.WriteMessage(websocket.TextMessage, connMsg); err != nil {
 		return
 	}
 	if connState.SessionID != "" {
-		activeMsg, _ := json.Marshal(relayMessage{
+		activeRelayMsg := relayMessage{
 			Type:      "active_session",
 			SessionID: connState.SessionID,
 			Data:      mustJSON(activeSessionData{SessionID: connState.SessionID}),
-		})
+		}
+		activeMsg, _ := json.Marshal(activeRelayMsg)
+		if p.hub != nil {
+			p.hub.traceRelayMessage("peer_init", p.room.token, p.clientID, activeRelayMsg, "")
+		}
 		_ = p.conn.SetWriteDeadline(time.Now().Add(peerWriteTimeout))
 		if err := p.conn.WriteMessage(websocket.TextMessage, activeMsg); err != nil {
 			return
@@ -248,6 +256,9 @@ func (p *peer) readPump(h *hub) {
 			continue
 		case "destroy_room":
 			if p.role == "server" {
+				if p.hub != nil {
+					p.hub.traceRelayMessage("server_request", p.room.token, p.clientID, msg, "")
+				}
 				roomDestroyed = true
 				h.destroyRoom(p.room.token, relayMessage{Type: "sharing_stopped"})
 				return
@@ -255,15 +266,24 @@ func (p *peer) readPump(h *hub) {
 			continue
 		case "active_session":
 			if p.role == "server" {
+				if p.hub != nil {
+					p.hub.traceRelayMessage("server_request", p.room.token, p.clientID, msg, "")
+				}
 				p.handleActiveSession(msg)
 			}
 			continue
 		case "resume_hello", "resume_from":
 			if p.role == "client" {
+				if p.hub != nil {
+					p.hub.traceRelayMessage("client_request", p.room.token, msg.ClientID, msg, "")
+				}
 				p.handleResume(msg)
 			}
 			continue
 		case "language_change":
+			if p.hub != nil {
+				p.hub.traceRelayMessage("client_request", p.room.token, p.clientID, msg, "")
+			}
 			// forward to all other peers in room
 			p.room.mu.Lock()
 			fwdMsg := relayMessage{
@@ -282,6 +302,9 @@ func (p *peer) readPump(h *hub) {
 			p.room.mu.Unlock()
 			continue
 		case "theme_change":
+			if p.hub != nil {
+				p.hub.traceRelayMessage("client_request", p.room.token, p.clientID, msg, "")
+			}
 			p.room.mu.Lock()
 			fwdMsg := relayMessage{
 				Type:      "theme_change",
@@ -299,6 +322,13 @@ func (p *peer) readPump(h *hub) {
 			p.room.mu.Unlock()
 			continue
 		case "encrypted":
+			if p.hub != nil {
+				route := "server_publish"
+				if p.role == "client" {
+					route = "client_forward"
+				}
+				p.hub.traceRelayMessage(route, p.room.token, p.clientID, msg, "")
+			}
 			// Send relay_ack back to the client immediately if message_id is present.
 			if p.role == "client" && msg.MessageID != "" {
 				p.sendJSON(relayMessage{Type: "relay_ack", MessageID: msg.MessageID})
@@ -333,6 +363,9 @@ func (p *peer) readPump(h *hub) {
 					readyClients++
 					c.sendRaw(raw)
 				}
+			}
+			if p.hub != nil && readyClients > 0 {
+				p.hub.traceRelayMessage("server_broadcast", p.room.token, "", msg, fmt.Sprintf("deliveries=%d", readyClients))
 			}
 			if p.hub != nil && p.hub.stats != nil {
 				p.hub.stats.recordClientBroadcast(readyClients)
@@ -423,6 +456,9 @@ func (p *peer) handleActiveSession(msg relayMessage) {
 		Data:      mustJSON(activeSessionData{SessionID: sessionID}),
 	}
 	for _, c := range clients {
+		if p.hub != nil {
+			p.hub.traceRelayMessage("relay_push", token, c.clientID, active, "reason=active_session")
+		}
 		c.sendJSON(active)
 	}
 	if p.hub != nil && p.hub.stats != nil {
@@ -467,16 +503,36 @@ func (p *peer) handleResume(msg relayMessage) {
 		ClientID:   msg.ClientID,
 		ResumeMode: mode,
 	})
+	if p.hub != nil {
+		p.hub.traceRelayMessage("relay_push", p.room.token, msg.ClientID, relayMessage{
+			Type:       "resume_ack",
+			SessionID:  p.room.sessionID,
+			ClientID:   msg.ClientID,
+			ResumeMode: mode,
+		}, fmt.Sprintf("replay=%d", len(replay)))
+	}
 
 	switch mode {
 	case "snapshot_required":
-		p.sendJSON(relayMessage{Type: "resume_miss", SessionID: p.room.sessionID, ClientID: msg.ClientID})
-		p.sendJSON(relayMessage{Type: "snapshot_reset", SessionID: p.room.sessionID, ClientID: msg.ClientID})
+		resumeMiss := relayMessage{Type: "resume_miss", SessionID: p.room.sessionID, ClientID: msg.ClientID}
+		snapshotReset := relayMessage{Type: "snapshot_reset", SessionID: p.room.sessionID, ClientID: msg.ClientID}
+		p.sendJSON(resumeMiss)
+		p.sendJSON(snapshotReset)
+		if p.hub != nil {
+			p.hub.traceRelayMessage("relay_push", p.room.token, msg.ClientID, resumeMiss, "")
+			p.hub.traceRelayMessage("relay_push", p.room.token, msg.ClientID, snapshotReset, "")
+		}
 		for _, ev := range replay {
+			if p.hub != nil {
+				p.hub.traceRoomEvent("replay_send", p.room.token, msg.ClientID, ev, "mode=snapshot_required")
+			}
 			p.sendRaw(ev.raw)
 		}
 	default:
 		for _, ev := range replay {
+			if p.hub != nil {
+				p.hub.traceRoomEvent("replay_send", p.room.token, msg.ClientID, ev, "mode="+mode)
+			}
 			p.sendRaw(ev.raw)
 		}
 	}
@@ -517,17 +573,19 @@ func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEv
 // ─── Hub ───
 
 type hub struct {
-	rooms map[string]*room
-	store *relayStore
-	stats *relayStats
-	mu    sync.RWMutex
+	rooms  map[string]*room
+	store  *relayStore
+	stats  *relayStats
+	tracer *relayTraceLogger
+	mu     sync.RWMutex
 }
 
 func newHub(store *relayStore) *hub {
 	return &hub{
-		rooms: make(map[string]*room),
-		store: store,
-		stats: newRelayStats(),
+		rooms:  make(map[string]*room),
+		store:  store,
+		stats:  newRelayStats(),
+		tracer: newRelayTraceLogger(),
 	}
 }
 
@@ -621,6 +679,9 @@ func (h *hub) notifyRoomRecovering(token, sessionID string) {
 		return
 	}
 	for _, c := range clients {
+		if h != nil {
+			h.traceRelayMessage("relay_notice", token, c.clientID, notice, "reason=server_recovering")
+		}
 		c.sendJSON(notice)
 	}
 	time.AfterFunc(500*time.Millisecond, func() {
@@ -709,6 +770,7 @@ func (h *hub) destroyRoom(token string, notice relayMessage) {
 	)
 	if notice.Type != "" {
 		for _, c := range clients {
+			h.traceRelayMessage("relay_notice", token, c.clientID, notice, "reason=room_destroy")
 			c.sendJSON(notice)
 		}
 		time.AfterFunc(500*time.Millisecond, func() {
@@ -779,6 +841,13 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rm.clients[p] = struct{}{}
 		rm.notifyServerClientConnected()
+		h.traceRelayMessage("server_notify", token, "", relayMessage{
+			Type:        "connected",
+			Role:        "client",
+			SessionID:   rm.sessionID,
+			Count:       len(rm.history),
+			LastEventID: lastEventID(rm.history),
+		}, "reason=client_join")
 	}
 	clients := len(rm.clients)
 	sessionID := rm.sessionID
@@ -833,8 +902,14 @@ func main() {
 			}
 		}
 	}()
-
 	h := newHub(store)
+	go func() {
+		ticker := time.NewTicker(traceFlushInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			h.flushTraceLogs()
+		}
+	}()
 	go func() {
 		ticker := time.NewTicker(defaultStatsInterval)
 		defer ticker.Stop()
