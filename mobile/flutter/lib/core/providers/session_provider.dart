@@ -1173,19 +1173,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _setAgentStatus(snapshot.agentStatus, '');
     _setAgentActivity(snapshot.agentStatusMessage);
-
-    final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
-    final record = cacheState.sessions[sessionKey];
+    final snapshotCursor = snapshot.lastEventId;
     if (adoptCursor) {
       _sessionId = sessionId;
-      _lastAppliedEventId = record?.lastEventId ?? '';
+      _lastAppliedEventId = snapshotCursor;
     } else if (seedCursorIfUnset &&
         _lastAppliedEventId.isEmpty &&
-        record != null &&
-        record.lastEventId.isNotEmpty) {
+        snapshotCursor.isNotEmpty) {
       if (_sessionId.isEmpty || _sessionId == sessionId) {
         _sessionId = sessionId;
-        _lastAppliedEventId = record.lastEventId;
+        _lastAppliedEventId = snapshotCursor;
       }
     }
     return true;
@@ -2405,6 +2402,7 @@ class CachedSessionSnapshot {
   final proto.SessionInfoData? sessionInfo;
   final String agentStatus;
   final String agentStatusMessage;
+  final String lastEventId;
 
   const CachedSessionSnapshot({
     required this.messages,
@@ -2412,6 +2410,7 @@ class CachedSessionSnapshot {
     required this.sessionInfo,
     this.agentStatus = 'idle',
     this.agentStatusMessage = '',
+    this.lastEventId = '',
   });
 
   Map<String, dynamic> toJson() => {
@@ -2420,6 +2419,7 @@ class CachedSessionSnapshot {
         'session_info': _sessionInfoToJson(sessionInfo),
         'agent_status': _normalizedCachedAgentStatus(agentStatus),
         'agent_status_message': agentStatusMessage,
+        'last_event_id': lastEventId,
       };
 
   factory CachedSessionSnapshot.fromJson(Map<String, dynamic> json) {
@@ -2441,6 +2441,7 @@ class CachedSessionSnapshot {
         json['agent_status'] as String? ?? 'idle',
       ),
       agentStatusMessage: json['agent_status_message'] as String? ?? '',
+      lastEventId: json['last_event_id'] as String? ?? '',
     );
   }
 }
@@ -3215,6 +3216,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       sessionInfo: sessionInfo,
       agentStatus: _normalizedCachedAgentStatus(agentStatus),
       agentStatusMessage: agentStatusMessage,
+      lastEventId: lastEventId,
     );
     final snapshotKey = _sessionCacheKey(workspaceKey, sessionId);
     final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots)
