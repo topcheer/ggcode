@@ -86,6 +86,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<ApprovalInfo?>(approvalProvider, (prev, next) {
+      if (next != null && prev == null) {
+        FocusManager.instance.primaryFocus?.unfocus();
+      }
+    });
     final allMessages = ref.watch(displayedMessagesProvider);
     final approval = ref.watch(approvalProvider);
     final info = ref.watch(displayedSessionInfoProvider);

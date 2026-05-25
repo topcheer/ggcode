@@ -14,6 +14,8 @@ import 'dart:io';
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
 import 'package:ggcode_mobile/core/theme/app_theme.dart';
+import 'package:ggcode_mobile/features/chat/approval_sheet.dart';
+import 'package:ggcode_mobile/features/chat/ask_user_screen.dart';
 import 'package:ggcode_mobile/features/chat/chat_screen.dart';
 import 'package:ggcode_mobile/features/chat/input_bar.dart';
 import 'package:ggcode_mobile/features/connect/connect_screen.dart';
@@ -38,6 +40,14 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
   }
 }
 
+class _ConnectedConnectionNotifier extends _FakeConnectionNotifier {
+  @override
+  TunnelConnectionState build() => TunnelConnectionState(
+        status: ConnectionStatus.connected,
+        url: 'wss://example.test/ws?token=abc',
+      );
+}
+
 void main() {
   late Directory cacheDir;
   setUp(() {
@@ -59,6 +69,47 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: GGCodeApp()));
 
     expect(find.byType(MaterialApp), findsOneWidget);
+  });
+
+  testWidgets('AskUserScreen adds keyboard inset padding',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MediaQuery(
+          data: const MediaQueryData(
+            viewInsets: EdgeInsets.only(bottom: 240),
+          ),
+          child: const MaterialApp(
+            home: Material(
+              child: AskUserScreen(),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final context = tester.element(find.byType(AskUserScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    container.read(askUserProvider.notifier).set(
+          AskUserInfo(
+            id: 'ask-1',
+            title: 'Need input',
+            msgId: 'msg-1',
+            questions: [
+              proto.AskUserQuestion(
+                id: 'q1',
+                prompt: 'Why?',
+                kind: 'text',
+              ),
+            ],
+          ),
+        );
+    await tester.pumpAndSettle();
+
+    final padding = tester.widget<AnimatedPadding>(
+      find.byKey(const Key('askUserKeyboardPadding')),
+    );
+    expect(padding.padding, const EdgeInsets.only(bottom: 240));
   });
 
   testWidgets(
@@ -126,6 +177,87 @@ void main() {
 
     expect(find.byType(ConnectScreen), findsOneWidget);
     expect(find.byType(ChatScreen), findsNothing);
+  });
+
+  testWidgets('AppShell ask_user modal dismisses composer focus',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+    notifier.emit(TunnelConnectionState(
+      status: ConnectionStatus.connected,
+      url: 'wss://example.test/ws?token=abc',
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(ChatScreen), findsOneWidget);
+
+    await tester.showKeyboard(find.byType(EditableText));
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    container.read(askUserProvider.notifier).set(
+          AskUserInfo(
+            id: 'ask-focus',
+            title: 'Choose one',
+            msgId: 'msg-focus',
+            questions: [
+              proto.AskUserQuestion(
+                id: 'q1',
+                prompt: 'Pick one',
+                kind: 'single',
+                choices: [
+                  proto.AskUserChoice(id: 'a', label: 'A'),
+                ],
+              ),
+            ],
+          ),
+        );
+    await tester.pumpAndSettle();
+    expect(find.byType(AskUserScreen), findsOneWidget);
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets('Approval sheet dismisses composer focus when shown',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_ConnectedConnectionNotifier.new),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.showKeyboard(find.byType(EditableText));
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    container.read(approvalProvider.notifier).set(
+          ApprovalInfo(
+            id: 'approval-1',
+            toolName: 'run_command',
+            input: 'go test ./...',
+          ),
+        );
+    await tester.pumpAndSettle();
+    expect(find.byType(ApprovalSheet), findsOneWidget);
+    expect(tester.testTextInput.isVisible, isFalse);
   });
 
   testWidgets('ChatScreen uses tool display name as card title',

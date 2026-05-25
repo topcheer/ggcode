@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func newIMCmd(cfgFile *string) *cobra.Command {
@@ -52,13 +52,116 @@ Subcommands:
 	return cmd
 }
 
-// loadIMConfig loads the config file, falling back to default resolution.
-func loadIMConfig(cfgFilePath string) (*config.Config, error) {
+type imCommandContext struct {
+	cfg         *config.Config
+	globalCfg   *config.Config
+	instanceCfg *config.Config
+	workingDir  string
+}
+
+// loadIMConfig loads the active config using the same path resolution and
+// instance overlay semantics as the TUI and daemon.
+func loadIMConfig(cfgFilePath string) (*imCommandContext, error) {
 	path := cfgFilePath
 	if path == "" {
-		path = config.ConfigPath()
+		resolved, err := resolveConfigFilePath()
+		if err != nil {
+			return nil, err
+		}
+		path = resolved
 	}
-	return config.Load(path)
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolving working directory: %w", err)
+	}
+	cfg, err := config.LoadWithInstance(path, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	globalCfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	return &imCommandContext{
+		cfg:         cfg,
+		globalCfg:   globalCfg,
+		instanceCfg: config.LoadInstanceConfig(workingDir),
+		workingDir:  normalizeWorkspacePath(workingDir),
+	}, nil
+}
+
+func (c *imCommandContext) adapterInGlobal(name string) bool {
+	if c == nil || c.globalCfg == nil || c.globalCfg.IM.Adapters == nil {
+		return false
+	}
+	_, ok := c.globalCfg.IM.Adapters[name]
+	return ok
+}
+
+func (c *imCommandContext) adapterInInstance(name string) bool {
+	if c == nil || c.instanceCfg == nil || c.instanceCfg.IM.Adapters == nil {
+		return false
+	}
+	_, ok := c.instanceCfg.IM.Adapters[name]
+	return ok
+}
+
+func (c *imCommandContext) configPathForScope(scope string) string {
+	if strings.EqualFold(strings.TrimSpace(scope), "instance") {
+		if path := config.InstanceConfigPath(c.workingDir); path != "" {
+			return path
+		}
+	}
+	return c.cfg.FilePath
+}
+
+func addIMConfigScopeFlag(cmd *cobra.Command, scope *string) {
+	cmd.Flags().StringVar(scope, "scope", "auto", "config target: auto, global, or instance")
+}
+
+func resolveIMConfigScope(ctx *imCommandContext, requested, adapterName string, creating bool) (string, error) {
+	scope := strings.ToLower(strings.TrimSpace(requested))
+	if scope == "" {
+		scope = "auto"
+	}
+	switch scope {
+	case "auto":
+	case "global":
+		return "global", nil
+	case "instance":
+		if err := ctx.cfg.SetSaveScope("instance"); err != nil {
+			return "", err
+		}
+		return "instance", nil
+	default:
+		return "", fmt.Errorf("unknown scope %q (expected auto, global, or instance)", requested)
+	}
+
+	if adapterName != "" {
+		inGlobal := ctx.adapterInGlobal(adapterName)
+		inInstance := ctx.adapterInInstance(adapterName)
+		switch {
+		case inInstance && !inGlobal:
+			return "instance", nil
+		case inGlobal:
+			return "global", nil
+		}
+	}
+	if creating && ctx.cfg.HasInstanceConfigFile() {
+		return "instance", nil
+	}
+	return "global", nil
+}
+
+func prepareIMConfigWrite(ctx *imCommandContext, requestedScope, adapterName string, creating bool) (string, error) {
+	scope, err := resolveIMConfigScope(ctx, requestedScope, adapterName, creating)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.cfg.SetSaveScope(scope); err != nil {
+		return "", err
+	}
+	return scope, nil
 }
 
 // resolveBindingsPath returns the default IM bindings file path.
@@ -78,17 +181,18 @@ func newIMStatusCmd(cfgFile *string) *cobra.Command {
 		Use:   "status",
 		Short: "Show IM overview (adapters + bindings)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			cfg := ctx.cfg
 
 			out := cmd.OutOrStdout()
 			fmt.Fprintln(out, "IM Status")
 			fmt.Fprintln(out, strings.Repeat("─", 40))
 
 			// Workspace
-			wd, _ := os.Getwd()
+			wd := ctx.workingDir
 			fmt.Fprintf(out, "  Workspace: %s\n", wd)
 
 			// Adapters
@@ -129,10 +233,11 @@ func newIMListCmd(cfgFile *string) *cobra.Command {
 		Short:   "List configured IM adapters",
 		Aliases: []string{"adapters"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			cfg := ctx.cfg
 
 			adapters := sortedAdapters(cfg)
 			if len(adapters) == 0 {
@@ -206,10 +311,11 @@ func newIMBindCmd(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("--channel is required")
 			}
 
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			cfg := ctx.cfg
 
 			// Validate adapter exists
 			if cfg.IM.Adapters == nil {
@@ -422,6 +528,7 @@ func newIMConfigAddCmd(cfgFile *string) *cobra.Command {
 	var enabled bool
 	var extras []string
 	var allowFrom []string
+	var scope string
 
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -442,9 +549,14 @@ Examples:
 				return fmt.Errorf("--platform is required (qq, telegram, feishu, dingtalk, discord, slack, privateclaw)")
 			}
 
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
+			}
+			cfg := ctx.cfg
+			effectiveScope, err := prepareIMConfigWrite(ctx, scope, name, true)
+			if err != nil {
+				return err
 			}
 
 			extraMap := make(map[string]interface{})
@@ -468,7 +580,7 @@ Examples:
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Added IM adapter %q (platform: %s) to %s\n", name, platform, cfg.FilePath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Added IM adapter %q (platform: %s) to %s\n", name, platform, ctx.configPathForScope(effectiveScope))
 			return nil
 		},
 	}
@@ -477,28 +589,38 @@ Examples:
 	cmd.Flags().BoolVar(&enabled, "enabled", true, "enable the adapter")
 	cmd.Flags().StringArrayVar(&extras, "extra", nil, "platform-specific key=value parameter (repeatable)")
 	cmd.Flags().StringArrayVar(&allowFrom, "allow-from", nil, "allowed source IDs (repeatable)")
+	addIMConfigScopeFlag(cmd, &scope)
 	_ = cmd.MarkFlagRequired("platform")
 	return cmd
 }
 
 func newIMConfigRemoveCmd(cfgFile *string) *cobra.Command {
-	return &cobra.Command{
+	var scope string
+
+	cmd := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove an IM adapter configuration",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
+			}
+			cfg := ctx.cfg
+			effectiveScope, err := prepareIMConfigWrite(ctx, scope, name, false)
+			if err != nil {
+				return err
 			}
 			if err := cfg.RemoveIMAdapter(name); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Removed IM adapter %q from %s\n", name, cfg.FilePath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Removed IM adapter %q from %s\n", name, ctx.configPathForScope(effectiveScope))
 			return nil
 		},
 	}
+	addIMConfigScopeFlag(cmd, &scope)
+	return cmd
 }
 
 func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
@@ -510,10 +632,11 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := strings.TrimSpace(args[0])
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			cfg := ctx.cfg
 			if cfg.IM.Adapters == nil {
 				return fmt.Errorf("adapter %q not found", name)
 			}
@@ -568,6 +691,8 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 }
 
 func newIMConfigSetCmd(cfgFile *string) *cobra.Command {
+	var scope string
+
 	cmd := &cobra.Command{
 		Use:   "set <name> <key> <value>",
 		Short: "Modify a single adapter setting",
@@ -588,9 +713,14 @@ Examples:
 			key := strings.TrimSpace(args[1])
 			value := args[2]
 
-			cfg, err := loadIMConfig(*cfgFile)
+			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
+			}
+			cfg := ctx.cfg
+			effectiveScope, err := prepareIMConfigWrite(ctx, scope, name, false)
+			if err != nil {
+				return err
 			}
 			if cfg.IM.Adapters == nil {
 				return fmt.Errorf("adapter %q not found", name)
@@ -604,19 +734,19 @@ Examples:
 			case "enabled":
 				adapter.Enabled = (value == "true" || value == "1")
 				cfg.IM.Adapters[name] = adapter
-				if err := cfg.Save(); err != nil {
+				if err := cfg.SaveScoped(effectiveScope); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
 			case "platform":
 				adapter.Platform = value
 				cfg.IM.Adapters[name] = adapter
-				if err := cfg.Save(); err != nil {
+				if err := cfg.SaveScoped(effectiveScope); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
 			case "transport":
 				adapter.Transport = value
 				cfg.IM.Adapters[name] = adapter
-				if err := cfg.Save(); err != nil {
+				if err := cfg.SaveScoped(effectiveScope); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
 			default:
@@ -635,6 +765,7 @@ Examples:
 			return nil
 		},
 	}
+	addIMConfigScopeFlag(cmd, &scope)
 	return cmd
 }
 
@@ -738,11 +869,7 @@ func printJSON(out io.Writer, v interface{}) error {
 }
 
 func normalizeWorkspacePath(p string) string {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	return abs
+	return session.NormalizeWorkspacePath(p)
 }
 
 func valueOr(v, fallback string) string {

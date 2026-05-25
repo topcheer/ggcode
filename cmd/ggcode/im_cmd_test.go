@@ -230,6 +230,94 @@ func TestIMConfigSetExtra(t *testing.T) {
 	}
 }
 
+func TestIMConfigAddAutoUsesInstanceScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	writeTestConfig(t, cfgPath, nil)
+
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeInstanceConfig(t, workspace, "im:\n  adapters: {}\n")
+
+	wd, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	buf := &bytes.Buffer{}
+	cmd := newIMConfigCmd(ptr(cfgPath))
+	cmd.SetOut(buf)
+	cmd.SetArgs([]string{"add", "my-qq", "--platform", "qq"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	globalCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload global: %v", err)
+	}
+	if _, ok := globalCfg.IM.Adapters["my-qq"]; ok {
+		t.Fatal("global config should not contain instance-scoped adapter")
+	}
+
+	instanceCfg := config.LoadInstanceConfig(workspace)
+	if instanceCfg == nil {
+		t.Fatal("instance config should exist")
+	}
+	if _, ok := instanceCfg.IM.Adapters["my-qq"]; !ok {
+		t.Fatal("instance config should contain my-qq")
+	}
+}
+
+func TestIMConfigSetAutoUsesInstanceScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	writeTestConfig(t, cfgPath, nil)
+
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeInstanceConfig(t, workspace, "im:\n  adapters:\n    my-tg:\n      platform: telegram\n      enabled: true\n")
+
+	wd, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	cmd := newIMConfigCmd(ptr(cfgPath))
+	cmd.SetArgs([]string{"set", "my-tg", "enabled", "false"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	globalCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload global: %v", err)
+	}
+	if _, ok := globalCfg.IM.Adapters["my-tg"]; ok {
+		t.Fatal("global config should not gain instance adapter")
+	}
+
+	instanceCfg := config.LoadInstanceConfig(workspace)
+	if instanceCfg == nil {
+		t.Fatal("instance config should exist")
+	}
+	if instanceCfg.IM.Adapters["my-tg"].Enabled {
+		t.Fatal("instance adapter should be disabled")
+	}
+}
+
 // ============================================================
 // im list
 // ============================================================
@@ -360,6 +448,50 @@ func TestIMBindAndUnbind(t *testing.T) {
 	}
 }
 
+func TestIMBindUsesInstanceAdapterConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	writeTestConfig(t, cfgPath, nil)
+
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeInstanceConfig(t, workspace, "im:\n  adapters:\n    my-qq:\n      platform: qq\n      enabled: true\n")
+
+	bindingsDir := t.TempDir()
+	origPath := resolveBindingsPath
+	t.Cleanup(func() { resolveBindingsPath = origPath })
+	resolveBindingsPath = func() (string, error) { return filepath.Join(bindingsDir, "bindings.json"), nil }
+
+	wd, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	cmd := newIMBindCmd(ptr(cfgPath))
+	cmd.SetArgs([]string{"my-qq", "--channel", "123456"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	store, err := im.NewJSONFileBindingStore(filepath.Join(bindingsDir, "bindings.json"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	bindings, err := store.ListByAdapter("my-qq")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(bindings))
+	}
+}
+
 func TestIMBindMissingChannelFails(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
@@ -485,5 +617,16 @@ func writeTestConfig(t *testing.T, path string, adapters map[string]config.IMAda
 	content := strings.Join(yamlParts, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
+	}
+}
+
+func writeInstanceConfig(t *testing.T, workspace string, content string) {
+	t.Helper()
+	instPath := config.InstanceConfigPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(instPath), 0o755); err != nil {
+		t.Fatalf("mkdir instance dir: %v", err)
+	}
+	if err := os.WriteFile(instPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write instance config: %v", err)
 	}
 }

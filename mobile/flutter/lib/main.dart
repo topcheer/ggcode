@@ -172,6 +172,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // Show ask_user questionnaire as modal bottom sheet
     ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
       if (next != null && prev == null) {
+        FocusManager.instance.primaryFocus?.unfocus();
         showModalBottomSheet(
           context: context,
           isScrollControlled: true,

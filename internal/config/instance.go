@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -20,17 +21,28 @@ const (
 )
 
 // InstanceDir returns the per-workspace instance config directory path.
-// Format: ~/.ggcode/instances/{sha256(abs-workspace)[:16]}
+// Format: ~/.ggcode/instances/{sha256(normalized-workspace)[:16]}
 // Returns empty string if the home directory cannot be resolved.
 func InstanceDir(workspace string) string {
 	home := HomeDir()
-	abs, err := filepath.Abs(workspace)
-	if err != nil {
-		abs = workspace
-	}
-	h := sha256.Sum256([]byte(abs))
+	normalized := normalizeInstanceWorkspacePath(workspace)
+	h := sha256.Sum256([]byte(normalized))
 	hash := hex.EncodeToString(h[:])[:hashLen]
 	return filepath.Join(home, ".ggcode", instancesDir, hash)
+}
+
+func normalizeInstanceWorkspacePath(workspace string) string {
+	trimmed := strings.TrimSpace(workspace)
+	if trimmed == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(trimmed); err == nil {
+		return filepath.Clean(resolved)
+	}
+	if abs, err := filepath.Abs(trimmed); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(trimmed)
 }
 
 // InstanceConfigPath returns the full path to the instance config file.
@@ -452,6 +464,27 @@ func (c *Config) SaveScoped(scope string) error {
 		return c.SaveInstance(c.instanceWS)
 	default:
 		return c.Save()
+	}
+}
+
+// SetSaveScope records which config target future save helpers should write to.
+func (c *Config) SetSaveScope(scope string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	switch scope {
+	case "", "global":
+		c.saveScope = "global"
+		return nil
+	case "instance":
+		if strings.TrimSpace(c.instanceWS) == "" {
+			return fmt.Errorf("instance config is not attached")
+		}
+		c.saveScope = "instance"
+		return nil
+	default:
+		return fmt.Errorf("unknown save scope %q", scope)
 	}
 }
 
