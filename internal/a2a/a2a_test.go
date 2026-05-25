@@ -1505,6 +1505,68 @@ func TestRegistryConcurrentRegister(t *testing.T) {
 	}
 }
 
+func TestRegisterCleansDeadPIDFiles(t *testing.T) {
+	dir := t.TempDir()
+	reg := &Registry{dir: dir}
+
+	// Write several fake instance files with different PIDs.
+	// Use PID 1 (init/launchd — always alive on macOS/Linux) for "alive" instances,
+	// and a very high PID that definitely doesn't exist for "dead" ones.
+	deadPID := 999999901
+	alivePID := os.Getpid()
+
+	dead1 := InstanceInfo{
+		ID: "dead-inst-1", PID: deadPID,
+		Workspace: "/project-dead-1", Endpoint: "http://localhost:9001", Status: "ready",
+	}
+	dead2 := InstanceInfo{
+		ID: "dead-inst-2", PID: deadPID,
+		Workspace: "/project-dead-2", Endpoint: "http://localhost:9002", Status: "ready",
+	}
+	alive1 := InstanceInfo{
+		ID: "alive-inst-1", PID: alivePID,
+		Workspace: "/project-alive-1", Endpoint: "http://localhost:9003", Status: "ready",
+	}
+	for _, inst := range []InstanceInfo{dead1, dead2, alive1} {
+		data, _ := json.MarshalIndent(inst, "", "  ")
+		os.WriteFile(filepath.Join(dir, inst.ID+".json"), data, 0644)
+	}
+
+	// Verify we have 3 files before register.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 files before register, got %d", len(entries))
+	}
+
+	// Register a new instance — this should clean up dead PID files.
+	newInst := InstanceInfo{
+		ID: "new-inst", PID: alivePID,
+		Workspace: "/project-new", Endpoint: "http://localhost:9004", Status: "ready",
+	}
+	if err := reg.Register(newInst); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dead files should be gone; alive + new should remain.
+	entries, _ = os.ReadDir(dir)
+	remaining := map[string]bool{}
+	for _, e := range entries {
+		remaining[e.Name()] = true
+	}
+	if remaining["dead-inst-1.json"] {
+		t.Error("dead-inst-1.json should have been removed")
+	}
+	if remaining["dead-inst-2.json"] {
+		t.Error("dead-inst-2.json should have been removed")
+	}
+	if !remaining["alive-inst-1.json"] {
+		t.Error("alive-inst-1.json should still exist")
+	}
+	if !remaining["new-inst.json"] {
+		t.Error("new-inst.json should exist")
+	}
+}
+
 func TestAmbiguousMatchError(t *testing.T) {
 	dir := t.TempDir()
 	remote := NewRemoteTool(&Registry{dir: dir, selfID: "self"}, "")
