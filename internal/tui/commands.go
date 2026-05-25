@@ -185,7 +185,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
 		"/stream", "/restart", "/help", "/?",
-		"/share", "/tunnel":
+		"/share", "/tunnel", "/unshare":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":

@@ -1031,6 +1031,33 @@ func TestBrokerHandleRelayConnectedSkipsReseedWhenRelayStateRetained(t *testing.
 	}
 }
 
+func TestBrokerHandleRelayConnectedRetainedStateAdvancesEventCursor(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "sess-local",
+		HistoryCount: 3,
+		LastEventID:  "ev-000000003",
+	})
+	time.Sleep(50 * time.Millisecond)
+	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected no reseed traffic, got %d messages", len(msgs))
+	}
+
+	b.PushSystemMessage("cursor advanced")
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 1 {
+		t.Fatalf("expected one live event after retained-state reconnect, got %d", len(msgs))
+	}
+	if msgs[0].EventID != "ev-000000004" {
+		t.Fatalf("expected next event id to continue relay history, got %q", msgs[0].EventID)
+	}
+}
+
 func TestBrokerHandleClientConnectedSkipsAuthoritativeSnapshotWhenStateRetained(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

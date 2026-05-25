@@ -712,7 +712,7 @@ func TestSessionMutexLazyInit(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestCronPromptIdleSubmitsImmediately verifies that when the agent is idle,
-// a cronPromptMsg triggers submitText immediately instead of just queuing.
+// a cronPromptMsg starts immediately via the hidden submission path instead of just queuing.
 func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
 	m := newTestModel()
 	m.loading = false // agent is idle
@@ -721,8 +721,7 @@ func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
 	next, cmd := m.Update(msg)
 	m2 := next.(Model)
 
-	// When idle, submitText should be called immediately.
-	// submitText returns a non-nil tea.Cmd (the agent start command).
+	// When idle, the hidden submission path should start immediately.
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd when cron fires while agent is idle — prompt should be submitted immediately")
 	}
@@ -735,6 +734,9 @@ func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
 	// Loading should now be true (agent starting).
 	if !m2.loading {
 		t.Error("expected loading=true after cron prompt submission")
+	}
+	if len(m2.history) != 0 {
+		t.Fatalf("expected hidden cron prompt to stay out of input history, got %#v", m2.history)
 	}
 }
 

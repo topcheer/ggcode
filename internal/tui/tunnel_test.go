@@ -904,7 +904,7 @@ func TestHandleTunnelClientCommand_InvalidJSON(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdMessage, Data: []byte("not json")}
-	m.handleTunnelClientCommand(cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
 }
 
 func TestHandleTunnelClientCommand_EmptyText(t *testing.T) {
@@ -912,14 +912,14 @@ func TestHandleTunnelClientCommand_EmptyText(t *testing.T) {
 	m.tunnelBroker = nil
 	data, _ := json.Marshal(tunnel.MessageData{Text: ""})
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdMessage, Data: data}
-	m.handleTunnelClientCommand(cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
 }
 
 func TestHandleTunnelClientCommand_Interrupt(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdInterrupt}
-	m.handleTunnelClientCommand(cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
 }
 
 func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
@@ -927,7 +927,7 @@ func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
 	m.tunnelBroker = nil
 	data, _ := json.Marshal(tunnel.ModeChangeData{Mode: "auto"})
 	cmd := tunnel.GatewayMessage{Type: tunnel.CmdModeChange, Data: data}
-	m.handleTunnelClientCommand(cmd) // should not panic
+	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
 }
 
 func TestHandleTunnelClientConnectedMsg_ClosesQROverlayAndWritesSystemMessage(t *testing.T) {
@@ -960,6 +960,76 @@ func TestHandleTunnelClientConnectedMsg_IgnoresInactiveTunnel(t *testing.T) {
 	rendered := stripAnsi(renderedOutput(updated))
 	if strings.Contains(rendered, updated.t("tunnel.mobile_connected")) {
 		t.Fatalf("did not expect connected system message without active tunnel, got: %s", rendered)
+	}
+}
+
+func TestHandleTunnelClientConnectedMsg_IgnoresStaleGeneration(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 2
+	m.tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
+	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
+
+	got, _ := m.handleTunnelClientConnectedMsgForGeneration(1)
+	updated := got.(*Model)
+
+	if updated.qrOverlay == nil {
+		t.Fatal("expected stale connect event to leave QR overlay open")
+	}
+	rendered := stripAnsi(renderedOutput(updated))
+	if strings.Contains(rendered, updated.t("tunnel.mobile_connected")) {
+		t.Fatalf("did not expect stale connect event to write system message, got: %s", rendered)
+	}
+}
+
+func TestHandleTunnelInboundMsg_IgnoresStaleGeneration(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 2
+
+	got, cmd := m.handleTunnelInboundMsg(tunnelInboundMsg{generation: 1, text: "hello from stale tunnel"})
+	updated := got.(*Model)
+	if cmd != nil {
+		t.Fatal("expected stale inbound tunnel event to do nothing")
+	}
+	if updated.loading {
+		t.Fatal("expected stale inbound tunnel event to not start loading")
+	}
+	rendered := stripAnsi(renderedOutput(updated))
+	if strings.Contains(rendered, "hello from stale tunnel") {
+		t.Fatalf("did not expect stale inbound text to render, got: %s", rendered)
+	}
+}
+
+func TestHandleTunnelStartMsg_DoesNotSeedRelayBeforeClientConnect(t *testing.T) {
+	m := newTestModel()
+	store := newTestSessionStore(t)
+	ses := session.NewSession("", "", "")
+	m.SetSession(ses, store)
+	m.chatWriteUser(nextChatID(), "hello")
+
+	tunnelSession := tunnel.NewSession("wss://test.local")
+	broker := tunnel.NewBroker(tunnelSession)
+	defer broker.Stop()
+	defer tunnelSession.Stop()
+
+	info := &tunnel.SessionInfo{
+		ConnectURL: "wss://test.local/ws?role=client&token=test",
+		QRCode:     "QR",
+	}
+	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+		info:    info,
+		session: tunnelSession,
+		broker:  broker,
+	})
+	updated := got.(*Model)
+
+	if updated.qrOverlay == nil {
+		t.Fatal("expected QR overlay to open after tunnel start")
+	}
+	if updated.tunnelBroker.SessionID() != ses.ID {
+		t.Fatalf("expected broker session id to bind immediately, got %q want %q", updated.tunnelBroker.SessionID(), ses.ID)
+	}
+	if len(updated.session.TunnelEvents) != 0 {
+		t.Fatalf("expected share start to avoid eager relay seeding, got %d recorded events", len(updated.session.TunnelEvents))
 	}
 }
 
@@ -1012,6 +1082,21 @@ func TestHandleTunnelCommand_StopNoTunnel(t *testing.T) {
 func TestHandleTunnelCommand_ShareAlias(t *testing.T) {
 	m := newTestModel()
 	_ = m.handleTunnelCommand("/share status")
+}
+
+func TestHandleTunnelCommand_DoesNotStartWhileStarting(t *testing.T) {
+	m := newTestModel()
+	m.tunnelStarting = true
+
+	cmd := m.handleTunnelCommand("/share")
+
+	if cmd != nil {
+		t.Fatal("expected no duplicate start command while tunnel is already starting")
+	}
+	rendered := stripAnsi(renderedOutput(&m))
+	if strings.Contains(rendered, "Starting tunnel...") {
+		t.Fatalf("did not expect duplicate starting message, got: %s", rendered)
+	}
 }
 
 func TestHandleTunnelApprovalResponse_IgnoresMismatchedID(t *testing.T) {

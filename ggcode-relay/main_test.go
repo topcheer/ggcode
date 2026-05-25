@@ -209,6 +209,35 @@ func TestPeerHandleActiveSessionBindsRoomAndNotifiesClients(t *testing.T) {
 	}
 }
 
+func TestPeerHandleActiveSessionHydratesCrossRoomSessionHistory(t *testing.T) {
+	store := newStoreForTest(t)
+	persistTestEvent(t, store, "token-old-1234567890abcdef", "new-session", "ev-000000001")
+
+	r := &room{
+		token:       "token-new-1234567890abcdef",
+		sessionID:   "old-session",
+		history:     []roomEvent{{sessionID: "old-session", eventID: "ev-000000001"}},
+		clients:     map[*peer]struct{}{},
+		clientsByID: map[string]*peer{},
+	}
+	server := &peer{
+		hub:    &hub{store: store},
+		room:   r,
+		role:   "server",
+		sendCh: make(chan []byte, 2),
+		done:   make(chan struct{}),
+	}
+
+	server.handleActiveSession(relayMessage{Type: "active_session", SessionID: "new-session"})
+
+	if r.sessionID != "new-session" {
+		t.Fatalf("room sessionID = %q, want new-session", r.sessionID)
+	}
+	if len(r.history) != 1 || r.history[0].eventID != "ev-000000001" {
+		t.Fatalf("expected room history to hydrate from logical session store, got %+v", r.history)
+	}
+}
+
 func TestHubGetOrLoadClientRoomRejectsUnknownToken(t *testing.T) {
 	h := newHub(nil)
 	if room, ok := h.getOrLoadClientRoom("token-1234567890abcdef"); ok || room != nil {

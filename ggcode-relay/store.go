@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS relay_sessions (
   PRIMARY KEY (token_hash, session_id)
 );
 
+CREATE TABLE IF NOT EXISTS relay_global_sessions (
+  session_id TEXT PRIMARY KEY,
+  last_event_at TIMESTAMP NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS relay_events (
   token_hash TEXT NOT NULL,
   session_id TEXT NOT NULL,
@@ -78,8 +83,24 @@ CREATE TABLE IF NOT EXISTS relay_events (
 CREATE INDEX IF NOT EXISTS idx_relay_events_room_session
   ON relay_events(token_hash, session_id, event_id);
 
+CREATE TABLE IF NOT EXISTS relay_global_events (
+  session_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  stream_id TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL,
+  raw BLOB NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  PRIMARY KEY (session_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_global_events_session
+  ON relay_global_events(session_id, event_id);
+
 CREATE INDEX IF NOT EXISTS idx_relay_sessions_expiry
   ON relay_sessions(last_event_at);
+
+CREATE INDEX IF NOT EXISTS idx_relay_global_sessions_expiry
+  ON relay_global_sessions(last_event_at);
 `
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -136,7 +157,44 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 	if err := rows.Err(); err != nil {
 		return persistedRoomState{}, fmt.Errorf("iterate room events: %w", err)
 	}
+	if len(state.history) == 0 {
+		history, err := s.loadSessionHistory(state.sessionID)
+		if err != nil {
+			return persistedRoomState{}, err
+		}
+		state.history = history
+	}
 	return state, nil
+}
+
+func (s *relayStore) loadSessionHistory(sessionID string) ([]roomEvent, error) {
+	if s == nil || sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.Query(
+		`SELECT session_id, event_id, stream_id, type, raw
+		   FROM relay_global_events
+		  WHERE session_id = ?
+		  ORDER BY event_id`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query session events: %w", err)
+	}
+	defer rows.Close()
+	var history []roomEvent
+	for rows.Next() {
+		var ev roomEvent
+		if err := rows.Scan(&ev.sessionID, &ev.eventID, &ev.streamID, &ev.typ, &ev.raw); err != nil {
+			return nil, fmt.Errorf("scan session event: %w", err)
+		}
+		ev.raw = append([]byte(nil), ev.raw...)
+		history = append(history, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session events: %w", err)
+	}
+	return history, nil
 }
 
 func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) error {
@@ -174,6 +232,15 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 		return fmt.Errorf("upsert session: %w", err)
 	}
 	if _, err = tx.Exec(
+		`INSERT INTO relay_global_sessions(session_id, last_event_at)
+		 VALUES(?, ?)
+		 ON CONFLICT(session_id) DO UPDATE SET
+		   last_event_at = excluded.last_event_at`,
+		msg.SessionID, now,
+	); err != nil {
+		return fmt.Errorf("upsert global session: %w", err)
+	}
+	if _, err = tx.Exec(
 		`INSERT INTO relay_events(token_hash, session_id, event_id, stream_id, type, raw, created_at)
 		 VALUES(?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(token_hash, session_id, event_id) DO UPDATE SET
@@ -183,6 +250,17 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 		tokenHash, msg.SessionID, msg.EventID, msg.StreamID, msg.Type, raw, now,
 	); err != nil {
 		return fmt.Errorf("insert event: %w", err)
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO relay_global_events(session_id, event_id, stream_id, type, raw, created_at)
+		 VALUES(?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(session_id, event_id) DO UPDATE SET
+		   stream_id = excluded.stream_id,
+		   type = excluded.type,
+		   raw = excluded.raw`,
+		msg.SessionID, msg.EventID, msg.StreamID, msg.Type, raw, now,
+	); err != nil {
+		return fmt.Errorf("insert global event: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit persist tx: %w", err)
@@ -223,6 +301,15 @@ func (s *relayStore) persistActiveSession(token, sessionID string) error {
 		tokenHash, sessionID, now,
 	); err != nil {
 		return fmt.Errorf("upsert active session: %w", err)
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO relay_global_sessions(session_id, last_event_at)
+		 VALUES(?, ?)
+		 ON CONFLICT(session_id) DO UPDATE SET
+		   last_event_at = excluded.last_event_at`,
+		sessionID, now,
+	); err != nil {
+		return fmt.Errorf("upsert active global session: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit active session tx: %w", err)
@@ -303,6 +390,21 @@ func (s *relayStore) cleanupExpired(now time.Time) error {
 	}
 	if _, err = tx.Exec(`DELETE FROM relay_sessions WHERE last_event_at < ?`, cutoff); err != nil {
 		return fmt.Errorf("delete expired sessions: %w", err)
+	}
+	if _, err = tx.Exec(
+		`DELETE FROM relay_global_events
+		  WHERE EXISTS (
+		      SELECT 1
+		        FROM relay_global_sessions s
+		       WHERE s.session_id = relay_global_events.session_id
+		         AND s.last_event_at < ?
+		    )`,
+		cutoff,
+	); err != nil {
+		return fmt.Errorf("delete expired global events: %w", err)
+	}
+	if _, err = tx.Exec(`DELETE FROM relay_global_sessions WHERE last_event_at < ?`, cutoff); err != nil {
+		return fmt.Errorf("delete expired global sessions: %w", err)
 	}
 	if _, err = tx.Exec(`DELETE FROM relay_rooms WHERE current_session_id = '' AND updated_at < ?`, cutoff); err != nil {
 		return fmt.Errorf("delete expired rooms: %w", err)

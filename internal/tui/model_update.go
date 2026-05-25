@@ -329,7 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Otherwise queue it for processing after the current run finishes.
 		if !m.loading {
 			m.setNextTunnelUserMessageOverride(override)
-			return m, m.submitText(msg.Prompt, true)
+			return m, m.submitHiddenText(msg.Prompt)
 		}
 		m.queuePendingSubmissionHiddenWithOverride(msg.Prompt, &override)
 		return m, nil
@@ -384,7 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTunnelInboundMsg(msg)
 
 	case tunnelClientConnectedMsg:
-		return m.handleTunnelClientConnectedMsg()
+		return m.handleTunnelClientConnectedMsgForGeneration(msg.generation)
 
 	case tunnelModeChangeMsg:
 		return m.handleTunnelModeChangeMsg(msg)
