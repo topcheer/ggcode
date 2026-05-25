@@ -1950,6 +1950,29 @@ func desktopTunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 	return true
 }
 
+func desktopMergeTunnelHistory(base, tail []tunnel.HistoryEntry) []tunnel.HistoryEntry {
+	if len(tail) == 0 {
+		return base
+	}
+	if len(base) == 0 {
+		return append([]tunnel.HistoryEntry(nil), tail...)
+	}
+	maxOverlap := len(base)
+	if len(tail) < maxOverlap {
+		maxOverlap = len(tail)
+	}
+	overlap := 0
+	for size := maxOverlap; size > 0; size-- {
+		if desktopTunnelHistoryMatches(base[len(base)-size:], tail[:size]) {
+			overlap = size
+			break
+		}
+	}
+	out := append([]tunnel.HistoryEntry(nil), base...)
+	out = append(out, tail[overlap:]...)
+	return out
+}
+
 func (b *AgentBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
 	if b.ui != nil {
 		if msgs := b.ui.TakeMessages(); len(msgs) > 0 {
@@ -1960,6 +1983,25 @@ func (b *AgentBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
 		return desktopSessionMessagesToTunnelHistory(b.currentSes.Messages)
 	}
 	return nil
+}
+
+func (b *AgentBridge) currentIncompleteTunnelHistoryTail() []tunnel.HistoryEntry {
+	b.mu.Lock()
+	if b.currentSes == nil || b.currentSes.TunnelEventsComplete || len(b.currentSes.TunnelEvents) == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	events := append([]session.TunnelEvent(nil), b.currentSes.TunnelEvents...)
+	b.mu.Unlock()
+	return desktopTunnelEventsToHistory(events)
+}
+
+func (b *AgentBridge) CurrentTunnelSnapshotHistory() []tunnel.HistoryEntry {
+	history := b.CurrentTunnelHistory()
+	if tail := b.currentIncompleteTunnelHistoryTail(); len(tail) > 0 {
+		history = desktopMergeTunnelHistory(history, tail)
+	}
+	return history
 }
 
 func (b *AgentBridge) PrepareCurrentSessionTunnelLedger() {

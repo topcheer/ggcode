@@ -5,6 +5,7 @@ class WsMessage {
   final String? sessionId;
   final String? eventId;
   final String? streamId;
+  final String? messageId;
   final String type;
   final Map<String, dynamic>? data;
 
@@ -12,6 +13,7 @@ class WsMessage {
     this.sessionId,
     this.eventId,
     this.streamId,
+    this.messageId,
     required this.type,
     this.data,
   });
@@ -20,6 +22,7 @@ class WsMessage {
         'session_id': sessionId,
         'event_id': eventId,
         'stream_id': streamId,
+        'message_id': messageId,
         'type': type,
         'data': data,
       });
@@ -30,6 +33,7 @@ class WsMessage {
       sessionId: map['session_id'] as String?,
       eventId: map['event_id'] as String?,
       streamId: map['stream_id'] as String?,
+      messageId: map['message_id'] as String?,
       type: map['type'] as String,
       data: map['data'] as Map<String, dynamic>?,
     );
@@ -118,17 +122,27 @@ class MessageData {
   final String text;
   final String displayText;
   final String kind;
+  final String messageId;
 
   MessageData({
     required this.text,
     this.displayText = '',
     this.kind = '',
+    this.messageId = '',
   });
+
+  Map<String, dynamic> toJson() => {
+        'text': text,
+        'display_text': displayText,
+        'kind': kind,
+        'message_id': messageId,
+      };
 
   factory MessageData.fromJson(Map<String, dynamic> d) => MessageData(
         text: d['text'] as String? ?? '',
         displayText: d['display_text'] as String? ?? '',
         kind: d['kind'] as String? ?? '',
+        messageId: d['message_id'] as String? ?? '',
       );
 }
 

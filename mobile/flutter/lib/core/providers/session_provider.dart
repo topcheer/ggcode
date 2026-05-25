@@ -209,6 +209,23 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       (msg) => _dispatchMessage(msg),
     );
 
+    // Listen to ack events and forward to ChatNotifier
+    service!.ackStream.listen(
+      (ack) {
+        final chatNotifier = ref.read(chatProvider.notifier);
+        switch (ack.type) {
+          case 'relay_ack':
+            chatNotifier.updateMessageStatus(
+                ack.messageId, MessageStatus.delivered);
+            break;
+          case 'server_ack':
+            chatNotifier.updateMessageStatus(
+                ack.messageId, MessageStatus.acknowledged);
+            break;
+        }
+      },
+    );
+
     try {
       // dart:io WebSocket.connect properly awaits handshake
       await service!.connect();
@@ -257,6 +274,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   void send(Map<String, dynamic> data) {
     final msg = proto.WsMessage(
         type: data['type'] as String? ?? 'message',
+        messageId: data['message_id'] as String?,
         data: data['data'] as Map<String, dynamic>?);
     service?.sendEncrypted(msg);
   }
@@ -268,6 +286,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _dispatchMessage(proto.WsMessage msg) {
     final chatNotifier = ref.read(chatProvider.notifier);
+
+    // Handle server_ack from encrypted channel (Desktop → Client ack).
+    if (msg.type == 'server_ack') {
+      final messageId = msg.data?['message_id'] as String? ?? '';
+      if (messageId.isNotEmpty) {
+        chatNotifier.updateMessageStatus(messageId, MessageStatus.acknowledged);
+      }
+      return;
+    }
 
     switch (msg.type) {
       case 'active_session':
@@ -1119,6 +1146,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 }
 
+// ---- Message delivery status for ack tracking ----
+
+enum MessageStatus {
+  sending,     // not yet acknowledged by relay
+  delivered,   // relay acknowledged (relay_ack received)
+  acknowledged, // desktop acknowledged (server_ack received)
+  failed,      // timed out waiting for relay_ack
+}
+
 // ---- Chat Messages Provider ----
 
 class ChatMessage {
@@ -1140,6 +1176,7 @@ class ChatMessage {
   final bool toolCompleted;
   final bool isToolError;
   final DateTime time;
+  final MessageStatus status; // ack tracking for user messages
 
   ChatMessage({
     required this.id,
@@ -1160,6 +1197,7 @@ class ChatMessage {
     this.toolCompleted = false,
     this.isToolError = false,
     required this.time,
+    this.status = MessageStatus.acknowledged, // default for server-originated
   });
 
   ChatMessage copyWith({
@@ -1172,6 +1210,7 @@ class ChatMessage {
     String? toolPayloadMode,
     bool? toolCompleted,
     bool? isToolError,
+    MessageStatus? status,
   }) =>
       ChatMessage(
         id: id ?? this.id,
@@ -1192,6 +1231,7 @@ class ChatMessage {
         toolCompleted: toolCompleted ?? this.toolCompleted,
         isToolError: isToolError ?? this.isToolError,
         time: time,
+        status: status ?? this.status,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1248,20 +1288,64 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   @override
   List<ChatMessage> build() => [];
 
+  /// Send a user message with ack tracking.
+  /// Generates a message_id, adds the message in 'sending' status,
+  /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
   void addUserMessage(String text) {
-    state = [
-      ...state,
-      ChatMessage(
-        id: 'user-${_msgCounter++}',
-        isUser: true,
-        text: text,
-        time: DateTime.now(),
-      ),
-    ];
+    final messageId = 'msg-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
+    final msg = ChatMessage(
+      id: messageId,
+      isUser: true,
+      text: text,
+      time: DateTime.now(),
+      status: MessageStatus.sending,
+    );
+    state = [...state, msg];
+
+    // Send with message_id for ack tracking.
     ref.read(connectionProvider.notifier).send({
       'type': 'message',
-      'data': {'text': text},
+      'message_id': messageId,
+      'data': {'text': text, 'message_id': messageId},
     });
+
+    // 5s timeout: if no relay_ack by then, assume delivered via TCP.
+    // This handles the case where an older relay doesn't send relay_ack.
+    // Only mark as truly failed if the connection itself is broken.
+    Future.delayed(const Duration(seconds: 5), () {
+      final idx = state.indexWhere((m) => m.id == messageId);
+      if (idx < 0) return;
+      final current = state[idx];
+      if (current.status == MessageStatus.sending) {
+        final connState = ref.read(connectionProvider);
+        final newStatus = connState.status == ConnectionStatus.connected
+            ? MessageStatus.delivered // connection ok, assume TCP delivered
+            : MessageStatus.failed;   // connection lost, likely failed
+        state = [
+          for (int i = 0; i < state.length; i++)
+            if (i == idx)
+              state[i].copyWith(status: newStatus)
+            else
+              state[i],
+        ];
+      }
+    });
+  }
+
+  /// Update message status by message_id (called when ack events arrive).
+  void updateMessageStatus(String messageId, MessageStatus status) {
+    final idx = state.indexWhere((m) => m.id == messageId);
+    if (idx < 0) return;
+    // Only advance status forward: sending → delivered → acknowledged.
+    final current = state[idx].status;
+    if (status.index <= current.index) return;
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i == idx)
+          state[i].copyWith(status: status)
+        else
+          state[i],
+    ];
   }
 
   void addRemoteUserMessage(String text,

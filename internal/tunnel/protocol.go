@@ -7,6 +7,7 @@ type GatewayMessage struct {
 	SessionID string          `json:"session_id,omitempty"`
 	EventID   string          `json:"event_id,omitempty"`
 	StreamID  string          `json:"stream_id,omitempty"`
+	MessageID string          `json:"message_id,omitempty"` // client-generated ID for ack tracking
 	Type      string          `json:"type"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
@@ -46,6 +47,8 @@ const (
 	EventError              = "error"
 	EventPing               = "ping"
 	EventDisconnected       = "disconnected"
+	EventRelayAck           = "relay_ack"  // Relay → Client: relay received the message
+	EventServerAck          = "server_ack" // Server → Client: desktop processed the message
 )
 
 // Client → Server command types.
@@ -210,6 +213,12 @@ type MessageData struct {
 	Text        string `json:"text"`
 	DisplayText string `json:"display_text,omitempty"`
 	Kind        string `json:"kind,omitempty"`
+	MessageID   string `json:"message_id,omitempty"` // client-generated ID for ack tracking
+}
+
+// AckData carries an acknowledgement for a previously sent message.
+type AckData struct {
+	MessageID string `json:"message_id"`
 }
 
 // ModeChangeData carries a mode change request.

@@ -25,6 +25,7 @@ type relayMessage struct {
 	EventID     string          `json:"event_id,omitempty"`
 	StreamID    string          `json:"stream_id,omitempty"`
 	ClientID    string          `json:"client_id,omitempty"`
+	MessageID   string          `json:"message_id,omitempty"`
 	LastEventID string          `json:"last_event_id,omitempty"`
 	ResumeMode  string          `json:"resume_mode,omitempty"`
 	Nonce       string          `json:"nonce,omitempty"`
@@ -276,6 +277,10 @@ func (p *peer) readPump(h *hub) {
 			p.room.mu.Unlock()
 			continue
 		case "encrypted":
+			// Send relay_ack back to the client immediately if message_id is present.
+			if p.role == "client" && msg.MessageID != "" {
+				p.sendJSON(relayMessage{Type: "relay_ack", MessageID: msg.MessageID})
+			}
 			// proceed
 		default:
 			continue

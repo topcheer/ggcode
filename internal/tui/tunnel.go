@@ -466,6 +466,10 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 		if m.program != nil {
 			m.program.Send(tunnelInboundMsg{text: data.Text})
 		}
+		// Acknowledge to mobile client that the message was received by desktop.
+		if m.tunnelBroker != nil {
+			m.tunnelBroker.PushServerAck(data.MessageID)
+		}
 
 	case tunnel.CmdInterrupt:
 		if m.program != nil {
@@ -787,6 +791,10 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 }
 
 func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
+	history := m.currentTunnelHistory()
+	if tail := m.currentIncompleteTunnelHistoryTail(); len(tail) > 0 {
+		history = mergeTunnelHistory(history, tail)
+	}
 	snapshot := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{
 			Workspace: m.sidebarWorkingDirectory(),
@@ -800,7 +808,7 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 			Activity: m.currentTunnelActivity(),
 		},
 	}
-	if history := m.currentTunnelHistory(); len(history) > 0 {
+	if len(history) > 0 {
 		snapshot.History = history
 	}
 	if extra := m.currentTunnelAgentSnapshotEvents(); len(extra) > 0 {
@@ -1251,6 +1259,40 @@ func tunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 		}
 	}
 	return true
+}
+
+func (m *Model) currentIncompleteTunnelHistoryTail() []tunnel.HistoryEntry {
+	m.sessionMutex().Lock()
+	if m.session == nil || m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+		m.sessionMutex().Unlock()
+		return nil
+	}
+	events := append([]session.TunnelEvent(nil), m.session.TunnelEvents...)
+	m.sessionMutex().Unlock()
+	return tunnelEventsToHistory(events)
+}
+
+func mergeTunnelHistory(base, tail []tunnel.HistoryEntry) []tunnel.HistoryEntry {
+	if len(tail) == 0 {
+		return base
+	}
+	if len(base) == 0 {
+		return append([]tunnel.HistoryEntry(nil), tail...)
+	}
+	maxOverlap := len(base)
+	if len(tail) < maxOverlap {
+		maxOverlap = len(tail)
+	}
+	overlap := 0
+	for size := maxOverlap; size > 0; size-- {
+		if tunnelHistoryMatches(base[len(base)-size:], tail[:size]) {
+			overlap = size
+			break
+		}
+	}
+	out := append([]tunnel.HistoryEntry(nil), base...)
+	out = append(out, tail[overlap:]...)
+	return out
 }
 
 func (m *Model) prepareCurrentSessionTunnelLedger() {

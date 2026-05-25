@@ -112,6 +112,48 @@ func TestDesktopChatMessagesToTunnelHistoryPreservesSystemAndToolBoundaries(t *t
 	}
 }
 
+func TestCurrentTunnelSnapshotHistoryMergesIncompleteLedgerTail(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	bridge.currentSes = &session.Session{
+		ID:        "sess-desktop-tail",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID: "ev-000000001",
+				Type:    tunnel.EventUserMessage,
+				Data:    []byte(`{"text":"tui 不用改是么?"}`),
+			},
+			{
+				EventID:  "ev-000000002",
+				StreamID: "msg-1",
+				Type:     tunnel.EventText,
+				Data:     []byte(`{"id":"msg-1","chunk":"不用改。","done":false}`),
+			},
+			{
+				EventID:  "ev-000000003",
+				StreamID: "msg-1",
+				Type:     tunnel.EventTextDone,
+				Data:     []byte(`{"id":"msg-1","done":true}`),
+			},
+		},
+	}
+	bridge.ui.ChatMsgs = []ChatMessage{
+		{Role: "user", Content: "tui 不用改是么?", Time: time.Now()},
+	}
+
+	history := bridge.CurrentTunnelSnapshotHistory()
+	if len(history) != 2 {
+		t.Fatalf("expected merged snapshot history, got %d entries: %+v", len(history), history)
+	}
+	if history[0].Role != "user" || history[0].Content != "tui 不用改是么?" {
+		t.Fatalf("unexpected first history entry: %+v", history[0])
+	}
+	if history[1].Role != "assistant" || history[1].Content != "不用改。" {
+		t.Fatalf("expected trailing assistant reply to be preserved, got %+v", history[1])
+	}
+}
+
 func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedgerDesktop(t *testing.T) {
 	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
 	store, err := session.NewJSONLStore(t.TempDir())

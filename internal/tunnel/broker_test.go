@@ -1591,3 +1591,40 @@ func TestBrokerPushChatClearRotatesSession(t *testing.T) {
 		t.Fatalf("expected rotated session_id, got old=%q new=%q", oldSessionID, reset.SessionID)
 	}
 }
+
+func TestPushServerAck(t *testing.T) {
+	b, _ := newBrokerForTest()
+
+	b.PushServerAck("msg-123")
+	msgs := b.drainHelperForTest()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != EventServerAck {
+		t.Errorf("expected type %q, got %q", EventServerAck, msgs[0].Type)
+	}
+	var ackData AckData
+	if err := json.Unmarshal(msgs[0].Data, &ackData); err != nil {
+		t.Fatal(err)
+	}
+	if ackData.MessageID != "msg-123" {
+		t.Errorf("expected message_id=msg-123, got %q", ackData.MessageID)
+	}
+
+	// Empty message_id should not produce any message.
+	b.PushServerAck("")
+	b.outMu.Lock()
+	extra := b.outbound
+	b.outMu.Unlock()
+	if len(extra) != 0 {
+		t.Errorf("empty message_id should not produce a message, got %d", len(extra))
+	}
+}
+
+func (b *Broker) drainHelperForTest() []GatewayMessage {
+	b.outMu.Lock()
+	msgs := b.outbound
+	b.outbound = nil
+	b.outMu.Unlock()
+	return msgs
+}

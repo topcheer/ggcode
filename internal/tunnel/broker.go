@@ -689,6 +689,18 @@ func (b *Broker) PushError(message string) {
 
 // ─── Ask User ───
 
+func (b *Broker) PushServerAck(messageID string) {
+	if messageID == "" {
+		return
+	}
+	msg := b.newMessage(EventServerAck, "", AckData{MessageID: messageID})
+	if msg.Type == "" {
+		return
+	}
+	// server_ack is NOT recorded in event history — it's a transient signal.
+	b.enqueueOut(msg)
+}
+
 func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
 	b.enqueueWithStream(EventAskUserRequest, id, AskUserRequestData{ID: id, Title: title, Questions: questions})
 }

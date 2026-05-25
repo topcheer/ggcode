@@ -26,10 +26,12 @@ class ConnectionService {
   final _statusController = StreamController<ConnectionStatus>.broadcast();
   final _errorController = StreamController<String>.broadcast();
   final _messageController = StreamController<proto.WsMessage>.broadcast();
+  final _ackController = StreamController<AckEvent>.broadcast();
 
   Stream<ConnectionStatus> get statusStream => _statusController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<proto.WsMessage> get messageStream => _messageController.stream;
+  Stream<AckEvent> get ackStream => _ackController.stream;
 
   Timer? _heartbeatTimer;
   StreamSubscription? _socketSub;
@@ -163,6 +165,22 @@ class ConnectionService {
         }
         break;
 
+      case 'relay_ack':
+        // Relay confirmed receipt of our encrypted message.
+        final ackId = map['message_id'] as String? ?? '';
+        if (ackId.isNotEmpty) {
+          _ackController.add(AckEvent(type: 'relay_ack', messageId: ackId));
+        }
+        break;
+
+      case 'server_ack':
+        // Desktop confirmed processing of our message (plaintext, unencrypted).
+        final sackId = map['message_id'] as String? ?? '';
+        if (sackId.isNotEmpty) {
+          _ackController.add(AckEvent(type: 'server_ack', messageId: sackId));
+        }
+        break;
+
       case 'sharing_stopped':
         // User explicitly stopped sharing — permanent disconnect.
         _cleanup();
@@ -286,6 +304,8 @@ class ConnectionService {
       'type': 'encrypted',
       'nonce': encrypted.nonce,
       'ciphertext': encrypted.ciphertext,
+      if (msg.messageId != null && msg.messageId!.isNotEmpty)
+        'message_id': msg.messageId,
     });
     _socket?.add(relayMsg);
   }
@@ -303,5 +323,14 @@ class ConnectionService {
     _statusController.close();
     _errorController.close();
     _messageController.close();
+    _ackController.close();
   }
+}
+
+/// Ack event from relay or server confirming message delivery.
+class AckEvent {
+  final String type; // 'relay_ack' or 'server_ack'
+  final String messageId;
+
+  const AckEvent({required this.type, required this.messageId});
 }
