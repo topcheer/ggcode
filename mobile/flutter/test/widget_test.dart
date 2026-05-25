@@ -24,6 +24,15 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
   TunnelConnectionState build() =>
       TunnelConnectionState(status: ConnectionStatus.disconnected);
 
+  @override
+  Future<void> connect(String url, {bool clearState = true}) async {}
+
+  @override
+  Future<void> restoreSelectedWorkspace() async {}
+
+  @override
+  Future<void> reconnect() async {}
+
   void emit(TunnelConnectionState next) {
     state = next;
   }
@@ -84,6 +93,39 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.byType(ConnectScreen), findsOneWidget);
+  });
+
+  testWidgets(
+      'AppShell keeps ConnectScreen during first connect when no cached session exists',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectScreen), findsOneWidget);
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+    final cache = container.read(workspaceCacheProvider.notifier);
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    notifier.emit(TunnelConnectionState(
+      status: ConnectionStatus.connecting,
+      url: 'wss://example.test/ws?token=abc',
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(ConnectScreen), findsOneWidget);
+    expect(find.byType(ChatScreen), findsNothing);
   });
 
   testWidgets('ChatScreen uses tool display name as card title',
