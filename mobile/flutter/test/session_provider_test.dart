@@ -1177,7 +1177,76 @@ void main() {
     expect(container.read(currentModeProvider), 'bypass');
   });
 
-  test('fresh connect does not reuse cached resume cursor before live attach',
+  test(
+      'cached snapshot seeds resume cursor so reconnect and gap recovery stay incremental',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'bypass',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-122', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=abc', clearState: false);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(service.resumeClientId, 'client-1');
+    expect(service.resumeSessionId, 'sess-122');
+    expect(service.resumeLastEventId, 'ev-000000120');
+    expect(container.read(chatProvider).single.text, 'cached hello');
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-122',
+      eventId: 'ev-000000122',
+      type: 'text',
+      data: {'id': 'msg-2', 'chunk': 'gap', 'done': false},
+    ));
+
+    expect(service.replayRequests, 1);
+    expect(service.replaySessionId, 'sess-122');
+    expect(service.replayLastEventId, 'ev-000000120');
+    expect(service.resumeHelloRequests, 1);
+  });
+
+  test('fresh connect defers cached projection restore until live attach',
       () async {
     SharedPreferences.setMockInitialValues({
       'ggcode_tunnel_client_id': 'client-1',
@@ -1229,10 +1298,19 @@ void main() {
     await notifier.connect('wss://example.test/ws?token=abc');
     await Future<void>.delayed(Duration.zero);
 
-    expect(container.read(chatProvider).single.text, 'cached hello');
+    expect(container.read(chatProvider), isEmpty);
     expect(service.resumeClientId, 'client-1');
     expect(service.resumeSessionId, isNull);
     expect(service.resumeLastEventId, isNull);
+
+    service.emit(proto.WsMessage(
+      sessionId: 'sess-122',
+      type: 'active_session',
+      data: {'session_id': 'sess-122'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(container.read(chatProvider).single.text, 'cached hello');
   });
 
   test('reconnect replaces cached busy state with authoritative idle status',

@@ -153,30 +153,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final crypto = TunnelCrypto(token);
     service = createConnectionService(url, crypto);
     await _loadResumeState();
-    final resumeSessionId = _sessionId;
     var restoredProjection = false;
     if (!clearState && _hasEmptyUiProjection()) {
-      restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
-    }
-    if (clearState) {
-      _hasAuthoritativeProjection = false;
-      restoredProjection = !_hasEmptyUiProjection() ||
-          _restoreProjectionFromCache(adoptCursor: false);
-      if (!restoredProjection && resumeSessionId.isNotEmpty) {
-        restoredProjection = await cache.attachSessionToActiveWorkspace(
-          resumeSessionId,
-        );
-        if (restoredProjection) {
-          restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
-        }
-      }
-      if (!restoredProjection) {
-        _clearUiProjection();
-      }
-      // Fresh connects can restore cached UI immediately, but the server still
-      // needs to authoritatively bind the active session before we reuse any
-      // resume cursor. Carrying a stale cursor here can hide live main-agent
-      // text/tool events from the newly attached room.
+      restoredProjection = _restoreProjectionFromCache(
+        adoptCursor: false,
+        seedCursorIfUnset: true,
+      );
+    } else if (clearState) {
+      // Fresh/manual connects should not synchronously restore large cached
+      // projections before the relay binds the active session. That work can
+      // stall the first-connect UX and briefly render stale history for the
+      // wrong room. We restore again once active_session/resume_ack arrives.
+      _clearUiProjection();
       _sessionId = '';
       _lastAppliedEventId = '';
       _awaitingReplay = false;
@@ -1002,7 +990,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   void _beginReplayRecovery() {
     _awaitingReplay = true;
     _replayRetryCount = 0;
-    if (_hasAuthoritativeProjection) {
+    if (_hasReplayCursorBaseline()) {
       _replayFullHistoryRequested = false;
       service?.requestReplayFrom(
         clientId: _clientId,
@@ -1077,7 +1065,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     final url = state.url;
-    final restoredFromCache = _restoreProjectionFromCache(adoptCursor: false);
+    final restoredFromCache = _restoreProjectionFromCache(
+      adoptCursor: false,
+      seedCursorIfUnset: true,
+    );
     _pendingReplayEvents.clear();
     _awaitingReplay = false;
     if (!restoredFromCache) {
@@ -1106,13 +1097,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         ref.read(sessionInfoProvider) == null;
   }
 
+  bool _hasReplayCursorBaseline() {
+    return _sessionId.isNotEmpty && _lastAppliedEventId.isNotEmpty;
+  }
+
   bool _canRestoreSessionProjection() {
     return !_hasAuthoritativeProjection &&
         ref.read(subagentProvider).isEmpty &&
         ref.read(sessionInfoProvider) == null;
   }
 
-  bool _restoreProjectionFromCache({bool adoptCursor = true}) {
+  bool _restoreProjectionFromCache({
+    bool adoptCursor = true,
+    bool seedCursorIfUnset = false,
+  }) {
     final cacheState = ref.read(workspaceCacheProvider);
     final workspaceKey = cacheState.selectedWorkspaceKey;
     final sessionId = cacheState.selectedSessionId;
@@ -1146,6 +1144,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (adoptCursor) {
       _sessionId = sessionId;
       _lastAppliedEventId = record?.lastEventId ?? '';
+    } else if (seedCursorIfUnset &&
+        _lastAppliedEventId.isEmpty &&
+        record != null &&
+        record.lastEventId.isNotEmpty) {
+      if (_sessionId.isEmpty || _sessionId == sessionId) {
+        _sessionId = sessionId;
+        _lastAppliedEventId = record.lastEventId;
+      }
     }
     return true;
   }
@@ -1160,7 +1166,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           .attachSessionToActiveWorkspace(sessionId)
           .then((restored) {
         if (restored && _canRestoreSessionProjection()) {
-          _restoreProjectionFromCache(adoptCursor: false);
+          _restoreProjectionFromCache(
+            adoptCursor: false,
+            seedCursorIfUnset: true,
+          );
         }
       }),
     );
@@ -2832,7 +2841,7 @@ final workspaceCacheProvider =
 class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   SharedPreferences? _prefs;
   _WorkspaceCacheSqlStore? _store;
-  bool _initializing = false;
+  Future<void>? _initializeFuture;
   Timer? _flushTimer;
   final Set<String> _dirtySnapshots = <String>{};
   final Set<String> _dirtySessions = <String>{};
@@ -2856,88 +2865,91 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   Future<void> initialize() async {
-    if (state.initialized || _initializing) return;
-    _initializing = true;
-    try {
-      _prefs ??= await SharedPreferences.getInstance();
-      if (!ref.mounted) return;
-      final index = _decodeJsonObjectOrEmpty(
-        _prefs!.getString(_workspaceCacheIndexKey),
-        'decode workspace cache index',
-      );
-      final workspaces = <String, WorkspaceRecord>{};
-      final sessions = <String, CachedSessionRecord>{};
-      try {
-        _store ??= await _WorkspaceCacheSqlStore.open();
-        if (!ref.mounted) return;
-        await _store!.importLegacyPreferences(_prefs!);
-        if (!ref.mounted) return;
-        for (final record in _store!.loadWorkspaces()) {
-          if (record.key.isNotEmpty) {
-            workspaces[record.key] = record;
-          }
-        }
-        for (final record in _store!.loadSessions()) {
-          if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
-            sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
-                record;
-          }
-        }
-      } catch (error, stackTrace) {
-        _reportWorkspaceCacheError(
-          'initialize workspace cache store',
-          error,
-          stackTrace,
-        );
-        _store?.dispose();
-        _store = null;
-      }
-      final selectedWorkspaceKey = index['selected_workspace_key'] as String?;
-      final selectedSessionId = index['selected_session_id'] as String?;
-      final selectedWorkspaceUrl = normalizeTunnelUrl(
-        index[_workspaceCacheIndexSelectedWorkspaceUrlKey] as String? ?? '',
-      );
-      if (selectedWorkspaceKey != null &&
-          selectedWorkspaceKey.isNotEmpty &&
-          selectedWorkspaceUrl.isNotEmpty) {
-        final existing = workspaces[selectedWorkspaceKey];
-        workspaces[selectedWorkspaceKey] = (existing ??
-                WorkspaceRecord(
-                  key: selectedWorkspaceKey,
-                  url: selectedWorkspaceUrl,
-                  displayName:
-                      _workspaceDisplayName(selectedWorkspaceUrl, null),
-                  lastSessionId: selectedSessionId ?? '',
-                  lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
-                ))
-            .copyWith(
-          url: selectedWorkspaceUrl,
-          displayName: existing?.displayName.isNotEmpty == true
-              ? existing!.displayName
-              : _workspaceDisplayName(selectedWorkspaceUrl, null),
-          lastSessionId: selectedSessionId ?? existing?.lastSessionId ?? '',
-        );
-      }
-      if (!ref.mounted) return;
-      state = WorkspaceCacheState(
-        initialized: true,
-        workspaces: workspaces,
-        sessions: sessions,
-        snapshots: {},
-        selectedWorkspaceKey: selectedWorkspaceKey,
-        selectedSessionId: selectedSessionId,
-      );
-      final workspaceKey = state.selectedWorkspaceKey;
-      final sessionId = state.selectedSessionId;
-      if (workspaceKey != null &&
-          workspaceKey.isNotEmpty &&
-          sessionId != null &&
-          sessionId.isNotEmpty) {
-        await _ensureSnapshotLoaded(workspaceKey, sessionId);
-      }
-    } finally {
-      _initializing = false;
+    if (state.initialized) return;
+    final inFlight = _initializeFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
     }
+    final future = _initializeImpl();
+    _initializeFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_initializeFuture, future)) {
+        _initializeFuture = null;
+      }
+    }
+  }
+
+  Future<void> _initializeImpl() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
+    final index = _decodeJsonObjectOrEmpty(
+      _prefs!.getString(_workspaceCacheIndexKey),
+      'decode workspace cache index',
+    );
+    final workspaces = <String, WorkspaceRecord>{};
+    final sessions = <String, CachedSessionRecord>{};
+    try {
+      _store ??= await _WorkspaceCacheSqlStore.open();
+      if (!ref.mounted) return;
+      await _store!.importLegacyPreferences(_prefs!);
+      if (!ref.mounted) return;
+      for (final record in _store!.loadWorkspaces()) {
+        if (record.key.isNotEmpty) {
+          workspaces[record.key] = record;
+        }
+      }
+      for (final record in _store!.loadSessions()) {
+        if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
+          sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
+              record;
+        }
+      }
+    } catch (error, stackTrace) {
+      _reportWorkspaceCacheError(
+        'initialize workspace cache store',
+        error,
+        stackTrace,
+      );
+      _store?.dispose();
+      _store = null;
+    }
+    final selectedWorkspaceKey = index['selected_workspace_key'] as String?;
+    final selectedSessionId = index['selected_session_id'] as String?;
+    final selectedWorkspaceUrl = normalizeTunnelUrl(
+      index[_workspaceCacheIndexSelectedWorkspaceUrlKey] as String? ?? '',
+    );
+    if (selectedWorkspaceKey != null &&
+        selectedWorkspaceKey.isNotEmpty &&
+        selectedWorkspaceUrl.isNotEmpty) {
+      final existing = workspaces[selectedWorkspaceKey];
+      workspaces[selectedWorkspaceKey] = (existing ??
+              WorkspaceRecord(
+                key: selectedWorkspaceKey,
+                url: selectedWorkspaceUrl,
+                displayName: _workspaceDisplayName(selectedWorkspaceUrl, null),
+                lastSessionId: selectedSessionId ?? '',
+                lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
+              ))
+          .copyWith(
+        url: selectedWorkspaceUrl,
+        displayName: existing?.displayName.isNotEmpty == true
+            ? existing!.displayName
+            : _workspaceDisplayName(selectedWorkspaceUrl, null),
+        lastSessionId: selectedSessionId ?? existing?.lastSessionId ?? '',
+      );
+    }
+    if (!ref.mounted) return;
+    state = WorkspaceCacheState(
+      initialized: true,
+      workspaces: workspaces,
+      sessions: sessions,
+      snapshots: {},
+      selectedWorkspaceKey: selectedWorkspaceKey,
+      selectedSessionId: selectedSessionId,
+    );
   }
 
   String? urlForWorkspace(String workspaceKey) =>
@@ -2974,9 +2986,6 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     _dirtyWorkspaces.add(key);
     _selectionDirty = true;
     _scheduleFlush();
-    if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
-      await _ensureSnapshotLoaded(key, selectedSessionId);
-    }
   }
 
   Future<void> clearSelection() async {
@@ -3304,8 +3313,22 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     return items;
   }
 
-  CachedSessionSnapshot? snapshotFor(String workspaceKey, String sessionId) =>
-      state.snapshots[_sessionCacheKey(workspaceKey, sessionId)];
+  CachedSessionSnapshot? snapshotFor(String workspaceKey, String sessionId) {
+    final key = _sessionCacheKey(workspaceKey, sessionId);
+    final cached = state.snapshots[key];
+    if (cached != null) {
+      return cached;
+    }
+    final snapshot = _store?.loadSnapshot(workspaceKey, sessionId);
+    if (snapshot == null) {
+      return null;
+    }
+    state = state.copyWith(
+      snapshots: Map<String, CachedSessionSnapshot>.from(state.snapshots)
+        ..[key] = snapshot,
+    );
+    return snapshot;
+  }
 
   CachedSessionRecord? _latestCachedSessionRecord(
     String sessionId, {
@@ -3331,16 +3354,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   Future<void> _ensureSnapshotLoaded(
       String workspaceKey, String sessionId) async {
-    final key = _sessionCacheKey(workspaceKey, sessionId);
-    if (state.snapshots.containsKey(key)) return;
     await initialize();
     if (!ref.mounted) return;
-    final snapshot = _store?.loadSnapshot(workspaceKey, sessionId);
-    if (snapshot == null) return;
-    state = state.copyWith(
-      snapshots: Map<String, CachedSessionSnapshot>.from(state.snapshots)
-        ..[key] = snapshot,
-    );
+    snapshotFor(workspaceKey, sessionId);
   }
 
   void _scheduleFlush() {

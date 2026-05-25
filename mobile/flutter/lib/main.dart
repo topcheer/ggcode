@@ -158,6 +158,7 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   Widget build(BuildContext context) {
     final workspaceCache = ref.watch(workspaceCacheProvider);
+    final connState = ref.watch(connectionProvider);
 
     // Manage wakelock based on connection state
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
@@ -250,10 +251,15 @@ class _AppShellState extends ConsumerState<AppShell>
 
     // Show ConnectScreen only before first successful connection.
     // Once connected, always show ChatScreen (connection status shown in AppBar).
+    final hasSelectedWorkspace = workspaceCache.selectedWorkspaceKey != null &&
+        workspaceCache.selectedWorkspaceKey!.isNotEmpty;
+    final hasSelectedSession = workspaceCache.selectedSessionId != null &&
+        workspaceCache.selectedSessionId!.isNotEmpty;
     if (!_hasConnected &&
         !_demoMode &&
-        (workspaceCache.selectedWorkspaceKey == null ||
-            workspaceCache.selectedWorkspaceKey!.isEmpty)) {
+        (!hasSelectedWorkspace ||
+            (!hasSelectedSession &&
+                connState.status != ConnectionStatus.connected))) {
       return const ConnectScreen();
     }
 
