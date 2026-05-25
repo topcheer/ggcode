@@ -283,6 +283,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = '';
     _lastAppliedEventId = '';
     _awaitingReplay = false;
+    _awaitingSnapshotProjection = false;
     _pendingReplayEvents.clear();
     _resetReplayRecoveryState();
     _recentEventIds.clear();
@@ -942,6 +943,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = '';
     _lastAppliedEventId = '';
     _awaitingReplay = false;
+    _awaitingSnapshotProjection = false;
     _pendingReplayEvents.clear();
     _resetReplayRecoveryState();
     _recentEventIds.clear();
