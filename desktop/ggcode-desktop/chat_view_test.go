@@ -45,3 +45,27 @@ func TestClassifyToolGUICronToolsAreNotSuppressed(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsLeftSquareRightRounded(t *testing.T) {
+	const (
+		width  = 40.0
+		height = 20.0
+		radius = 8.0
+	)
+	tests := []struct {
+		name string
+		x    float64
+		y    float64
+		want bool
+	}{
+		{name: "left top corner stays square", x: 0.5, y: 0.5, want: true},
+		{name: "left bottom corner stays square", x: 0.5, y: 19.5, want: true},
+		{name: "right top outside rounded corner", x: 39.5, y: 0.5, want: false},
+		{name: "right edge center inside", x: 39.5, y: 10.0, want: true},
+	}
+	for _, tt := range tests {
+		if got := containsLeftSquareRightRounded(tt.x, tt.y, width, height, radius); got != tt.want {
+			t.Fatalf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
