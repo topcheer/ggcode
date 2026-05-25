@@ -272,6 +272,8 @@ func (a *App) showShareDialog() {
 						a.agentBridge.Send(text)
 					}
 				}
+				// Acknowledge to mobile client that the message was received by desktop.
+				broker.PushServerAck(data.MessageID)
 			case tunnel.CmdApprovalResponse:
 				if a.agentBridge == nil {
 					return
@@ -364,7 +366,7 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	}
 	snapshot.Status = a.agentBridge.CurrentTunnelStatus()
 	snapshot.Activity = tunnel.ActivityData{Activity: a.agentBridge.CurrentTunnelActivity()}
-	snapshot.History = a.agentBridge.CurrentTunnelHistory()
+	snapshot.History = a.agentBridge.CurrentTunnelSnapshotHistory()
 	snapshot.ExtraEvents = a.currentTunnelAgentSnapshotEvents()
 	return snapshot
 }

@@ -36,6 +36,7 @@ type RelayClient struct {
 
 	onMessage   func(msg GatewayMessage)
 	onConnected func(info RelayConnectedState)
+	onAck       func(ackType, messageID string)
 	mu          sync.RWMutex
 }
 
@@ -264,6 +265,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			SessionID   string          `json:"session_id,omitempty"`
 			EventID     string          `json:"event_id,omitempty"`
 			StreamID    string          `json:"stream_id,omitempty"`
+			MessageID   string          `json:"message_id,omitempty"`
 			LastEventID string          `json:"last_event_id,omitempty"`
 			Count       int             `json:"count,omitempty"`
 			Nonce       string          `json:"nonce,omitempty"`
@@ -297,6 +299,14 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 				Data:      relayMsg.Data,
 			})
 
+		case "relay_ack":
+			rc.mu.RLock()
+			fn := rc.onAck
+			rc.mu.RUnlock()
+			if fn != nil && relayMsg.MessageID != "" {
+				fn("relay_ack", relayMsg.MessageID)
+			}
+
 		case "pong":
 			// keepalive
 
@@ -319,6 +329,21 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			if msg.StreamID == "" {
 				msg.StreamID = relayMsg.StreamID
 			}
+
+			// Handle server_ack specially — deliver to ack callback, not general message handler.
+			if msg.Type == EventServerAck {
+				rc.mu.RLock()
+				fn := rc.onAck
+				rc.mu.RUnlock()
+				if fn != nil {
+					var ackData AckData
+					if json.Unmarshal(msg.Data, &ackData) == nil && ackData.MessageID != "" {
+						fn("server_ack", ackData.MessageID)
+					}
+				}
+				continue
+			}
+
 			rc.deliver(msg)
 
 		case "language_change":
@@ -406,11 +431,15 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 		"nonce":      nonce,
 		"ciphertext": ciphertext,
 	}
+	if msg.MessageID != "" {
+		relayMsg["message_id"] = msg.MessageID
+	}
 	envelope := struct {
 		Type       string `json:"type"`
 		SessionID  string `json:"session_id,omitempty"`
 		EventID    string `json:"event_id,omitempty"`
 		StreamID   string `json:"stream_id,omitempty"`
+		MessageID  string `json:"message_id,omitempty"`
 		Nonce      string `json:"nonce"`
 		Ciphertext string `json:"ciphertext"`
 	}{
@@ -418,6 +447,7 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 		SessionID:  msg.SessionID,
 		EventID:    msg.EventID,
 		StreamID:   msg.StreamID,
+		MessageID:  msg.MessageID,
 		Nonce:      relayMsg["nonce"],
 		Ciphertext: relayMsg["ciphertext"],
 	}
@@ -466,6 +496,12 @@ func (rc *RelayClient) OnConnected(fn func(info RelayConnectedState)) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onConnected = fn
+}
+
+func (rc *RelayClient) OnAck(fn func(ackType, messageID string)) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.onAck = fn
 }
 
 func (rc *RelayClient) Close() {

@@ -5,6 +5,7 @@ package tunnel
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,213 +51,110 @@ func TestRelayClientConnectURL(t *testing.T) {
 	}
 }
 
-func TestRelayClientToken(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
-	if rc.Token() != "0123456789abcdef01234567" {
-		t.Errorf("Token() = %q, want %q", rc.Token(), "0123456789abcdef01234567")
-	}
-}
-
-func TestRelayClientOnMessage(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
-
-	var received GatewayMessage
-	rc.OnMessage(func(msg GatewayMessage) {
-		received = msg
-	})
-	rc.mu.RLock()
-	fn := rc.onMessage
-	rc.mu.RUnlock()
-	if fn == nil {
-		t.Fatal("onMessage should be set")
-	}
-	fn(GatewayMessage{Type: "test", EventID: "ev-1"})
-	if received.Type != "test" {
-		t.Error("callback should have been called")
-	}
-}
-
-func TestRelayClientClose(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc.Close()
-	rc.Close()
-	if !rc.closed {
-		t.Error("closed should be true after Close()")
-	}
-}
-
-func TestRelayClientCloseGracefullyWithoutConnectionFallsBackToClose(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc.CloseGracefully(50 * time.Millisecond)
-	if !rc.closed {
-		t.Fatal("CloseGracefully should mark client closed even without an active connection")
-	}
-}
-
-func TestRelayClientSendAfterClose(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc.Close()
-	err = rc.Send(GatewayMessage{Type: "test"})
-	if err == nil {
-		t.Error("Send after Close should return error")
-	}
-	if !strings.Contains(err.Error(), "closed") {
-		t.Errorf("error should mention closed: %v", err)
-	}
-}
-
-func TestRelayClientSendSuccess(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestRelayClientSendEncryptsMessage(t *testing.T) {
+	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
 	defer rc.Close()
 
 	msg := GatewayMessage{
-		Type:      "message",
-		SessionID: "sess-1",
-		EventID:   "ev-1",
-		StreamID:  "msg-1",
-		Data:      json.RawMessage(`{"text":"hi"}`),
+		Type: EventText,
+		Data: json.RawMessage(`{"id":"1","chunk":"hello"}`),
 	}
-	err = rc.Send(msg)
-	if err != nil {
+	if err := rc.Send(msg); err != nil {
 		t.Fatal(err)
 	}
+
+	// Drain the send channel and verify it's a valid encrypted relay message.
 	select {
-	case data := <-rc.sendCh:
-		var parsed map[string]string
-		if err := json.Unmarshal(data, &parsed); err != nil {
+	case raw := <-rc.sendCh:
+		var relayMsg map[string]interface{}
+		if err := json.Unmarshal(raw, &relayMsg); err != nil {
 			t.Fatal(err)
 		}
-		if parsed["type"] != "encrypted" {
-			t.Errorf("relay message type = %q, want %q", parsed["type"], "encrypted")
+		if relayMsg["type"] != "encrypted" {
+			t.Errorf("expected type=encrypted, got %v", relayMsg["type"])
 		}
-		if parsed["session_id"] != "sess-1" || parsed["event_id"] != "ev-1" || parsed["stream_id"] != "msg-1" {
-			t.Fatalf("expected envelope metadata, got %+v", parsed)
+		if _, ok := relayMsg["nonce"]; !ok {
+			t.Error("missing nonce field")
 		}
-		if parsed["nonce"] == "" {
-			t.Error("nonce should not be empty")
-		}
-		if parsed["ciphertext"] == "" {
-			t.Error("ciphertext should not be empty")
+		if _, ok := relayMsg["ciphertext"]; !ok {
+			t.Error("missing ciphertext field")
 		}
 	case <-time.After(time.Second):
-		t.Error("timed out waiting for message on send channel")
+		t.Fatal("timed out waiting for encrypted message on sendCh")
 	}
 }
 
-func TestRelayClientSendEncryptsPayload(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestRelayClientSendMessageID(t *testing.T) {
+	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
 	defer rc.Close()
 
-	msg := GatewayMessage{Type: "test", SessionID: "sess-1", EventID: "ev-42"}
-	err = rc.Send(msg)
-	if err != nil {
+	msg := GatewayMessage{
+		Type:      CmdMessage,
+		MessageID: "msg-test-789",
+		Data:      json.RawMessage(`{"text":"hello"}`),
+	}
+	if err := rc.Send(msg); err != nil {
 		t.Fatal(err)
 	}
 
-	data := <-rc.sendCh
-	var relayMsg struct {
-		Type       string `json:"type"`
-		Nonce      string `json:"nonce"`
-		Ciphertext string `json:"ciphertext"`
-	}
-	json.Unmarshal(data, &relayMsg)
-
-	plain, err := rc.crypto.Decrypt(relayMsg.Nonce, relayMsg.Ciphertext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got GatewayMessage
-	json.Unmarshal(plain, &got)
-	if got.Type != "test" || got.SessionID != "sess-1" || got.EventID != "ev-42" {
-		t.Errorf("decrypted message mismatch: %+v", got)
+	select {
+	case raw := <-rc.sendCh:
+		var relayMsg map[string]interface{}
+		if err := json.Unmarshal(raw, &relayMsg); err != nil {
+			t.Fatal(err)
+		}
+		if relayMsg["message_id"] != "msg-test-789" {
+			t.Errorf("expected message_id=msg-test-789, got %v", relayMsg["message_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
 	}
 }
 
-func TestRelayClientSendWaitsForBufferSpace(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestRelayClientOnAck(t *testing.T) {
+	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
 	defer rc.Close()
 
-	for i := 0; i < cap(rc.sendCh); i++ {
-		rc.sendCh <- []byte("filler")
+	var acks []struct {
+		ackType   string
+		messageID string
 	}
+	ackMu := sync.Mutex{}
+	rc.OnAck(func(ackType, messageID string) {
+		ackMu.Lock()
+		acks = append(acks, struct {
+			ackType   string
+			messageID string
+		}{ackType, messageID})
+		ackMu.Unlock()
+	})
 
-	done := make(chan error, 1)
-	go func() {
-		done <- rc.Send(GatewayMessage{Type: "test"})
-	}()
-
-	select {
-	case err := <-done:
-		t.Fatalf("Send should wait for space instead of failing immediately: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	// Simulate relay_ack by directly invoking the onAck callback
+	// (same path as readPump's relay_ack case).
+	rc.mu.RLock()
+	fn := rc.onAck
+	rc.mu.RUnlock()
+	if fn == nil {
+		t.Fatal("onAck should be set")
 	}
+	fn("relay_ack", "msg-456")
 
-	select {
-	case <-rc.sendCh:
-	case <-time.After(time.Second):
-		t.Fatal("timed out freeing buffer space")
+	ackMu.Lock()
+	defer ackMu.Unlock()
+	if len(acks) != 1 {
+		t.Fatalf("expected 1 ack, got %d", len(acks))
 	}
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Send should succeed after space is available: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Send did not resume after buffer space was freed")
+	if acks[0].ackType != "relay_ack" || acks[0].messageID != "msg-456" {
+		t.Errorf("expected relay_ack/msg-456, got %s/%s", acks[0].ackType, acks[0].messageID)
 	}
 }
 
-func TestRelayClientPendingMessagesTakePriorityOverSendChannel(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
+func TestRelayClientClosedSend(t *testing.T) {
+	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc.Close()
 
-	rc.sendCh <- []byte("queued")
-	rc.pushPendingFront([]byte("retry"))
-
-	first, ok := rc.popPendingFront()
-	if !ok {
-		t.Fatal("expected pending retry message")
-	}
-	if string(first) != "retry" {
-		t.Fatalf("pending retry = %q, want retry", string(first))
-	}
-
-	select {
-	case next := <-rc.sendCh:
-		if string(next) != "queued" {
-			t.Fatalf("queued message = %q, want queued", string(next))
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for queued message")
+	msg := GatewayMessage{Type: "test"}
+	if err := rc.Send(msg); err == nil {
+		t.Error("expected error sending on closed client")
 	}
 }

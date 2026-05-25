@@ -330,6 +330,48 @@ func TestCurrentTunnelHistoryPreservesSystemAndToolBoundaries(t *testing.T) {
 	}
 }
 
+func TestTunnelSnapshotMergesIncompleteLedgerTail(t *testing.T) {
+	m := newTestModel()
+	store := newTestSessionStore(t)
+	ses := &session.Session{
+		ID:        "sess-mobile-tail",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID: "ev-000000001",
+				Type:    tunnel.EventUserMessage,
+				Data:    json.RawMessage(`{"text":"tui 不用改是么?"}`),
+			},
+			{
+				EventID:  "ev-000000002",
+				StreamID: "msg-1",
+				Type:     tunnel.EventText,
+				Data:     json.RawMessage(`{"id":"msg-1","chunk":"不用改。","done":false}`),
+			},
+			{
+				EventID:  "ev-000000003",
+				StreamID: "msg-1",
+				Type:     tunnel.EventTextDone,
+				Data:     json.RawMessage(`{"id":"msg-1","done":true}`),
+			},
+		},
+	}
+	m.SetSession(ses, store)
+	m.chatWriteUser("user-1", "tui 不用改是么?")
+
+	snapshot := m.tunnelSnapshot()
+	if len(snapshot.History) != 2 {
+		t.Fatalf("expected merged snapshot history, got %d entries: %+v", len(snapshot.History), snapshot.History)
+	}
+	if snapshot.History[0].Role != "user" || snapshot.History[0].Content != "tui 不用改是么?" {
+		t.Fatalf("unexpected first history entry: %+v", snapshot.History[0])
+	}
+	if snapshot.History[1].Role != "assistant" || snapshot.History[1].Content != "不用改。" {
+		t.Fatalf("expected tail assistant reply to be preserved, got %+v", snapshot.History[1])
+	}
+}
+
 func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedger(t *testing.T) {
 	store := newTestSessionStore(t)
 	m := newTestModel()
