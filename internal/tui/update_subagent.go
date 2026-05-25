@@ -75,6 +75,13 @@ func (m Model) handleSubAgentTunnelStreamTextMsg(msg subAgentTunnelStreamTextMsg
 	return m, nil
 }
 
+func (m Model) handleSubAgentTunnelReasoningMsg(msg subAgentTunnelReasoningMsg) (Model, tea.Cmd) {
+	if msg.AgentID != "" && msg.Text != "" {
+		m.pushSubAgentTunnelReasoning(msg.AgentID, msg.Text)
+	}
+	return m, nil
+}
+
 func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
 		detail := msg.Detail
