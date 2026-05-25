@@ -353,17 +353,32 @@ func (p *peer) handleActiveSession(msg relayMessage) {
 		return
 	}
 	var clients []*peer
+	var hydrate bool
 	p.room.mu.Lock()
 	changed := p.room.sessionID != sessionID
 	p.room.sessionID = sessionID
 	if changed {
 		p.room.history = nil
 	}
+	hydrate = len(p.room.history) == 0
 	for c := range p.room.clients {
 		clients = append(clients, c)
 	}
 	token := p.room.token
 	p.room.mu.Unlock()
+
+	if hydrate && p.hub != nil && p.hub.store != nil {
+		history, err := p.hub.store.loadSessionHistory(sessionID)
+		if err != nil {
+			log.Printf("[relay] load session history failed: session=%s err=%v", sessionID, err)
+		} else if len(history) > 0 {
+			p.room.mu.Lock()
+			if p.room.sessionID == sessionID && len(p.room.history) == 0 {
+				p.room.history = history
+			}
+			p.room.mu.Unlock()
+		}
+	}
 
 	active := relayMessage{
 		Type:      "active_session",

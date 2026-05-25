@@ -73,6 +73,27 @@ func TestRelayStoreLoadRoomUsesCurrentSessionOnly(t *testing.T) {
 	}
 }
 
+func TestRelayStoreLoadRoomFallsBackToGlobalSessionHistory(t *testing.T) {
+	store := newStoreForTest(t)
+	originToken := "token-origin-1234567890"
+	newToken := "token-fresh-1234567890"
+	persistTestEvent(t, store, originToken, "sess-1", "ev-000000001")
+	if err := store.persistActiveSession(newToken, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.loadRoom(newToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID != "sess-1" {
+		t.Fatalf("sessionID = %q, want sess-1", state.sessionID)
+	}
+	if len(state.history) != 1 || state.history[0].eventID != "ev-000000001" {
+		t.Fatalf("expected global session history fallback, got %+v", state.history)
+	}
+}
+
 func TestRelayStoreCleanupExpiredSessions(t *testing.T) {
 	store := newStoreForTest(t)
 	token := "token-1234567890abcdef"
@@ -105,5 +126,12 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 	}
 	if state.sessionID != "" || len(state.history) != 0 {
 		t.Fatalf("expected destroyed room state to be empty, got session=%q history=%d", state.sessionID, len(state.history))
+	}
+	history, err := store.loadSessionHistory("sess-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected logical session history to survive room destroy, got %d events", len(history))
 	}
 }

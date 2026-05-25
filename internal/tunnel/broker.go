@@ -367,9 +367,9 @@ func (b *Broker) ResetSession() {
 	b.resetSessionAndEnqueue(true)
 }
 
-func (b *Broker) SwitchSession(sessionID string) {
+func (b *Broker) BindSession(sessionID string) bool {
 	if strings.TrimSpace(sessionID) == "" {
-		return
+		return false
 	}
 	b.sessionMu.Lock()
 	changed := b.sessionID != sessionID
@@ -378,21 +378,21 @@ func (b *Broker) SwitchSession(sessionID string) {
 		b.nextEvent.Store(0)
 	}
 	b.sessionMu.Unlock()
+	return changed
+}
+
+func (b *Broker) SwitchSession(sessionID string) {
+	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
+		return
+	}
 	_ = b.session.SendActiveSession(sessionID)
 	b.resetProjectionAndEnqueue(true)
 }
 
 func (b *Broker) AnnounceActiveSession(sessionID string) {
-	if strings.TrimSpace(sessionID) == "" {
+	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
 		return
 	}
-	b.sessionMu.Lock()
-	changed := b.sessionID != sessionID
-	b.sessionID = sessionID
-	if changed {
-		b.nextEvent.Store(0)
-	}
-	b.sessionMu.Unlock()
 	_ = b.session.SendActiveSession(sessionID)
 }
 
@@ -457,6 +457,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		// A newly joined mobile client should NOT force-reset existing clients when
 		// the room already has retained history for the current active session.
 		if b.trustRelayHistory(info, currentSessionID) {
+			b.bumpNextEvent(info.LastEventID)
 			// Still flush any buffered live text so the joining client's resume replay
 			// can observe the latest assistant chunks without resetting the room.
 			b.flushAllText()
@@ -500,6 +501,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		return
 	}
 	if b.trustRelayHistory(info, currentSessionID) {
+		b.bumpNextEvent(info.LastEventID)
 		return
 	}
 	b.snapshotMu.RLock()

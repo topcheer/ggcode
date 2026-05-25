@@ -53,11 +53,11 @@ func (m *Model) handleClearChat() {
 
 // handleUnshare stops the active tunnel/sharing session.
 func (m *Model) handleUnshare() {
-	if m.tunnelSession == nil {
+	if m.tunnelSession == nil && !m.tunnelStarting {
 		m.chatWriteSystem(nextSystemID(), m.t("tunnel.not_active"))
 		return
 	}
-	m.closeTunnelGracefully(2 * time.Second)
+	m.closeTunnelGracefullyAsync(2 * time.Second)
 	m.chatWriteSystem(nextSystemID(), m.t("tunnel.stopped"))
 }
 

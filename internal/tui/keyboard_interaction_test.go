@@ -1085,6 +1085,7 @@ func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",
 		"/tg", "/pc", "/discord", "/feishu", "/slack", "/dingtalk",
 		"/im", "/harness", "/harness panel",
+		"/share status", "/unshare",
 	}
 	for _, cmd := range safeCommands {
 		if !shouldExecuteWhileBusy(cmd) {

@@ -24,10 +24,11 @@ import (
 
 // tunnelStartMsg is sent when the tunnel is ready.
 type tunnelStartMsg struct {
-	info    *tunnel.SessionInfo
-	session *tunnel.Session
-	broker  *tunnel.Broker
-	err     error
+	generation uint64
+	info       *tunnel.SessionInfo
+	session    *tunnel.Session
+	broker     *tunnel.Broker
+	err        error
 }
 
 // tunnelStopMsg is sent when the tunnel has stopped.
@@ -37,38 +38,46 @@ type tunnelStopMsg struct{}
 // Bubble Tea event loop. It is produced by the broker OnCommand callback
 // (which runs on a goroutine) and consumed by Update.
 type tunnelInboundMsg struct {
-	text string
+	generation uint64
+	text       string
 }
 
 // tunnelModeChangeMsg carries a mode change request from mobile.
 type tunnelModeChangeMsg struct {
-	mode string
+	generation uint64
+	mode       string
 }
 
 // tunnelApprovalResponseMsg carries an approval decision from mobile.
 type tunnelApprovalResponseMsg struct {
-	id       string
-	decision string // "allow", "deny", "always"
+	generation uint64
+	id         string
+	decision   string // "allow", "deny", "always"
 }
 
 // tunnelAskUserResponseMsg carries an ask_user answer from mobile.
 type tunnelAskUserResponseMsg struct {
-	id      string
-	status  string
-	answers []tunnel.AskUserAnswer
+	generation uint64
+	id         string
+	status     string
+	answers    []tunnel.AskUserAnswer
 }
 
 // tunnelLanguageChangeMsg carries a language change from mobile.
 type tunnelLanguageChangeMsg struct {
-	language string
+	generation uint64
+	language   string
 }
 
 // tunnelThemeChangeMsg carries a theme change from mobile.
 type tunnelThemeChangeMsg struct {
-	theme string
+	generation uint64
+	theme      string
 }
 
-type tunnelClientConnectedMsg struct{}
+type tunnelClientConnectedMsg struct {
+	generation uint64
+}
 
 // ─── Slash command handler ───
 
@@ -84,8 +93,8 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 
 	switch args {
 	case "stop", "close", "off":
-		if m.tunnelSession != nil {
-			m.closeTunnelGracefully(2 * time.Second)
+		if m.tunnelSession != nil || m.tunnelStarting {
+			m.closeTunnelGracefullyAsync(2 * time.Second)
 			m.chatWriteSystem(nextSystemID(), "Tunnel closed.")
 		} else {
 			m.chatWriteSystem(nextSystemID(), "No active tunnel.")
@@ -113,8 +122,13 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 			)
 			return nil
 		}
+		if m.tunnelStarting {
+			return nil
+		}
+		m.tunnelStarting = true
+		generation := m.nextTunnelGeneration()
 		m.chatWriteSystem(nextSystemID(), "Starting tunnel...")
-		return m.startTunnel()
+		return m.startTunnel(generation)
 
 	default:
 		m.chatWriteSystem(nextSystemID(), "Usage: /tunnel [start|stop|status]")
@@ -122,23 +136,67 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 	}
 }
 
-func (m *Model) closeTunnelGracefully(timeout time.Duration) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.StopSharingGracefully(timeout)
-	} else if m.tunnelSession != nil {
-		m.tunnelSession.StopGracefully(timeout)
+func (m *Model) nextTunnelGeneration() uint64 {
+	m.tunnelGeneration++
+	return m.tunnelGeneration
+}
+
+func (m *Model) isCurrentTunnelGeneration(generation uint64) bool {
+	return generation == 0 || generation == m.tunnelGeneration
+}
+
+func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
+	sess := m.tunnelSession
+	broker := m.tunnelBroker
+	if broker != nil {
+		broker.OnCommand(nil)
+		broker.OnRelayConnected(nil)
+		broker.SetSnapshotProvider(nil)
+		broker.SetReplayProvider(nil)
+		broker.SetEventRecorder(nil)
 	}
+	if sess != nil {
+		sess.OnMessage(nil)
+		sess.OnConnected(nil)
+	}
+	m.closeQROverlay()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
 	m.tunnelMsgID = ""
 	m.tunnelPendingApprovalID = ""
 	m.tunnelPendingAskUserID = ""
 	m.tunnelSpawned = nil
+	m.tunnelStarting = false
+	return sess, broker
+}
+
+func stopDetachedTunnelGracefully(sess *tunnel.Session, broker *tunnel.Broker, timeout time.Duration) {
+	if broker != nil {
+		broker.StopSharingGracefully(timeout)
+		return
+	}
+	if sess != nil {
+		sess.StopGracefully(timeout)
+	}
+}
+
+func (m *Model) closeTunnelGracefully(timeout time.Duration) {
+	m.nextTunnelGeneration()
+	sess, broker := m.detachTunnelLifecycle()
+	stopDetachedTunnelGracefully(sess, broker, timeout)
+}
+
+func (m *Model) closeTunnelGracefullyAsync(timeout time.Duration) {
+	m.nextTunnelGeneration()
+	sess, broker := m.detachTunnelLifecycle()
+	safego.Go("tui.tunnel.closeTunnelGracefully", func() {
+		stopDetachedTunnelGracefully(sess, broker, timeout)
+	})
 }
 
 // ─── Tunnel lifecycle ───
 
-func (m *Model) startTunnel() tea.Cmd {
+func (m *Model) startTunnel(generation uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -146,15 +204,30 @@ func (m *Model) startTunnel() tea.Cmd {
 		sess := tunnel.NewSession(tunnel.DefaultRelayURL)
 		info, err := sess.Start(ctx)
 		if err != nil {
-			return tunnelStartMsg{err: err}
+			return tunnelStartMsg{generation: generation, err: err}
 		}
 
 		broker := tunnel.NewBroker(sess)
-		return tunnelStartMsg{info: info, session: sess, broker: broker}
+		return tunnelStartMsg{generation: generation, info: info, session: sess, broker: broker}
 	}
 }
 
 func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		if msg.broker != nil || msg.session != nil {
+			safego.Go("tui.tunnel.discardStaleStart", func() {
+				if msg.broker != nil {
+					msg.broker.StopSharingGracefully(2 * time.Second)
+					return
+				}
+				if msg.session != nil {
+					msg.session.DestroyGracefully(2 * time.Second)
+				}
+			})
+		}
+		return m, nil
+	}
+	m.tunnelStarting = false
 	if msg.err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel failed: %v", msg.err))
 		m.chatListScrollToBottom()
@@ -167,12 +240,14 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	m.tunnelSpawned = make(map[string]bool)
 
 	// Register inbound command handler.
+	currentBroker := msg.broker
+	currentGeneration := msg.generation
 	msg.broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-		m.handleTunnelClientCommand(cmd)
+		m.handleTunnelClientCommand(currentGeneration, currentBroker, cmd)
 	})
 	msg.broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
 		if info.Role == "client" && m.program != nil {
-			m.program.Send(tunnelClientConnectedMsg{})
+			m.program.Send(tunnelClientConnectedMsg{generation: currentGeneration})
 		}
 	})
 
@@ -185,12 +260,17 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	msg.broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 		m.recordTunnelEvent(ev)
 	})
-	seededSnapshot, replayedCanonical := m.publishTunnelSnapshotForCurrentSessionWithReport(true)
-	if !replayedCanonical {
-		m.reseedTunnelSnapshotAfterStart(seededSnapshot)
+	if m.session != nil && m.session.ID != "" {
+		msg.broker.BindSession(m.session.ID)
+		sessionID := m.session.ID
+		safego.Go("tui.tunnel.announceActiveSession", func() {
+			msg.broker.AnnounceActiveSession(sessionID)
+		})
 	}
 
-	// Open QR overlay with connect URL and QR code.
+	// Open the QR overlay immediately. Fresh share rooms do not need an eager
+	// snapshot/replay seed here because broker.handleRelayConnected will publish
+	// the authoritative snapshot when the first client actually attaches.
 	m.openQROverlayDirect(
 		"Mobile Tunnel",
 		"Scan with GGCode Mobile to connect",
@@ -202,6 +282,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleTunnelClientConnectedMsg() (tea.Model, tea.Cmd) {
+	return m.handleTunnelClientConnectedMsgForGeneration(0)
+}
+
+func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(generation) {
+		return m, nil
+	}
 	if m.tunnelSession == nil {
 		return m, nil
 	}
@@ -453,7 +540,7 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 
 // handleTunnelClientCommand is called from the broker's OnCommand callback
 // (runs on a goroutine). It routes mobile commands into the Bubble Tea event loop.
-func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
+func (m *Model) handleTunnelClientCommand(generation uint64, broker *tunnel.Broker, cmd tunnel.GatewayMessage) {
 	switch cmd.Type {
 	case tunnel.CmdMessage, "user_text":
 		var data tunnel.MessageData
@@ -464,16 +551,16 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if m.program != nil {
-			m.program.Send(tunnelInboundMsg{text: data.Text})
+			m.program.Send(tunnelInboundMsg{generation: generation, text: data.Text})
 		}
 		// Acknowledge to mobile client that the message was received by desktop.
-		if m.tunnelBroker != nil {
-			m.tunnelBroker.PushServerAck(data.MessageID)
+		if broker != nil {
+			broker.PushServerAck(data.MessageID)
 		}
 
 	case tunnel.CmdInterrupt:
 		if m.program != nil {
-			m.program.Send(tunnelInboundMsg{text: "/interrupt"})
+			m.program.Send(tunnelInboundMsg{generation: generation, text: "/interrupt"})
 		}
 
 	case tunnel.CmdModeChange:
@@ -482,7 +569,7 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if m.program != nil {
-			m.program.Send(tunnelModeChangeMsg{mode: data.Mode})
+			m.program.Send(tunnelModeChangeMsg{generation: generation, mode: data.Mode})
 		}
 
 	case tunnel.CmdApprovalResponse:
@@ -491,7 +578,7 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if m.program != nil {
-			m.program.Send(tunnelApprovalResponseMsg{id: data.ID, decision: data.Decision})
+			m.program.Send(tunnelApprovalResponseMsg{generation: generation, id: data.ID, decision: data.Decision})
 		}
 
 	case tunnel.CmdAskUserResponse:
@@ -500,7 +587,7 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if m.program != nil {
-			m.program.Send(tunnelAskUserResponseMsg{id: data.ID, status: data.Status, answers: data.Answers})
+			m.program.Send(tunnelAskUserResponseMsg{generation: generation, id: data.ID, status: data.Status, answers: data.Answers})
 		}
 
 	case tunnel.CmdLanguageChange:
@@ -509,7 +596,7 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if data.Language != "" && m.program != nil {
-			m.program.Send(tunnelLanguageChangeMsg{language: data.Language})
+			m.program.Send(tunnelLanguageChangeMsg{generation: generation, language: data.Language})
 		}
 
 	case tunnel.CmdThemeChange:
@@ -518,7 +605,7 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 			return
 		}
 		if data.Theme != "" && m.program != nil {
-			m.program.Send(tunnelThemeChangeMsg{theme: data.Theme})
+			m.program.Send(tunnelThemeChangeMsg{generation: generation, theme: data.Theme})
 		}
 	}
 }
@@ -527,6 +614,9 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 // It routes through the same idle→startAgent / busy→queuePendingSubmission
 // path as webchat messages.
 func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	text := msg.text
 	if text == "" {
 		return m, nil
@@ -569,6 +659,9 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 
 // handleTunnelModeChangeMsg switches the permission mode from a mobile request.
 func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	newMode := permission.ParsePermissionMode(msg.mode)
 	if newMode == permission.SupervisedMode && msg.mode != "supervised" && msg.mode != "" {
 		// ParsePermissionMode defaults to supervised for unknown values — reject.
@@ -586,6 +679,9 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 
 // handleTunnelLanguageChangeMsg switches the UI language from a mobile request.
 func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	lang := normalizeLanguage(msg.language)
 	if lang == m.currentLanguage() {
 		return m, nil
@@ -603,6 +699,9 @@ func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.
 // handleTunnelThemeChangeMsg handles a theme change from mobile.
 // TUI does not switch its own theme, but echoes the event to other clients.
 func (m *Model) handleTunnelThemeChangeMsg(msg tunnelThemeChangeMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.SendThemeChange(msg.theme)
 	}
@@ -1423,6 +1522,9 @@ func parseModeFromString(s string) (permission.PermissionMode, bool) {
 
 // handleTunnelApprovalResponse processes an approval decision from mobile.
 func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	if m.pendingApproval == nil {
 		return m, nil
 	}
@@ -1449,6 +1551,9 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 
 // handleTunnelAskUserResponse processes ask_user answers from mobile.
 func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
 	if m.pendingQuestionnaire == nil {
 		return m, nil
 	}

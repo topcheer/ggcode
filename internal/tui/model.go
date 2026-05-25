@@ -156,6 +156,8 @@ type Model struct {
 	harnessContextPrompt            *harnessContextPromptState
 	impersonatePanel                *impersonatePanelState
 	qrOverlay                       *qrOverlayState
+	tunnelStarting                  bool
+	tunnelGeneration                uint64
 
 	// Approval selection list
 	approvalOptions []approvalOption
