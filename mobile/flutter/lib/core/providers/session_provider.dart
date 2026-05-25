@@ -198,6 +198,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // Listen to error messages
     service!.errorStream.listen(
       (error) {
+        if (isPermanentRoomFailureMessage(error)) {
+          unawaited(_handlePermanentRoomFailure(url, error));
+          return;
+        }
         state = state.copyWith(error: error);
       },
     );
@@ -263,8 +267,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_resumeSessionIdKey);
-    await prefs.remove(_resumeEventIdKey);
+    await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearSelection();
     state = TunnelConnectionState(status: ConnectionStatus.disconnected);
   }
@@ -787,17 +790,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'server_offline':
-        // Server went offline — ConnectionService auto-reconnects every 15s.
-        // Keep UI intact so the user sees cached messages while waiting.
+        // Relay told us the room is temporarily offline. Keep the current
+        // projection and selection so reconnect stays pinned to this room.
         ref.read(workspaceCacheProvider.notifier).markDisconnected();
-        state = state.copyWith(status: ConnectionStatus.disconnected);
+        state = state.copyWith(
+          status: ConnectionStatus.disconnected,
+          error: state.error?.isNotEmpty == true
+              ? state.error
+              : 'Relay recovering',
+        );
         break;
 
       case 'sharing_stopped':
-        _clearUiProjection();
-        service?.disconnect();
-        ref.read(workspaceCacheProvider.notifier).markDisconnected();
-        state = state.copyWith(status: ConnectionStatus.disconnected);
+        unawaited(_handlePermanentRoomFailure(
+          state.url ?? '',
+          'Sharing stopped',
+        ));
         break;
     }
   }
@@ -884,6 +892,33 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = prefs.getString(_resumeSessionIdKey) ?? _sessionId;
     _lastAppliedEventId =
         prefs.getString(_resumeEventIdKey) ?? _lastAppliedEventId;
+  }
+
+  Future<void> _handlePermanentRoomFailure(
+      String failedUrl, String error) async {
+    final normalizedFailedUrl = normalizeTunnelUrl(failedUrl);
+    final currentUrl = normalizeTunnelUrl(state.url ?? '');
+    if (normalizedFailedUrl.isEmpty || currentUrl != normalizedFailedUrl) {
+      return;
+    }
+    service?.dispose();
+    service = null;
+    _clearUiProjection();
+    _sessionId = '';
+    _lastAppliedEventId = '';
+    _awaitingReplay = false;
+    _pendingReplayEvents.clear();
+    _resetReplayRecoveryState();
+    _recentEventIds.clear();
+    _recentEventSet.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await _clearPersistedResumeState(prefs);
+    await ref.read(workspaceCacheProvider.notifier).clearSelection();
+    if (!ref.mounted) return;
+    state = TunnelConnectionState(
+      status: ConnectionStatus.disconnected,
+      error: error,
+    );
   }
 
   bool _shouldApplyEvent(proto.WsMessage msg) {
@@ -1250,6 +1285,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await prefs.setString(_resumeClientIdKey, _clientId);
     await prefs.setString(_resumeSessionIdKey, _sessionId);
     await prefs.setString(_resumeEventIdKey, _lastAppliedEventId);
+  }
+
+  Future<void> _clearPersistedResumeState([SharedPreferences? prefs]) async {
+    final store = prefs ?? await SharedPreferences.getInstance();
+    await store.remove(_resumeSessionIdKey);
+    await store.remove(_resumeEventIdKey);
   }
 }
 
@@ -3017,81 +3058,15 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (!ref.mounted) return false;
     final targetRecord = state.sessions[targetKey];
     final hasTargetSnapshot = state.snapshots.containsKey(targetKey);
-    final sourceRecord = _latestCachedSessionRecord(
-      sessionId,
-      excludeSessionKey: targetKey,
-    );
-    if (sourceRecord == null) {
-      if (targetRecord == null) {
-        return false;
-      }
-      if (state.selectedWorkspaceKey == workspaceKey &&
-          (state.selectedSessionId == null ||
-              state.selectedSessionId!.isEmpty)) {
-        state = state.copyWith(selectedSessionId: sessionId);
-        await _persistIndex();
-      }
-      return hasTargetSnapshot;
+    if (targetRecord == null) {
+      return false;
     }
-
-    await _ensureSnapshotLoaded(
-        sourceRecord.workspaceKey, sourceRecord.sessionId);
-    if (!ref.mounted) return false;
-    final sourceKey =
-        _sessionCacheKey(sourceRecord.workspaceKey, sourceRecord.sessionId);
-    final sourceSnapshot = state.snapshots[sourceKey];
-    final now = DateTime.now();
-    final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
-      ..[targetKey] = CachedSessionRecord(
-        workspaceKey: workspaceKey,
-        sessionId: sessionId,
-        title: targetRecord?.title.isNotEmpty == true
-            ? targetRecord!.title
-            : sourceRecord.title,
-        model: targetRecord?.model.isNotEmpty == true
-            ? targetRecord!.model
-            : sourceRecord.model,
-        provider: targetRecord?.provider.isNotEmpty == true
-            ? targetRecord!.provider
-            : sourceRecord.provider,
-        mode: targetRecord?.mode.isNotEmpty == true
-            ? targetRecord!.mode
-            : sourceRecord.mode,
-        version: targetRecord?.version.isNotEmpty == true
-            ? targetRecord!.version
-            : sourceRecord.version,
-        lastEventId: targetRecord?.lastEventId.isNotEmpty == true
-            ? targetRecord!.lastEventId
-            : sourceRecord.lastEventId,
-        lastUpdatedAt: now,
-      );
-    final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots);
-    if (!hasTargetSnapshot && sourceSnapshot != null) {
-      snapshots[targetKey] = sourceSnapshot;
+    if (state.selectedWorkspaceKey == workspaceKey &&
+        (state.selectedSessionId == null || state.selectedSessionId!.isEmpty)) {
+      state = state.copyWith(selectedSessionId: sessionId);
+      await _persistIndex();
     }
-    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
-    final workspace = workspaces[workspaceKey];
-    if (workspace != null) {
-      workspaces[workspaceKey] = workspace.copyWith(
-        lastSessionId: sessionId,
-        lastOpenedAt: now,
-      );
-    }
-    state = state.copyWith(
-      workspaces: workspaces,
-      sessions: sessions,
-      snapshots: snapshots,
-      selectedWorkspaceKey: workspaceKey,
-      selectedSessionId: sessionId,
-    );
-    _dirtyWorkspaces.add(workspaceKey);
-    _dirtySessions.add(targetKey);
-    _selectionDirty = true;
-    if (!hasTargetSnapshot && sourceSnapshot != null) {
-      _dirtySnapshots.add(targetKey);
-    }
-    _scheduleFlush();
-    return snapshots.containsKey(targetKey);
+    return hasTargetSnapshot;
   }
 
   Future<void> selectSession(String workspaceKey, String sessionId) async {
@@ -3328,28 +3303,6 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         ..[key] = snapshot,
     );
     return snapshot;
-  }
-
-  CachedSessionRecord? _latestCachedSessionRecord(
-    String sessionId, {
-    String? excludeSessionKey,
-  }) {
-    CachedSessionRecord? latest;
-    for (final record in state.sessions.values) {
-      if (record.sessionId != sessionId) {
-        continue;
-      }
-      if (excludeSessionKey != null &&
-          _sessionCacheKey(record.workspaceKey, record.sessionId) ==
-              excludeSessionKey) {
-        continue;
-      }
-      if (latest == null ||
-          record.lastUpdatedAt.isAfter(latest.lastUpdatedAt)) {
-        latest = record;
-      }
-    }
-    return latest;
   }
 
   Future<void> _ensureSnapshotLoaded(
