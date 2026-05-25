@@ -1244,6 +1244,8 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 
 // ── Shared helpers ───────────────────────────────────
 
+const accentStripeWidth float32 = 3
+
 func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.CanvasObject {
 	return cv.messageRow("TOOL", icon, theme.ColorNamePrimary, content)
 }
@@ -1266,10 +1268,10 @@ func (cv *ChatView) messageRow(tag string, icon fyne.Resource, tone fyne.ThemeCo
 	body := container.NewVBox(bodyObjects...)
 
 	accent := canvas.NewRectangle(theme.Color(tone))
-	accent.CornerRadius = 3
-	accent.SetMinSize(fyne.NewSize(3, 0))
+	accent.CornerRadius = 0
+	accent.SetMinSize(fyne.NewSize(accentStripeWidth, 0))
 
-	panel := surfaceRect(tone)
+	panel := messageSurfaceRect(tone, accentStripeWidth)
 	frame := container.NewStack(panel, container.NewBorder(nil, nil, accent, nil, compactPad(8, 8, 14, 12, body)))
 	left := container.NewVBox(compactPad(6, 0, 0, 8, badge))
 	return compactPad(2, 2, 0, 0, container.NewBorder(nil, nil, left, nil, frame))
@@ -1286,6 +1288,85 @@ func surfaceRect(tone fyne.ThemeColorName) *canvas.Rectangle {
 	bg.StrokeWidth = 1
 	bg.CornerRadius = theme.Size(theme.SizeNameInputRadius)
 	return bg
+}
+
+func messageSurfaceRect(tone fyne.ThemeColorName, accentWidth float32) fyne.CanvasObject {
+	panel := surfaceRect(tone)
+	radius := theme.Size(theme.SizeNameInputRadius)
+	fillColor := blendThemeColors(theme.ColorNameInputBackground, tone, 0.08)
+	borderColor := panel.StrokeColor
+	borderWidth := panel.StrokeWidth
+	_ = accentWidth
+
+	raster := canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
+		if w <= 0 || h <= 0 {
+			return color.Transparent
+		}
+		px := float64(x) + 0.5
+		py := float64(y) + 0.5
+		if !containsLeftSquareRightRounded(px, py, float64(w), float64(h), float64(radius)) {
+			return color.Transparent
+		}
+		innerW := float64(w) - 2*float64(borderWidth)
+		innerH := float64(h) - 2*float64(borderWidth)
+		if innerW <= 0 || innerH <= 0 {
+			return borderColor
+		}
+		innerRadius := float64(radius) - float64(borderWidth)
+		if innerRadius < 0 {
+			innerRadius = 0
+		}
+		if containsLeftSquareRightRounded(
+			px-float64(borderWidth),
+			py-float64(borderWidth),
+			innerW,
+			innerH,
+			innerRadius,
+		) {
+			return fillColor
+		}
+		return borderColor
+	})
+	raster.SetMinSize(panel.MinSize())
+	return raster
+}
+
+func containsLeftSquareRightRounded(px, py, width, height, radius float64) bool {
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	if px < 0 || py < 0 || px >= width || py >= height {
+		return false
+	}
+	if radius < 0 {
+		radius = 0
+	}
+	if radius > width {
+		radius = width
+	}
+	maxRadius := height / 2
+	if radius > maxRadius {
+		radius = maxRadius
+	}
+	if radius <= 0 {
+		return true
+	}
+	straightWidth := width - radius
+	if px < straightWidth {
+		return true
+	}
+	cx := width - radius
+	if py >= radius && py < height-radius {
+		return true
+	}
+	if py < radius {
+		dx := px - cx
+		dy := py - radius
+		return dx*dx+dy*dy <= radius*radius
+	}
+	dx := px - cx
+	dy := py - (height - radius)
+	return dx*dx+dy*dy <= radius*radius
 }
 
 func timelineTag(text string, tone fyne.ThemeColorName) *canvas.Text {
