@@ -29,13 +29,9 @@ generate_build_number() {
 	local today
 	today=$(date +%Y%m%d)
 
-	# Read current build number from .build-number file (CI-safe), fallback to pubspec.yaml
+	# Always read from pubspec.yaml (source of truth), ignore stale .build-number file.
 	local current_build
-	if [[ -f "$BUILD_NUMBER_FILE" ]]; then
-		current_build=$(tr -d '[:space:]' < "$BUILD_NUMBER_FILE")
-	else
-		current_build=$(grep '^version:' "$PUBSPEC" | sed 's/version: [0-9.]*+//' | tr -d '[:space:]')
-	fi
+	current_build=$(grep '^version:' "$PUBSPEC" | sed 's/version: [0-9.]*+//' | tr -d '[:space:]')
 
 	if [[ "$current_build" =~ ^${today}([0-9]+)$ ]]; then
 		# Same day — increment sequence
