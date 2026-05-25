@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/version"
 )
 
@@ -44,25 +45,32 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 			return streamMsg(m.t("session.store_missing"))
 		}
 		ses, err := m.sessionStore.Load(id)
-		if err != nil {
-			return streamMsg(m.t("session.resume_failed", id, err))
+		return sessionResumeLoadedMsg{
+			requestedID: id,
+			session:     ses,
+			err:         err,
 		}
-		// Restore messages into agent
+	}
+}
+
+func (m *Model) applyResumedSession(ses *session.Session) {
+	if ses == nil {
+		return
+	}
+	if m.agent != nil {
+		m.agent.Clear()
 		for _, msg := range ses.Messages {
 			m.agent.AddMessage(msg)
 		}
-		m.SetSession(ses, m.sessionStore)
+	}
+	m.SetSession(ses, m.sessionStore)
+	m.rebuildConversationFromMessages(ses.Messages)
+	m.restoreHistoryFromMessages(ses.Messages)
+}
 
-		// Notify mobile client about session switch
-		m.publishTunnelSnapshotForCurrentSession(true)
-
-		m.rebuildConversationFromMessages(ses.Messages)
-		m.restoreHistoryFromMessages(ses.Messages)
-		title := ses.Title
-		if title == "" {
-			title = m.t("session.untitled")
-		}
-		return streamMsg(m.t("session.resume", ses.ID, title, len(ses.Messages)))
+func publishCurrentSessionCmd(reset bool) tea.Cmd {
+	return func() tea.Msg {
+		return tunnelPublishCurrentSessionMsg{reset: reset}
 	}
 }
 

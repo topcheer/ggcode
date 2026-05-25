@@ -135,3 +135,31 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 		t.Fatalf("expected logical session history to survive room destroy, got %d events", len(history))
 	}
 }
+
+func TestRelayStoreStatsSnapshotCountsPersistedRows(t *testing.T) {
+	store := newStoreForTest(t)
+	persistTestEvent(t, store, "token-1234567890abcdef", "sess-1", "ev-000000001")
+	if err := store.persistActiveSession("token-abcdef1234567890", "sess-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.statsSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Rooms != 2 {
+		t.Fatalf("rooms = %d, want 2", stats.Rooms)
+	}
+	if stats.RoomSessions != 2 {
+		t.Fatalf("room sessions = %d, want 2", stats.RoomSessions)
+	}
+	if stats.GlobalSessions != 2 {
+		t.Fatalf("global sessions = %d, want 2", stats.GlobalSessions)
+	}
+	if stats.RoomEvents != 1 {
+		t.Fatalf("room events = %d, want 1", stats.RoomEvents)
+	}
+	if stats.GlobalEvents != 1 {
+		t.Fatalf("global events = %d, want 1", stats.GlobalEvents)
+	}
+}

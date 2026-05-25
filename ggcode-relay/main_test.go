@@ -288,3 +288,58 @@ func TestHubDestroyRoomClearsMemoryAndStore(t *testing.T) {
 		t.Fatalf("expected destroyed room persistence to be empty, got session=%q history=%d", state.sessionID, len(state.history))
 	}
 }
+
+func TestRelayStatsSnapshotIncludesRoomAndResumeState(t *testing.T) {
+	store := newStoreForTest(t)
+	token := "token-stats-1234567890abcdef"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+
+	h := newHub(store)
+	room := h.getOrCreateServerRoom(token)
+	room.mu.Lock()
+	room.server = &peer{room: room, role: "server"}
+	client := &peer{room: room, role: "client"}
+	room.clients[client] = struct{}{}
+	room.history = append(room.history, roomEvent{
+		sessionID: "sess-1",
+		eventID:   "ev-000000002",
+	})
+	room.mu.Unlock()
+
+	h.stats.recordConnect("server")
+	h.stats.recordConnect("client")
+	h.stats.recordPersistResult(true)
+	h.stats.recordForwardToServer()
+	h.stats.recordClientBroadcast(2)
+	h.stats.recordResume("incremental", 2)
+	h.stats.recordActiveSession(true, 1)
+
+	snapshot, err := h.stats.snapshot(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ActiveRooms != 1 {
+		t.Fatalf("active rooms = %d, want 1", snapshot.ActiveRooms)
+	}
+	if snapshot.RoomsWithServer != 1 {
+		t.Fatalf("rooms with server = %d, want 1", snapshot.RoomsWithServer)
+	}
+	if snapshot.ConnectedClients != 1 {
+		t.Fatalf("connected clients = %d, want 1", snapshot.ConnectedClients)
+	}
+	if snapshot.BufferedRoomEvents != 2 {
+		t.Fatalf("buffered room events = %d, want 2", snapshot.BufferedRoomEvents)
+	}
+	if snapshot.Store.RoomEvents != 1 {
+		t.Fatalf("db room events = %d, want 1", snapshot.Store.RoomEvents)
+	}
+	if snapshot.ResumeRequests != 1 || snapshot.ResumeIncremental != 1 {
+		t.Fatalf("unexpected resume counters: %+v", snapshot)
+	}
+	if snapshot.ReplayedEvents != 2 {
+		t.Fatalf("replayed events = %d, want 2", snapshot.ReplayedEvents)
+	}
+	if snapshot.ActiveSessionChanges != 1 || snapshot.ActiveSessionHydrates != 1 {
+		t.Fatalf("unexpected active session counters: %+v", snapshot)
+	}
+}

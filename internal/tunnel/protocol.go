@@ -20,35 +20,39 @@ type GatewayMessage struct {
 
 // Server → Client event types.
 const (
-	EventConnected          = "connected"
-	EventActiveSession      = "active_session"
-	EventSessionInfo        = "session_info"
-	EventActivity           = "activity"     // main-agent activity text change
-	EventUserMessage        = "user_message" // user text from desktop
-	EventSystemMessage      = "system_message"
-	EventText               = "text"      // streaming text chunk
-	EventTextDone           = "text_done" // text stream complete
-	EventStatus             = "status"    // agent status change
-	EventToolCall           = "tool_call"
-	EventToolResult         = "tool_result"
-	EventApprovalRequest    = "approval_request"
-	EventApprovalResult     = "approval_result"
-	EventAskUserRequest     = "ask_user_request"
-	EventAskUserResponse    = "ask_user_response"
-	EventSubagentSpawn      = "subagent_spawn"
-	EventSubagentText       = "subagent_text"
-	EventSubagentStatus     = "subagent_status"
-	EventSubagentToolCall   = "subagent_tool_call"
-	EventSubagentToolResult = "subagent_tool_result"
-	EventSubagentComplete   = "subagent_complete"
-	EventResumeMiss         = "resume_miss"
-	EventSnapshotReset      = "snapshot_reset"
-	EventLanguageChange     = "language_change" // bidirectional language sync
-	EventError              = "error"
-	EventPing               = "ping"
-	EventDisconnected       = "disconnected"
-	EventRelayAck           = "relay_ack"  // Relay → Client: relay received the message
-	EventServerAck          = "server_ack" // Server → Client: desktop processed the message
+	EventConnected             = "connected"
+	EventActiveSession         = "active_session"
+	EventSessionInfo           = "session_info"
+	EventActivity              = "activity"     // main-agent activity text change
+	EventUserMessage           = "user_message" // user text from desktop
+	EventSystemMessage         = "system_message"
+	EventText                  = "text"      // streaming text chunk
+	EventTextDone              = "text_done" // text stream complete
+	EventReasoning             = "reasoning"
+	EventReasoningDone         = "reasoning_done"
+	EventStatus                = "status" // agent status change
+	EventToolCall              = "tool_call"
+	EventToolResult            = "tool_result"
+	EventApprovalRequest       = "approval_request"
+	EventApprovalResult        = "approval_result"
+	EventAskUserRequest        = "ask_user_request"
+	EventAskUserResponse       = "ask_user_response"
+	EventSubagentSpawn         = "subagent_spawn"
+	EventSubagentText          = "subagent_text"
+	EventSubagentReasoning     = "subagent_reasoning"
+	EventSubagentReasoningDone = "subagent_reasoning_done"
+	EventSubagentStatus        = "subagent_status"
+	EventSubagentToolCall      = "subagent_tool_call"
+	EventSubagentToolResult    = "subagent_tool_result"
+	EventSubagentComplete      = "subagent_complete"
+	EventResumeMiss            = "resume_miss"
+	EventSnapshotReset         = "snapshot_reset"
+	EventLanguageChange        = "language_change" // bidirectional language sync
+	EventError                 = "error"
+	EventPing                  = "ping"
+	EventDisconnected          = "disconnected"
+	EventRelayAck              = "relay_ack"  // Relay → Client: relay received the message
+	EventServerAck             = "server_ack" // Server → Client: desktop processed the message
 )
 
 // Client → Server command types.

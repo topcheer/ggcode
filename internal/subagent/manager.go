@@ -245,6 +245,7 @@ type Manager struct {
 	onUpdate     func(*SubAgent)
 	onComplete   func(*SubAgent)
 	onStreamText func(agentID, text string)                                   // called on each text chunk (no throttle)
+	onReasoning  func(agentID, text string)                                   // called on each reasoning chunk (no throttle)
 	onToolCall   func(agentID, toolID, toolName, args, detail string)         // called on tool call
 	onToolResult func(agentID, toolID, toolName, result string, isError bool) // called on tool result
 	lastNotify   time.Time                                                    // throttle: last time onUpdate was called
@@ -551,6 +552,12 @@ func (m *Manager) SetOnStreamText(fn func(agentID, text string)) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) SetOnReasoning(fn func(agentID, text string)) {
+	m.mu.Lock()
+	m.onReasoning = fn
+	m.mu.Unlock()
+}
+
 func (m *Manager) SetOnToolCall(fn func(agentID, toolID, toolName, args, detail string)) {
 	m.mu.Lock()
 	m.onToolCall = fn
@@ -585,6 +592,15 @@ func (m *Manager) NotifyToolResult(agentID, toolID, toolName, result string, isE
 func (m *Manager) NotifyStreamText(agentID, text string) {
 	m.mu.Lock()
 	fn := m.onStreamText
+	m.mu.Unlock()
+	if fn != nil {
+		fn(agentID, text)
+	}
+}
+
+func (m *Manager) NotifyReasoning(agentID, text string) {
+	m.mu.Lock()
+	fn := m.onReasoning
 	m.mu.Unlock()
 	if fn != nil {
 		fn(agentID, text)

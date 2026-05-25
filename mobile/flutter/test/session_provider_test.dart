@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,8 +91,19 @@ class _TestConnectionNotifier extends ConnectionNotifier {
 }
 
 void main() {
+  late Directory cacheDir;
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    cacheDir = Directory.systemTemp.createTempSync('ggcode_mobile_cache_test_');
+    debugWorkspaceCacheDatabasePathOverride =
+        '${cacheDir.path}/workspace_cache.sqlite';
+  });
+
+  tearDown(() {
+    debugWorkspaceCacheDatabasePathOverride = null;
+    if (cacheDir.existsSync()) {
+      cacheDir.deleteSync(recursive: true);
+    }
   });
 
   test('ChatNotifier finalizes only the targeted stream', () {
@@ -212,6 +225,67 @@ void main() {
     expect(message.toolPayload, contains('Task ID: task-1'));
     expect(message.toolPayloadMode, 'task_fields');
     expect(message.toolCompleted, isTrue);
+  });
+
+  test('ChatNotifier collapses reasoning when assistant text arrives', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleReasoningChunk(
+      proto.TextData(id: 'reason-1', chunk: 'thinking', done: false),
+    );
+    notifier.handleTextChunk(
+      proto.TextData(id: 'msg-1', chunk: 'answer', done: false),
+    );
+
+    final messages = container.read(chatProvider);
+    final reasoning = messages.firstWhere((m) => m.id == 'reason-1');
+    final answer = messages.firstWhere((m) => m.id == 'msg-1');
+    expect(reasoning.kind, 'reasoning');
+    expect(reasoning.streaming, isFalse);
+    expect(reasoning.reasoningCollapsed, isTrue);
+    expect(answer.text, 'answer');
+  });
+
+  test('ConnectionNotifier projects subagent reasoning into agent tab', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000001',
+        type: 'subagent_reasoning',
+        data: {
+          'agent_id': 'sa-1',
+          'id': 'reason-1',
+          'chunk': 'thinking',
+        },
+      ),
+    );
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000002',
+        type: 'subagent_text',
+        data: {
+          'agent_id': 'sa-1',
+          'id': 'msg-1',
+          'chunk': 'done',
+        },
+      ),
+    );
+
+    final messages = container.read(chatProvider);
+    final reasoning = messages.firstWhere((m) => m.id == 'sa-1-reason-1');
+    final text = messages.firstWhere((m) => m.id == 'sa-1-msg-1');
+    expect(reasoning.sourceId, 'sa-1');
+    expect(reasoning.kind, 'reasoning');
+    expect(reasoning.reasoningCollapsed, isTrue);
+    expect(text.sourceId, 'sa-1');
+    expect(text.text, 'done');
   });
 
   test('ChatNotifier formats teammate_spawn tool results', () {
@@ -504,6 +578,132 @@ void main() {
     expect(snapshot!.messages.single.text, 'hello');
     expect(snapshot.agentStatus, 'busy');
     expect(snapshot.agentStatusMessage, 'read_file');
+  });
+
+  test('workspace cache preserves full message history without truncation',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=full-cache');
+    await cache.registerLiveSession('sess-full', info, lastEventId: 'ev-0400');
+    final messages = List<ChatMessage>.generate(
+      400,
+      (index) => ChatMessage(
+        id: 'msg-$index',
+        text: 'message-$index',
+        time: DateTime.parse('2026-01-01T00:00:00Z')
+            .add(Duration(minutes: index)),
+      ),
+    );
+    await cache.captureLiveProjection(
+      messages: messages,
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-0400',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    final restored = ProviderContainer();
+    addTearDown(restored.dispose);
+    final restoredCache = restored.read(workspaceCacheProvider.notifier);
+    await restoredCache.initialize();
+
+    final restoredState = restored.read(workspaceCacheProvider);
+    final snapshot = restoredCache.snapshotFor(
+      restoredState.selectedWorkspaceKey!,
+      'sess-full',
+    );
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages, hasLength(400));
+    expect(snapshot.messages.first.text, 'message-0');
+    expect(snapshot.messages.last.text, 'message-399');
+  });
+
+  test('workspace cache flushNow persists snapshot without debounce wait',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=flush-now');
+    await cache.registerLiveSession('sess-flush', info, lastEventId: 'ev-0002');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-flush',
+          text: 'persist immediately',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-0002',
+    );
+    await cache.flushNow();
+
+    final restored = ProviderContainer();
+    addTearDown(restored.dispose);
+    final restoredCache = restored.read(workspaceCacheProvider.notifier);
+    await restoredCache.initialize();
+
+    final restoredState = restored.read(workspaceCacheProvider);
+    final snapshot = restoredCache.snapshotFor(
+      restoredState.selectedWorkspaceKey!,
+      'sess-flush',
+    );
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages.single.text, 'persist immediately');
+  });
+
+  test(
+      'workspace cache restores selected workspace url when sqlite is unavailable',
+      () async {
+    const selectedWorkspaceKey = 'workspace-fallback';
+    const selectedWorkspaceUrl = 'wss://example.test/ws?token=fallback';
+    SharedPreferences.setMockInitialValues({
+      'ggcode_workspace_cache_v1': jsonEncode({
+        'selected_workspace_key': selectedWorkspaceKey,
+        'selected_session_id': 'sess-fallback',
+        'selected_workspace_url': selectedWorkspaceUrl,
+      }),
+    });
+    debugWorkspaceCacheDatabasePathOverride = cacheDir.path;
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+
+    final state = container.read(workspaceCacheProvider);
+    expect(state.initialized, isTrue);
+    expect(state.selectedWorkspaceKey, selectedWorkspaceKey);
+    expect(state.selectedSessionId, 'sess-fallback');
+    expect(cache.urlForWorkspace(selectedWorkspaceKey), selectedWorkspaceUrl);
   });
 
   test('historical session view uses cached messages and disables sending',

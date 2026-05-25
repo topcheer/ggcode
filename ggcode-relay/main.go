@@ -200,7 +200,10 @@ func (p *peer) readPump(h *hub) {
 			p.room.mu.Unlock()
 			h.removeRoomIfEmpty(p.room)
 		}
-		log.Printf("[relay] %s disconnected: room=%s", p.role, p.room.token[:8])
+		if p.hub != nil && p.hub.stats != nil {
+			p.hub.stats.recordDisconnect(p.role)
+		}
+		log.Printf("[relay] %s disconnected: room=%s", p.role, shortToken(p.room.token))
 	}()
 
 	p.conn.SetReadLimit(1 << 20)
@@ -290,6 +293,7 @@ func (p *peer) readPump(h *hub) {
 		var persistMsg relayMessage
 		var persistRaw []byte
 		if p.role == "server" {
+			readyClients := 0
 			if msg.SessionID != "" && msg.SessionID != p.room.sessionID {
 				p.room.sessionID = msg.SessionID
 				p.room.history = nil
@@ -307,18 +311,30 @@ func (p *peer) readPump(h *hub) {
 			}
 			for c := range p.room.clients {
 				if c.ready {
+					readyClients++
 					c.sendRaw(raw)
 				}
+			}
+			if p.hub != nil && p.hub.stats != nil {
+				p.hub.stats.recordClientBroadcast(readyClients)
 			}
 		} else {
 			if p.room.server != nil {
 				p.room.server.sendRaw(raw)
+				if p.hub != nil && p.hub.stats != nil {
+					p.hub.stats.recordForwardToServer()
+				}
 			}
 		}
 		p.room.mu.Unlock()
 		if p.role == "server" && p.hub != nil && p.hub.store != nil && persistMsg.SessionID != "" {
 			if err := p.hub.store.persistEvent(p.room.token, persistMsg, persistRaw); err != nil {
-				log.Printf("[relay] persist event failed: room=%s err=%v", p.room.token[:8], err)
+				if p.hub.stats != nil {
+					p.hub.stats.recordPersistResult(false)
+				}
+				log.Printf("[relay] persist event failed: room=%s err=%v", shortToken(p.room.token), err)
+			} else if p.hub.stats != nil {
+				p.hub.stats.recordPersistResult(true)
 			}
 		}
 	}
@@ -354,6 +370,7 @@ func (p *peer) handleActiveSession(msg relayMessage) {
 	}
 	var clients []*peer
 	var hydrate bool
+	hydratedEvents := 0
 	p.room.mu.Lock()
 	changed := p.room.sessionID != sessionID
 	p.room.sessionID = sessionID
@@ -372,6 +389,7 @@ func (p *peer) handleActiveSession(msg relayMessage) {
 		if err != nil {
 			log.Printf("[relay] load session history failed: session=%s err=%v", sessionID, err)
 		} else if len(history) > 0 {
+			hydratedEvents = len(history)
 			p.room.mu.Lock()
 			if p.room.sessionID == sessionID && len(p.room.history) == 0 {
 				p.room.history = history
@@ -388,9 +406,23 @@ func (p *peer) handleActiveSession(msg relayMessage) {
 	for _, c := range clients {
 		c.sendJSON(active)
 	}
+	if p.hub != nil && p.hub.stats != nil {
+		p.hub.stats.recordActiveSession(changed, hydratedEvents)
+	}
+	log.Printf(
+		"[relay] active_session room=%s session=%s changed=%t hydrated=%d clients=%d",
+		shortToken(token),
+		sessionID,
+		changed,
+		hydratedEvents,
+		len(clients),
+	)
 	if p.hub != nil && p.hub.store != nil {
 		if err := p.hub.store.persistActiveSession(token, sessionID); err != nil {
-			log.Printf("[relay] persist active session failed: room=%s err=%v", token[:8], err)
+			if p.hub.stats != nil {
+				p.hub.stats.recordPersistResult(false)
+			}
+			log.Printf("[relay] persist active session failed: room=%s err=%v", shortToken(token), err)
 		}
 	}
 }
@@ -429,6 +461,17 @@ func (p *peer) handleResume(msg relayMessage) {
 			p.sendRaw(ev.raw)
 		}
 	}
+	if p.hub != nil && p.hub.stats != nil {
+		p.hub.stats.recordResume(mode, len(replay))
+	}
+	log.Printf(
+		"[relay] resume room=%s client=%s session=%s mode=%s replay=%d",
+		shortToken(p.room.token),
+		msg.ClientID,
+		p.room.sessionID,
+		mode,
+		len(replay),
+	)
 }
 
 func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEvent) {
@@ -457,11 +500,16 @@ func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEv
 type hub struct {
 	rooms map[string]*room
 	store *relayStore
+	stats *relayStats
 	mu    sync.RWMutex
 }
 
 func newHub(store *relayStore) *hub {
-	return &hub{rooms: make(map[string]*room), store: store}
+	return &hub{
+		rooms: make(map[string]*room),
+		store: store,
+		stats: newRelayStats(),
+	}
 }
 
 func (h *hub) getOrCreateServerRoom(token string) *room {
@@ -474,10 +522,13 @@ func (h *hub) getOrCreateServerRoom(token string) *room {
 	if h.store != nil {
 		state, err := h.store.loadRoom(token)
 		if err != nil {
-			log.Printf("[relay] load room failed: room=%s err=%v", token[:8], err)
+			log.Printf("[relay] load room failed: room=%s err=%v", shortToken(token), err)
 		} else {
 			r.sessionID = state.sessionID
 			r.history = state.history
+			if h.stats != nil {
+				h.stats.recordRoomStoreResult(state.sessionID != "" || len(state.history) > 0)
+			}
 		}
 	}
 	h.rooms[token] = r
@@ -497,11 +548,17 @@ func (h *hub) getOrLoadClientRoom(token string) (*room, bool) {
 	}
 	state, err := h.store.loadRoom(token)
 	if err != nil {
-		log.Printf("[relay] load room failed: room=%s err=%v", token[:8], err)
+		log.Printf("[relay] load room failed: room=%s err=%v", shortToken(token), err)
 		return nil, false
 	}
 	if state.sessionID == "" && len(state.history) == 0 {
+		if h.stats != nil {
+			h.stats.recordRoomStoreResult(false)
+		}
 		return nil, false
+	}
+	if h.stats != nil {
+		h.stats.recordRoomStoreResult(true)
 	}
 
 	h.mu.Lock()
@@ -559,7 +616,7 @@ func (h *hub) expireRoomIfServerOffline(token string) {
 	}
 	r.offlineTimer = nil
 	r.mu.Unlock()
-	log.Printf("[relay] server grace period expired: room=%s", token[:8])
+	log.Printf("[relay] server grace period expired: room=%s", shortToken(token))
 	h.destroyRoom(token, relayMessage{Type: "server_offline"})
 }
 
@@ -590,9 +647,18 @@ func (h *hub) destroyRoom(token string, notice relayMessage) {
 	}
 	if h.store != nil {
 		if err := h.store.destroyRoom(token); err != nil {
-			log.Printf("[relay] destroy room failed: room=%s err=%v", token[:8], err)
+			log.Printf("[relay] destroy room failed: room=%s err=%v", shortToken(token), err)
 		}
 	}
+	if h.stats != nil {
+		h.stats.recordRoomDestroy()
+	}
+	log.Printf(
+		"[relay] destroy room=%s reason=%s clients=%d",
+		shortToken(token),
+		notice.Type,
+		len(clients),
+	)
 	if notice.Type != "" {
 		for _, c := range clients {
 			c.sendJSON(notice)
@@ -666,9 +732,22 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		rm.clients[p] = struct{}{}
 		rm.notifyServerClientConnected()
 	}
+	clients := len(rm.clients)
+	sessionID := rm.sessionID
+	bufferedEvents := len(rm.history)
 	rm.mu.Unlock()
 
-	log.Printf("[relay] %s connected: room=%s clients=%d", role, token[:8], len(rm.clients))
+	if h.stats != nil {
+		h.stats.recordConnect(role)
+	}
+	log.Printf(
+		"[relay] %s connected: room=%s session=%s clients=%d buffered_events=%d",
+		role,
+		shortToken(token),
+		sessionID,
+		clients,
+		bufferedEvents,
+	)
 	go p.writePump()
 	p.readPump(h) // blocks
 }
@@ -699,6 +778,13 @@ func main() {
 	}()
 
 	h := newHub(store)
+	go func() {
+		ticker := time.NewTicker(defaultStatsInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			h.logStats()
+		}
+	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

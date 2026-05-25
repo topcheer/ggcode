@@ -11,6 +11,8 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+const subagentRedactedReasoningPlaceholder = "Reasoning hidden by model."
+
 // ToolInfo is the minimal interface needed from a tool for sub-agent registration.
 type ToolInfo interface {
 	Name() string
@@ -182,13 +184,20 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventReasoning:
-			if event.Text != "" && event.Text != "__redacted_thinking__" {
+			text := strings.TrimSpace(event.Text)
+			switch text {
+			case "":
+			case "__redacted_thinking__":
+				text = subagentRedactedReasoningPlaceholder
+			}
+			if text != "" {
 				if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 					sa.appendEvent(AgentEvent{
 						Type: AgentEventReasoning,
-						Text: event.Text,
+						Text: text,
 					})
 				}
+				cfg.Manager.NotifyReasoning(cfg.SubAgentID, text)
 			}
 		}
 	})

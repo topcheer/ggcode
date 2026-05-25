@@ -70,6 +70,59 @@ func TestUIStateAppendReasoningEmitsChunkDeltas(t *testing.T) {
 	}
 }
 
+func TestUIStateAppendAssistantTextFlushesPendingReasoning(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	ui := NewUIState()
+	var events []UIEvent
+	ui.OnEvent = func(e UIEvent) {
+		events = append(events, e)
+	}
+
+	ui.AppendReasoning("first")
+	ui.AppendReasoning(" second")
+	ui.AppendAssistantText("answer")
+
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	if events[0].Type != EventReasoning || events[0].Text != "first" {
+		t.Fatalf("first event = %#v, want immediate first reasoning chunk", events[0])
+	}
+	if events[1].Type != EventReasoning || events[1].Text != " second" {
+		t.Fatalf("second event = %#v, want pending reasoning flushed before assistant text", events[1])
+	}
+	if events[2].Type != EventAppend || events[2].Msg.Role != "assistant" || events[2].Msg.Content != "answer" {
+		t.Fatalf("third event = %#v, want assistant append after reasoning flush", events[2])
+	}
+}
+
+func TestUIStateAppendChatFlushesPendingReasoningForNonUserMessages(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	ui := NewUIState()
+	var events []UIEvent
+	ui.OnEvent = func(e UIEvent) {
+		events = append(events, e)
+	}
+
+	ui.AppendReasoning("first")
+	ui.AppendReasoning(" second")
+	ui.AppendChat(ChatMessage{Role: "tool", ToolName: "bash"})
+
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	if events[1].Type != EventReasoning || events[1].Text != " second" {
+		t.Fatalf("second event = %#v, want pending reasoning flushed before non-user append", events[1])
+	}
+	if events[2].Type != EventAppend || events[2].Msg.Role != "tool" {
+		t.Fatalf("third event = %#v, want tool append after reasoning flush", events[2])
+	}
+}
+
 func TestAppendAgentEventsMergesConsecutiveTextChunks(t *testing.T) {
 	app := test.NewApp()
 	defer app.Quit()

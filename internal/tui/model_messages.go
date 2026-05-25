@@ -8,6 +8,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/update"
 )
@@ -33,6 +34,16 @@ type errMsg struct{ err error }
 type compactResultMsg struct {
 	text string // success message
 	err  string // error message (mutually exclusive with text)
+}
+
+type sessionResumeLoadedMsg struct {
+	requestedID string
+	session     *session.Session
+	err         error
+}
+
+type tunnelPublishCurrentSessionMsg struct {
+	reset bool
 }
 
 type startupReadyMsg struct{}
@@ -97,6 +108,11 @@ type subAgentUpdateMsg struct {
 }
 
 type subAgentTunnelStreamTextMsg struct {
+	AgentID string
+	Text    string
+}
+
+type subAgentTunnelReasoningMsg struct {
 	AgentID string
 	Text    string
 }

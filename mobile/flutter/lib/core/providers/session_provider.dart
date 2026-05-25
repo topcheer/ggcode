@@ -1,9 +1,14 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../connection_service.dart';
@@ -12,6 +17,9 @@ import '../crypto.dart';
 import '../l10n/app_localizations.dart';
 import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
+
+const _reasoningKind = 'reasoning';
+const _redactedReasoningPlaceholder = 'Reasoning hidden by model.';
 
 // ---- Connection Service Provider ----
 
@@ -487,6 +495,24 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markEventApplied(msg);
         break;
 
+      case 'reasoning':
+        if (!_shouldApplyEvent(msg)) break;
+        if (msg.data != null) {
+          final data = proto.TextData.fromJson(msg.data!);
+          final reasoningId = data.id.isNotEmpty
+              ? data.id
+              : 'reasoning-${DateTime.now().millisecondsSinceEpoch}';
+          chatNotifier.handleReasoningChunk(
+            proto.TextData(
+              id: reasoningId,
+              chunk: data.chunk,
+              done: data.done,
+            ),
+          );
+        }
+        _markEventApplied(msg);
+        break;
+
       case 'stream_start':
         break;
 
@@ -496,6 +522,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final msgId = msg.data?['id'] as String? ?? msg.streamId;
         if (msgId != null && msgId.isNotEmpty) {
           chatNotifier.finalizeStreaming(msgId);
+        }
+        _markEventApplied(msg);
+        break;
+
+      case 'reasoning_done':
+        if (!_shouldApplyEvent(msg)) break;
+        final msgId = msg.data?['id'] as String? ?? msg.streamId;
+        if (msgId != null && msgId.isNotEmpty) {
+          chatNotifier.finalizeReasoning(msgId);
         }
         _markEventApplied(msg);
         break;
@@ -627,6 +662,29 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markEventApplied(msg);
         break;
 
+      case 'subagent_reasoning':
+        if (!_shouldApplyEvent(msg)) break;
+        if (msg.data != null) {
+          final data = proto.SubagentReasoningData.fromJson(msg.data!);
+          _upsertSubagent(
+            agentId: data.agentId,
+            status: 'thinking',
+          );
+          chatNotifier.handleSubagentReasoning(data);
+        }
+        _markEventApplied(msg);
+        break;
+
+      case 'subagent_reasoning_done':
+        if (!_shouldApplyEvent(msg)) break;
+        if (msg.data != null) {
+          final data = proto.SubagentReasoningData.fromJson(msg.data!);
+          final reasoningId = '${data.agentId}-${data.id}';
+          chatNotifier.finalizeReasoning(reasoningId);
+        }
+        _markEventApplied(msg);
+        break;
+
       case 'subagent_status':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
@@ -643,6 +701,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
+          chatNotifier._finalizePendingReasoning(
+            sourceId: data.agentId,
+            collapse: true,
+          );
           _upsertSubagent(
             agentId: data.agentId,
             name: data.name,
@@ -1149,10 +1211,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 // ---- Message delivery status for ack tracking ----
 
 enum MessageStatus {
-  sending,     // not yet acknowledged by relay
-  delivered,   // relay acknowledged (relay_ack received)
+  sending, // not yet acknowledged by relay
+  delivered, // relay acknowledged (relay_ack received)
   acknowledged, // desktop acknowledged (server_ack received)
-  failed,      // timed out waiting for relay_ack
+  failed, // timed out waiting for relay_ack
 }
 
 // ---- Chat Messages Provider ----
@@ -1175,6 +1237,7 @@ class ChatMessage {
   final String? toolPayloadMode;
   final bool toolCompleted;
   final bool isToolError;
+  final bool reasoningCollapsed;
   final DateTime time;
   final MessageStatus status; // ack tracking for user messages
 
@@ -1196,6 +1259,7 @@ class ChatMessage {
     this.toolPayloadMode,
     this.toolCompleted = false,
     this.isToolError = false,
+    this.reasoningCollapsed = false,
     required this.time,
     this.status = MessageStatus.acknowledged, // default for server-originated
   });
@@ -1210,6 +1274,7 @@ class ChatMessage {
     String? toolPayloadMode,
     bool? toolCompleted,
     bool? isToolError,
+    bool? reasoningCollapsed,
     MessageStatus? status,
   }) =>
       ChatMessage(
@@ -1230,6 +1295,7 @@ class ChatMessage {
         toolPayloadMode: toolPayloadMode ?? this.toolPayloadMode,
         toolCompleted: toolCompleted ?? this.toolCompleted,
         isToolError: isToolError ?? this.isToolError,
+        reasoningCollapsed: reasoningCollapsed ?? this.reasoningCollapsed,
         time: time,
         status: status ?? this.status,
       );
@@ -1252,6 +1318,7 @@ class ChatMessage {
         'tool_payload_mode': toolPayloadMode,
         'tool_completed': toolCompleted,
         'is_tool_error': isToolError,
+        'reasoning_collapsed': reasoningCollapsed,
         'time': time.toIso8601String(),
       };
 
@@ -1273,6 +1340,7 @@ class ChatMessage {
         toolPayloadMode: json['tool_payload_mode'] as String?,
         toolCompleted: json['tool_completed'] as bool? ?? false,
         isToolError: json['is_tool_error'] as bool? ?? false,
+        reasoningCollapsed: json['reasoning_collapsed'] as bool? ?? false,
         time:
             DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
       );
@@ -1292,7 +1360,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
   void addUserMessage(String text) {
-    final messageId = 'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
+    final messageId =
+        'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
     final msg = ChatMessage(
       id: messageId,
       isUser: true,
@@ -1320,13 +1389,10 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         final connState = ref.read(connectionProvider);
         final newStatus = connState.status == ConnectionStatus.connected
             ? MessageStatus.delivered // connection ok, assume TCP delivered
-            : MessageStatus.failed;   // connection lost, likely failed
+            : MessageStatus.failed; // connection lost, likely failed
         state = [
           for (int i = 0; i < state.length; i++)
-            if (i == idx)
-              state[i].copyWith(status: newStatus)
-            else
-              state[i],
+            if (i == idx) state[i].copyWith(status: newStatus) else state[i],
         ];
       }
     });
@@ -1341,10 +1407,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     if (status.index <= current.index) return;
     state = [
       for (int i = 0; i < state.length; i++)
-        if (i == idx)
-          state[i].copyWith(status: status)
-        else
-          state[i],
+        if (i == idx) state[i].copyWith(status: status) else state[i],
     ];
   }
 
@@ -1364,6 +1427,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void addRemoteSystemMessage(String text,
       {String? messageId, String kind = ''}) {
+    _finalizePendingReasoning(sourceId: null, collapse: true);
     state = [
       ...state,
       ChatMessage(
@@ -1400,6 +1464,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void handleTextChunk(proto.TextData data) {
+    _finalizePendingReasoning(sourceId: null, collapse: true);
     final idx = state.indexWhere((m) => m.id == data.id);
     if (idx >= 0) {
       final msg = state[idx];
@@ -1429,6 +1494,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void handleSubagentText(proto.SubagentTextData data) {
+    _finalizePendingReasoning(sourceId: data.agentId, collapse: true);
     final msgId = '${data.agentId}-${data.id}';
     final idx = state.indexWhere((m) => m.id == msgId);
     final agent = _findSubagent(data.agentId);
@@ -1469,6 +1535,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     required String sourceName,
     required String sourceColor,
   }) {
+    _finalizePendingReasoning(sourceId: agentId, collapse: true);
     final msgId = messageId ??
         '$agentId-tool-${toolId.isNotEmpty ? toolId : _msgCounter++}';
     state = [
@@ -1499,6 +1566,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     String payloadMode = '',
     required bool isError,
   }) {
+    _finalizePendingReasoning(sourceId: agentId, collapse: true);
     // Match by toolId (exact), fallback to agentId+toolName
     int idx = -1;
     if (toolId.isNotEmpty) {
@@ -1539,6 +1607,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void handleToolCall(proto.ToolCallData data, {String? messageId}) {
+    _finalizePendingReasoning(sourceId: null, collapse: true);
     state = [
       ...state,
       ChatMessage(
@@ -1555,6 +1624,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void handleToolResult(proto.ToolResultData data) {
+    _finalizePendingReasoning(sourceId: null, collapse: true);
     // Match by toolId (exact), fallback to toolName
     int idx = -1;
     if (data.toolId.isNotEmpty) {
@@ -1740,7 +1810,108 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ];
   }
 
+  void handleReasoningChunk(
+    proto.TextData data, {
+    String? sourceId,
+    String? sourceName,
+    String? sourceColor,
+  }) {
+    final chunk = _normalizeReasoningChunk(data.chunk);
+    if (chunk.isEmpty) return;
+    final idx = state.indexWhere(
+      (m) => m.id == data.id && m.kind == _reasoningKind,
+    );
+    if (idx >= 0) {
+      final msg = state[idx];
+      state = [
+        for (int i = 0; i < state.length; i++)
+          if (i == idx)
+            msg.copyWith(
+              text: msg.text + chunk,
+              streaming: !data.done,
+            )
+          else
+            state[i],
+      ];
+      return;
+    }
+    state = [
+      ...state,
+      ChatMessage(
+        id: data.id,
+        sourceId: sourceId,
+        sourceName: sourceName,
+        sourceColor: sourceColor,
+        kind: _reasoningKind,
+        text: chunk,
+        streaming: !data.done,
+        reasoningCollapsed: false,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void handleSubagentReasoning(proto.SubagentReasoningData data) {
+    final agent = _findSubagent(data.agentId);
+    handleReasoningChunk(
+      proto.TextData(
+        id: '${data.agentId}-${data.id}',
+        chunk: data.chunk,
+        done: data.done,
+      ),
+      sourceId: data.agentId,
+      sourceName: agent?.name ?? data.agentId,
+      sourceColor: agent?.color ?? '#4CAF50',
+    );
+  }
+
+  void finalizeReasoning(String msgId) {
+    final idx = state.lastIndexWhere(
+      (m) => m.id == msgId && m.kind == _reasoningKind,
+    );
+    if (idx < 0) return;
+    final msg = state[idx];
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i == idx) msg.copyWith(streaming: false) else state[i],
+    ];
+  }
+
+  String _normalizeReasoningChunk(String chunk) {
+    final trimmed = chunk.trim();
+    if (trimmed.isEmpty) return '';
+    if (trimmed == '__redacted_thinking__') {
+      return _redactedReasoningPlaceholder;
+    }
+    return chunk;
+  }
+
+  void _finalizePendingReasoning({
+    required String? sourceId,
+    required bool collapse,
+  }) {
+    final idx = state.lastIndexWhere(
+      (m) =>
+          m.kind == _reasoningKind &&
+          m.sourceId == sourceId &&
+          (m.streaming || (!m.reasoningCollapsed && collapse)),
+    );
+    if (idx < 0) return;
+    final msg = state[idx];
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i == idx)
+          msg.copyWith(
+            streaming: false,
+            reasoningCollapsed: collapse ? true : msg.reasoningCollapsed,
+          )
+        else
+          state[i],
+    ];
+  }
+
   void addErrorMessage(String message, {String? messageId}) {
+    _finalizePendingReasoning(sourceId: null, collapse: true);
     state = [
       ...state,
       ChatMessage(
@@ -2241,7 +2412,381 @@ class WorkspaceCacheState {
 }
 
 const _workspaceCacheSentinel = Object();
+const _workspaceCacheIndexKey = 'ggcode_workspace_cache_v1';
+const _workspaceCacheIndexSelectedWorkspaceUrlKey = 'selected_workspace_url';
 const _workspaceSnapshotPrefix = 'ggcode_workspace_snapshot_v1_';
+const _workspaceCacheStorageSchemaVersion = 1;
+const _workspaceCacheProjectionVersion = 2;
+String? debugWorkspaceCacheDatabasePathOverride;
+
+class _SnapshotWrite {
+  const _SnapshotWrite({
+    required this.workspaceKey,
+    required this.sessionId,
+    required this.snapshot,
+  });
+
+  final String workspaceKey;
+  final String sessionId;
+  final CachedSessionSnapshot snapshot;
+}
+
+class _WorkspaceCacheSqlStore {
+  _WorkspaceCacheSqlStore._(this._db);
+
+  final Database _db;
+
+  static Future<_WorkspaceCacheSqlStore> open() async {
+    final path = await _resolveDatabasePath();
+    final parent = Directory(p.dirname(path));
+    if (!parent.existsSync()) {
+      parent.createSync(recursive: true);
+    }
+    final db = sqlite3.open(path);
+    final store = _WorkspaceCacheSqlStore._(db);
+    store._initialize();
+    return store;
+  }
+
+  static Future<String> _resolveDatabasePath() async {
+    if (debugWorkspaceCacheDatabasePathOverride != null &&
+        debugWorkspaceCacheDatabasePathOverride!.isNotEmpty) {
+      return debugWorkspaceCacheDatabasePathOverride!;
+    }
+    try {
+      final dir = await getApplicationSupportDirectory();
+      return p.join(dir.path, 'workspace_cache_v2.sqlite');
+    } catch (_) {
+      return p.join(
+        Directory.systemTemp.path,
+        'ggcode_mobile_workspace_cache_v2.sqlite',
+      );
+    }
+  }
+
+  void _initialize() {
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS cache_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS cache_workspaces (
+        key TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        last_session_id TEXT NOT NULL,
+        last_opened_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS cache_sessions (
+        workspace_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        version TEXT NOT NULL,
+        last_event_id TEXT NOT NULL,
+        last_updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_key, session_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS cache_snapshots (
+        workspace_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_key, session_id)
+      );
+    ''');
+    _ensureVersion(
+      key: 'storage_schema_version',
+      expected: '$_workspaceCacheStorageSchemaVersion',
+      resetStore: false,
+    );
+    _ensureVersion(
+      key: 'projection_version',
+      expected: '$_workspaceCacheProjectionVersion',
+      resetStore: true,
+    );
+  }
+
+  void _ensureVersion({
+    required String key,
+    required String expected,
+    required bool resetStore,
+  }) {
+    final current = _metaValue(key);
+    if (current == expected) {
+      return;
+    }
+    if (resetStore) {
+      clearAll();
+    }
+    _db.execute(
+      'INSERT INTO cache_meta(key, value) VALUES(?, ?) '
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      [key, expected],
+    );
+  }
+
+  String? _metaValue(String key) {
+    final result = _db.select(
+      'SELECT value FROM cache_meta WHERE key = ?',
+      [key],
+    );
+    if (result.isEmpty) {
+      return null;
+    }
+    return result.first['value'] as String?;
+  }
+
+  bool get isEmpty {
+    final rows = _db.select('SELECT COUNT(*) AS count FROM cache_sessions');
+    final count = rows.first['count'];
+    if (count is int) {
+      return count == 0;
+    }
+    if (count is BigInt) {
+      return count == BigInt.zero;
+    }
+    return true;
+  }
+
+  void clearAll() {
+    _db.execute('DELETE FROM cache_snapshots');
+    _db.execute('DELETE FROM cache_sessions');
+    _db.execute('DELETE FROM cache_workspaces');
+  }
+
+  List<WorkspaceRecord> loadWorkspaces() {
+    final rows = _db.select('''
+      SELECT key, url, display_name, last_session_id, last_opened_at
+      FROM cache_workspaces
+      ORDER BY last_opened_at DESC
+    ''');
+    return rows
+        .map(
+          (row) => WorkspaceRecord(
+            key: row['key'] as String? ?? '',
+            url: row['url'] as String? ?? '',
+            displayName: row['display_name'] as String? ?? '',
+            lastSessionId: row['last_session_id'] as String? ?? '',
+            lastOpenedAt: DateTime.tryParse(
+                  row['last_opened_at'] as String? ?? '',
+                ) ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        )
+        .toList();
+  }
+
+  List<CachedSessionRecord> loadSessions() {
+    final rows = _db.select('''
+      SELECT workspace_key, session_id, title, model, provider, mode, version,
+             last_event_id, last_updated_at
+      FROM cache_sessions
+      ORDER BY last_updated_at DESC
+    ''');
+    return rows
+        .map(
+          (row) => CachedSessionRecord(
+            workspaceKey: row['workspace_key'] as String? ?? '',
+            sessionId: row['session_id'] as String? ?? '',
+            title: row['title'] as String? ?? '',
+            model: row['model'] as String? ?? '',
+            provider: row['provider'] as String? ?? '',
+            mode: row['mode'] as String? ?? '',
+            version: row['version'] as String? ?? '',
+            lastEventId: row['last_event_id'] as String? ?? '',
+            lastUpdatedAt: DateTime.tryParse(
+                  row['last_updated_at'] as String? ?? '',
+                ) ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        )
+        .toList();
+  }
+
+  CachedSessionSnapshot? loadSnapshot(String workspaceKey, String sessionId) {
+    final rows = _db.select(
+      '''
+      SELECT payload_json
+      FROM cache_snapshots
+      WHERE workspace_key = ? AND session_id = ?
+      ''',
+      [workspaceKey, sessionId],
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    final payload = rows.first['payload_json'] as String? ?? '';
+    if (payload.isEmpty) {
+      return null;
+    }
+    final json = _decodeJsonObjectOrEmpty(
+      payload,
+      'decode cached snapshot $workspaceKey/$sessionId',
+    );
+    if (json.isEmpty) {
+      return null;
+    }
+    return CachedSessionSnapshot.fromJson(json);
+  }
+
+  void upsertWorkspace(WorkspaceRecord record) {
+    _db.execute(
+      '''
+      INSERT INTO cache_workspaces(key, url, display_name, last_session_id, last_opened_at)
+      VALUES(?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        url = excluded.url,
+        display_name = excluded.display_name,
+        last_session_id = excluded.last_session_id,
+        last_opened_at = excluded.last_opened_at
+      ''',
+      [
+        record.key,
+        record.url,
+        record.displayName,
+        record.lastSessionId,
+        record.lastOpenedAt.toIso8601String(),
+      ],
+    );
+  }
+
+  void upsertSession(CachedSessionRecord record) {
+    _db.execute(
+      '''
+      INSERT INTO cache_sessions(
+        workspace_key, session_id, title, model, provider, mode, version,
+        last_event_id, last_updated_at
+      )
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_key, session_id) DO UPDATE SET
+        title = excluded.title,
+        model = excluded.model,
+        provider = excluded.provider,
+        mode = excluded.mode,
+        version = excluded.version,
+        last_event_id = excluded.last_event_id,
+        last_updated_at = excluded.last_updated_at
+      ''',
+      [
+        record.workspaceKey,
+        record.sessionId,
+        record.title,
+        record.model,
+        record.provider,
+        record.mode,
+        record.version,
+        record.lastEventId,
+        record.lastUpdatedAt.toIso8601String(),
+      ],
+    );
+  }
+
+  void upsertSnapshot(
+    String workspaceKey,
+    String sessionId,
+    CachedSessionSnapshot snapshot,
+  ) {
+    _db.execute(
+      '''
+      INSERT INTO cache_snapshots(workspace_key, session_id, payload_json, updated_at)
+      VALUES(?, ?, ?, ?)
+      ON CONFLICT(workspace_key, session_id) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at
+      ''',
+      [
+        workspaceKey,
+        sessionId,
+        jsonEncode(snapshot.toJson()),
+        DateTime.now().toIso8601String(),
+      ],
+    );
+  }
+
+  void writeBatch({
+    required List<WorkspaceRecord> workspaces,
+    required List<CachedSessionRecord> sessions,
+    required List<_SnapshotWrite> snapshots,
+  }) {
+    if (workspaces.isEmpty && sessions.isEmpty && snapshots.isEmpty) {
+      return;
+    }
+    _db.execute('BEGIN IMMEDIATE');
+    try {
+      for (final workspace in workspaces) {
+        upsertWorkspace(workspace);
+      }
+      for (final session in sessions) {
+        upsertSession(session);
+      }
+      for (final snapshot in snapshots) {
+        upsertSnapshot(
+          snapshot.workspaceKey,
+          snapshot.sessionId,
+          snapshot.snapshot,
+        );
+      }
+      _db.execute('COMMIT');
+    } catch (_) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  Future<void> importLegacyPreferences(SharedPreferences prefs) async {
+    if (!isEmpty) {
+      return;
+    }
+    final raw = prefs.getString(_workspaceCacheIndexKey);
+    final json = _decodeJsonObjectOrEmpty(raw, 'decode legacy workspace cache');
+    if (json.isEmpty) {
+      return;
+    }
+    for (final item in json['workspaces'] as List<dynamic>? ?? const []) {
+      final record = WorkspaceRecord.fromJson(Map<String, dynamic>.from(item));
+      if (record.key.isEmpty) {
+        continue;
+      }
+      upsertWorkspace(record);
+    }
+    for (final item in json['sessions'] as List<dynamic>? ?? const []) {
+      final record =
+          CachedSessionRecord.fromJson(Map<String, dynamic>.from(item));
+      if (record.workspaceKey.isEmpty || record.sessionId.isEmpty) {
+        continue;
+      }
+      upsertSession(record);
+      final sessionKey =
+          _sessionCacheKey(record.workspaceKey, record.sessionId);
+      final snapshotRaw = prefs.getString(_snapshotStorageKey(sessionKey));
+      if (snapshotRaw == null || snapshotRaw.isEmpty) {
+        continue;
+      }
+      final snapshotJson = _decodeJsonObjectOrEmpty(
+        snapshotRaw,
+        'decode legacy workspace snapshot $sessionKey',
+      );
+      if (snapshotJson.isEmpty) {
+        continue;
+      }
+      upsertSnapshot(
+        record.workspaceKey,
+        record.sessionId,
+        CachedSessionSnapshot.fromJson(snapshotJson),
+      );
+    }
+  }
+
+  void dispose() {
+    _db.dispose();
+  }
+}
 
 final workspaceCacheProvider =
     NotifierProvider<WorkspaceCacheNotifier, WorkspaceCacheState>(
@@ -2249,21 +2794,22 @@ final workspaceCacheProvider =
 );
 
 class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
-  static const _indexKey = 'ggcode_workspace_cache_v1';
-  static const _maxWorkspaces = 10;
-  static const _maxSessionsPerWorkspace = 20;
-  static const _maxMessagesPerSession = 300;
-
   SharedPreferences? _prefs;
+  _WorkspaceCacheSqlStore? _store;
   bool _initializing = false;
   Timer? _flushTimer;
   final Set<String> _dirtySnapshots = <String>{};
+  final Set<String> _dirtySessions = <String>{};
+  final Set<String> _dirtyWorkspaces = <String>{};
+  bool _selectionDirty = false;
 
   @override
   WorkspaceCacheState build() {
     ref.onDispose(() {
       _flushTimer?.cancel();
       _flushTimer = null;
+      _store?.dispose();
+      _store = null;
     });
     return const WorkspaceCacheState(
       initialized: false,
@@ -2278,36 +2824,72 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     _initializing = true;
     try {
       _prefs ??= await SharedPreferences.getInstance();
-      final raw = _prefs!.getString(_indexKey);
-      if (raw == null || raw.isEmpty) {
-        state = state.copyWith(initialized: true);
-        return;
-      }
-      final json = jsonDecode(raw) as Map<String, dynamic>;
+      if (!ref.mounted) return;
+      final index = _decodeJsonObjectOrEmpty(
+        _prefs!.getString(_workspaceCacheIndexKey),
+        'decode workspace cache index',
+      );
       final workspaces = <String, WorkspaceRecord>{};
-      for (final item in json['workspaces'] as List<dynamic>? ?? const []) {
-        final record =
-            WorkspaceRecord.fromJson(Map<String, dynamic>.from(item));
-        if (record.key.isNotEmpty) {
-          workspaces[record.key] = record;
-        }
-      }
       final sessions = <String, CachedSessionRecord>{};
-      for (final item in json['sessions'] as List<dynamic>? ?? const []) {
-        final record =
-            CachedSessionRecord.fromJson(Map<String, dynamic>.from(item));
-        if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
-          sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
-              record;
+      try {
+        _store ??= await _WorkspaceCacheSqlStore.open();
+        if (!ref.mounted) return;
+        await _store!.importLegacyPreferences(_prefs!);
+        if (!ref.mounted) return;
+        for (final record in _store!.loadWorkspaces()) {
+          if (record.key.isNotEmpty) {
+            workspaces[record.key] = record;
+          }
         }
+        for (final record in _store!.loadSessions()) {
+          if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
+            sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
+                record;
+          }
+        }
+      } catch (error, stackTrace) {
+        _reportWorkspaceCacheError(
+          'initialize workspace cache store',
+          error,
+          stackTrace,
+        );
+        _store?.dispose();
+        _store = null;
       }
+      final selectedWorkspaceKey = index['selected_workspace_key'] as String?;
+      final selectedSessionId = index['selected_session_id'] as String?;
+      final selectedWorkspaceUrl = normalizeTunnelUrl(
+        index[_workspaceCacheIndexSelectedWorkspaceUrlKey] as String? ?? '',
+      );
+      if (selectedWorkspaceKey != null &&
+          selectedWorkspaceKey.isNotEmpty &&
+          selectedWorkspaceUrl.isNotEmpty) {
+        final existing = workspaces[selectedWorkspaceKey];
+        workspaces[selectedWorkspaceKey] = (existing ??
+                WorkspaceRecord(
+                  key: selectedWorkspaceKey,
+                  url: selectedWorkspaceUrl,
+                  displayName:
+                      _workspaceDisplayName(selectedWorkspaceUrl, null),
+                  lastSessionId: selectedSessionId ?? '',
+                  lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
+                ))
+            .copyWith(
+          url: selectedWorkspaceUrl,
+          displayName: existing?.displayName.isNotEmpty == true
+              ? existing!.displayName
+              : _workspaceDisplayName(selectedWorkspaceUrl, null),
+          lastSessionId: selectedSessionId ?? existing?.lastSessionId ?? '',
+        );
+      }
+      if (!ref.mounted) return;
       state = WorkspaceCacheState(
         initialized: true,
         workspaces: workspaces,
         sessions: sessions,
         snapshots: {},
-        selectedWorkspaceKey: json['selected_workspace_key'] as String?,
-        selectedSessionId: json['selected_session_id'] as String?,
+        selectedWorkspaceKey: selectedWorkspaceKey,
+        selectedSessionId: selectedSessionId,
       );
       final workspaceKey = state.selectedWorkspaceKey;
       final sessionId = state.selectedSessionId;
@@ -2327,6 +2909,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   Future<void> activateWorkspaceUrl(String url) async {
     await initialize();
+    if (!ref.mounted) return;
     final normalized = normalizeTunnelUrl(url);
     final key = _workspaceKeyForUrl(normalized);
     final now = DateTime.now();
@@ -2346,13 +2929,15 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
               ))
           .copyWith(url: normalized, lastOpenedAt: now);
     state = state.copyWith(
-      workspaces: _prunedWorkspaces(workspaces),
+      workspaces: workspaces,
       selectedWorkspaceKey: key,
       selectedSessionId: selectedSessionId,
       liveWorkspaceKey: key,
       liveSessionId: state.liveWorkspaceKey == key ? state.liveSessionId : null,
     );
-    await _persistIndex();
+    _dirtyWorkspaces.add(key);
+    _selectionDirty = true;
+    _scheduleFlush();
     if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
       await _ensureSnapshotLoaded(key, selectedSessionId);
     }
@@ -2360,13 +2945,15 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   Future<void> clearSelection() async {
     await initialize();
+    if (!ref.mounted) return;
     state = state.copyWith(
       selectedWorkspaceKey: null,
       selectedSessionId: null,
       liveWorkspaceKey: null,
       liveSessionId: null,
     );
-    await _persistIndex();
+    _selectionDirty = true;
+    _scheduleFlush();
   }
 
   void markDisconnected() {
@@ -2376,11 +2963,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<bool> attachSessionToActiveWorkspace(String sessionId) async {
     if (sessionId.isEmpty) return false;
     await initialize();
+    if (!ref.mounted) return false;
     final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return false;
 
     final targetKey = _sessionCacheKey(workspaceKey, sessionId);
     await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    if (!ref.mounted) return false;
     final targetRecord = state.sessions[targetKey];
     final hasTargetSnapshot = state.snapshots.containsKey(targetKey);
     final sourceRecord = _latestCachedSessionRecord(
@@ -2402,6 +2991,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
     await _ensureSnapshotLoaded(
         sourceRecord.workspaceKey, sourceRecord.sessionId);
+    if (!ref.mounted) return false;
     final sourceKey =
         _sessionCacheKey(sourceRecord.workspaceKey, sourceRecord.sessionId);
     final sourceSnapshot = state.snapshots[sourceKey];
@@ -2443,28 +3033,33 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     }
     state = state.copyWith(
-      workspaces: _prunedWorkspaces(workspaces),
-      sessions: _prunedSessions(sessions),
+      workspaces: workspaces,
+      sessions: sessions,
       snapshots: snapshots,
       selectedWorkspaceKey: workspaceKey,
       selectedSessionId: sessionId,
     );
+    _dirtyWorkspaces.add(workspaceKey);
+    _dirtySessions.add(targetKey);
+    _selectionDirty = true;
     if (!hasTargetSnapshot && sourceSnapshot != null) {
       _dirtySnapshots.add(targetKey);
-      _scheduleFlush();
     }
-    await _persistIndex();
+    _scheduleFlush();
     return snapshots.containsKey(targetKey);
   }
 
   Future<void> selectSession(String workspaceKey, String sessionId) async {
     await initialize();
+    if (!ref.mounted) return;
     state = state.copyWith(
       selectedWorkspaceKey: workspaceKey,
       selectedSessionId: sessionId,
     );
     await _ensureSnapshotLoaded(workspaceKey, sessionId);
-    await _persistIndex();
+    if (!ref.mounted) return;
+    _selectionDirty = true;
+    _scheduleFlush();
   }
 
   Future<void> registerLiveSession(
@@ -2474,6 +3069,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }) async {
     if (sessionId.isEmpty) return;
     await initialize();
+    if (!ref.mounted) return;
     final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return;
     final now = DateTime.now();
@@ -2519,8 +3115,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     }
     state = state.copyWith(
-      workspaces: _prunedWorkspaces(workspaces),
-      sessions: _prunedSessions(sessions),
+      workspaces: workspaces,
+      sessions: sessions,
       liveWorkspaceKey: workspaceKey,
       liveSessionId: sessionId,
       selectedWorkspaceKey:
@@ -2528,7 +3124,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       selectedSessionId:
           selectionFollowedLive ? sessionId : state.selectedSessionId,
     );
-    await _persistIndex();
+    _dirtyWorkspaces.add(workspaceKey);
+    _dirtySessions.add(sessionKey);
+    if (selectionFollowedLive) {
+      _selectionDirty = true;
+    }
+    _scheduleFlush();
     if (selectionFollowedLive) {
       await _ensureSnapshotLoaded(workspaceKey, sessionId);
     }
@@ -2554,6 +3155,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<void> updateLiveCursor(String sessionId, String lastEventId) async {
     if (sessionId.isEmpty) return;
     await initialize();
+    if (!ref.mounted) return;
     final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return;
     final key = _sessionCacheKey(workspaceKey, sessionId);
@@ -2565,6 +3167,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         lastUpdatedAt: DateTime.now(),
       );
     state = state.copyWith(sessions: updated);
+    _dirtySessions.add(key);
     _scheduleFlush();
   }
 
@@ -2577,6 +3180,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String lastEventId,
   }) async {
     await initialize();
+    if (!ref.mounted) return;
     final workspaceKey = state.liveWorkspaceKey;
     final sessionId = state.liveSessionId;
     if (workspaceKey == null ||
@@ -2585,11 +3189,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         sessionId.isEmpty) {
       return;
     }
-    final trimmedMessages = messages.length <= _maxMessagesPerSession
-        ? messages
-        : messages.sublist(messages.length - _maxMessagesPerSession);
     final snapshot = CachedSessionSnapshot(
-      messages: List<ChatMessage>.from(trimmedMessages),
+      messages: List<ChatMessage>.from(messages),
       subagents: Map<String, SubagentInfo>.from(subagents),
       sessionInfo: sessionInfo,
       agentStatus: _normalizedCachedAgentStatus(agentStatus),
@@ -2632,12 +3233,25 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     }
     state = state.copyWith(
-      workspaces: _prunedWorkspaces(workspaces),
-      sessions: _prunedSessions(sessions),
+      workspaces: workspaces,
+      sessions: sessions,
       snapshots: snapshots,
     );
+    _dirtyWorkspaces.add(workspaceKey);
+    _dirtySessions.add(snapshotKey);
     _dirtySnapshots.add(snapshotKey);
     _scheduleFlush();
+  }
+
+  Future<void> flushNow() async {
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    if (!ref.mounted) return;
+    await _flushDirtyState();
+    if (!ref.mounted) return;
+    if (_selectionDirty) {
+      await _persistIndex();
+    }
   }
 
   List<WorkspaceRecord> sortedWorkspaces() {
@@ -2683,11 +3297,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       String workspaceKey, String sessionId) async {
     final key = _sessionCacheKey(workspaceKey, sessionId);
     if (state.snapshots.containsKey(key)) return;
-    _prefs ??= await SharedPreferences.getInstance();
-    final raw = _prefs!.getString(_snapshotStorageKey(key));
-    if (raw == null || raw.isEmpty) return;
-    final snapshot =
-        CachedSessionSnapshot.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    await initialize();
+    if (!ref.mounted) return;
+    final snapshot = _store?.loadSnapshot(workspaceKey, sessionId);
+    if (snapshot == null) return;
     state = state.copyWith(
       snapshots: Map<String, CachedSessionSnapshot>.from(state.snapshots)
         ..[key] = snapshot,
@@ -2696,27 +3309,69 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   void _scheduleFlush() {
     _flushTimer?.cancel();
-    _flushTimer = Timer(const Duration(milliseconds: 350), () async {
-      if (!ref.mounted) return;
-      await _flushDirtySnapshots();
-      if (!ref.mounted) return;
-      await _persistIndex();
-    });
+    _flushTimer = Timer(
+      const Duration(milliseconds: 350),
+      () => unawaited(flushNow()),
+    );
   }
 
-  Future<void> _flushDirtySnapshots() async {
-    if (_dirtySnapshots.isEmpty) return;
-    _prefs ??= await SharedPreferences.getInstance();
+  Future<void> _flushDirtyState() async {
+    if (_dirtySnapshots.isEmpty &&
+        _dirtySessions.isEmpty &&
+        _dirtyWorkspaces.isEmpty) {
+      return;
+    }
+    await initialize();
     if (!ref.mounted) return;
-    final pending = List<String>.from(_dirtySnapshots);
-    _dirtySnapshots.clear();
-    for (final key in pending) {
-      if (!ref.mounted) return;
+    if (_store == null) {
+      return;
+    }
+    final pendingWorkspaces = List<String>.from(_dirtyWorkspaces);
+    final pendingWorkspaceRecords = <WorkspaceRecord>[];
+    for (final key in pendingWorkspaces) {
+      final workspace = state.workspaces[key];
+      if (workspace == null) continue;
+      pendingWorkspaceRecords.add(workspace);
+    }
+    final pendingSessions = List<String>.from(_dirtySessions);
+    final pendingSessionRecords = <CachedSessionRecord>[];
+    for (final key in pendingSessions) {
+      final session = state.sessions[key];
+      if (session == null) continue;
+      pendingSessionRecords.add(session);
+    }
+    final pendingSnapshotKeys = List<String>.from(_dirtySnapshots);
+    final pendingSnapshotWrites = <_SnapshotWrite>[];
+    for (final key in pendingSnapshotKeys) {
       final snapshot = state.snapshots[key];
       if (snapshot == null) continue;
-      await _prefs!.setString(
-        _snapshotStorageKey(key),
-        jsonEncode(snapshot.toJson()),
+      final split = key.split('::');
+      if (split.length != 2) continue;
+      pendingSnapshotWrites.add(
+        _SnapshotWrite(
+          workspaceKey: split[0],
+          sessionId: split[1],
+          snapshot: snapshot,
+        ),
+      );
+    }
+    _dirtyWorkspaces.clear();
+    _dirtySessions.clear();
+    _dirtySnapshots.clear();
+    try {
+      _store!.writeBatch(
+        workspaces: pendingWorkspaceRecords,
+        sessions: pendingSessionRecords,
+        snapshots: pendingSnapshotWrites,
+      );
+    } catch (error, stackTrace) {
+      _dirtyWorkspaces.addAll(pendingWorkspaces);
+      _dirtySessions.addAll(pendingSessions);
+      _dirtySnapshots.addAll(pendingSnapshotKeys);
+      _reportWorkspaceCacheError(
+        'flush workspace cache',
+        error,
+        stackTrace,
       );
     }
   }
@@ -2724,45 +3379,24 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<void> _persistIndex() async {
     _prefs ??= await SharedPreferences.getInstance();
     if (!ref.mounted) return;
-    final orderedSessions = state.sessions.values.toList()
-      ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    final selectedWorkspace = state.selectedWorkspaceKey == null
+        ? null
+        : state.workspaces[state.selectedWorkspaceKey!];
     final payload = {
-      'workspaces':
-          sortedWorkspaces().map((workspace) => workspace.toJson()).toList(),
-      'sessions': orderedSessions.map((session) => session.toJson()).toList(),
       'selected_workspace_key': state.selectedWorkspaceKey,
       'selected_session_id': state.selectedSessionId,
+      _workspaceCacheIndexSelectedWorkspaceUrlKey: selectedWorkspace?.url,
     };
-    await _prefs!.setString(_indexKey, jsonEncode(payload));
-  }
-
-  Map<String, WorkspaceRecord> _prunedWorkspaces(
-      Map<String, WorkspaceRecord> workspaces) {
-    final ordered = workspaces.values.toList()
-      ..sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
-    final keep = ordered.take(_maxWorkspaces).toList();
-    return <String, WorkspaceRecord>{
-      for (final workspace in keep) workspace.key: workspace,
-    };
-  }
-
-  Map<String, CachedSessionRecord> _prunedSessions(
-      Map<String, CachedSessionRecord> sessions) {
-    final result = <String, CachedSessionRecord>{};
-    final grouped = <String, List<CachedSessionRecord>>{};
-    for (final record in sessions.values) {
-      grouped
-          .putIfAbsent(record.workspaceKey, () => <CachedSessionRecord>[])
-          .add(record);
+    try {
+      await _prefs!.setString(_workspaceCacheIndexKey, jsonEncode(payload));
+      _selectionDirty = false;
+    } catch (error, stackTrace) {
+      _reportWorkspaceCacheError(
+        'persist workspace cache index',
+        error,
+        stackTrace,
+      );
     }
-    for (final entry in grouped.entries) {
-      entry.value.sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
-      for (final record in entry.value.take(_maxSessionsPerWorkspace)) {
-        result[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
-            record;
-      }
-    }
-    return result;
   }
 }
 
@@ -2918,6 +3552,40 @@ String _sessionCacheKey(String workspaceKey, String sessionId) =>
 
 String _snapshotStorageKey(String sessionKey) =>
     '$_workspaceSnapshotPrefix${base64UrlEncode(utf8.encode(sessionKey)).replaceAll('=', '')}';
+
+Map<String, dynamic> _decodeJsonObjectOrEmpty(String? raw, String context) {
+  if (raw == null || raw.isEmpty) {
+    return const <String, dynamic>{};
+  }
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is Map<String, dynamic>) {
+      return decoded;
+    }
+    if (decoded is Map) {
+      return Map<String, dynamic>.from(decoded);
+    }
+  } catch (error, stackTrace) {
+    _reportWorkspaceCacheError(context, error, stackTrace);
+  }
+  return const <String, dynamic>{};
+}
+
+void _reportWorkspaceCacheError(
+  String context,
+  Object error,
+  StackTrace stackTrace,
+) {
+  debugPrint('[workspace_cache] $context: $error');
+  FlutterError.reportError(
+    FlutterErrorDetails(
+      exception: error,
+      stack: stackTrace,
+      library: 'ggcode_mobile.workspace_cache',
+      context: ErrorDescription(context),
+    ),
+  );
+}
 
 Map<String, dynamic>? _sessionInfoToJson(proto.SessionInfoData? info) {
   if (info == null) return null;

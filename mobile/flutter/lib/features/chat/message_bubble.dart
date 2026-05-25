@@ -7,6 +7,7 @@ import '../../core/theme/app_theme.dart';
 
 const _shellCommandKind = 'shell_command';
 const _shellOutputKind = 'shell_output';
+const _reasoningKind = 'reasoning';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -15,6 +16,9 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.kind == _reasoningKind) {
+      return _ReasoningBubble(message: message);
+    }
     if (_isShellOutputMessage) {
       return _buildShellOutputBubble(context);
     }
@@ -406,6 +410,140 @@ class MessageBubble extends StatelessWidget {
     } catch (_) {
       return AppColors.success;
     }
+  }
+}
+
+class _ReasoningBubble extends StatefulWidget {
+  final ChatMessage message;
+
+  const _ReasoningBubble({required this.message});
+
+  @override
+  State<_ReasoningBubble> createState() => _ReasoningBubbleState();
+}
+
+class _ReasoningBubbleState extends State<_ReasoningBubble> {
+  late bool _collapsed;
+
+  @override
+  void initState() {
+    super.initState();
+    _collapsed = widget.message.reasoningCollapsed;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReasoningBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.reasoningCollapsed !=
+        widget.message.reasoningCollapsed) {
+      _collapsed = widget.message.reasoningCollapsed;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = widget.message.text.trim().replaceAll('\n', ' ');
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        key: Key('reasoningBubble-${widget.message.id}'),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.88,
+        ),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundElevated,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.panel,
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => setState(() => _collapsed = !_collapsed),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.psychology_alt_outlined,
+                      size: 15,
+                      color: AppColors.accent,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      widget.message.sourceName != null
+                          ? '${widget.message.sourceName} thinking'
+                          : 'Thinking',
+                      style: TextStyle(
+                        color: AppColors.accent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (widget.message.streaming && !_collapsed)
+                      Container(
+                        width: 6,
+                        height: 6,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    Icon(
+                      _collapsed ? Icons.expand_more : Icons.expand_less,
+                      key: Key('reasoningToggle-${widget.message.id}'),
+                      size: 18,
+                      color: AppColors.textMuted,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_collapsed)
+                  Text(
+                    preview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  )
+                else
+                  MarkdownBody(
+                    key: Key('reasoningBody-${widget.message.id}'),
+                    data: widget.message.text,
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet(
+                      p: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                        height: 1.45,
+                      ),
+                      code: TextStyle(
+                        color: AppColors.accent.withValues(alpha: 0.95),
+                        fontSize: 12,
+                        backgroundColor: AppColors.surface,
+                      ),
+                      codeblockDecoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppRadii.sm),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      codeblockPadding: const EdgeInsets.all(8),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

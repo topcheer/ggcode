@@ -395,6 +395,28 @@ class SubagentTextData {
       );
 }
 
+class SubagentReasoningData {
+  final String agentId;
+  final String id;
+  final String chunk;
+  final bool done;
+
+  SubagentReasoningData({
+    required this.agentId,
+    required this.id,
+    required this.chunk,
+    required this.done,
+  });
+
+  factory SubagentReasoningData.fromJson(Map<String, dynamic> d) =>
+      SubagentReasoningData(
+        agentId: d['agent_id'] as String? ?? '',
+        id: d['id'] as String? ?? '',
+        chunk: d['chunk'] as String? ?? '',
+        done: d['done'] as bool? ?? false,
+      );
+}
+
 class SubagentStatusData {
   final String agentId;
   final String status;

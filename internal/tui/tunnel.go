@@ -302,6 +302,21 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 
 // ─── Outbound: Agent stream events → mobile ───
 
+func (m *Model) tunnelReasoningMsgID() string {
+	if m.tunnelMsgID == "" {
+		return ""
+	}
+	return m.tunnelMsgID + "-reasoning"
+}
+
+func subagentTunnelTextMsgID(agentID string) string {
+	return fmt.Sprintf("sa-%s", agentID)
+}
+
+func subagentTunnelReasoningMsgID(agentID string) string {
+	return fmt.Sprintf("sa-%s-reasoning", agentID)
+}
+
 // pushTunnelEvent pushes a provider stream event to the mobile client.
 // Called from the agent stream callback in submit.go. Nil-safe.
 func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
@@ -311,9 +326,16 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 	switch ev.Type {
 	case provider.StreamEventText:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushText(m.tunnelMsgID, ev.Text)
 
+	case provider.StreamEventReasoning:
+		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
+			m.tunnelBroker.PushReasoning(m.tunnelReasoningMsgID(), chunk)
+		}
+
 	case provider.StreamEventToolCallDone:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		name := ev.Tool.Name
 		if name == "" {
@@ -325,6 +347,7 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventToolResult:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		content := ev.Result
 		if len([]rune(content)) > 2000 {
 			content = truncateRunes(content, 2000, "\n...(truncated)")
@@ -332,14 +355,17 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		m.pushTunnelToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 
 	case provider.StreamEventSystem:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventDone:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 
 	case provider.StreamEventError:
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		if ev.Error != nil {
 			m.tunnelBroker.PushError(sanitizeAPIError(ev.Error).Error())
@@ -412,6 +438,7 @@ func (m *Model) pushTunnelCurrentActivity() {
 // pushTunnelCancel notifies mobile that the current run was cancelled.
 func (m *Model) pushTunnelCancel() {
 	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
 		m.pushTunnelStatus(tunnel.StatusIdle, "cancelled")
 		m.pushTunnelActivity("")
@@ -436,13 +463,15 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 		m.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
 
 	case subagent.StatusCompleted:
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
 		if sa.Result != "" {
-			msgID := fmt.Sprintf("sa-%s", sa.ID)
+			msgID := subagentTunnelTextMsgID(sa.ID)
 			m.tunnelBroker.PushSubagentText(sa.ID, msgID, sa.Result, true)
 		}
 		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
 
 	case subagent.StatusFailed:
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
 		errMsg := ""
 		if sa.Error != nil {
 			errMsg = sa.Error.Error()
@@ -450,6 +479,7 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
 
 	case subagent.StatusCancelled:
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
 		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 	}
 }
@@ -457,14 +487,25 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 // pushSubAgentTunnelStreamText pushes streaming text from a sub-agent.
 func (m *Model) pushSubAgentTunnelStreamText(agentID, text string) {
 	if m.tunnelBroker != nil {
-		msgID := fmt.Sprintf("sa-%s", agentID)
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
+		msgID := subagentTunnelTextMsgID(agentID)
 		m.tunnelBroker.PushSubagentText(agentID, msgID, text, false)
+	}
+}
+
+func (m *Model) pushSubAgentTunnelReasoning(agentID, text string) {
+	if m.tunnelBroker == nil {
+		return
+	}
+	if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
+		m.tunnelBroker.PushSubagentReasoning(agentID, subagentTunnelReasoningMsgID(agentID), chunk, false)
 	}
 }
 
 // pushSubAgentTunnelToolCall pushes a tool call from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayName, args, detail string) {
 	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
 		m.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
 	}
 }
@@ -472,6 +513,7 @@ func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayNam
 // pushSubAgentTunnelToolResult pushes a tool result from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, result string, isError bool) {
 	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
 		m.tunnelBroker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
 	}
 }
@@ -746,6 +788,9 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 				}
 			}
 		case *chat.AssistantItem:
+			if reasoning := strings.TrimSpace(it.Reasoning()); reasoning != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: reasoning})
+			}
 			if text := strings.TrimSpace(it.Text()); text != "" {
 				history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
 			}
@@ -812,6 +857,16 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 	return history
 }
 
+func contentBlockReasoningText(block provider.ContentBlock) string {
+	if text := tunnel.NormalizeReasoningChunk(block.ReasoningContent); text != "" {
+		return text
+	}
+	if strings.TrimSpace(block.ThinkingData) != "" {
+		return tunnel.RedactedReasoningPlaceholder
+	}
+	return ""
+}
+
 // tunnelMessagesToHistory converts provider messages to tunnel history entries.
 func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
@@ -847,6 +902,12 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 			}
 		case "assistant":
 			for _, block := range msg.Content {
+				if reasoning := contentBlockReasoningText(block); reasoning != "" {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "reasoning",
+						Content: reasoning,
+					})
+				}
 				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
 					history = append(history, tunnel.HistoryEntry{
 						Role:    "assistant",
@@ -994,6 +1055,7 @@ func tunnelSnapshotEventsFromTeammate(tm swarm.TeammateSnapshot, teamID string) 
 func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.AgentEvent, result, errText, status, statusMessage, name string) []tunnel.SnapshotEvent {
 	var out []tunnel.SnapshotEvent
 	textBuf := strings.Builder{}
+	reasoningBuf := strings.Builder{}
 	toolArgsByID := make(map[string]string)
 	flushText := func(done bool) {
 		if textBuf.Len() == 0 {
@@ -1006,9 +1068,33 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 		))
 		textBuf.Reset()
 	}
+	flushReasoning := func(done bool) {
+		if reasoningBuf.Len() == 0 {
+			return
+		}
+		reasoningID := subagentTunnelReasoningMsgID(agentID)
+		out = append(out, snapshotEvent(
+			tunnel.EventSubagentReasoning,
+			reasoningID,
+			tunnel.SubagentTextData{AgentID: agentID, ID: reasoningID, Chunk: reasoningBuf.String()},
+		))
+		if done {
+			out = append(out, snapshotEvent(
+				tunnel.EventSubagentReasoningDone,
+				reasoningID,
+				tunnel.SubagentTextData{AgentID: agentID, ID: reasoningID, Done: true},
+			))
+		}
+		reasoningBuf.Reset()
+	}
 	for _, ev := range events {
 		switch ev.Type {
+		case subagent.AgentEventReasoning:
+			if ev.Text != "" {
+				reasoningBuf.WriteString(tunnel.NormalizeReasoningChunk(ev.Text))
+			}
 		case subagent.AgentEventToolCall:
+			flushReasoning(true)
 			flushText(false)
 			if ev.ToolID != "" {
 				toolArgsByID[ev.ToolID] = ev.ToolArgs
@@ -1027,6 +1113,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 				},
 			))
 		case subagent.AgentEventToolResult:
+			flushReasoning(true)
 			flushText(false)
 			present, _ := toolpkg.DescribeToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Result, ev.IsError)
 			delete(toolArgsByID, ev.ToolID)
@@ -1045,6 +1132,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 				},
 			))
 		case subagent.AgentEventError:
+			flushReasoning(true)
 			if ev.Text != "" {
 				if textBuf.Len() > 0 {
 					textBuf.WriteString("\n")
@@ -1052,6 +1140,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 				textBuf.WriteString(ev.Text)
 			}
 		default:
+			flushReasoning(true)
 			if ev.Text != "" {
 				textBuf.WriteString(ev.Text)
 			}
@@ -1066,6 +1155,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 		}
 	}
 	completed := status == "completed" || status == "failed" || status == "cancelled"
+	flushReasoning(true)
 	flushText(completed)
 	if completed {
 		summary := result
@@ -1122,9 +1212,8 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 }
 
 func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tunnel.BrokerSnapshot, bool) {
-	snapshot := m.tunnelSnapshot()
 	if m.tunnelBroker == nil {
-		return snapshot, false
+		return m.tunnelSnapshot(), false
 	}
 	switchedSession := false
 	if m.session != nil && m.session.ID != "" {
@@ -1138,8 +1227,9 @@ func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tu
 	m.prepareCurrentSessionTunnelLedger()
 	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
 		m.tunnelBroker.ReplayEvents(events, reset && !switchedSession)
-		return snapshot, true
+		return tunnel.BrokerSnapshot{}, true
 	}
+	snapshot := m.tunnelSnapshot()
 	m.tunnelBroker.SendSnapshot(snapshot)
 	return snapshot, false
 }
@@ -1200,6 +1290,7 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
 	textByID := make(map[string]string)
 	textKindByID := make(map[string]string)
+	reasoningByID := make(map[string]string)
 	finalizeText := func(id string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -1217,6 +1308,34 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 			Content: text,
 			Kind:    kind,
 		})
+	}
+	finalizeReasoning := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		text := strings.TrimSpace(reasoningByID[id])
+		delete(reasoningByID, id)
+		if text == "" {
+			return
+		}
+		history = append(history, tunnel.HistoryEntry{
+			Role:    "reasoning",
+			Content: text,
+		})
+	}
+	finalizeAllReasoning := func() {
+		if len(reasoningByID) == 0 {
+			return
+		}
+		ids := make([]string, 0, len(reasoningByID))
+		for id := range reasoningByID {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			finalizeReasoning(id)
+		}
 	}
 
 	for _, ev := range events {
@@ -1279,6 +1398,9 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
 				continue
 			}
+			if _, seen := textByID[data.ID]; !seen {
+				finalizeAllReasoning()
+			}
 			textByID[data.ID] += data.Chunk
 			if strings.TrimSpace(data.Kind) != "" && strings.TrimSpace(textKindByID[data.ID]) == "" {
 				textKindByID[data.ID] = strings.TrimSpace(data.Kind)
@@ -1296,7 +1418,30 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				id = ev.StreamID
 			}
 			finalizeText(id)
+		case tunnel.EventReasoning:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
+				continue
+			}
+			reasoningByID[data.ID] += data.Chunk
+			if data.Done {
+				finalizeReasoning(data.ID)
+			}
+		case tunnel.EventReasoningDone:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			id := data.ID
+			if strings.TrimSpace(id) == "" {
+				id = ev.StreamID
+			}
+			finalizeReasoning(id)
 		case tunnel.EventToolCall:
+			finalizeAllReasoning()
 			var data tunnel.ToolCallData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1310,6 +1455,7 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				ToolDetail:      data.Detail,
 			})
 		case tunnel.EventToolResult:
+			finalizeAllReasoning()
 			var data tunnel.ToolResultData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1322,6 +1468,7 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 				IsError:  data.IsError,
 			})
 		case tunnel.EventError:
+			finalizeAllReasoning()
 			var data tunnel.ErrorData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1337,6 +1484,9 @@ func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 		}
 	}
 
+	for id := range reasoningByID {
+		finalizeReasoning(id)
+	}
 	return history
 }
 
@@ -1347,6 +1497,7 @@ func tunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 	for i := range a {
 		if a[i].Role != b[i].Role ||
 			a[i].Content != b[i].Content ||
+			a[i].Kind != b[i].Kind ||
 			a[i].ToolID != b[i].ToolID ||
 			a[i].ToolName != b[i].ToolName ||
 			a[i].ToolDisplayName != b[i].ToolDisplayName ||
