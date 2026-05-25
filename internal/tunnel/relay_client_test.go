@@ -158,3 +158,22 @@ func TestRelayClientClosedSend(t *testing.T) {
 		t.Error("expected error sending on closed client")
 	}
 }
+
+func TestRelayReconnectDelay(t *testing.T) {
+	tests := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 1, want: 5 * time.Second},
+		{attempt: 2, want: 10 * time.Second},
+		{attempt: 3, want: 20 * time.Second},
+		{attempt: 4, want: 40 * time.Second},
+		{attempt: 8, want: 40 * time.Second},
+	}
+
+	for _, tt := range tests {
+		if got := relayReconnectDelay(tt.attempt); got != tt.want {
+			t.Fatalf("relayReconnectDelay(%d) = %v, want %v", tt.attempt, got, tt.want)
+		}
+	}
+}

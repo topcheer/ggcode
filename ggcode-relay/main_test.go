@@ -289,6 +289,51 @@ func TestHubDestroyRoomClearsMemoryAndStore(t *testing.T) {
 	}
 }
 
+func TestHubNotifyRoomRecoveringBroadcastsRetryHint(t *testing.T) {
+	h := newHub(nil)
+	room := h.getOrCreateServerRoom("token-1234567890abcdef")
+	room.sessionID = "sess-1"
+	client := &peer{
+		room:   room,
+		role:   "client",
+		sendCh: make(chan []byte, 2),
+		done:   make(chan struct{}),
+	}
+	room.clients[client] = struct{}{}
+
+	h.notifyRoomRecovering(room.token, room.sessionID)
+
+	var msg relayMessage
+	if err := json.Unmarshal(<-client.sendCh, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "server_offline" || msg.SessionID != "sess-1" {
+		t.Fatalf("unexpected recovering notice: %+v", msg)
+	}
+	var data relayOfflineData
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.RetryAfterMS != int(retryAfterOffline/time.Millisecond) {
+		t.Fatalf("retry_after_ms = %d, want %d", data.RetryAfterMS, int(retryAfterOffline/time.Millisecond))
+	}
+}
+
+func TestRemoveRoomIfEmptyKeepsOfflineGraceRooms(t *testing.T) {
+	h := newHub(nil)
+	room := h.getOrCreateServerRoom("token-1234567890abcdef")
+	room.offlineTimer = time.NewTimer(time.Hour)
+	t.Cleanup(func() {
+		room.offlineTimer.Stop()
+	})
+
+	h.removeRoomIfEmpty(room)
+
+	if _, ok := h.rooms[room.token]; !ok {
+		t.Fatal("expected room with offline timer to remain registered")
+	}
+}
+
 func TestRelayStatsSnapshotIncludesRoomAndResumeState(t *testing.T) {
 	store := newStoreForTest(t)
 	token := "token-stats-1234567890abcdef"

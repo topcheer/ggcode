@@ -81,6 +81,66 @@ class _CaptureResumeHelloService extends _FakeConnectionService {
   }
 }
 
+class _PermanentRoomFailureService extends _FakeConnectionService {
+  final _status = StreamController<ConnectionStatus>.broadcast();
+  final _errors = StreamController<String>.broadcast();
+  final _messages = StreamController<proto.WsMessage>.broadcast();
+
+  @override
+  Stream<ConnectionStatus> get statusStream => _status.stream;
+
+  @override
+  Stream<String> get errorStream => _errors.stream;
+
+  @override
+  Stream<proto.WsMessage> get messageStream => _messages.stream;
+
+  @override
+  Future<void> connect() async {
+    _errors.add('Room not found: stale or expired share token');
+    _status.add(ConnectionStatus.disconnected);
+  }
+
+  @override
+  void dispose() {
+    _status.close();
+    _errors.close();
+    _messages.close();
+    super.dispose();
+  }
+}
+
+class _ServerOfflineService extends _FakeConnectionService {
+  final _status = StreamController<ConnectionStatus>.broadcast();
+  final _messages = StreamController<proto.WsMessage>.broadcast();
+
+  @override
+  Stream<ConnectionStatus> get statusStream => _status.stream;
+
+  @override
+  Stream<String> get errorStream => const Stream<String>.empty();
+
+  @override
+  Stream<proto.WsMessage> get messageStream => _messages.stream;
+
+  @override
+  Future<void> connect() async {
+    _status.add(ConnectionStatus.connected);
+    _messages.add(proto.WsMessage(
+      type: 'server_offline',
+      data: {'retry_after_ms': 60000},
+    ));
+    _status.add(ConnectionStatus.disconnected);
+  }
+
+  @override
+  void dispose() {
+    _status.close();
+    _messages.close();
+    super.dispose();
+  }
+}
+
 class _TestConnectionNotifier extends ConnectionNotifier {
   static ConnectionService Function(String url, TunnelCrypto crypto)? factory;
 
@@ -1020,6 +1080,121 @@ void main() {
     expect(secondService.resumeLastEventId, anyOf(isNull, isEmpty));
   });
 
+  test('stale room failure clears auto-resume selection and cursor', () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+      'ggcode_tunnel_session_id': 'sess-stale',
+      'ggcode_tunnel_last_event_id': 'ev-000000099',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final service = _PermanentRoomFailureService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=stale');
+    await cache.registerLiveSession('sess-stale', info,
+        lastEventId: 'ev-000000099');
+    await cache.flushNow();
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final cacheState = container.read(workspaceCacheProvider);
+    final connState = container.read(connectionProvider);
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(cacheState.selectedWorkspaceKey, isNull);
+    expect(cacheState.selectedSessionId, isNull);
+    expect(connState.status, ConnectionStatus.disconnected);
+    expect(connState.url, isNull);
+    expect(connState.error, contains('Room not found'));
+    expect(
+      cache.sortedWorkspaces().single.url,
+      'wss://example.test/ws?token=stale',
+    );
+    expect(prefs.getString('ggcode_tunnel_session_id'), anyOf(isNull, isEmpty));
+    expect(
+      prefs.getString('ggcode_tunnel_last_event_id'),
+      anyOf(isNull, isEmpty),
+    );
+  });
+
+  test('server offline keeps room selection pinned for recovery', () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final service = _ServerOfflineService();
+    _TestConnectionNotifier.factory = (_, __) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    container.read(chatProvider.notifier).set([
+      ChatMessage(
+        id: 'msg-1',
+        text: 'keep this while relay recovers',
+        time: DateTime.parse('2026-01-01T00:00:00Z'),
+      ),
+    ]);
+    await cache.captureLiveProjection(
+      messages: container.read(chatProvider),
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final cacheState = container.read(workspaceCacheProvider);
+    final connState = container.read(connectionProvider);
+    expect(cacheState.selectedWorkspaceKey, isNotNull);
+    expect(cacheState.selectedSessionId, 'sess-room');
+    expect(connState.status, ConnectionStatus.disconnected);
+    expect(connState.url, 'wss://example.test/ws?token=room-a');
+    expect(connState.error, 'Relay recovering');
+    expect(container.read(displayedMessagesProvider).single.text,
+        'keep this while relay recovers');
+  });
+
   test(
       'replay fallback restores cached projection without reconnect when no authoritative events arrived',
       () async {
@@ -1225,7 +1400,8 @@ void main() {
     );
 
     final notifier = container.read(connectionProvider.notifier);
-    await notifier.connect('wss://example.test/ws?token=abc', clearState: false);
+    await notifier.connect('wss://example.test/ws?token=abc',
+        clearState: false);
     await Future<void>.delayed(Duration.zero);
 
     expect(service.resumeClientId, 'client-1');
@@ -1439,7 +1615,8 @@ void main() {
     expect(container.read(displayedMessagesProvider).last.text, 'cached world');
   });
 
-  test('workspace cache reattaches a cached session after scanning a new room',
+  test(
+      'workspace cache does not reattach cached session after scanning a new room',
       () async {
     final info = proto.SessionInfoData(
       workspace: '/tmp/demo',
@@ -1476,23 +1653,18 @@ void main() {
     await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
     final adopted = await cache.attachSessionToActiveWorkspace('sess-room');
 
-    expect(adopted, isTrue);
+    expect(adopted, isFalse);
     final cacheState = container.read(workspaceCacheProvider);
     final snapshot = cache.snapshotFor(
       cacheState.selectedWorkspaceKey!,
       'sess-room',
     );
-    expect(cacheState.selectedSessionId, 'sess-room');
-    expect(snapshot, isNotNull);
-    expect(snapshot!.messages.single.text, 'cached from old room');
-    final sessionRecord = container
-        .read(workspaceCacheProvider)
-        .sessions['${cacheState.selectedWorkspaceKey!}::sess-room'];
-    expect(sessionRecord?.lastEventId, 'ev-000000120');
+    expect(cacheState.selectedSessionId, isNull);
+    expect(snapshot, isNull);
   });
 
   test(
-      'ConnectionNotifier restores cached session after active_session moves to a new room',
+      'ConnectionNotifier does not restore cached session after active_session moves to a new room',
       () async {
     final info = proto.SessionInfoData(
       workspace: '/tmp/demo',
@@ -1538,15 +1710,11 @@ void main() {
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
-    expect(container.read(displayedMessagesProvider), hasLength(1));
-    expect(
-      container.read(displayedMessagesProvider).single.text,
-      'cached after room switch',
-    );
+    expect(container.read(displayedMessagesProvider), isEmpty);
   });
 
   test(
-      'ConnectionNotifier restores cached session even if non-authoritative system events arrive first',
+      'ConnectionNotifier keeps new-room events authoritative when old-room cache exists',
       () async {
     final oldInfo = proto.SessionInfoData(
       workspace: '/tmp/old',
@@ -1631,9 +1799,9 @@ void main() {
     expect(container.read(displayedMessagesProvider), hasLength(1));
     expect(
       container.read(displayedMessagesProvider).single.text,
-      'cached after control events',
+      'mobile connected',
     );
-    expect(container.read(sessionInfoProvider)?.mode, 'supervised');
+    expect(container.read(sessionInfoProvider), isNull);
   });
 
   test(

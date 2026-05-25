@@ -13,12 +13,38 @@ enum ConnectionStatus {
   connected,
 }
 
+const Duration _defaultServerOfflineReconnectDelay = Duration(seconds: 60);
+
+bool isPermanentRoomFailureMessage(String error) {
+  final lower = error.toLowerCase();
+  return lower.contains('room not found') ||
+      lower.contains('stale or expired share token') ||
+      lower.contains('http status code: 410') ||
+      lower.contains('status code: 410');
+}
+
+Duration relayRecoveryDelay([int? retryAfterMs]) {
+  if (retryAfterMs == null || retryAfterMs <= 0) {
+    return _defaultServerOfflineReconnectDelay;
+  }
+  return Duration(milliseconds: retryAfterMs);
+}
+
+int? relayRetryAfterMs(Map<String, dynamic>? data) {
+  if (data == null) return null;
+  final raw = data['retry_after_ms'];
+  if (raw is int && raw > 0) return raw;
+  if (raw is String) return int.tryParse(raw);
+  return null;
+}
+
 class ConnectionService {
   final String url;
   final TunnelCrypto crypto;
   WebSocket? _socket;
   bool _disposed = false;
   bool _serverOfflineReconnect = false;
+  bool _everConnected = false;
   int _reconnectAttempts = 0;
   static const _maxReconnectAttempts = 30;
   Timer? _reconnectTimer;
@@ -50,14 +76,19 @@ class ConnectionService {
           await WebSocket.connect(url).timeout(const Duration(seconds: 30));
     } catch (e) {
       if (!_disposed) {
-        _errorController.add('Connection failed: $e');
+        final error = _formatConnectError(e);
+        _errorController.add(error);
         _statusController.add(ConnectionStatus.disconnected);
-        if (_serverOfflineReconnect) {
+        if (isPermanentRoomFailureMessage(error)) {
+          return;
+        }
+        if (_everConnected || _serverOfflineReconnect) {
           _scheduleServerOfflineReconnect();
         } else {
           _scheduleReconnect();
         }
       }
+
       return;
     }
 
@@ -80,7 +111,11 @@ class ConnectionService {
         _cleanup();
         if (!_disposed) {
           _statusController.add(ConnectionStatus.disconnected);
-          _scheduleReconnect();
+          if (_serverOfflineReconnect || _everConnected) {
+            _scheduleServerOfflineReconnect();
+          } else {
+            _scheduleReconnect();
+          }
         }
       },
       onError: (e) {
@@ -88,7 +123,11 @@ class ConnectionService {
         if (!_disposed) {
           _errorController.add('Connection error: $e');
           _statusController.add(ConnectionStatus.disconnected);
-          _scheduleReconnect();
+          if (_serverOfflineReconnect || _everConnected) {
+            _scheduleServerOfflineReconnect();
+          } else {
+            _scheduleReconnect();
+          }
         }
       },
     );
@@ -117,13 +156,14 @@ class ConnectionService {
     _reconnectTimer = null;
   }
 
-  /// Reconnect every 15 seconds after server goes offline.
-  /// Retries indefinitely until the server comes back online.
-  void _scheduleServerOfflineReconnect() {
+  /// Reconnect after relay/server recovery notices.
+  void _scheduleServerOfflineReconnect([Duration? delay]) {
     _cancelReconnect();
     _serverOfflineReconnect = true;
-    debugPrint('[connection] server offline, reconnecting in 15s...');
-    _reconnectTimer = Timer(const Duration(seconds: 15), () {
+    final wait = delay ?? _defaultServerOfflineReconnectDelay;
+    debugPrint(
+        '[connection] server offline, reconnecting in ${wait.inSeconds}s...');
+    _reconnectTimer = Timer(wait, () {
       if (!_disposed) {
         connect();
       }
@@ -136,6 +176,8 @@ class ConnectionService {
 
     switch (type) {
       case 'connected':
+        _everConnected = true;
+        _serverOfflineReconnect = false;
         _statusController.add(ConnectionStatus.connected);
         _startHeartbeat();
         break;
@@ -154,14 +196,24 @@ class ConnectionService {
         break;
 
       case 'server_offline':
-        // Server went offline — schedule auto-reconnect every 15s.
-        // Do NOT mark disposed; keep retrying until the server comes back.
-        // Also forward to session_provider so it can update UI state.
+        final data = map['data'] is Map<String, dynamic>
+            ? map['data'] as Map<String, dynamic>
+            : map['data'] is Map
+                ? Map<String, dynamic>.from(map['data'] as Map)
+                : null;
+        final retryAfter = relayRecoveryDelay(relayRetryAfterMs(data));
+        _errorController.add(
+          'Relay recovering: reconnecting in ${retryAfter.inSeconds}s',
+        );
         _cleanup();
         if (!_disposed) {
-          _messageController.add(proto.WsMessage(type: 'server_offline'));
+          _messageController.add(proto.WsMessage(
+            sessionId: map['session_id'] as String?,
+            type: 'server_offline',
+            data: data,
+          ));
           _statusController.add(ConnectionStatus.disconnected);
-          _scheduleServerOfflineReconnect();
+          _scheduleServerOfflineReconnect(retryAfter);
         }
         break;
 
@@ -186,6 +238,7 @@ class ConnectionService {
         _cleanup();
         if (!_disposed) {
           _disposed = true;
+          _errorController.add('Sharing stopped');
           _statusController.add(ConnectionStatus.disconnected);
         }
         break;
@@ -231,6 +284,14 @@ class ConnectionService {
         }
         break;
     }
+  }
+
+  String _formatConnectError(Object error) {
+    final raw = error.toString();
+    if (isPermanentRoomFailureMessage(raw)) {
+      return 'Room not found: stale or expired share token';
+    }
+    return 'Connection failed: $raw';
   }
 
   void _cleanup() {
@@ -312,6 +373,7 @@ class ConnectionService {
 
   void disconnect() {
     _cancelReconnect();
+    _serverOfflineReconnect = false;
     _cleanup();
     _socket?.close();
     _socket = null;

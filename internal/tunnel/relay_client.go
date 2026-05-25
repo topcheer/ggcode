@@ -52,6 +52,19 @@ const (
 	relayReadTimeout  = 75 * time.Second
 )
 
+func relayReconnectDelay(attempt int) time.Duration {
+	switch {
+	case attempt <= 1:
+		return 5 * time.Second
+	case attempt == 2:
+		return 10 * time.Second
+	case attempt == 3:
+		return 20 * time.Second
+	default:
+		return 40 * time.Second
+	}
+}
+
 func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 	crypto, err := NewCrypto(token)
 	if err != nil {
@@ -146,10 +159,7 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 
 			nextConn, err := rc.dial()
 			if err != nil {
-				backoff := time.Duration(attempt+1) * time.Second
-				if backoff > 10*time.Second {
-					backoff = 10 * time.Second
-				}
+				backoff := relayReconnectDelay(attempt + 1)
 				debug.Log("tunnel", "relay-client: reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
 				select {
 				case <-time.After(backoff):
@@ -295,6 +305,13 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		case EventActiveSession:
 			rc.deliver(GatewayMessage{
 				Type:      EventActiveSession,
+				SessionID: relayMsg.SessionID,
+				Data:      relayMsg.Data,
+			})
+
+		case "server_offline", "sharing_stopped":
+			rc.deliver(GatewayMessage{
+				Type:      relayMsg.Type,
 				SessionID: relayMsg.SessionID,
 				Data:      relayMsg.Data,
 			})

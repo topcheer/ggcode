@@ -14,7 +14,8 @@ import (
 const (
 	peerWriteTimeout  = 30 * time.Second
 	peerReadTimeout   = 75 * time.Second
-	relayOfflineGrace = 30 * time.Second
+	relayOfflineGrace = 90 * time.Second
+	retryAfterOffline = 60 * time.Second
 )
 
 // relayMessage is the wire format. Metadata fields remain plaintext so relay
@@ -56,6 +57,11 @@ type room struct {
 	offlineTimer *time.Timer
 }
 
+type relayOfflineData struct {
+	Reason       string `json:"reason,omitempty"`
+	RetryAfterMS int    `json:"retry_after_ms,omitempty"`
+}
+
 func (r *room) upsertHistoryEvent(ev roomEvent) {
 	if ev.sessionID == "" || ev.eventID == "" {
 		return
@@ -74,6 +80,17 @@ func newRoom(token string) *room {
 		token:       token,
 		clients:     make(map[*peer]struct{}),
 		clientsByID: make(map[string]*peer),
+	}
+}
+
+func serverOfflineNotice(sessionID string) relayMessage {
+	return relayMessage{
+		Type:      "server_offline",
+		SessionID: sessionID,
+		Data: mustJSON(relayOfflineData{
+			Reason:       "server_offline",
+			RetryAfterMS: int(retryAfterOffline / time.Millisecond),
+		}),
 	}
 }
 
@@ -186,8 +203,10 @@ func (p *peer) readPump(h *hub) {
 		if p.role == "server" {
 			p.room.server = nil
 			token := p.room.token
+			sessionID := p.room.sessionID
 			p.room.mu.Unlock()
 			if !roomDestroyed {
+				h.notifyRoomRecovering(token, sessionID)
 				h.scheduleRoomExpiry(token)
 			}
 		} else {
@@ -577,11 +596,40 @@ func (h *hub) removeRoomIfEmpty(r *room) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	r.mu.RLock()
-	empty := r.server == nil && len(r.clients) == 0
+	empty := r.server == nil && len(r.clients) == 0 && r.offlineTimer == nil
 	r.mu.RUnlock()
 	if empty {
 		delete(h.rooms, r.token)
 	}
+}
+
+func (h *hub) notifyRoomRecovering(token, sessionID string) {
+	h.mu.RLock()
+	r := h.rooms[token]
+	h.mu.RUnlock()
+	if r == nil {
+		return
+	}
+	notice := serverOfflineNotice(sessionID)
+	r.mu.RLock()
+	clients := make([]*peer, 0, len(r.clients))
+	for c := range r.clients {
+		clients = append(clients, c)
+	}
+	r.mu.RUnlock()
+	if len(clients) == 0 {
+		return
+	}
+	for _, c := range clients {
+		c.sendJSON(notice)
+	}
+	time.AfterFunc(500*time.Millisecond, func() {
+		for _, c := range clients {
+			if c.conn != nil {
+				_ = c.conn.Close()
+			}
+		}
+	})
 }
 
 func (h *hub) scheduleRoomExpiry(token string) {
@@ -749,6 +797,15 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		bufferedEvents,
 	)
 	go p.writePump()
+	if role == "client" && rm.server == nil {
+		h.scheduleRoomExpiry(token)
+		p.sendJSON(serverOfflineNotice(sessionID))
+		time.AfterFunc(500*time.Millisecond, func() {
+			if conn != nil {
+				_ = conn.Close()
+			}
+		})
+	}
 	p.readPump(h) // blocks
 }
 

@@ -51,6 +51,8 @@ const (
 	EventError                 = "error"
 	EventPing                  = "ping"
 	EventDisconnected          = "disconnected"
+	EventServerOffline         = "server_offline"
+	EventSharingStopped        = "sharing_stopped"
 	EventRelayAck              = "relay_ack"  // Relay → Client: relay received the message
 	EventServerAck             = "server_ack" // Server → Client: desktop processed the message
 )
