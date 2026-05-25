@@ -63,6 +63,9 @@ type Broker struct {
 	toolArgs         map[string]string
 	subagentToolArgs map[string]string
 
+	reasoningMu     sync.Mutex
+	activeReasoning map[string]string // msgID -> agentID (empty for main agent)
+
 	// Text batching
 	textMu     sync.Mutex
 	textBuf    map[string]*textEntry // msgID → unflushed text entry
@@ -97,6 +100,7 @@ func NewBroker(sess *Session) *Broker {
 		sendWaiters:      make(map[string]chan struct{}),
 		toolArgs:         make(map[string]string),
 		subagentToolArgs: make(map[string]string),
+		activeReasoning:  make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
@@ -413,6 +417,9 @@ func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
 		b.activeText = make(map[string]*textEntry)
 	}
 	b.textMu.Unlock()
+	b.reasoningMu.Lock()
+	b.activeReasoning = make(map[string]string)
+	b.reasoningMu.Unlock()
 	b.enqueueControl(EventSnapshotReset, nil)
 }
 
@@ -598,6 +605,40 @@ func (b *Broker) PushTextDone(id string) {
 	b.textMu.Unlock()
 }
 
+func (b *Broker) PushReasoning(id, chunk string) {
+	if strings.TrimSpace(id) == "" || chunk == "" {
+		return
+	}
+	b.reasoningMu.Lock()
+	if b.activeReasoning == nil {
+		b.activeReasoning = make(map[string]string)
+	}
+	b.activeReasoning[id] = ""
+	b.reasoningMu.Unlock()
+	b.enqueueWithStream(EventReasoning, id, TextData{ID: id, Chunk: chunk})
+}
+
+func (b *Broker) PushReasoningDone(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	b.reasoningMu.Lock()
+	agentID, ok := b.activeReasoning[id]
+	if ok {
+		delete(b.activeReasoning, id)
+	}
+	b.reasoningMu.Unlock()
+	if !ok {
+		return
+	}
+	if agentID != "" {
+		b.enqueueWithStream(EventSubagentReasoningDone, id, SubagentTextData{AgentID: agentID, ID: id, Done: true})
+		return
+	}
+	b.enqueueWithStream(EventReasoningDone, id, TextData{ID: id, Done: true})
+}
+
 // ─── Status ───
 
 func (b *Broker) PushStatus(status, message string) {
@@ -732,6 +773,28 @@ func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
 	}
 }
 
+func (b *Broker) PushSubagentReasoning(agentID, msgID, chunk string, done bool) {
+	if strings.TrimSpace(msgID) == "" {
+		return
+	}
+	if chunk != "" {
+		b.reasoningMu.Lock()
+		if b.activeReasoning == nil {
+			b.activeReasoning = make(map[string]string)
+		}
+		b.activeReasoning[msgID] = agentID
+		b.reasoningMu.Unlock()
+		b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentTextData{
+			AgentID: agentID,
+			ID:      msgID,
+			Chunk:   chunk,
+		})
+	}
+	if done {
+		b.PushReasoningDone(msgID)
+	}
+}
+
 func (b *Broker) PushSubagentStatus(agentID, status, message string) {
 	b.enqueueWithStream(EventSubagentStatus, agentID, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
 }
@@ -837,6 +900,13 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 			msgID := b.NextMessageID()
 			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content, Kind: entry.Kind})
 			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true, Kind: entry.Kind})
+		case "reasoning":
+			if entry.Content == "" {
+				continue
+			}
+			msgID := b.NextMessageID()
+			b.enqueueWithStream(EventReasoning, msgID, TextData{ID: msgID, Chunk: entry.Content})
+			b.enqueueWithStream(EventReasoningDone, msgID, TextData{ID: msgID, Done: true})
 		case "tool_call":
 			displayName := strings.TrimSpace(entry.ToolDisplayName)
 			if displayName == "" {

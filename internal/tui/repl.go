@@ -228,6 +228,11 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 			r.program.Send(subAgentTunnelStreamTextMsg{AgentID: agentID, Text: text})
 		}
 	})
+	mgr.SetOnReasoning(func(agentID, text string) {
+		if r.program != nil {
+			r.program.Send(subAgentTunnelReasoningMsg{AgentID: agentID, Text: text})
+		}
+	})
 	mgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
 		if r.program != nil {
 			r.program.Send(subAgentTunnelToolCallMsg{

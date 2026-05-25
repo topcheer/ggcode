@@ -99,6 +99,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactResultMsg:
 		return m.handleCompactResultMsg(msg)
 
+	case sessionResumeLoadedMsg:
+		if msg.err != nil {
+			return m, func() tea.Msg {
+				return streamMsg(m.t("session.resume_failed", msg.requestedID, msg.err))
+			}
+		}
+		m.applyResumedSession(msg.session)
+		title := msg.session.Title
+		if title == "" {
+			title = m.t("session.untitled")
+		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				return streamMsg(m.t("session.resume", msg.session.ID, title, len(msg.session.Messages)))
+			},
+			publishCurrentSessionCmd(true),
+		)
+
+	case tunnelPublishCurrentSessionMsg:
+		m.publishTunnelSnapshotForCurrentSession(msg.reset)
+		return m, nil
+
 	case remoteRestartMsg:
 		m.quitting = true
 		m.restartRequested = true
@@ -288,6 +310,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case subAgentTunnelStreamTextMsg:
 		return m.handleSubAgentTunnelStreamTextMsg(msg)
+
+	case subAgentTunnelReasoningMsg:
+		return m.handleSubAgentTunnelReasoningMsg(msg)
 
 	case subAgentTunnelToolCallMsg:
 		return m.handleSubAgentTunnelToolCallMsg(msg)

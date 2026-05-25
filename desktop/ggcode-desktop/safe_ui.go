@@ -132,6 +132,9 @@ func (u *UIState) SetTokenUsage(usage string, pct float64) {
 // AppendChat appends a message to the chat list (thread-safe).
 // Fires EventAppend so the UI can render precisely.
 func (u *UIState) AppendChat(msg ChatMessage) {
+	if msg.Role != "user" {
+		u.FlushReasoning()
+	}
 	u.ChatMu.Lock()
 
 	// Merge consecutive system messages (e.g. repeated auto-compress notices).
@@ -188,6 +191,7 @@ func (u *UIState) FlushReasoning() {
 // and updates (or creates) the last assistant message with the full accumulated text.
 // Throttled: GUI updates are chunked so markdown widgets can append incrementally.
 func (u *UIState) AppendAssistantText(chunk string) {
+	u.FlushReasoning()
 	u.ChatMu.Lock()
 	u.assistantBuf.WriteString(chunk)
 	full := u.assistantBuf.String()
@@ -268,6 +272,7 @@ func (u *UIState) takeReasoningIncrement() string {
 
 // UpdateToolResult updates the tool message with matching tool call ID.
 func (u *UIState) UpdateToolResult(toolID, result string, isError bool) {
+	u.FlushReasoning()
 	u.ChatMu.Lock()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "tool" && u.ChatMsgs[i].ToolID == toolID {
@@ -284,6 +289,7 @@ func (u *UIState) UpdateToolResult(toolID, result string, isError bool) {
 // FinalizeStreaming marks the last streaming assistant message as done,
 // resets the streaming buffer, and marks any still-running tool calls as cancelled.
 func (u *UIState) FinalizeStreaming() {
+	u.FlushReasoning()
 	u.FlushStream() // ensure last chunk is rendered before finalize
 	u.ChatMu.Lock()
 	u.assistantBuf.Reset()

@@ -195,6 +195,26 @@ func TestBrokerPushTextDoneEmptyBuffer(t *testing.T) {
 	}
 }
 
+func TestBrokerPushReasoningDone(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushReasoning("msg-r1", "thinking")
+	b.PushReasoningDone("msg-r1")
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 reasoning messages, got %d", len(msgs))
+	}
+	if msgs[0].Type != EventReasoning {
+		t.Fatalf("expected first event %q, got %q", EventReasoning, msgs[0].Type)
+	}
+	if msgs[1].Type != EventReasoningDone {
+		t.Fatalf("expected second event %q, got %q", EventReasoningDone, msgs[1].Type)
+	}
+}
+
 func TestBrokerSendSessionInfo(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
@@ -634,6 +654,26 @@ func TestBrokerPushSubagentTextDone(t *testing.T) {
 	}
 	if !hasText {
 		t.Error("expected subagent_text event on done")
+	}
+}
+
+func TestBrokerPushSubagentReasoningDone(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushSubagentReasoning("agent-1", "reasoning-1", "plan", false)
+	b.PushSubagentReasoning("agent-1", "reasoning-1", "", true)
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 subagent reasoning messages, got %d", len(msgs))
+	}
+	if msgs[0].Type != EventSubagentReasoning {
+		t.Fatalf("expected first event %q, got %q", EventSubagentReasoning, msgs[0].Type)
+	}
+	if msgs[1].Type != EventSubagentReasoningDone {
+		t.Fatalf("expected second event %q, got %q", EventSubagentReasoningDone, msgs[1].Type)
 	}
 }
 

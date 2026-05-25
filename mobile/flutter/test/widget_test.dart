@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:io';
 
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
@@ -29,8 +30,20 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
 }
 
 void main() {
+  late Directory cacheDir;
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    cacheDir =
+        Directory.systemTemp.createTempSync('ggcode_mobile_widget_cache_');
+    debugWorkspaceCacheDatabasePathOverride =
+        '${cacheDir.path}/workspace_cache.sqlite';
+  });
+
+  tearDown(() {
+    debugWorkspaceCacheDatabasePathOverride = null;
+    if (cacheDir.existsSync()) {
+      cacheDir.deleteSync(recursive: true);
+    }
   });
 
   testWidgets('App shell renders', (WidgetTester tester) async {
@@ -191,6 +204,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Task ID: task-1'), findsOneWidget);
+  });
+
+  testWidgets('Thinking cards render expanded and can collapse',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(chatProvider.notifier);
+
+    notifier.handleReasoningChunk(
+      proto.TextData(id: 'reason-1', chunk: 'step 1', done: false),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('reasoningBubble-reason-1')), findsOneWidget);
+    expect(find.byKey(const Key('reasoningBody-reason-1')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('reasoningToggle-reason-1')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reasoningBody-reason-1')), findsNothing);
+    expect(find.textContaining('step 1'), findsOneWidget);
   });
 
   testWidgets(

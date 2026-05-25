@@ -114,6 +114,25 @@ func TestTunnelMessagesToHistory_AssistantWithTool(t *testing.T) {
 	}
 }
 
+func TestTunnelMessagesToHistory_AssistantReasoning(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{ReasoningContent: "checking options"},
+			{Type: "text", Text: "done"},
+		}},
+	}
+	history := tunnelMessagesToHistory(msgs)
+	if len(history) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(history))
+	}
+	if history[0].Role != "reasoning" || history[0].Content != "checking options" {
+		t.Fatalf("unexpected reasoning entry: %+v", history[0])
+	}
+	if history[1].Role != "assistant" || history[1].Content != "done" {
+		t.Fatalf("unexpected assistant entry: %+v", history[1])
+	}
+}
+
 func TestTunnelMessagesToHistory_ToolResult(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{
@@ -428,6 +447,89 @@ func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedger(t *testi
 	}
 	if loaded.TunnelEventsComplete {
 		t.Fatal("expected downgraded replay flag to persist")
+	}
+}
+
+func TestApplyResumedSessionClearsAgentContext(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.agent.AddMessage(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.TextBlock("stale context")},
+	})
+
+	ses := &session.Session{
+		ID: "sess-resume-agent",
+		Messages: []provider.Message{
+			{
+				Role:    "user",
+				Content: []provider.ContentBlock{provider.TextBlock("fresh context")},
+			},
+		},
+	}
+
+	m.applyResumedSession(ses)
+
+	msgs := m.agent.ContextManager().Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected resumed agent context to contain 1 message, got %d", len(msgs))
+	}
+	if got := msgs[0].Content[0].Text; got != "fresh context" {
+		t.Fatalf("expected resumed agent context to be replaced, got %q", got)
+	}
+}
+
+func TestApplyResumedSessionPreservesCanonicalReplay(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	store := m.sessionStore
+
+	m.chatWriteUser("stale-user", "stale live chat")
+
+	ses := &session.Session{
+		ID:        "sess-resume-replay",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("restored user")}},
+			{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("restored assistant")}},
+		},
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID: "ev-000000001",
+				Type:    tunnel.EventUserMessage,
+				Data:    json.RawMessage(`{"text":"restored user"}`),
+			},
+			{
+				EventID:  "ev-000000002",
+				StreamID: "msg-1",
+				Type:     tunnel.EventText,
+				Data:     json.RawMessage(`{"id":"msg-1","chunk":"restored assistant"}`),
+			},
+			{
+				EventID:  "ev-000000003",
+				StreamID: "msg-1",
+				Type:     tunnel.EventTextDone,
+				Data:     json.RawMessage(`{"id":"msg-1","done":true}`),
+			},
+		},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m.applyResumedSession(ses)
+	if got := len(m.currentSessionTunnelReplayEvents()); got != len(ses.TunnelEvents) {
+		t.Fatalf("expected canonical replay to remain available after resume, got %d events", got)
+	}
+
+	m.publishTunnelSnapshotForCurrentSession(true)
+
+	if !m.session.TunnelEventsComplete {
+		t.Fatal("expected canonical replay to remain armed after publish")
+	}
+	if got := len(m.currentSessionTunnelReplayEvents()); got != len(ses.TunnelEvents) {
+		t.Fatalf("expected publish to keep canonical replay intact, got %d events", got)
 	}
 }
 
@@ -774,6 +876,56 @@ func TestHandleSubAgentTunnelToolMsgsPushEvents(t *testing.T) {
 	}
 	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentToolResult {
 		t.Fatalf("expected tool result event, got %q", got)
+	}
+}
+
+func TestHandleSubAgentTunnelReasoningMsgPushesAndFinalizes(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	next, _ := m.handleSubAgentTunnelReasoningMsg(subAgentTunnelReasoningMsg{
+		AgentID: "sa-1",
+		Text:    "thinking",
+	})
+	m = &next
+	next, _ = m.handleSubAgentTunnelToolCallMsg(subAgentTunnelToolCallMsg{
+		AgentID:  "sa-1",
+		ToolID:   "tool-1",
+		ToolName: "read_file",
+		Args:     `{"path":"a.txt"}`,
+		Detail:   "a.txt",
+	})
+	m = &next
+
+	if len(m.session.TunnelEvents) != 3 {
+		t.Fatalf("expected 3 tunnel events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentReasoning {
+		t.Fatalf("expected reasoning event, got %q", got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentReasoningDone {
+		t.Fatalf("expected reasoning_done event, got %q", got)
+	}
+	if got := m.session.TunnelEvents[2].Type; got != tunnel.EventSubagentToolCall {
+		t.Fatalf("expected tool call event, got %q", got)
+	}
+}
+
+func TestPushTunnelEventReasoningFinalizesBeforeText(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.tunnelMsgID = "msg-1"
+
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: "thinking"})
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "hello"})
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventDone})
+
+	if len(m.session.TunnelEvents) < 4 {
+		t.Fatalf("expected at least 4 tunnel events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventReasoning {
+		t.Fatalf("expected first event %q, got %q", tunnel.EventReasoning, got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventReasoningDone {
+		t.Fatalf("expected second event %q, got %q", tunnel.EventReasoningDone, got)
 	}
 }
 

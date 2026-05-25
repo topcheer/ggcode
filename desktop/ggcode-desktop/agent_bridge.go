@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 
 	"sync"
@@ -116,10 +117,27 @@ func (b *AgentBridge) rotateTunnelMsgID(broker *tunnel.Broker) {
 	b.tunnelMsgID = broker.NextMessageID()
 }
 
+func (b *AgentBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
+	msgID := b.ensureTunnelMsgID(broker)
+	if msgID == "" {
+		return ""
+	}
+	return msgID + "-reasoning"
+}
+
+func tunnelSubagentTextID(agentID string) string {
+	return fmt.Sprintf("sa-%s", agentID)
+}
+
+func tunnelSubagentReasoningID(agentID string) string {
+	return fmt.Sprintf("sa-%s-reasoning", agentID)
+}
+
 func (b *AgentBridge) flushTunnelTextStream(broker *tunnel.Broker) {
 	if broker == nil {
 		return
 	}
+	broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 	msgID := b.ensureTunnelMsgID(broker)
 	broker.PushTextDone(msgID)
 	b.rotateTunnelMsgID(broker)
@@ -283,13 +301,15 @@ func (b *AgentBridge) setupAgent() error {
 				broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
 
 			case subagent.StatusCompleted:
+				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
 				if sa.Result != "" {
-					msgID := fmt.Sprintf("sa-%s", sa.ID)
+					msgID := tunnelSubagentTextID(sa.ID)
 					broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
 				}
 				broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
 
 			case subagent.StatusFailed:
+				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
 				errMsg := ""
 				if sa.Error != nil {
 					errMsg = sa.Error.Error()
@@ -297,6 +317,7 @@ func (b *AgentBridge) setupAgent() error {
 				broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
 
 			case subagent.StatusCancelled:
+				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
 				broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 			}
 		}
@@ -305,14 +326,23 @@ func (b *AgentBridge) setupAgent() error {
 	// Forward sub-agent text chunks to mobile (unthrottled).
 	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
 		if broker := b.currentTunnelBroker(); broker != nil {
-			msgID := fmt.Sprintf("sa-%s", agentID)
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
+			msgID := tunnelSubagentTextID(agentID)
 			broker.PushSubagentText(agentID, msgID, text, false)
+		}
+	})
+	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
+		if broker := b.currentTunnelBroker(); broker != nil {
+			if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
+				broker.PushSubagentReasoning(agentID, tunnelSubagentReasoningID(agentID), chunk, false)
+			}
 		}
 	})
 
 	// Forward sub-agent tool calls/results to mobile.
 	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
 		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
 			summary := detail
 			if summary == "" {
 				summary = toolArgSummary(toolName, args)
@@ -322,6 +352,7 @@ func (b *AgentBridge) setupAgent() error {
 	})
 	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
 		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
 			broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
 		}
 	})
@@ -668,6 +699,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 				b.ui.AppendAssistantText(ev.Text)
 				b.imRound.Text.WriteString(ev.Text)
 				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 					broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
 				}
 
@@ -733,6 +765,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 					b.Emitter.TriggerTyping()
 				}
 				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 					broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 				}
 
@@ -754,8 +787,11 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 				}
 
 			case provider.StreamEventReasoning:
-				if ev.Text != "" {
-					b.ui.AppendReasoning(ev.Text)
+				if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
+					b.ui.AppendReasoning(chunk)
+					if broker := b.currentTunnelBroker(); broker != nil {
+						broker.PushReasoning(b.tunnelReasoningMsgID(broker), chunk)
+					}
 				}
 
 			case provider.StreamEventDone:
@@ -1738,6 +1774,12 @@ func desktopSessionMessagesToTunnelHistory(messages []provider.Message) []tunnel
 			continue
 		}
 		for _, block := range msg.Content {
+			if reasoning := desktopContentBlockReasoningText(block); reasoning != "" {
+				history = append(history, tunnel.HistoryEntry{
+					Role:    "reasoning",
+					Content: reasoning,
+				})
+			}
 			switch block.Type {
 			case "text":
 				if strings.TrimSpace(block.Text) != "" {
@@ -1770,6 +1812,16 @@ func desktopSessionMessagesToTunnelHistory(messages []provider.Message) []tunnel
 	return history
 }
 
+func desktopContentBlockReasoningText(block provider.ContentBlock) string {
+	if text := tunnel.NormalizeReasoningChunk(block.ReasoningContent); text != "" {
+		return text
+	}
+	if strings.TrimSpace(block.ThinkingData) != "" {
+		return tunnel.RedactedReasoningPlaceholder
+	}
+	return ""
+}
+
 func desktopChatMessagesToTunnelHistory(messages []ChatMessage) []tunnel.HistoryEntry {
 	history := make([]tunnel.HistoryEntry, 0, len(messages)*2)
 	for _, msg := range messages {
@@ -1781,6 +1833,10 @@ func desktopChatMessagesToTunnelHistory(messages []ChatMessage) []tunnel.History
 		case "assistant":
 			if strings.TrimSpace(msg.Content) != "" {
 				history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: strings.TrimSpace(msg.Content)})
+			}
+		case "reasoning":
+			if strings.TrimSpace(msg.Content) != "" {
+				history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: strings.TrimSpace(msg.Content)})
 			}
 		case "system":
 			if strings.TrimSpace(msg.Content) != "" {
@@ -1820,6 +1876,7 @@ func desktopChatMessagesToTunnelHistory(messages []ChatMessage) []tunnel.History
 func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
 	var history []tunnel.HistoryEntry
 	textByID := make(map[string]string)
+	reasoningByID := make(map[string]string)
 	finalizeText := func(id string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -1831,6 +1888,31 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 			return
 		}
 		history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
+	}
+	finalizeReasoning := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		text := strings.TrimSpace(reasoningByID[id])
+		delete(reasoningByID, id)
+		if text == "" {
+			return
+		}
+		history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: text})
+	}
+	finalizeAllReasoning := func() {
+		if len(reasoningByID) == 0 {
+			return
+		}
+		ids := make([]string, 0, len(reasoningByID))
+		for id := range reasoningByID {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			finalizeReasoning(id)
+		}
 	}
 
 	for _, ev := range events {
@@ -1877,6 +1959,9 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
 				continue
 			}
+			if _, seen := textByID[data.ID]; !seen {
+				finalizeAllReasoning()
+			}
 			textByID[data.ID] += data.Chunk
 			if data.Done {
 				finalizeText(data.ID)
@@ -1891,7 +1976,30 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 				id = ev.StreamID
 			}
 			finalizeText(id)
+		case tunnel.EventReasoning:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			if strings.TrimSpace(data.ID) == "" || data.Chunk == "" {
+				continue
+			}
+			reasoningByID[data.ID] += data.Chunk
+			if data.Done {
+				finalizeReasoning(data.ID)
+			}
+		case tunnel.EventReasoningDone:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				continue
+			}
+			id := data.ID
+			if strings.TrimSpace(id) == "" {
+				id = ev.StreamID
+			}
+			finalizeReasoning(id)
 		case tunnel.EventToolCall:
+			finalizeAllReasoning()
 			var data tunnel.ToolCallData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1905,6 +2013,7 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 				ToolDetail:      data.Detail,
 			})
 		case tunnel.EventToolResult:
+			finalizeAllReasoning()
 			var data tunnel.ToolResultData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1917,6 +2026,7 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 				IsError:  data.IsError,
 			})
 		case tunnel.EventError:
+			finalizeAllReasoning()
 			var data tunnel.ErrorData
 			if err := json.Unmarshal(ev.Data, &data); err != nil {
 				continue
@@ -1927,6 +2037,9 @@ func desktopTunnelEventsToHistory(events []session.TunnelEvent) []tunnel.History
 		}
 	}
 
+	for id := range reasoningByID {
+		finalizeReasoning(id)
+	}
 	return history
 }
 
@@ -1937,6 +2050,7 @@ func desktopTunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 	for i := range a {
 		if a[i].Role != b[i].Role ||
 			a[i].Content != b[i].Content ||
+			a[i].Kind != b[i].Kind ||
 			a[i].ToolID != b[i].ToolID ||
 			a[i].ToolName != b[i].ToolName ||
 			a[i].ToolDisplayName != b[i].ToolDisplayName ||
