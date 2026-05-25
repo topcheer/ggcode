@@ -118,6 +118,10 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final connState = ref.read(connectionProvider);
     final notifier = ref.read(connectionProvider.notifier);
+    void flushWorkspaceCache() {
+      if (_demoMode) return;
+      unawaited(ref.read(workspaceCacheProvider.notifier).flushNow());
+    }
 
     switch (state) {
       case AppLifecycleState.resumed:
@@ -140,11 +144,13 @@ class _AppShellState extends ConsumerState<AppShell>
         _wasConnectedBeforeBackground =
             connState.status == ConnectionStatus.connected;
         debugPrint('[app] Paused: wasConnected=$_wasConnectedBeforeBackground');
+        flushWorkspaceCache();
         break;
 
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
+        flushWorkspaceCache();
         break;
     }
   }
