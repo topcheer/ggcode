@@ -88,6 +88,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   Duration _replayFallbackTimeout = _defaultReplayFallbackTimeout;
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
+  bool _awaitingSnapshotProjection = false;
 
   @override
   TunnelConnectionState build() {
@@ -187,6 +188,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _sessionId = '';
       _lastAppliedEventId = '';
       _awaitingReplay = false;
+      _awaitingSnapshotProjection = false;
       _pendingReplayEvents.clear();
       _resetReplayRecoveryState();
       _recentEventIds.clear();
@@ -353,6 +355,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _resetReplayRecoveryState();
           _recentEventIds.clear();
           _recentEventSet.clear();
+          _awaitingSnapshotProjection = false;
           // Prevent an earlier async cache-restore task (scheduled from
           // active_session) from reseeding a stale cursor while authoritative
           // full-history replay is in flight.
@@ -401,6 +404,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _resetReplayRecoveryState();
         _recentEventIds.clear();
         _recentEventSet.clear();
+        _awaitingSnapshotProjection = true;
         // Prevent late cache-restore callbacks from reviving stale snapshots
         // after the desktop has started an authoritative reset.
         _markProjectionAuthoritative();
@@ -429,6 +433,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         _markEventApplied(msg);
         _markProjectionAuthoritative();
+        if (_awaitingSnapshotProjection) {
+          _awaitingSnapshotProjection = false;
+          _drainBufferedReplayEvents();
+        }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
               data,
@@ -956,6 +964,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         sessionId != _sessionId) {
       final previousSessionId = _sessionId;
       _clearUiProjection();
+      _hasAuthoritativeProjection = true; // event-driven switch must not allow cache re-seeding
       _pendingReplayEvents.clear();
       _awaitingReplay = false;
       _resetReplayRecoveryState();
@@ -978,7 +987,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     final next = _parseEventOrdinal(eventId);
     final last = _parseEventOrdinal(_lastAppliedEventId);
-    if (last != null && next != null) {
+    if (!_awaitingSnapshotProjection && last != null && next != null) {
       if (next <= last) {
         _pendingReplayEvents.remove(next);
         return false;
@@ -1050,6 +1059,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   void _beginReplayRecovery() {
+    if (_awaitingSnapshotProjection) return;
     _awaitingReplay = true;
     _replayRetryCount = 0;
     if (_hasReplayCursorBaseline()) {
@@ -1127,10 +1137,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     final url = state.url;
-    final restoredFromCache = _restoreProjectionFromCache(
-      adoptCursor: false,
-      seedCursorIfUnset: true,
-    );
+    final restoredFromCache = !_hasAuthoritativeProjection &&
+        _restoreProjectionFromCache(
+          adoptCursor: false,
+          seedCursorIfUnset: true,
+        );
     _pendingReplayEvents.clear();
     _awaitingReplay = false;
     if (!restoredFromCache) {

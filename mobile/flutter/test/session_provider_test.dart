@@ -2194,4 +2194,211 @@ void main() {
     expect(messages[3].id, 'msg-after');
     expect(messages[3].text, 'The rerun completed successfully.');
   });
+
+  test(
+      'ConnectionNotifier does not trigger replay recovery after snapshot_reset even with gap',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000860');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000860',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000860',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    // snapshot_reset clears the cursor and sets _awaitingSnapshotProjection
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'snapshot_reset',
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    // Stale relay event with old ordinal arrives — should still apply but
+    // should NOT trigger replay recovery even if it creates a gap with
+    // subsequent events. Because _awaitingSnapshotProjection is true,
+    // the gap check is skipped entirely.
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      eventId: 'ev-000000861',
+      type: 'text',
+      data: {
+        'id': 'msg-stale',
+        'chunk': 'stale replay text',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(container.read(chatProvider), isNotEmpty);
+    expect(notifier.lastAppliedEventId, 'ev-000000861');
+    // _awaitingSnapshotProjection still true (only cleared by session_info)
+
+    // New authoritative session_info from broker snapshot arrives with a
+    // much higher ordinal (gap after 861). Because _awaitingSnapshotProjection
+    // is still true, the gap check is skipped and session_info is applied
+    // directly. _awaitingSnapshotProjection is cleared by session_info handler.
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      eventId: 'ev-000002000',
+      type: 'session_info',
+      data: {
+        'workspace': '/tmp/demo',
+        'model': 'gpt-5.4',
+        'provider': 'openai',
+        'mode': 'auto',
+        'version': '1.0.0',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    // session_info applied directly (gap check bypassed), mode updated,
+    // cursor jumped to 2000.
+    expect(container.read(currentModeProvider), 'auto');
+    expect(notifier.lastAppliedEventId, 'ev-000002000');
+    // No replay recovery was triggered
+  });
+
+  test(
+      'ConnectionNotifier clears awaitingSnapshotProjection when event ordinal advances',
+      () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'snapshot_reset',
+    ));
+
+    // First data event clears _awaitingSnapshotProjection
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      eventId: 'ev-000000001',
+      type: 'session_info',
+      data: {
+        'workspace': '/tmp/demo',
+        'model': 'gpt-5.4',
+        'provider': 'openai',
+        'mode': 'supervised',
+        'version': '1.0.0',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(notifier.lastAppliedEventId, 'ev-000000001');
+
+    // After _awaitingSnapshotProjection is cleared, a gap should now
+    // trigger replay recovery normally.
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      eventId: 'ev-000000010',
+      type: 'text',
+      data: {'id': 'msg-gap', 'chunk': 'gap'},
+    ));
+    // Event is buffered (gap 1→10) but NOT applied yet
+    expect(
+        container.read(chatProvider).where((m) => m.id == 'msg-gap'), isEmpty);
+  });
+
+  test(
+      'ConnectionNotifier does not reseed stale cursor on session change inside _shouldApplyEvent',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-old', info,
+        lastEventId: 'ev-000000860');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000860',
+          text: 'cached old session',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000860',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    // Establish an authoritative projection
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      eventId: 'ev-000000860',
+      type: 'session_info',
+      data: {
+        'workspace': '/tmp/demo',
+        'model': 'gpt-5.4',
+        'provider': 'openai',
+        'mode': 'supervised',
+        'version': '1.0.0',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    // Now an event arrives with a different session ID — this triggers
+    // _clearUiProjection inside _shouldApplyEvent. With the fix,
+    // _hasAuthoritativeProjection is re-set to true, preventing
+    // _restoreSessionProjectionIfAvailable from reseeding cursor.
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-new',
+      eventId: 'ev-000000001',
+      type: 'session_info',
+      data: {
+        'workspace': '/tmp/demo',
+        'model': 'gpt-5.4',
+        'provider': 'openai',
+        'mode': 'auto',
+        'version': '1.0.0',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    // Cursor should be at the new event, NOT the cached old cursor
+    expect(notifier.lastAppliedEventId, 'ev-000000001');
+    expect(notifier.currentSessionId, 'sess-new');
+    // Chat should NOT contain the cached old session message
+    expect(
+        container
+            .read(chatProvider)
+            .where((m) => m.text == 'cached old session'),
+        isEmpty);
+  });
 }
