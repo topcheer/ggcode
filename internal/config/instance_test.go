@@ -59,8 +59,27 @@ func TestInstanceDir(t *testing.T) {
 	if dir1 != dir2 {
 		t.Errorf("same workspace should produce same hash: %s != %s", dir1, dir2)
 	}
+}
 
-	// Different workspaces should produce different hashes
+func TestInstanceDirNormalizesSymlinks(t *testing.T) {
+	withTestHome(t)
+	realDir := filepath.Join(t.TempDir(), "real-workspace")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir real workspace: %v", err)
+	}
+	linkDir := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if got, want := InstanceDir(linkDir), InstanceDir(realDir); got != want {
+		t.Fatalf("InstanceDir should normalize symlinks: got %s want %s", got, want)
+	}
+
+}
+
+func TestInstanceDirDiffersAcrossWorkspaces(t *testing.T) {
+	withTestHome(t)
+	dir1 := InstanceDir("/home/user/projects/myapp")
 	dir3 := InstanceDir("/home/user/projects/other")
 	if dir1 == dir3 {
 		t.Error("different workspaces should produce different hashes")

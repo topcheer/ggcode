@@ -59,21 +59,25 @@ class ApprovalSheet extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          Wrap(
+            alignment: WrapAlignment.end,
+            runAlignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
             children: [
               TextButton(
                 onPressed: () => _respond(ref, 'deny'),
                 child: Text(t('approval.deny'),
                     style: const TextStyle(color: Colors.redAccent)),
               ),
-              const SizedBox(width: 8),
               TextButton(
                 onPressed: () => _respond(ref, 'allow'),
-                child:
-                    Text(t('approval.allow'), style: const TextStyle(color: Colors.green)),
+                child: Text(
+                  t('approval.allow'),
+                  style: const TextStyle(color: Colors.green),
+                ),
               ),
-              const SizedBox(width: 8),
               FilledButton(
                 onPressed: () => _respond(ref, 'always_allow'),
                 style:
