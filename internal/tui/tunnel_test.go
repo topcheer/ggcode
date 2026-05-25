@@ -611,6 +611,70 @@ func TestTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) {
 	}
 }
 
+func TestCurrentTunnelHistoryIncludesTerminalToolResultsWithoutBodies(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   chat.ToolStatus
+		isError  bool
+		toolName string
+	}{
+		{name: "success", status: chat.StatusSuccess, isError: false, toolName: "read_file"},
+		{name: "error", status: chat.StatusError, isError: true, toolName: "read_file"},
+		{name: "canceled", status: chat.StatusCanceled, isError: true, toolName: "read_file"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel()
+			item := chat.NewGenericToolItem("tool-1", tc.toolName, tc.status, "a.txt", m.chatStyles)
+			item.SetResult("", tc.isError)
+			m.chatWrite(item)
+
+			history := m.currentTunnelHistory()
+			if len(history) != 2 {
+				t.Fatalf("expected tool_call and empty tool_result, got %+v", history)
+			}
+			if history[0].Role != "tool_call" {
+				t.Fatalf("first entry role = %q, want tool_call", history[0].Role)
+			}
+			if history[1].Role != "tool_result" {
+				t.Fatalf("second entry role = %q, want tool_result", history[1].Role)
+			}
+			if history[1].Result != "" {
+				t.Fatalf("tool_result body = %q, want empty", history[1].Result)
+			}
+			if history[1].IsError != tc.isError {
+				t.Fatalf("tool_result is_error = %t, want %t", history[1].IsError, tc.isError)
+			}
+		})
+	}
+}
+
+func TestCurrentTunnelHistoryIncludesEmptySpawnAgentResultWhenComplete(t *testing.T) {
+	m := newTestModel()
+
+	item := chat.NewAgentToolItem("agent-1", "Researcher", chat.StatusCanceled, m.chatStyles)
+	item.SetResult("")
+	m.chatWrite(item)
+
+	history := m.currentTunnelHistory()
+	if len(history) != 2 {
+		t.Fatalf("expected spawn_agent tool_call and empty tool_result, got %+v", history)
+	}
+	if history[0].Role != "tool_call" || history[0].ToolName != "spawn_agent" {
+		t.Fatalf("unexpected first history entry: %+v", history[0])
+	}
+	if history[1].Role != "tool_result" || history[1].ToolName != "spawn_agent" {
+		t.Fatalf("unexpected second history entry: %+v", history[1])
+	}
+	if history[1].Result != "" {
+		t.Fatalf("spawn_agent tool_result body = %q, want empty", history[1].Result)
+	}
+	if !history[1].IsError {
+		t.Fatal("expected canceled spawn_agent tool_result to be marked as error")
+	}
+}
+
 // ─── Nil broker safety tests ───
 
 func TestPushTunnelEvent_NilBroker(t *testing.T) {
@@ -1083,7 +1147,7 @@ func TestHandleTunnelClientCommand_ModeChange(t *testing.T) {
 }
 
 func TestHandleTunnelClientConnectedMsg_ClosesQROverlayAndWritesSystemMessage(t *testing.T) {
-	m := newTestModel()
+	m := newTunnelRecordingModel(t)
 	m.tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
 	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
 
@@ -1096,6 +1160,28 @@ func TestHandleTunnelClientConnectedMsg_ClosesQROverlayAndWritesSystemMessage(t 
 	rendered := stripAnsi(renderedOutput(updated))
 	if !strings.Contains(rendered, updated.t("tunnel.mobile_connected")) {
 		t.Fatalf("expected connected system message, got: %s", rendered)
+	}
+	if got := len(updated.session.TunnelEvents); got != 0 {
+		t.Fatalf("expected local-only connected notice to stay out of tunnel history, got %d events", got)
+	}
+}
+
+func TestHandleTunnelClientConnectedMsg_WritesNoticeOnlyOncePerShare(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
+	m.openQROverlayDirect("Mobile Tunnel", "Scan with GGCode Mobile to connect", "QR", "wss://example")
+
+	got, _ := m.handleTunnelClientConnectedMsg()
+	updated := got.(*Model)
+	got, _ = updated.handleTunnelClientConnectedMsg()
+	updated = got.(*Model)
+
+	rendered := stripAnsi(renderedOutput(updated))
+	if count := strings.Count(rendered, updated.t("tunnel.mobile_connected")); count != 1 {
+		t.Fatalf("expected connected notice once per share, got %d in: %s", count, rendered)
+	}
+	if got := len(updated.session.TunnelEvents); got != 0 {
+		t.Fatalf("expected duplicate connected notices to stay out of tunnel history, got %d events", got)
 	}
 }
 
@@ -1182,6 +1268,95 @@ func TestHandleTunnelStartMsg_DoesNotSeedRelayBeforeClientConnect(t *testing.T) 
 	}
 	if len(updated.session.TunnelEvents) != 0 {
 		t.Fatalf("expected share start to avoid eager relay seeding, got %d recorded events", len(updated.session.TunnelEvents))
+	}
+}
+
+func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(t *testing.T) {
+	m := newTestModel()
+	store := newTestSessionStore(t)
+	m.sessionStore = store
+
+	ses := &session.Session{
+		ID:        "sess-restart-share",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("before restart")}},
+			{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("before restart reply")}},
+		},
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID: "ev-000000001",
+				Type:    tunnel.EventUserMessage,
+				Data:    json.RawMessage(`{"text":"before restart"}`),
+			},
+			{
+				EventID:  "ev-000000002",
+				StreamID: "msg-1",
+				Type:     tunnel.EventText,
+				Data:     json.RawMessage(`{"id":"msg-1","chunk":"before restart reply"}`),
+			},
+			{
+				EventID:  "ev-000000003",
+				StreamID: "msg-1",
+				Type:     tunnel.EventTextDone,
+				Data:     json.RawMessage(`{"id":"msg-1","done":true}`),
+			},
+		},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m.applyResumedSession(ses)
+	m.chatWriteUser("user-after-restart", "after restart")
+	after := chat.NewAssistantItem("assistant-after-restart", m.chatStyles)
+	after.SetText("after restart reply")
+	after.SetFinished()
+	m.chatList.Append(after)
+
+	tunnelSession := tunnel.NewSession("wss://test.local")
+	broker := tunnel.NewBroker(tunnelSession)
+	defer broker.Stop()
+	defer tunnelSession.Stop()
+
+	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+		info: &tunnel.SessionInfo{
+			ConnectURL: "wss://test.local/ws?role=client&token=test",
+			QRCode:     "QR",
+		},
+		session: tunnelSession,
+		broker:  broker,
+	})
+	updated := got.(*Model)
+
+	if updated.session.TunnelEventsComplete {
+		t.Fatal("expected stale canonical replay ledger to be downgraded on share start")
+	}
+	if got := len(updated.currentSessionTunnelReplayEvents()); got != 0 {
+		t.Fatalf("expected stale canonical replay to be disabled, got %d events", got)
+	}
+	snapshot := updated.tunnelSnapshot()
+	if len(snapshot.History) != 4 {
+		t.Fatalf("expected current snapshot history to include post-restart messages, got %d entries: %+v", len(snapshot.History), snapshot.History)
+	}
+	if snapshot.History[2].Role != "user" || snapshot.History[2].Content != "after restart" {
+		t.Fatalf("expected post-restart user message in snapshot, got %+v", snapshot.History[2])
+	}
+	if snapshot.History[3].Role != "assistant" || snapshot.History[3].Content != "after restart reply" {
+		t.Fatalf("expected post-restart assistant message in snapshot, got %+v", snapshot.History[3])
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("reload session: %v", err)
+	}
+	if loaded.TunnelEventsComplete {
+		t.Fatal("expected downgraded replay flag to persist")
+	}
+	if len(loaded.TunnelEvents) != 0 {
+		t.Fatalf("expected stale replay events to be cleared, got %d", len(loaded.TunnelEvents))
 	}
 }
 

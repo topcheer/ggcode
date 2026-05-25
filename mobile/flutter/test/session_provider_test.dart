@@ -141,6 +141,36 @@ class _ServerOfflineService extends _FakeConnectionService {
   }
 }
 
+class _BlockingConnectService extends _FakeConnectionService {
+  final _status = StreamController<ConnectionStatus>.broadcast();
+  final _messages = StreamController<proto.WsMessage>.broadcast();
+  final Completer<void> ready = Completer<void>();
+  int connectCalls = 0;
+
+  @override
+  Stream<ConnectionStatus> get statusStream => _status.stream;
+
+  @override
+  Stream<String> get errorStream => const Stream<String>.empty();
+
+  @override
+  Stream<proto.WsMessage> get messageStream => _messages.stream;
+
+  @override
+  Future<void> connect() async {
+    connectCalls++;
+    await ready.future;
+    _status.add(ConnectionStatus.connected);
+  }
+
+  @override
+  void dispose() {
+    _status.close();
+    _messages.close();
+    super.dispose();
+  }
+}
+
 class _TestConnectionNotifier extends ConnectionNotifier {
   static ConnectionService Function(String url, TunnelCrypto crypto)? factory;
 
@@ -1195,6 +1225,40 @@ void main() {
         'keep this while relay recovers');
   });
 
+  test('connect coalesces concurrent requests for the same url', () async {
+    final service = _BlockingConnectService();
+    var factoryCalls = 0;
+    _TestConnectionNotifier.factory = (_, __) {
+      factoryCalls++;
+      return service;
+    };
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    final connectA = notifier.connect('wss://example.test/ws?token=room-a');
+    final connectB = notifier.connect('wss://example.test/ws?token=room-a');
+
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(factoryCalls, 1);
+    expect(service.connectCalls, 1);
+
+    service.ready.complete();
+    await Future.wait([connectA, connectB]);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.connected);
+    expect(state.url, 'wss://example.test/ws?token=room-a');
+  });
+
   test(
       'replay fallback restores cached projection without reconnect when no authoritative events arrived',
       () async {
@@ -1720,6 +1784,151 @@ void main() {
 
     expect(container.read(displayedMessagesProvider), hasLength(2));
     expect(container.read(displayedMessagesProvider).last.text, 'cached world');
+  });
+
+  test(
+      'ConnectionNotifier does not restore cached projection on full-history resume',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000120',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'resume_ack',
+      data: {'resume_mode': 'full_history'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    expect(container.read(chatProvider), isEmpty);
+    expect(notifier.lastAppliedEventId, isEmpty);
+  });
+
+  test(
+      'ConnectionNotifier does not reseed stale cursor when active_session restore races with full-history resume',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000174');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000174',
+          text: 'cached stale history',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000174',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'active_session',
+      data: {'session_id': 'sess-live'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'resume_ack',
+      data: {'resume_mode': 'full_history'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(container.read(chatProvider), isEmpty);
+    expect(notifier.lastAppliedEventId, isEmpty);
+  });
+
+  test(
+      'ConnectionNotifier does not restore cached projection after snapshot reset',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000120',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'snapshot_reset',
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    expect(container.read(chatProvider), isEmpty);
+    expect(notifier.lastAppliedEventId, isEmpty);
   });
 
   test(

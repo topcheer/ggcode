@@ -86,6 +86,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   List<Duration> _replayRetryBackoffs =
       List<Duration>.from(_defaultReplayRetryBackoffs);
   Duration _replayFallbackTimeout = _defaultReplayFallbackTimeout;
+  Future<void>? _connectInFlight;
+  String? _connectInFlightUrl;
 
   @override
   TunnelConnectionState build() {
@@ -127,6 +129,23 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   Future<void> connect(String url, {bool clearState = true}) async {
     url = normalizeTunnelUrl(url);
+    if (_connectInFlight != null && _connectInFlightUrl == url) {
+      return _connectInFlight!;
+    }
+    final future = _connectImpl(url, clearState: clearState);
+    _connectInFlight = future;
+    _connectInFlightUrl = url;
+    try {
+      await future;
+    } finally {
+      if (identical(_connectInFlight, future)) {
+        _connectInFlight = null;
+        _connectInFlightUrl = null;
+      }
+    }
+  }
+
+  Future<void> _connectImpl(String url, {required bool clearState}) async {
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
     await cache.activateWorkspaceUrl(url);
@@ -334,11 +353,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _resetReplayRecoveryState();
           _recentEventIds.clear();
           _recentEventSet.clear();
+          // Prevent an earlier async cache-restore task (scheduled from
+          // active_session) from reseeding a stale cursor while authoritative
+          // full-history replay is in flight.
+          _markProjectionAuthoritative();
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
-        _restoreSessionProjectionIfAvailable(sessionId);
+        if (resumeMode != 'full_history') {
+          _restoreSessionProjectionIfAvailable(sessionId);
+        }
         _restoreCachedAgentStatus(sessionId: sessionId);
         _persistResumeState();
         break;
@@ -376,13 +401,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _resetReplayRecoveryState();
         _recentEventIds.clear();
         _recentEventSet.clear();
+        // Prevent late cache-restore callbacks from reviving stale snapshots
+        // after the desktop has started an authoritative reset.
+        _markProjectionAuthoritative();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             _sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
-        _restoreSessionProjectionIfAvailable(_sessionId);
         _restoreCachedAgentStatus(sessionId: _sessionId);
         _persistResumeState();
         break;
