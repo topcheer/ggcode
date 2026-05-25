@@ -74,6 +74,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _sessionId = '';
   String _lastAppliedEventId = '';
   bool _awaitingReplay = false;
+  bool _hasAuthoritativeProjection = false;
   final SplayTreeMap<int, proto.WsMessage> _pendingReplayEvents =
       SplayTreeMap<int, proto.WsMessage>();
   final List<String> _recentEventIds = <String>[];
@@ -158,6 +159,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
     }
     if (clearState) {
+      _hasAuthoritativeProjection = false;
       restoredProjection = !_hasEmptyUiProjection() ||
           _restoreProjectionFromCache(adoptCursor: false);
       if (!restoredProjection && resumeSessionId.isNotEmpty) {
@@ -314,6 +316,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _lastAppliedEventId = '';
           _pendingReplayEvents.clear();
           _awaitingReplay = false;
+          _hasAuthoritativeProjection = false;
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
@@ -333,8 +336,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _awaitingReplay = _pendingReplayEvents.isNotEmpty;
         _updateReplayWatchdog();
         if (resumeMode == 'full_history') {
-          chatNotifier.clearMessages();
-          ref.read(subagentProvider.notifier).clear();
+          _clearUiProjection();
           _lastAppliedEventId = '';
           _pendingReplayEvents.clear();
           _awaitingReplay = false;
@@ -376,8 +378,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'snapshot_reset':
-        chatNotifier.clearMessages();
-        ref.read(subagentProvider.notifier).clear();
+        _clearUiProjection();
         _lastAppliedEventId = '';
         _pendingReplayEvents.clear();
         _awaitingReplay = false;
@@ -409,6 +410,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           ref.read(themeProvider.notifier).setTheme(data.theme);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
               data,
@@ -454,6 +456,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           }
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'system_message':
@@ -493,6 +496,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           ));
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'reasoning':
@@ -511,6 +515,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           );
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'stream_start':
@@ -533,6 +538,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           chatNotifier.finalizeReasoning(msgId);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'status':
@@ -550,6 +556,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           }
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'tool_call':
@@ -563,6 +570,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           );
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'tool_result':
@@ -572,6 +580,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               .handleToolResult(proto.ToolResultData.fromJson(msg.data!));
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'approval_request':
@@ -582,6 +591,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               id: data.id, toolName: data.toolName, input: data.input));
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'approval_result':
@@ -594,6 +604,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           }
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'ask_user_request':
@@ -612,6 +623,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               msgId: amsgId));
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'ask_user_response':
@@ -811,6 +823,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     ref.read(currentModeProvider.notifier).set('supervised');
     _setAgentStatus('idle', '');
     _setAgentActivity('');
+    _hasAuthoritativeProjection = false;
   }
 
   void _setAgentStatus(String status, String message) {
@@ -892,8 +905,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _sessionId.isNotEmpty &&
         sessionId != _sessionId) {
       final previousSessionId = _sessionId;
-      ref.read(chatProvider.notifier).clearMessages();
-      ref.read(subagentProvider.notifier).clear();
+      _clearUiProjection();
       _pendingReplayEvents.clear();
       _awaitingReplay = false;
       _resetReplayRecoveryState();
@@ -990,12 +1002,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   void _beginReplayRecovery() {
     _awaitingReplay = true;
     _replayRetryCount = 0;
-    _replayFullHistoryRequested = false;
-    service?.requestReplayFrom(
-      clientId: _clientId,
-      sessionId: _sessionId,
-      lastEventId: _lastAppliedEventId,
-    );
+    if (_hasAuthoritativeProjection) {
+      _replayFullHistoryRequested = false;
+      service?.requestReplayFrom(
+        clientId: _clientId,
+        sessionId: _sessionId,
+        lastEventId: _lastAppliedEventId,
+      );
+    } else {
+      _replayFullHistoryRequested = true;
+      service?.sendResumeHello(
+        clientId: _clientId,
+        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+      );
+    }
     _updateReplayWatchdog();
   }
 
@@ -1057,13 +1077,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     final url = state.url;
+    final restoredFromCache = _restoreProjectionFromCache(adoptCursor: false);
     _pendingReplayEvents.clear();
     _awaitingReplay = false;
-    _sessionId = '';
-    _lastAppliedEventId = '';
+    if (!restoredFromCache) {
+      _sessionId = '';
+      _lastAppliedEventId = '';
+    }
     _recentEventIds.clear();
     _recentEventSet.clear();
     _resetReplayRecoveryState();
+    if (restoredFromCache) {
+      return;
+    }
     if (url != null && url.isNotEmpty) {
       unawaited(_reconnectAfterReplayFailure(url));
     }
@@ -1076,6 +1102,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   bool _hasEmptyUiProjection() {
     return ref.read(chatProvider).isEmpty &&
+        ref.read(subagentProvider).isEmpty &&
+        ref.read(sessionInfoProvider) == null;
+  }
+
+  bool _canRestoreSessionProjection() {
+    return !_hasAuthoritativeProjection &&
         ref.read(subagentProvider).isEmpty &&
         ref.read(sessionInfoProvider) == null;
   }
@@ -1119,7 +1151,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   void _restoreSessionProjectionIfAvailable(String sessionId) {
-    if (sessionId.isEmpty || !_hasEmptyUiProjection()) {
+    if (sessionId.isEmpty || !_canRestoreSessionProjection()) {
       return;
     }
     unawaited(
@@ -1127,11 +1159,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           .read(workspaceCacheProvider.notifier)
           .attachSessionToActiveWorkspace(sessionId)
           .then((restored) {
-        if (restored && _hasEmptyUiProjection()) {
+        if (restored && _canRestoreSessionProjection()) {
           _restoreProjectionFromCache(adoptCursor: false);
         }
       }),
     );
+  }
+
+  void _markProjectionAuthoritative() {
+    _hasAuthoritativeProjection = true;
   }
 
   void handleIncomingForTest(proto.WsMessage msg) {

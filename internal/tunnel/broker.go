@@ -555,7 +555,7 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 	}
 	events := provider()
 	if len(events) == 0 {
-		return true
+		return false
 	}
 	if len(events) != info.HistoryCount {
 		return false

@@ -1020,6 +1020,83 @@ void main() {
     expect(secondService.resumeLastEventId, anyOf(isNull, isEmpty));
   });
 
+  test(
+      'replay fallback restores cached projection without reconnect when no authoritative events arrived',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+      'ggcode_tunnel_session_id': 'sess-1',
+      'ggcode_tunnel_last_event_id': 'ev-000000001',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final firstService = _CaptureResumeHelloService();
+    final secondService = _CaptureResumeHelloService();
+    final services = <_CaptureResumeHelloService>[firstService, secondService];
+    _TestConnectionNotifier.factory = (_, __) => services.removeAt(0);
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-1', info,
+        lastEventId: 'ev-000000001');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-cached',
+          text: 'cached history',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000001',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=abc',
+        clearState: false);
+    notifier.configureReplayRecoveryForTest(
+      watchdogTimeout: const Duration(milliseconds: 2),
+      retryBackoffs: const [Duration(milliseconds: 2)],
+      fallbackTimeout: const Duration(milliseconds: 2),
+    );
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-000000003',
+      type: 'text',
+      data: {'id': 'msg-gap', 'chunk': 'third', 'done': false},
+    ));
+
+    await Future<void>.delayed(const Duration(milliseconds: 12));
+
+    expect(container.read(displayedMessagesProvider), hasLength(1));
+    expect(container.read(displayedMessagesProvider).single.text,
+        'cached history');
+    expect(firstService.resumeHelloRequests, greaterThanOrEqualTo(2));
+    expect(secondService.resumeHelloRequests, 0);
+    expect(secondService.replayRequests, 0);
+  });
+
   test('ConnectionNotifier follows active session control message', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -1388,6 +1465,97 @@ void main() {
       container.read(displayedMessagesProvider).single.text,
       'cached after room switch',
     );
+  });
+
+  test(
+      'ConnectionNotifier restores cached session even if non-authoritative system events arrive first',
+      () async {
+    final oldInfo = proto.SessionInfoData(
+      workspace: '/tmp/old',
+      model: 'gpt-4.1',
+      provider: 'openai',
+      mode: 'bypass',
+      version: '1.0.0',
+    );
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached after control events',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    container.read(chatProvider.notifier).clearMessages();
+    container.read(sessionInfoProvider.notifier).set(null);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      type: 'active_session',
+      data: {'session_id': 'sess-old'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      eventId: 'ev-000000090',
+      type: 'session_info',
+      data: {
+        'workspace': oldInfo.workspace,
+        'model': oldInfo.model,
+        'provider': oldInfo.provider,
+        'mode': oldInfo.mode,
+        'version': oldInfo.version,
+      },
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-room',
+      eventId: 'ev-000000121',
+      type: 'system_message',
+      data: {'text': 'mobile connected'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-room',
+      eventId: 'ev-000000122',
+      type: 'activity',
+      data: {'activity': 'restoring'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-room',
+      type: 'active_session',
+      data: {'session_id': 'sess-room'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(container.read(displayedMessagesProvider), hasLength(1));
+    expect(
+      container.read(displayedMessagesProvider).single.text,
+      'cached after control events',
+    );
+    expect(container.read(sessionInfoProvider)?.mode, 'supervised');
   });
 
   test(
