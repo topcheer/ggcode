@@ -1292,7 +1292,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
   void addUserMessage(String text) {
-    final messageId = 'msg-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
+    final messageId = 'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
     final msg = ChatMessage(
       id: messageId,
       isUser: true,
