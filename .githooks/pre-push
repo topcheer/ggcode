@@ -24,28 +24,3 @@ echo "[pre-push] running go build"
 CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode
 
 echo "[pre-push] checks passed"
-
-# Pull any CI-pushed commits (e.g. mobile build number bumps) to avoid
-# push rejection.  Skipped when pushing tags (no remote branch to pull).
-if git symbolic-ref -q HEAD >/dev/null 2>&1; then
-  remote_branch="$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true)"
-  if [[ -n "${remote_branch}" ]]; then
-    echo "[pre-push] pulling ${remote_branch} (rebase)..."
-    had_stash=false
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-      git stash --keep-index -q
-      had_stash=true
-    fi
-    git pull --rebase "${remote_branch%%/*}" "${remote_branch#*/}" || {
-      echo "[pre-push] WARNING: git pull --rebase failed, continuing push attempt"
-    }
-    if [[ "${had_stash}" == true ]]; then
-      git stash pop -q || true
-    fi
-  fi
-fi
-
-# NOTE: Mobile build number bump is intentionally NOT automated here.
-# It caused an infinite push loop. Bump manually before release:
-#   cd mobile/flutter && bash scripts/version_sync.sh <VERSION>
-# See docs/release-process.md §3.5.
