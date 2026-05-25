@@ -165,6 +165,7 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.tunnelMsgID = ""
 	m.tunnelPendingApprovalID = ""
 	m.tunnelPendingAskUserID = ""
+	m.tunnelClientNoticeShown = false
 	m.tunnelSpawned = nil
 	m.tunnelStarting = false
 	return sess, broker
@@ -254,6 +255,10 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	msg.broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 		return m.tunnelSnapshot()
 	})
+	// A resumed session can carry a canonical tunnel ledger that only reflects
+	// the pre-restart projection. Revalidate it before the first mobile attach so
+	// broker replay falls back to the current chat snapshot when needed.
+	m.prepareCurrentSessionTunnelLedger()
 	msg.broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 		return m.currentSessionTunnelReplayEvents()
 	})
@@ -295,7 +300,13 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 	if m.qrOverlay != nil {
 		m.closeQROverlay()
 	}
-	m.chatWriteSystem(nextSystemID(), m.t("tunnel.mobile_connected"))
+	if m.tunnelClientNoticeShown {
+		return m, nil
+	}
+	m.tunnelClientNoticeShown = true
+	sysMsg := m.t("tunnel.mobile_connected")
+	m.suppressNextTunnelSystem = sysMsg
+	m.chatWriteSystem(nextSystemID(), sysMsg)
 	m.chatListScrollToBottom()
 	return m, nil
 }
@@ -812,6 +823,7 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 			Input() string
 			Result() string
 			IsError() bool
+			Status() chat.ToolStatus
 		}:
 			rawArgs := it.Input()
 			present := describeTool(m.currentLanguage(), it.ToolName(), rawArgs)
@@ -827,7 +839,8 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 				ToolArgs:        argsStr,
 				ToolDetail:      present.Detail,
 			})
-			if result := strings.TrimSpace(it.Result()); result != "" {
+			result := strings.TrimSpace(it.Result())
+			if result != "" || isTerminalToolStatus(it.Status()) {
 				history = append(history, tunnel.HistoryEntry{
 					Role:     "tool_result",
 					ToolID:   it.ID(),
@@ -837,24 +850,35 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 				})
 			}
 		case *chat.AgentToolItem:
+			status := it.Status()
 			history = append(history, tunnel.HistoryEntry{
 				Role:            "tool_call",
 				ToolID:          it.ID(),
 				ToolName:        "spawn_agent",
 				ToolDisplayName: it.Label(),
 			})
-			if result := strings.TrimSpace(it.Result()); result != "" {
+			result := strings.TrimSpace(it.Result())
+			if result != "" || isTerminalToolStatus(status) {
 				history = append(history, tunnel.HistoryEntry{
 					Role:     "tool_result",
 					ToolID:   it.ID(),
 					ToolName: "spawn_agent",
 					Result:   result,
-					IsError:  it.Status() == chat.StatusError || it.Status() == chat.StatusCanceled,
+					IsError:  status == chat.StatusError || status == chat.StatusCanceled,
 				})
 			}
 		}
 	}
 	return history
+}
+
+func isTerminalToolStatus(status chat.ToolStatus) bool {
+	switch status {
+	case chat.StatusSuccess, chat.StatusError, chat.StatusCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 func contentBlockReasoningText(block provider.ContentBlock) string {

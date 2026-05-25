@@ -255,6 +255,7 @@ type Model struct {
 	tunnelPendingAskUserID    string
 	tunnelUserMessageOverride *tunnel.MessageData
 	suppressNextTunnelSystem  string
+	tunnelClientNoticeShown   bool
 	tunnelSpawned             map[string]bool // tracks which subagents have been announced to mobile
 }
 

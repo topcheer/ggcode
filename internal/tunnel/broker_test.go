@@ -33,6 +33,7 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 		subagentToolArgs: make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
+	b.projectionCond = sync.NewCond(&b.projectionMu)
 
 	// Do NOT start senderLoop - we'll drain manually
 	// Do NOT start textFlushLoop - we'll flush manually or wait for ticker
@@ -1098,7 +1099,7 @@ func TestBrokerHandleRelayConnectedRetainedStateAdvancesEventCursor(t *testing.T
 	}
 }
 
-func TestBrokerHandleClientConnectedSkipsAuthoritativeSnapshotWhenStateRetained(t *testing.T) {
+func TestBrokerHandleFirstClientConnectedPublishesAuthoritativeSnapshotWhenStateRetained(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1120,15 +1121,19 @@ func TestBrokerHandleClientConnectedSkipsAuthoritativeSnapshotWhenStateRetained(
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
-	if len(msgs) != 0 {
-		t.Fatalf("expected no snapshot broadcast when state is retained, got %d messages", len(msgs))
+	if len(msgs) < 5 {
+		t.Fatalf("expected first retained-state client to receive authoritative snapshot, got %+v", msgs)
+	}
+	if msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected first event snapshot_reset, got %q", msgs[0].Type)
 	}
 }
 
-func TestBrokerHandleClientConnectedDoesNotTrustRelayHistoryWhenLocalReplayIsEmpty(t *testing.T) {
+func TestBrokerHandleAdditionalClientConnectedTrustsRetainedRelayHistoryWhenLocalReplayIsEmpty(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
+	b.clientProjectionSeeded.Store(true)
 	b.SetSnapshotProvider(func() BrokerSnapshot {
 		return BrokerSnapshot{
 			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
@@ -1151,14 +1156,8 @@ func TestBrokerHandleClientConnectedDoesNotTrustRelayHistoryWhenLocalReplayIsEmp
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) < 5 {
-		t.Fatalf("expected authoritative snapshot when local replay is empty, got %d messages", len(msgs))
-	}
-	if msgs[0].Type != EventSnapshotReset {
-		t.Fatalf("expected first event snapshot_reset, got %q", msgs[0].Type)
-	}
-	if msgs[1].Type != EventSessionInfo {
-		t.Fatalf("expected session_info after snapshot_reset, got %q", msgs[1].Type)
+	if len(msgs) != 0 {
+		t.Fatalf("expected retained relay history to avoid authoritative reset when local replay is empty, got %+v", msgs)
 	}
 }
 
@@ -1166,6 +1165,7 @@ func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *test
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
+	b.clientProjectionSeeded.Store(true)
 	b.PushText("msg-live", "partial answer")
 
 	b.handleRelayConnected(RelayConnectedState{
@@ -1298,6 +1298,95 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
+func TestBrokerHandleClientConnectedCoalescesDuplicateAuthoritativeSnapshots(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "system", Content: "Starting tunnel..."},
+				{Role: "assistant", Content: "done"},
+			},
+			Status: StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage { return nil })
+
+	info := RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 0}
+	b.handleRelayConnected(info)
+	b.handleRelayConnected(info)
+	time.Sleep(50 * time.Millisecond)
+
+	msgs := d.drain()
+	resetCount := 0
+	for _, msg := range msgs {
+		if msg.Type == EventSnapshotReset {
+			resetCount++
+		}
+	}
+	if resetCount != 1 {
+		t.Fatalf("expected exactly one snapshot_reset for duplicate client-connect replay, got %d in %+v", resetCount, msgs)
+	}
+}
+
+func TestBrokerHandleClientConnectedCoalescesDuplicateCanonicalReplay(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	textJSON, err := json.Marshal(TextData{ID: "msg-1", Chunk: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			Status:      StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      infoJSON,
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      textJSON,
+			},
+		}
+	})
+
+	info := RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 1}
+	b.handleRelayConnected(info)
+	b.handleRelayConnected(info)
+	time.Sleep(50 * time.Millisecond)
+
+	msgs := d.drain()
+	resetCount := 0
+	for _, msg := range msgs {
+		if msg.Type == EventSnapshotReset {
+			resetCount++
+		}
+	}
+	if resetCount != 1 {
+		t.Fatalf("expected exactly one snapshot_reset for duplicate canonical replay, got %d in %+v", resetCount, msgs)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected one canonical replay batch, got %d messages: %+v", len(msgs), msgs)
+	}
+}
+
 func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
@@ -1374,6 +1463,78 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	}
 	if last.SessionID != msgs[0].SessionID {
 		t.Fatalf("in-flight text should use reset session id, got reset=%q text=%q", msgs[0].SessionID, last.SessionID)
+	}
+}
+
+func TestBrokerClientConnectedSerializesConcurrentLiveEventsAfterSnapshot(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "user", Content: "during tool call"},
+				{Role: "tool_call", ToolID: "tool-1", ToolName: "bash", ToolDisplayName: "Run bash", ToolArgs: `{"command":"sleep 1"}`},
+			},
+			Status: StatusData{Status: "busy", Message: "running"},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 0,
+	})
+	b.PushToolResult("tool-1", "bash", "done", false)
+	b.PushText("msg-after-tool", "follow-up text")
+	b.PushTextDone("msg-after-tool")
+
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 8 {
+		t.Fatalf("expected snapshot plus live tool/text events, got %+v", msgs)
+	}
+	resetIdx := -1
+	toolResultIdx := -1
+	textIdx := -1
+	textDoneIdx := -1
+	for i, msg := range msgs {
+		switch msg.Type {
+		case EventSnapshotReset:
+			resetIdx = i
+		case EventToolResult:
+			toolResultIdx = i
+		case EventText:
+			var data TextData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Fatalf("unmarshal text: %v", err)
+			}
+			if data.ID == "msg-after-tool" {
+				textIdx = i
+			}
+		case EventTextDone:
+			var data TextData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Fatalf("unmarshal text_done: %v", err)
+			}
+			if data.ID == "msg-after-tool" {
+				textDoneIdx = i
+			}
+		}
+	}
+	if resetIdx != 0 {
+		t.Fatalf("expected snapshot reset first, got index %d with msgs %+v", resetIdx, msgs)
+	}
+	if toolResultIdx <= resetIdx {
+		t.Fatalf("expected live tool result after snapshot sync, got reset=%d tool_result=%d msgs=%+v", resetIdx, toolResultIdx, msgs)
+	}
+	if textIdx <= toolResultIdx {
+		t.Fatalf("expected live follow-up text after tool result, got tool_result=%d text=%d msgs=%+v", toolResultIdx, textIdx, msgs)
+	}
+	if textDoneIdx <= textIdx {
+		t.Fatalf("expected text_done after text, got text=%d text_done=%d msgs=%+v", textIdx, textDoneIdx, msgs)
 	}
 }
 

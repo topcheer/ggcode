@@ -72,6 +72,14 @@ type Broker struct {
 	activeText map[string]*textEntry // msgID → full in-flight text entry
 	textTick   *time.Ticker
 	textDone   chan struct{} // stop text flusher
+
+	projectionMu      sync.Mutex
+	projectionCond    *sync.Cond
+	projectionSyncing bool
+
+	clientReplayMu         sync.Mutex
+	clientReplayInFlight   bool
+	clientProjectionSeeded atomic.Bool
 }
 
 type BrokerSnapshot struct {
@@ -103,6 +111,7 @@ func NewBroker(sess *Session) *Broker {
 		activeReasoning:  make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
+	b.projectionCond = sync.NewCond(&b.projectionMu)
 
 	// Start sender goroutine.
 	go b.senderLoop()
@@ -172,6 +181,7 @@ func (b *Broker) textFlushLoop() {
 	for {
 		select {
 		case <-b.textTick.C:
+			b.waitProjectionSync()
 			b.flushAllText()
 		case <-b.textDone:
 			return
@@ -324,6 +334,7 @@ func (b *Broker) resetSession() string {
 	defer b.sessionMu.Unlock()
 	b.sessionID = newTunnelSessionID()
 	b.nextEvent.Store(0)
+	b.clientProjectionSeeded.Store(false)
 	return b.sessionID
 }
 
@@ -380,6 +391,7 @@ func (b *Broker) BindSession(sessionID string) bool {
 	b.sessionID = sessionID
 	if changed {
 		b.nextEvent.Store(0)
+		b.clientProjectionSeeded.Store(false)
 	}
 	b.sessionMu.Unlock()
 	return changed
@@ -463,7 +475,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role == "client" {
 		// A newly joined mobile client should NOT force-reset existing clients when
 		// the room already has retained history for the current active session.
-		if b.trustRelayHistory(info, currentSessionID) {
+		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
 			b.bumpNextEvent(info.LastEventID)
 			// Still flush any buffered live text so the joining client's resume replay
 			// can observe the latest assistant chunks without resetting the room.
@@ -490,17 +502,26 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
 			return
 		}
+		if !b.beginClientReplaySync() {
+			debug.Log("tunnel", "broker: coalescing duplicate client replay sync for session=%q count=%d", currentSessionID, info.HistoryCount)
+			return
+		}
+		b.beginProjectionSync()
 		go func() {
+			defer b.endProjectionSync()
+			defer b.endClientReplaySync()
 			debug.Log("tunnel", "broker: client connected (relay session=%q count=%d local session=%q), publishing authoritative snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 			b.flushAllText()
 			_ = b.session.SendActiveSession(b.SessionID())
 			if replayed := b.replayCanonicalEvents(true); replayed {
+				b.clientProjectionSeeded.Store(true)
 				return
 			}
 			activeText := b.activeTextSnapshot()
 			b.enqueueControl(EventSnapshotReset, nil)
-			b.SendSnapshot(snapshot)
+			b.sendSnapshotDirect(snapshot)
 			b.replayActiveText(activeText)
+			b.clientProjectionSeeded.Store(true)
 		}()
 		return
 	}
@@ -531,16 +552,34 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
 		return
 	}
+	b.beginProjectionSync()
 	go func() {
+		defer b.endProjectionSync()
 		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 		b.flushAllText()
 		if replayed := b.replayCanonicalEvents(false); replayed {
 			return
 		}
 		activeText := b.activeTextSnapshot()
-		b.SendSnapshot(snapshot)
+		b.sendSnapshotDirect(snapshot)
 		b.replayActiveText(activeText)
 	}()
+}
+
+func (b *Broker) beginClientReplaySync() bool {
+	b.clientReplayMu.Lock()
+	defer b.clientReplayMu.Unlock()
+	if b.clientReplayInFlight {
+		return false
+	}
+	b.clientReplayInFlight = true
+	return true
+}
+
+func (b *Broker) endClientReplaySync() {
+	b.clientReplayMu.Lock()
+	b.clientReplayInFlight = false
+	b.clientReplayMu.Unlock()
 }
 
 func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID string) bool {
@@ -555,7 +594,11 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 	}
 	events := provider()
 	if len(events) == 0 {
-		return false
+		// During a live share the room can already hold authoritative retained
+		// history even though local canonical replay is intentionally unavailable.
+		// In that case, additional client joins should reuse relay history rather
+		// than resetting existing ready clients with a fresh snapshot.
+		return true
 	}
 	if len(events) != info.HistoryCount {
 		return false
@@ -571,6 +614,7 @@ func (b *Broker) PushUserMessage(text string) {
 }
 
 func (b *Broker) PushUserMessageData(data MessageData) {
+	b.waitProjectionSync()
 	b.enqueue(EventUserMessage, data)
 }
 
@@ -579,24 +623,28 @@ func (b *Broker) PushSystemMessage(text string) {
 }
 
 func (b *Broker) PushSystemMessageData(data MessageData) {
+	b.waitProjectionSync()
 	b.enqueue(EventSystemMessage, data)
 }
 
 // ─── Streaming text (batched) ───
 
 func (b *Broker) PushText(id, chunk string) {
+	b.waitProjectionSync()
 	b.textMu.Lock()
 	b.appendTextLocked(id, "", chunk, "")
 	b.textMu.Unlock()
 }
 
 func (b *Broker) PushTextData(data TextData) {
+	b.waitProjectionSync()
 	b.textMu.Lock()
 	b.appendTextLocked(data.ID, "", data.Chunk, data.Kind)
 	b.textMu.Unlock()
 }
 
 func (b *Broker) PushTextDone(id string) {
+	b.waitProjectionSync()
 	// Flush remaining text immediately, then send text_done
 	b.flushText(id)
 	b.enqueueWithStream(EventTextDone, id, TextData{ID: id, Done: true})
@@ -606,6 +654,7 @@ func (b *Broker) PushTextDone(id string) {
 }
 
 func (b *Broker) PushReasoning(id, chunk string) {
+	b.waitProjectionSync()
 	if strings.TrimSpace(id) == "" || chunk == "" {
 		return
 	}
@@ -619,6 +668,7 @@ func (b *Broker) PushReasoning(id, chunk string) {
 }
 
 func (b *Broker) PushReasoningDone(id string) {
+	b.waitProjectionSync()
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return
@@ -642,6 +692,7 @@ func (b *Broker) PushReasoningDone(id string) {
 // ─── Status ───
 
 func (b *Broker) PushStatus(status, message string) {
+	b.waitProjectionSync()
 	b.statusMu.Lock()
 	if b.hasCurrentStatus && b.currentStatus.Status == status && b.currentStatus.Message == message {
 		b.statusMu.Unlock()
@@ -660,6 +711,7 @@ func (b *Broker) CurrentStatus() (StatusData, bool) {
 }
 
 func (b *Broker) PushActivity(activity string) {
+	b.waitProjectionSync()
 	b.activityMu.Lock()
 	if b.hasCurrentActivity && b.currentActivity.Activity == activity {
 		b.activityMu.Unlock()
@@ -680,6 +732,7 @@ func (b *Broker) CurrentActivity() (ActivityData, bool) {
 // ─── Tool calls ───
 
 func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string) {
+	b.waitProjectionSync()
 	if toolID != "" {
 		b.toolMu.Lock()
 		if b.toolArgs == nil {
@@ -698,6 +751,7 @@ func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string
 }
 
 func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
+	b.waitProjectionSync()
 	rawArgs := ""
 	if toolID != "" {
 		b.toolMu.Lock()
@@ -717,16 +771,19 @@ func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
 // ─── Approval ───
 
 func (b *Broker) PushApprovalRequest(id, toolName, input string) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventApprovalRequest, id, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
 }
 
 func (b *Broker) PushApprovalResult(id, decision string) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventApprovalResult, id, map[string]string{"id": id, "decision": decision})
 }
 
 // ─── Error ───
 
 func (b *Broker) PushError(message string) {
+	b.waitProjectionSync()
 	b.enqueue(EventError, ErrorData{Message: message})
 }
 
@@ -745,22 +802,26 @@ func (b *Broker) PushServerAck(messageID string) {
 }
 
 func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventAskUserRequest, id, AskUserRequestData{ID: id, Title: title, Questions: questions})
 }
 
 func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventAskUserResponse, id, AskUserResponseData{ID: id, Status: status, Answers: answers})
 }
 
 // ─── Sub-agent / Teammate ───
 
 func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventSubagentSpawn, agentID, SubagentSpawnData{
 		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
 	})
 }
 
 func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
+	b.waitProjectionSync()
 	if !done {
 		b.textMu.Lock()
 		b.appendTextLocked(msgID, agentID, chunk, "")
@@ -774,6 +835,7 @@ func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
 }
 
 func (b *Broker) PushSubagentReasoning(agentID, msgID, chunk string, done bool) {
+	b.waitProjectionSync()
 	if strings.TrimSpace(msgID) == "" {
 		return
 	}
@@ -796,16 +858,19 @@ func (b *Broker) PushSubagentReasoning(agentID, msgID, chunk string, done bool) 
 }
 
 func (b *Broker) PushSubagentStatus(agentID, status, message string) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventSubagentStatus, agentID, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
 }
 
 func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
+	b.waitProjectionSync()
 	b.enqueueWithStream(EventSubagentComplete, agentID, SubagentCompleteData{
 		AgentID: agentID, Name: name, Summary: summary, Success: success,
 	})
 }
 
 func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail string) {
+	b.waitProjectionSync()
 	streamID := toolID
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
@@ -827,6 +892,7 @@ func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, ar
 }
 
 func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string, isError bool) {
+	b.waitProjectionSync()
 	streamID := toolID
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
@@ -939,6 +1005,144 @@ func fallbackToolDisplayName(toolName string) string {
 		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
 	return strings.Join(parts, " ")
+}
+
+func (b *Broker) sendSnapshotDirect(snapshot BrokerSnapshot) {
+	if snapshot.SessionInfo != (SessionInfoData{}) {
+		b.enqueue(EventSessionInfo, snapshot.SessionInfo)
+	}
+	if len(snapshot.History) > 0 {
+		b.seedHistoryDirect(snapshot.History)
+	}
+	for _, ev := range snapshot.ExtraEvents {
+		b.enqueueSnapshotEvent(ev)
+	}
+	if snapshot.Status.Status != "" {
+		b.statusMu.Lock()
+		b.currentStatus = snapshot.Status
+		b.hasCurrentStatus = true
+		b.statusMu.Unlock()
+		b.enqueue(EventStatus, snapshot.Status)
+	}
+	if snapshot.Activity.Activity != "" {
+		b.activityMu.Lock()
+		b.currentActivity = snapshot.Activity
+		b.hasCurrentActivity = true
+		b.activityMu.Unlock()
+		b.enqueue(EventActivity, snapshot.Activity)
+	}
+}
+
+func (b *Broker) seedHistoryDirect(messages []HistoryEntry) {
+	for _, entry := range messages {
+		switch entry.Role {
+		case "user":
+			if entry.Content != "" {
+				b.enqueue(EventUserMessage, MessageData{
+					Text:        entry.Content,
+					DisplayText: entry.DisplayText,
+					Kind:        entry.Kind,
+				})
+			}
+		case "system":
+			if entry.Content != "" {
+				b.enqueue(EventSystemMessage, MessageData{
+					Text:        entry.Content,
+					DisplayText: entry.DisplayText,
+					Kind:        entry.Kind,
+				})
+			}
+		case "assistant":
+			if entry.Content == "" {
+				continue
+			}
+			msgID := b.NextMessageID()
+			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content, Kind: entry.Kind})
+			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true, Kind: entry.Kind})
+		case "reasoning":
+			if entry.Content == "" {
+				continue
+			}
+			msgID := b.NextMessageID()
+			b.enqueueWithStream(EventReasoning, msgID, TextData{ID: msgID, Chunk: entry.Content})
+			b.enqueueWithStream(EventReasoningDone, msgID, TextData{ID: msgID, Done: true})
+		case "tool_call":
+			displayName := strings.TrimSpace(entry.ToolDisplayName)
+			if displayName == "" {
+				displayName = fallbackToolDisplayName(entry.ToolName)
+			}
+			detail := entry.ToolDetail
+			if detail == "" && entry.ToolArgs != "" {
+				present := toolpkg.DescribeTool(entry.ToolName, entry.ToolArgs)
+				detail = present.Detail
+			}
+			if entry.ToolID != "" {
+				b.toolMu.Lock()
+				if b.toolArgs == nil {
+					b.toolArgs = make(map[string]string)
+				}
+				b.toolArgs[entry.ToolID] = entry.ToolArgs
+				b.toolMu.Unlock()
+			}
+			b.enqueueWithStream(EventToolCall, entry.ToolID, ToolCallData{
+				ToolID:      entry.ToolID,
+				ToolName:    entry.ToolName,
+				DisplayName: displayName,
+				Args:        entry.ToolArgs,
+				Detail:      detail,
+			})
+		case "tool_result":
+			rawArgs := ""
+			if entry.ToolID != "" {
+				b.toolMu.Lock()
+				rawArgs = b.toolArgs[entry.ToolID]
+				delete(b.toolArgs, entry.ToolID)
+				b.toolMu.Unlock()
+			}
+			payload := ToolResultData{
+				ToolID:   entry.ToolID,
+				ToolName: entry.ToolName,
+				Result:   entry.Result,
+				IsError:  entry.IsError,
+			}
+			if present, ok := toolpkg.DescribeToolResult(entry.ToolName, rawArgs, entry.Result, entry.IsError); ok {
+				payload.Summary = present.Summary
+				payload.Payload = present.Payload
+				payload.PayloadMode = present.PayloadMode
+			}
+			b.enqueueWithStream(EventToolResult, entry.ToolID, payload)
+		case "error":
+			if entry.Content != "" {
+				b.enqueue(EventError, ErrorData{Message: entry.Content})
+			}
+		}
+	}
+}
+
+func (b *Broker) beginProjectionSync() {
+	b.projectionMu.Lock()
+	for b.projectionSyncing {
+		b.projectionCond.Wait()
+	}
+	b.projectionSyncing = true
+	b.projectionMu.Unlock()
+}
+
+func (b *Broker) endProjectionSync() {
+	b.projectionMu.Lock()
+	if b.projectionSyncing {
+		b.projectionSyncing = false
+		b.projectionCond.Broadcast()
+	}
+	b.projectionMu.Unlock()
+}
+
+func (b *Broker) waitProjectionSync() {
+	b.projectionMu.Lock()
+	for b.projectionSyncing {
+		b.projectionCond.Wait()
+	}
+	b.projectionMu.Unlock()
 }
 
 // ─── Internal ───
