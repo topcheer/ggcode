@@ -13,6 +13,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // InstanceInfo describes a running ggcode instance for discovery.
@@ -56,14 +57,15 @@ func NewRegistry() (*Registry, error) {
 }
 
 // Register adds this instance to the registry.
-// Writes a per-PID file — no cross-process read-modify-write contention.
-// Register adds this instance to the registry.
 // Cleans up stale files from the same PID, writes a new file,
 // and optionally starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
 	r.selfInfo = &info
+
+	// Proactively remove all zombie files from dead processes.
+	r.removeDeadPIDFiles()
 
 	// Remove any stale files from a previous registration of this PID+workspace.
 	r.removeStaleFiles(info.PID, info.Workspace, info.ID)
@@ -82,6 +84,30 @@ func (r *Registry) Register(info InstanceInfo) error {
 		}
 	}
 	return nil
+}
+
+// removeDeadPIDFiles removes all registry files belonging to dead processes.
+// Called during Register() to proactively clean up zombie files that would
+// otherwise accumulate until someone calls Discover().
+func (r *Registry) removeDeadPIDFiles() {
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(r.dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var inst InstanceInfo
+		if json.Unmarshal(data, &inst) == nil && inst.PID > 0 && !isPIDAlive(inst.PID) {
+			os.Remove(path)
+		}
+	}
 }
 
 // removeStaleFiles deletes registry files from the same PID+workspace
@@ -299,24 +325,10 @@ func (r *Registry) writeInstanceFile(info InstanceInfo) error {
 }
 
 // isPIDAlive checks if a process with the given PID exists.
+// Delegates to util.IsProcessAlive which uses syscall.Signal(0)
+// for reliable detection across macOS and Linux.
 func isPIDAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal nil checks process existence on most platforms.
-	// On macOS this may return "unsupported signal type" for signal 0,
-	// so we also check if the error indicates the process doesn't exist.
-	err = proc.Signal(nil)
-	if err == nil {
-		return true
-	}
-	// If the error is "signal type" related, the process exists
-	// (only non-existent processes return "no such process").
-	errStr := err.Error()
-	return !strings.Contains(errStr, "no such process") &&
-		!strings.Contains(errStr, "already finished") &&
-		!strings.Contains(errStr, "not initialized")
+	return util.IsProcessAlive(pid)
 }
 
 // ---------------------------------------------------------------------------
