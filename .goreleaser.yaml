@@ -72,7 +72,8 @@ homebrew_casks:
   - name: ggcode
     homepage: https://github.com/topcheer/ggcode
     description: AI coding agent for the terminal with TUI, MCP, and IM integrations.
-    binary: ggcode
+    binaries:
+      - ggcode
     repository:
       owner: topcheer
       name: homebrew-ggcode
