@@ -142,7 +142,26 @@ Important details:
 - The verify-ci script unsets `ZAI_API_KEY`, `GGCODE_ZAI_API_KEY`, and `ZAI_MODEL`.
 - The script also clears inherited `GIT_*` environment variables so nested test repos behave like CI.
 
-### 3.4 Know what the pre-commit hook will do
+### 3.5 Bump mobile build number (when releasing mobile changes)
+
+If the release includes mobile (`mobile/flutter/`) changes, bump the build number **before** the release commit. Build numbers use the format `YYYYMMDDNN` (date + 2-digit daily sequence):
+
+```bash
+# Auto-increment from current value (same day → +1, new day → reset to 01)
+cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z
+
+# The script updates all four files in sync:
+#   .build-number                        → raw build number
+#   pubspec.yaml                         → version: X.Y.Z+YYYYMMDDNN
+#   android/app/build.gradle.kts         → versionCode + versionName
+#   ios/Runner/Info.plist                → CFBundleVersion + CFBundleShortVersionString
+```
+
+Stage all four files as part of the release commit. Each mobile release within the same day must have a distinct build number — TestFlight and Google Play reject duplicates.
+
+**Do not automate this in git hooks.** A pre-push hook that auto-bumps causes an infinite push loop (hook creates commit → push doesn't include it → next push bumps again).
+
+### 3.6 Know what the pre-commit hook will do
 
 If `.githooks/pre-commit` is installed, `git commit` will:
 
@@ -423,11 +442,12 @@ Use this checklist for every real release:
 4. Bump `python/pyproject.toml`.
 5. Update `GGCODE.md` release pointer.
 6. Update `docs/releases/README.md` current pointer.
-7. Run `make verify-ci`.
-8. Review `git status`.
-9. Commit `release: vX.Y.Z`.
-10. Push `main`.
-11. Create and push tag `vX.Y.Z`.
+7. **If mobile changes are included**: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
+8. Run `make verify-ci`.
+9. Review `git status`.
+10. Commit `release: vX.Y.Z`.
+11. Push `main`.
+12. Create and push tag `vX.Y.Z`.
 12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
     - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
     - `CI` (build → vet → test)
