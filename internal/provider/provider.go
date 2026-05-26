@@ -79,6 +79,17 @@ type TokenUsage struct {
 	CacheWrite   int `json:"cache_write_tokens"`
 }
 
+func (u *TokenUsage) Add(delta TokenUsage) {
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheRead += delta.CacheRead
+	u.CacheWrite += delta.CacheWrite
+}
+
+func (u TokenUsage) Total() int {
+	return u.InputTokens + u.OutputTokens
+}
+
 // StreamEvent is sent over a channel during streaming responses.
 type StreamEvent struct {
 	Type              StreamEventType

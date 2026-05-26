@@ -28,6 +28,8 @@ func zhCatalog(key string) string {
 		return "Agent 状态"
 	case "panel.mode_policy":
 		return "模式说明"
+	case "panel.session_usage":
+		return "会话用量"
 	case "panel.context":
 		return "上下文"
 	case "panel.mcp":
@@ -84,6 +86,8 @@ func zhCatalog(key string) string {
 		return "占用"
 	case "label.compact":
 		return "压缩"
+	case "label.total":
+		return "总计"
 	case "label.approval_policy":
 		return "审批"
 	case "label.tool_policy":
@@ -94,6 +98,12 @@ func zhCatalog(key string) string {
 		return "工具"
 	case "label.input":
 		return "输入"
+	case "label.output":
+		return "输出"
+	case "label.cache_read":
+		return "缓存读"
+	case "label.cache_write":
+		return "缓存写"
 	case "label.file":
 		return "文件"
 	case "label.directory":

@@ -191,11 +191,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	choice := resp.Choices[0]
 	content := p.convertResponseContent(choice.Message)
 
-	usage := TokenUsage{}
-	if resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0 {
-		usage.InputTokens = int(resp.Usage.PromptTokens)
-		usage.OutputTokens = int(resp.Usage.CompletionTokens)
-	}
+	usage := openAIUsage(resp.Usage)
 
 	return &ChatResponse{
 		Message: Message{Role: "assistant", Content: content},
@@ -208,6 +204,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
 		Messages: chatMsgs,
+		StreamOptions: &openai.StreamOptions{
+			IncludeUsage: true,
+		},
 	}
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
@@ -327,13 +326,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						return
 					}
 
-					// Check for usage in final chunk (empty choices)
-					if resp.Usage != nil && (resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0) && len(resp.Choices) == 0 {
-						usage = &TokenUsage{
-							InputTokens:  int(resp.Usage.PromptTokens),
-							OutputTokens: int(resp.Usage.CompletionTokens),
-						}
-						continue
+					if resp.Usage != nil {
+						parsedUsage := openAIUsage(*resp.Usage)
+						usage = &parsedUsage
 					}
 
 					if len(resp.Choices) == 0 {
@@ -425,6 +420,17 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	})
 
 	return ch, nil
+}
+
+func openAIUsage(usage openai.Usage) TokenUsage {
+	parsed := TokenUsage{
+		InputTokens:  int(usage.PromptTokens),
+		OutputTokens: int(usage.CompletionTokens),
+	}
+	if usage.PromptTokensDetails != nil {
+		parsed.CacheRead = usage.PromptTokensDetails.CachedTokens
+	}
+	return parsed
 }
 
 func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {

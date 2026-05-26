@@ -8,6 +8,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/update"
@@ -44,6 +45,10 @@ type sessionResumeLoadedMsg struct {
 
 type tunnelPublishCurrentSessionMsg struct {
 	reset bool
+}
+
+type sessionUsageMsg struct {
+	Usage provider.TokenUsage
 }
 
 type startupReadyMsg struct{}

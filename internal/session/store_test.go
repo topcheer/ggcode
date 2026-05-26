@@ -22,6 +22,7 @@ func TestSaveLoad(t *testing.T) {
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "Test Session"
 	ses.Workspace = "/tmp/workspace-a"
+	ses.TokenUsage = provider.TokenUsage{InputTokens: 1200, OutputTokens: 340, CacheRead: 800, CacheWrite: 64}
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi there!"}}},
@@ -43,6 +44,9 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("message count: %d", len(loaded.Messages))
+	}
+	if loaded.TokenUsage != ses.TokenUsage {
+		t.Fatalf("token usage mismatch: %+v", loaded.TokenUsage)
 	}
 }
 
@@ -616,6 +620,31 @@ func TestEnsureMetaCreatesFileForSessionWithMessages(t *testing.T) {
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Error("session with messages should have meta file")
+	}
+}
+
+func TestAppendMetaToDiskPersistsTokenUsage(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "default", "model")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	ses.TokenUsage = provider.TokenUsage{InputTokens: 42, OutputTokens: 9, CacheRead: 18, CacheWrite: 3}
+	if err := store.AppendMetaToDisk(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TokenUsage != ses.TokenUsage {
+		t.Fatalf("token usage mismatch after meta append: %+v", loaded.TokenUsage)
 	}
 }
 

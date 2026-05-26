@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +30,8 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
+
+var onboardPanelMinSize = fyne.NewSize(720, 420)
 
 // App is the top-level desktop application state.
 type App struct {
@@ -678,7 +681,7 @@ func mustParseURL(raw string) *url.URL {
 // ── Welcome screen ───────────────────────────────────
 
 func (a *App) showWelcome() {
-	title := canvas.NewText("Welcome to ggcode", theme.ForegroundColor())
+	title := canvas.NewText(t("app.welcome_title"), theme.ForegroundColor())
 	title.TextSize = 24
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
@@ -707,7 +710,7 @@ func (a *App) showWelcome() {
 	a.content.Objects = []fyne.CanvasObject{welcomeContent}
 	a.content.Refresh()
 	a.ui.SetStatus(t("status.select_project"))
-	a.setTitle("ggcode — Welcome")
+	a.setTitle(t("app.title.welcome"))
 }
 
 func (a *App) showFolderPicker() {
@@ -744,7 +747,7 @@ func (a *App) initFromWorkDir(dir string) {
 	cfgPath := resolveConfigFilePath(dir)
 	cfg, err := config.LoadWithInstance(cfgPath, dir)
 	if err != nil {
-		a.showError(fmt.Sprintf("Failed to load config: %v", err))
+		a.showError(t("error.load_config", err))
 		return
 	}
 	a.cfg = cfg
@@ -787,7 +790,7 @@ func (a *App) showError(msg string) {
 func (a *App) showOnboard() {
 	presets := config.VendorPresets()
 	if len(presets) == 0 {
-		a.showError("No vendor presets available. Please configure manually in ggcode.yaml.")
+		a.showError(t("onboard.no_presets"))
 		return
 	}
 
@@ -934,7 +937,7 @@ func (a *App) showOnboard() {
 			a.cfg.Model = modelSelect.Selected
 			a.cfg.SetEndpointAPIKey(selectedPreset.ID, selectedEndpoint.ID, apiEntry.Text, true)
 			if err := a.cfg.Save(); err != nil {
-				a.showError(fmt.Sprintf("Failed to save config: %v", err))
+				a.showError(t("error.save_config", err))
 				return
 			}
 			a.startChat()
@@ -945,7 +948,10 @@ func (a *App) showOnboard() {
 	}
 
 	card := widget.NewCard(t("onboard.card_title"), t("onboard.card_subtitle"), form)
-	a.content.Objects = []fyne.CanvasObject{container.NewCenter(card)}
+	panelSizer := canvas.NewRectangle(color.Transparent)
+	panelSizer.SetMinSize(onboardPanelMinSize)
+	panel := container.NewStack(panelSizer, card)
+	a.content.Objects = []fyne.CanvasObject{container.NewCenter(panel)}
 	a.content.Refresh()
 	a.ui.SetStatus(t("onboard.setup_required"))
 }
@@ -963,7 +969,7 @@ func (a *App) resumeSession(id string) {
 	// Load session and restore messages into agent.
 	if a.agentBridge != nil {
 		if err := a.agentBridge.ResumeSession(id); err != nil {
-			a.showError(fmt.Sprintf("Failed to resume session: %v", err))
+			a.showError(t("error.resume_session", err))
 			return
 		}
 	}
@@ -1045,13 +1051,13 @@ func (a *App) startChat() {
 
 	resolved, err := a.cfg.ResolveActiveEndpoint()
 	if err != nil {
-		a.showError(fmt.Sprintf("Failed to resolve endpoint: %v", err))
+		a.showError(t("error.resolve_endpoint", err))
 		return
 	}
 
 	prov, err := provider.NewProvider(resolved)
 	if err != nil {
-		a.showError(fmt.Sprintf("Failed to create provider: %v", err))
+		a.showError(t("error.create_provider", err))
 		return
 	}
 
@@ -1161,6 +1167,16 @@ func (a *App) applyLanguageChange(language string) {
 
 func (a *App) refreshLanguageUI() {
 	a.setupMenu()
+	if a.agentBridge == nil {
+		if a.cfg != nil && a.cfg.NeedsOnboard() {
+			a.showOnboard()
+			return
+		}
+		if a.dc != nil && a.dc.WorkDir == "" {
+			a.showWelcome()
+			return
+		}
+	}
 	if a.imWindow != nil {
 		a.imWindow.SetTitle(t("im.title"))
 		a.refreshIMWindow()

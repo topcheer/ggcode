@@ -18,23 +18,27 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
-func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects *[]*widget.Select) {
+func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects *[]*widget.Select, cards *[]*widget.Card) {
 	switch v := obj.(type) {
 	case *fyne.Container:
 		for _, child := range v.Objects {
-			collectDesktopWidgets(child, forms, selects)
+			collectDesktopWidgets(child, forms, selects, cards)
 		}
 	case *widget.Card:
+		if cards != nil {
+			*cards = append(*cards, v)
+		}
 		if v.Content != nil {
-			collectDesktopWidgets(v.Content, forms, selects)
+			collectDesktopWidgets(v.Content, forms, selects, cards)
 		}
 	case *widget.Form:
 		*forms = append(*forms, v)
 		for _, item := range v.Items {
 			if item != nil && item.Widget != nil {
-				collectDesktopWidgets(item.Widget, forms, selects)
+				collectDesktopWidgets(item.Widget, forms, selects, cards)
 			}
 		}
 	case *widget.Select:
@@ -1183,8 +1187,8 @@ func TestAppShowFilePreviewWithSidebarHidden(t *testing.T) {
 func TestAppShowOnboardPopulatesEndpointOptions(tt *testing.T) {
 	app := &App{
 		fyneApp: test.NewApp(),
-		dc:      defaultDesktopConfig(),
-		cfg:     config.DefaultConfig(),
+		dc:      &DesktopConfig{WorkDir: "/tmp/test-workspace", Language: "en"},
+		cfg:     &config.Config{},
 		ui:      NewUIState(),
 	}
 	app.window = app.fyneApp.NewWindow("test")
@@ -1196,7 +1200,7 @@ func TestAppShowOnboardPopulatesEndpointOptions(tt *testing.T) {
 	var forms []*widget.Form
 	var selects []*widget.Select
 	for _, obj := range app.content.Objects {
-		collectDesktopWidgets(obj, &forms, &selects)
+		collectDesktopWidgets(obj, &forms, &selects, nil)
 	}
 	if len(forms) != 1 {
 		tt.Fatalf("expected one onboard form, got %d", len(forms))
@@ -1244,6 +1248,107 @@ func TestAppShowOnboardPopulatesEndpointOptions(tt *testing.T) {
 	}
 	if selects[1].Selected == "" {
 		tt.Fatal("expected default endpoint selection after choosing vendor")
+	}
+}
+
+func TestAppShowOnboardUsesLargerPanel(tt *testing.T) {
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: "/tmp/test-workspace", Language: "en"},
+		cfg:     &config.Config{},
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("test")
+	app.content = container.NewStack(widget.NewLabel(""))
+	app.window.SetContent(app.content)
+
+	app.showOnboard()
+
+	if len(app.content.Objects) != 1 {
+		tt.Fatalf("expected one onboard root object, got %d", len(app.content.Objects))
+	}
+	size := app.content.Objects[0].MinSize()
+	if size.Width < onboardPanelMinSize.Width || size.Height < onboardPanelMinSize.Height {
+		tt.Fatalf("expected onboard panel at least %v, got %v", onboardPanelMinSize, size)
+	}
+}
+
+func TestAppShowOnboardUsesCurrentLanguage(tt *testing.T) {
+	loadTranslations()
+	setLanguage("zh-CN")
+	defer setLanguage("en")
+
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      defaultDesktopConfig(),
+		cfg:     config.DefaultConfig(),
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("test")
+	app.content = container.NewStack(widget.NewLabel(""))
+	app.window.SetContent(app.content)
+
+	app.showOnboard()
+
+	var forms []*widget.Form
+	var selects []*widget.Select
+	var cards []*widget.Card
+	for _, obj := range app.content.Objects {
+		collectDesktopWidgets(obj, &forms, &selects, &cards)
+	}
+	if len(cards) == 0 {
+		tt.Fatal("expected onboarding card")
+	}
+	if cards[0].Title != "设置 ggcode" || cards[0].Subtitle != "配置你的 AI 提供方" {
+		tt.Fatalf("expected localized onboarding card, got title=%q subtitle=%q", cards[0].Title, cards[0].Subtitle)
+	}
+	if len(forms) != 1 {
+		tt.Fatalf("expected one onboard form, got %d", len(forms))
+	}
+	wantLabels := []string{"厂商", "端点", "API Key", "模型"}
+	for i, want := range wantLabels {
+		if forms[0].Items[i].Text != want {
+			tt.Fatalf("expected localized form label %d to be %q, got %q", i, want, forms[0].Items[i].Text)
+		}
+	}
+}
+
+func TestAppRefreshLanguageUIRerendersOnboard(tt *testing.T) {
+	loadTranslations()
+	setLanguage("en")
+	defer setLanguage("en")
+
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: "/tmp/test-workspace", Language: "en"},
+		cfg:     &config.Config{},
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("test")
+	app.content = container.NewStack(widget.NewLabel(""))
+	app.window.SetContent(app.content)
+
+	app.showOnboard()
+	setLanguage("zh-CN")
+	app.refreshLanguageUI()
+
+	var forms []*widget.Form
+	var selects []*widget.Select
+	var cards []*widget.Card
+	for _, obj := range app.content.Objects {
+		collectDesktopWidgets(obj, &forms, &selects, &cards)
+	}
+	if len(cards) == 0 {
+		tt.Fatal("expected onboarding card after language change")
+	}
+	if cards[0].Title != "设置 ggcode" || cards[0].Subtitle != "配置你的 AI 提供方" {
+		tt.Fatalf("expected live language switch to rerender onboarding card, got title=%q subtitle=%q", cards[0].Title, cards[0].Subtitle)
+	}
+	if len(forms) != 1 {
+		tt.Fatalf("expected one onboard form after language change, got %d", len(forms))
+	}
+	if forms[0].Items[0].Text != "厂商" || forms[0].Items[1].Text != "端点" {
+		tt.Fatalf("expected onboard form labels to update live, got %q / %q", forms[0].Items[0].Text, forms[0].Items[1].Text)
 	}
 }
 
@@ -1308,6 +1413,81 @@ func TestSidebarRenderHideButtonTogglesSidebar(t *testing.T) {
 	}
 	if len(app.content.Objects) != 1 || app.content.Objects[0] != app.chatViewObj {
 		t.Fatal("expected hide button to swap content to chat view")
+	}
+}
+
+func TestSidebarContextTabShowsSessionUsageCard(t *testing.T) {
+	loadTranslations()
+	setLanguage("en")
+
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: createTestWorkspace(t)},
+		cfg: &config.Config{
+			Vendor:   "zai",
+			Endpoint: "default",
+			Vendors: map[string]config.VendorConfig{
+				"zai": {
+					DisplayName: "Z.ai",
+					Endpoints: map[string]config.EndpointConfig{
+						"default": {
+							DisplayName:  "Default",
+							Protocol:     "openai",
+							BaseURL:      "https://api.example.com/v1",
+							DefaultModel: "glm-5.1",
+							Models:       []string{"glm-5.1"},
+						},
+					},
+				},
+			},
+		},
+		ui: NewUIState(),
+	}
+	app.ui.SetSessionUsage(configuredTestUsage())
+
+	bridge := &AgentBridge{
+		resolved: &config.ResolvedEndpoint{
+			VendorID:   "zai",
+			VendorName: "Z.ai",
+			Model:      "glm-5.1",
+			Models:     []string{"glm-5.1"},
+		},
+	}
+
+	sidebar := NewSidebar(app, bridge, app.ui)
+	obj := sidebar.buildContextTab()
+
+	var forms []*widget.Form
+	var selects []*widget.Select
+	var cards []*widget.Card
+	collectDesktopWidgets(obj, &forms, &selects, &cards)
+
+	var usageCard *widget.Card
+	for _, card := range cards {
+		if card.Title == "Session Usage" {
+			usageCard = card
+			break
+		}
+	}
+	if usageCard == nil {
+		t.Fatal("expected session usage card in context tab")
+	}
+	var labels []string
+	collectLabelTexts(usageCard.Content, &labels)
+	labelText := strings.Join(labels, "\n")
+	for _, want := range []string{"Total", "1.5K", "Input", "1.2K", "Output", "340", "Cache Read", "800", "Cache Write", "64"} {
+		if !strings.Contains(labelText, want) {
+			t.Fatalf("expected %q in session usage card labels, got %v", want, labels)
+		}
+	}
+}
+
+func configuredTestUsage() provider.TokenUsage {
+	return provider.TokenUsage{
+		InputTokens:  1200,
+		OutputTokens: 340,
+		CacheRead:    800,
+		CacheWrite:   64,
 	}
 }
 
@@ -1396,6 +1576,17 @@ func findLabelDeep(obj fyne.CanvasObject) *widget.Label {
 		}
 	}
 	return findLabel(obj)
+}
+
+func collectLabelTexts(obj fyne.CanvasObject, texts *[]string) {
+	switch w := obj.(type) {
+	case *widget.Label:
+		*texts = append(*texts, w.Text)
+	case *fyne.Container:
+		for _, child := range w.Objects {
+			collectLabelTexts(child, texts)
+		}
+	}
 }
 
 func min(a, b int) int {

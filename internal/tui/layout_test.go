@@ -554,6 +554,9 @@ func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
+	m.session = &session.Session{
+		TokenUsage: provider.TokenUsage{InputTokens: 1200, OutputTokens: 340},
+	}
 
 	if !m.sidebarEnabled() {
 		t.Fatal("expected sidebar layout to be enabled")
@@ -569,8 +572,8 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	if !strings.Contains(view, "ggcode") {
 		t.Error("expected branded logo content in right sidebar")
 	}
-	if !strings.Contains(view, "Mode policy") || !strings.Contains(view, "approval") {
-		t.Error("expected mode policy section in sidebar")
+	if !strings.Contains(view, "Session usage") || !strings.Contains(view, "1540") {
+		t.Error("expected session usage section in sidebar")
 	}
 }
 
@@ -731,14 +734,17 @@ func TestRenderLogoFallsBackToASCIIWhenForced(t *testing.T) {
 	}
 }
 
-func TestSidebarModePolicyLocalizesInChinese(t *testing.T) {
+func TestSidebarSessionUsageLocalizesInChinese(t *testing.T) {
 	m := newTestModel()
 	m.setLanguage("zh-CN")
 	m.handleResize(128, 28)
+	m.session = &session.Session{
+		TokenUsage: provider.TokenUsage{InputTokens: 1200, OutputTokens: 340, CacheRead: 800, CacheWrite: 64},
+	}
 
 	view := m.View().Content
-	if !strings.Contains(view, "模式说明") || !strings.Contains(view, "审批") || !strings.Contains(view, "行为") {
-		t.Error("expected localized mode policy section in sidebar")
+	if !strings.Contains(view, "会话用量") || !strings.Contains(view, "总计") || !strings.Contains(view, "缓存读") {
+		t.Error("expected localized session usage section in sidebar")
 	}
 }
 

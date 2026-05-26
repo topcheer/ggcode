@@ -37,6 +37,33 @@ func zaiModel() string {
 	return m
 }
 
+func zaiCachePrefix() string {
+	return "You are a senior code reviewer. Follow these stable rules exactly.\n" + strings.Join(func() []string {
+		rules := make([]string, 0, 280)
+		for i := 1; i <= 280; i++ {
+			rules = append(rules, fmt.Sprintf("Rule %03d: Preserve behavior, explain tradeoffs briefly, and watch for edge cases in APIs, caching, streaming, auth, retries, and token accounting.", i))
+		}
+		return rules
+	}(), "\n")
+}
+
+func collectStreamUsage(t *testing.T, ch <-chan StreamEvent) *TokenUsage {
+	t.Helper()
+	var usage *TokenUsage
+	for ev := range ch {
+		switch ev.Type {
+		case StreamEventDone:
+			usage = ev.Usage
+		case StreamEventError:
+			t.Fatalf("Stream error: %v", ev.Error)
+		}
+	}
+	if usage == nil {
+		t.Fatal("expected stream usage")
+	}
+	return usage
+}
+
 // TestAnthropicChat verifies a non-streaming chat call via the Anthropic-compatible endpoint.
 func TestAnthropicChat(t *testing.T) {
 	key := zaiAPIKey()
@@ -648,6 +675,84 @@ func TestOpenAIStreaming(t *testing.T) {
 	}
 	if usage != nil {
 		t.Logf("Usage: input=%d, output=%d", usage.InputTokens, usage.OutputTokens)
+	}
+}
+
+func TestAnthropicCacheUsage(t *testing.T) {
+	key := zaiAPIKey()
+	if key == "" {
+		t.Skip("ZAI_API_KEY not set, skipping integration test")
+	}
+
+	prov := NewAnthropicProviderWithBaseURL(key, zaiModel(), 1024, zaiAnthropicBaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("cache-seed:%d\n%s", time.Now().UnixNano(), zaiCachePrefix())
+
+	resp1, err := prov.Chat(ctx, []Message{
+		{Role: "system", Content: []ContentBlock{TextBlock(prefix)}},
+		{Role: "user", Content: []ContentBlock{TextBlock("Reply with exactly CACHE-ANTHROPIC-1")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("first Chat failed: %v", err)
+	}
+	usage1 := resp1.Usage
+	t.Logf("First anthropic usage: input=%d output=%d cache_read=%d cache_write=%d", usage1.InputTokens, usage1.OutputTokens, usage1.CacheRead, usage1.CacheWrite)
+
+	resp2, err := prov.Chat(ctx, []Message{
+		{Role: "system", Content: []ContentBlock{TextBlock(prefix)}},
+		{Role: "user", Content: []ContentBlock{TextBlock("Reply with exactly CACHE-ANTHROPIC-2")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("second Chat failed: %v", err)
+	}
+	usage2 := resp2.Usage
+	t.Logf("Second anthropic usage: input=%d output=%d cache_read=%d cache_write=%d", usage2.InputTokens, usage2.OutputTokens, usage2.CacheRead, usage2.CacheWrite)
+
+	if usage1.CacheRead != 0 {
+		t.Fatalf("expected first anthropic request to start cold, got cache_read=%d", usage1.CacheRead)
+	}
+	if usage2.CacheRead <= 0 {
+		t.Fatalf("expected second anthropic request to report cache hits, got cache_read=%d", usage2.CacheRead)
+	}
+}
+
+func TestOpenAIStreamingCacheUsage(t *testing.T) {
+	key := zaiAPIKey()
+	if key == "" {
+		t.Skip("ZAI_API_KEY not set, skipping integration test")
+	}
+
+	prov := NewOpenAIProviderWithBaseURL(key, zaiModel(), 1024, zaiOpenAIBaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("cache-seed:%d\n%s", time.Now().UnixNano(), zaiCachePrefix())
+
+	ch1, err := prov.ChatStream(ctx, []Message{
+		{Role: "system", Content: []ContentBlock{TextBlock(prefix)}},
+		{Role: "user", Content: []ContentBlock{TextBlock("Reply with exactly CACHE-OPENAI-1")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("first ChatStream failed: %v", err)
+	}
+	usage1 := collectStreamUsage(t, ch1)
+	t.Logf("First openai stream usage: input=%d output=%d cache_read=%d cache_write=%d", usage1.InputTokens, usage1.OutputTokens, usage1.CacheRead, usage1.CacheWrite)
+
+	ch2, err := prov.ChatStream(ctx, []Message{
+		{Role: "system", Content: []ContentBlock{TextBlock(prefix)}},
+		{Role: "user", Content: []ContentBlock{TextBlock("Reply with exactly CACHE-OPENAI-2")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("second ChatStream failed: %v", err)
+	}
+	usage2 := collectStreamUsage(t, ch2)
+	t.Logf("Second openai stream usage: input=%d output=%d cache_read=%d cache_write=%d", usage2.InputTokens, usage2.OutputTokens, usage2.CacheRead, usage2.CacheWrite)
+
+	if usage1.CacheRead != 0 {
+		t.Fatalf("expected first openai request to start cold, got cache_read=%d", usage1.CacheRead)
+	}
+	if usage2.CacheRead <= 0 {
+		t.Fatalf("expected second openai request to report cache hits, got cache_read=%d", usage2.CacheRead)
 	}
 }
 

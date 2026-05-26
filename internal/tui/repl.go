@@ -56,10 +56,14 @@ type REPL struct {
 // NewREPL creates a new REPL with optional permission policy.
 func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	m := NewModel(a, policy)
-	return &REPL{
+	r := &REPL{
 		model: m,
 		agent: a,
 	}
+	if a != nil {
+		a.SetUsageHandler(r.recordSessionUsage)
+	}
+	return r
 }
 
 // SetSessionStore sets the session persistence store.
@@ -151,6 +155,14 @@ func (r *REPL) InjectRestart() {
 	if r.program != nil {
 		r.program.Send(remoteRestartMsg{})
 	}
+}
+
+func (r *REPL) recordSessionUsage(usage provider.TokenUsage) {
+	if r.program != nil {
+		r.program.Send(sessionUsageMsg{Usage: usage})
+		return
+	}
+	r.model.recordSessionUsage(usage)
 }
 
 // SetWebUIReadyAddr stores the webui address and auth token to be displayed

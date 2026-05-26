@@ -103,10 +103,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	}
 
 	msg := convertAnthropicResponse(resp.Content)
-	usage := TokenUsage{
-		InputTokens:  int(resp.Usage.InputTokens),
-		OutputTokens: int(resp.Usage.OutputTokens),
-	}
+	usage := anthropicUsage(resp.Usage)
 
 	return &ChatResponse{
 		Message: Message{Role: "assistant", Content: msg},
@@ -132,7 +129,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			}
 
 			toolCalls := make(map[int]*ToolCallDelta)
-			var inputTokens, outputTokens int
+			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 			emitted := false
 			retry := false
 
@@ -212,6 +209,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "message_delta":
 						outputTokens = int(event.Usage.OutputTokens)
+						inputTokens = int(event.Usage.InputTokens)
+						cacheWriteTokens = int(event.Usage.CacheCreationInputTokens)
+						cacheReadTokens = int(event.Usage.CacheReadInputTokens)
 						// Check stop_reason for truncation / policy errors.
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
@@ -226,6 +226,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "message_start":
 						inputTokens = int(event.Message.Usage.InputTokens)
+						cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
+						cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
 					}
 				}
 
@@ -258,8 +260,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			usage = &TokenUsage{
 				InputTokens:  inputTokens,
 				OutputTokens: outputTokens,
+				CacheRead:    cacheReadTokens,
+				CacheWrite:   cacheWriteTokens,
 			}
-			debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d", usage.InputTokens, usage.OutputTokens)
+			debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d", usage.InputTokens, usage.OutputTokens, usage.CacheRead, usage.CacheWrite)
 			break
 		}
 
@@ -279,6 +283,15 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 	})
 
 	return ch, nil
+}
+
+func anthropicUsage(usage anthropic.Usage) TokenUsage {
+	return TokenUsage{
+		InputTokens:  int(usage.InputTokens),
+		OutputTokens: int(usage.OutputTokens),
+		CacheRead:    int(usage.CacheReadInputTokens),
+		CacheWrite:   int(usage.CacheCreationInputTokens),
+	}
 }
 
 func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
