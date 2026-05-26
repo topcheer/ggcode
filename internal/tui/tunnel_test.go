@@ -1142,6 +1142,36 @@ func TestAppendShellChunkPushesShellOutputTextEvent(t *testing.T) {
 	}
 }
 
+func TestCronPromptPushesCronTunnelEventWithoutSystemEvent(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	next, _ := m.Update(cronPromptMsg{Prompt: "check status"})
+	m2 := next.(Model)
+	m = &m2
+
+	var sawCron bool
+	for _, ev := range m.session.TunnelEvents {
+		switch ev.Type {
+		case tunnel.EventUserMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("unmarshal user_message: %v", err)
+			}
+			if data.Kind == tunnel.MessageKindCron {
+				sawCron = true
+				if data.Text != "check status" || data.DisplayText != "⏰ Cron job triggered" {
+					t.Fatalf("unexpected cron message data: %+v", data)
+				}
+			}
+		case tunnel.EventSystemMessage:
+			t.Fatalf("did not expect cron to emit system_message tunnel event: %s", ev.Data)
+		}
+	}
+	if !sawCron {
+		t.Fatal("expected cron user_message tunnel event")
+	}
+}
+
 func TestHandleSubAgentTunnelToolCallMsgFillsDetailFallback(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 
