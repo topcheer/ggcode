@@ -346,6 +346,37 @@ func TestNewToolItem(t *testing.T) {
 	}
 }
 
+func TestNewToolItemPreservesRawToolMetadata(t *testing.T) {
+	styles := DefaultStyles()
+	rawArgs := `{"description":"编译","command":"go build ./cmd/ggcode"}`
+	item := NewToolItem("id1", ToolContext{
+		ToolName:    "run_command",
+		DisplayName: "编译 (Bash)",
+		Detail:      "go build ./cmd/ggcode",
+		RawArgs:     rawArgs,
+		Lang:        "zh-CN",
+	}, StatusPending, styles)
+
+	toolItem, ok := item.(interface {
+		ToolName() string
+		Input() string
+	})
+	if !ok {
+		t.Fatalf("expected tool item accessors, got %T", item)
+	}
+	if toolItem.ToolName() != "run_command" {
+		t.Fatalf("ToolName() = %q, want run_command", toolItem.ToolName())
+	}
+	if toolItem.Input() != rawArgs {
+		t.Fatalf("Input() = %q, want raw args", toolItem.Input())
+	}
+
+	rendered := stripTestAnsi(item.Render(80))
+	if !strings.Contains(rendered, "编译 (Bash)") {
+		t.Fatalf("expected rendered header to keep display name, got:\n%s", rendered)
+	}
+}
+
 func fmtTypeName(v interface{}) string {
 	s := fmt.Sprintf("%T", v)
 	// Remove "chat." prefix for comparison

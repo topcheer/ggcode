@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/tree"
@@ -17,10 +18,11 @@ import (
 type BaseToolItem struct {
 	CachedItem
 	id             string
-	toolName       string
+	toolName       string // rendered header label
+	rawToolName    string // original tool name, e.g. "run_command"
 	params         string // display params for header (set at creation, never truncated)
 	status         ToolStatus
-	input          string // raw JSON input
+	input          string // display detail when raw JSON input is unavailable
 	result         string // result text (may contain error)
 	isError        bool
 	markdownBody   bool // render result as markdown
@@ -62,14 +64,24 @@ func (t *BaseToolItem) SetResult(result string, isError bool) {
 	t.Invalidate()
 }
 
-// ToolName returns the tool name.
-func (t *BaseToolItem) ToolName() string { return t.toolName }
-
 // Status returns the current tool status.
 func (t *BaseToolItem) Status() ToolStatus { return t.status }
 
-// Input returns the raw input JSON.
-func (t *BaseToolItem) Input() string { return t.input }
+// ToolName returns the original tool name when available.
+func (t *BaseToolItem) ToolName() string {
+	if t.rawToolName != "" {
+		return t.rawToolName
+	}
+	return t.toolName
+}
+
+// Input returns the raw input JSON when available, otherwise the display detail.
+func (t *BaseToolItem) Input() string {
+	if t.rawArgs != "" {
+		return t.rawArgs
+	}
+	return t.input
+}
 
 // Result returns the current rendered tool result body.
 func (t *BaseToolItem) Result() string { return t.result }
@@ -80,6 +92,13 @@ func (t *BaseToolItem) IsError() bool { return t.isError }
 // RenderParams returns the display parameters for the tool header.
 func (t *BaseToolItem) RenderParams() string {
 	return t.params
+}
+
+func (t *BaseToolItem) setToolMeta(rawToolName, rawArgs string) {
+	t.rawToolName = rawToolName
+	if rawArgs != "" {
+		t.rawArgs = rawArgs
+	}
 }
 
 // RenderBody renders the tool output body.
@@ -511,7 +530,9 @@ func PrettifyToolName(name string) string {
 	}
 	// Fallback: capitalize first letter
 	if len(name) > 0 {
-		return strings.ToUpper(name[:1]) + name[1:]
+		runes := []rune(name)
+		runes[0] = unicode.ToUpper(runes[0])
+		return string(runes)
 	}
 	return name
 }
@@ -742,19 +763,34 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		displayName = PrettifyToolName(ctx.ToolName)
 	}
 
+	applyToolContext := func(base *BaseToolItem) {
+		base.setToolMeta(ctx.ToolName, ctx.RawArgs)
+	}
+
 	switch classifyTool(ctx.ToolName) {
 	case catBash:
-		return NewBashToolItem(id, displayName, ctx.Detail, status, styles)
+		item := NewBashToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	case catFile:
-		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang, ctx.RawArgs, ctx.ToolName)
+		item := NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang, ctx.RawArgs, ctx.ToolName)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	case catSearch:
-		return NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
+		item := NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	case catList:
-		return newListToolItem(id, displayName, ctx.Detail, status, styles)
+		item := newListToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	case catWeb:
-		return newWebToolItem(id, displayName, ctx.Detail, status, styles)
+		item := newWebToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	case catGit:
 		item := newGitToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
 		switch ctx.ToolName {
 		case "git_status":
 			item.BaseToolItem.fileBodyMode = "gitstatus"
@@ -768,19 +804,21 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		return item
 	case catCmd:
 		item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
 		item.BaseToolItem.suppressBody = ctx.ToolName != "start_command"
 		return item
 	case catLSP:
-		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
+		item := newLspToolItem(id, displayName, ctx.Detail, status, styles)
+		applyToolContext(&item.BaseToolItem)
+		return item
 	default:
 		if GetToolBodyBehavior(ctx.ToolName) == BodyMarkdown {
 			item := NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
-			if ctx.ToolName == "exit_plan_mode" {
-				item.rawArgs = ctx.RawArgs
-			}
+			applyToolContext(&item.BaseToolItem)
 			return item
 		}
 		item := NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
+		applyToolContext(&item.BaseToolItem)
 		switch GetToolBodyBehavior(ctx.ToolName) {
 		case BodySuppress:
 			item.suppressBody = true

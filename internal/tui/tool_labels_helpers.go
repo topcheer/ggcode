@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -918,7 +919,9 @@ func prettifyToolName(name string) string {
 		if part == "" {
 			continue
 		}
-		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		runes := []rune(part)
+		runes[0] = unicode.ToUpper(runes[0])
+		parts[i] = string(runes)
 	}
 	return strings.Join(parts, " ")
 }
