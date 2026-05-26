@@ -291,24 +291,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'resume_ack':
-        final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
-        if (resumeMode == 'full_history') {
-          _clearUiProjection();
-          _lastAppliedEventId = '';
-          _recentEventIds.clear();
-          _recentEventSet.clear();
-          _awaitingSnapshotProjection = false;
-          _markProjectionAuthoritative();
-        }
+        // Always restore local snapshot first — relay replay will skip
+        // already-cached events via ordinal dedup.
+        _restoreSessionProjectionIfAvailable(sessionId);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
-        if (resumeMode != 'full_history') {
-          _restoreSessionProjectionIfAvailable(sessionId);
-        }
         _restoreCachedAgentStatus(sessionId: sessionId);
         _persistResumeState();
         break;
