@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -276,6 +277,46 @@ func TestAgentBridgeHandleCronPromptWhileWorkingQueuesHidden(t *testing.T) {
 	}
 	if !pending.Hidden || pending.Text != "check status" {
 		t.Fatalf("unexpected pending entry: %+v", pending)
+	}
+}
+
+func TestAgentBridgeHandleCronPromptPushesCronTunnelEvent(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	bridge.working = true
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	bridge.sessionStore = store
+	bridge.currentSes = &session.Session{ID: "sess-cron", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+	broker := tunnel.NewBroker(sess)
+	broker.Stop()
+	broker.SetEventRecorder(bridge.RecordTunnelEvent)
+	bridge.tunnelBroker = broker
+
+	bridge.handleCronPrompt("check status")
+
+	var sawCron bool
+	for _, ev := range bridge.currentSes.TunnelEvents {
+		switch ev.Type {
+		case tunnel.EventUserMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("unmarshal user_message: %v", err)
+			}
+			if data.Kind == tunnel.MessageKindCron {
+				sawCron = true
+				if data.Text != "check status" || data.DisplayText != "⏰ Cron job triggered" {
+					t.Fatalf("unexpected cron message data: %+v", data)
+				}
+			}
+		case tunnel.EventSystemMessage:
+			t.Fatalf("did not expect cron to emit system_message tunnel event: %s", ev.Data)
+		}
+	}
+	if !sawCron {
+		t.Fatal("expected cron user_message tunnel event")
 	}
 }
 

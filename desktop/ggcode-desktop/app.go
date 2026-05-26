@@ -798,14 +798,102 @@ func (a *App) showOnboard() {
 
 	vendorSelect := widget.NewSelect(vendorNames, nil)
 	vendorSelect.PlaceHolder = t("onboard.choose_vendor")
+	endpointSelect := widget.NewSelect([]string{}, nil)
+	endpointSelect.PlaceHolder = t("sidebar.endpoint_label")
 	apiEntry := widget.NewPasswordEntry()
 	apiEntry.PlaceHolder = t("onboard.enter_api_key")
 	modelSelect := widget.NewSelect([]string{}, nil)
 	modelSelect.PlaceHolder = t("onboard.select_model")
 
 	var selectedPreset *config.VendorPreset
+	var selectedEndpoint *config.EndpointPreset
+
+	endpointLabel := func(ep config.EndpointPreset) string {
+		if strings.TrimSpace(ep.DisplayName) != "" {
+			return ep.DisplayName
+		}
+		return ep.ID
+	}
+
+	findSelectedEndpoint := func(name string) *config.EndpointPreset {
+		if selectedPreset == nil {
+			return nil
+		}
+		for i := range selectedPreset.Endpoints {
+			if endpointLabel(selectedPreset.Endpoints[i]) == name {
+				return &selectedPreset.Endpoints[i]
+			}
+		}
+		return nil
+	}
+
+	updateModelOptions := func() {
+		modelSelect.ClearSelected()
+		modelSelect.Options = nil
+		if selectedPreset == nil || selectedEndpoint == nil {
+			modelSelect.Refresh()
+			return
+		}
+		a.cfg.Vendor = selectedPreset.ID
+		a.cfg.Endpoint = selectedEndpoint.ID
+		if apiEntry.Text == "" {
+			modelSelect.Options = []string{t("onboard.enter_api_key_first")}
+			modelSelect.Refresh()
+			return
+		}
+		a.cfg.SetEndpointAPIKey(selectedPreset.ID, selectedEndpoint.ID, apiEntry.Text, false)
+		resolved, err := a.cfg.ResolveActiveEndpoint()
+		if err != nil {
+			modelSelect.Options = []string{t("onboard.error_option")}
+			modelSelect.Refresh()
+			return
+		}
+		models := resolved.Models
+		if len(models) == 0 && resolved.Model != "" {
+			models = []string{resolved.Model}
+		}
+		modelSelect.Options = models
+		modelSelect.Refresh()
+		if len(models) == 0 {
+			return
+		}
+		selectedModel := resolved.Model
+		if selectedModel == "" {
+			selectedModel = models[0]
+		}
+		modelSelect.SetSelected(selectedModel)
+	}
+
+	updateEndpointOptions := func() {
+		selectedEndpoint = nil
+		endpointSelect.ClearSelected()
+		endpointSelect.Options = nil
+		if selectedPreset == nil {
+			endpointSelect.Refresh()
+			updateModelOptions()
+			return
+		}
+
+		options := make([]string, 0, len(selectedPreset.Endpoints))
+		defaultSelection := ""
+		for _, ep := range selectedPreset.Endpoints {
+			label := endpointLabel(ep)
+			options = append(options, label)
+			if defaultSelection == "" || ep.ID == selectedPreset.DefaultEndpoint {
+				defaultSelection = label
+			}
+		}
+		endpointSelect.Options = options
+		endpointSelect.Refresh()
+		if defaultSelection != "" {
+			endpointSelect.SetSelected(defaultSelection)
+			return
+		}
+		updateModelOptions()
+	}
 
 	vendorSelect.OnChanged = func(name string) {
+		selectedPreset = nil
 		for i := range presets {
 			if presets[i].DisplayName == name {
 				selectedPreset = &presets[i]
@@ -813,52 +901,38 @@ func (a *App) showOnboard() {
 			}
 		}
 		if selectedPreset == nil {
+			updateEndpointOptions()
 			return
 		}
-		epID := selectedPreset.DefaultEndpoint
-		if len(selectedPreset.Endpoints) > 0 {
-			epID = selectedPreset.Endpoints[0].ID
-		}
 		a.cfg.Vendor = selectedPreset.ID
-		a.cfg.Endpoint = epID
-		if apiEntry.Text != "" {
-			a.cfg.SetEndpointAPIKey(selectedPreset.ID, epID, apiEntry.Text, false)
-			resolved, err := a.cfg.ResolveActiveEndpoint()
-			if err != nil {
-				modelSelect.Options = []string{t("onboard.error_option")}
-				modelSelect.Refresh()
-				return
-			}
-			models := resolved.Models
-			if len(models) == 0 {
-				models = []string{resolved.Model}
-			}
-			modelSelect.Options = models
-		} else {
-			modelSelect.Options = []string{t("onboard.enter_api_key_first")}
+		updateEndpointOptions()
+	}
+
+	endpointSelect.OnChanged = func(name string) {
+		selectedEndpoint = findSelectedEndpoint(name)
+		if selectedPreset != nil && selectedEndpoint != nil {
+			a.cfg.Vendor = selectedPreset.ID
+			a.cfg.Endpoint = selectedEndpoint.ID
 		}
-		modelSelect.Refresh()
+		updateModelOptions()
 	}
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
 			{Text: t("sidebar.vendor_label"), Widget: vendorSelect},
+			{Text: t("sidebar.endpoint_label"), Widget: endpointSelect},
 			{Text: t("sidebar.api_key_label"), Widget: apiEntry},
 			{Text: t("sidebar.model_label"), Widget: modelSelect},
 		},
 		OnSubmit: func() {
-			if selectedPreset == nil || apiEntry.Text == "" || modelSelect.Selected == "" {
+			if selectedPreset == nil || selectedEndpoint == nil || apiEntry.Text == "" || modelSelect.Selected == "" {
 				dialog.ShowInformation(t("onboard.missing_fields_title"), t("onboard.missing_fields_message"), a.window)
 				return
 			}
-			epID := selectedPreset.DefaultEndpoint
-			if len(selectedPreset.Endpoints) > 0 {
-				epID = selectedPreset.Endpoints[0].ID
-			}
 			a.cfg.Vendor = selectedPreset.ID
-			a.cfg.Endpoint = epID
+			a.cfg.Endpoint = selectedEndpoint.ID
 			a.cfg.Model = modelSelect.Selected
-			a.cfg.SetEndpointAPIKey(selectedPreset.ID, epID, apiEntry.Text, true)
+			a.cfg.SetEndpointAPIKey(selectedPreset.ID, selectedEndpoint.ID, apiEntry.Text, true)
 			if err := a.cfg.Save(); err != nil {
 				a.showError(fmt.Sprintf("Failed to save config: %v", err))
 				return

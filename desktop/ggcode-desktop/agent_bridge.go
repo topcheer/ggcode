@@ -941,7 +941,13 @@ func (b *AgentBridge) handleCronPrompt(prompt string) {
 	if b.ui != nil {
 		b.ui.AppendChat(ChatMessage{Role: "system", Content: sysMsg, Time: time.Now()})
 	}
-	b.PushSystemMessageToMobile(sysMsg)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushUserMessageData(tunnel.MessageData{
+			Text:        prompt,
+			DisplayText: sysMsg,
+			Kind:        tunnel.MessageKindCron,
+		})
+	}
 	if strings.TrimSpace(prompt) == "" {
 		return
 	}

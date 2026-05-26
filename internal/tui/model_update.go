@@ -344,19 +344,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sysMsg := m.t("cron.firing")
 		m.suppressNextTunnelSystem = sysMsg
 		m.chatWriteSystem(nextSystemID(), sysMsg)
-		m.emitIMText(sysMsg)
-		override := tunnel.MessageData{
-			Text:        msg.Prompt,
-			DisplayText: sysMsg,
-			Kind:        "cron",
+		if m.tunnelBroker != nil {
+			m.tunnelBroker.PushUserMessageData(tunnel.MessageData{
+				Text:        msg.Prompt,
+				DisplayText: sysMsg,
+				Kind:        tunnel.MessageKindCron,
+			})
 		}
+		m.emitIMText(sysMsg)
 		// If agent is idle, submit the cron prompt immediately.
 		// Otherwise queue it for processing after the current run finishes.
 		if !m.loading {
-			m.setNextTunnelUserMessageOverride(override)
 			return m, m.submitHiddenText(msg.Prompt)
 		}
-		m.queuePendingSubmissionHiddenWithOverride(msg.Prompt, &override)
+		m.queuePendingSubmissionHidden(msg.Prompt)
 		return m, nil
 
 	case skillsChangedMsg:

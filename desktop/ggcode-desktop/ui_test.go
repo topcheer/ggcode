@@ -20,6 +20,28 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects *[]*widget.Select) {
+	switch v := obj.(type) {
+	case *fyne.Container:
+		for _, child := range v.Objects {
+			collectDesktopWidgets(child, forms, selects)
+		}
+	case *widget.Card:
+		if v.Content != nil {
+			collectDesktopWidgets(v.Content, forms, selects)
+		}
+	case *widget.Form:
+		*forms = append(*forms, v)
+		for _, item := range v.Items {
+			if item != nil && item.Widget != nil {
+				collectDesktopWidgets(item.Widget, forms, selects)
+			}
+		}
+	case *widget.Select:
+		*selects = append(*selects, v)
+	}
+}
+
 // helper: create a temp workspace directory with sample files
 func createTestWorkspace(t *testing.T) string {
 	t.Helper()
@@ -1155,6 +1177,73 @@ func TestAppShowFilePreviewWithSidebarHidden(t *testing.T) {
 	app.showFilePreview(filepath.Join(root, "README.md"), 0)
 	if app.filePreview == nil {
 		t.Error("filePreview should be set")
+	}
+}
+
+func TestAppShowOnboardPopulatesEndpointOptions(tt *testing.T) {
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      defaultDesktopConfig(),
+		cfg:     config.DefaultConfig(),
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("test")
+	app.content = container.NewStack(widget.NewLabel(""))
+	app.window.SetContent(app.content)
+
+	app.showOnboard()
+
+	var forms []*widget.Form
+	var selects []*widget.Select
+	for _, obj := range app.content.Objects {
+		collectDesktopWidgets(obj, &forms, &selects)
+	}
+	if len(forms) != 1 {
+		tt.Fatalf("expected one onboard form, got %d", len(forms))
+	}
+	form := forms[0]
+	if len(form.Items) != 4 {
+		tt.Fatalf("expected vendor/endpoint/api key/model form items, got %d", len(form.Items))
+	}
+	if form.Items[1].Text != t("sidebar.endpoint_label") {
+		tt.Fatalf("expected endpoint field in onboard form, got %q", form.Items[1].Text)
+	}
+	if len(selects) != 3 {
+		tt.Fatalf("expected vendor, endpoint, and model selects, got %d", len(selects))
+	}
+
+	presets := config.VendorPresets()
+	if len(presets) == 0 {
+		tt.Fatal("expected vendor presets")
+	}
+	preset := presets[0]
+	if len(preset.Endpoints) == 0 {
+		tt.Fatalf("expected preset %q to include endpoints", preset.ID)
+	}
+	selects[0].OnChanged(preset.DisplayName)
+
+	wantOptions := make([]string, 0, len(preset.Endpoints))
+	for _, ep := range preset.Endpoints {
+		if ep.DisplayName != "" {
+			wantOptions = append(wantOptions, ep.DisplayName)
+		} else {
+			wantOptions = append(wantOptions, ep.ID)
+		}
+	}
+	gotOptions := map[string]bool{}
+	for _, option := range selects[1].Options {
+		gotOptions[option] = true
+	}
+	if len(gotOptions) != len(wantOptions) {
+		tt.Fatalf("expected %d endpoint options, got %d (%v)", len(wantOptions), len(gotOptions), selects[1].Options)
+	}
+	for _, want := range wantOptions {
+		if !gotOptions[want] {
+			tt.Fatalf("expected endpoint options to include %q, got %v", want, selects[1].Options)
+		}
+	}
+	if selects[1].Selected == "" {
+		tt.Fatal("expected default endpoint selection after choosing vendor")
 	}
 }
 
