@@ -89,6 +89,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
   bool _awaitingSnapshotProjection = false;
+  bool _fullHistoryReplayInProgress = false;
 
   @override
   TunnelConnectionState build() {
@@ -189,6 +190,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _lastAppliedEventId = '';
       _awaitingReplay = false;
       _awaitingSnapshotProjection = false;
+    _fullHistoryReplayInProgress = false;
+      _fullHistoryReplayInProgress = false;
       _pendingReplayEvents.clear();
       _resetReplayRecoveryState();
       _recentEventIds.clear();
@@ -284,6 +287,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _awaitingReplay = false;
     _awaitingSnapshotProjection = false;
+    _fullHistoryReplayInProgress = false;
     _pendingReplayEvents.clear();
     _resetReplayRecoveryState();
     _recentEventIds.clear();
@@ -346,8 +350,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
-        _awaitingReplay = _pendingReplayEvents.isNotEmpty;
-        _updateReplayWatchdog();
         if (resumeMode == 'full_history') {
           _clearUiProjection();
           _lastAppliedEventId = '';
@@ -357,10 +359,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _recentEventIds.clear();
           _recentEventSet.clear();
           _awaitingSnapshotProjection = false;
+    _fullHistoryReplayInProgress = false;
+          _fullHistoryReplayInProgress = true;
           // Prevent an earlier async cache-restore task (scheduled from
           // active_session) from reseeding a stale cursor while authoritative
           // full-history replay is in flight.
           _markProjectionAuthoritative();
+        } else {
+          // For incremental resume, set replay state and start watchdog.
+          // Only start the watchdog if there are actually pending events to wait for.
+          _awaitingReplay = _pendingReplayEvents.isNotEmpty;
+          if (_awaitingReplay) {
+            _updateReplayWatchdog();
+          }
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
@@ -436,7 +447,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markProjectionAuthoritative();
         if (_awaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
+    _fullHistoryReplayInProgress = false;
           _drainBufferedReplayEvents();
+        }
+        if (_fullHistoryReplayInProgress) {
+          _fullHistoryReplayInProgress = false;
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
@@ -944,6 +959,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _awaitingReplay = false;
     _awaitingSnapshotProjection = false;
+    _fullHistoryReplayInProgress = false;
     _pendingReplayEvents.clear();
     _resetReplayRecoveryState();
     _recentEventIds.clear();
@@ -989,7 +1005,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     final next = _parseEventOrdinal(eventId);
     final last = _parseEventOrdinal(_lastAppliedEventId);
-    if (!_awaitingSnapshotProjection && last != null && next != null) {
+    if (!_awaitingSnapshotProjection && !_fullHistoryReplayInProgress && last != null && next != null) {
       if (next <= last) {
         _pendingReplayEvents.remove(next);
         return false;
@@ -1062,6 +1078,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _beginReplayRecovery() {
     if (_awaitingSnapshotProjection) return;
+    if (_fullHistoryReplayInProgress) return;
     _awaitingReplay = true;
     _replayRetryCount = 0;
     if (_hasReplayCursorBaseline()) {
