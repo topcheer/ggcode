@@ -827,10 +827,7 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 		}:
 			rawArgs := it.Input()
 			present := describeTool(m.currentLanguage(), it.ToolName(), rawArgs)
-			argsStr := rawArgs
-			if len(argsStr) > 200 {
-				argsStr = argsStr[:200] + "..."
-			}
+			argsStr := truncateRunes(rawArgs, 200, "...")
 			history = append(history, tunnel.HistoryEntry{
 				Role:            "tool_call",
 				ToolID:          it.ID(),
@@ -905,10 +902,7 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 						textParts = append(textParts, strings.TrimSpace(block.Text))
 					}
 				case "tool_result":
-					result := block.Output
-					if len(result) > 500 {
-						result = result[:500] + "..."
-					}
+					result := truncateRunes(block.Output, 500, "...")
 					history = append(history, tunnel.HistoryEntry{
 						Role:     "tool_result",
 						ToolID:   block.ToolID,
@@ -938,10 +932,7 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 						Content: strings.TrimSpace(block.Text),
 					})
 				} else if block.Type == "tool_use" {
-					argsStr := string(block.Input)
-					if len(argsStr) > 200 {
-						argsStr = argsStr[:200] + "..."
-					}
+					argsStr := truncateRunes(string(block.Input), 200, "...")
 					present := describeTool(LangEnglish, block.ToolName, string(block.Input))
 					history = append(history, tunnel.HistoryEntry{
 						Role:            "tool_call",
@@ -956,10 +947,7 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 		case "tool":
 			for _, block := range msg.Content {
 				if block.Type == "tool_result" {
-					result := block.Output
-					if len(result) > 500 {
-						result = result[:500] + "..."
-					}
+					result := truncateRunes(block.Output, 500, "...")
 					history = append(history, tunnel.HistoryEntry{
 						Role:     "tool_result",
 						ToolID:   block.ToolID,
