@@ -261,6 +261,7 @@ func (p *peer) handleServerBroadcast(raw []byte, msg relayMessage) {
 		if p.hub.store != nil {
 			events, _ := p.hub.store.loadSessionHistory(msg.SessionID)
 			p.room.history = events
+			p.room.lastEventAt = time.Now()
 			if p.hub.stats != nil {
 				p.hub.stats.recordActiveSession(true, len(events))
 			}
@@ -327,6 +328,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	if len(p.room.history) == 0 && p.hub.store != nil {
 		events, _ := p.hub.store.loadSessionHistory(sessionID)
 		p.room.history = events
+		p.room.lastEventAt = time.Now()
 		log.Printf("[relay] hydrate room=%s session=%s events=%d",
 			shortToken(p.room.token), sessionID, len(events))
 		if p.hub.stats != nil {
