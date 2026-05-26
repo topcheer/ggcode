@@ -332,28 +332,23 @@ class ConnectionService {
   void sendResumeHello({
     required String clientId,
     String? sessionId,
-    String? lastEventId,
   }) {
     send({
       'type': 'resume_hello',
       'client_id': clientId,
       if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
-      if (lastEventId != null && lastEventId.isNotEmpty)
-        'last_event_id': lastEventId,
     });
   }
 
-  void requestReplayFrom({
+  /// ACK an event — tells the relay to advance the cursor.
+  void sendAck({
     required String clientId,
-    String? sessionId,
-    String? lastEventId,
+    required String eventId,
   }) {
     send({
-      'type': 'resume_from',
+      'type': 'event_ack',
       'client_id': clientId,
-      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
-      if (lastEventId != null && lastEventId.isNotEmpty)
-        'last_event_id': lastEventId,
+      'event_id': eventId,
     });
   }
 

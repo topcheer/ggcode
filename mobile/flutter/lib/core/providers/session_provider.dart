@@ -62,31 +62,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   static const _resumeClientIdKey = 'ggcode_tunnel_client_id';
   static const _resumeSessionIdKey = 'ggcode_tunnel_session_id';
   static const _resumeEventIdKey = 'ggcode_tunnel_last_event_id';
-  static const _defaultReplayWatchdogTimeout = Duration(seconds: 2);
-  static const _defaultReplayRetryBackoffs = <Duration>[
-    Duration(seconds: 1),
-    Duration(seconds: 2),
-    Duration(seconds: 4),
-  ];
-  static const _defaultReplayFallbackTimeout = Duration(seconds: 4);
 
   String _clientId = '';
   String _sessionId = '';
   String _lastAppliedEventId = '';
-  bool _awaitingReplay = false;
   bool _hasAuthoritativeProjection = false;
-  final SplayTreeMap<int, proto.WsMessage> _pendingReplayEvents =
-      SplayTreeMap<int, proto.WsMessage>();
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
-  Timer? _replayWatchdogTimer;
-  int _replayRetryCount = 0;
-  int _replaySequentialCount = 0;
-  bool _replayFullHistoryRequested = false;
-  Duration _replayWatchdogTimeout = _defaultReplayWatchdogTimeout;
-  List<Duration> _replayRetryBackoffs =
-      List<Duration>.from(_defaultReplayRetryBackoffs);
-  Duration _replayFallbackTimeout = _defaultReplayFallbackTimeout;
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
   bool _awaitingSnapshotProjection = false;
@@ -94,7 +76,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   @override
   TunnelConnectionState build() {
-    ref.onDispose(_cancelReplayWatchdog);
     return TunnelConnectionState(status: ConnectionStatus.disconnected);
   }
 
@@ -158,7 +139,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       service!.dispose();
       service = null;
     }
-    _resetReplayRecoveryState();
 
     state = state.copyWith(
         status: ConnectionStatus.connecting, url: url, error: null);
@@ -189,13 +169,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _clearUiProjection();
       _sessionId = '';
       _lastAppliedEventId = '';
-      _awaitingReplay = false;
-      _awaitingSnapshotProjection = false;
+        _awaitingSnapshotProjection = false;
     _fullHistoryReplayInProgress = false;
       _fullHistoryReplayInProgress = false;
-      _pendingReplayEvents.clear();
-      _resetReplayRecoveryState();
-      _recentEventIds.clear();
+          _recentEventIds.clear();
       _recentEventSet.clear();
     }
     if (!restoredProjection && _hasEmptyUiProjection()) {
@@ -213,8 +190,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           service?.sendResumeHello(
             clientId: _clientId,
             sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-            lastEventId:
-                _lastAppliedEventId.isNotEmpty ? _lastAppliedEventId : null,
           );
         }
       },
@@ -275,7 +250,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void disconnect() {
     service?.disconnect();
-    _resetReplayRecoveryState();
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
@@ -286,11 +260,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
-    _awaitingReplay = false;
     _awaitingSnapshotProjection = false;
     _fullHistoryReplayInProgress = false;
-    _pendingReplayEvents.clear();
-    _resetReplayRecoveryState();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
@@ -332,9 +303,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (_sessionId.isNotEmpty && _sessionId != sessionId) {
           _clearUiProjection();
           _lastAppliedEventId = '';
-          _pendingReplayEvents.clear();
-          _awaitingReplay = false;
-          _hasAuthoritativeProjection = false;
+                      _hasAuthoritativeProjection = false;
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
@@ -348,17 +317,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'resume_ack':
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
-        debugPrint('[session] resume_ack: mode=$resumeMode sessionId=${msg.sessionId} lastEvent=$_lastAppliedEventId awaiting=$_awaitingReplay pending=${_pendingReplayEvents.length}');
-        final sessionId =
+            final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
         if (resumeMode == 'full_history') {
           _clearUiProjection();
           _lastAppliedEventId = '';
-          _pendingReplayEvents.clear();
-          _awaitingReplay = false;
-          _resetReplayRecoveryState();
-          _recentEventIds.clear();
+                            _recentEventIds.clear();
           _recentEventSet.clear();
           _awaitingSnapshotProjection = false;
     _fullHistoryReplayInProgress = false;
@@ -370,14 +335,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         } else {
           // For incremental resume, clear pending events and cancel the
           // watchdog.  Replay events will flow in and be accepted directly
-          // (ordinal check is suppressed while _awaitingReplay is true).
           // If a gap still exists after replay completes, a fresh
-          // _beginReplayRecovery will trigger from _shouldApplyEvent.
-          _pendingReplayEvents.clear();
-          _resetReplayRecoveryState();
-          // Keep _awaitingReplay true so _shouldApplyEvent skips ordinal
           // checks during the replay burst.
-          _awaitingReplay = true;
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
@@ -390,10 +349,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'resume_miss':
-        _pendingReplayEvents.clear();
-        _awaitingReplay = false;
-        _resetReplayRecoveryState();
-        break;
+                    break;
 
       case 'language_change':
         if (msg.data != null) {
@@ -417,10 +373,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'snapshot_reset':
         _clearUiProjection();
         _lastAppliedEventId = '';
-        _pendingReplayEvents.clear();
-        _awaitingReplay = false;
-        _resetReplayRecoveryState();
-        _recentEventIds.clear();
+                    _recentEventIds.clear();
         _recentEventSet.clear();
         _awaitingSnapshotProjection = true;
         // Prevent late cache-restore callbacks from reviving stale snapshots
@@ -454,7 +407,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (_awaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
     _fullHistoryReplayInProgress = false;
-          _drainBufferedReplayEvents();
         }
         if (_fullHistoryReplayInProgress) {
           _fullHistoryReplayInProgress = false;
@@ -963,11 +915,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
-    _awaitingReplay = false;
     _awaitingSnapshotProjection = false;
     _fullHistoryReplayInProgress = false;
-    _pendingReplayEvents.clear();
-    _resetReplayRecoveryState();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
@@ -988,10 +937,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         sessionId != _sessionId) {
       final previousSessionId = _sessionId;
       _clearUiProjection();
-      _hasAuthoritativeProjection = true; // event-driven switch must not allow cache re-seeding
-      _pendingReplayEvents.clear();
-      _awaitingReplay = false;
-      _resetReplayRecoveryState();
+      _hasAuthoritativeProjection = true;
       _recentEventIds.clear();
       _recentEventSet.clear();
       _lastAppliedEventId = '';
@@ -1006,34 +952,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (eventId == null || eventId.isEmpty) {
       return true;
     }
+    // Dedup only — relay guarantees ordering via ACK cursor.
     if (_recentEventSet.contains(eventId)) {
       return false;
-    }
-    final next = _parseEventOrdinal(eventId);
-    final last = _parseEventOrdinal(_lastAppliedEventId);
-    if (!_awaitingSnapshotProjection && !_fullHistoryReplayInProgress && !_awaitingReplay && last != null && next != null) {
-      if (next <= last) {
-        _pendingReplayEvents.remove(next);
-        return false;
-      }
-      if (next > last + 1) {
-        _pendingReplayEvents[next] = msg;
-        if (!_awaitingReplay) {
-          _beginReplayRecovery();
-        } else {
-          _updateReplayWatchdog();
-        }
-        return false;
-      }
     }
     return true;
   }
 
   void _markEventApplied(proto.WsMessage msg) {
     final eventId = msg.eventId;
-    if (eventId != null && eventId.isNotEmpty) {
-      debugPrint('[session] _markEventApplied: event=$eventId last=$_lastAppliedEventId type=${msg.type}');
-    }
     if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
       _sessionId = msg.sessionId!;
     }
@@ -1045,23 +972,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       return;
     }
     _lastAppliedEventId = eventId;
-    final ordinal = _parseEventOrdinal(eventId);
-    // Track consecutive sequential events during replay.
-    // After enough sequential events, exit replay mode.
-    if (_awaitingReplay) {
-      final last = _parseEventOrdinal(_lastAppliedEventId);
-      if (last != null && ordinal != null && ordinal == last) {
-        _replaySequentialCount++;
-        if (_replaySequentialCount >= 10) {
-          _awaitingReplay = false;
-          _replaySequentialCount = 0;
-        }
-      } else {
-        _replaySequentialCount = 1;
-      }
-    }
-    if (ordinal != null) {
-      _pendingReplayEvents.remove(ordinal);
+    // Send ACK to relay so it advances the cursor.
+    if (_clientId.isNotEmpty) {
+      service?.sendAck(clientId: _clientId, eventId: eventId);
     }
     _recentEventSet.add(eventId);
     _recentEventIds.add(eventId);
@@ -1073,7 +986,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     unawaited(ref
         .read(workspaceCacheProvider.notifier)
         .updateLiveCursor(_sessionId, _lastAppliedEventId));
-    _drainBufferedReplayEvents();
   }
 
   int? _parseEventOrdinal(String? eventId) {
@@ -1083,124 +995,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return int.tryParse(raw);
   }
 
-  void _drainBufferedReplayEvents() {
-    while (true) {
-      final last = _parseEventOrdinal(_lastAppliedEventId);
-      if (last == null) {
-        break;
-      }
-      final pending = _pendingReplayEvents.remove(last + 1);
-      if (pending == null) {
-        break;
-      }
-      _dispatchMessage(pending);
-    }
-    _awaitingReplay = _pendingReplayEvents.isNotEmpty;
-    _updateReplayWatchdog();
-  }
-
-  void _beginReplayRecovery() {
-    if (_awaitingSnapshotProjection) return;
-    if (_fullHistoryReplayInProgress) return;
-    _awaitingReplay = true;
-    _replayRetryCount = 0;
-    if (_hasReplayCursorBaseline()) {
-      _replayFullHistoryRequested = false;
-      service?.requestReplayFrom(
-        clientId: _clientId,
-        sessionId: _sessionId,
-        lastEventId: _lastAppliedEventId,
-      );
-    } else {
-      _replayFullHistoryRequested = true;
-      service?.sendResumeHello(
-        clientId: _clientId,
-        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-      );
-    }
-    _updateReplayWatchdog();
-  }
-
-  void _cancelReplayWatchdog() {
-    _replayWatchdogTimer?.cancel();
-    _replayWatchdogTimer = null;
-  }
-
-  void _resetReplayRecoveryState() {
-    _cancelReplayWatchdog();
-    _replayRetryCount = 0;
-    _replayFullHistoryRequested = false;
-    _replaySequentialCount = 0;
-  }
-
-  void _updateReplayWatchdog() {
-    if (!_awaitingReplay || _pendingReplayEvents.isEmpty) {
-      _awaitingReplay = false;
-      _resetReplayRecoveryState();
-      return;
-    }
-    if (_replayWatchdogTimer != null && _replayWatchdogTimer!.isActive) {
-      return;
-    }
-    final delay = _replayFullHistoryRequested
-        ? _replayFallbackTimeout
-        : (_replayRetryCount == 0
-            ? _replayWatchdogTimeout
-            : _replayRetryBackoffs[(_replayRetryCount - 1)
-                .clamp(0, _replayRetryBackoffs.length - 1)]);
-    _replayWatchdogTimer = Timer(delay, _handleReplayWatchdogTimeout);
-  }
-
-  void _handleReplayWatchdogTimeout() {
-    _replayWatchdogTimer = null;
-    if (!_awaitingReplay || _pendingReplayEvents.isEmpty) {
-      _resetReplayRecoveryState();
-      return;
-    }
-
-    if (!_replayFullHistoryRequested) {
-      if (_replayRetryCount < _replayRetryBackoffs.length) {
-        _replayRetryCount++;
-        service?.requestReplayFrom(
-          clientId: _clientId,
-          sessionId: _sessionId,
-          lastEventId: _lastAppliedEventId,
-        );
-        _updateReplayWatchdog();
-        return;
-      }
-
-      _replayFullHistoryRequested = true;
-      service?.sendResumeHello(
-        clientId: _clientId,
-        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-      );
-      _updateReplayWatchdog();
-      return;
-    }
-
-    final url = state.url;
-    final restoredFromCache = !_hasAuthoritativeProjection &&
-        _restoreProjectionFromCache(
-          adoptCursor: false,
-          seedCursorIfUnset: true,
-        );
-    _pendingReplayEvents.clear();
-    _awaitingReplay = false;
-    if (!restoredFromCache) {
-      _sessionId = '';
-      _lastAppliedEventId = '';
-    }
-    _recentEventIds.clear();
-    _recentEventSet.clear();
-    _resetReplayRecoveryState();
-    if (restoredFromCache) {
-      return;
-    }
-    if (url != null && url.isNotEmpty) {
-      unawaited(_reconnectAfterReplayFailure(url));
-    }
-  }
 
   Future<void> _reconnectAfterReplayFailure(String url) async {
     await _persistResumeStateNow();
@@ -1298,19 +1092,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   bool restoreProjectionFromCacheForTest({bool adoptCursor = true}) {
     return _restoreProjectionFromCache(adoptCursor: adoptCursor);
-  }
-
-  void configureReplayRecoveryForTest({
-    Duration? watchdogTimeout,
-    List<Duration>? retryBackoffs,
-    Duration? fallbackTimeout,
-  }) {
-    _replayWatchdogTimeout = watchdogTimeout ?? _defaultReplayWatchdogTimeout;
-    _replayRetryBackoffs = retryBackoffs != null
-        ? List<Duration>.from(retryBackoffs)
-        : List<Duration>.from(_defaultReplayRetryBackoffs);
-    _replayFallbackTimeout = fallbackTimeout ?? _defaultReplayFallbackTimeout;
-    _resetReplayRecoveryState();
   }
 
   SubagentInfo _upsertSubagent({
