@@ -1,0 +1,362 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// ─── Room tests ───
+
+func TestRoomEventsAfter(t *testing.T) {
+	r := newRoom("token")
+	r.history = []roomEvent{
+		{eventID: "ev-000000001"},
+		{eventID: "ev-000000002"},
+		{eventID: "ev-000000003"},
+	}
+
+	// Empty cursor → full history.
+	replay := r.eventsAfter("")
+	if len(replay) != 3 {
+		t.Fatalf("expected 3, got %d", len(replay))
+	}
+
+	// Cursor at ev-1 → replay ev-2, ev-3.
+	replay = r.eventsAfter("ev-000000001")
+	if len(replay) != 2 || replay[0].eventID != "ev-000000002" {
+		t.Fatalf("expected [ev-2, ev-3], got %v", eventIDs(replay))
+	}
+
+	// Cursor at ev-3 (tail) → empty.
+	replay = r.eventsAfter("ev-000000003")
+	if len(replay) != 0 {
+		t.Fatalf("expected 0, got %d", len(replay))
+	}
+
+	// Cursor not found → full history.
+	replay = r.eventsAfter("ev-000099999")
+	if len(replay) != 3 {
+		t.Fatalf("expected 3 (cursor not found), got %d", len(replay))
+	}
+}
+
+func TestRoomAppendEventDedupes(t *testing.T) {
+	r := newRoom("token")
+	r.appendEvent(roomEvent{eventID: "ev-000000001", typ: "a"})
+	r.appendEvent(roomEvent{eventID: "ev-000000002", typ: "b"})
+	if len(r.history) != 2 {
+		t.Fatalf("expected 2, got %d", len(r.history))
+	}
+
+	// Upsert last event.
+	r.appendEvent(roomEvent{eventID: "ev-000000002", typ: "c"})
+	if len(r.history) != 2 {
+		t.Fatalf("dedup should keep length 2, got %d", len(r.history))
+	}
+	if r.history[1].typ != "c" {
+		t.Fatalf("expected updated type c, got %s", r.history[1].typ)
+	}
+
+	// Ignore empty eventID.
+	r.appendEvent(roomEvent{eventID: "", typ: "d"})
+	if len(r.history) != 2 {
+		t.Fatalf("empty eventID should not append")
+	}
+}
+
+func TestRoomNotifyServerClientConnected(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{{eventID: "ev-000000001"}}
+	server := newPeer(nil, r, "server", nil)
+	r.server = server
+
+	r.notifyServerClientConnected()
+
+	select {
+	case raw := <-server.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" {
+			t.Fatalf("unexpected: %+v", msg)
+		}
+	default:
+		t.Fatal("expected notification")
+	}
+}
+
+// ─── ACK cursor tests ───
+
+func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
+		{eventID: "ev-000000003", raw: []byte(`{"type":"encrypted","event_id":"ev-000000003"}`)},
+	}
+
+	h := newHub(nil)
+	p := newPeer(h, r, "client", nil)
+
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	if p.clientID != "client-1" {
+		t.Fatalf("clientID not set")
+	}
+	if !p.ready {
+		t.Fatalf("peer should be ready")
+	}
+
+	// Should have: resume_ack + 3 replay events = 4 messages in sendCh.
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+
+	var ack relayMessage
+	if json.Unmarshal(msgs[0], &ack) != nil || ack.Type != "resume_ack" {
+		t.Fatalf("first message should be resume_ack, got %s", string(msgs[0]))
+	}
+
+	// Since cursor was empty, resume_ack should say full_history.
+	if string(ack.Data) != `{"replay_count":3,"resume_mode":"full_history"}` {
+		t.Fatalf("unexpected ack data: %s", string(ack.Data))
+	}
+}
+
+func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
+		{eventID: "ev-000000003", raw: []byte(`{"type":"encrypted","event_id":"ev-000000003"}`)},
+	}
+
+	h := newHub(nil)
+	p := newPeer(h, r, "client", nil)
+	p.cursor = "ev-000000001" // already ACK'd ev-1
+
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 3 { // resume_ack + ev-2 + ev-3
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+}
+
+func TestPeerOnAckUpdatesCursor(t *testing.T) {
+	r := newRoom("token")
+	h := newHub(nil)
+	p := newPeer(h, r, "client", nil)
+	p.clientID = "client-1"
+
+	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
+
+	if p.cursor != "ev-000000100" {
+		t.Fatalf("expected cursor ev-000000100, got %s", p.cursor)
+	}
+}
+
+func TestPeerOnAckPersistsToDB(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openRelayStore(filepath.Join(dir, "test.db"), 72*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	h := newHub(store)
+	p := newPeer(h, r, "client", nil)
+	p.clientID = "client-1"
+
+	p.onAck(relayMessage{EventID: "ev-000000100"}, h)
+
+	// Wait for async goroutine.
+	time.Sleep(100 * time.Millisecond)
+
+	cursor, err := store.loadClientCursor(hashToken("token"), "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "ev-000000100" {
+		t.Fatalf("expected persisted cursor ev-000000100, got %s", cursor)
+	}
+}
+
+func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openRelayStore(filepath.Join(dir, "test.db"), 72*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Pre-seed cursor in DB.
+	_ = store.saveClientCursor(hashToken("token"), "client-1", "sess-1", "ev-000000002")
+
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{}`)},
+		{eventID: "ev-000000002", raw: []byte(`{}`)},
+		{eventID: "ev-000000003", raw: []byte(`{}`)},
+		{eventID: "ev-000000004", raw: []byte(`{}`)},
+	}
+
+	h := newHub(store)
+	p := newPeer(h, r, "client", nil)
+
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	// Should replay only ev-3 and ev-4 (after cursor ev-2).
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 3 { // resume_ack + ev-3 + ev-4
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+}
+
+// ─── Peer send tests ───
+
+func TestPeerSendBackpressures(t *testing.T) {
+	p := newPeer(nil, newRoom("t"), "client", nil)
+	// Fill buffer.
+	for i := 0; i < cap(p.sendCh); i++ {
+		p.sendRaw([]byte("x"))
+	}
+	// One more send should not block indefinitely because done is open.
+	// (In production it would block until writeLoop drains, but we test non-blocking on done.)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(p.done)
+	}()
+	p.sendRaw([]byte("overflow")) // should return via done
+}
+
+// ─── Integration: full ACK lifecycle ───
+
+func TestFullACKLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openRelayStore(filepath.Join(dir, "test.db"), 72*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
+		{eventID: "ev-000000003", raw: []byte(`{"type":"encrypted","event_id":"ev-000000003"}`)},
+	}
+
+	h := newHub(store)
+	p := newPeer(h, r, "client", nil)
+
+	// Step 1: Resume (no cursor → full replay).
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+	drainSendCh(p.sendCh)
+
+	// Step 2: ACK ev-3.
+	p.onAck(relayMessage{EventID: "ev-000000003"}, h)
+	time.Sleep(100 * time.Millisecond)
+
+	// Step 3: New events arrive.
+	r.appendEvent(roomEvent{eventID: "ev-000000004", raw: []byte(`{"type":"encrypted","event_id":"ev-000000004"}`)})
+
+	// Step 4: Disconnect and reconnect (new peer, same clientID).
+	p2 := newPeer(h, r, "client", nil)
+	p2.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	msgs := drainSendCh(p2.sendCh)
+	// Should only replay ev-4 (cursor at ev-3).
+	if len(msgs) != 2 { // resume_ack + ev-4
+		t.Fatalf("expected 2 messages after reconnect, got %d", len(msgs))
+	}
+
+	var ack relayMessage
+	json.Unmarshal(msgs[0], &ack)
+	if ack.Type != "resume_ack" {
+		t.Fatalf("expected resume_ack")
+	}
+}
+
+// ─── Hub tests ───
+
+func TestHubGetOrCreateRoom(t *testing.T) {
+	h := newHub(nil)
+	r1 := h.getOrCreateRoom("token-a")
+	r2 := h.getOrCreateRoom("token-a")
+	if r1 != r2 {
+		t.Fatal("same token should return same room")
+	}
+	r3 := h.getOrCreateRoom("token-b")
+	if r1 == r3 {
+		t.Fatal("different token should return different room")
+	}
+}
+
+func TestHubDestroyRoom(t *testing.T) {
+	h := newHub(nil)
+	r := h.getOrCreateRoom("token")
+	p := newPeer(h, r, "client", nil)
+	p.ready = true
+	r.clients[p] = struct{}{}
+
+	h.destroyRoom("token")
+
+	// Client should have received sharing_stopped.
+	select {
+	case raw := <-p.sendCh:
+		var msg relayMessage
+		json.Unmarshal(raw, &msg)
+		if msg.Type != "sharing_stopped" {
+			t.Fatalf("expected sharing_stopped, got %s", msg.Type)
+		}
+	default:
+		t.Fatal("client should be notified")
+	}
+
+	h.mu.RLock()
+	_, exists := h.rooms["token"]
+	h.mu.RUnlock()
+	if exists {
+		t.Fatal("room should be removed from hub")
+	}
+}
+
+// ─── Helpers ───
+
+func drainSendCh(ch chan []byte) [][]byte {
+	var msgs [][]byte
+	for {
+		select {
+		case raw := <-ch:
+			msgs = append(msgs, raw)
+		default:
+			return msgs
+		}
+	}
+}
+
+func eventIDs(events []roomEvent) []string {
+	ids := make([]string, len(events))
+	for i, ev := range events {
+		ids[i] = ev.eventID
+	}
+	return ids
+}
+
+func TestMain(m *testing.M) {
+	// Set a temp HOME so DB path doesn't collide.
+	os.Exit(m.Run())
+}

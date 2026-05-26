@@ -101,6 +101,15 @@ CREATE INDEX IF NOT EXISTS idx_relay_sessions_expiry
 
 CREATE INDEX IF NOT EXISTS idx_relay_global_sessions_expiry
   ON relay_global_sessions(last_event_at);
+
+CREATE TABLE IF NOT EXISTS relay_client_cursors (
+  room_token_hash TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  session_id TEXT NOT NULL DEFAULT '',
+  last_acked_event_id TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL,
+  PRIMARY KEY (room_token_hash, client_id)
+);
 `
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -431,11 +440,47 @@ func hashToken(token string) string {
 }
 
 func (s *relayStore) nukeAll() error {
-	tables := []string{"relay_events", "relay_sessions", "relay_rooms", "relay_global_events", "relay_global_sessions"}
+	tables := []string{"relay_events", "relay_sessions", "relay_rooms", "relay_global_events", "relay_global_sessions", "relay_client_cursors"}
 	for _, t := range tables {
 		if _, err := s.db.Exec("DELETE FROM " + t); err != nil {
 			return fmt.Errorf("delete %s: %w", t, err)
 		}
 	}
 	return nil
+}
+
+// loadClientCursor loads the last ACK'd event ID for a client in a room.
+// Returns ("", nil) if no cursor exists.
+func (s *relayStore) loadClientCursor(tokenHash, clientID string) (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	var eventID string
+	err := s.db.QueryRow(
+		`SELECT last_acked_event_id FROM relay_client_cursors
+		  WHERE room_token_hash = ? AND client_id = ?`,
+		tokenHash, clientID,
+	).Scan(&eventID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return eventID, err
+}
+
+// saveClientCursor persists the client's ACK cursor.
+func (s *relayStore) saveClientCursor(tokenHash, clientID, sessionID, eventID string) error {
+	if s == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`INSERT INTO relay_client_cursors (room_token_hash, client_id, session_id, last_acked_event_id, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(room_token_hash, client_id)
+		 DO UPDATE SET session_id = excluded.session_id,
+		               last_acked_event_id = excluded.last_acked_event_id,
+		               updated_at = excluded.updated_at`,
+		tokenHash, clientID, sessionID, eventID, now,
+	)
+	return err
 }
