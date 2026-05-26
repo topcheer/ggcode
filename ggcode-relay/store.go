@@ -15,7 +15,7 @@ import (
 const (
 	defaultDBDir           = "/db"
 	defaultDBFilename      = "relay.db"
-	defaultCleanupAge      = 72 * time.Hour
+	defaultCleanupAge      = 12 * time.Hour
 	defaultCleanupInterval = 6 * time.Hour
 )
 
