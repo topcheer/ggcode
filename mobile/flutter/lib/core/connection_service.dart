@@ -7,6 +7,20 @@ import 'package:flutter/foundation.dart';
 import 'crypto.dart';
 import 'models/protocol.dart' as proto;
 
+/// Normalize tunnel URL schemes (ggcode:// → wss://, http:// → ws://, etc).
+String normalizeTunnelUrl(String raw) {
+  String url = raw.trim();
+  if (url.startsWith('ggcode://')) {
+    url = url.replaceFirst('ggcode://', 'wss://');
+  }
+  if (url.startsWith('http://')) {
+    url = url.replaceFirst('http://', 'ws://');
+  } else if (url.startsWith('https://')) {
+    url = url.replaceFirst('https://', 'wss://');
+  }
+  return url;
+}
+
 enum ConnectionStatus {
   disconnected,
   connecting,
