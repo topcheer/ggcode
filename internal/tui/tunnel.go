@@ -835,7 +835,7 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 				Role:            "tool_call",
 				ToolID:          it.ID(),
 				ToolName:        it.ToolName(),
-				ToolDisplayName: toolCallDisplayName(it.ToolName(), rawArgs),
+				ToolDisplayName: present.DisplayName,
 				ToolArgs:        argsStr,
 				ToolDetail:      present.Detail,
 			})
@@ -947,7 +947,7 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 						Role:            "tool_call",
 						ToolID:          block.ToolID,
 						ToolName:        block.ToolName,
-						ToolDisplayName: toolCallDisplayName(block.ToolName, string(block.Input)),
+						ToolDisplayName: present.DisplayName,
 						ToolArgs:        argsStr,
 						ToolDetail:      present.Detail,
 					})

@@ -109,7 +109,7 @@ func TestTunnelMessagesToHistory_AssistantWithTool(t *testing.T) {
 	if history[1].Role != "tool_call" || history[1].ToolName != "read_file" {
 		t.Errorf("entry 1: %+v", history[1])
 	}
-	if history[1].ToolDisplayName != "Read File" {
+	if history[1].ToolDisplayName != "Read" {
 		t.Errorf("entry 1 display name: %q", history[1].ToolDisplayName)
 	}
 }
@@ -177,11 +177,12 @@ func TestTunnelMessagesToHistoryStoresToolDetail(t *testing.T) {
 	if len(history) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(history))
 	}
+	// describeTool returns localized label for run_command (no comment line in command)
 	if history[0].ToolDetail == "" {
 		t.Fatal("expected tool_detail to be populated for tool history")
 	}
-	if history[0].ToolDisplayName != "Run Command" {
-		t.Fatalf("expected fallback tool display name, got %q", history[0].ToolDisplayName)
+	if history[0].ToolDisplayName != "Run" {
+		t.Fatalf("expected command display name, got %q", history[0].ToolDisplayName)
 	}
 }
 
@@ -195,7 +196,8 @@ func TestTunnelMessagesToHistoryStoresToolDisplayNameFromDescription(t *testing.
 	if len(history) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(history))
 	}
-	if history[0].ToolDisplayName != "run tests" {
+	// describeTool uses description field: desc + " (" + friendlyToolName + ")"
+	if history[0].ToolDisplayName != "run tests (Bash)" {
 		t.Fatalf("expected tool display name from description, got %q", history[0].ToolDisplayName)
 	}
 }
