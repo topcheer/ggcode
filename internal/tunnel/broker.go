@@ -579,6 +579,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		defer b.endProjectionSync()
 		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 		b.flushAllText()
+		_ = b.session.SendActiveSession(currentSessionID)
 		if replayed := b.replayCanonicalEvents(false); replayed {
 			return
 		}
