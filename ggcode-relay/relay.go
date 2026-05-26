@@ -252,10 +252,6 @@ func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 
 func (p *peer) handleServerBroadcast(raw []byte, msg relayMessage) {
 	p.room.mu.Lock()
-	if msg.SessionID != "" && msg.SessionID != p.room.sessionID {
-		p.room.sessionID = msg.SessionID
-		p.room.history = nil
-	}
 	ev := roomEvent{
 		sessionID: msg.SessionID,
 		eventID:   msg.EventID,
@@ -584,7 +580,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	token := r.URL.Query().Get("token")
 	role := r.URL.Query().Get("role")
-	sessionID := r.URL.Query().Get("session_id")
 	clientID := r.URL.Query().Get("client_id")
 
 	if token == "" {
@@ -615,10 +610,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			room.offlineTimer.Stop()
 			room.offlineTimer = nil
 		}
-		if room.sessionID == "" {
-			room.sessionID = sessionID
-		}
-		// Hydrate from DB if needed.
+		// Hydrate from DB once active_session sets room.sessionID.
 		if len(room.history) == 0 && h.store != nil && room.sessionID != "" {
 			events, _ := h.store.loadSessionHistory(room.sessionID)
 			room.history = events
