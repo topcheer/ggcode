@@ -117,6 +117,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			publishCurrentSessionCmd(true),
 		)
 
+	case sessionUsageMsg:
+		m.recordSessionUsage(msg.Usage)
+		return m, nil
+
 	case tunnelPublishCurrentSessionMsg:
 		m.publishTunnelSnapshotForCurrentSession(msg.reset)
 		return m, nil

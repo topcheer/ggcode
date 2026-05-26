@@ -200,6 +200,9 @@ func (b *AgentBridge) ClearCurrentSession() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.currentSes = nil
+	if b.ui != nil {
+		b.ui.SetSessionUsage(provider.TokenUsage{})
+	}
 }
 
 func (b *AgentBridge) markTunnelSubagentSpawned(id string) bool {
@@ -501,6 +504,7 @@ func (b *AgentBridge) setupAgent() error {
 	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 	b.agent.SetPermissionPolicy(policy)
 	b.permissionMode = mode
+	b.agent.SetUsageHandler(b.recordSessionUsage)
 
 	// Approval handler — popup dialog for tool approval
 	b.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
@@ -1027,6 +1031,29 @@ func (b *AgentBridge) TokenCount() int {
 		return 0
 	}
 	return b.agent.ContextManager().TokenCount()
+}
+
+func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil {
+		b.mu.Unlock()
+		return
+	}
+	b.currentSes.TokenUsage.Add(usage)
+	b.currentSes.UpdatedAt = time.Now()
+	ses := b.currentSes
+	store := b.sessionStore
+	total := b.currentSes.TokenUsage
+	b.mu.Unlock()
+
+	if b.ui != nil {
+		b.ui.SetSessionUsage(total)
+	}
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetaToDisk(ses)
+	} else {
+		_ = store.Save(ses)
+	}
 }
 
 func (b *AgentBridge) Resolved() *config.ResolvedEndpoint {
@@ -1706,6 +1733,9 @@ func (b *AgentBridge) ensureSession() {
 	ses := session.NewSession(vendor, endpoint, model)
 	_ = b.sessionStore.Save(ses)
 	b.currentSes = ses
+	if b.ui != nil {
+		b.ui.SetSessionUsage(ses.TokenUsage)
+	}
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
 	}
@@ -2232,6 +2262,9 @@ func (b *AgentBridge) ResumeSession(id string) error {
 	b.mu.Lock()
 	b.currentSes = ses
 	b.mu.Unlock()
+	if b.ui != nil {
+		b.ui.SetSessionUsage(ses.TokenUsage)
+	}
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
 	}

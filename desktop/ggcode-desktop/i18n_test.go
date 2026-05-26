@@ -15,6 +15,10 @@ func TestEmbeddedTranslationsAreValidJSON(t *testing.T) {
 		"sidebar.tab.provider",
 		"share.title",
 		"update.title",
+		"onboard.card_title",
+		"onboard.no_presets",
+		"app.welcome_title",
+		"sidebar.session_usage_card",
 	}
 
 	for _, lang := range []string{"en", "zh-CN"} {

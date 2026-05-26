@@ -10,6 +10,7 @@ import (
 
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // ── Event-driven UI updates ────────────────────────
@@ -45,6 +46,13 @@ type UIState struct {
 	TokenUsage binding.String
 	ContextWin binding.String
 	TokenPct   binding.Float
+
+	SessionUsageTotal      binding.String
+	SessionUsageInput      binding.String
+	SessionUsageOutput     binding.String
+	SessionUsageCacheRead  binding.String
+	SessionUsageCacheWrite binding.String
+	SessionUsageValueLines binding.String
 
 	AgentWorking atomic.Bool // true while agent is busy
 
@@ -91,11 +99,23 @@ func NewUIState() *UIState {
 	s.TokenUsage = binding.NewString()
 	s.ContextWin = binding.NewString()
 	s.TokenPct = binding.NewFloat()
+	s.SessionUsageTotal = binding.NewString()
+	s.SessionUsageInput = binding.NewString()
+	s.SessionUsageOutput = binding.NewString()
+	s.SessionUsageCacheRead = binding.NewString()
+	s.SessionUsageCacheWrite = binding.NewString()
+	s.SessionUsageValueLines = binding.NewString()
 	_ = s.StatusText.Set("Ready")
 	_ = s.ModelName.Set("")
 	_ = s.TokenUsage.Set("")
 	_ = s.ContextWin.Set("")
 	_ = s.TokenPct.Set(0)
+	_ = s.SessionUsageTotal.Set("0")
+	_ = s.SessionUsageInput.Set("0")
+	_ = s.SessionUsageOutput.Set("0")
+	_ = s.SessionUsageCacheRead.Set("0")
+	_ = s.SessionUsageCacheWrite.Set("0")
+	_ = s.SessionUsageValueLines.Set(strings.Join([]string{"0", "0", "0", "0", "0"}, "\n"))
 	return s
 }
 
@@ -127,6 +147,20 @@ func (u *UIState) SetModelInfo(model, contextWin string) {
 func (u *UIState) SetTokenUsage(usage string, pct float64) {
 	_ = u.TokenUsage.Set(usage)
 	_ = u.TokenPct.Set(pct)
+}
+
+func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
+	total := humanizeTokens(usage.Total())
+	input := humanizeTokens(usage.InputTokens)
+	output := humanizeTokens(usage.OutputTokens)
+	cacheRead := humanizeTokens(usage.CacheRead)
+	cacheWrite := humanizeTokens(usage.CacheWrite)
+	_ = u.SessionUsageTotal.Set(total)
+	_ = u.SessionUsageInput.Set(input)
+	_ = u.SessionUsageOutput.Set(output)
+	_ = u.SessionUsageCacheRead.Set(cacheRead)
+	_ = u.SessionUsageCacheWrite.Set(cacheWrite)
+	_ = u.SessionUsageValueLines.Set(strings.Join([]string{total, input, output, cacheRead, cacheWrite}, "\n"))
 }
 
 // AppendChat appends a message to the chat list (thread-safe).

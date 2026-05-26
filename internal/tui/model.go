@@ -526,6 +526,29 @@ func (m *Model) Session() *session.Session {
 	return m.session
 }
 
+func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
+	if m.session == nil || m.sessionStore == nil {
+		return
+	}
+	mu := m.sessionMutex()
+	mu.Lock()
+	if m.session == nil || m.sessionStore == nil {
+		mu.Unlock()
+		return
+	}
+	m.session.TokenUsage.Add(usage)
+	m.session.UpdatedAt = time.Now()
+	ses := m.session
+	store := m.sessionStore
+	mu.Unlock()
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetaToDisk(ses)
+	} else {
+		_ = store.Save(ses)
+	}
+}
+
 func (m *Model) SetIMManager(mgr *im.Manager) {
 	m.imManager = mgr
 	if mgr != nil {

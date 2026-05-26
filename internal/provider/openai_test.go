@@ -503,3 +503,34 @@ func TestCountTokens_AllProvidersCountOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAIUsageIncludesCachedTokens(t *testing.T) {
+	usage := openAIUsage(openai.Usage{
+		PromptTokens:     1200,
+		CompletionTokens: 300,
+		PromptTokensDetails: &openai.PromptTokensDetails{
+			CachedTokens: 800,
+		},
+	})
+	if usage.InputTokens != 1200 || usage.OutputTokens != 300 {
+		t.Fatalf("expected input/output tokens 1200/300, got %d/%d", usage.InputTokens, usage.OutputTokens)
+	}
+	if usage.CacheRead != 800 || usage.CacheWrite != 0 {
+		t.Fatalf("expected cache usage read/write 800/0, got %d/%d", usage.CacheRead, usage.CacheWrite)
+	}
+}
+
+func TestAnthropicUsageIncludesCacheTokens(t *testing.T) {
+	usage := anthropicUsage(anthropic.Usage{
+		InputTokens:              23,
+		OutputTokens:             9,
+		CacheCreationInputTokens: 128,
+		CacheReadInputTokens:     8832,
+	})
+	if usage.InputTokens != 23 || usage.OutputTokens != 9 {
+		t.Fatalf("expected input/output tokens 23/9, got %d/%d", usage.InputTokens, usage.OutputTokens)
+	}
+	if usage.CacheRead != 8832 || usage.CacheWrite != 128 {
+		t.Fatalf("expected cache usage read/write 8832/128, got %d/%d", usage.CacheRead, usage.CacheWrite)
+	}
+}

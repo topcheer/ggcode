@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/version"
 )
@@ -34,7 +35,7 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarDetailRow(m.t("label.branch"), util.FirstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		"",
-		m.renderSidebarModeSection(),
+		m.renderSidebarSessionUsageSection(),
 		m.renderSidebarUpdateSection(),
 		"",
 		m.renderSidebarIMSection(),
@@ -51,13 +52,20 @@ func (m Model) renderSidebar() string {
 		Width(m.boxInnerWidth(m.sidebarWidth())).
 		Render(body)
 }
-func (m Model) renderSidebarModeSection() string {
+
+func (m Model) renderSidebarSessionUsageSection() string {
 	width := max(12, m.sidebarWidth()-4)
+	usage := m.sidebarSessionUsage()
+	renderUsageRow := func(label, value string) string {
+		return m.renderSidebarDetailRowWithLabelWidth(label, value, width, 11)
+	}
 	rows := []string{
-		m.renderSidebarSectionTitle(m.t("panel.mode_policy")),
-		m.renderSidebarDetailRow(m.t("label.approval_policy"), m.t(sidebarModeApprovalKey(m.mode)), width),
-		m.renderSidebarDetailRow(m.t("label.tool_policy"), m.t(sidebarModeToolsKey(m.mode)), width),
-		m.renderSidebarDetailRow(m.t("label.agent_policy"), m.t(sidebarModeAgentKey(m.mode)), width),
+		m.renderSidebarSectionTitle(m.t("panel.session_usage")),
+		renderUsageRow(m.t("label.total"), humanizeTokenCount(usage.Total())),
+		renderUsageRow(m.t("label.input"), humanizeTokenCount(usage.InputTokens)),
+		renderUsageRow(m.t("label.output"), humanizeTokenCount(usage.OutputTokens)),
+		renderUsageRow(m.t("label.cache_read"), humanizeTokenCount(usage.CacheRead)),
+		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
 	}
 	return strings.Join(rows, "\n")
 }
@@ -441,7 +449,13 @@ func (m Model) renderSidebarSectionTitle(title string) string {
 }
 
 func (m Model) renderSidebarDetailRow(label, value string, width int) string {
-	const labelWidth = 9
+	return m.renderSidebarDetailRowWithLabelWidth(label, value, width, 9)
+}
+
+func (m Model) renderSidebarDetailRowWithLabelWidth(label, value string, width, labelWidth int) string {
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
 	key := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
 		Width(labelWidth).
@@ -573,6 +587,13 @@ func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
 		usagePercent:     usagePercent,
 		remainingPercent: remainingPercent,
 	}, true
+}
+
+func (m Model) sidebarSessionUsage() provider.TokenUsage {
+	if m.session == nil {
+		return provider.TokenUsage{}
+	}
+	return m.session.TokenUsage
 }
 
 func humanizeTokenCount(n int) string {

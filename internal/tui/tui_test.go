@@ -692,6 +692,29 @@ func TestSidebarShowsUpdateHintWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestSidebarShowsSessionUsage(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	m.session = &session.Session{
+		TokenUsage: provider.TokenUsage{
+			InputTokens:  1200,
+			OutputTokens: 340,
+			CacheRead:    800,
+			CacheWrite:   64,
+		},
+	}
+
+	sidebar := stripAnsi(m.renderSidebar())
+	for _, want := range []string{"Session usage", "1540", "1200", "340", "800", "64", "cache read", "cache write"} {
+		if !strings.Contains(sidebar, want) {
+			t.Fatalf("expected %q in sidebar, got %q", want, sidebar)
+		}
+	}
+	if strings.Contains(sidebar, "Mode policy") {
+		t.Fatalf("expected session usage to replace mode policy, got %q", sidebar)
+	}
+}
+
 type fakeMCPManager struct {
 	retried     []string
 	installed   []config.MCPServerConfig

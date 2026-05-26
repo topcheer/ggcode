@@ -30,6 +30,8 @@ func enCatalog(key string) string {
 		return "Agent status"
 	case "panel.mode_policy":
 		return "Mode policy"
+	case "panel.session_usage":
+		return "Session usage"
 	case "panel.context":
 		return "Context"
 	case "panel.im":
@@ -86,6 +88,8 @@ func enCatalog(key string) string {
 		return "usage"
 	case "label.compact":
 		return "compact"
+	case "label.total":
+		return "total"
 	case "label.approval_policy":
 		return "approval"
 	case "label.tool_policy":
@@ -96,6 +100,12 @@ func enCatalog(key string) string {
 		return "tool"
 	case "label.input":
 		return "input"
+	case "label.output":
+		return "output"
+	case "label.cache_read":
+		return "cache read"
+	case "label.cache_write":
+		return "cache write"
 	case "label.file":
 		return "file"
 	case "label.directory":
