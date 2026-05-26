@@ -64,6 +64,7 @@ class ConnectionService {
 
   // Sequential message processing queue
   Future<void> _queue = Future.value();
+  int _decryptErrorCount = 0;
 
   ConnectionService({required this.url, required this.crypto});
 
@@ -98,14 +99,20 @@ class ConnectionService {
     }
 
     _reconnectAttempts = 0;
+    _decryptErrorCount = 0;
     _serverOfflineReconnect = false;
     _queue = Future.value();
 
     _socketSub = _socket!.listen(
       (data) {
         if (data is! String) return;
-        // Enqueue for sequential processing
-        _queue = _queue.then((_) => _handleRelayMessage(data));
+        // Enqueue for sequential processing. Catch errors to prevent a
+        // single bad message from breaking the entire chain — all subsequent
+        // messages would be silently dropped otherwise.
+        _queue = _queue.then((_) => _handleRelayMessage(data)).catchError((e) {
+          // Swallow to keep the chain alive; _handleRelayMessage handles
+          // its own errors internally for known cases.
+        });
       },
       onDone: () {
         _cleanup();
@@ -278,9 +285,13 @@ class ConnectionService {
               data: msg.data,
             );
           }
+          _decryptErrorCount = 0;
           _messageController.add(msg);
         } catch (e) {
-          // Decrypt error
+          _decryptErrorCount++;
+          if (_decryptErrorCount <= 3) {
+            _errorController.add('Decrypt error (#$_decryptErrorCount): $e');
+          }
         }
         break;
     }
