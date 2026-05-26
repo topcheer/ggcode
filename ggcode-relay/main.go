@@ -549,6 +549,8 @@ func (p *peer) handleResume(msg relayMessage) {
 	)
 }
 
+const maxIncrementalReplay = 500
+
 func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEvent) {
 	if len(r.history) == 0 {
 		return "full_history", nil
@@ -560,7 +562,15 @@ func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEv
 	}
 	for i, ev := range r.history {
 		if ev.eventID == lastEventID {
-			replay := make([]roomEvent, len(r.history[i+1:]))
+			pending := len(r.history) - i - 1
+			if pending > maxIncrementalReplay {
+				// Too many events to replay incrementally — request a snapshot
+				// from the desktop broker instead.
+				log.Printf("[relay] incremental replay too large: room=%s pending=%d max=%d — requesting snapshot",
+					shortToken(r.token), pending, maxIncrementalReplay)
+				return "snapshot_required", nil
+			}
+			replay := make([]roomEvent, pending)
 			copy(replay, r.history[i+1:])
 			return "incremental", replay
 		}

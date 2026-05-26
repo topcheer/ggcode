@@ -81,6 +81,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   final Set<String> _recentEventSet = <String>{};
   Timer? _replayWatchdogTimer;
   int _replayRetryCount = 0;
+  int _replaySequentialCount = 0;
   bool _replayFullHistoryRequested = false;
   Duration _replayWatchdogTimeout = _defaultReplayWatchdogTimeout;
   List<Duration> _replayRetryBackoffs =
@@ -347,6 +348,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'resume_ack':
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
+        debugPrint('[session] resume_ack: mode=$resumeMode sessionId=${msg.sessionId} lastEvent=$_lastAppliedEventId awaiting=$_awaitingReplay pending=${_pendingReplayEvents.length}');
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
@@ -366,12 +368,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           // full-history replay is in flight.
           _markProjectionAuthoritative();
         } else {
-          // For incremental resume, set replay state and start watchdog.
-          // Only start the watchdog if there are actually pending events to wait for.
-          _awaitingReplay = _pendingReplayEvents.isNotEmpty;
-          if (_awaitingReplay) {
-            _updateReplayWatchdog();
-          }
+          // For incremental resume, clear pending events and cancel the
+          // watchdog.  Replay events will flow in and be accepted directly
+          // (ordinal check is suppressed while _awaitingReplay is true).
+          // If a gap still exists after replay completes, a fresh
+          // _beginReplayRecovery will trigger from _shouldApplyEvent.
+          _pendingReplayEvents.clear();
+          _resetReplayRecoveryState();
+          // Keep _awaitingReplay true so _shouldApplyEvent skips ordinal
+          // checks during the replay burst.
+          _awaitingReplay = true;
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
@@ -1005,7 +1011,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     final next = _parseEventOrdinal(eventId);
     final last = _parseEventOrdinal(_lastAppliedEventId);
-    if (!_awaitingSnapshotProjection && !_fullHistoryReplayInProgress && last != null && next != null) {
+    if (!_awaitingSnapshotProjection && !_fullHistoryReplayInProgress && !_awaitingReplay && last != null && next != null) {
       if (next <= last) {
         _pendingReplayEvents.remove(next);
         return false;
@@ -1025,6 +1031,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _markEventApplied(proto.WsMessage msg) {
     final eventId = msg.eventId;
+    if (eventId != null && eventId.isNotEmpty) {
+      debugPrint('[session] _markEventApplied: event=$eventId last=$_lastAppliedEventId type=${msg.type}');
+    }
     if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
       _sessionId = msg.sessionId!;
     }
@@ -1037,6 +1046,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _lastAppliedEventId = eventId;
     final ordinal = _parseEventOrdinal(eventId);
+    // Track consecutive sequential events during replay.
+    // After enough sequential events, exit replay mode.
+    if (_awaitingReplay) {
+      final last = _parseEventOrdinal(_lastAppliedEventId);
+      if (last != null && ordinal != null && ordinal == last) {
+        _replaySequentialCount++;
+        if (_replaySequentialCount >= 10) {
+          _awaitingReplay = false;
+          _replaySequentialCount = 0;
+        }
+      } else {
+        _replaySequentialCount = 1;
+      }
+    }
     if (ordinal != null) {
       _pendingReplayEvents.remove(ordinal);
     }
@@ -1107,6 +1130,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _cancelReplayWatchdog();
     _replayRetryCount = 0;
     _replayFullHistoryRequested = false;
+    _replaySequentialCount = 0;
   }
 
   void _updateReplayWatchdog() {
