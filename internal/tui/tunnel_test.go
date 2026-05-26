@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/chat"
@@ -167,6 +168,22 @@ func TestTunnelMessagesToHistory_TruncatesToolArgs(t *testing.T) {
 	}
 }
 
+func TestTunnelMessagesToHistory_TruncatesToolArgsWithoutBreakingUTF8(t *testing.T) {
+	rawArgs := `"` + strings.Repeat("a", 198) + `你"`
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{Type: "tool_use", ToolID: "t1", ToolName: "tool", Input: json.RawMessage(rawArgs)},
+		}},
+	}
+	history := tunnelMessagesToHistory(msgs)
+	if len(history) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(history))
+	}
+	if !utf8.ValidString(history[0].ToolArgs) {
+		t.Fatalf("expected valid UTF-8 tool args, got %q", history[0].ToolArgs)
+	}
+}
+
 func TestTunnelMessagesToHistoryStoresToolDetail(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
@@ -212,6 +229,22 @@ func TestTunnelMessagesToHistory_TruncatesResult(t *testing.T) {
 	history := tunnelMessagesToHistory(msgs)
 	if len(history[0].Result) > 503 {
 		t.Errorf("result not truncated: %d chars", len(history[0].Result))
+	}
+}
+
+func TestTunnelMessagesToHistory_TruncatesResultWithoutBreakingUTF8(t *testing.T) {
+	longResult := strings.Repeat("y", 499) + "你"
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "t1", ToolName: "tool", Output: longResult},
+		}},
+	}
+	history := tunnelMessagesToHistory(msgs)
+	if len(history) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(history))
+	}
+	if !utf8.ValidString(history[0].Result) {
+		t.Fatalf("expected valid UTF-8 result, got %q", history[0].Result)
 	}
 }
 
