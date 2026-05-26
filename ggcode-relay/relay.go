@@ -252,6 +252,18 @@ func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 
 func (p *peer) handleServerBroadcast(raw []byte, msg relayMessage) {
 	p.room.mu.Lock()
+	if msg.SessionID != "" && msg.SessionID != p.room.sessionID {
+		p.room.sessionID = msg.SessionID
+		p.room.history = nil
+		// Load new session history from DB.
+		if p.hub.store != nil {
+			events, _ := p.hub.store.loadSessionHistory(msg.SessionID)
+			p.room.history = events
+			if p.hub.stats != nil {
+				p.hub.stats.recordActiveSession(true, len(events))
+			}
+		}
+	}
 	ev := roomEvent{
 		sessionID: msg.SessionID,
 		eventID:   msg.EventID,
