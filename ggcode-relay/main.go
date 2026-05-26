@@ -924,32 +924,7 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/nuke", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(405)
-			return
-		}
-		h.mu.Lock()
-		for _, rm := range h.rooms {
-			rm.mu.Lock()
-			for p := range rm.clients {
-				close(p.done)
-			}
-			rm.history = nil
-			rm.mu.Unlock()
-		}
-		h.rooms = make(map[string]*room)
-		h.mu.Unlock()
-		if h.store != nil {
-			if err := h.store.nukeAll(); err != nil {
-				log.Printf("[relay] nuke db error: %v", err)
-				w.WriteHeader(500)
-				w.Write([]byte("db error"))
-				return
-			}
-		}
-		log.Printf("[relay] nuke: all rooms and persisted data cleared")
-		w.WriteHeader(200)
-		w.Write([]byte("nuked"))
+		w.WriteHeader(404)
 	})
 	log.Printf("[relay] listening on :%s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
