@@ -622,11 +622,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			room.offlineTimer.Stop()
 			room.offlineTimer = nil
 		}
-		// Hydrate from DB once active_session sets room.sessionID.
-		if len(room.history) == 0 && h.store != nil && room.sessionID != "" {
-			events, _ := h.store.loadSessionHistory(room.sessionID)
-			room.history = events
-		}
 	} else {
 		room.clients[p] = struct{}{}
 	}
