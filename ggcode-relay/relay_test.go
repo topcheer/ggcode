@@ -113,14 +113,18 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 		t.Fatalf("peer should be ready")
 	}
 
-	// Should have: resume_ack + 3 replay events = 4 messages in sendCh.
+	// Should have: active_session + resume_ack + 3 replay events = 5 messages.
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 4 {
-		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 
+	var first relayMessage
+	if json.Unmarshal(msgs[0], &first) != nil || first.Type != "active_session" {
+		t.Fatalf("first message should be active_session, got %s", string(msgs[0]))
+	}
 	var ack relayMessage
-	if json.Unmarshal(msgs[0], &ack) != nil || ack.Type != "resume_ack" {
+	if json.Unmarshal(msgs[1], &ack) != nil || ack.Type != "resume_ack" {
 		t.Fatalf("first message should be resume_ack, got %s", string(msgs[0]))
 	}
 
@@ -146,8 +150,8 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 3 { // resume_ack + ev-2 + ev-3
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if len(msgs) != 4 { // active_session + resume_ack + ev-2 + ev-3
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
 
@@ -219,8 +223,8 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 
 	// Should replay only ev-3 and ev-4 (after cursor ev-2).
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 3 { // resume_ack + ev-3 + ev-4
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if len(msgs) != 4 { // active_session + resume_ack + ev-3 + ev-4
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
 
@@ -279,12 +283,17 @@ func TestFullACKLifecycle(t *testing.T) {
 
 	msgs := drainSendCh(p2.sendCh)
 	// Should only replay ev-4 (cursor at ev-3).
-	if len(msgs) != 2 { // resume_ack + ev-4
-		t.Fatalf("expected 2 messages after reconnect, got %d", len(msgs))
+	if len(msgs) != 3 { // active_session + resume_ack + ev-4
+		t.Fatalf("expected 3 messages after reconnect, got %d", len(msgs))
 	}
 
+	var first relayMessage
+	json.Unmarshal(msgs[0], &first)
+	if first.Type != "active_session" {
+		t.Fatalf("expected active_session first, got %s", first.Type)
+	}
 	var ack relayMessage
-	json.Unmarshal(msgs[0], &ack)
+	json.Unmarshal(msgs[1], &ack)
 	if ack.Type != "resume_ack" {
 		t.Fatalf("expected resume_ack")
 	}

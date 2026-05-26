@@ -364,6 +364,14 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		mode = "full_history"
 	}
 
+	// 1. Send active_session so mobile can load its cached snapshot.
+	p.send(relayMessage{
+		Type:      "active_session",
+		SessionID: p.room.sessionID,
+		ClientID:  msg.ClientID,
+	})
+
+	// 2. Send resume_ack.
 	p.send(relayMessage{
 		Type:      "resume_ack",
 		SessionID: p.room.sessionID,
