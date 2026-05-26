@@ -1200,15 +1200,20 @@ func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
 	if ev.Type == "" {
 		return
 	}
+	data := append(json.RawMessage(nil), ev.Data...)
+	b.outMu.Lock()
+	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
 		SessionID: b.SessionID(),
-		EventID:   fmt.Sprintf("ev-%09d", b.nextEvent.Add(1)),
+		EventID:   fmt.Sprintf("ev-%09d", eventNum),
 		StreamID:  ev.StreamID,
 		Type:      ev.Type,
-		Data:      append(json.RawMessage(nil), ev.Data...),
+		Data:      data,
 	}
+	b.outbound = append(b.outbound, msg)
+	b.outMu.Unlock()
+	b.outCond.Signal()
 	b.recordEvent(msg)
-	b.enqueueOut(msg)
 }
 
 func (b *Broker) trackSend(eventID string) <-chan struct{} {
@@ -1243,14 +1248,32 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 }
 
 func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{}) {
-	msg := b.newMessage(eventType, streamID, data)
-	if msg.Type == "" {
+	// Marshal outside the lock — this is the expensive part.
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
 		return
 	}
+	// Assign eventNum AND enqueue under the same lock so that
+	// event IDs are always strictly increasing in the outbound queue.
+	b.outMu.Lock()
+	eventNum := b.nextEvent.Add(1)
+	msg := GatewayMessage{
+		SessionID: b.SessionID(),
+		EventID:   fmt.Sprintf("ev-%09d", eventNum),
+		StreamID:  streamID,
+		Type:      eventType,
+		Data:      dataBytes,
+	}
+	b.outbound = append(b.outbound, msg)
+	b.outMu.Unlock()
+	b.outCond.Signal()
 	b.recordEvent(msg)
-	b.enqueueOut(msg)
 }
 
+// newMessage allocates a new event ID and marshals data.  Only used by
+// callers that need the GatewayMessage before enqueuing (tests, etc.).
+// For the hot path use enqueueWithStream which is race-free.
 func (b *Broker) newMessage(eventType, streamID string, data interface{}) GatewayMessage {
 	eventNum := b.nextEvent.Add(1)
 
