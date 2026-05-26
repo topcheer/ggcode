@@ -390,7 +390,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'session_info':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         final data = proto.SessionInfoData.fromJson(msg.data!);
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
@@ -419,7 +419,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'activity':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.ActivityData.fromJson(msg.data!);
           _setAgentActivity(data.activity);
@@ -428,7 +428,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'user_message':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.MessageData.fromJson(msg.data!);
           final displayText =
@@ -460,7 +460,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'system_message':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.MessageData.fromJson(msg.data!);
           final displayText =
@@ -479,7 +479,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'text':
       case 'stream_text':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.TextData.fromJson(msg.data!);
           final text = data.chunk.isNotEmpty
@@ -500,7 +500,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'reasoning':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.TextData.fromJson(msg.data!);
           final reasoningId = data.id.isNotEmpty
@@ -523,7 +523,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'stream_end':
       case 'text_done':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         final msgId = msg.data?['id'] as String? ?? msg.streamId;
         if (msgId != null && msgId.isNotEmpty) {
           chatNotifier.finalizeStreaming(msgId);
@@ -532,7 +532,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'reasoning_done':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         final msgId = msg.data?['id'] as String? ?? msg.streamId;
         if (msgId != null && msgId.isNotEmpty) {
           chatNotifier.finalizeReasoning(msgId);
@@ -542,7 +542,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'status':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.StatusData.fromJson(msg.data!);
           final normalized = _normalizeAgentStatus(data.status);
@@ -560,7 +560,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'tool_call':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           chatNotifier.handleToolCall(
             proto.ToolCallData.fromJson(msg.data!),
@@ -574,7 +574,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'tool_result':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           chatNotifier
               .handleToolResult(proto.ToolResultData.fromJson(msg.data!));
@@ -584,7 +584,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'approval_request':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.ApprovalRequestData.fromJson(msg.data!);
           ref.read(approvalProvider.notifier).set(ApprovalInfo(
@@ -595,7 +595,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'approval_result':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.ApprovalResultData.fromJson(msg.data!);
           final approval = ref.read(approvalProvider);
@@ -608,7 +608,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'ask_user_request':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.AskUserRequestData.fromJson(msg.data!);
           // Build a human-readable summary of the questions
@@ -627,7 +627,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'ask_user_response':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.AskUserResponseData.fromJson(msg.data!);
           final askUser = ref.read(askUserProvider);
@@ -646,7 +646,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_spawn':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentSpawnData.fromJson(msg.data!);
           _upsertSubagent(
@@ -662,7 +662,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_text':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentTextData.fromJson(msg.data!);
           _upsertSubagent(
@@ -675,7 +675,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_reasoning':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentReasoningData.fromJson(msg.data!);
           _upsertSubagent(
@@ -688,7 +688,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_reasoning_done':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentReasoningData.fromJson(msg.data!);
           final reasoningId = '${data.agentId}-${data.id}';
@@ -698,7 +698,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_status':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentStatusData.fromJson(msg.data!);
           _upsertSubagent(
@@ -710,7 +710,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_complete':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
           chatNotifier._finalizePendingReasoning(
@@ -742,7 +742,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_tool_call':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentToolCallData.fromJson(msg.data!);
           final agent = _upsertSubagent(
@@ -766,7 +766,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_tool_result':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final data = proto.SubagentToolResultData.fromJson(msg.data!);
           _upsertSubagent(agentId: data.agentId);
@@ -786,7 +786,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'error':
-        if (!_shouldApplyEvent(msg)) break;
+        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
         if (msg.data != null) {
           final errMsg = msg.data!['message'] as String? ?? 'Unknown error';
           chatNotifier.addErrorMessage(
@@ -952,11 +952,26 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (eventId == null || eventId.isEmpty) {
       return true;
     }
-    // Dedup only — relay guarantees ordering via ACK cursor.
+    // Dedup: exact match in recent window.
     if (_recentEventSet.contains(eventId)) {
       return false;
     }
+    // Skip already-cached events: relay may replay events earlier than our
+    // snapshot's lastEventId (ACK latency).  Skip + ACK so relay advances.
+    final ord = _parseEventOrdinal(eventId);
+    final last = _parseEventOrdinal(_lastAppliedEventId);
+    if (ord != null && last != null && ord <= last) {
+      return false;
+    }
     return true;
+  }
+
+  /// ACK a skipped (already-cached) event so relay can advance its cursor.
+  void _ackSkippedEvent(proto.WsMessage msg) {
+    final eventId = msg.eventId;
+    if (eventId != null && eventId.isNotEmpty && _clientId.isNotEmpty) {
+      service?.sendAck(clientId: _clientId, eventId: eventId);
+    }
   }
 
   void _markEventApplied(proto.WsMessage msg) {
