@@ -429,3 +429,13 @@ func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+func (s *relayStore) nukeAll() error {
+	tables := []string{"relay_events", "relay_sessions", "relay_rooms", "relay_global_events", "relay_global_sessions"}
+	for _, t := range tables {
+		if _, err := s.db.Exec("DELETE FROM " + t); err != nil {
+			return fmt.Errorf("delete %s: %w", t, err)
+		}
+	}
+	return nil
+}
