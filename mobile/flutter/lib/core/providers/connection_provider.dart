@@ -962,13 +962,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return int.tryParse(raw);
   }
 
-
-  bool _hasEmptyUiProjection() {
-    return ref.read(chatProvider).isEmpty &&
-        ref.read(subagentProvider).isEmpty &&
-        ref.read(sessionInfoProvider) == null;
-  }
-
   bool _canRestoreSessionProjection() {
     return !_hasAuthoritativeProjection &&
         ref.read(subagentProvider).isEmpty &&
