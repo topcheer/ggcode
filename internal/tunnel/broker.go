@@ -466,20 +466,21 @@ func (b *Broker) StopSharingGracefully(timeout time.Duration) {
 		return
 	}
 	b.flushAllText()
-	msg := b.newMessage("sharing_stopped", "", nil)
-	if msg.Type != "" {
-		wait := b.trackSend(msg.EventID)
-		b.enqueueOut(msg)
-		timer := time.NewTimer(timeout)
-		select {
-		case <-wait:
-		case <-timer.C:
-			debug.Log("tunnel", "broker: timed out waiting to enqueue sharing_stopped event=%s", msg.EventID)
-		}
-		if !timer.Stop() {
+	dataBytes, err := json.Marshal(nil)
+	if err == nil {
+		msg, wait := b.enqueueWithBytes("sharing_stopped", "", dataBytes, false, true)
+		if msg.Type != "" && wait != nil {
+			timer := time.NewTimer(timeout)
 			select {
+			case <-wait:
 			case <-timer.C:
-			default:
+				debug.Log("tunnel", "broker: timed out waiting to enqueue sharing_stopped event=%s", msg.EventID)
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 		}
 	}
@@ -816,12 +817,13 @@ func (b *Broker) PushServerAck(messageID string) {
 	if messageID == "" {
 		return
 	}
-	msg := b.newMessage(EventServerAck, "", AckData{MessageID: messageID})
-	if msg.Type == "" {
+	dataBytes, err := json.Marshal(AckData{MessageID: messageID})
+	if err != nil {
+		debug.Log("tunnel", "broker: marshal error for %s: %v", EventServerAck, err)
 		return
 	}
 	// server_ack is NOT recorded in event history — it's a transient signal.
-	b.enqueueOut(msg)
+	b.enqueueWithBytes(EventServerAck, "", dataBytes, false, false)
 }
 
 func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
@@ -1240,12 +1242,12 @@ func (b *Broker) signalSent(eventID string) {
 
 // enqueue assigns stable session/event metadata and puts on outbound.
 func (b *Broker) enqueue(eventType string, data interface{}) {
-	msg := b.newMessage(eventType, "", data)
-	if msg.Type == "" {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
 		return
 	}
-	b.recordEvent(msg)
-	b.enqueueOut(msg)
+	b.enqueueWithBytes(eventType, "", dataBytes, true, false)
 }
 
 func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{}) {
@@ -1255,8 +1257,15 @@ func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{})
 		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
 		return
 	}
-	// Assign eventNum AND enqueue under the same lock so that
-	// event IDs are always strictly increasing in the outbound queue.
+	b.enqueueWithBytes(eventType, streamID, dataBytes, true, false)
+}
+
+// enqueueWithBytes assigns an event ID and appends to the outbound queue under
+// the same lock so queue order always matches event ID order.
+func (b *Broker) enqueueWithBytes(eventType, streamID string, dataBytes []byte, record, waitForSend bool) (GatewayMessage, <-chan struct{}) {
+	if eventType == "" {
+		return GatewayMessage{}, nil
+	}
 	b.outMu.Lock()
 	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
@@ -1266,31 +1275,24 @@ func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{})
 		Type:      eventType,
 		Data:      dataBytes,
 	}
+	var wait <-chan struct{}
+	if waitForSend {
+		ch := make(chan struct{})
+		b.waitMu.Lock()
+		if b.sendWaiters == nil {
+			b.sendWaiters = make(map[string]chan struct{})
+		}
+		b.sendWaiters[msg.EventID] = ch
+		b.waitMu.Unlock()
+		wait = ch
+	}
 	b.outbound = append(b.outbound, msg)
 	b.outMu.Unlock()
 	b.outCond.Signal()
-	b.recordEvent(msg)
-}
-
-// newMessage allocates a new event ID and marshals data.  Only used by
-// callers that need the GatewayMessage before enqueuing (tests, etc.).
-// For the hot path use enqueueWithStream which is race-free.
-func (b *Broker) newMessage(eventType, streamID string, data interface{}) GatewayMessage {
-	eventNum := b.nextEvent.Add(1)
-
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
-		return GatewayMessage{}
+	if record {
+		b.recordEvent(msg)
 	}
-
-	return GatewayMessage{
-		SessionID: b.SessionID(),
-		EventID:   fmt.Sprintf("ev-%09d", eventNum),
-		StreamID:  streamID,
-		Type:      eventType,
-		Data:      dataBytes,
-	}
+	return msg, wait
 }
 
 func (b *Broker) recordEvent(msg GatewayMessage) {

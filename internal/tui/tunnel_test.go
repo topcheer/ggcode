@@ -384,6 +384,39 @@ func TestCurrentTunnelHistoryPreservesSystemAndToolBoundaries(t *testing.T) {
 	}
 }
 
+func TestCurrentTunnelHistoryPreservesLocalizedToolDescription(t *testing.T) {
+	m := newTestModel()
+	rawArgs := `{"description":"编译","command":"go build ./cmd/ggcode"}`
+	toolItem := chat.NewToolItem("tool-1", chat.ToolContext{
+		ToolName:    "run_command",
+		DisplayName: "编译 (Bash)",
+		Detail:      "go build ./cmd/ggcode",
+		RawArgs:     rawArgs,
+		Lang:        "zh-CN",
+	}, chat.StatusSuccess, m.chatStyles)
+	m.chatList.Append(toolItem)
+
+	history := m.currentTunnelHistory()
+	if len(history) != 2 {
+		t.Fatalf("expected tool_call and tool_result, got %+v", history)
+	}
+	if history[0].Role != "tool_call" {
+		t.Fatalf("unexpected first history entry: %+v", history[0])
+	}
+	if history[0].ToolName != "run_command" {
+		t.Fatalf("tool_call name = %q, want run_command", history[0].ToolName)
+	}
+	if history[0].ToolDisplayName != "编译 (Bash)" {
+		t.Fatalf("tool_call display_name = %q, want %q", history[0].ToolDisplayName, "编译 (Bash)")
+	}
+	if strings.ContainsRune(history[0].ToolDisplayName, '\uFFFD') {
+		t.Fatalf("tool_call display_name contains replacement char: %q", history[0].ToolDisplayName)
+	}
+	if history[0].ToolArgs != rawArgs {
+		t.Fatalf("tool_call args = %q, want raw args", history[0].ToolArgs)
+	}
+}
+
 func TestTunnelSnapshotMergesIncompleteLedgerTail(t *testing.T) {
 	m := newTestModel()
 	store := newTestSessionStore(t)
@@ -1517,5 +1550,50 @@ func TestBuildAskUserResponseFromTunnel(t *testing.T) {
 	}
 	if !resp.Answers[1].Answered {
 		t.Fatal("expected freeform text question to count as answered")
+	}
+}
+
+func TestHandleTunnelAskUserResponseDeliversPendingAnswer(t *testing.T) {
+	m := newTestModel()
+	respCh := make(chan toolpkg.AskUserResponse, 1)
+	req := toolpkg.AskUserRequest{
+		Title: "Clarify",
+		Questions: []toolpkg.AskUserQuestion{
+			{
+				ID:     "notes",
+				Title:  "Notes",
+				Prompt: "Anything else?",
+				Kind:   toolpkg.AskUserKindText,
+			},
+		},
+	}
+	m.pendingQuestionnaire = newQuestionnaireState(req, respCh, m.currentLanguage())
+	m.tunnelPendingAskUserID = "ask-1"
+
+	got, _ := m.handleTunnelAskUserResponse(tunnelAskUserResponseMsg{
+		id:     "ask-1",
+		status: toolpkg.AskUserStatusSubmitted,
+		answers: []tunnel.AskUserAnswer{
+			{QuestionID: "notes", FreeformText: "Ship it"},
+		},
+	})
+	updated := got.(*Model)
+	if updated.pendingQuestionnaire != nil {
+		t.Fatal("expected pending questionnaire to be cleared")
+	}
+	if updated.tunnelPendingAskUserID != "" {
+		t.Fatalf("expected pending ask user id to be cleared, got %q", updated.tunnelPendingAskUserID)
+	}
+
+	select {
+	case resp := <-respCh:
+		if resp.Status != toolpkg.AskUserStatusSubmitted {
+			t.Fatalf("expected submitted status, got %q", resp.Status)
+		}
+		if len(resp.Answers) != 1 || resp.Answers[0].FreeformText != "Ship it" {
+			t.Fatalf("unexpected ask user response: %+v", resp)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for ask user response delivery")
 	}
 }

@@ -1717,23 +1717,25 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		return m, nil
 	}
-	if m.pendingQuestionnaire == nil {
+	qs := m.pendingQuestionnaire
+	if qs == nil {
 		return m, nil
 	}
 	if m.tunnelPendingAskUserID != "" && msg.id != "" && msg.id != m.tunnelPendingAskUserID {
 		return m, nil
 	}
 
-	result := buildAskUserResponseFromTunnel(m.pendingQuestionnaire.request, msg.status, msg.answers)
-
-	safego.Go("tunnel.askUserResponse", func() {
-		select {
-		case m.pendingQuestionnaire.response <- result:
-		default:
-		}
-	})
+	result := buildAskUserResponseFromTunnel(qs.request, msg.status, msg.answers)
+	respCh := qs.response
 	m.pendingQuestionnaire = nil
 	m.tunnelPendingAskUserID = ""
+
+	if respCh != nil {
+		select {
+		case respCh <- result:
+		default:
+		}
+	}
 
 	// Send status update to mobile
 	m.pushTunnelCurrentStatus()
