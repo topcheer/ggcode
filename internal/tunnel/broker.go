@@ -401,6 +401,28 @@ func (b *Broker) SwitchSession(sessionID string) {
 	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
 		return
 	}
+	// Clear all broker-internal state from previous session so that
+	// the new session starts from a clean slate.  The relay session
+	// (encryption token, WebSocket connection) is preserved.
+	b.toolMu.Lock()
+	b.toolArgs = make(map[string]string)
+	b.subagentToolArgs = make(map[string]string)
+	b.toolMu.Unlock()
+
+	b.statusMu.Lock()
+	b.currentStatus = StatusData{}
+	b.hasCurrentStatus = false
+	b.statusMu.Unlock()
+
+	b.activityMu.Lock()
+	b.currentActivity = ActivityData{}
+	b.hasCurrentActivity = false
+	b.activityMu.Unlock()
+
+	b.clientReplayMu.Lock()
+	b.clientReplayInFlight = false
+	b.clientReplayMu.Unlock()
+
 	_ = b.session.SendActiveSession(sessionID)
 	b.resetProjectionAndEnqueue(true)
 }
