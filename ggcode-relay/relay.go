@@ -48,6 +48,7 @@ type room struct {
 	server      *peer
 	clients     map[*peer]struct{}
 	clientsByID map[string]*peer
+	lastEventAt time.Time
 
 	mu           sync.RWMutex
 	offlineTimer *time.Timer
@@ -73,6 +74,7 @@ func (r *room) appendEvent(ev roomEvent) {
 		}
 	}
 	r.history = append(r.history, ev)
+	r.lastEventAt = time.Now()
 }
 
 func (r *room) eventsAfter(cursor string) []roomEvent {
@@ -542,6 +544,26 @@ func (h *hub) expireRoom(token string) {
 	log.Printf("[relay] room expired: room=%s", shortToken(token))
 }
 
+func (h *hub) evictStaleRooms(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	h.mu.RLock()
+	var stale []string
+	for token, r := range h.rooms {
+		r.mu.RLock()
+		if !r.lastEventAt.IsZero() && r.lastEventAt.Before(cutoff) {
+			stale = append(stale, token)
+		}
+		r.mu.RUnlock()
+	}
+	h.mu.RUnlock()
+	for _, token := range stale {
+		h.expireRoom(token)
+	}
+	if len(stale) > 0 {
+		log.Printf("[relay] evicted %d stale rooms (no events for %s)", len(stale), maxAge)
+	}
+}
+
 func (h *hub) destroyRoom(token string) {
 	h.mu.Lock()
 	r, ok := h.rooms[token]
@@ -746,6 +768,11 @@ func main() {
 	go func() {
 		for range time.Tick(time.Hour) {
 			_ = store.cleanupExpired(time.Now())
+		}
+	}()
+	go func() {
+		for range time.Tick(time.Hour) {
+			h.evictStaleRooms(12 * time.Hour)
 		}
 	}()
 
