@@ -286,6 +286,8 @@ class ConnectionService {
             );
           }
           _decryptErrorCount = 0;
+          final replayTag = map['event_id'] != null ? ' event=${map['event_id']}' : '';
+          debugPrint('[connection] encrypted decrypted:${replayTag} type=${msg.type} sessionId=${msg.sessionId}');
           _messageController.add(msg);
         } catch (e) {
           _decryptErrorCount++;

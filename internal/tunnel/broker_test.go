@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -1883,6 +1884,75 @@ func TestPushServerAck(t *testing.T) {
 	b.outMu.Unlock()
 	if len(extra) != 0 {
 		t.Errorf("empty message_id should not produce a message, got %d", len(extra))
+	}
+}
+
+func TestConcurrentEnqueueStrictlyOrdered(t *testing.T) {
+	// Verify that event IDs in the outbound queue are strictly increasing
+	// even when multiple goroutines enqueue concurrently.
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+
+	const goroutines = 8
+	const eventsPerGoroutine = 200
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < eventsPerGoroutine; i++ {
+				// Mix different event types to exercise all enqueue paths.
+				switch i % 3 {
+				case 0:
+					b.PushText(fmt.Sprintf("msg-%d-%d", gid, i), "chunk")
+				case 1:
+					b.PushToolCall(
+						fmt.Sprintf("t-%d-%d", gid, i),
+						"run_command",
+						fmt.Sprintf("desc-%d-%d", gid, i),
+						`{"command":"echo"}`,
+						"desc",
+					)
+				case 2:
+					b.PushUserMessage(fmt.Sprintf("user-msg-%d-%d", gid, i))
+				}
+			}
+		}(g)
+	}
+
+	// Also drive the textFlushLoop so text chunks get flushed concurrently.
+	// The ticker is already running (300ms). Wait for all goroutines to finish
+	// then give the flush loop time to drain.
+	wg.Wait()
+	time.Sleep(500 * time.Millisecond)
+
+	// Collect all outbound messages.
+	b.outMu.Lock()
+	msgs := make([]GatewayMessage, len(b.outbound))
+	copy(msgs, b.outbound)
+	b.outMu.Unlock()
+
+	// Filter to events that have an EventID (skip snapshot_reset etc.)
+	var ordered []GatewayMessage
+	for _, m := range msgs {
+		if m.EventID != "" {
+			ordered = append(ordered, m)
+		}
+	}
+	if len(ordered) < goroutines*eventsPerGoroutine/3 {
+		t.Fatalf("expected at least %d events with IDs, got %d",
+			goroutines*eventsPerGoroutine/3, len(ordered))
+	}
+
+	// Verify strictly increasing event IDs.
+	for i := 1; i < len(ordered); i++ {
+		prev := ordered[i-1].EventID
+		cur := ordered[i].EventID
+		if cur <= prev {
+			t.Fatalf("event IDs not strictly increasing at index %d: %s >= %s",
+				i, prev, cur)
+		}
 	}
 }
 
