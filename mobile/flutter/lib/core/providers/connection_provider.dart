@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -132,29 +133,32 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
     final crypto = TunnelCrypto(token);
     service = createConnectionService(url, crypto);
+
+    // Snapshot current UI state before loading persisted values.
+    final uiSessionId = _sessionId;
+    final uiHasContent = ref.read(sessionInfoProvider) != null;
+
     await _loadResumeState();
-    var restoredProjection = false;
-    if (!clearState && _hasEmptyUiProjection()) {
-      restoredProjection = _restoreProjectionFromCache(
-        adoptCursor: false,
-        seedCursorIfUnset: true,
-      );
-    } else if (clearState) {
-      // Fresh/manual connects should not synchronously restore large cached
-      // projections before the relay binds the active session. That work can
-      // stall the first-connect UX and briefly render stale history for the
-      // wrong room. We restore again once active_session/resume_ack arrives.
+
+    // _loadResumeState overwrites _sessionId/_lastAppliedEventId from prefs.
+    final savedSessionId = _sessionId;
+
+    if (uiHasContent && uiSessionId == savedSessionId) {
+      // UI already renders this session — keep it. Ordinal dedup will skip
+      // relay replay events we already have rendered.
+    } else {
+      // Different session or fresh connect — clear UI, restore from SQLite.
       _clearUiProjection();
-      _sessionId = '';
-      _lastAppliedEventId = '';
+      _sessionId = savedSessionId;
+      _lastAppliedEventId =
+          savedSessionId.isNotEmpty ? _lastAppliedEventId : '';
       _awaitingSnapshotProjection = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
-    }
-    if (!restoredProjection && _hasEmptyUiProjection()) {
-      // A stale cursor without restored local UI can skip earlier subagent_spawn
-      // events, which leaves teammate/subagent tabs missing after reconnect.
-      _lastAppliedEventId = '';
+      _restoreProjectionFromCache(
+        adoptCursor: false,
+        seedCursorIfUnset: true,
+      );
     }
 
     // Listen to connection status changes
@@ -274,6 +278,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'active_session':
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
+        log('[tunnel] active_session: session=$sessionId currentSession=$_sessionId lastEvent=$_lastAppliedEventId');
         if (sessionId.isEmpty) break;
         if (_sessionId.isNotEmpty && _sessionId != sessionId) {
           _clearUiProjection();
@@ -1018,13 +1023,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _restoreSessionProjectionIfAvailable(String sessionId) {
     if (sessionId.isEmpty || !_canRestoreSessionProjection()) {
+      log('[tunnel] _restoreSessionProjectionIfAvailable: SKIP session=$sessionId canRestore=${_canRestoreSessionProjection()} hasAuth=$_hasAuthoritativeProjection subs=${ref.read(subagentProvider).isEmpty} info=${ref.read(sessionInfoProvider)}');
       return;
     }
+    log('[tunnel] _restoreSessionProjectionIfAvailable: restoring session=$sessionId');
     unawaited(
       ref
           .read(workspaceCacheProvider.notifier)
           .attachSessionToActiveWorkspace(sessionId)
           .then((restored) {
+        log('[tunnel] attachSession returned: restored=$restored canRestore=${_canRestoreSessionProjection()} lastEvent=$_lastAppliedEventId');
         if (restored && _canRestoreSessionProjection()) {
           _restoreProjectionFromCache(
             adoptCursor: false,
