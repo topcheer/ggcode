@@ -827,6 +827,16 @@ var vendorModels = map[string]vendorModelInfo{
 		"claude-opus-4-5-20251101",
 		"claude-haiku-4-5-20251001",
 	}},
+	"xiaomi-mimo": {Models: []string{
+		"MiMo-V2.5-Pro",
+		"MiMo-V2.5",
+		"MiMo-V2.5-TTS-VoiceClone",
+		"MiMo-V2.5-TTS-VoiceDesign",
+		"MiMo-V2.5-TTS",
+		"MiMo-V2-Pro",
+		"MiMo-V2-Omni",
+		"MiMo-V2-TTS",
+	}},
 	"xai": {Models: []string{
 		"grok-3",
 		"grok-3-mini",
@@ -899,6 +909,7 @@ var vendorDefaultModels = map[string]defaultModelInfo{
 	"venice":        {LargeModel: "claude-opus-4-6-fast", SmallModel: "deepseek-v4-flash"},
 	"vercel":        {LargeModel: "anthropic/claude-sonnet-4", SmallModel: "anthropic/claude-haiku-4.5"},
 	"vertexai":      {LargeModel: "gemini-3.1-pro-preview", SmallModel: "gemini-3-flash-preview"},
+	"xiaomi-mimo":   {LargeModel: "MiMo-V2.5-Pro", SmallModel: "MiMo-V2.5"},
 	"xai":           {LargeModel: "grok-4.20", SmallModel: "grok-4-1-fast"},
 	"zai":           {LargeModel: "glm-4.7", SmallModel: "glm-4.7-flash"},
 	"zhipu":         {LargeModel: "glm-4.7", SmallModel: "glm-4.7-flash"},
@@ -948,6 +959,7 @@ func populateDefaultModels(cfg *Config) {
 		"nvidia":         {"nvidia"},
 		"ark":            {"ark"},
 		"aliyun":         {"aliyun"},
+		"xiaomi-mimo":    {"xiaomi-mimo"},
 	}
 
 	for vendorName, vc := range cfg.Vendors {

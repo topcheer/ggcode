@@ -515,6 +515,30 @@ func DefaultConfig() *Config {
 					"official", "openai",
 				),
 			}),
+			"xiaomi-mimo": defaultVendor("XiaoMi MIMO", "${XIAOMI_MIMO_API_KEY}", map[string]EndpointConfig{
+				"cn-openai": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"XiaoMi MIMO API",
+						"openai",
+						"https://token-plan-cn.xiaomimimo.com/v1",
+						"MiMo-V2.5-Pro",
+						"api", "cn",
+					)
+					ep.Models = append([]string(nil), lookupVendorModels("xiaomi-mimo")...)
+					return ep
+				}(),
+				"cn-anthropic": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"XiaoMi MIMO API (Anthropic)",
+						"anthropic",
+						"https://token-plan-cn.xiaomimimo.com/anthropic",
+						"MiMo-V2.5-Pro",
+						"api", "cn", "anthropic",
+					)
+					ep.Models = append([]string(nil), lookupVendorModels("xiaomi-mimo")...)
+					return ep
+				}(),
+			}),
 			"google": defaultVendor("Google Gemini", "${GEMINI_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
 					"Gemini API",

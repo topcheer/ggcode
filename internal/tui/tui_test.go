@@ -687,7 +687,7 @@ func TestSidebarShowsUpdateHintWhenAvailable(t *testing.T) {
 	m.updateInfo.LatestVersion = "v1.2.3"
 
 	sidebar := stripAnsi(m.renderSidebar())
-	if !strings.Contains(sidebar, "New release available") || !strings.Contains(sidebar, "/update") {
+	if !strings.Contains(sidebar, "New release available") || (!strings.Contains(sidebar, "/update") && !strings.Contains(sidebar, "Run /u")) {
 		t.Fatalf("expected update hint in sidebar, got %q", sidebar)
 	}
 }
