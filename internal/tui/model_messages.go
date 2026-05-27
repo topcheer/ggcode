@@ -7,6 +7,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -49,6 +50,10 @@ type tunnelPublishCurrentSessionMsg struct {
 
 type sessionUsageMsg struct {
 	Usage provider.TokenUsage
+}
+
+type sessionMetricMsg struct {
+	Metric metrics.MetricEvent
 }
 
 type startupReadyMsg struct{}

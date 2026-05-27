@@ -1020,3 +1020,22 @@ func TestSaveLoad_WithMetrics(t *testing.T) {
 		t.Errorf("unexpected metric 1: %+v", loaded.Metrics[1])
 	}
 }
+
+func TestLastTurnIndex(t *testing.T) {
+	ses := &Session{
+		UsageHistory: []UsageEntry{
+			{TurnIndex: 2},
+			{TurnIndex: 4},
+		},
+		Metrics: []metrics.MetricEvent{
+			{TurnIndex: 3},
+			{TurnIndex: 5},
+		},
+	}
+	if got := LastTurnIndex(ses); got != 5 {
+		t.Fatalf("expected last turn index 5, got %d", got)
+	}
+	if got := LastTurnIndex(nil); got != 0 {
+		t.Fatalf("expected nil session turn index 0, got %d", got)
+	}
+}

@@ -178,15 +178,11 @@ func (r *REPL) recordSessionUsage(usage provider.TokenUsage) {
 // recordMetric persists a metric event to the session JSONL.
 // Called by the metrics collector goroutine (async, non-blocking for agent).
 func (r *REPL) recordMetric(ev metrics.MetricEvent) {
-	ses := r.model.Session()
-	store := r.store
-	if ses == nil || store == nil {
+	if r.program != nil {
+		r.program.Send(sessionMetricMsg{Metric: ev})
 		return
 	}
-	ev.TurnIndex = r.model.usageTurnIndex
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendMetric(ses, ev)
-	}
+	r.model.recordSessionMetric(ev)
 }
 
 // SetWebUIReadyAddr stores the webui address and auth token to be displayed

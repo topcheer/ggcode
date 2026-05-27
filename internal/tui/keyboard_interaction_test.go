@@ -1080,7 +1080,7 @@ func TestScenario_UserOpensFileBrowser(t *testing.T) {
 func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 	safeCommands := []string{
 		"/help", "/model", "/provider", "/lang en",
-		"/mcp", "/skills", "/sessions",
+		"/mcp", "/skills", "/stats", "/sessions",
 		"/status", "/config", "/memory", "/todo", "/plugins",
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",
 		"/tg", "/pc", "/discord", "/feishu", "/slack", "/dingtalk",

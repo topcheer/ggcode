@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -149,6 +150,7 @@ type Model struct {
 	mcpPanel                        *mcpPanelState
 	pendingDeviceCodes              []deviceCodeInfo
 	skillsPanel                     *skillsPanelState
+	statsPanel                      *statsPanelState
 	inspectorPanel                  *inspectorPanelState
 	swarmMgr                        *swarm.Manager
 	previewPanel                    *previewPanelState
@@ -514,11 +516,7 @@ func (m *Model) startContextProbe() {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
-	if ses != nil && len(ses.UsageHistory) > 0 {
-		m.usageTurnIndex = ses.UsageHistory[len(ses.UsageHistory)-1].TurnIndex
-	} else {
-		m.usageTurnIndex = 0
-	}
+	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
 	// Register this instance for multi-instance detection and auto-mute
@@ -562,6 +560,31 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	} else {
 		_ = store.Save(ses)
 	}
+}
+
+func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
+	if m.session == nil || m.sessionStore == nil {
+		return
+	}
+	mu := m.sessionMutex()
+	mu.Lock()
+	if m.session == nil || m.sessionStore == nil {
+		mu.Unlock()
+		return
+	}
+	ev.TurnIndex = m.usageTurnIndex
+	m.session.Metrics = append(m.session.Metrics, ev)
+	m.session.UpdatedAt = time.Now()
+	ses := m.session
+	store := m.sessionStore
+	mu.Unlock()
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetric(ses, ev)
+	} else {
+		_ = store.Save(ses)
+	}
+	m.syncStatsPanelViewport(false)
 }
 
 func (m *Model) SetIMManager(mgr *im.Manager) {
@@ -734,6 +757,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeMCPPanel()
 	case m.skillsPanel != nil:
 		m.closeSkillsPanel()
+	case m.statsPanel != nil:
+		m.closeStatsPanel()
 	case m.inspectorPanel != nil:
 		m.closeInspectorPanel()
 	case m.streamPanel != nil:

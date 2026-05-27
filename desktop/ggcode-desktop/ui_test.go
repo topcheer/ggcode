@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -18,6 +19,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -26,6 +28,10 @@ func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects
 	case *fyne.Container:
 		for _, child := range v.Objects {
 			collectDesktopWidgets(child, forms, selects, cards)
+		}
+	case *container.Scroll:
+		if v.Content != nil {
+			collectDesktopWidgets(v.Content, forms, selects, cards)
 		}
 	case *widget.Card:
 		if cards != nil {
@@ -1478,6 +1484,94 @@ func TestSidebarContextTabShowsSessionUsageCard(t *testing.T) {
 	for _, want := range []string{"Total", "1.5K", "Input", "1.2K", "Output", "340", "Cache Read", "800", "Cache Write", "64", "Cache Hit", "67%"} {
 		if !strings.Contains(labelText, want) {
 			t.Fatalf("expected %q in session usage card labels, got %v", want, labels)
+		}
+	}
+}
+
+func TestShowMetricsWindowRendersCards(t *testing.T) {
+	loadTranslations()
+	setLanguage("en")
+
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: createTestWorkspace(t)},
+		cfg: &config.Config{
+			Vendor:   "zai",
+			Endpoint: "default",
+			Vendors: map[string]config.VendorConfig{
+				"zai": {
+					DisplayName: "Z.ai",
+					Endpoints: map[string]config.EndpointConfig{
+						"default": {
+							DisplayName:  "Default",
+							Protocol:     "openai",
+							BaseURL:      "https://api.example.com/v1",
+							DefaultModel: "glm-5.1",
+							Models:       []string{"glm-5.1"},
+						},
+					},
+				},
+			},
+		},
+		ui: NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("main")
+	app.ui.SetSessionMetrics([]metrics.MetricEvent{
+		{TurnIndex: 1, Type: "llm", TTFT: 900 * time.Millisecond, ThinkTime: 1500 * time.Millisecond, Duration: 6 * time.Second},
+		{TurnIndex: 1, Type: "tool", ToolName: "bash", ToolSuccess: true, ToolDuration: 2 * time.Second},
+		{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+		{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+	})
+
+	bridge := &AgentBridge{
+		resolved: &config.ResolvedEndpoint{
+			VendorID:   "zai",
+			VendorName: "Z.ai",
+			Model:      "glm-5.1",
+			Models:     []string{"glm-5.1"},
+		},
+	}
+	app.agentBridge = bridge
+	app.showMetricsWindow()
+	if app.metricsWindow == nil {
+		t.Fatal("expected metrics window to open")
+	}
+	obj := app.metricsWindow.Content()
+
+	var forms []*widget.Form
+	var selects []*widget.Select
+	var cards []*widget.Card
+	collectDesktopWidgets(obj, &forms, &selects, &cards)
+
+	var metricsCard *widget.Card
+	var turnsCard *widget.Card
+	for _, card := range cards {
+		switch card.Title {
+		case "Session Metrics":
+			metricsCard = card
+		case "Recent Turns":
+			turnsCard = card
+		}
+	}
+	if metricsCard == nil || turnsCard == nil {
+		t.Fatalf("expected metrics cards, got %+v", cards)
+	}
+
+	var labels []string
+	collectLabelTexts(metricsCard.Content, &labels)
+	labelText := strings.Join(labels, "\n")
+	for _, want := range []string{"Turns", "2", "Avg TTFT", "1.1s", "P95 Dur", "8.0s", "Fail Rate", "50%", "Slow Tools", "read_bash 3.0s"} {
+		if !strings.Contains(labelText, want) {
+			t.Fatalf("expected %q in metrics card labels, got %v", want, labels)
+		}
+	}
+
+	labels = nil
+	collectLabelTexts(turnsCard.Content, &labels)
+	turnText := strings.Join(labels, "\n")
+	for _, want := range []string{"#2", "1.2s / 8.0s / 1t", "#1", "900ms / 6.0s / 1t"} {
+		if !strings.Contains(turnText, want) {
+			t.Fatalf("expected %q in recent turns card labels, got %v", want, labels)
 		}
 	}
 }

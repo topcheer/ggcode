@@ -32,6 +32,8 @@ func enCatalog(key string) string {
 		return "Mode policy"
 	case "panel.session_usage":
 		return "Session usage"
+	case "panel.metrics":
+		return "Metrics"
 	case "panel.context":
 		return "Context"
 	case "panel.im":
@@ -108,12 +110,32 @@ func enCatalog(key string) string {
 		return "cache write"
 	case "label.cache_hit":
 		return "cache hit"
+	case "label.turns":
+		return "turns"
+	case "label.avg_ttft":
+		return "avg ttft"
+	case "label.p95_ttft":
+		return "p95 ttft"
+	case "label.avg_duration":
+		return "avg dur"
+	case "label.p95_duration":
+		return "p95 dur"
+	case "label.avg_think":
+		return "avg think"
+	case "label.fail_rate":
+		return "fail rate"
+	case "label.slow_tools":
+		return "slow tools"
+	case "label.recent_turns":
+		return "recent turns"
 	case "label.file":
 		return "file"
 	case "label.directory":
 		return "directory"
 	case "context.unavailable":
 		return "No context data yet"
+	case "metrics.empty":
+		return "No metrics yet"
 	case "im.none":
 		return "No adapters configured"
 	case "im.summary":
