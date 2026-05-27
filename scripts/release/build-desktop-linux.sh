@@ -16,6 +16,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
+ICON_PATH="${DESKTOP_DIR}/icon.png"
 
 detect_arch() {
   case "${TARGET_ARCH:-$(uname -m)}" in
@@ -67,8 +68,20 @@ build_desktop_binary() {
   popd >/dev/null
 }
 
+prepare_linux_icon() {
+  local icon_output="${WORK_DIR}/ggcode-desktop-512.png"
+  if [[ ! -f "${ICON_PATH}" ]]; then
+    echo "desktop icon not found: ${ICON_PATH}" >&2
+    exit 1
+  fi
+
+  convert "${ICON_PATH}" -resize 512x512 "${icon_output}"
+  printf '%s\n' "${icon_output}"
+}
+
 build_linux_packages() {
   local binary="$1"
+  local icon_file="$2"
   local config_path="${WORK_DIR}/ggcode-desktop.nfpm.yaml"
 
   cat > "${config_path}" <<EOF
@@ -92,7 +105,7 @@ contents:
       mode: 0755
   - src: ${PACKAGING_DIR}/ggcode-desktop.desktop
     dst: /usr/share/applications/ggcode-desktop.desktop
-  - src: ${DESKTOP_DIR}/icon.png
+  - src: ${icon_file}
     dst: /usr/share/icons/hicolor/512x512/apps/ggcode-desktop.png
   - src: ${PACKAGING_DIR}/gg.ai.ggcode-desktop.metainfo.xml
     dst: /usr/share/metainfo/gg.ai.ggcode-desktop.metainfo.xml
@@ -115,11 +128,11 @@ EOF
 
 build_appimage() {
   local binary="$1"
+  local icon_path="$2"
   local appdir="${WORK_DIR}/AppDir"
-  local linuxdeploy_bin="$2"
-  local appimagetool_bin="$3"
+  local linuxdeploy_bin="$3"
+  local appimagetool_bin="$4"
   local desktop_entry="${PACKAGING_DIR}/ggcode-desktop.desktop"
-  local icon_path="${DESKTOP_DIR}/icon.png"
 
   rm -rf "${appdir}"
   mkdir -p \
@@ -177,11 +190,12 @@ LDFLAGS=(
 echo "=== Building ggcode-desktop for Linux (${PACKAGE_ARCH}) ==="
 
 RAW_BINARY="${WORK_DIR}/ggcode-desktop"
+PACKAGED_ICON="$(prepare_linux_icon)"
 build_desktop_binary "${RAW_BINARY}"
 chmod 0755 "${RAW_BINARY}"
 
 cp "${RAW_BINARY}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_linux_${PACKAGE_ARCH}"
-build_linux_packages "${RAW_BINARY}"
-build_appimage "${RAW_BINARY}" "${LINUXDEPLOY_BIN}" "${APPIMAGETOOL_BIN}"
+build_linux_packages "${RAW_BINARY}" "${PACKAGED_ICON}"
+build_appimage "${RAW_BINARY}" "${PACKAGED_ICON}" "${LINUXDEPLOY_BIN}" "${APPIMAGETOOL_BIN}"
 
 echo "=== Done: ${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_linux_${PACKAGE_ARCH} (+ AppImage/.deb/.rpm) ==="
