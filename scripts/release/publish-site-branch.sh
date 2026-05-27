@@ -81,7 +81,7 @@ include_release_asset() {
   local name
   name="$(basename "$1")"
   case "${name}" in
-    checksums.txt|*.tar.gz|*.zip|*.deb|*.rpm|*.apk|*.ipk|*.pkg.tar.zst|*.pkg|*.msi|*.dmg|*.exe)
+    checksums.txt|*.tar.gz|*.zip|*.deb|*.rpm|*.apk|*.ipk|*.pkg.tar.zst|*.pkg|*.msi|*.dmg|*.exe|*.AppImage)
       return 0
       ;;
   esac

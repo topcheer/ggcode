@@ -47,8 +47,8 @@ nfpms:
     package_name: ggcode
     file_name_template: "{{ .ConventionalFileName }}"
     homepage: https://github.com/topcheer/ggcode
-    vendor: topcheer
-    maintainer: topcheer
+    vendor: GG AI Studio
+    maintainer: GG AI Studio
     description: >-
       AI coding agent for the terminal with a polished TUI, resumable sessions,
       MCP integrations, built-in tools, and self-update support.
