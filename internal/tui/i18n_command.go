@@ -97,6 +97,7 @@ func enCommandModule() map[string]string {
   /slack             Open Slack binding panel
   /dingtalk, /ding   Open DingTalk binding panel
   /lang [code]       Choose or switch interface language
+  /stats             Open session stats panel
   /skills            Browse available skills
   /clear             Clear conversation history
   /mcp               Show connected MCP servers and tools
@@ -236,6 +237,7 @@ func zhCommandModule() map[string]string {
   /slack             打开 Slack 绑定面板
   /dingtalk, /ding   打开钉钉绑定面板
   /lang [code]       选择或切换界面语言
+  /stats             打开会话指标面板
   /skills            浏览可用 skills
   /clear             清空对话历史
   /mcp               显示已连接的 MCP 服务器和工具

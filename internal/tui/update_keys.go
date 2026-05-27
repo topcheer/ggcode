@@ -150,6 +150,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handleSkillsPanelKey(msg)
 	}
 
+	if m.statsPanel != nil {
+		return m.handleStatsPanelKey(msg)
+	}
+
 	if m.inspectorPanel != nil {
 		return m.handleInspectorPanelKey(msg)
 	}

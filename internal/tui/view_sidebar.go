@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
@@ -13,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
@@ -67,6 +69,39 @@ func (m Model) renderSidebarSessionUsageSection() string {
 		renderUsageRow(m.t("label.cache_read"), humanizeTokenCount(usage.CacheRead)),
 		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
 		renderUsageRow(m.t("label.cache_hit"), fmt.Sprintf("%d%%", usage.CacheHitPercent())),
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarMetricsSection() string {
+	width := max(12, m.sidebarWidth()-4)
+	summary := metrics.Summarize(m.sidebarSessionMetrics())
+	rows := []string{m.renderSidebarSectionTitle(m.t("panel.metrics"))}
+	if !summary.HasData() {
+		rows = append(rows, util.Truncate(m.t("metrics.empty"), width))
+		return strings.Join(rows, "\n")
+	}
+	renderRow := func(label, value string) string {
+		return m.renderSidebarDetailRowWithLabelWidth(label, value, width, 12)
+	}
+	rows = append(rows,
+		renderRow(m.t("label.turns"), fmt.Sprintf("%d", summary.TurnCount)),
+		renderRow(m.t("label.avg_ttft"), formatMetricDuration(summary.AvgTTFT)),
+		renderRow(m.t("label.p95_ttft"), formatMetricDuration(summary.P95TTFT)),
+		renderRow(m.t("label.avg_duration"), formatMetricDuration(summary.AvgDuration)),
+		renderRow(m.t("label.p95_duration"), formatMetricDuration(summary.P95Duration)),
+		renderRow(m.t("label.avg_think"), formatMetricDuration(summary.AvgThink)),
+		renderRow(m.t("label.tools"), fmt.Sprintf("%d", summary.ToolCallCount)),
+		renderRow(m.t("label.fail_rate"), fmt.Sprintf("%d%%", summary.ToolFailureRate())),
+	)
+	if slow := sidebarSlowTools(summary.SlowTools); slow != "" {
+		rows = append(rows, renderRow(m.t("label.slow_tools"), slow))
+	}
+	if recent := sidebarRecentTurns(summary.Turns); len(recent) > 0 {
+		rows = append(rows, util.Truncate(m.t("label.recent_turns"), width))
+		for _, line := range recent {
+			rows = append(rows, util.Truncate(line, width))
+		}
 	}
 	return strings.Join(rows, "\n")
 }
@@ -597,6 +632,13 @@ func (m Model) sidebarSessionUsage() provider.TokenUsage {
 	return m.session.TokenUsage
 }
 
+func (m Model) sidebarSessionMetrics() []metrics.MetricEvent {
+	if m.session == nil {
+		return nil
+	}
+	return m.session.Metrics
+}
+
 func humanizeTokenCount(n int) string {
 	if n >= 1000000 && n%1000000 == 0 {
 		return fmt.Sprintf("%dm", n/1000000)
@@ -605,6 +647,54 @@ func humanizeTokenCount(n int) string {
 		return fmt.Sprintf("%dk", n/1000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+func formatMetricDuration(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d/time.Millisecond)
+	}
+	seconds := d.Seconds()
+	if seconds < 10 {
+		return fmt.Sprintf("%.1fs", seconds)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", seconds)
+	}
+	return d.Round(time.Second).String()
+}
+
+func sidebarSlowTools(tools []metrics.ToolSummary) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	visible := tools
+	if len(visible) > 2 {
+		visible = visible[:2]
+	}
+	parts := make([]string, 0, len(visible))
+	for _, tool := range visible {
+		parts = append(parts, fmt.Sprintf("%s %s", tool.Name, formatMetricDuration(tool.AvgDuration)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sidebarRecentTurns(turns []metrics.TurnSummary) []string {
+	if len(turns) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, min(2, len(turns)))
+	for i := len(turns) - 1; i >= 0 && len(lines) < 2; i-- {
+		turn := turns[i]
+		line := fmt.Sprintf("#%d %s / %s / %dt", turn.TurnIndex, formatMetricDuration(turn.TTFT), formatMetricDuration(turn.Duration), turn.ToolCallCount)
+		if turn.ToolFailureCount > 0 {
+			line += " !"
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func (m Model) sidebarWorkingDirectory() string {

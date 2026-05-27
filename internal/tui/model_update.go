@@ -121,6 +121,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recordSessionUsage(msg.Usage)
 		return m, nil
 
+	case sessionMetricMsg:
+		m.recordSessionMetric(msg.Metric)
+		return m, nil
+
 	case tunnelPublishCurrentSessionMsg:
 		m.publishTunnelSnapshotForCurrentSession(msg.reset)
 		return m, nil

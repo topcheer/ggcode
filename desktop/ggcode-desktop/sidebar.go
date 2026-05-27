@@ -78,6 +78,39 @@ func (s *Sidebar) buildSessionUsageCard() fyne.CanvasObject {
 	)
 }
 
+func (s *Sidebar) buildSessionMetricsCard() fyne.CanvasObject {
+	left := widget.NewLabel(strings.Join([]string{
+		t("sidebar.metric_turns"),
+		t("sidebar.metric_avg_ttft"),
+		t("sidebar.metric_p95_ttft"),
+		t("sidebar.metric_avg_duration"),
+		t("sidebar.metric_p95_duration"),
+		t("sidebar.metric_avg_think"),
+		t("sidebar.metric_tools"),
+		t("sidebar.metric_fail_rate"),
+		t("sidebar.metric_slow_tools"),
+	}, "\n"))
+	right := widget.NewLabelWithData(s.ui.SessionMetricsValueLines)
+	right.Alignment = fyne.TextAlignTrailing
+	right.TextStyle = fyne.TextStyle{Monospace: true}
+	return widget.NewCard(
+		t("sidebar.session_metrics_card"),
+		"",
+		compactPad(0, 0, 0, 0, container.NewHBox(left, layout.NewSpacer(), right)),
+	)
+}
+
+func (s *Sidebar) buildSessionMetricTurnsCard() fyne.CanvasObject {
+	content := widget.NewLabelWithData(s.ui.SessionMetricTurnsLines)
+	content.Wrapping = fyne.TextWrapWord
+	content.TextStyle = fyne.TextStyle{Monospace: true}
+	return widget.NewCard(
+		t("sidebar.session_metric_turns_card"),
+		"",
+		compactPad(0, 0, 0, 0, content),
+	)
+}
+
 func permissionModeOptions() []string {
 	return []string{
 		t("sidebar.mode.supervised"),

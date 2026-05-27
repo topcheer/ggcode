@@ -30,6 +30,8 @@ func zhCatalog(key string) string {
 		return "模式说明"
 	case "panel.session_usage":
 		return "会话用量"
+	case "panel.metrics":
+		return "指标"
 	case "panel.context":
 		return "上下文"
 	case "panel.mcp":
@@ -106,12 +108,32 @@ func zhCatalog(key string) string {
 		return "缓存写"
 	case "label.cache_hit":
 		return "缓存命中"
+	case "label.turns":
+		return "轮次"
+	case "label.avg_ttft":
+		return "平均首字"
+	case "label.p95_ttft":
+		return "P95首字"
+	case "label.avg_duration":
+		return "平均时长"
+	case "label.p95_duration":
+		return "P95时长"
+	case "label.avg_think":
+		return "平均思考"
+	case "label.fail_rate":
+		return "失败率"
+	case "label.slow_tools":
+		return "慢工具"
+	case "label.recent_turns":
+		return "最近轮次"
 	case "label.file":
 		return "文件"
 	case "label.directory":
 		return "目录"
 	case "context.unavailable":
 		return "暂无上下文数据"
+	case "metrics.empty":
+		return "暂无指标"
 	case "im.none":
 		return "未配置适配器"
 	case "im.summary":

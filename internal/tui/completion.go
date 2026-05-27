@@ -196,7 +196,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
 	"/image", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
+	"/compact", "/todo", "/status", "/stats", "/knight", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -244,6 +244,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/compact":     "Compress conversation history",
 	"/todo":        "View/manage todo list",
 	"/status":      "Show current status",
+	"/stats":       "Open session stats panel",
 	"/knight":      "Knight auto-evolution commands",
 	"/update":      "Update ggcode to the latest release",
 	"/restart":     "Restart ggcode (picks up latest binary)",
@@ -306,6 +307,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/sessions":    "[filter]",
 	"/slack":       "<subcommand>",
 	"/status":      "",
+	"/stats":       "",
 	"/telegram":    "<subcommand>",
 	"/tg":          "<subcommand>",
 	"/todo":        "<subcommand>",

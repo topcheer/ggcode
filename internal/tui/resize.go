@@ -30,6 +30,7 @@ func (m *Model) handleResize(width, height int) {
 	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
 	// chatList items cache by width — will re-render automatically on next Render()
 	m.syncPreviewViewport(false)
+	m.syncStatsPanelViewport(false)
 	m.syncFileBrowser(false)
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/lsp"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -713,6 +714,51 @@ func TestSidebarShowsSessionUsage(t *testing.T) {
 	}
 	if strings.Contains(sidebar, "Mode policy") {
 		t.Fatalf("expected session usage to replace mode policy, got %q", sidebar)
+	}
+}
+
+func TestSidebarOmitsMetricsSummary(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	m.session = &session.Session{
+		Metrics: []metrics.MetricEvent{
+			{TurnIndex: 1, Type: "llm", TTFT: 900 * time.Millisecond, ThinkTime: 1500 * time.Millisecond, Duration: 6 * time.Second},
+			{TurnIndex: 1, Type: "tool", ToolName: "bash", ToolSuccess: true, ToolDuration: 2 * time.Second},
+			{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+			{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+		},
+	}
+
+	sidebar := stripAnsi(m.renderSidebar())
+	if strings.Contains(sidebar, "Metrics") || strings.Contains(sidebar, "avg ttft") {
+		t.Fatalf("expected sidebar to omit metrics summary, got %q", sidebar)
+	}
+}
+
+func TestStatsCommandOpensStatsPanel(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	m.session = &session.Session{
+		Metrics: []metrics.MetricEvent{
+			{TurnIndex: 1, Type: "llm", TTFT: 900 * time.Millisecond, ThinkTime: 1500 * time.Millisecond, Duration: 6 * time.Second},
+			{TurnIndex: 1, Type: "tool", ToolName: "bash", ToolSuccess: true, ToolDuration: 2 * time.Second},
+			{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+			{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+		},
+	}
+
+	if cmd := m.handleCommand("/stats"); cmd != nil {
+		t.Fatal("expected /stats to open panel without spawning a command")
+	}
+	if m.statsPanel == nil {
+		t.Fatal("expected stats panel to open")
+	}
+
+	rendered := stripAnsi(m.renderContextPanel())
+	for _, want := range []string{"Session stats", "Overview", "Avg TTFT", "1.1s", "Recent turns", "#2  1.2s  8.0s  2.0s  1t  !", "Slowest: read_bash 3.0s"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected %q in stats panel, got %q", want, rendered)
+		}
 	}
 }
 
@@ -3292,6 +3338,19 @@ func TestUsageTurnIndexRestoresFromSession(t *testing.T) {
 	m.SetSession(loaded, store)
 	if m.usageTurnIndex != 3 {
 		t.Fatalf("expected restored turn index 3, got %d", m.usageTurnIndex)
+	}
+}
+
+func TestUsageTurnIndexRestoresFromSessionMetrics(t *testing.T) {
+	m := newTestModel()
+	m.SetSession(&session.Session{
+		Metrics: []metrics.MetricEvent{
+			{TurnIndex: 2, Type: "llm"},
+			{TurnIndex: 4, Type: "tool"},
+		},
+	}, nil)
+	if m.usageTurnIndex != 4 {
+		t.Fatalf("expected restored turn index 4 from metrics, got %d", m.usageTurnIndex)
 	}
 }
 

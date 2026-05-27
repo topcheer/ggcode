@@ -937,6 +937,20 @@ func NewSession(vendor, endpoint, model string) *Session {
 	}
 }
 
+func LastTurnIndex(ses *Session) int {
+	if ses == nil {
+		return 0
+	}
+	last := 0
+	if n := len(ses.UsageHistory); n > 0 && ses.UsageHistory[n-1].TurnIndex > last {
+		last = ses.UsageHistory[n-1].TurnIndex
+	}
+	if n := len(ses.Metrics); n > 0 && ses.Metrics[n-1].TurnIndex > last {
+		last = ses.Metrics[n-1].TurnIndex
+	}
+	return last
+}
+
 func CurrentWorkspacePath() string {
 	wd, err := os.Getwd()
 	if err != nil {

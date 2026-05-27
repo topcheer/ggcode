@@ -10,6 +10,7 @@ import (
 
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -47,13 +48,15 @@ type UIState struct {
 	ContextWin binding.String
 	TokenPct   binding.Float
 
-	SessionUsageTotal      binding.String
-	SessionUsageInput      binding.String
-	SessionUsageOutput     binding.String
-	SessionUsageCacheRead  binding.String
-	SessionUsageCacheWrite binding.String
-	SessionUsageCacheHit   binding.String
-	SessionUsageValueLines binding.String
+	SessionUsageTotal        binding.String
+	SessionUsageInput        binding.String
+	SessionUsageOutput       binding.String
+	SessionUsageCacheRead    binding.String
+	SessionUsageCacheWrite   binding.String
+	SessionUsageCacheHit     binding.String
+	SessionUsageValueLines   binding.String
+	SessionMetricsValueLines binding.String
+	SessionMetricTurnsLines  binding.String
 
 	AgentWorking atomic.Bool // true while agent is busy
 
@@ -107,6 +110,8 @@ func NewUIState() *UIState {
 	s.SessionUsageCacheWrite = binding.NewString()
 	s.SessionUsageCacheHit = binding.NewString()
 	s.SessionUsageValueLines = binding.NewString()
+	s.SessionMetricsValueLines = binding.NewString()
+	s.SessionMetricTurnsLines = binding.NewString()
 	_ = s.StatusText.Set("Ready")
 	_ = s.ModelName.Set("")
 	_ = s.TokenUsage.Set("")
@@ -119,6 +124,8 @@ func NewUIState() *UIState {
 	_ = s.SessionUsageCacheWrite.Set("0")
 	_ = s.SessionUsageCacheHit.Set("0%")
 	_ = s.SessionUsageValueLines.Set(strings.Join([]string{"0", "0", "0", "0", "0", "0%"}, "\n"))
+	_ = s.SessionMetricsValueLines.Set(strings.Join([]string{"0", "-", "-", "-", "-", "-", "0", "0%", "-"}, "\n"))
+	_ = s.SessionMetricTurnsLines.Set(t("sidebar.metrics_empty"))
 	return s
 }
 
@@ -166,6 +173,72 @@ func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
 	_ = u.SessionUsageCacheWrite.Set(cacheWrite)
 	_ = u.SessionUsageCacheHit.Set(cacheHit)
 	_ = u.SessionUsageValueLines.Set(strings.Join([]string{total, input, output, cacheRead, cacheWrite, cacheHit}, "\n"))
+}
+
+func (u *UIState) SetSessionMetrics(events []metrics.MetricEvent) {
+	summary := metrics.Summarize(events)
+	if !summary.HasData() {
+		_ = u.SessionMetricsValueLines.Set(strings.Join([]string{"0", "-", "-", "-", "-", "-", "0", "0%", "-"}, "\n"))
+		_ = u.SessionMetricTurnsLines.Set(t("sidebar.metrics_empty"))
+		return
+	}
+
+	slowTools := "-"
+	if len(summary.SlowTools) > 0 {
+		visible := summary.SlowTools
+		if len(visible) > 2 {
+			visible = visible[:2]
+		}
+		parts := make([]string, 0, len(visible))
+		for _, tool := range visible {
+			parts = append(parts, fmt.Sprintf("%s %s", tool.Name, humanizeMetricDuration(tool.AvgDuration)))
+		}
+		slowTools = strings.Join(parts, ", ")
+	}
+
+	_ = u.SessionMetricsValueLines.Set(strings.Join([]string{
+		fmt.Sprintf("%d", summary.TurnCount),
+		humanizeMetricDuration(summary.AvgTTFT),
+		humanizeMetricDuration(summary.P95TTFT),
+		humanizeMetricDuration(summary.AvgDuration),
+		humanizeMetricDuration(summary.P95Duration),
+		humanizeMetricDuration(summary.AvgThink),
+		fmt.Sprintf("%d", summary.ToolCallCount),
+		fmt.Sprintf("%d%%", summary.ToolFailureRate()),
+		slowTools,
+	}, "\n"))
+
+	if len(summary.Turns) == 0 {
+		_ = u.SessionMetricTurnsLines.Set(t("sidebar.metrics_empty"))
+		return
+	}
+	lines := make([]string, 0, min(5, len(summary.Turns)))
+	for i := len(summary.Turns) - 1; i >= 0 && len(lines) < 5; i-- {
+		turn := summary.Turns[i]
+		line := fmt.Sprintf("#%d  %s / %s / %dt", turn.TurnIndex, humanizeMetricDuration(turn.TTFT), humanizeMetricDuration(turn.Duration), turn.ToolCallCount)
+		if turn.ToolFailureCount > 0 {
+			line += "  !"
+		}
+		lines = append(lines, line)
+	}
+	_ = u.SessionMetricTurnsLines.Set(strings.Join(lines, "\n"))
+}
+
+func humanizeMetricDuration(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d/time.Millisecond)
+	}
+	seconds := d.Seconds()
+	if seconds < 10 {
+		return fmt.Sprintf("%.1fs", seconds)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", seconds)
+	}
+	return d.Round(time.Second).String()
 }
 
 // AppendChat appends a message to the chat list (thread-safe).
