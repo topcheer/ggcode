@@ -15,23 +15,26 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // Session represents a single conversation session.
 type Session struct {
-	ID                   string              `json:"id"`
-	CreatedAt            time.Time           `json:"created_at"`
-	UpdatedAt            time.Time           `json:"updated_at"`
-	Title                string              `json:"title"`
-	Workspace            string              `json:"workspace,omitempty"`
-	Vendor               string              `json:"vendor"`
-	Endpoint             string              `json:"endpoint"`
-	Model                string              `json:"model"`
-	TokenUsage           provider.TokenUsage `json:"token_usage,omitempty"`
-	Messages             []provider.Message  `json:"messages,omitempty"`
-	TunnelEvents         []TunnelEvent       `json:"tunnel_events,omitempty"`
-	TunnelEventsComplete bool                `json:"tunnel_events_complete,omitempty"`
+	ID                   string                `json:"id"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+	Title                string                `json:"title"`
+	Workspace            string                `json:"workspace,omitempty"`
+	Vendor               string                `json:"vendor"`
+	Endpoint             string                `json:"endpoint"`
+	Model                string                `json:"model"`
+	TokenUsage           provider.TokenUsage   `json:"token_usage,omitempty"`
+	UsageHistory         []UsageEntry          `json:"usage_history,omitempty"`
+	Metrics              []metrics.MetricEvent `json:"metrics,omitempty"`
+	Messages             []provider.Message    `json:"messages,omitempty"`
+	TunnelEvents         []TunnelEvent         `json:"tunnel_events,omitempty"`
+	TunnelEventsComplete bool                  `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 }
@@ -42,6 +45,16 @@ type TunnelEvent struct {
 	StreamID string          `json:"stream_id,omitempty"`
 	Type     string          `json:"type"`
 	Data     json.RawMessage `json:"data,omitempty"`
+}
+
+// UsageEntry records a single LLM API call's token consumption within a session.
+type UsageEntry struct {
+	Timestamp time.Time           `json:"timestamp"`
+	TurnIndex int                 `json:"turn_index"`
+	Model     string              `json:"model,omitempty"`
+	Vendor    string              `json:"vendor,omitempty"`
+	Endpoint  string              `json:"endpoint,omitempty"`
+	Usage     provider.TokenUsage `json:"usage"`
 }
 
 // Store is the interface for session persistence.
@@ -237,7 +250,7 @@ func sessionToIndexEntry(s *Session) indexEntry {
 
 // jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type                 string              `json:"type"` // "meta", "message", "cost", or "checkpoint"
+	Type                 string              `json:"type"` // "meta", "message", "cost", "usage", "metric", or "checkpoint"
 	SessionID            string              `json:"session_id,omitempty"`
 	Title                string              `json:"title,omitempty"`
 	Workspace            string              `json:"workspace,omitempty"`
@@ -251,6 +264,10 @@ type jsonlRecord struct {
 	Message              *provider.Message   `json:"message,omitempty"`
 	TunnelEvent          *TunnelEvent        `json:"tunnel_event,omitempty"`
 	CostJSON             json.RawMessage     `json:"cost,omitempty"`
+	// UsageEntry: per-turn usage record (type == "usage").
+	UsageEntry *UsageEntry `json:"usage_entry,omitempty"`
+	// MetricEvent: performance metric record (type == "metric").
+	MetricEvent *metrics.MetricEvent `json:"metric_event,omitempty"`
 	// Checkpoint fields: compacted messages snapshot after summarize.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
@@ -357,6 +374,28 @@ func (s *JSONLStore) Save(ses *Session) error {
 		}
 	}
 
+	// Usage history records
+	for i := range ses.UsageHistory {
+		entry := ses.UsageHistory[i]
+		rec := jsonlRecord{Type: "usage", SessionID: ses.ID, UsageEntry: &entry}
+		if err := enc.Encode(rec); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("encoding usage %d: %w", i, err)
+		}
+	}
+
+	// Metric records
+	for i := range ses.Metrics {
+		m := ses.Metrics[i]
+		rec := jsonlRecord{Type: "metric", SessionID: ses.ID, MetricEvent: &m}
+		if err := enc.Encode(rec); err != nil {
+			f.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("encoding metric %d: %w", i, err)
+		}
+	}
+
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("closing temp file: %w", err)
@@ -425,7 +464,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			lastCpMessages = rec.CheckpointMessages
 			postCPEntries = nil
 			haveCheckpoint = true
-		case "message", "cost", "tunnel_event":
+		case "message", "cost", "tunnel_event", "usage", "metric":
 			if haveCheckpoint {
 				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 			} else {
@@ -470,6 +509,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "tunnel_event":
 			if e.record.TunnelEvent != nil {
 				ses.TunnelEvents = append(ses.TunnelEvents, *e.record.TunnelEvent)
+			}
+		case "usage":
+			if e.record.UsageEntry != nil {
+				ses.UsageHistory = append(ses.UsageHistory, *e.record.UsageEntry)
+			}
+		case "metric":
+			if e.record.MetricEvent != nil {
+				ses.Metrics = append(ses.Metrics, *e.record.MetricEvent)
 			}
 		}
 	}
@@ -795,6 +842,39 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		return err
 	}
 	return s.updateIndex(ses)
+}
+
+// AppendUsageEntry persists a per-turn usage record to the session's JSONL file.
+// Each record captures the token consumption of a single LLM API call.
+func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !ses.HasUserInteraction() {
+		return nil
+	}
+	path := s.sessionPath(ses.ID)
+	rec := jsonlRecord{
+		Type:       "usage",
+		SessionID:  ses.ID,
+		UsageEntry: &entry,
+	}
+	return appendRecordLine(path, rec)
+}
+
+// AppendMetric persists a performance metric record to the session's JSONL file.
+func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !ses.HasUserInteraction() {
+		return nil
+	}
+	path := s.sessionPath(ses.ID)
+	rec := jsonlRecord{
+		Type:        "metric",
+		SessionID:   ses.ID,
+		MetricEvent: &m,
+	}
+	return appendRecordLine(path, rec)
 }
 
 // EnsureMeta writes the meta record if the session file doesn't exist yet.

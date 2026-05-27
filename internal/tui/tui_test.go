@@ -3245,3 +3245,69 @@ func TestDescribeToolExitWorktreeShowsAction(t *testing.T) {
 		t.Errorf("expected Detail with action, got %q", present.Detail)
 	}
 }
+
+func TestUsageTurnIndexIncrementsOnStartAgent(t *testing.T) {
+	m := newTestModel()
+	if m.usageTurnIndex != 0 {
+		t.Fatalf("expected initial turn index 0, got %d", m.usageTurnIndex)
+	}
+
+	_ = m.startAgent("hello")
+	if m.usageTurnIndex != 1 {
+		t.Fatalf("expected turn index 1 after first startAgent, got %d", m.usageTurnIndex)
+	}
+
+	_ = m.startAgent("world")
+	if m.usageTurnIndex != 2 {
+		t.Fatalf("expected turn index 2 after second startAgent, got %d", m.usageTurnIndex)
+	}
+}
+
+func TestUsageTurnIndexRestoresFromSession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := session.NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	ses.UsageHistory = []session.UsageEntry{
+		{TurnIndex: 1, Usage: provider.TokenUsage{InputTokens: 100}},
+		{TurnIndex: 2, Usage: provider.TokenUsage{InputTokens: 200}},
+		{TurnIndex: 3, Usage: provider.TokenUsage{InputTokens: 300}},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel()
+	m.SetSession(loaded, store)
+	if m.usageTurnIndex != 3 {
+		t.Fatalf("expected restored turn index 3, got %d", m.usageTurnIndex)
+	}
+}
+
+func TestUsageTurnIndexIncrementsOnStartAgentWithExpand(t *testing.T) {
+	m := newTestModel()
+	if m.usageTurnIndex != 0 {
+		t.Fatalf("expected initial turn index 0, got %d", m.usageTurnIndex)
+	}
+
+	_ = m.startAgentWithExpand("hello")
+	if m.usageTurnIndex != 1 {
+		t.Fatalf("expected turn index 1 after startAgentWithExpand, got %d", m.usageTurnIndex)
+	}
+
+	_ = m.startAgentWithExpand("world")
+	if m.usageTurnIndex != 2 {
+		t.Fatalf("expected turn index 2 after second startAgentWithExpand, got %d", m.usageTurnIndex)
+	}
+}

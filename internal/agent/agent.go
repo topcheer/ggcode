@@ -8,12 +8,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -46,6 +48,7 @@ type Agent struct {
 	policy         permission.PermissionPolicy
 	onApproval     ApprovalFunc
 	onUsage        func(usage provider.TokenUsage)
+	onMetric       func(metrics.MetricEvent)
 	onCheckpoint   func(messages []provider.Message, tokenCount int)
 	onRunResult    runResultHandler
 	hookConfig     hooks.HookConfig
@@ -127,6 +130,15 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 	defer a.mu.Unlock()
 	a.onUsage = fn
 	a.syncContextManagerUsageHandlerLocked()
+}
+
+// SetMetricHandler sets a callback invoked after each LLM call or tool execution
+// with performance metrics (TTFT, think time, tool duration, etc.).
+// The callback must be non-blocking — it should send to a channel or drop if busy.
+func (a *Agent) SetMetricHandler(fn func(metrics.MetricEvent)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onMetric = fn
 }
 
 // SetRunResultHandler sets a callback invoked after each RunStreamWithContent
@@ -728,13 +740,32 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	var reasoningBuf strings.Builder
 	var thinkingSignature string
 
+	// Metric tracking — records timestamps during streaming, fires onMetric on Done.
+	llmStartTime := time.Now()
+	var firstTokenTime time.Time
+	var thinkStartTime time.Time
+	var thinkDuration time.Duration
+	hasFirstToken := false
+
 	for event := range stream {
 		switch event.Type {
 		case provider.StreamEventText:
+			if !hasFirstToken && event.Text != "" {
+				firstTokenTime = time.Now()
+				hasFirstToken = true
+			}
 			onEvent(event)
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
 		case provider.StreamEventReasoning:
+			if !hasFirstToken && event.Text != "" {
+				firstTokenTime = time.Now()
+				hasFirstToken = true
+			}
+			// Track thinking duration
+			if event.Text != "" && thinkStartTime.IsZero() {
+				thinkStartTime = time.Now()
+			}
 			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
 			onEvent(event)
 			if event.Text != "" {
@@ -747,6 +778,11 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
+			// Close thinking window if open
+			if !thinkStartTime.IsZero() {
+				thinkDuration += time.Since(thinkStartTime)
+				thinkStartTime = time.Time{}
+			}
 			flushText()
 			onEvent(event)
 			toolCalls = append(toolCalls, event.Tool)
@@ -755,6 +791,24 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			if event.Usage != nil {
 				usage = *event.Usage
 			}
+			// Close thinking window if open
+			if !thinkStartTime.IsZero() {
+				thinkDuration += time.Since(thinkStartTime)
+				thinkStartTime = time.Time{}
+			}
+			// Fire LLM metric
+			now := time.Now()
+			ttft := time.Duration(0)
+			if !firstTokenTime.IsZero() {
+				ttft = firstTokenTime.Sub(llmStartTime)
+			}
+			a.emitMetric(metrics.MetricEvent{
+				Timestamp: now,
+				Type:      "llm",
+				TTFT:      ttft,
+				ThinkTime: thinkDuration,
+				Duration:  now.Sub(llmStartTime),
+			})
 			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
@@ -803,6 +857,15 @@ func (a *Agent) emitUsage(usage provider.TokenUsage) {
 	a.mu.Unlock()
 	if fn != nil {
 		fn(usage)
+	}
+}
+
+func (a *Agent) emitMetric(m metrics.MetricEvent) {
+	a.mu.Lock()
+	fn := a.onMetric
+	a.mu.Unlock()
+	if fn != nil {
+		fn(m)
 	}
 }
 

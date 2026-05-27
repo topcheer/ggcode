@@ -12,6 +12,7 @@ import (
 	"time"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -1685,5 +1686,192 @@ func TestRunStreamEmitsErrorWhenMaxIterationsReached(t *testing.T) {
 	}
 	if gotErr == nil || !strings.Contains(gotErr.Error(), "max iterations") {
 		t.Fatalf("expected stream error event for max iterations, got %v", gotErr)
+	}
+}
+
+func TestRunStreamEmitsLLMMetric(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{{
+			{Type: provider.StreamEventText, Text: "Hello"},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+		}},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+
+	var collectedMetrics []metrics.MetricEvent
+	a.SetMetricHandler(func(m metrics.MetricEvent) {
+		collectedMetrics = append(collectedMetrics, m)
+	})
+
+	err := a.RunStream(context.Background(), "hi", func(event provider.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+
+	if len(collectedMetrics) == 0 {
+		t.Fatal("expected at least 1 metric event")
+	}
+
+	// Find the LLM metric
+	var llmMetric *metrics.MetricEvent
+	for i := range collectedMetrics {
+		if collectedMetrics[i].Type == "llm" {
+			llmMetric = &collectedMetrics[i]
+			break
+		}
+	}
+	if llmMetric == nil {
+		t.Fatal("expected an LLM metric event")
+	}
+	if llmMetric.TTFT <= 0 {
+		t.Errorf("expected positive TTFT, got %v", llmMetric.TTFT)
+	}
+	if llmMetric.Duration <= 0 {
+		t.Errorf("expected positive Duration, got %v", llmMetric.Duration)
+	}
+	if llmMetric.Duration < llmMetric.TTFT {
+		t.Errorf("Duration %v should be >= TTFT %v", llmMetric.Duration, llmMetric.TTFT)
+	}
+}
+
+func TestRunStreamEmitsToolMetric(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc1", Name: "mock", Arguments: json.RawMessage(`{}`)}},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+			},
+			{
+				{Type: provider.StreamEventText, Text: "done"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 20, OutputTokens: 10}},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "mock", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewAgent(mp, registry, "", 5)
+
+	var collectedMetrics []metrics.MetricEvent
+	a.SetMetricHandler(func(m metrics.MetricEvent) {
+		collectedMetrics = append(collectedMetrics, m)
+	})
+
+	err := a.RunStream(context.Background(), "use tool", func(event provider.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+
+	// Find tool metric
+	var toolMetric *metrics.MetricEvent
+	for i := range collectedMetrics {
+		if collectedMetrics[i].Type == "tool" {
+			toolMetric = &collectedMetrics[i]
+			break
+		}
+	}
+	if toolMetric == nil {
+		t.Fatal("expected a tool metric event")
+	}
+	if toolMetric.ToolName != "mock" {
+		t.Errorf("tool name: got %q, want mock", toolMetric.ToolName)
+	}
+	if !toolMetric.ToolSuccess {
+		t.Error("expected tool success = true")
+	}
+	if toolMetric.ToolDuration <= 0 {
+		t.Errorf("expected positive tool duration, got %v", toolMetric.ToolDuration)
+	}
+}
+
+func TestRunStreamEmitsToolMetricOnFailure(t *testing.T) {
+	errTool := mockTool{
+		name:   "fail-tool",
+		result: tool.Result{Content: "something broke", IsError: true},
+	}
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "tc1", Name: "fail-tool", Arguments: json.RawMessage(`{}`)}},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+			},
+			{
+				{Type: provider.StreamEventText, Text: "recovered"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 20, OutputTokens: 10}},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	if err := registry.Register(errTool); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewAgent(mp, registry, "", 5)
+
+	var collectedMetrics []metrics.MetricEvent
+	a.SetMetricHandler(func(m metrics.MetricEvent) {
+		collectedMetrics = append(collectedMetrics, m)
+	})
+
+	err := a.RunStream(context.Background(), "use failing tool", func(event provider.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+
+	var toolMetric *metrics.MetricEvent
+	for i := range collectedMetrics {
+		if collectedMetrics[i].Type == "tool" {
+			toolMetric = &collectedMetrics[i]
+			break
+		}
+	}
+	if toolMetric == nil {
+		t.Fatal("expected a tool metric event")
+	}
+	if toolMetric.ToolSuccess {
+		t.Error("expected tool success = false for error tool")
+	}
+	if toolMetric.ToolError == "" {
+		t.Error("expected non-empty tool error")
+	}
+}
+
+func TestRunStreamEmitsReasoningMetric(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventReasoning, Text: "thinking..."},
+				{Type: provider.StreamEventReasoning, Text: " more thinking"},
+				{Type: provider.StreamEventText, Text: "answer"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+			},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+
+	var collectedMetrics []metrics.MetricEvent
+	a.SetMetricHandler(func(m metrics.MetricEvent) {
+		collectedMetrics = append(collectedMetrics, m)
+	})
+
+	err := a.RunStream(context.Background(), "think about it", func(event provider.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+
+	var llmMetric *metrics.MetricEvent
+	for i := range collectedMetrics {
+		if collectedMetrics[i].Type == "llm" {
+			llmMetric = &collectedMetrics[i]
+			break
+		}
+	}
+	if llmMetric == nil {
+		t.Fatal("expected an LLM metric event")
+	}
+	if llmMetric.ThinkTime <= 0 {
+		t.Errorf("expected positive think time, got %v", llmMetric.ThinkTime)
 	}
 }

@@ -119,6 +119,7 @@ type Model struct {
 	pluginMgr                       *plugin.Manager
 	subAgentMgr                     *subagent.Manager
 	subAgentFollow                  subAgentFollowState
+	usageTurnIndex                  int
 	knight                          *knight.Knight
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
@@ -513,6 +514,11 @@ func (m *Model) startContextProbe() {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	if ses != nil && len(ses.UsageHistory) > 0 {
+		m.usageTurnIndex = ses.UsageHistory[len(ses.UsageHistory)-1].TurnIndex
+	} else {
+		m.usageTurnIndex = 0
+	}
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
 	// Register this instance for multi-instance detection and auto-mute
@@ -540,10 +546,19 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore
+	entry := session.UsageEntry{
+		Timestamp: time.Now(),
+		TurnIndex: m.usageTurnIndex,
+		Model:     ses.Model,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
+		Usage:     usage,
+	}
 	mu.Unlock()
 
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		_ = jsonlStore.AppendMetaToDisk(ses)
+		_ = jsonlStore.AppendUsageEntry(ses, entry)
 	} else {
 		_ = store.Save(ses)
 	}

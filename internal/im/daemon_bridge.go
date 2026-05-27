@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/harness"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -47,6 +48,8 @@ type DaemonBridge struct {
 	harnessMode     string // "off", "suggest", "on", "strict"
 	harnessAutoInit bool
 	workingDir      string
+	usageTurnIndex  int
+	metricCollector *metrics.Collector
 
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
@@ -74,6 +77,9 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		sess:     sess,
 		language: emitter.Language(),
 	}
+	if sess != nil {
+		b.usageTurnIndex = daemonSessionTurnIndex(sess)
+	}
 	// Register interactive callback handler so button clicks from adapters
 	// are routed to the pending ask_user question.
 	if mgr != nil {
@@ -82,6 +88,12 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 	// Register approval handler so tool permission requests are pushed to IM.
 	if ag != nil {
 		ag.SetApprovalHandler(b.handleApproval)
+		if store != nil && sess != nil {
+			b.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+				b.recordMetric(ev)
+			})
+			ag.SetMetricHandler(b.metricCollector.Emit)
+		}
 	}
 	return b
 }
@@ -500,6 +512,9 @@ func formatToolInline(toolName, input string) string {
 // StreamEventDone (not per-token), tool status is emitted as it happens.
 func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.ContentBlock) error {
 	round := &daemonRoundState{}
+	b.mu.Lock()
+	b.usageTurnIndex++
+	b.mu.Unlock()
 
 	// Set up interruption handler so mid-run IM messages get injected
 	// into the agent's context instead of cancelling the stream.
@@ -764,6 +779,47 @@ func (b *DaemonBridge) appendAssistantMessages() {
 		}
 	}
 	b.sess.Messages = messages
+}
+
+func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
+	b.mu.Lock()
+	ses := b.sess
+	store := b.store
+	ev.TurnIndex = b.usageTurnIndex
+	if ses != nil {
+		ses.Metrics = append(ses.Metrics, ev)
+	}
+	b.mu.Unlock()
+	if ses == nil || store == nil {
+		return
+	}
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetric(ses, ev)
+	}
+}
+
+func (b *DaemonBridge) Close() {
+	b.mu.Lock()
+	collector := b.metricCollector
+	b.metricCollector = nil
+	b.mu.Unlock()
+	if collector != nil {
+		collector.Stop()
+	}
+}
+
+func daemonSessionTurnIndex(ses *session.Session) int {
+	if ses == nil {
+		return 0
+	}
+	last := 0
+	if n := len(ses.UsageHistory); n > 0 && ses.UsageHistory[n-1].TurnIndex > last {
+		last = ses.UsageHistory[n-1].TurnIndex
+	}
+	if n := len(ses.Metrics); n > 0 && ses.Metrics[n-1].TurnIndex > last {
+		last = ses.Metrics[n-1].TurnIndex
+	}
+	return last
 }
 
 // --- helpers ---

@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -57,11 +58,13 @@ type AgentBridge struct {
 	mainWindow     fyne.Window
 	permissionMode permission.PermissionMode
 
-	registry     *tool.Registry
-	workingDir   string
-	sessionStore session.Store
-	currentSes   *session.Session
-	rebuildCB    func()
+	registry        *tool.Registry
+	workingDir      string
+	sessionStore    session.Store
+	currentSes      *session.Session
+	rebuildCB       func()
+	usageTurnIndex  int
+	metricCollector *metrics.Collector
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -508,6 +511,12 @@ func (b *AgentBridge) setupAgent() error {
 	b.permissionMode = mode
 	b.agent.SetUsageHandler(b.recordSessionUsage)
 
+	// Metric collector — async, non-blocking for agent.
+	b.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+		b.recordMetric(ev)
+	})
+	b.agent.SetMetricHandler(b.metricCollector.Emit)
+
 	// Approval handler — popup dialog for tool approval
 	b.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		if b.mainWindow == nil {
@@ -627,6 +636,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 	b.mu.Lock()
 	b.working = true
 	b.startTime = time.Now()
+	b.usageTurnIndex++
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.mu.Unlock()
@@ -893,6 +903,9 @@ func (b *AgentBridge) Cancel() {
 
 func (b *AgentBridge) Close() {
 	b.Cancel()
+	if b.metricCollector != nil {
+		b.metricCollector.Stop()
+	}
 	if b.cronScheduler != nil {
 		b.cronScheduler.Shutdown()
 	}
@@ -1046,6 +1059,14 @@ func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
 	ses := b.currentSes
 	store := b.sessionStore
 	total := b.currentSes.TokenUsage
+	entry := session.UsageEntry{
+		Timestamp: time.Now(),
+		TurnIndex: b.usageTurnIndex,
+		Model:     ses.Model,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
+		Usage:     usage,
+	}
 	b.mu.Unlock()
 
 	if b.ui != nil {
@@ -1053,8 +1074,25 @@ func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
 	}
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		_ = jsonlStore.AppendMetaToDisk(ses)
+		_ = jsonlStore.AppendUsageEntry(ses, entry)
 	} else {
 		_ = store.Save(ses)
+	}
+}
+
+// recordMetric persists a metric event to the session JSONL.
+// Called by the metrics collector goroutine (async, non-blocking for agent).
+func (b *AgentBridge) recordMetric(ev metrics.MetricEvent) {
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.sessionStore
+	ev.TurnIndex = b.usageTurnIndex
+	b.mu.Unlock()
+	if ses == nil || store == nil {
+		return
+	}
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetric(ses, ev)
 	}
 }
 
@@ -1735,6 +1773,7 @@ func (b *AgentBridge) ensureSession() {
 	ses := session.NewSession(vendor, endpoint, model)
 	_ = b.sessionStore.Save(ses)
 	b.currentSes = ses
+	b.usageTurnIndex = 0
 	if b.ui != nil {
 		b.ui.SetSessionUsage(ses.TokenUsage)
 	}
@@ -2263,6 +2302,11 @@ func (b *AgentBridge) ResumeSession(id string) error {
 
 	b.mu.Lock()
 	b.currentSes = ses
+	if len(ses.UsageHistory) > 0 {
+		b.usageTurnIndex = ses.UsageHistory[len(ses.UsageHistory)-1].TurnIndex
+	} else {
+		b.usageTurnIndex = 0
+	}
 	b.mu.Unlock()
 	if b.ui != nil {
 		b.ui.SetSessionUsage(ses.TokenUsage)

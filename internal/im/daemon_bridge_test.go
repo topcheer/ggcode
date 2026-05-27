@@ -7,9 +7,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/tool"
 )
+
+type daemonBridgeMetricsProvider struct {
+	events []provider.StreamEvent
+}
+
+func (p *daemonBridgeMetricsProvider) Name() string { return "test" }
+
+func (p *daemonBridgeMetricsProvider) Chat(context.Context, []provider.Message, []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	return &provider.ChatResponse{}, nil
+}
+
+func (p *daemonBridgeMetricsProvider) ChatStream(context.Context, []provider.Message, []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, len(p.events))
+	for _, ev := range p.events {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (p *daemonBridgeMetricsProvider) CountTokens(context.Context, []provider.Message) (int, error) {
+	return 0, nil
+}
 
 // TestDaemonBridgeInterruptionQueuing verifies that when an agent run is
 // active (cancelFunc != nil), a new IM message is queued as an interruption
@@ -198,6 +225,101 @@ func TestDaemonBridgeNoCancelStress(t *testing.T) {
 	bridge.mu.Unlock()
 	if count != 100 {
 		t.Fatalf("expected 100 queued, got %d", count)
+	}
+}
+
+func TestDaemonBridgePersistsMetricsToSession(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ses := session.NewSession("openai", "api", "test-model")
+	prov := &daemonBridgeMetricsProvider{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "hello"},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+		},
+	}
+	ag := agent.NewAgent(prov, tool.NewRegistry(), "", 3)
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := NewDaemonBridge(mgr, ag, emitter, store, ses)
+
+	err = bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Text:     "run once",
+		Envelope: Envelope{Adapter: "test", Platform: PlatformTelegram},
+	})
+	if err != nil {
+		t.Fatalf("SubmitInboundMessage error: %v", err)
+	}
+	bridge.Close()
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Metrics) != 1 {
+		t.Fatalf("expected 1 metric, got %d", len(loaded.Metrics))
+	}
+	if loaded.Metrics[0].Type != "llm" {
+		t.Fatalf("expected llm metric, got %q", loaded.Metrics[0].Type)
+	}
+	if loaded.Metrics[0].TurnIndex != 1 {
+		t.Fatalf("expected turn index 1, got %d", loaded.Metrics[0].TurnIndex)
+	}
+}
+
+func TestDaemonBridgeMetricsResumeTurnIndex(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ses := session.NewSession("openai", "api", "test-model")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "existing"}}}}
+	ses.Metrics = []metrics.MetricEvent{{
+		Timestamp: time.Now(),
+		TurnIndex: 3,
+		Type:      "llm",
+		TTFT:      10 * time.Millisecond,
+		Duration:  20 * time.Millisecond,
+	}}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := &daemonBridgeMetricsProvider{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "hello again"},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 7, OutputTokens: 3}},
+		},
+	}
+	ag := agent.NewAgent(prov, tool.NewRegistry(), "", 3)
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := NewDaemonBridge(mgr, ag, emitter, store, loaded)
+
+	err = bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Text:     "resume turn",
+		Envelope: Envelope{Adapter: "test", Platform: PlatformTelegram},
+	})
+	if err != nil {
+		t.Fatalf("SubmitInboundMessage error: %v", err)
+	}
+	bridge.Close()
+
+	reloaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d", len(reloaded.Metrics))
+	}
+	if reloaded.Metrics[1].TurnIndex != 4 {
+		t.Fatalf("expected resumed turn index 4, got %d", reloaded.Metrics[1].TurnIndex)
 	}
 }
 

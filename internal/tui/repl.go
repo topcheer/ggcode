@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -51,6 +52,7 @@ type REPL struct {
 	webuiAddr           string // webui listen address
 	webuiToken          string // webui auth token, displayed in URL fragment
 	knightStartupHint   string // one-time hint shown at startup (e.g. lock conflict)
+	metricCollector     *metrics.Collector
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -62,6 +64,10 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	}
 	if a != nil {
 		a.SetUsageHandler(r.recordSessionUsage)
+		r.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+			r.recordMetric(ev)
+		})
+		a.SetMetricHandler(r.metricCollector.Emit)
 	}
 	return r
 }
@@ -167,6 +173,20 @@ func (r *REPL) recordSessionUsage(usage provider.TokenUsage) {
 		return
 	}
 	r.model.recordSessionUsage(usage)
+}
+
+// recordMetric persists a metric event to the session JSONL.
+// Called by the metrics collector goroutine (async, non-blocking for agent).
+func (r *REPL) recordMetric(ev metrics.MetricEvent) {
+	ses := r.model.Session()
+	store := r.store
+	if ses == nil || store == nil {
+		return
+	}
+	ev.TurnIndex = r.model.usageTurnIndex
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetric(ses, ev)
+	}
 }
 
 // SetWebUIReadyAddr stores the webui address and auth token to be displayed
@@ -748,6 +768,10 @@ func (r *REPL) Run() error {
 	debug.Log("repl", "program.Run() returned err=%v", err)
 	if errors.Is(err, tea.ErrInterrupted) {
 		err = nil
+	}
+	// Drain remaining metrics before session save.
+	if r.metricCollector != nil {
+		r.metricCollector.Stop()
 	}
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
