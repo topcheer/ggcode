@@ -696,7 +696,7 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "recent answer"}}},
 	}
-	summary, err := summarizeMessages(ctx, prov, msgs)
+	summary, err := summarizeMessages(ctx, prov, msgs, nil)
 	if err != nil {
 		t.Fatalf("summarizeMessages failed: %v", err)
 	}

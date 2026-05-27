@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"math"
 )
 
 // Message represents a single message in the conversation.
@@ -73,10 +74,11 @@ func ToolResultWithImages(id, name, textOutput string, images []ContentImage, is
 
 // TokenUsage records token consumption for a single API call.
 type TokenUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	CacheRead    int `json:"cache_read_tokens"`
-	CacheWrite   int `json:"cache_write_tokens"`
+	InputTokens       int `json:"input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	CacheRead         int `json:"cache_read_tokens"`
+	CacheWrite        int `json:"cache_write_tokens"`
+	PromptTokensTotal int `json:"prompt_tokens_total,omitempty"`
 }
 
 func (u *TokenUsage) Add(delta TokenUsage) {
@@ -84,10 +86,28 @@ func (u *TokenUsage) Add(delta TokenUsage) {
 	u.OutputTokens += delta.OutputTokens
 	u.CacheRead += delta.CacheRead
 	u.CacheWrite += delta.CacheWrite
+	u.PromptTokensTotal += delta.PromptTokensTotal
 }
 
 func (u TokenUsage) Total() int {
 	return u.InputTokens + u.OutputTokens
+}
+
+func (u TokenUsage) CacheHitPercent() int {
+	totalPromptTokens := u.PromptTokensTotal
+	if totalPromptTokens <= 0 || totalPromptTokens < u.CacheRead {
+		fallbackTotal := u.InputTokens
+		if u.CacheWrite > 0 || u.CacheRead > u.InputTokens {
+			fallbackTotal = u.InputTokens + u.CacheRead + u.CacheWrite
+		}
+		if fallbackTotal > totalPromptTokens {
+			totalPromptTokens = fallbackTotal
+		}
+	}
+	if totalPromptTokens <= 0 || u.CacheRead <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(u.CacheRead) * 100 / float64(totalPromptTokens)))
 }
 
 // StreamEvent is sent over a channel during streaming responses.

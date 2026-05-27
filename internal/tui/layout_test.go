@@ -739,11 +739,11 @@ func TestSidebarSessionUsageLocalizesInChinese(t *testing.T) {
 	m.setLanguage("zh-CN")
 	m.handleResize(128, 28)
 	m.session = &session.Session{
-		TokenUsage: provider.TokenUsage{InputTokens: 1200, OutputTokens: 340, CacheRead: 800, CacheWrite: 64},
+		TokenUsage: provider.TokenUsage{InputTokens: 1200, OutputTokens: 340, CacheRead: 800, CacheWrite: 64, PromptTokensTotal: 1200},
 	}
 
 	view := m.View().Content
-	if !strings.Contains(view, "会话用量") || !strings.Contains(view, "总计") || !strings.Contains(view, "缓存读") {
+	if !strings.Contains(view, "会话用量") || !strings.Contains(view, "总计") || !strings.Contains(view, "缓存读") || !strings.Contains(view, "缓存命中") || !strings.Contains(view, "67%") {
 		t.Error("expected localized session usage section in sidebar")
 	}
 }

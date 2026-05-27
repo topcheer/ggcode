@@ -18,6 +18,7 @@ type SpawnAgentTool struct {
 	Tools        *Registry
 	AgentFactory subagent.AgentFactory
 	WorkingDir   string // working directory to propagate to sub-agent
+	OnUsage      func(provider.TokenUsage)
 }
 
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
@@ -136,6 +137,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			Model:        model,
 			AgentType:    subagentType,
 			WorkingDir:   t.WorkingDir,
+			OnUsage:      t.OnUsage,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each sub-agent gets its own tool
 				// instances with independent WorkingDir fields. This prevents
@@ -174,6 +176,7 @@ func (t SpawnAgentTool) Clone() Tool {
 		Tools:        t.Tools,
 		AgentFactory: t.AgentFactory,
 		WorkingDir:   t.WorkingDir,
+		OnUsage:      t.OnUsage,
 	}
 }
 

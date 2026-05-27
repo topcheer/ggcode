@@ -106,6 +106,8 @@ func enCatalog(key string) string {
 		return "cache read"
 	case "label.cache_write":
 		return "cache write"
+	case "label.cache_hit":
+		return "cache hit"
 	case "label.file":
 		return "file"
 	case "label.directory":

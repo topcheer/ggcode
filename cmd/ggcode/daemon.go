@@ -215,6 +215,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
 		WorkingDir:   workingDir,
+		OnUsage:      nil,
 		OnSkillUsed: func(ref string) {
 			if knightAgent != nil {
 				knightAgent.RecordSkillUse(ref)

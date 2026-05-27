@@ -66,6 +66,7 @@ func (m Model) renderSidebarSessionUsageSection() string {
 		renderUsageRow(m.t("label.output"), humanizeTokenCount(usage.OutputTokens)),
 		renderUsageRow(m.t("label.cache_read"), humanizeTokenCount(usage.CacheRead)),
 		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
+		renderUsageRow(m.t("label.cache_hit"), fmt.Sprintf("%d%%", usage.CacheHitPercent())),
 	}
 	return strings.Join(rows, "\n")
 }

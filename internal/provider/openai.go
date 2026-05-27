@@ -408,8 +408,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					inputTokens = 0
 				}
 				usage = &TokenUsage{
-					InputTokens:  inputTokens,
-					OutputTokens: estimateTokensFromChars(outputChars),
+					InputTokens:       inputTokens,
+					OutputTokens:      estimateTokensFromChars(outputChars),
+					PromptTokensTotal: inputTokens,
 				}
 			}
 			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
@@ -424,8 +425,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 func openAIUsage(usage openai.Usage) TokenUsage {
 	parsed := TokenUsage{
-		InputTokens:  int(usage.PromptTokens),
-		OutputTokens: int(usage.CompletionTokens),
+		InputTokens:       int(usage.PromptTokens),
+		OutputTokens:      int(usage.CompletionTokens),
+		PromptTokensTotal: int(usage.PromptTokens),
 	}
 	if usage.PromptTokensDetails != nil {
 		parsed.CacheRead = usage.PromptTokensDetails.CachedTokens
