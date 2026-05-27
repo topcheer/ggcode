@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GGCode
+Comment=AI coding agent for the terminal and desktop
+Exec=ggcode-desktop
+Icon=ggcode-desktop
+Terminal=false
+Categories=Development;IDE;
+Keywords=AI;Coding;Terminal;MCP;Agent;
+StartupNotify=true

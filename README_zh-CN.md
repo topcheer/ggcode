@@ -56,6 +56,15 @@ pip install ggcode
 
 Python 包装器同样默认下载最新的 ggcode GitHub Release，也支持 `GGCODE_INSTALL_VERSION` 指定版本。
 
+### winget
+
+```powershell
+winget install --id gg.ai.ggcode-desktop
+```
+
+winget 包跟踪 Windows 桌面安装器。配置 `WINGET_CREATE_GITHUB_TOKEN` 后，release workflow 会在首次
+bootstrap 之后自动提交后续更新。
+
 ### Release 压缩包和安装包
 
 每个 tagged release 都会发布桌面压缩包和原生安装包：
@@ -73,6 +82,28 @@ Python 包装器同样默认下载最新的 ggcode GitHub Release，也支持 `G
 桌面版 release 还包含压缩包文件（Unix 平台为 `.tar.gz`，Windows 为 `.zip`），适合手动解压。
 
 如果你不想使用包管理器安装，也可以使用 release 压缩包、Go 安装器、npm 包装器或 Python 包装器。
+
+### Desktop Application（GUI）
+
+ggcode 也提供原生桌面应用，使用 [Fyne](https://fyne.io/) 构建。除 CLI 能力外，还包含：
+
+- 图形化聊天界面，支持 Markdown 渲染（GFM 表格、Mermaid 图）
+- 工作区文件浏览、搜索、过滤和文件预览
+- IM 平台集成面板（微信、飞书、钉钉等）
+- 工具审批弹窗与权限模式切换
+- Session 历史侧边栏、恢复支持、图片附件和更新检查
+
+从 [GitHub Releases](https://github.com/topcheer/ggcode/releases) 下载最新桌面版：
+
+| 平台 | 文件 |
+| --- | --- |
+| macOS（Universal） | `ggcode-desktop_<version>_darwin_universal.dmg` |
+| Linux（x86_64） | `ggcode-desktop_<version>_linux_amd64`、`.AppImage`、`.deb`、`.rpm` |
+| Linux（arm64） | `ggcode-desktop_<version>_linux_arm64`、`.AppImage`、`.deb`、`.rpm` |
+| Windows（x64） | `ggcode-desktop_<version>_windows_amd64.exe`、`ggcode-desktop_<version>_windows_x64.msi` |
+
+macOS 打开 DMG 后把 **ggcode** 拖到 Applications。Windows 可以直接运行便携 `.exe`，也可以安装 `.msi`。
+Linux 可以按发行版选择裸二进制、AppImage 或原生包。
 
 ### 移动端 App（Beta）
 

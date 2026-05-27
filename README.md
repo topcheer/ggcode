@@ -61,6 +61,15 @@ pip install ggcode
 The Python wrapper also downloads the latest ggcode GitHub Release by default and respects
 `GGCODE_INSTALL_VERSION` for explicit pinning.
 
+### winget
+
+```powershell
+winget install --id gg.ai.ggcode-desktop
+```
+
+The winget package tracks the desktop Windows installer. The release workflow can auto-submit
+updates after the initial package bootstrap once `WINGET_CREATE_GITHUB_TOKEN` is configured.
+
 ### Release archives and installer packages
 
 Each tagged release publishes desktop archives plus native installer/package files:
@@ -104,10 +113,13 @@ Download the latest desktop release from [GitHub Releases](https://github.com/to
 | Platform | Asset |
 | --- | --- |
 | macOS (Universal) | `ggcode-desktop_<version>_darwin_universal.dmg` |
-| Linux | `ggcode-desktop_<version>_linux_amd64` |
-| Windows | `ggcode-desktop_<version>_windows_amd64.exe` |
+| Linux (x86_64) | `ggcode-desktop_<version>_linux_amd64`, `.AppImage`, `.deb`, `.rpm` |
+| Linux (arm64) | `ggcode-desktop_<version>_linux_arm64`, `.AppImage`, `.deb`, `.rpm` |
+| Windows (x64) | `ggcode-desktop_<version>_windows_amd64.exe`, `ggcode-desktop_<version>_windows_x64.msi` |
 
-Open the DMG on macOS and drag **ggcode** to your Applications folder. On Windows, run the `.exe` directly.
+Open the DMG on macOS and drag **ggcode** to your Applications folder. On Windows, either run the
+portable `.exe` directly or install the `.msi`. On Linux, choose the raw binary, AppImage, or
+native package that best matches your distribution.
 
 ### Mobile App (Beta)
 

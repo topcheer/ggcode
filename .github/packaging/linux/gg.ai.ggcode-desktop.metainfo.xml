@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>gg.ai.ggcode-desktop</id>
+  <name>GGCode</name>
+  <summary>AI coding agent with terminal and desktop workflows</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="gg.ai">
+    <name>GG AI Studio</name>
+  </developer>
+  <launchable type="desktop-id">ggcode-desktop.desktop</launchable>
+  <description>
+    <p>
+      GGCode is an AI coding agent with a native desktop interface, resumable sessions,
+      MCP integrations, built-in tools, and coding-focused workflows.
+    </p>
+  </description>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <url type="homepage">https://github.com/topcheer/ggcode</url>
+  <url type="bugtracker">https://github.com/topcheer/ggcode/issues</url>
+  <content_rating type="oars-1.1" />
+</component>
