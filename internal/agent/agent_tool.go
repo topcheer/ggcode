@@ -9,10 +9,12 @@ import (
 	runtimedebug "runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -61,7 +63,24 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		}
 	}
 
-	return a.executeTool(ctx, tc)
+	toolStart := time.Now()
+	result := a.executeTool(ctx, tc)
+	toolDur := time.Since(toolStart)
+
+	// Fire tool metric (non-blocking — caller must handle asynchronously).
+	errMsg := ""
+	if result.IsError {
+		errMsg = truncateString(result.Content, 200)
+	}
+	a.emitMetric(metrics.MetricEvent{
+		Timestamp:    time.Now(),
+		Type:         "tool",
+		ToolName:     tc.Name,
+		ToolSuccess:  !result.IsError,
+		ToolError:    errMsg,
+		ToolDuration: toolDur,
+	})
+	return result
 }
 
 // executeTool runs pre-hooks, executes the tool, then runs post-hooks.
@@ -363,4 +382,11 @@ func syncToolWorkingDir(t tool.Tool, dir string) {
 	if f.IsValid() && f.CanSet() && f.Kind() == reflect.String {
 		f.SetString(dir)
 	}
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

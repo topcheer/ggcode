@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -702,5 +703,320 @@ func TestDefaultDir_RespectsHomeOverride(t *testing.T) {
 	want := tmp + "/.ggcode/sessions"
 	if dir != want {
 		t.Errorf("DefaultDir() = %q, want %q", dir, want)
+	}
+}
+
+func TestAppendUsageEntry_PersistsAndLoads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	entry1 := UsageEntry{
+		Timestamp: time.Now().Truncate(time.Second),
+		TurnIndex: 1,
+		Model:     "glm-5-turbo",
+		Vendor:    "zai",
+		Endpoint:  "cn-coding-openai",
+		Usage:     provider.TokenUsage{InputTokens: 500, OutputTokens: 100, CacheRead: 200},
+	}
+	entry2 := UsageEntry{
+		Timestamp: time.Now().Truncate(time.Second),
+		TurnIndex: 1,
+		Model:     "glm-5-turbo",
+		Vendor:    "zai",
+		Endpoint:  "cn-coding-openai",
+		Usage:     provider.TokenUsage{InputTokens: 300, OutputTokens: 80, CacheRead: 100},
+	}
+	entry3 := UsageEntry{
+		Timestamp: time.Now().Truncate(time.Second),
+		TurnIndex: 2,
+		Model:     "glm-5-turbo",
+		Vendor:    "zai",
+		Endpoint:  "cn-coding-openai",
+		Usage:     provider.TokenUsage{InputTokens: 600, OutputTokens: 150},
+	}
+
+	if err := store.AppendUsageEntry(ses, entry1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendUsageEntry(ses, entry2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendUsageEntry(ses, entry3); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(loaded.UsageHistory) != 3 {
+		t.Fatalf("expected 3 usage entries, got %d", len(loaded.UsageHistory))
+	}
+
+	// Verify first entry
+	if loaded.UsageHistory[0].TurnIndex != 1 {
+		t.Errorf("entry 0 turn index: got %d, want 1", loaded.UsageHistory[0].TurnIndex)
+	}
+	if loaded.UsageHistory[0].Usage.InputTokens != 500 {
+		t.Errorf("entry 0 input tokens: got %d, want 500", loaded.UsageHistory[0].Usage.InputTokens)
+	}
+	if loaded.UsageHistory[0].Usage.CacheRead != 200 {
+		t.Errorf("entry 0 cache read: got %d, want 200", loaded.UsageHistory[0].Usage.CacheRead)
+	}
+
+	// Verify third entry (different turn)
+	if loaded.UsageHistory[2].TurnIndex != 2 {
+		t.Errorf("entry 2 turn index: got %d, want 2", loaded.UsageHistory[2].TurnIndex)
+	}
+	if loaded.UsageHistory[2].Usage.InputTokens != 600 {
+		t.Errorf("entry 2 input tokens: got %d, want 600", loaded.UsageHistory[2].Usage.InputTokens)
+	}
+
+	// Verify metadata on entries
+	if loaded.UsageHistory[0].Model != "glm-5-turbo" {
+		t.Errorf("entry 0 model: got %q, want glm-5-turbo", loaded.UsageHistory[0].Model)
+	}
+	if loaded.UsageHistory[0].Vendor != "zai" {
+		t.Errorf("entry 0 vendor: got %q, want zai", loaded.UsageHistory[0].Vendor)
+	}
+}
+
+func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add usage entry before checkpoint
+	entry1 := UsageEntry{
+		Timestamp: time.Now(),
+		TurnIndex: 1,
+		Usage:     provider.TokenUsage{InputTokens: 500, OutputTokens: 100},
+	}
+	if err := store.AppendUsageEntry(ses, entry1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add checkpoint
+	checkpointMsgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi!"}}},
+	}
+	if err := store.AppendCheckpoint(ses, checkpointMsgs, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add usage entry after checkpoint
+	entry2 := UsageEntry{
+		Timestamp: time.Now(),
+		TurnIndex: 2,
+		Usage:     provider.TokenUsage{InputTokens: 300, OutputTokens: 80},
+	}
+	if err := store.AppendUsageEntry(ses, entry2); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Usage entries before checkpoint are lost (checkpoint resets),
+	// but entries after checkpoint should survive.
+	if len(loaded.UsageHistory) != 1 {
+		t.Fatalf("expected 1 usage entry after checkpoint, got %d", len(loaded.UsageHistory))
+	}
+	if loaded.UsageHistory[0].TurnIndex != 2 {
+		t.Errorf("turn index: got %d, want 2", loaded.UsageHistory[0].TurnIndex)
+	}
+}
+
+func TestSaveLoad_WithUsageHistory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	ses.UsageHistory = []UsageEntry{
+		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 1, Model: "glm-5-turbo", Usage: provider.TokenUsage{InputTokens: 500, OutputTokens: 100}},
+		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 2, Model: "glm-5-turbo", Usage: provider.TokenUsage{InputTokens: 300, OutputTokens: 80}},
+	}
+
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(loaded.UsageHistory) != 2 {
+		t.Fatalf("expected 2 usage entries, got %d", len(loaded.UsageHistory))
+	}
+	if loaded.UsageHistory[0].TurnIndex != 1 || loaded.UsageHistory[1].TurnIndex != 2 {
+		t.Errorf("unexpected turn indices: %d, %d", loaded.UsageHistory[0].TurnIndex, loaded.UsageHistory[1].TurnIndex)
+	}
+	if loaded.UsageHistory[0].Usage.InputTokens != 500 {
+		t.Errorf("entry 0 input tokens: got %d, want 500", loaded.UsageHistory[0].Usage.InputTokens)
+	}
+}
+
+func TestAppendMetric_PersistsAndLoads(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	m1 := metrics.MetricEvent{
+		Timestamp: time.Now().Truncate(time.Second),
+		TurnIndex: 1,
+		Type:      "llm",
+		TTFT:      150 * time.Millisecond,
+		ThinkTime: 200 * time.Millisecond,
+		Duration:  2 * time.Second,
+		Model:     "glm-5-turbo",
+		Vendor:    "zai",
+		Endpoint:  "cn-coding-openai",
+	}
+	m2 := metrics.MetricEvent{
+		Timestamp:    time.Now().Truncate(time.Second),
+		TurnIndex:    1,
+		Type:         "tool",
+		ToolName:     "read_file",
+		ToolSuccess:  true,
+		ToolDuration: 50 * time.Millisecond,
+	}
+	m3 := metrics.MetricEvent{
+		Timestamp:    time.Now().Truncate(time.Second),
+		TurnIndex:    1,
+		Type:         "tool",
+		ToolName:     "run_command",
+		ToolSuccess:  false,
+		ToolError:    "exit status 1",
+		ToolDuration: 500 * time.Millisecond,
+	}
+
+	if err := store.AppendMetric(ses, m1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMetric(ses, m2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMetric(ses, m3); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(loaded.Metrics) != 3 {
+		t.Fatalf("expected 3 metric events, got %d", len(loaded.Metrics))
+	}
+
+	// LLM metric
+	if loaded.Metrics[0].Type != "llm" {
+		t.Errorf("metric 0 type: got %q, want llm", loaded.Metrics[0].Type)
+	}
+	if loaded.Metrics[0].TTFT != 150*time.Millisecond {
+		t.Errorf("metric 0 TTFT: got %v, want 150ms", loaded.Metrics[0].TTFT)
+	}
+	if loaded.Metrics[0].ThinkTime != 200*time.Millisecond {
+		t.Errorf("metric 0 think time: got %v, want 200ms", loaded.Metrics[0].ThinkTime)
+	}
+	if loaded.Metrics[0].Duration != 2*time.Second {
+		t.Errorf("metric 0 duration: got %v, want 2s", loaded.Metrics[0].Duration)
+	}
+
+	// Tool success metric
+	if loaded.Metrics[1].Type != "tool" {
+		t.Errorf("metric 1 type: got %q, want tool", loaded.Metrics[1].Type)
+	}
+	if loaded.Metrics[1].ToolName != "read_file" {
+		t.Errorf("metric 1 tool: got %q, want read_file", loaded.Metrics[1].ToolName)
+	}
+	if !loaded.Metrics[1].ToolSuccess {
+		t.Error("metric 1 should be success")
+	}
+
+	// Tool failure metric
+	if loaded.Metrics[2].ToolSuccess {
+		t.Error("metric 2 should be failure")
+	}
+	if loaded.Metrics[2].ToolError != "exit status 1" {
+		t.Errorf("metric 2 error: got %q, want exit status 1", loaded.Metrics[2].ToolError)
+	}
+}
+
+func TestSaveLoad_WithMetrics(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+	}
+	ses.Metrics = []metrics.MetricEvent{
+		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 1, Type: "llm", TTFT: 100 * time.Millisecond, Duration: time.Second},
+		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 1, Type: "tool", ToolName: "glob", ToolSuccess: true, ToolDuration: 20 * time.Millisecond},
+	}
+
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(loaded.Metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %d", len(loaded.Metrics))
+	}
+	if loaded.Metrics[0].Type != "llm" || loaded.Metrics[0].TTFT != 100*time.Millisecond {
+		t.Errorf("unexpected metric 0: %+v", loaded.Metrics[0])
+	}
+	if loaded.Metrics[1].Type != "tool" || loaded.Metrics[1].ToolName != "glob" {
+		t.Errorf("unexpected metric 1: %+v", loaded.Metrics[1])
 	}
 }

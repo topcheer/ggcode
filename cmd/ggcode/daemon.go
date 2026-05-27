@@ -428,6 +428,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		emitter.SetOutputMode(cfg.IM.OutputMode)
 	}
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
+	defer bridge.Close()
 	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 
 	// Wire checkpoint handler — persist compacted state after summarize
@@ -1157,6 +1158,7 @@ loop:
 		if err != nil {
 			return fmt.Errorf("restart: resolve binary: %w", err)
 		}
+		bridge.Close()
 		ses.Messages = ag.Messages()
 		_ = store.Save(ses)
 
@@ -1200,6 +1202,7 @@ loop:
 	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\r\n")
 
 	// Save session on exit
+	bridge.Close()
 	ses.Messages = ag.Messages()
 	_ = store.Save(ses)
 
