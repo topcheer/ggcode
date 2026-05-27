@@ -41,10 +41,11 @@ type App struct {
 	cfg     *config.Config
 
 	// IM runtime.
-	imManager    *im.Manager
-	imController *im.AdapterController
-	imWindow     fyne.Window
-	imPairingWin fyne.Window
+	imManager     *im.Manager
+	imController  *im.AdapterController
+	imWindow      fyne.Window
+	imPairingWin  fyne.Window
+	metricsWindow fyne.Window
 
 	// Shared UI state for cross-goroutine updates.
 	ui *UIState
@@ -177,6 +178,7 @@ func (a *App) setupMenu() {
 	viewMenu := fyne.NewMenu(t("menu.view"),
 		fyne.NewMenuItem(t("menu.toggle_sidebar"), func() { a.toggleSidebar() }),
 		fyne.NewMenuItem(t("menu.refresh_stats"), func() { a.refreshSidebar() }),
+		fyne.NewMenuItem(t("menu.open_metrics"), func() { a.showMetricsWindow() }),
 		fyne.NewMenuItemSeparator(),
 		a.buildLanguageMenu(),
 		a.buildThemeMenu(),
