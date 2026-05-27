@@ -29,6 +29,14 @@ func TestLookupVendorModels(t *testing.T) {
 		t.Error("expected models for anthropic, got empty")
 	}
 
+	models = lookupVendorModels("xiaomi-mimo")
+	if len(models) == 0 {
+		t.Error("expected models for xiaomi-mimo, got empty")
+	}
+	if models[0] != "MiMo-V2.5-Pro" {
+		t.Fatalf("expected MiMo-V2.5-Pro as first xiaomi-mimo model, got %q", models[0])
+	}
+
 	// Unknown provider should return nil.
 	models = lookupVendorModels("nonexistent-provider-xyz")
 	if models != nil {
@@ -46,6 +54,11 @@ func TestLookupVendorDefaultModel(t *testing.T) {
 	model = lookupVendorDefaultModel("anthropic")
 	if model == "" {
 		t.Error("expected non-empty default model for anthropic")
+	}
+
+	model = lookupVendorDefaultModel("xiaomi-mimo")
+	if model != "MiMo-V2.5-Pro" {
+		t.Fatalf("expected MiMo-V2.5-Pro for xiaomi-mimo, got %q", model)
 	}
 
 	// Unknown provider should return empty string.
@@ -136,7 +149,7 @@ func TestPopulateDefaultModels_AllKnownVendorsHaveModels(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// Only check vendors that have catwalk or OpenRouter data.
-	knownVendors := []string{"openai", "anthropic", "google", "deepseek", "groq", "xai", "mistral", "perplexity", "nvidia", "ark"}
+	knownVendors := []string{"openai", "anthropic", "google", "deepseek", "groq", "xai", "mistral", "perplexity", "nvidia", "ark", "xiaomi-mimo"}
 	for _, vendor := range knownVendors {
 		vc, ok := cfg.Vendors[vendor]
 		if !ok {
@@ -147,5 +160,38 @@ func TestPopulateDefaultModels_AllKnownVendorsHaveModels(t *testing.T) {
 				t.Errorf("vendor %q endpoint %q should have models after populate", vendor, epName)
 			}
 		}
+	}
+}
+
+func TestDefaultConfig_IncludesXiaoMiMIMOEndpoints(t *testing.T) {
+	cfg := DefaultConfig()
+	vc, ok := cfg.Vendors["xiaomi-mimo"]
+	if !ok {
+		t.Fatal("expected xiaomi-mimo vendor in default config")
+	}
+	if vc.DisplayName != "XiaoMi MIMO" {
+		t.Fatalf("expected XiaoMi MIMO display name, got %q", vc.DisplayName)
+	}
+
+	openaiEP, ok := vc.Endpoints["cn-openai"]
+	if !ok {
+		t.Fatal("expected cn-openai endpoint")
+	}
+	if openaiEP.Protocol != "openai" || openaiEP.BaseURL != "https://token-plan-cn.xiaomimimo.com/v1" {
+		t.Fatalf("unexpected openai endpoint: %+v", openaiEP)
+	}
+	if openaiEP.DefaultModel != "MiMo-V2.5-Pro" || len(openaiEP.Models) != 8 {
+		t.Fatalf("unexpected openai models: default=%q models=%v", openaiEP.DefaultModel, openaiEP.Models)
+	}
+
+	anthropicEP, ok := vc.Endpoints["cn-anthropic"]
+	if !ok {
+		t.Fatal("expected cn-anthropic endpoint")
+	}
+	if anthropicEP.Protocol != "anthropic" || anthropicEP.BaseURL != "https://token-plan-cn.xiaomimimo.com/anthropic" {
+		t.Fatalf("unexpected anthropic endpoint: %+v", anthropicEP)
+	}
+	if anthropicEP.DefaultModel != "MiMo-V2.5-Pro" || len(anthropicEP.Models) != 8 {
+		t.Fatalf("unexpected anthropic models: default=%q models=%v", anthropicEP.DefaultModel, anthropicEP.Models)
 	}
 }

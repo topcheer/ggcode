@@ -59,6 +59,11 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"moonshot-v1-8k", 8000},
 		{"kimi-k2", 262144},
 
+		// XiaoMi MIMO
+		{"MiMo-V2.5-Pro", 1_000_000},
+		{"MiMo-V2.5", 1_000_000},
+		{"MiMo-V2-Pro", 1_000_000},
+
 		// Protocol fallback
 		{"unknown-model", 128000},
 	}
@@ -93,5 +98,17 @@ func TestInferContextWindow_HintParsing(t *testing.T) {
 	}
 	if got := inferContextWindow("model-128k-pro", "openai"); got != 128000 {
 		t.Errorf("hint 128k = %d, want 128000", got)
+	}
+}
+
+func TestInferVisionSupport_XiaoMiMIMO(t *testing.T) {
+	if !inferVisionSupport("MiMo-V2.5", "openai") {
+		t.Fatal("expected MiMo-V2.5 to infer vision support")
+	}
+	if !inferVisionSupport("MiMo-V2-Omni", "openai") {
+		t.Fatal("expected MiMo-V2-Omni to infer vision support")
+	}
+	if inferVisionSupport("MiMo-V2.5-Pro", "openai") {
+		t.Fatal("expected MiMo-V2.5-Pro to remain non-vision by default")
 	}
 }

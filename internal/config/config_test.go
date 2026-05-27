@@ -972,6 +972,24 @@ func TestResolveActiveEndpointInfersGLMVVisionSupport(t *testing.T) {
 	}
 }
 
+func TestResolveActiveEndpointInfersXiaoMiMIMOCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "xiaomi-mimo"
+	cfg.Endpoint = "cn-openai"
+	cfg.Model = "MiMo-V2.5"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.ContextWindow != 1_000_000 {
+		t.Fatalf("expected MiMo-V2.5 context window 1000000, got %d", resolved.ContextWindow)
+	}
+	if !resolved.SupportsVision {
+		t.Fatal("expected MiMo-V2.5 endpoint to infer vision support")
+	}
+}
+
 func TestDefaultConfigUsesGLMCapabilitiesForZaiCatalog(t *testing.T) {
 	cfg := DefaultConfig()
 	ep := cfg.Vendors["zai"].Endpoints["cn-coding-openai"]

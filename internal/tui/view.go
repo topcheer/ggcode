@@ -242,10 +242,13 @@ func (m Model) renderModeBadge() string {
 }
 
 func (m Model) sidebarWidth() int {
-	if m.viewWidth() >= 156 {
-		return 44
+	if m.viewWidth() >= 180 {
+		return 38
 	}
-	return 40
+	if m.viewWidth() >= 140 {
+		return 36
+	}
+	return 34
 }
 
 func (m Model) terminalLeftMargin() int {

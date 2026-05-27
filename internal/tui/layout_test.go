@@ -595,6 +595,25 @@ func TestWideLayoutLeavesRightMarginForSidebarBorder(t *testing.T) {
 	}
 }
 
+func TestSidebarWidthTiers(t *testing.T) {
+	m := newTestModel()
+
+	m.handleResize(200, 28)
+	if got := m.sidebarWidth(); got != 38 {
+		t.Fatalf("expected ultra-wide sidebar width 38, got %d", got)
+	}
+
+	m.handleResize(156, 28)
+	if got := m.sidebarWidth(); got != 36 {
+		t.Fatalf("expected wide sidebar width 36, got %d", got)
+	}
+
+	m.handleResize(128, 28)
+	if got := m.sidebarWidth(); got != 34 {
+		t.Fatalf("expected default sidebar width 34, got %d", got)
+	}
+}
+
 func TestNarrowLayoutLeavesRightMarginForMainPanels(t *testing.T) {
 	m := newTestModel()
 	m.sidebarVisible = false
