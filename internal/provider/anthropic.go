@@ -258,10 +258,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 			// Stream completed successfully.
 			usage = &TokenUsage{
-				InputTokens:  inputTokens,
-				OutputTokens: outputTokens,
-				CacheRead:    cacheReadTokens,
-				CacheWrite:   cacheWriteTokens,
+				InputTokens:       inputTokens,
+				OutputTokens:      outputTokens,
+				CacheRead:         cacheReadTokens,
+				CacheWrite:        cacheWriteTokens,
+				PromptTokensTotal: inputTokens + cacheReadTokens + cacheWriteTokens,
 			}
 			debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d", usage.InputTokens, usage.OutputTokens, usage.CacheRead, usage.CacheWrite)
 			break
@@ -287,10 +288,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 func anthropicUsage(usage anthropic.Usage) TokenUsage {
 	return TokenUsage{
-		InputTokens:  int(usage.InputTokens),
-		OutputTokens: int(usage.OutputTokens),
-		CacheRead:    int(usage.CacheReadInputTokens),
-		CacheWrite:   int(usage.CacheCreationInputTokens),
+		InputTokens:       int(usage.InputTokens),
+		OutputTokens:      int(usage.OutputTokens),
+		CacheRead:         int(usage.CacheReadInputTokens),
+		CacheWrite:        int(usage.CacheCreationInputTokens),
+		PromptTokensTotal: int(usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens),
 	}
 }
 

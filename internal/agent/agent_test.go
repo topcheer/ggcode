@@ -471,6 +471,38 @@ func TestAgent_ContextManager(t *testing.T) {
 	}
 }
 
+func TestAgent_SetUsageHandlerIncludesSummarizeUsage(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{
+					{Type: "text", Text: "Summary text"},
+				},
+			},
+			Usage: provider.TokenUsage{InputTokens: 42, OutputTokens: 9},
+		},
+		tokenCount: 10,
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "system", 1)
+	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}})
+	a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}})
+	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "second round"}}})
+	a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "second answer"}}})
+
+	var got provider.TokenUsage
+	a.SetUsageHandler(func(usage provider.TokenUsage) {
+		got = usage
+	})
+
+	if err := a.ContextManager().Summarize(context.Background(), mp); err != nil {
+		t.Fatalf("Summarize failed: %v", err)
+	}
+	if got != (provider.TokenUsage{InputTokens: 42, OutputTokens: 9}) {
+		t.Fatalf("expected summarize usage to be reported, got %+v", got)
+	}
+}
+
 func TestRunStreamWithContent_CompactsSilentlyAndProducesResponse(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{

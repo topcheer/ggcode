@@ -168,6 +168,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				if resp.UsageMetadata != nil {
 					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
 					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+					usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
 				}
 
 				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {

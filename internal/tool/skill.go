@@ -46,7 +46,8 @@ type SkillTool struct {
 	Provider         provider.Provider
 	Tools            *Registry
 	AgentFactory     subagent.AgentFactory
-	WorkingDir       string                          // working directory to propagate to sub-agent
+	WorkingDir       string // working directory to propagate to sub-agent
+	OnUsage          func(provider.TokenUsage)
 	OnSkillUsed      func(ref string)                // optional callback when a skill is loaded by the agent
 	OnSkillCompleted func(event SkillExecutionEvent) // optional callback when execution finishes
 }
@@ -181,6 +182,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			SubAgentID:   id,
 			AgentFactory: t.AgentFactory,
 			WorkingDir:   t.WorkingDir,
+			OnUsage:      t.OnUsage,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each skill sub-agent gets its own tool
 				// instances with independent WorkingDir fields.
@@ -331,6 +333,7 @@ func (t SkillTool) Clone() Tool {
 		Tools:            t.Tools,
 		AgentFactory:     t.AgentFactory,
 		WorkingDir:       t.WorkingDir,
+		OnUsage:          t.OnUsage,
 		OnSkillUsed:      t.OnSkillUsed,
 		OnSkillCompleted: t.OnSkillCompleted,
 	}

@@ -27,6 +27,10 @@ type AgentRunner interface {
 	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
 }
 
+type usageHandlerSetter interface {
+	SetUsageHandler(func(provider.TokenUsage))
+}
+
 // RunnerConfig holds everything needed to run a sub-agent.
 type RunnerConfig struct {
 	Provider     provider.Provider
@@ -41,6 +45,7 @@ type RunnerConfig struct {
 	AgentType    string                                                       // optional agent type hint (e.g., "Explore", "Plan")
 	WorkingDir   string                                                       // working directory for the sub-agent
 	OnStreamText func(agentID, text string)                                   // called on each text chunk for tunnel relay
+	OnUsage      func(provider.TokenUsage)                                    // optional exact-usage callback for session accounting
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.
@@ -105,6 +110,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	if cfg.WorkingDir != "" {
 		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
 			wd.SetWorkingDir(cfg.WorkingDir)
+		}
+	}
+	if cfg.OnUsage != nil {
+		if usageAware, ok := subAgent.(usageHandlerSetter); ok {
+			usageAware.SetUsageHandler(cfg.OnUsage)
 		}
 	}
 

@@ -286,6 +286,7 @@ func (b *AgentBridge) setupAgent() error {
 		Tools:        b.registry,
 		AgentFactory: agentFactory,
 		WorkingDir:   b.workingDir,
+		OnUsage:      b.recordSessionUsage,
 	})
 	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
 	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
@@ -370,6 +371,7 @@ func (b *AgentBridge) setupAgent() error {
 		return reg
 	}
 	b.swarmMgr = swarm.NewManager(b.cfg.Swarm, b.prov, swarmFactory, toolBuilder)
+	b.swarmMgr.SetUsageHandler(b.recordSessionUsage)
 
 	b.registry.Register(tool.TeamCreateTool{Manager: b.swarmMgr})
 	b.registry.Register(tool.TeamDeleteTool{Manager: b.swarmMgr})

@@ -21,6 +21,10 @@ type AgentRunner interface {
 	RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error
 }
 
+type usageHandlerSetter interface {
+	SetUsageHandler(func(provider.TokenUsage))
+}
+
 // ToolBuilder constructs a tool set for a teammate based on allowed tool names.
 type ToolBuilder func(allowedTools []string) interface{}
 
@@ -33,6 +37,7 @@ type Manager struct {
 	agentFactory AgentFactory
 	toolBuilder  ToolBuilder
 	onUpdate     func(Event)
+	onUsage      func(provider.TokenUsage)
 
 	// results stores the most recent task output per teammate (key=teammateID).
 	// Written on teammate_idle events, cleared on teammate shutdown.
@@ -71,6 +76,12 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 		rootCtx:      rootCtx,
 		rootCancel:   rootCancel,
 	}
+}
+
+func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onUsage = fn
 }
 
 // RootContext returns the manager's lifecycle context.
@@ -256,6 +267,11 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	var agent AgentRunner
 	if m.agentFactory != nil {
 		agent = m.agentFactory(m.provider, toolSet, systemPrompt, 0)
+		if m.onUsage != nil {
+			if usageAware, ok := agent.(usageHandlerSetter); ok {
+				usageAware.SetUsageHandler(m.onUsage)
+			}
+		}
 	}
 
 	// Start idle loop in a goroutine

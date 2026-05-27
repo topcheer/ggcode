@@ -70,6 +70,10 @@ type usageAwareContextManager interface {
 	RecordUsage(provider.TokenUsage)
 }
 
+type usageEmitterContextManager interface {
+	SetUsageHandler(func(provider.TokenUsage))
+}
+
 type todoPathAwareContextManager interface {
 	SetTodoFilePath(path string)
 }
@@ -91,6 +95,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shutdownCancel: cancel,
 	}
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()
 	if systemPrompt != "" {
 		a.contextManager.Add(provider.Message{
@@ -121,6 +126,7 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onUsage = fn
+	a.syncContextManagerUsageHandlerLocked()
 }
 
 // SetRunResultHandler sets a callback invoked after each RunStreamWithContent
@@ -188,6 +194,7 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 	defer a.mu.Unlock()
 	a.contextManager = cm
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()
 }
 
@@ -304,6 +311,12 @@ func (a *Agent) UpdateSystemPrompt(text string) {
 func (a *Agent) syncContextManagerProviderLocked() {
 	if cm, ok := a.contextManager.(providerAwareContextManager); ok {
 		cm.SetProvider(a.provider)
+	}
+}
+
+func (a *Agent) syncContextManagerUsageHandlerLocked() {
+	if cm, ok := a.contextManager.(usageEmitterContextManager); ok {
+		cm.SetUsageHandler(a.onUsage)
 	}
 }
 

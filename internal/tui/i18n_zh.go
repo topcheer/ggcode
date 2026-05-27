@@ -104,6 +104,8 @@ func zhCatalog(key string) string {
 		return "缓存读"
 	case "label.cache_write":
 		return "缓存写"
+	case "label.cache_hit":
+		return "缓存命中"
 	case "label.file":
 		return "文件"
 	case "label.directory":

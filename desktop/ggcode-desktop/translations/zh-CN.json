@@ -100,6 +100,7 @@
   "sidebar.session_usage_output": "输出",
   "sidebar.session_usage_cache_read": "缓存读",
   "sidebar.session_usage_cache_write": "缓存写",
+  "sidebar.session_usage_cache_hit": "缓存命中",
   "sidebar.vendor_label": "厂商",
   "sidebar.model_label": "模型",
   "sidebar.mode_label": "模式",

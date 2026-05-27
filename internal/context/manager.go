@@ -103,6 +103,7 @@ type Manager struct {
 	baselineAvailable bool
 	provider          provider.Provider
 	todoPath          string
+	onUsage           func(provider.TokenUsage)
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -118,6 +119,12 @@ func (m *Manager) SetTodoFilePath(path string) {
 		return
 	}
 	m.todoPath = path
+}
+
+func (m *Manager) SetUsageHandler(fn func(provider.TokenUsage)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onUsage = fn
 }
 
 // SetProvider sets the provider for provider-aware token counting.
@@ -366,7 +373,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		debug.Log("ctx", "Summarize: pass=%d old_msgs=%d recent_msgs=%d has_system=%t",
 			pass, len(plan.oldMsgs), len(plan.recentMsgs), plan.hasSystem)
 
-		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs)
+		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage)
 		if err != nil {
 			debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 			return err
@@ -712,7 +719,7 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 	return plan, len(plan.oldMsgs) > 0
 }
 
-func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message) (string, error) {
+func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage)) (string, error) {
 	current := append([]provider.Message(nil), msgs...)
 	for attempt := 0; attempt <= maxPTLRetries; attempt++ {
 		payload := buildSummaryPayload(current)
@@ -760,6 +767,9 @@ Format: Use clear sections with bullet points. Be specific with names, paths, an
 			}
 			current = truncated
 			continue
+		}
+		if onUsage != nil {
+			onUsage(resp.Usage)
 		}
 
 		for _, block := range resp.Message.Content {

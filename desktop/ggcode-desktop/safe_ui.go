@@ -52,6 +52,7 @@ type UIState struct {
 	SessionUsageOutput     binding.String
 	SessionUsageCacheRead  binding.String
 	SessionUsageCacheWrite binding.String
+	SessionUsageCacheHit   binding.String
 	SessionUsageValueLines binding.String
 
 	AgentWorking atomic.Bool // true while agent is busy
@@ -104,6 +105,7 @@ func NewUIState() *UIState {
 	s.SessionUsageOutput = binding.NewString()
 	s.SessionUsageCacheRead = binding.NewString()
 	s.SessionUsageCacheWrite = binding.NewString()
+	s.SessionUsageCacheHit = binding.NewString()
 	s.SessionUsageValueLines = binding.NewString()
 	_ = s.StatusText.Set("Ready")
 	_ = s.ModelName.Set("")
@@ -115,7 +117,8 @@ func NewUIState() *UIState {
 	_ = s.SessionUsageOutput.Set("0")
 	_ = s.SessionUsageCacheRead.Set("0")
 	_ = s.SessionUsageCacheWrite.Set("0")
-	_ = s.SessionUsageValueLines.Set(strings.Join([]string{"0", "0", "0", "0", "0"}, "\n"))
+	_ = s.SessionUsageCacheHit.Set("0%")
+	_ = s.SessionUsageValueLines.Set(strings.Join([]string{"0", "0", "0", "0", "0", "0%"}, "\n"))
 	return s
 }
 
@@ -155,12 +158,14 @@ func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
 	output := humanizeTokens(usage.OutputTokens)
 	cacheRead := humanizeTokens(usage.CacheRead)
 	cacheWrite := humanizeTokens(usage.CacheWrite)
+	cacheHit := fmt.Sprintf("%d%%", usage.CacheHitPercent())
 	_ = u.SessionUsageTotal.Set(total)
 	_ = u.SessionUsageInput.Set(input)
 	_ = u.SessionUsageOutput.Set(output)
 	_ = u.SessionUsageCacheRead.Set(cacheRead)
 	_ = u.SessionUsageCacheWrite.Set(cacheWrite)
-	_ = u.SessionUsageValueLines.Set(strings.Join([]string{total, input, output, cacheRead, cacheWrite}, "\n"))
+	_ = u.SessionUsageCacheHit.Set(cacheHit)
+	_ = u.SessionUsageValueLines.Set(strings.Join([]string{total, input, output, cacheRead, cacheWrite, cacheHit}, "\n"))
 }
 
 // AppendChat appends a message to the chat list (thread-safe).
