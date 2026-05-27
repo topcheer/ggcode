@@ -112,6 +112,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
 		WorkingDir:   workingDir,
+		OnUsage:      nil,
 	})
 
 	// Build enhanced system prompt

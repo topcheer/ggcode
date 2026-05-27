@@ -697,15 +697,16 @@ func TestSidebarShowsSessionUsage(t *testing.T) {
 	m.handleResize(140, 40)
 	m.session = &session.Session{
 		TokenUsage: provider.TokenUsage{
-			InputTokens:  1200,
-			OutputTokens: 340,
-			CacheRead:    800,
-			CacheWrite:   64,
+			InputTokens:       1200,
+			OutputTokens:      340,
+			CacheRead:         800,
+			CacheWrite:        64,
+			PromptTokensTotal: 1200,
 		},
 	}
 
 	sidebar := stripAnsi(m.renderSidebar())
-	for _, want := range []string{"Session usage", "1540", "1200", "340", "800", "64", "cache read", "cache write"} {
+	for _, want := range []string{"Session usage", "1540", "1200", "340", "800", "64", "67%", "cache read", "cache write", "cache hit"} {
 		if !strings.Contains(sidebar, want) {
 			t.Fatalf("expected %q in sidebar, got %q", want, sidebar)
 		}

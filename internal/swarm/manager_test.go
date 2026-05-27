@@ -45,6 +45,22 @@ func (a *mockAgent) getCalls() []string {
 	return append([]string(nil), a.calls...)
 }
 
+type usageAwareMockAgent struct {
+	*mockAgent
+	onUsage func(provider.TokenUsage)
+}
+
+func (a *usageAwareMockAgent) SetUsageHandler(fn func(provider.TokenUsage)) {
+	a.onUsage = fn
+}
+
+func (a *usageAwareMockAgent) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+	if a.onUsage != nil {
+		a.onUsage(provider.TokenUsage{InputTokens: 23, OutputTokens: 8})
+	}
+	return a.mockAgent.RunStream(ctx, prompt, onEvent)
+}
+
 func testManager(t *testing.T) (*Manager, *mockAgent) {
 	t.Helper()
 	ma := newMockAgent()
@@ -520,6 +536,55 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 
 	if !contains(resultEvent.Result, "hello world") {
 		t.Fatalf("expected result to contain task content, got: %s", resultEvent.Result)
+	}
+}
+
+func TestManager_SpawnTeammate_ForwardsUsageHandler(t *testing.T) {
+	cfg := config.SwarmConfig{MaxTeammatesPerTeam: 3, InboxSize: 16}
+	agent := &usageAwareMockAgent{mockAgent: newMockAgent()}
+	m := NewManager(cfg, nil, func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) AgentRunner {
+		return agent
+	}, nil)
+	defer m.Shutdown()
+
+	var got provider.TokenUsage
+	m.SetUsageHandler(func(usage provider.TokenUsage) {
+		got = usage
+	})
+
+	team := m.CreateTeam("test", "leader")
+	snap, err := m.SpawnTeammate(team.ID, "worker", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agent.onUsage == nil {
+		t.Fatal("expected teammate usage handler to be installed")
+	}
+
+	done := make(chan struct{})
+	m.SetOnUpdate(func(ev Event) {
+		if ev.Type == "teammate_idle" {
+			close(done)
+		}
+	})
+
+	err = m.SendToTeammate(team.ID, snap.ID, MailMessage{
+		From:    "leader",
+		Content: "hello world",
+		Type:    "task",
+	})
+	if err != nil {
+		t.Fatalf("SendToTeammate error: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for teammate to process task")
+	}
+
+	if got != (provider.TokenUsage{InputTokens: 23, OutputTokens: 8}) {
+		t.Fatalf("expected forwarded usage, got %+v", got)
 	}
 }
 

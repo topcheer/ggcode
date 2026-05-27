@@ -1475,7 +1475,7 @@ func TestSidebarContextTabShowsSessionUsageCard(t *testing.T) {
 	var labels []string
 	collectLabelTexts(usageCard.Content, &labels)
 	labelText := strings.Join(labels, "\n")
-	for _, want := range []string{"Total", "1.5K", "Input", "1.2K", "Output", "340", "Cache Read", "800", "Cache Write", "64"} {
+	for _, want := range []string{"Total", "1.5K", "Input", "1.2K", "Output", "340", "Cache Read", "800", "Cache Write", "64", "Cache Hit", "67%"} {
 		if !strings.Contains(labelText, want) {
 			t.Fatalf("expected %q in session usage card labels, got %v", want, labels)
 		}
@@ -1484,10 +1484,11 @@ func TestSidebarContextTabShowsSessionUsageCard(t *testing.T) {
 
 func configuredTestUsage() provider.TokenUsage {
 	return provider.TokenUsage{
-		InputTokens:  1200,
-		OutputTokens: 340,
-		CacheRead:    800,
-		CacheWrite:   64,
+		InputTokens:       1200,
+		OutputTokens:      340,
+		CacheRead:         800,
+		CacheWrite:        64,
+		PromptTokensTotal: 1200,
 	}
 }
 

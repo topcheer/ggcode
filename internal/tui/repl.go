@@ -71,6 +71,10 @@ func (r *REPL) SetSessionStore(s session.Store) {
 	r.store = s
 }
 
+func (r *REPL) SessionUsageHandler() func(provider.TokenUsage) {
+	return r.recordSessionUsage
+}
+
 // SetMCPServers passes MCP server info to the TUI model.
 func (r *REPL) SetMCPServers(servers []MCPInfo) {
 	r.model.SetMCPServers(servers)
@@ -214,6 +218,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Tools:        tools,
 		AgentFactory: factory,
 		WorkingDir:   r.model.agent.WorkingDir(),
+		OnUsage:      r.recordSessionUsage,
 	})
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})

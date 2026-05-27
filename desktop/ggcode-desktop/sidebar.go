@@ -66,6 +66,7 @@ func (s *Sidebar) buildSessionUsageCard() fyne.CanvasObject {
 		t("sidebar.session_usage_output"),
 		t("sidebar.session_usage_cache_read"),
 		t("sidebar.session_usage_cache_write"),
+		t("sidebar.session_usage_cache_hit"),
 	}, "\n"))
 	right := widget.NewLabelWithData(s.ui.SessionUsageValueLines)
 	right.Alignment = fyne.TextAlignTrailing

@@ -441,6 +441,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
 	}
+	var skillUsageHandler func(provider.TokenUsage)
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 		a.SetWorkingDir(ag.WorkingDir())
@@ -464,6 +465,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
 		WorkingDir:   workingDir,
+		OnUsage: func(usage provider.TokenUsage) {
+			if skillUsageHandler != nil {
+				skillUsageHandler(usage)
+			}
+		},
 		OnSkillUsed: func(ref string) {
 			if knightAgent != nil {
 				knightAgent.RecordSkillUse(ref)
@@ -654,6 +660,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
+	skillUsageHandler = repl.SessionUsageHandler()
 	if a2aTaskHandler != nil {
 		repl.SetA2AHandler(a2aTaskHandler)
 	}
@@ -759,6 +766,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
+	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
 	repl.SetSwarmManager(swarmMgr, registry)
 	trace.Mark("setup swarm")
 

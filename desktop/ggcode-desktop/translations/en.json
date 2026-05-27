@@ -100,6 +100,7 @@
   "sidebar.session_usage_output": "Output",
   "sidebar.session_usage_cache_read": "Cache Read",
   "sidebar.session_usage_cache_write": "Cache Write",
+  "sidebar.session_usage_cache_hit": "Cache Hit",
   "sidebar.vendor_label": "Vendor",
   "sidebar.model_label": "Model",
   "sidebar.mode_label": "Mode",
