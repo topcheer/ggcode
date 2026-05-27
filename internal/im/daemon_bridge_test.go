@@ -252,6 +252,9 @@ func TestDaemonBridgePersistsMetricsToSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitInboundMessage error: %v", err)
 	}
+	// SubmitInboundMessage runs the agent asynchronously. Wait for it to
+	// finish so the metric collector has time to persist the event.
+	time.Sleep(200 * time.Millisecond)
 	bridge.Close()
 
 	loaded, err := store.Load(ses.ID)
