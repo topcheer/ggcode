@@ -236,6 +236,12 @@ jobs:
       - name: Install GCC (MinGW)
         shell: pwsh
         run: choco install mingw --yes
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          wix --version
       - name: Capture build date
         shell: pwsh
         run: |
@@ -249,10 +255,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
-          path: dist/
+          path: dist/ggcode-desktop_*
 
-  build-desktop-linux:
-    name: Build desktop Linux
+  build-desktop-linux-amd64:
+    name: Build desktop Linux amd64
     runs-on: ubuntu-latest
     needs:
       - verify
@@ -273,7 +279,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev patchelf squashfs-tools desktop-file-utils
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -285,7 +291,45 @@ jobs:
       - name: Upload desktop Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-linux
+          name: desktop-linux-amd64
+          path: dist/ggcode-desktop_*
+
+  build-desktop-linux-arm64:
+    name: Build desktop Linux arm64
+    runs-on: ubuntu-24.04-arm
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+      TARGET_ARCH: arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Fyne dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev patchelf squashfs-tools desktop-file-utils
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build desktop Linux
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-linux.sh
+          ./scripts/release/build-desktop-linux.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-arm64
           path: dist/ggcode-desktop_*
 
   upload-release-assets:
@@ -298,7 +342,8 @@ jobs:
       - release-windows-msi
       - build-desktop-darwin
       - build-desktop-windows
-      - build-desktop-linux
+      - build-desktop-linux-amd64
+      - build-desktop-linux-arm64
     permissions:
       contents: write
     env:
@@ -322,8 +367,12 @@ jobs:
           path: dist/desktop-windows
       - uses: actions/download-artifact@v4
         with:
-          name: desktop-linux
-          path: dist/desktop-linux
+          name: desktop-linux-amd64
+          path: dist/desktop-linux-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: dist/desktop-linux-arm64
       - name: Upload all extra assets to release
         env:
           GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
@@ -333,9 +382,38 @@ jobs:
             dist/macos-pkg/*.pkg \
             dist/windows-msi/*.msi \
             dist/desktop-darwin/*.dmg \
-            dist/desktop-windows/*.exe \
-            dist/desktop-linux/ggcode-desktop_* \
+            dist/desktop-windows/* \
+            dist/desktop-linux-amd64/ggcode-desktop_* \
+            dist/desktop-linux-arm64/ggcode-desktop_* \
             --clobber
+
+  publish-winget:
+    name: Publish desktop to winget
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    needs:
+      - upload-release-assets
+    permissions:
+      contents: read
+    env:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+      WINGET_PACKAGE_ID: gg.ai.ggcode-desktop
+    steps:
+      - uses: actions/checkout@v6
+      - name: Submit or skip winget update
+        shell: pwsh
+        run: |
+          if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN not configured; skipping winget submission."
+            exit 0
+          }
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ggcode-desktop_${packageVersion}_windows_x64.msi"
+          .\scripts\release\publish-winget.ps1 `
+            -PackageId $env:WINGET_PACKAGE_ID `
+            -Version "${{ github.ref_name }}" `
+            -InstallerUrl $installerUrl `
+            -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
 
   publish-site-release-branch:
     name: Publish site release branch
@@ -343,6 +421,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - upload-release-assets
+      - publish-winget
     permissions:
       contents: write
     env:
@@ -374,8 +453,12 @@ jobs:
           path: dist-site/desktop-windows
       - uses: actions/download-artifact@v4
         with:
-          name: desktop-linux
-          path: dist-site/desktop-linux
+          name: desktop-linux-amd64
+          path: dist-site/desktop-linux-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: dist-site/desktop-linux-arm64
       - name: Publish release assets into deployment branch
         env:
           GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
@@ -389,5 +472,6 @@ jobs:
             --asset-dir dist-site/windows-msi \
             --asset-dir dist-site/desktop-darwin \
             --asset-dir dist-site/desktop-windows \
-            --asset-dir dist-site/desktop-linux \
+            --asset-dir dist-site/desktop-linux-amd64 \
+            --asset-dir dist-site/desktop-linux-arm64 \
             --source-label "${GITHUB_REF_NAME}"

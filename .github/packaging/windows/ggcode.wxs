@@ -2,7 +2,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
     Name="ggcode"
-    Manufacturer="topcheer"
+    Manufacturer="GG AI Studio"
     Version="$(var.Version)"
     UpgradeCode="$(var.UpgradeCode)"
     Language="1033"
@@ -10,7 +10,7 @@
     Scope="perMachine">
     <SummaryInformation
       Description="ggcode terminal AI coding agent"
-      Manufacturer="topcheer"
+      Manufacturer="GG AI Studio"
       Keywords="Installer" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of ggcode is already installed." />
     <MediaTemplate EmbedCab="yes" />
