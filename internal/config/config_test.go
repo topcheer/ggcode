@@ -542,6 +542,13 @@ func TestSaveSidebarPreferenceCreatesUIConfig(t *testing.T) {
 	}
 }
 
+func TestSidebarVisibleDefaultsToFalse(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.SidebarVisible() {
+		t.Fatal("expected sidebar preference to default to false")
+	}
+}
+
 func TestSaveDefaultModePreferenceCreatesMinimalConfig(t *testing.T) {
 	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")

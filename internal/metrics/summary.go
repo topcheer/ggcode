@@ -176,6 +176,19 @@ func Summarize(events []MetricEvent) SessionSummary {
 	return out
 }
 
+func TurnSummaryForIndex(events []MetricEvent, turnIndex int) (TurnSummary, bool) {
+	if turnIndex <= 0 {
+		return TurnSummary{}, false
+	}
+	summary := Summarize(events)
+	for _, turn := range summary.Turns {
+		if turn.TurnIndex == turnIndex {
+			return turn, true
+		}
+	}
+	return TurnSummary{}, false
+}
+
 func averageDuration(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0

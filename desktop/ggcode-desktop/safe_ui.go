@@ -250,9 +250,9 @@ func (u *UIState) AppendChat(msg ChatMessage) {
 	u.ChatMu.Lock()
 
 	// Merge consecutive system messages (e.g. repeated auto-compress notices).
-	if msg.Role == "system" && len(u.ChatMsgs) > 0 {
+	if msg.Role == "system" && !msg.PreventMerge && len(u.ChatMsgs) > 0 {
 		last := &u.ChatMsgs[len(u.ChatMsgs)-1]
-		if last.Role == "system" {
+		if last.Role == "system" && !last.PreventMerge {
 			last.Content = msg.Content
 			last.Time = msg.Time
 			u.ChatMu.Unlock()

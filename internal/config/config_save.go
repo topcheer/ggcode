@@ -199,7 +199,7 @@ func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
 
 func (c *Config) SidebarVisible() bool {
 	if c == nil || c.UI.SidebarVisible == nil {
-		return true
+		return false
 	}
 	return *c.UI.SidebarVisible
 }

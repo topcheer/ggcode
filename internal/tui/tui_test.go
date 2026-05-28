@@ -807,6 +807,37 @@ func TestStatsCommandOpensStatsPanel(t *testing.T) {
 	}
 }
 
+func TestAgentDoneAppendsTurnMetricsDigestOnce(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	ses := session.NewSession("zai", "default", "glm")
+	ses.Metrics = []metrics.MetricEvent{
+		{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+		{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+	}
+	ses.RebuildEndpointStats()
+	m.session = ses
+	m.usageTurnIndex = 2
+	m.loading = true
+	m.activeAgentRunID = 1
+
+	next, _ := m.handleAgentDoneMsg(agentDoneMsg{RunID: 1})
+	m = next
+	rendered := stripAnsi(renderedOutput(&m))
+	for _, want := range []string{"📊 Turn #2", "TTFT 1.2s", "Dur 8.0s", "Think 2.0s", "Tools 1", "Slowest read_bash 3.0s"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected %q in rendered output, got %q", want, rendered)
+		}
+	}
+
+	next, _ = m.handleAgentDoneMsg(agentDoneMsg{RunID: 1})
+	m = next
+	rendered = stripAnsi(renderedOutput(&m))
+	if strings.Count(rendered, "📊 Turn #2") != 1 {
+		t.Fatalf("expected one metrics digest, got %q", rendered)
+	}
+}
+
 type fakeMCPManager struct {
 	retried     []string
 	installed   []config.MCPServerConfig
