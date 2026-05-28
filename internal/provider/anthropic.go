@@ -72,6 +72,11 @@ func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
 	}
 	// Inject identity headers from impersonation state or protocol defaults.
 	headers := BuildHeadersForProvider("anthropic")
+	for key, values := range vendorSpecificAuthHeaders(baseURL, apiKey) {
+		for _, value := range values {
+			opts = append(opts, option.WithHeader(key, value))
+		}
+	}
 	for k, vals := range headers {
 		for _, v := range vals {
 			opts = append(opts, option.WithHeader(k, v))

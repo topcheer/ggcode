@@ -98,20 +98,25 @@ func claudeCLIHeaders() http.Header {
 // NewOpenAIProvider creates a new OpenAI provider.
 func NewOpenAIProvider(apiKey string, model string, maxTokens int) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
-	return NewOpenAIProviderWithConfig(config, model, maxTokens, "openai")
+	return NewOpenAIProviderWithConfig(config, apiKey, model, maxTokens, "openai")
 }
 
 // NewOpenAIProviderWithBaseURL creates a new OpenAI provider with a custom base URL.
 func NewOpenAIProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
-	return NewOpenAIProviderWithConfig(config, model, maxTokens, "openai")
+	return NewOpenAIProviderWithConfig(config, apiKey, model, maxTokens, "openai")
 }
 
-func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTokens int, name string) *OpenAIProvider {
+func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model string, maxTokens int, name string) *OpenAIProvider {
 	// Build identity headers from impersonation state or defaults.
 	protocol := "openai"
 	extraHeaders := BuildHeadersForProvider(protocol)
+	for key, values := range vendorSpecificAuthHeaders(config.BaseURL, apiKey) {
+		for _, value := range values {
+			extraHeaders.Set(key, value)
+		}
+	}
 	var baseTransport http.RoundTripper
 	if hc, ok := config.HTTPClient.(*http.Client); ok && hc != nil && hc.Transport != nil {
 		baseTransport = hc.Transport

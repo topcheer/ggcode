@@ -1056,10 +1056,11 @@ func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
 		return
 	}
 	b.currentSes.TokenUsage.Add(usage)
+	b.currentSes.AddUsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, usage)
 	b.currentSes.UpdatedAt = time.Now()
 	ses := b.currentSes
 	store := b.sessionStore
-	total := b.currentSes.TokenUsage
+	current := b.currentSes.UsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint)
 	entry := session.UsageEntry{
 		Timestamp: time.Now(),
 		TurnIndex: b.usageTurnIndex,
@@ -1071,7 +1072,7 @@ func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
 	b.mu.Unlock()
 
 	if b.ui != nil {
-		b.ui.SetSessionUsage(total)
+		b.ui.SetSessionUsage(current)
 	}
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		_ = jsonlStore.AppendMetaToDisk(ses)
@@ -1089,7 +1090,11 @@ func (b *AgentBridge) recordMetric(ev metrics.MetricEvent) {
 	store := b.sessionStore
 	ev.TurnIndex = b.usageTurnIndex
 	if ses != nil {
+		ev.Model = ses.Model
+		ev.Vendor = ses.Vendor
+		ev.Endpoint = ses.Endpoint
 		ses.Metrics = append(ses.Metrics, ev)
+		ses.AppendMetricForEndpoint(ses.Vendor, ses.Endpoint, ev)
 		ses.UpdatedAt = time.Now()
 	}
 	b.mu.Unlock()
@@ -1097,7 +1102,7 @@ func (b *AgentBridge) recordMetric(ev metrics.MetricEvent) {
 		return
 	}
 	if b.ui != nil {
-		b.ui.SetSessionMetrics(ses.Metrics)
+		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
 	}
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		_ = jsonlStore.AppendMetric(ses, ev)
@@ -1786,8 +1791,8 @@ func (b *AgentBridge) ensureSession() {
 	b.currentSes = ses
 	b.usageTurnIndex = 0
 	if b.ui != nil {
-		b.ui.SetSessionUsage(ses.TokenUsage)
-		b.ui.SetSessionMetrics(ses.Metrics)
+		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
+		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
 	}
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
@@ -2317,8 +2322,8 @@ func (b *AgentBridge) ResumeSession(id string) error {
 	b.usageTurnIndex = session.LastTurnIndex(ses)
 	b.mu.Unlock()
 	if b.ui != nil {
-		b.ui.SetSessionUsage(ses.TokenUsage)
-		b.ui.SetSessionMetrics(ses.Metrics)
+		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
+		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
 	}
 	if broker := b.currentTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
@@ -2615,6 +2620,9 @@ func (b *AgentBridge) SwitchModel(model string) error {
 	b.mu.Lock()
 	b.prov = prov
 	b.resolved = resolved
+	if b.currentSes != nil {
+		b.currentSes.Model = resolved.Model
+	}
 	b.mu.Unlock()
 
 	return nil

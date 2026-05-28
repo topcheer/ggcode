@@ -541,6 +541,7 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 		return
 	}
 	m.session.TokenUsage.Add(usage)
+	m.session.AddUsageForEndpoint(m.session.Vendor, m.session.Endpoint, usage)
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore
@@ -573,7 +574,11 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		return
 	}
 	ev.TurnIndex = m.usageTurnIndex
+	ev.Model = m.session.Model
+	ev.Vendor = m.session.Vendor
+	ev.Endpoint = m.session.Endpoint
 	m.session.Metrics = append(m.session.Metrics, ev)
+	m.session.AppendMetricForEndpoint(m.session.Vendor, m.session.Endpoint, ev)
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore

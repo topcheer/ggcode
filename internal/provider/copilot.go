@@ -27,7 +27,7 @@ func NewCopilotProvider(apiKey, model string, maxTokens int, baseURL string) *Co
 		},
 	}
 	return &CopilotProvider{
-		OpenAIProvider: NewOpenAIProviderWithConfig(config, model, maxTokens, "github-copilot"),
+		OpenAIProvider: NewOpenAIProviderWithConfig(config, apiKey, model, maxTokens, "github-copilot"),
 	}
 }
 
