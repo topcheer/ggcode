@@ -5,13 +5,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
@@ -112,6 +115,8 @@ type Model struct {
 	activeVendor                    string
 	activeEndpoint                  string
 	activeModel                     string
+	terminalTitleWriter             func(string)
+	lastTerminalTitle               string
 	customCmds                      map[string]*commands.Command
 	commandMgr                      *commands.Manager
 	autoMem                         *memory.AutoMemory
@@ -439,6 +444,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		sessionMu:            &sync.Mutex{},
 		a2aMu:                &sync.Mutex{},
 		streamViewState:      &streamViewStateData{},
+		terminalTitleWriter:  newTerminalTitleWriter(),
 	}
 }
 
@@ -892,6 +898,95 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	m.activeVendor = strings.TrimSpace(vendor)
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)
+}
+
+func newTerminalTitleWriter() func(string) {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return nil
+	}
+	return func(title string) {
+		title = sanitizeTerminalTitle(title)
+		if title == "" {
+			return
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "\x1b]0;%s\x07", title)
+	}
+}
+
+func sanitizeTerminalTitle(title string) string {
+	title = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\a' || r == 0x1b:
+			return -1
+		case unicode.IsControl(r):
+			return ' '
+		default:
+			return r
+		}
+	}, title)
+	return strings.Join(strings.Fields(title), " ")
+}
+
+func (m Model) terminalTitleLabel() string {
+	workspace := strings.TrimSpace(m.currentWorkspacePath())
+	workspace = strings.TrimSpace(filepath.Base(workspace))
+	switch workspace {
+	case "", ".", string(filepath.Separator):
+		workspace = ""
+	}
+
+	modelName := strings.TrimSpace(m.activeModel)
+	if modelName == "" && m.session != nil {
+		modelName = strings.TrimSpace(m.session.Model)
+	}
+	if modelName == "" && m.config != nil {
+		modelName = strings.TrimSpace(m.config.Model)
+	}
+
+	switch {
+	case workspace != "" && modelName != "":
+		return fmt.Sprintf("%s [%s]", workspace, modelName)
+	case workspace != "":
+		return workspace
+	case modelName != "":
+		return modelName
+	default:
+		return ""
+	}
+}
+
+func (m Model) desiredTerminalTitle() string {
+	label := m.terminalTitleLabel()
+	activity := sanitizeTerminalTitle(strings.TrimSpace(m.statusActivity))
+	if activity != "" {
+		if label != "" {
+			return fmt.Sprintf("> %s — %s", activity, label)
+		}
+		return fmt.Sprintf("> %s", activity)
+	}
+	if label != "" {
+		return fmt.Sprintf("> ggcode — %s", label)
+	}
+	return "> ggcode"
+}
+
+func (m Model) withTerminalTitleCmd(cmd tea.Cmd) (Model, tea.Cmd) {
+	if m.terminalTitleWriter == nil {
+		return m, cmd
+	}
+	title := m.desiredTerminalTitle()
+	if title == "" || title == m.lastTerminalTitle {
+		return m, cmd
+	}
+	m.lastTerminalTitle = title
+	writeCmd := func() tea.Msg {
+		m.terminalTitleWriter(title)
+		return nil
+	}
+	return m, combineCmds(cmd, writeCmd)
 }
 
 func asciiLogo() string {
