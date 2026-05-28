@@ -121,6 +121,7 @@ func (m Model) renderFeishuPanel() string {
 			" "+m.t("panel.feishu.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.feishu.create_format"),
 			" "+m.t("panel.feishu.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.feishu.create_hint")),
 		)
 	} else {

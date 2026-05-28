@@ -83,18 +83,18 @@ func (m *Model) openImpersonatePanel() {
 
 	vi := textinput.New()
 	vi.Prompt = "> "
-	vi.Placeholder = "version"
+	vi.Placeholder = placeholderWithPasteShortcutHint("version", m.currentLanguage())
 	vi.CharLimit = 64
 	vi.SetValue(currentVersion)
 
 	ki := textinput.New()
 	ki.Prompt = ""
-	ki.Placeholder = "header name"
+	ki.Placeholder = placeholderWithPasteShortcutHint("header name", m.currentLanguage())
 	ki.CharLimit = 64
 
 	hvi := textinput.New()
 	hvi.Prompt = ""
-	hvi.Placeholder = "header value"
+	hvi.Placeholder = placeholderWithPasteShortcutHint("header value", m.currentLanguage())
 	hvi.CharLimit = 256
 
 	m.impersonatePanel = &impersonatePanelState{

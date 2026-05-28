@@ -141,6 +141,7 @@ func (m Model) renderQQPanel() string {
 			" "+m.t("panel.qq.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.qq.create_format"),
 			" "+m.t("panel.qq.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.qq.create_hint")),
 		)
 	} else {

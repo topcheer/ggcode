@@ -133,6 +133,7 @@ func (m Model) renderTGPanel() string {
 			" "+m.t("panel.tg.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.tg.create_format"),
 			" "+m.t("panel.tg.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.tg.create_hint")),
 		)
 	} else {

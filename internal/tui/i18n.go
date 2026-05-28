@@ -90,7 +90,7 @@ func (m *Model) setLanguage(lang string) {
 		}
 	}
 	if m.harnessPanel != nil {
-		m.harnessPanel.actionInput.Placeholder = harnessPanelInputPlaceholder(m.harnessPanel.selectedSection, m.currentLanguage())
+		m.harnessPanel.actionInput.Placeholder = placeholderWithPasteShortcutHint(harnessPanelInputPlaceholder(m.harnessPanel.selectedSection, m.currentLanguage()), m.currentLanguage())
 	}
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())

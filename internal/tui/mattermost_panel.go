@@ -156,6 +156,7 @@ func (m Model) renderMattermostPanel() string {
 			" "+m.t("panel.mattermost.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.mattermost.create_format"),
 			" "+m.t("panel.mattermost.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.mattermost.create_hint")),
 		)
 	} else {

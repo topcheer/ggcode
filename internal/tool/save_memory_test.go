@@ -219,3 +219,36 @@ func TestSaveMemoryTool_NoGitStillWorks(t *testing.T) {
 		t.Errorf("wrong content: %q", string(data))
 	}
 }
+
+func TestSaveMemoryTool_CallsAfterSaveHook(t *testing.T) {
+	am := memory.NewAutoMemory()
+	defer os.RemoveAll(am.Dir())
+
+	projectDir := createTestProjectDir(t)
+	pm := memory.NewProjectAutoMemory(projectDir)
+	if pm == nil {
+		t.Fatal("expected non-nil project memory")
+	}
+
+	tol := NewSaveMemoryTool(am, pm)
+	called := 0
+	tol.SetAfterSave(func() {
+		called++
+	})
+
+	input, _ := json.Marshal(map[string]string{
+		"key":     "hook-test",
+		"content": "refresh prompt after save",
+	})
+
+	result, err := tol.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if called != 1 {
+		t.Fatalf("expected after-save hook once, got %d", called)
+	}
+}

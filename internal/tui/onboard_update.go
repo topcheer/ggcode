@@ -25,10 +25,12 @@ func (m *onboardModel) updateLanguage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.langCursor++
 		}
 	case "enter":
+		m.refreshInputPlaceholders()
 		m.step = onboardStepVendor
 		m.vendorFilter.Focus()
 		return m, textinput.Blink
 	}
+	m.refreshInputPlaceholders()
 	return m, nil
 }
 

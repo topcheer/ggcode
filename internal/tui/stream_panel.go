@@ -35,14 +35,14 @@ func newStreamPanel(cfg stream.StreamConfig) *streamPanelState {
 	copy(p.targets, cfg.Targets)
 
 	p.keyInput = textinput.New()
-	p.keyInput.Placeholder = "Stream key..."
+	p.keyInput.Placeholder = placeholderWithPasteShortcutHint("Stream key...", LangEnglish)
 	p.keyInput.EchoMode = textinput.EchoPassword
 
 	p.urlInput = textinput.New()
-	p.urlInput.Placeholder = "rtmp://... or rtmps://..."
+	p.urlInput.Placeholder = placeholderWithPasteShortcutHint("rtmp://... or rtmps://...", LangEnglish)
 
 	p.nameInput = textinput.New()
-	p.nameInput.Placeholder = "Target name (e.g., youtube)"
+	p.nameInput.Placeholder = placeholderWithPasteShortcutHint("Target name (e.g., youtube)", LangEnglish)
 
 	return p
 }
@@ -279,7 +279,7 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 		p.selectedIndex = len(p.targets) - 1
 		p.editingField = "key"
 		p.keyInput.SetValue("")
-		p.keyInput.Placeholder = fmt.Sprintf("Enter %s stream key...", preset.Name)
+		p.keyInput.Placeholder = placeholderWithPasteShortcutHint(fmt.Sprintf("Enter %s stream key...", preset.Name), LangEnglish)
 		p.keyInput.Focus()
 		p.message = fmt.Sprintf("Added %s — enter stream key", preset.Name)
 		m.persistStreamConfig()

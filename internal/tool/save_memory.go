@@ -12,11 +12,19 @@ import (
 type SaveMemoryTool struct {
 	globalMem  *memory.AutoMemory
 	projectMem *memory.AutoMemory
+	afterSave  func()
 }
 
 // NewSaveMemoryTool creates a save_memory tool with global and project memory.
 func NewSaveMemoryTool(globalMem, projectMem *memory.AutoMemory) *SaveMemoryTool {
 	return &SaveMemoryTool{globalMem: globalMem, projectMem: projectMem}
+}
+
+// SetAfterSave configures a callback that runs after memory is persisted.
+// Callers can use this to refresh any in-memory prompt state that includes
+// auto memory from disk.
+func (t *SaveMemoryTool) SetAfterSave(fn func()) {
+	t.afterSave = fn
 }
 
 func (t *SaveMemoryTool) Name() string { return "save_memory" }
@@ -83,6 +91,9 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 
 	if err := target.SaveMemory(params.Key, params.Content); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
+	}
+	if t.afterSave != nil {
+		t.afterSave()
 	}
 
 	return Result{Content: fmt.Sprintf("%s memory saved: %s", scopeLabel, params.Key)}, nil

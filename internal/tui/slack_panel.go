@@ -125,6 +125,7 @@ func (m Model) renderSlackPanel() string {
 			" "+m.t("panel.slack.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.slack.create_format"),
 			" "+m.t("panel.slack.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.slack.create_hint")),
 		)
 	} else {

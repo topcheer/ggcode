@@ -404,7 +404,7 @@ func (m *Model) selectedHarnessRollout() *harness.ReleaseWavePlan {
 func newHarnessPanelInput(lang Language) textinput.Model {
 	ti := textinput.New()
 	ti.Prompt = "  "
-	ti.Placeholder = harnessPanelInputPlaceholder(harnessSectionQueue, lang)
+	ti.Placeholder = placeholderWithPasteShortcutHint(harnessPanelInputPlaceholder(harnessSectionQueue, lang), lang)
 	ti.CharLimit = 240
 	ti.SetWidth(52)
 	ti.Blur()
@@ -416,7 +416,7 @@ func (m *Model) updateHarnessPanelInputState() {
 	if panel == nil {
 		return
 	}
-	panel.actionInput.Placeholder = harnessPanelInputPlaceholder(panel.selectedSection, m.currentLanguage())
+	panel.actionInput.Placeholder = placeholderWithPasteShortcutHint(harnessPanelInputPlaceholder(panel.selectedSection, m.currentLanguage()), m.currentLanguage())
 	if harnessPanelNeedsInput(panel.selectedSection) {
 		return
 	}

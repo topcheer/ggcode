@@ -175,6 +175,7 @@ func (m Model) renderWhatsAppPanel() string {
 		body = append(body,
 			" Adapter name: "+panel.createInput+"█",
 			"",
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" enter confirm · esc cancel"),
 		)
 	} else if len(entries) == 0 {

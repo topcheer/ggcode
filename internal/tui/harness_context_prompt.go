@@ -93,10 +93,10 @@ type harnessContextPromptState struct {
 	message            string
 }
 
-func newHarnessPromptInput(placeholder string) textinput.Model {
+func newHarnessPromptInput(placeholder string, lang Language) textinput.Model {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
-	ti.Placeholder = placeholder
+	ti.Placeholder = placeholderWithPasteShortcutHint(placeholder, lang)
 	ti.CharLimit = 512
 	ti.SetWidth(60)
 	return ti
@@ -115,7 +115,7 @@ func (m *Model) beginHarnessInitPrompt(commandText, goal string, fromPanel bool)
 		existingProject:  statErr == nil,
 		selected:         map[int]bool{},
 		inputFocus:       true,
-		input:            newHarnessPromptInput("Optional project elements, comma-separated"),
+		input:            newHarnessPromptInput("Optional project elements, comma-separated", m.currentLanguage()),
 	}
 	state.input.Focus()
 	m.harnessContextPrompt = state
@@ -135,14 +135,14 @@ func (m *Model) beginHarnessRunPrompt(commandText, goal string, project harness.
 		cfg:              cfg,
 		fromHarnessPanel: fromPanel,
 		selected:         map[int]bool{},
-		input:            newHarnessPromptInput("New context: payments or checkout=apps/checkout"),
+		input:            newHarnessPromptInput("New context: payments or checkout=apps/checkout", m.currentLanguage()),
 		suggestions:      harness.AugmentRunContexts(append([]harness.ContextConfig(nil), cfg.Contexts...), strings.TrimSpace(goal)),
 	}
 	if len(state.suggestions) == 0 {
 		state.inputFocus = true
 		state.input.Focus()
 	} else {
-		state.input.Placeholder = "Press Tab to type a new context"
+		state.input.Placeholder = placeholderWithPasteShortcutHint("Press Tab to type a new context", m.currentLanguage())
 		state.input.Blur()
 	}
 	m.harnessContextPrompt = state

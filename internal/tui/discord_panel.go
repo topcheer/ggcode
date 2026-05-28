@@ -125,6 +125,7 @@ func (m Model) renderDiscordPanel() string {
 			" "+m.t("panel.discord.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.discord.create_format"),
 			" "+m.t("panel.discord.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.discord.create_hint")),
 		)
 	} else {

@@ -152,6 +152,7 @@ func (m Model) renderWeComPanel() string {
 			" "+m.t("panel.wecom.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.wecom.create_format"),
 			" "+m.t("panel.wecom.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.wecom.create_hint")),
 		)
 	} else {

@@ -36,6 +36,45 @@ func newMD(text string) *markdownx.MarkdownWidget {
 	return w
 }
 
+type themedRectangle struct {
+	canvas.Rectangle
+	refreshFn func(*themedRectangle)
+}
+
+func newThemedRectangle(refreshFn func(*themedRectangle)) *themedRectangle {
+	r := &themedRectangle{refreshFn: refreshFn}
+	if refreshFn != nil {
+		refreshFn(r)
+	}
+	return r
+}
+
+func (r *themedRectangle) Refresh() {
+	if r.refreshFn != nil {
+		r.refreshFn(r)
+	}
+	canvas.Refresh(r)
+}
+
+func newThemeBlendRect(fillBase, fillOverlay fyne.ThemeColorName, fillAlpha float64) *themedRectangle {
+	return newThemedRectangle(func(r *themedRectangle) {
+		r.FillColor = blendThemeColors(fillBase, fillOverlay, fillAlpha)
+	})
+}
+
+func newThemeBlendStrokeRect(fillBase, fillOverlay fyne.ThemeColorName, fillAlpha float64, strokeBase, strokeOverlay fyne.ThemeColorName, strokeAlpha float64) *themedRectangle {
+	return newThemedRectangle(func(r *themedRectangle) {
+		r.FillColor = blendThemeColors(fillBase, fillOverlay, fillAlpha)
+		r.StrokeColor = blendThemeColors(strokeBase, strokeOverlay, strokeAlpha)
+	})
+}
+
+func newThemeColorRect(name fyne.ThemeColorName) *themedRectangle {
+	return newThemedRectangle(func(r *themedRectangle) {
+		r.FillColor = theme.Color(name)
+	})
+}
+
 // ── sendEntry ────────────────────────────────────────
 
 type sendEntry struct {
@@ -1253,8 +1292,7 @@ func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.
 func (cv *ChatView) messageRow(tag string, icon fyne.Resource, tone fyne.ThemeColorName, content fyne.CanvasObject) fyne.CanvasObject {
 	ic := widget.NewIcon(icon)
 	ic.Resize(fyne.NewSize(16, 16))
-	badgeBg := canvas.NewRectangle(blendThemeColors(theme.ColorNameInputBackground, tone, 0.18))
-	badgeBg.StrokeColor = blendThemeColors(theme.ColorNameSeparator, tone, 0.35)
+	badgeBg := newThemeBlendStrokeRect(theme.ColorNameInputBackground, tone, 0.18, theme.ColorNameSeparator, tone, 0.35)
 	badgeBg.StrokeWidth = 1
 	badgeBg.CornerRadius = 10
 	badgeBg.SetMinSize(fyne.NewSize(30, 30))
@@ -1267,7 +1305,7 @@ func (cv *ChatView) messageRow(tag string, icon fyne.Resource, tone fyne.ThemeCo
 	bodyObjects = append(bodyObjects, content)
 	body := container.NewVBox(bodyObjects...)
 
-	accent := canvas.NewRectangle(theme.Color(tone))
+	accent := newThemeColorRect(tone)
 	accent.CornerRadius = 0
 	accent.SetMinSize(fyne.NewSize(accentStripeWidth, 0))
 
@@ -1282,9 +1320,8 @@ func (cv *ChatView) surface(tone fyne.ThemeColorName, content fyne.CanvasObject)
 	return container.NewStack(panel, compactPad(8, 8, 12, 12, content))
 }
 
-func surfaceRect(tone fyne.ThemeColorName) *canvas.Rectangle {
-	bg := canvas.NewRectangle(blendThemeColors(theme.ColorNameInputBackground, tone, 0.08))
-	bg.StrokeColor = blendThemeColors(theme.ColorNameSeparator, tone, 0.28)
+func surfaceRect(tone fyne.ThemeColorName) *themedRectangle {
+	bg := newThemeBlendStrokeRect(theme.ColorNameInputBackground, tone, 0.08, theme.ColorNameSeparator, tone, 0.28)
 	bg.StrokeWidth = 1
 	bg.CornerRadius = theme.Size(theme.SizeNameInputRadius)
 	return bg
@@ -1292,33 +1329,33 @@ func surfaceRect(tone fyne.ThemeColorName) *canvas.Rectangle {
 
 func messageSurfaceRect(tone fyne.ThemeColorName, accentWidth float32) fyne.CanvasObject {
 	panel := surfaceRect(tone)
-	radius := theme.Size(theme.SizeNameInputRadius)
-	fillColor := blendThemeColors(theme.ColorNameInputBackground, tone, 0.08)
-	borderColor := panel.StrokeColor
-	borderWidth := panel.StrokeWidth
 	_ = accentWidth
 
 	raster := canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
 		if w <= 0 || h <= 0 {
 			return color.Transparent
 		}
+		radius := float64(theme.Size(theme.SizeNameInputRadius))
+		borderWidth := float64(panel.StrokeWidth)
+		fillColor := blendThemeColors(theme.ColorNameInputBackground, tone, 0.08)
+		borderColor := blendThemeColors(theme.ColorNameSeparator, tone, 0.28)
 		px := float64(x) + 0.5
 		py := float64(y) + 0.5
-		if !containsLeftSquareRightRounded(px, py, float64(w), float64(h), float64(radius)) {
+		if !containsLeftSquareRightRounded(px, py, float64(w), float64(h), radius) {
 			return color.Transparent
 		}
-		innerW := float64(w) - 2*float64(borderWidth)
-		innerH := float64(h) - 2*float64(borderWidth)
+		innerW := float64(w) - 2*borderWidth
+		innerH := float64(h) - 2*borderWidth
 		if innerW <= 0 || innerH <= 0 {
 			return borderColor
 		}
-		innerRadius := float64(radius) - float64(borderWidth)
+		innerRadius := radius - borderWidth
 		if innerRadius < 0 {
 			innerRadius = 0
 		}
 		if containsLeftSquareRightRounded(
-			px-float64(borderWidth),
-			py-float64(borderWidth),
+			px-borderWidth,
+			py-borderWidth,
 			innerW,
 			innerH,
 			innerRadius,

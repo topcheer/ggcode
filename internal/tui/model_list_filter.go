@@ -25,7 +25,7 @@ type modelListWindow struct {
 func newModelFilterInput(lang Language) textinput.Model {
 	ti := textinput.New()
 	ti.Prompt = tr(lang, "panel.model_filter.prompt")
-	ti.Placeholder = tr(lang, "panel.model_filter.placeholder")
+	ti.Placeholder = placeholderWithPasteShortcutHint(tr(lang, "panel.model_filter.placeholder"), lang)
 	return ti
 }
 

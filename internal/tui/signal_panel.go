@@ -265,6 +265,7 @@ func (m Model) renderSignalPanel() string {
 			" "+m.t("panel.signal.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.signal.create_format"),
 			" "+m.t("panel.signal.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.create_hint")),
 		)
 	} else {

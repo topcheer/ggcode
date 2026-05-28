@@ -109,6 +109,30 @@ type onboardModel struct {
 	imFocused int
 }
 
+func (m *onboardModel) currentLanguage() Language {
+	if len(m.langs) == 0 || m.langCursor < 0 || m.langCursor >= len(m.langs) {
+		return LangEnglish
+	}
+	return normalizeLanguage(m.langs[m.langCursor].code)
+}
+
+func (m *onboardModel) refreshInputPlaceholders() {
+	lang := m.currentLanguage()
+	m.vendorFilter.Placeholder = placeholderWithPasteShortcutHint("Type to filter vendors...", lang)
+	m.apiKeyInput.Placeholder = placeholderWithPasteShortcutHint("Enter your API key...", lang)
+	m.modelFilter.Placeholder = placeholderWithPasteShortcutHint("Type to filter models...", lang)
+	imLabels := []string{
+		"Bot token...",
+		"Bot token...",
+		"App ID...",
+		"App Secret...",
+		"",
+	}
+	for i := range m.imInputs {
+		m.imInputs[i].Placeholder = placeholderWithPasteShortcutHint(imLabels[i], lang)
+	}
+}
+
 // RunOnboard starts the onboard wizard as an independent Bubble Tea program.
 func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 	presets := config.VendorPresets()
@@ -122,17 +146,14 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 
 	vf := textinput.New()
 	vf.Prompt = "> "
-	vf.Placeholder = "Type to filter vendors..."
 
 	ak := textinput.New()
 	ak.Prompt = "> "
 	ak.EchoMode = textinput.EchoPassword
 	ak.EchoCharacter = '•'
-	ak.Placeholder = "Enter your API key..."
 
 	mf := textinput.New()
 	mf.Prompt = "> "
-	mf.Placeholder = "Type to filter models..."
 
 	filtered := make([]int, len(presets))
 	for i := range presets {
@@ -141,19 +162,11 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 
 	// IM inputs: 0=telegram, 1=discord, 2=qq_appid, 3=qq_secret, 4=unused(wechat=scan)
 	var imInputs [5]textinput.Model
-	imLabels := []string{
-		"Bot token...",
-		"Bot token...",
-		"App ID...",
-		"App Secret...",
-		"",
-	}
 	for i := range imInputs {
 		imInputs[i] = textinput.New()
 		imInputs[i].Prompt = "> "
 		imInputs[i].EchoMode = textinput.EchoPassword
 		imInputs[i].EchoCharacter = '•'
-		imInputs[i].Placeholder = imLabels[i]
 	}
 
 	m := onboardModel{
@@ -167,6 +180,7 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		imInputs:       imInputs,
 		imFocused:      -1,
 	}
+	m.refreshInputPlaceholders()
 
 	p := tea.NewProgram(&m)
 	result, err := p.Run()

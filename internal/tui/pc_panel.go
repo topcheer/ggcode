@@ -117,6 +117,7 @@ func (m Model) renderPCPanel() string {
 		}
 		body = append(body,
 			fmt.Sprintf("  Create session (%s): %s█", groupLabel, panel.createInput),
+			renderPasteShortcutHint(m.currentLanguage()),
 			"  Enter: confirm  Esc: cancel  G: toggle group",
 		)
 	} else {

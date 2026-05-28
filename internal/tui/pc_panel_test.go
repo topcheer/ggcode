@@ -73,6 +73,16 @@ func TestPCPanelCreateModeInput(t *testing.T) {
 	}
 }
 
+func TestPCPanelCreateModeShowsPasteHint(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.openPCPanel()
+	m.pcPanel.createMode = true
+	rendered := m.renderPCPanel()
+	if !strings.Contains(rendered, pasteShortcutHintText(m.currentLanguage())) {
+		t.Fatalf("expected pc panel create mode to show paste hint, got:\n%s", rendered)
+	}
+}
+
 func TestPCPanelQRViewExitsOnAnyKey(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openPCPanel()

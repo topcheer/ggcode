@@ -156,6 +156,7 @@ func (m Model) renderIRCPanel() string {
 			" "+m.t("panel.irc.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.irc.create_format"),
 			" "+m.t("panel.irc.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.irc.create_hint")),
 		)
 	} else {

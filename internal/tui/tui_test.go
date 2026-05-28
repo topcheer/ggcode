@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -1593,6 +1594,22 @@ func TestSavingEndpointBaseURLTriggersModelRefresh(t *testing.T) {
 	}
 	if updated.providerPanel.refreshVendor != "openai" {
 		t.Fatalf("expected refresh vendor openai, got %+v", updated.providerPanel)
+	}
+}
+
+func TestProviderEditRenderShowsPasteHint(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o"
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+	m.providerPanel.startEditing("endpoint api key", "")
+
+	rendered := m.renderProviderPanel()
+	if !strings.Contains(rendered, pasteShortcutHintText(m.currentLanguage())) {
+		t.Fatalf("expected provider edit render to show paste hint, got:\n%s", rendered)
 	}
 }
 
@@ -3382,6 +3399,24 @@ func TestUsageTurnIndexIncrementsOnStartAgent(t *testing.T) {
 	_ = m.startAgent("world")
 	if m.usageTurnIndex != 2 {
 		t.Fatalf("expected turn index 2 after second startAgent, got %d", m.usageTurnIndex)
+	}
+}
+
+func TestStartAgentRebuildsSystemPromptBeforeRun(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, tool.NewRegistry(), "old prompt", 1)
+	called := 0
+	m.SetSystemPromptRebuilder(func() string {
+		called++
+		return "rebuilt prompt"
+	})
+
+	_ = m.startAgent("hello")
+	if called != 1 {
+		t.Fatalf("expected system prompt rebuild once, got %d", called)
+	}
+	if got := m.agent.SystemPrompt(); got != "rebuilt prompt" {
+		t.Fatalf("expected rebuilt prompt, got %q", got)
 	}
 }
 

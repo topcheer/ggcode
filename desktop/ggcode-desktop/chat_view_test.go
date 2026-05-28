@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+)
 
 func TestFormatTeammateSpawnResult(t *testing.T) {
 	result := `{"ID":"tm-1","Name":"researcher","Status":"idle"}`
@@ -67,5 +72,27 @@ func TestContainsLeftSquareRightRounded(t *testing.T) {
 		if got := containsLeftSquareRightRounded(tt.x, tt.y, width, height, radius); got != tt.want {
 			t.Fatalf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestSurfaceRectRefreshesWithThemeChange(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	app.Settings().SetTheme(newThemeForScheme("light"))
+	rect := surfaceRect(theme.ColorNamePrimary)
+	lightFill := toNRGBA(rect.FillColor)
+	lightStroke := toNRGBA(rect.StrokeColor)
+
+	app.Settings().SetTheme(newThemeForScheme("forest"))
+	rect.Refresh()
+	forestFill := toNRGBA(rect.FillColor)
+	forestStroke := toNRGBA(rect.StrokeColor)
+
+	if lightFill == forestFill {
+		t.Fatalf("expected fill color to change across themes, got %v", lightFill)
+	}
+	if lightStroke == forestStroke {
+		t.Fatalf("expected stroke color to change across themes, got %v", lightStroke)
 	}
 }
