@@ -783,6 +783,10 @@ func (r *REPL) Run() error {
 	}
 
 	if m, ok := finalModel.(Model); ok {
+		if m.terminalTitleWriter != nil {
+			m.statusActivity = ""
+			m.terminalTitleWriter(m.desiredTerminalTitle())
+		}
 		m.closeTunnelGracefully(2 * time.Second)
 		finalModel = m
 	}

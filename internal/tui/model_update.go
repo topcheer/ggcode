@@ -18,7 +18,16 @@ import (
 // Update handles all Bubble Tea messages and is defined in model_update.go for file-size
 // manageability. See model.go for the Model struct definition and other methods.
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	defer func() {
+		next, ok := model.(Model)
+		if !ok {
+			return
+		}
+		model, cmd = next.withTerminalTitleCmd(cmd)
+	}()
+
+	model = m
 	// Handle spinner ticks first
 	var spinnerCmd tea.Cmd
 	if m.spinner.IsActive() {
@@ -615,7 +624,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input, fwdCmd = m.input.Update(msg)
 		return m, combineCmds(spinnerCmd, fwdCmd)
 	}
-	var cmd tea.Cmd
+	var keyCmd tea.Cmd
 	// During startup input drain, suppress all keyboard input.
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
 		debug.Log("tui", "CATCHALL dropped (input drain) key=%q text=%q", keyMsg.String(), keyMsg.Text)
@@ -628,7 +637,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	oldValue := m.input.Value()
-	m.input, cmd = m.input.Update(msg)
+	m.input, keyCmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", util.Truncate(oldValue, 80), util.Truncate(newValue, 80))
@@ -642,7 +651,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.inputHint = ""
 	}
 
-	return m, combineCmds(spinnerCmd, cmd)
+	return m, combineCmds(spinnerCmd, keyCmd)
 }
 
 // parseApprovalReply parses an IM text reply as an approval decision.
