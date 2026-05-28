@@ -95,7 +95,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Load auto memory
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
+	_ = registry.Register(saveMemoryTool)
 	commandMgr := commands.NewManager(workingDir)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
@@ -115,31 +116,34 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		OnUsage:      nil,
 	})
 
-	// Build enhanced system prompt
-	gitStatus := detectGitStatus(workingDir)
-	userSlashCmds := commandMgr.UserSlashCommands()
-	customCmdNames := make([]string, 0, len(userSlashCmds))
-	for name := range userSlashCmds {
-		customCmdNames = append(customCmdNames, name)
-	}
-	systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, registryToolNames(registry), gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
-		systemPrompt += "\n\n## Skills\n" + skillsPrompt
-	}
-	if mode == permission.AutopilotMode {
-		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-	}
-	if projectMem != "" {
-		systemPrompt += "\n\n## Project Memory\n" + projectMem
-	}
-	if projectAutoMem != nil {
-		if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
-			systemPrompt += "\n\n## Auto Memory (Project)\n" + projContent
+	buildCurrentSystemPrompt := func() string {
+		gitStatus := detectGitStatus(workingDir)
+		userSlashCmds := commandMgr.UserSlashCommands()
+		customCmdNames := make([]string, 0, len(userSlashCmds))
+		for name := range userSlashCmds {
+			customCmdNames = append(customCmdNames, name)
 		}
+		systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, registryToolNames(registry), gitStatus, customCmdNames)
+		if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
+			systemPrompt += "\n\n## Skills\n" + skillsPrompt
+		}
+		if mode == permission.AutopilotMode {
+			systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+		}
+		if projectMem != "" {
+			systemPrompt += "\n\n## Project Memory\n" + projectMem
+		}
+		if projectAutoMem != nil {
+			if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
+				systemPrompt += "\n\n## Auto Memory (Project)\n" + projContent
+			}
+		}
+		if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
+			systemPrompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
+		}
+		return systemPrompt
 	}
-	if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
-		systemPrompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
-	}
+	systemPrompt := buildCurrentSystemPrompt()
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
@@ -158,6 +162,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
+	saveMemoryTool.SetAfterSave(func() {
+		systemPrompt = buildCurrentSystemPrompt()
+		ag.UpdateSystemPrompt(systemPrompt)
+	})
 
 	// Read stdin if available
 	stdinData, err := readStdin()

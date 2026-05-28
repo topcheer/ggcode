@@ -156,6 +156,7 @@ func (m Model) renderMatrixPanel() string {
 			" "+m.t("panel.matrix.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.matrix.create_format"),
 			" "+m.t("panel.matrix.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.matrix.create_hint")),
 		)
 	} else {

@@ -167,6 +167,7 @@ func (m Model) renderNostrPanel() string {
 			" "+m.t("panel.nostr.create_format"),
 			" "+m.t("panel.nostr.create_example"),
 			" "+m.t("panel.nostr.create_full_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.nostr.create_hint")),
 		)
 	} else {

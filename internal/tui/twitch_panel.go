@@ -156,6 +156,7 @@ func (m Model) renderTwitchPanel() string {
 			" "+m.t("panel.twitch.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.twitch.create_format"),
 			" "+m.t("panel.twitch.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.twitch.create_hint")),
 		)
 	} else {

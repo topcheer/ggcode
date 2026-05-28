@@ -162,6 +162,7 @@ func (m Model) renderMCPPanel() string {
 			" Spec: "+panel.installInput+"█",
 			" Format: [name] [-t <stdio|http|ws>] [--env KEY=VALUE ...] [--header KEY:VALUE ...] [-- <command...|url>]",
 			" Example: web-reader -t http https://mcp.example.com/api --header Authorization: Bearer xxx",
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Enter install • Esc cancel"),
 		)
 	} else {

@@ -63,6 +63,7 @@ type AgentBridge struct {
 	sessionStore         session.Store
 	currentSes           *session.Session
 	rebuildCB            func()
+	systemPromptBuilder  func() string
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 	metricCollector      *metrics.Collector
@@ -278,7 +279,9 @@ func (b *AgentBridge) setupAgent() error {
 	_ = pluginMgr.RegisterTools(b.registry)
 
 	autoMem := memory.NewAutoMemory()
-	_ = b.registry.Register(tool.NewSaveMemoryTool(autoMem, nil))
+	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
+	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
+	_ = b.registry.Register(saveMemoryTool)
 
 	// Sub-agent manager.
 	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
@@ -495,12 +498,16 @@ func (b *AgentBridge) setupAgent() error {
 		}
 	})
 
-	systemPrompt := buildSystemPrompt(b.workingDir)
+	b.systemPromptBuilder = func() string {
+		return buildSystemPrompt(b.workingDir, autoMem, projectAutoMem)
+	}
+	systemPrompt := b.systemPromptBuilder()
 	maxIter := b.cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 200
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
+	saveMemoryTool.SetAfterSave(b.refreshSystemPrompt)
 
 	// Permission policy — default to "auto" for desktop.
 	modeStr := b.cfg.DefaultMode
@@ -629,6 +636,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 	if err := b.setupAgent(); err != nil {
 		return err
 	}
+	b.refreshSystemPrompt()
 	if b.agent != nil {
 		b.agent.SetInterruptionHandler(func() string {
 			return b.drainPendingInterrupt()
@@ -1719,13 +1727,13 @@ func agentEventTypeStr(t subagent.AgentEventType) string {
 	return "unknown"
 }
 
-func buildSystemPrompt(workingDir string) string {
+func buildSystemPrompt(workingDir string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
 	hostname, _ := os.Hostname()
 	cwd := workingDir
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	return fmt.Sprintf(`You are ggcode, an AI coding assistant running as a desktop application.
+	prompt := fmt.Sprintf(`You are ggcode, an AI coding assistant running as a desktop application.
 
 ## Environment
 - OS: %s
@@ -1736,6 +1744,28 @@ func buildSystemPrompt(workingDir string) string {
 - Prefer small, reversible changes over broad rewrites.
 - Read before you edit, and inspect results before claiming success.
 `, hostname, cwd)
+	if projectAutoMem != nil {
+		if projectContent, _, _ := projectAutoMem.LoadAll(); projectContent != "" {
+			prompt += "\n\n## Auto Memory (Project)\n" + projectContent
+		}
+	}
+	if globalAutoMem != nil {
+		if globalContent, _, _ := globalAutoMem.LoadAll(); globalContent != "" {
+			prompt += "\n\n## Auto Memory (Global)\n" + globalContent
+		}
+	}
+	return prompt
+}
+
+func (b *AgentBridge) refreshSystemPrompt() {
+	b.mu.Lock()
+	agent := b.agent
+	builder := b.systemPromptBuilder
+	b.mu.Unlock()
+	if agent == nil || builder == nil {
+		return
+	}
+	agent.UpdateSystemPrompt(builder())
 }
 
 // saveSession persists the current conversation to the session store.

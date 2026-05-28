@@ -121,6 +121,7 @@ func (m Model) renderDingtalkPanel() string {
 			" "+m.t("panel.dingtalk.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.dingtalk.create_format"),
 			" "+m.t("panel.dingtalk.create_example"),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.dingtalk.create_hint")),
 		)
 	} else {

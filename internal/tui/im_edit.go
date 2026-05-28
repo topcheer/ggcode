@@ -149,6 +149,7 @@ func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 		fmt.Sprintf(" %s", m.t("panel.im.edit.field", s.editField)),
 		fmt.Sprintf(" %s%s█", m.t("panel.im.edit.new_value"), s.editInput),
 		"",
+		renderPasteShortcutHint(m.currentLanguage()),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.im.edit.input_hint")),
 	}
 	if s.editMessage != "" {

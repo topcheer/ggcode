@@ -244,7 +244,7 @@ func (m Model) handleHarnessContextSuggestionsMsg(msg harnessContextSuggestionsM
 	state.suggestions = harness.NormalizeContexts(msg.Contexts)
 	state.selected = map[int]bool{}
 	state.cursor = 0
-	state.input.Placeholder = "Optional custom contexts: payments, checkout=apps/checkout"
+	state.input.Placeholder = placeholderWithPasteShortcutHint("Optional custom contexts: payments, checkout=apps/checkout", m.currentLanguage())
 	state.input.SetValue("")
 	state.inputFocus = len(state.suggestions) == 0
 	if state.inputFocus {

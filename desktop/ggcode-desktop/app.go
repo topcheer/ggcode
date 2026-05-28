@@ -35,10 +35,12 @@ var onboardPanelMinSize = fyne.NewSize(720, 420)
 
 // App is the top-level desktop application state.
 type App struct {
-	fyneApp fyne.App
-	window  fyne.Window
-	dc      *DesktopConfig
-	cfg     *config.Config
+	fyneApp        fyne.App
+	window         fyne.Window
+	dc             *DesktopConfig
+	cfg            *config.Config
+	windowTitle    string
+	nativeTitlebar nativeTitlebarConfig
 
 	// IM runtime.
 	imManager     *im.Manager
@@ -53,6 +55,8 @@ type App struct {
 	// UI components.
 	content       *fyne.Container
 	statusBar     *widget.Label
+	titleBarLabel *widget.Label
+	titleBarSizer *canvas.Rectangle
 	split         *container.Split
 	chatViewObj   fyne.CanvasObject
 	chatViewRef   *ChatView
@@ -69,6 +73,12 @@ type App struct {
 	tunnelSession *tunnel.Session
 	tunnelBroker  *tunnel.Broker
 	shareDialog   dialog.Dialog
+}
+
+type nativeTitlebarConfig struct {
+	Integrated   bool
+	TopInset     float32
+	LeadingInset float32
 }
 
 func (a *App) currentTunnelSession() *tunnel.Session {
@@ -111,11 +121,10 @@ func (a *App) Run() {
 
 	a.window = a.fyneApp.NewWindow("ggcode")
 	setWindowIcon(a.window)
+	a.nativeTitlebar = setupNativeTitlebar(a.window)
 	a.buildUI()
 	a.setupMenu()
-
-	// Apply dark titlebar matching the app theme.
-	setupNativeTitlebar(a.window)
+	a.setTitle("ggcode")
 
 	w := float32(1200)
 	h := float32(800)
@@ -144,7 +153,15 @@ func (a *App) Run() {
 		a.closeTunnelGracefully(2 * time.Second)
 	})
 
-	a.window.ShowAndRun()
+	a.window.Show()
+	a.refreshNativeTitlebar()
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		fyne.Do(func() {
+			a.refreshNativeTitlebar()
+		})
+	}()
+	a.fyneApp.Run()
 }
 
 // ── UI construction ──────────────────────────────────
@@ -155,8 +172,7 @@ func (a *App) buildUI() {
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 	a.ui.SetStatusLabel(a.statusBar)
 
-	statusChrome := surfaceRect(theme.ColorNameOverlayBackground)
-	statusChrome.StrokeColor = blendThemeColors(theme.ColorNameSeparator, theme.ColorNamePrimary, 0.12)
+	statusChrome := newThemeBlendStrokeRect(theme.ColorNameInputBackground, theme.ColorNameOverlayBackground, 0.08, theme.ColorNameSeparator, theme.ColorNamePrimary, 0.12)
 	statusChrome.CornerRadius = 10
 	statusBox := container.NewStack(statusChrome, compactPad(4, 4, 10, 10, container.NewHBox(
 		a.statusBar,
@@ -164,9 +180,59 @@ func (a *App) buildUI() {
 	)))
 
 	a.content = container.NewStack(widget.NewLabel(""))
-
-	root := container.NewBorder(nil, compactPad(4, 6, 8, 8, statusBox), nil, nil, a.content)
+	topChrome := a.buildTopChrome()
+	root := container.NewBorder(topChrome, compactPad(4, 6, 8, 8, statusBox), nil, nil, a.content)
 	a.window.SetContent(root)
+}
+
+func (a *App) buildTopChrome() fyne.CanvasObject {
+	if !a.nativeTitlebar.Integrated {
+		return nil
+	}
+	a.titleBarLabel = widget.NewLabelWithStyle("ggcode", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	a.titleBarLabel.Wrapping = fyne.TextWrapOff
+	a.titleBarSizer = canvas.NewRectangle(color.Transparent)
+	a.titleBarSizer.SetMinSize(fyne.NewSize(0, titlebarChromeHeight(a.nativeTitlebar)))
+
+	bg := newThemeBlendRect(theme.ColorNameBackground, theme.ColorNameInputBackground, 0.06)
+	separator := newThemeBlendRect(theme.ColorNameSeparator, theme.ColorNamePrimary, 0.16)
+	separator.SetMinSize(fyne.NewSize(0, 1))
+	row := container.NewHBox(a.titleBarLabel, layout.NewSpacer())
+	content := compactPad(8, 8, a.nativeTitlebar.LeadingInset, 16, row)
+	return container.NewBorder(nil, separator, nil, nil, container.NewStack(a.titleBarSizer, bg, content))
+}
+
+func titlebarChromeHeight(cfg nativeTitlebarConfig) float32 {
+	height := cfg.TopInset + 8
+	if height < 36 {
+		height = 36
+	}
+	return height
+}
+
+func (a *App) applyNativeTitlebarConfig(cfg nativeTitlebarConfig) {
+	a.nativeTitlebar = cfg
+	if a.titleBarSizer != nil {
+		a.titleBarSizer.SetMinSize(fyne.NewSize(0, titlebarChromeHeight(cfg)))
+		a.titleBarSizer.Refresh()
+	}
+	if a.titleBarLabel != nil {
+		a.titleBarLabel.Refresh()
+	}
+}
+
+func (a *App) refreshNativeTitlebar() {
+	if a.window == nil {
+		return
+	}
+	a.applyNativeTitlebarConfig(setupNativeTitlebar(a.window))
+	themeName := ""
+	if a.dc != nil {
+		themeName = a.dc.Theme
+	}
+	pal := paletteForTheme(themeName)
+	updateNativeTitlebarAppearance(a.window, toNRGBA(pal.HeaderBackground), toNRGBA(pal.Foreground))
+	updateNativeWindowTitle(a.window, a.windowTitle)
 }
 
 func (a *App) setupMenu() {
@@ -744,7 +810,7 @@ func (a *App) initFromWorkDir(dir string) {
 	_ = os.Chdir(dir)
 
 	a.ui.SetStatus(t("status.loading_workspace", dir))
-	a.window.SetTitle(fmt.Sprintf("ggcode — %s", filepath.Base(dir)))
+	a.setTitle(fmt.Sprintf("ggcode — %s", filepath.Base(dir)))
 
 	cfgPath := resolveConfigFilePath(dir)
 	cfg, err := config.LoadWithInstance(cfgPath, dir)
@@ -1132,7 +1198,7 @@ func (a *App) startChat() {
 	a.ui.SetModelInfo(resolved.Model, humanizeTokens(resolved.ContextWindow))
 	a.ui.SetStatus(fmt.Sprintf("%s/%s | context %s",
 		resolved.VendorID, resolved.Model, humanizeTokens(resolved.ContextWindow)))
-	a.window.SetTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(a.dc.WorkDir), resolved.Model))
+	a.setTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(a.dc.WorkDir), resolved.Model))
 
 	// Register global keyboard shortcuts.
 	a.registerShortcuts()
@@ -1224,6 +1290,12 @@ func (a *App) applyThemeChange(themeName string) {
 	fyne.Do(func() {
 		a.fyneApp.Settings().SetTheme(newThemeForScheme(themeName))
 		a.setupMenu()
+		a.refreshNativeTitlebar()
+		for _, win := range a.fyneApp.Driver().AllWindows() {
+			if content := win.Content(); content != nil {
+				content.Refresh()
+			}
+		}
 	})
 }
 
@@ -1274,7 +1346,13 @@ func (a *App) buildLanguageMenu() *fyne.MenuItem {
 // ── Helpers ──────────────────────────────────────────
 
 func (a *App) setTitle(title string) {
+	a.windowTitle = title
 	a.window.SetTitle(title)
+	if a.titleBarLabel != nil {
+		a.titleBarLabel.SetText(title)
+		a.titleBarLabel.Refresh()
+	}
+	a.refreshNativeTitlebar()
 }
 
 func (a *App) toggleSidebar() {

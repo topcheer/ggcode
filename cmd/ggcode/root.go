@@ -427,7 +427,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
+	_ = registry.Register(saveMemoryTool)
 	trace.Mark("init auto memory")
 
 	_, autoFiles, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
@@ -562,6 +563,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			knightAgent.RecordSkillPromptExposure(nextRefs)
 		}
 	}
+	saveMemoryTool.SetAfterSave(refreshAgentSystemPrompt)
 	ag.SetRunResultWithContentHandler(func(content []provider.ContentBlock, err error) {
 		if knightAgent == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -723,6 +725,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetPluginManager(pluginMgr)
 	repl.SetCommandsManager(commandMgr)
 	repl.SetSkillsChangedHook(refreshAgentSystemPrompt)
+	repl.SetSystemPromptRebuilder(func() string {
+		nextPrompt, nextRefs := buildCurrentSystemPrompt()
+		systemPrompt = nextPrompt
+		promptSkillRefsMu.Lock()
+		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
+		promptSkillRefsMu.Unlock()
+		return nextPrompt
+	})
 	repl.SetAutoMemory(autoMem)
 	repl.SetAutoMemoryFiles(autoFiles)
 	repl.SetProjectMemoryLoader(projectMemoryLoader)

@@ -332,6 +332,7 @@ func (m *Model) renderProviderPanel() string {
 		footer = append(footer,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.edit")+" "+providerEditFieldLabel(m.currentLanguage(), panel.editingField)),
 			panel.editInput.View(),
+			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
 		)
 	} else {

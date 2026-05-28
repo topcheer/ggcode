@@ -117,6 +117,15 @@ func TestDefaultDesktopConfigUsesValidTheme(t *testing.T) {
 	}
 }
 
+func TestPaletteForThemeFallsBackToMidnight(t *testing.T) {
+	if got := paletteForTheme("unknown-theme"); got != themePalettes["midnight"] {
+		t.Fatalf("expected unknown theme to fall back to midnight palette")
+	}
+	if got := paletteForTheme("dark"); got != themePalettes["midnight"] {
+		t.Fatalf("expected legacy dark theme to map to midnight palette")
+	}
+}
+
 func TestModernThemeDesktopChromeSizes(t *testing.T) {
 	th := newThemeForScheme("midnight")
 	if got := th.Size(theme.SizeNamePadding); got != 8 {

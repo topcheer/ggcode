@@ -24,12 +24,13 @@ import "C"
 import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver"
+	"image/color"
 )
 
-func setupNativeTitlebar(w fyne.Window) {
+func setupNativeTitlebar(w fyne.Window) nativeTitlebarConfig {
 	nw, ok := w.(driver.NativeWindow)
 	if !ok {
-		return
+		return nativeTitlebarConfig{}
 	}
 	nw.RunNative(func(ctx any) {
 		win, ok := ctx.(driver.WindowsWindowContext)
@@ -38,6 +39,11 @@ func setupNativeTitlebar(w fyne.Window) {
 		}
 		C.setDarkTitlebar(C.ulonglong(win.HWND))
 	})
+	return nativeTitlebarConfig{}
 }
+
+func updateNativeTitlebarAppearance(w fyne.Window, bg, fg color.NRGBA) {}
+
+func updateNativeWindowTitle(w fyne.Window, title string) {}
 
 func setDockIconMac(path string) {}

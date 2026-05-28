@@ -178,7 +178,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
+	_ = registry.Register(saveMemoryTool)
 
 	_, _, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
@@ -289,6 +290,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			knightAgent.RecordSkillPromptExposure(nextRefs)
 		}
 	}
+	saveMemoryTool.SetAfterSave(refreshAgentSystemPrompt)
 	ag.SetRunResultWithContentHandler(func(content []provider.ContentBlock, err error) {
 		if knightAgent == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return

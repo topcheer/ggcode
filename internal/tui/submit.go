@@ -71,6 +71,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	// This handles the case where the user set an API key in the provider
 	// panel but hasn't explicitly activated — the key should still take effect.
 	m.ensureProviderSync()
+	m.rebuildSystemPrompt()
 
 	// Capture and clear pending image
 	img := m.pendingImage
@@ -117,6 +118,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 // This avoids blocking the TUI update loop with filesystem I/O.
 func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	m.usageTurnIndex++
+	m.rebuildSystemPrompt()
 	img := m.pendingImage
 	m.pendingImage = nil
 	ctx, cancel := context.WithCancel(context.Background())

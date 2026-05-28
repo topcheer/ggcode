@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -19,9 +21,11 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects *[]*widget.Select, cards *[]*widget.Card) {
@@ -84,6 +88,15 @@ func createTestWorkspace(t *testing.T) string {
 	os.MkdirAll(filepath.Join(root, "vendor", "lib"), 0755)
 
 	return root
+}
+
+func createDesktopTestProjectDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // ── fileIconForExt ─────────────────────────────────────────────
@@ -1603,6 +1616,120 @@ func TestAgentBridgeAppendsTurnMetricsDigestWithoutMerging(t *testing.T) {
 	}
 	if ui.ChatMsgs[1].Content != "Processing queued message..." {
 		t.Fatalf("expected queued message to remain intact, got %+v", ui.ChatMsgs[1])
+	}
+}
+
+func TestDesktopSaveMemoryRefreshesAgentPromptImmediately(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := createDesktopTestProjectDir(t)
+
+	bridge := NewAgentBridge(&config.Config{}, nil, &config.ResolvedEndpoint{}, projectDir, NewUIState())
+	bridge.currentSes = session.NewSession("", "", "")
+	if err := bridge.setupAgent(); err != nil {
+		t.Fatalf("setupAgent: %v", err)
+	}
+
+	toolAny, ok := bridge.registry.Get("save_memory")
+	if !ok {
+		t.Fatal("expected save_memory tool to be registered")
+	}
+	saveTool, ok := toolAny.(*tool.SaveMemoryTool)
+	if !ok {
+		t.Fatalf("expected save_memory tool type, got %T", toolAny)
+	}
+
+	if strings.Contains(bridge.agent.SystemPrompt(), "desktop memory refresh") {
+		t.Fatal("prompt should not include saved memory before execute")
+	}
+
+	input, _ := json.Marshal(map[string]string{
+		"key":     "desktop-refresh",
+		"content": "desktop memory refresh",
+		"scope":   "project",
+	})
+	result, err := saveTool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected save_memory error: %s", result.Content)
+	}
+	if !strings.Contains(bridge.agent.SystemPrompt(), "desktop memory refresh") {
+		t.Fatalf("expected prompt refresh after save_memory, got %q", bridge.agent.SystemPrompt())
+	}
+}
+
+func TestBuildSystemPromptIncludesProjectAutoMemory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projectDir := createDesktopTestProjectDir(t)
+	projectAutoMem := memory.NewProjectAutoMemory(projectDir)
+	if projectAutoMem == nil {
+		t.Fatal("expected project auto memory")
+	}
+	if err := projectAutoMem.SaveMemory("desktop-memory", "applies to desktop prompt"); err != nil {
+		t.Fatalf("save memory: %v", err)
+	}
+
+	prompt := buildSystemPrompt(projectDir, nil, projectAutoMem)
+	if !strings.Contains(prompt, "## Auto Memory (Project)") || !strings.Contains(prompt, "applies to desktop prompt") {
+		t.Fatalf("expected project auto memory in prompt, got %q", prompt)
+	}
+}
+
+func TestSetTitleStoresNativeWindowTitle(t *testing.T) {
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      defaultDesktopConfig(),
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("ggcode")
+	app.buildUI()
+
+	app.setTitle("ggcode — workspace [model]")
+	if app.windowTitle != "ggcode — workspace [model]" {
+		t.Fatalf("expected stored window title to update, got %q", app.windowTitle)
+	}
+}
+
+func TestTitlebarChromeHeightKeepsComfortableMinimum(t *testing.T) {
+	if got := titlebarChromeHeight(nativeTitlebarConfig{TopInset: 20}); got != 36 {
+		t.Fatalf("expected minimum chrome height 36, got %v", got)
+	}
+	if got := titlebarChromeHeight(nativeTitlebarConfig{TopInset: 34}); got != 42 {
+		t.Fatalf("expected inset-aware chrome height 42, got %v", got)
+	}
+}
+
+func TestApplyNativeTitlebarConfigUpdatesChromeSizer(t *testing.T) {
+	app := &App{
+		fyneApp: test.NewApp(),
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("ggcode")
+	app.nativeTitlebar = nativeTitlebarConfig{Integrated: true, TopInset: 28, LeadingInset: 88}
+	app.buildUI()
+
+	app.applyNativeTitlebarConfig(nativeTitlebarConfig{Integrated: true, TopInset: 40, LeadingInset: 88})
+	if app.titleBarSizer == nil {
+		t.Fatal("expected integrated titlebar chrome sizer")
+	}
+	if got := app.titleBarSizer.MinSize().Height; got != 48 {
+		t.Fatalf("expected chrome height to update to 48, got %v", got)
+	}
+}
+
+func TestBuildUIDoesNotAddTopChromeWhenNativeTitlebarNotIntegrated(t *testing.T) {
+	app := &App{
+		fyneApp: test.NewApp(),
+		ui:      NewUIState(),
+	}
+	app.window = app.fyneApp.NewWindow("ggcode")
+	app.nativeTitlebar = nativeTitlebarConfig{}
+	app.buildUI()
+	if app.titleBarLabel != nil || app.titleBarSizer != nil {
+		t.Fatalf("expected no custom top chrome when native integration is disabled")
 	}
 }
 

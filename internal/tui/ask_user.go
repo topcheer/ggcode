@@ -46,7 +46,7 @@ func newQuestionnaireState(req toolpkg.AskUserRequest, response chan toolpkg.Ask
 func newQuestionnaireInput(lang Language) textinput.Model {
 	input := textinput.New()
 	input.Prompt = ""
-	input.Placeholder = questionnaireFreeformPlaceholder(lang)
+	input.Placeholder = placeholderWithPasteShortcutHint(questionnaireFreeformPlaceholder(lang), lang)
 	input.Focus()
 	return input
 }
@@ -357,7 +357,7 @@ func (qs *questionnaireState) loadActiveQuestion(lang Language) {
 	}
 	question := qs.request.Questions[idx]
 	qs.choiceCursor = 0
-	qs.input.Placeholder = util.FirstNonEmpty(strings.TrimSpace(question.Placeholder), questionnaireFreeformPlaceholder(lang))
+	qs.input.Placeholder = placeholderWithPasteShortcutHint(util.FirstNonEmpty(strings.TrimSpace(question.Placeholder), questionnaireFreeformPlaceholder(lang)), lang)
 	qs.input.SetValue(qs.answers[idx].freeform)
 	if question.AllowFreeform {
 		qs.input.Focus()
