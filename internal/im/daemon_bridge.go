@@ -787,7 +787,11 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 	store := b.store
 	ev.TurnIndex = b.usageTurnIndex
 	if ses != nil {
+		ev.Model = ses.Model
+		ev.Vendor = ses.Vendor
+		ev.Endpoint = ses.Endpoint
 		ses.Metrics = append(ses.Metrics, ev)
+		ses.AppendMetricForEndpoint(ses.Vendor, ses.Endpoint, ev)
 	}
 	b.mu.Unlock()
 	if ses == nil || store == nil {

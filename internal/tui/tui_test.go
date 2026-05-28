@@ -717,6 +717,51 @@ func TestSidebarShowsSessionUsage(t *testing.T) {
 	}
 }
 
+func TestSidebarShowsOnlyCurrentEndpointUsage(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	ses := &session.Session{
+		Vendor:   "zai",
+		Endpoint: "coding",
+		UsageHistory: []session.UsageEntry{
+			{
+				Vendor:   "zai",
+				Endpoint: "coding",
+				Usage: provider.TokenUsage{
+					InputTokens:  111,
+					OutputTokens: 22,
+				},
+			},
+			{
+				Vendor:   "openai",
+				Endpoint: "api",
+				Usage: provider.TokenUsage{
+					InputTokens:  777,
+					OutputTokens: 88,
+				},
+			},
+		},
+		TokenUsage: provider.TokenUsage{
+			InputTokens:  888,
+			OutputTokens: 110,
+		},
+	}
+	ses.RebuildEndpointStats()
+	m.session = ses
+
+	sidebar := stripAnsi(m.renderSidebar())
+	for _, want := range []string{"Session usage", "133", "111", "22"} {
+		if !strings.Contains(sidebar, want) {
+			t.Fatalf("expected %q in sidebar, got %q", want, sidebar)
+		}
+	}
+	for _, avoid := range []string{"865", "777", "88", "998"} {
+		if strings.Contains(sidebar, avoid) {
+			t.Fatalf("expected sidebar to omit non-current endpoint usage %q, got %q", avoid, sidebar)
+		}
+	}
+}
+
 func TestSidebarOmitsMetricsSummary(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(140, 40)

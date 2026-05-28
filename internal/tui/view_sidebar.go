@@ -629,14 +629,14 @@ func (m Model) sidebarSessionUsage() provider.TokenUsage {
 	if m.session == nil {
 		return provider.TokenUsage{}
 	}
-	return m.session.TokenUsage
+	return m.session.UsageForEndpoint(m.session.Vendor, m.session.Endpoint)
 }
 
 func (m Model) sidebarSessionMetrics() []metrics.MetricEvent {
 	if m.session == nil {
 		return nil
 	}
-	return m.session.Metrics
+	return m.session.MetricsForEndpoint(m.session.Vendor, m.session.Endpoint)
 }
 
 func humanizeTokenCount(n int) string {

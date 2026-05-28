@@ -21,20 +21,22 @@ import (
 
 // Session represents a single conversation session.
 type Session struct {
-	ID                   string                `json:"id"`
-	CreatedAt            time.Time             `json:"created_at"`
-	UpdatedAt            time.Time             `json:"updated_at"`
-	Title                string                `json:"title"`
-	Workspace            string                `json:"workspace,omitempty"`
-	Vendor               string                `json:"vendor"`
-	Endpoint             string                `json:"endpoint"`
-	Model                string                `json:"model"`
-	TokenUsage           provider.TokenUsage   `json:"token_usage,omitempty"`
-	UsageHistory         []UsageEntry          `json:"usage_history,omitempty"`
-	Metrics              []metrics.MetricEvent `json:"metrics,omitempty"`
-	Messages             []provider.Message    `json:"messages,omitempty"`
-	TunnelEvents         []TunnelEvent         `json:"tunnel_events,omitempty"`
-	TunnelEventsComplete bool                  `json:"tunnel_events_complete,omitempty"`
+	ID                   string                           `json:"id"`
+	CreatedAt            time.Time                        `json:"created_at"`
+	UpdatedAt            time.Time                        `json:"updated_at"`
+	Title                string                           `json:"title"`
+	Workspace            string                           `json:"workspace,omitempty"`
+	Vendor               string                           `json:"vendor"`
+	Endpoint             string                           `json:"endpoint"`
+	Model                string                           `json:"model"`
+	TokenUsage           provider.TokenUsage              `json:"token_usage,omitempty"`
+	EndpointUsage        map[string]provider.TokenUsage   `json:"endpoint_usage,omitempty"`
+	UsageHistory         []UsageEntry                     `json:"usage_history,omitempty"`
+	Metrics              []metrics.MetricEvent            `json:"metrics,omitempty"`
+	EndpointMetrics      map[string][]metrics.MetricEvent `json:"endpoint_metrics,omitempty"`
+	Messages             []provider.Message               `json:"messages,omitempty"`
+	TunnelEvents         []TunnelEvent                    `json:"tunnel_events,omitempty"`
+	TunnelEventsComplete bool                             `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 }
@@ -527,6 +529,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	if ses.UpdatedAt.IsZero() {
 		ses.UpdatedAt = ses.CreatedAt
 	}
+	ses.RebuildEndpointStats()
 	return ses, nil
 }
 
@@ -926,14 +929,16 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 func NewSession(vendor, endpoint, model string) *Session {
 	now := time.Now()
 	return &Session{
-		ID:        generateID(),
-		CreatedAt: now,
-		UpdatedAt: now,
-		Workspace: CurrentWorkspacePath(),
-		Vendor:    vendor,
-		Endpoint:  endpoint,
-		Model:     model,
-		Title:     "New session",
+		ID:              generateID(),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Workspace:       CurrentWorkspacePath(),
+		Vendor:          vendor,
+		Endpoint:        endpoint,
+		Model:           model,
+		EndpointUsage:   make(map[string]provider.TokenUsage),
+		EndpointMetrics: make(map[string][]metrics.MetricEvent),
+		Title:           "New session",
 	}
 }
 
