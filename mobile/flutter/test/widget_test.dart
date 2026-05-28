@@ -260,6 +260,28 @@ void main() {
     expect(tester.testTextInput.isVisible, isFalse);
   });
 
+  testWidgets('ChatScreen tap in message area dismisses composer focus',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_ConnectedConnectionNotifier.new),
+        ],
+        child: const MaterialApp(home: ChatScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.showKeyboard(find.byType(EditableText));
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    await tester.tapAt(tester.getCenter(find.byType(ListView)));
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
   testWidgets('ChatScreen uses tool display name as card title',
       (WidgetTester tester) async {
     await tester.pumpWidget(

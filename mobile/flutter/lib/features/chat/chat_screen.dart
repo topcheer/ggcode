@@ -57,6 +57,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     });
   }
 
+  void _dismissComposerFocus() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   void _updateTabs(List<String> newIds, List<String> newNames) {
     // Only rebuild if tab list actually changed
     if (_tabIds.length == newIds.length) {
@@ -404,17 +408,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               },
             ),
           Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final msg = messages[index];
-                if (msg.toolName != null) {
-                  return _buildToolMessage(msg);
-                }
-                return MessageBubble(message: msg);
-              },
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => _dismissComposerFocus(),
+              child: ListView.builder(
+                controller: _scrollController,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final msg = messages[index];
+                  if (msg.toolName != null) {
+                    return _buildToolMessage(msg);
+                  }
+                  return MessageBubble(message: msg);
+                },
+              ),
             ),
           ),
           if (approval != null) ApprovalSheet(approval: approval),
