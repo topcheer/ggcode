@@ -88,11 +88,14 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	return func() tea.Msg {
 		safego.Go("tui.startAgent.run", func() {
 			defer func() {
-				// Kick off background pre-compact during the user's idle time
-				// before notifying the TUI the run is done. If tokens are
-				// below threshold this is a cheap no-op.
+				if m.metricCollectorFlush != nil {
+					m.metricCollectorFlush()
+				}
 				if m.agent != nil {
-					m.agent.StartPreCompact()
+					// Start background pre-compact only after the round-complete
+					// signal is queued so its own metrics don't contaminate the
+					// just-finished turn digest.
+					defer m.agent.StartPreCompact()
 				}
 				if m.program != nil {
 					m.program.Send(agentDoneMsg{RunID: runID})
@@ -129,8 +132,11 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	return func() tea.Msg {
 		safego.Go("tui.startAgentWithExpand.run", func() {
 			defer func() {
+				if m.metricCollectorFlush != nil {
+					m.metricCollectorFlush()
+				}
 				if m.agent != nil {
-					m.agent.StartPreCompact()
+					defer m.agent.StartPreCompact()
 				}
 				if m.program != nil {
 					m.program.Send(agentDoneMsg{RunID: runID})

@@ -68,6 +68,7 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 			r.recordMetric(ev)
 		})
 		a.SetMetricHandler(r.metricCollector.Emit)
+		r.model.metricCollectorFlush = r.metricCollector.Flush
 	}
 	return r
 }

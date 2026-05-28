@@ -47,6 +47,7 @@ func newTestModel() Model {
 	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.inputReady = true
+	m.sidebarVisible = true
 	return m
 }
 
@@ -1008,7 +1009,7 @@ func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 	if !m.sidebarEnabled() {
-		t.Fatal("expected sidebar enabled by default on wide layout")
+		t.Fatal("expected sidebar enabled on wide layout")
 	}
 
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+r"})
@@ -1033,6 +1034,33 @@ func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
 	}
 }
 
+func TestComposerShowsCtrlRHintOnlyWhenSidebarHidden(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	m.sidebarVisible = false
+	hidden := stripAnsi(m.renderComposerPanel())
+	if !strings.Contains(hidden, "Ctrl+R sidebar") {
+		t.Fatalf("expected Ctrl+R sidebar hint when sidebar is hidden, got %q", hidden)
+	}
+	if strings.Contains(hidden, "Enter send") {
+		t.Fatalf("expected Enter send hint to be removed, got %q", hidden)
+	}
+
+	m.sidebarVisible = true
+	visible := stripAnsi(m.renderComposerPanel())
+	if strings.Contains(visible, "Ctrl+R sidebar") {
+		t.Fatalf("expected Ctrl+R sidebar hint to disappear when sidebar is shown, got %q", visible)
+	}
+}
+
+func TestNewModelSidebarDefaultIsHidden(t *testing.T) {
+	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
+	if m.sidebarVisible {
+		t.Fatal("expected new model sidebar preference to default to hidden")
+	}
+}
+
 func TestSetConfigAppliesPersistedSidebarVisibility(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
@@ -1051,6 +1079,8 @@ func TestCtrlRPersistsSidebarVisibility(t *testing.T) {
 	m.handleResize(128, 28)
 	cfg := config.DefaultConfig()
 	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	visible := true
+	cfg.UI.SidebarVisible = &visible
 	m.SetConfig(cfg)
 
 	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+r"})

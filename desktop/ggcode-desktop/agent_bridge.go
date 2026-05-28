@@ -58,13 +58,14 @@ type AgentBridge struct {
 	mainWindow     fyne.Window
 	permissionMode permission.PermissionMode
 
-	registry        *tool.Registry
-	workingDir      string
-	sessionStore    session.Store
-	currentSes      *session.Session
-	rebuildCB       func()
-	usageTurnIndex  int
-	metricCollector *metrics.Collector
+	registry             *tool.Registry
+	workingDir           string
+	sessionStore         session.Store
+	currentSes           *session.Session
+	rebuildCB            func()
+	usageTurnIndex       int
+	lastMetricDigestTurn int
+	metricCollector      *metrics.Collector
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -648,6 +649,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 	}
 
 	go func() {
+		var runErr error
 		if broker := b.currentTunnelBroker(); broker != nil {
 			b.ensureTunnelMsgID(broker)
 			broker.SendSessionInfo(tunnel.SessionInfoData{
@@ -663,8 +665,14 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 		}
 
 		defer func() {
+			if b.metricCollector != nil {
+				b.metricCollector.Flush()
+			}
 			cancel()
 			b.ui.FinalizeStreaming()
+			if runErr == nil {
+				b.appendTurnMetricsDigest(b.usageTurnIndex)
+			}
 			b.saveSession()
 
 			// Fallback: clear all sub-agent/teammate panels now that
@@ -842,20 +850,20 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 			}
 		}
 
-		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
-		if err != nil {
+		runErr = b.agent.RunStreamWithContent(ctx, content, onEvent)
+		if runErr != nil {
 			b.mu.Lock()
 			c := b.cancelled
 			b.mu.Unlock()
 			if !c {
 				b.ui.AppendChat(ChatMessage{
 					Role:    "error",
-					Content: err.Error(),
+					Content: runErr.Error(),
 					Time:    time.Now(),
 				})
 				if broker := b.currentTunnelBroker(); broker != nil {
 					b.flushTunnelTextStream(broker)
-					broker.PushError(err.Error())
+					broker.PushError(runErr.Error())
 				}
 			}
 		}
@@ -1790,6 +1798,7 @@ func (b *AgentBridge) ensureSession() {
 	_ = b.sessionStore.Save(ses)
 	b.currentSes = ses
 	b.usageTurnIndex = 0
+	b.lastMetricDigestTurn = 0
 	if b.ui != nil {
 		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
 		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
@@ -2320,6 +2329,7 @@ func (b *AgentBridge) ResumeSession(id string) error {
 	b.mu.Lock()
 	b.currentSes = ses
 	b.usageTurnIndex = session.LastTurnIndex(ses)
+	b.lastMetricDigestTurn = b.usageTurnIndex
 	b.mu.Unlock()
 	if b.ui != nil {
 		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))

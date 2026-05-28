@@ -121,6 +121,8 @@ type Model struct {
 	subAgentMgr                     *subagent.Manager
 	subAgentFollow                  subAgentFollowState
 	usageTurnIndex                  int
+	lastMetricDigestTurn            int
+	metricCollectorFlush            func()
 	knight                          *knight.Knight
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
@@ -428,7 +430,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		mode:                 policyMode(policy),
 		startedAt:            time.Time{}, // set on first WindowSizeMsg
 		startupBannerVisible: false,
-		sidebarVisible:       true,
+		sidebarVisible:       false,
 		activeMCPTools:       make(map[string]ToolStatusMsg),
 		clipboardLoader:      loadClipboardImage,
 		clipboardWriter:      copyTextToClipboard,
@@ -517,6 +519,7 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
 	m.usageTurnIndex = session.LastTurnIndex(ses)
+	m.lastMetricDigestTurn = m.usageTurnIndex
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
 	// Register this instance for multi-instance detection and auto-mute

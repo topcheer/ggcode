@@ -72,6 +72,9 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.renderStreamBuffer(true)
 		m.streamBuffer = nil
 	}
+	if !wasCanceled && !wasFailed {
+		m.appendTurnMetricsDigest(m.usageTurnIndex)
+	}
 	m.chatListScrollToBottom()
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()

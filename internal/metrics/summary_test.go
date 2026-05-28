@@ -77,3 +77,23 @@ func TestSummarizeEmpty(t *testing.T) {
 		t.Fatalf("unexpected empty summary: %+v", summary)
 	}
 }
+
+func TestTurnSummaryForIndex(t *testing.T) {
+	events := []MetricEvent{
+		{TurnIndex: 1, Type: "llm", TTFT: 800 * time.Millisecond, ThinkTime: time.Second, Duration: 5 * time.Second},
+		{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 7 * time.Second},
+		{TurnIndex: 2, Type: "tool", ToolName: "bash", ToolSuccess: true, ToolDuration: 3 * time.Second},
+	}
+
+	turn, ok := TurnSummaryForIndex(events, 2)
+	if !ok {
+		t.Fatal("expected turn 2 summary")
+	}
+	if turn.TurnIndex != 2 || turn.ToolCallCount != 1 || turn.SlowestTool != "bash" {
+		t.Fatalf("unexpected turn summary: %+v", turn)
+	}
+
+	if _, ok := TurnSummaryForIndex(events, 3); ok {
+		t.Fatal("expected missing turn summary for turn 3")
+	}
+}

@@ -33,6 +33,10 @@ func (m *Model) chatWriteSystem(id, text string) {
 	}
 }
 
+func (m *Model) chatWriteLocalSystem(id, text string) {
+	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
+}
+
 // chatUpdateSystemText updates the text of an existing system message.
 func (m *Model) chatUpdateSystemText(id, text string) {
 	if m.chatList == nil {

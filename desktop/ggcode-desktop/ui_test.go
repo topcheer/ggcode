@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func collectDesktopWidgets(obj fyne.CanvasObject, forms *[]*widget.Form, selects *[]*widget.Select, cards *[]*widget.Card) {
@@ -1573,6 +1574,35 @@ func TestShowMetricsWindowRendersCards(t *testing.T) {
 		if !strings.Contains(turnText, want) {
 			t.Fatalf("expected %q in recent turns card labels, got %v", want, labels)
 		}
+	}
+}
+
+func TestAgentBridgeAppendsTurnMetricsDigestWithoutMerging(t *testing.T) {
+	loadTranslations()
+	setLanguage("en")
+
+	ui := NewUIState()
+	ses := session.NewSession("zai", "default", "glm-5.1")
+	ses.Metrics = []metrics.MetricEvent{
+		{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+		{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+	}
+	ses.RebuildEndpointStats()
+	bridge := &AgentBridge{ui: ui, currentSes: ses}
+
+	bridge.appendTurnMetricsDigest(2)
+	ui.AppendChat(ChatMessage{Role: "system", Content: "Processing queued message...", Time: time.Now()})
+
+	ui.ChatMu.Lock()
+	defer ui.ChatMu.Unlock()
+	if len(ui.ChatMsgs) != 2 {
+		t.Fatalf("expected digest and queued system message to remain separate, got %+v", ui.ChatMsgs)
+	}
+	if !strings.Contains(ui.ChatMsgs[0].Content, "📊 Turn #2") || !ui.ChatMsgs[0].PreventMerge {
+		t.Fatalf("expected first system message to be metrics digest, got %+v", ui.ChatMsgs[0])
+	}
+	if ui.ChatMsgs[1].Content != "Processing queued message..." {
+		t.Fatalf("expected queued message to remain intact, got %+v", ui.ChatMsgs[1])
 	}
 }
 

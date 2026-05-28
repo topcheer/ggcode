@@ -141,8 +141,10 @@ func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
-		m.t("hint.enter_send"),
 		m.t("hint.help"),
+	}
+	if m.sidebarAvailableByWidth() && !m.sidebarEnabled() {
+		hints = append(hints, m.t("hint.ctrlr_sidebar"))
 	}
 	if !m.autoCompleteActive {
 		hints = append(hints, m.t("hint.shift_tab_mode"))
