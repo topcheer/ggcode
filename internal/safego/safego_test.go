@@ -42,6 +42,7 @@ func TestPanicHookFires(t *testing.T) {
 		gotName  string
 		gotValue any
 	)
+	done := make(chan struct{})
 	old := PanicHook
 	PanicHook = func(name string, recovered any, stack []byte) {
 		calls.Add(1)
@@ -49,9 +50,17 @@ func TestPanicHookFires(t *testing.T) {
 		gotName = name
 		gotValue = recovered
 		mu.Unlock()
+		close(done)
 	}
 	defer func() { PanicHook = old }()
 	Run("hook-test", func() { panic("hooked") })
+	// Wait for the hook to fire (should be immediate since Run is sync,
+	// but guards against scheduler edge cases on CI).
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("PanicHook never called")
+	}
 	if calls.Load() != 1 {
 		t.Fatalf("hook calls = %d, want 1", calls.Load())
 	}
