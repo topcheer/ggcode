@@ -20,7 +20,7 @@ func EndpointStatsKey(vendor, endpoint string) string {
 	}
 }
 
-func (s *Session) ensureEndpointStats() {
+func (s *Session) ensureEndpointStatsLocked() {
 	if s.EndpointUsage == nil {
 		s.EndpointUsage = make(map[string]provider.TokenUsage)
 	}
@@ -33,24 +33,26 @@ func (s *Session) RebuildEndpointStats() {
 	if s == nil {
 		return
 	}
-	s.EndpointUsage = make(map[string]provider.TokenUsage)
-	s.EndpointMetrics = make(map[string][]metrics.MetricEvent)
+	usageByEndpoint := make(map[string]provider.TokenUsage)
+	metricsByEndpoint := make(map[string][]metrics.MetricEvent)
 	for _, entry := range s.UsageHistory {
 		key := EndpointStatsKey(entry.Vendor, entry.Endpoint)
 		if key == "" {
 			continue
 		}
-		current := s.EndpointUsage[key]
-		current.Add(entry.Usage)
-		s.EndpointUsage[key] = current
+		usageByEndpoint[key] = usageByEndpoint[key].Add(entry.Usage)
 	}
 	for _, ev := range s.Metrics {
 		key := EndpointStatsKey(ev.Vendor, ev.Endpoint)
 		if key == "" {
 			continue
 		}
-		s.EndpointMetrics[key] = append(s.EndpointMetrics[key], ev)
+		metricsByEndpoint[key] = append(metricsByEndpoint[key], ev)
 	}
+	s.endpointStatsMu.Lock()
+	s.EndpointUsage = usageByEndpoint
+	s.EndpointMetrics = metricsByEndpoint
+	s.endpointStatsMu.Unlock()
 }
 
 func (s *Session) AddUsageForEndpoint(vendor, endpoint string, usage provider.TokenUsage) {
@@ -61,10 +63,10 @@ func (s *Session) AddUsageForEndpoint(vendor, endpoint string, usage provider.To
 	if key == "" {
 		return
 	}
-	s.ensureEndpointStats()
-	current := s.EndpointUsage[key]
-	current.Add(usage)
-	s.EndpointUsage[key] = current
+	s.endpointStatsMu.Lock()
+	defer s.endpointStatsMu.Unlock()
+	s.ensureEndpointStatsLocked()
+	s.EndpointUsage[key] = s.EndpointUsage[key].Add(usage)
 }
 
 func (s *Session) AppendMetricForEndpoint(vendor, endpoint string, ev metrics.MetricEvent) {
@@ -75,7 +77,9 @@ func (s *Session) AppendMetricForEndpoint(vendor, endpoint string, ev metrics.Me
 	if key == "" {
 		return
 	}
-	s.ensureEndpointStats()
+	s.endpointStatsMu.Lock()
+	defer s.endpointStatsMu.Unlock()
+	s.ensureEndpointStatsLocked()
 	s.EndpointMetrics[key] = append(s.EndpointMetrics[key], ev)
 }
 
@@ -84,28 +88,27 @@ func (s *Session) UsageForEndpoint(vendor, endpoint string) provider.TokenUsage 
 		return provider.TokenUsage{}
 	}
 	key := EndpointStatsKey(vendor, endpoint)
+	s.endpointStatsMu.RLock()
+	usage, ok := s.EndpointUsage[key]
+	hasBuckets := len(s.EndpointUsage) > 0
+	s.endpointStatsMu.RUnlock()
 	if key == "" {
-		if len(s.EndpointUsage) == 0 && len(s.UsageHistory) == 0 {
+		if !hasBuckets && len(s.UsageHistory) == 0 {
 			return s.TokenUsage
 		}
 		return provider.TokenUsage{}
 	}
-	if s.EndpointUsage != nil {
-		if usage, ok := s.EndpointUsage[key]; ok {
+	if ok {
+		return usage
+	}
+	if !hasBuckets && len(s.UsageHistory) > 0 {
+		s.RebuildEndpointStats()
+		s.endpointStatsMu.RLock()
+		usage, ok = s.EndpointUsage[key]
+		s.endpointStatsMu.RUnlock()
+		if ok {
 			return usage
 		}
-	}
-	var rebuilt provider.TokenUsage
-	found := false
-	for _, entry := range s.UsageHistory {
-		if EndpointStatsKey(entry.Vendor, entry.Endpoint) != key {
-			continue
-		}
-		rebuilt.Add(entry.Usage)
-		found = true
-	}
-	if found {
-		return rebuilt
 	}
 	sessionKey := EndpointStatsKey(s.Vendor, s.Endpoint)
 	if len(s.UsageHistory) == 0 && (sessionKey == key || sessionKey == "") {
@@ -119,8 +122,12 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 		return nil
 	}
 	key := EndpointStatsKey(vendor, endpoint)
+	s.endpointStatsMu.RLock()
+	events, ok := s.EndpointMetrics[key]
+	hasBuckets := len(s.EndpointMetrics) > 0
+	s.endpointStatsMu.RUnlock()
 	if key == "" {
-		if len(s.EndpointMetrics) == 0 {
+		if !hasBuckets {
 			hasMetadata := false
 			for _, ev := range s.Metrics {
 				if strings.TrimSpace(ev.Vendor) != "" || strings.TrimSpace(ev.Endpoint) != "" {
@@ -134,23 +141,31 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 		}
 		return nil
 	}
-	if s.EndpointMetrics != nil {
-		if events, ok := s.EndpointMetrics[key]; ok {
+	if ok {
+		return append([]metrics.MetricEvent(nil), events...)
+	}
+	if !hasBuckets && len(s.Metrics) > 0 {
+		s.RebuildEndpointStats()
+		s.endpointStatsMu.RLock()
+		events, ok = s.EndpointMetrics[key]
+		hasBuckets = len(s.EndpointMetrics) > 0
+		s.endpointStatsMu.RUnlock()
+		if ok {
 			return append([]metrics.MetricEvent(nil), events...)
 		}
+		if hasBuckets {
+			return nil
+		}
 	}
-	filtered := make([]metrics.MetricEvent, 0)
 	hasMetadata := false
 	for _, ev := range s.Metrics {
 		if strings.TrimSpace(ev.Vendor) != "" || strings.TrimSpace(ev.Endpoint) != "" {
 			hasMetadata = true
-		}
-		if EndpointStatsKey(ev.Vendor, ev.Endpoint) == key {
-			filtered = append(filtered, ev)
+			break
 		}
 	}
-	if len(filtered) > 0 || hasMetadata {
-		return filtered
+	if hasMetadata {
+		return nil
 	}
 	sessionKey := EndpointStatsKey(s.Vendor, s.Endpoint)
 	if sessionKey == key || sessionKey == "" {

@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -1169,6 +1170,39 @@ func TestCronPromptPushesCronTunnelEventWithoutSystemEvent(t *testing.T) {
 	}
 	if !sawCron {
 		t.Fatal("expected cron user_message tunnel event")
+	}
+}
+
+func TestTurnMetricsDigestPushesTunnelSystemMessage(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.session.Metrics = []metrics.MetricEvent{
+		{TurnIndex: 2, Type: "llm", TTFT: 1200 * time.Millisecond, ThinkTime: 2 * time.Second, Duration: 8 * time.Second},
+		{TurnIndex: 2, Type: "tool", ToolName: "read_bash", ToolSuccess: false, ToolError: "timeout", ToolDuration: 3 * time.Second},
+	}
+	m.usageTurnIndex = 2
+
+	m.appendTurnMetricsDigest(2)
+
+	if len(m.session.TunnelEvents) != 1 {
+		t.Fatalf("expected 1 tunnel event, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSystemMessage {
+		t.Fatalf("expected event %q, got %q", tunnel.EventSystemMessage, got)
+	}
+
+	var data tunnel.MessageData
+	if err := json.Unmarshal(m.session.TunnelEvents[0].Data, &data); err != nil {
+		t.Fatalf("unmarshal system_message: %v", err)
+	}
+	for _, want := range []string{"📊 Turn #2", "TTFT 1.2s", "Dur 8.0s", "Think 2.0s", "Tools 1", "Slowest read_bash 3.0s"} {
+		if !strings.Contains(data.Text, want) {
+			t.Fatalf("expected %q in metrics digest %q", want, data.Text)
+		}
+	}
+
+	m.appendTurnMetricsDigest(2)
+	if len(m.session.TunnelEvents) != 1 {
+		t.Fatalf("expected metrics digest to emit once, got %d events", len(m.session.TunnelEvents))
 	}
 }
 

@@ -39,6 +39,9 @@ type Session struct {
 	TunnelEventsComplete bool                             `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
+	// endpointStatsMu is nested inside higher-level session/bridge locks and only
+	// guards the per-endpoint aggregate maps used by live readers/writers.
+	endpointStatsMu sync.RWMutex
 }
 
 // TunnelEvent is the canonical persisted tunnel event for a session.

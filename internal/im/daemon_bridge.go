@@ -50,6 +50,7 @@ type DaemonBridge struct {
 	workingDir      string
 	usageTurnIndex  int
 	metricCollector *metrics.Collector
+	metricCancel    context.CancelFunc
 
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
@@ -89,7 +90,9 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 	if ag != nil {
 		ag.SetApprovalHandler(b.handleApproval)
 		if store != nil && sess != nil {
-			b.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+			collectorCtx, collectorCancel := context.WithCancel(context.Background())
+			b.metricCancel = collectorCancel
+			b.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
 				b.recordMetric(ev)
 			})
 			ag.SetMetricHandler(b.metricCollector.Emit)
@@ -805,8 +808,13 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 func (b *DaemonBridge) Close() {
 	b.mu.Lock()
 	collector := b.metricCollector
+	cancel := b.metricCancel
 	b.metricCollector = nil
+	b.metricCancel = nil
 	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if collector != nil {
 		collector.Stop()
 	}

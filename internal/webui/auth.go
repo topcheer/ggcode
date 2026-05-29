@@ -2,6 +2,8 @@ package webui
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"strings"
@@ -32,18 +34,27 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		// Check Bearer token in Authorization header
 		auth := r.Header.Get("Authorization")
 		if strings.HasPrefix(auth, "Bearer ") {
-			if strings.TrimPrefix(auth, "Bearer ") == s.authToken {
+			if authTokenMatches(strings.TrimPrefix(auth, "Bearer "), s.authToken) {
 				next(w, r)
 				return
 			}
 		}
 
 		// Fallback: check query parameter (needed for WebSocket upgrade)
-		if r.URL.Query().Get("token") == s.authToken {
+		if authTokenMatches(r.URL.Query().Get("token"), s.authToken) {
 			next(w, r)
 			return
 		}
 
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
+}
+
+func authTokenMatches(provided, expected string) bool {
+	if provided == "" || expected == "" {
+		return false
+	}
+	providedHash := sha256.Sum256([]byte(provided))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
 }

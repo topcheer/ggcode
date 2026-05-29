@@ -67,6 +67,7 @@ type AgentBridge struct {
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 	metricCollector      *metrics.Collector
+	metricCancel         context.CancelFunc
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -521,7 +522,9 @@ func (b *AgentBridge) setupAgent() error {
 	b.agent.SetUsageHandler(b.recordSessionUsage)
 
 	// Metric collector — async, non-blocking for agent.
-	b.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+	collectorCtx, collectorCancel := context.WithCancel(context.Background())
+	b.metricCancel = collectorCancel
+	b.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
 		b.recordMetric(ev)
 	})
 	b.agent.SetMetricHandler(b.metricCollector.Emit)
@@ -920,6 +923,9 @@ func (b *AgentBridge) Cancel() {
 
 func (b *AgentBridge) Close() {
 	b.Cancel()
+	if b.metricCancel != nil {
+		b.metricCancel()
+	}
 	if b.metricCollector != nil {
 		b.metricCollector.Stop()
 	}
@@ -1071,7 +1077,7 @@ func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
 		b.mu.Unlock()
 		return
 	}
-	b.currentSes.TokenUsage.Add(usage)
+	b.currentSes.TokenUsage = b.currentSes.TokenUsage.Add(usage)
 	b.currentSes.AddUsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, usage)
 	b.currentSes.UpdatedAt = time.Now()
 	ses := b.currentSes

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,10 +55,7 @@ func (c *Config) Save() error {
 	}
 	// Strip fields identical to DefaultConfig() to keep the file minimal.
 	data = stripDefaultsFromYAML(data)
-	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := util.AtomicWriteFile(c.FilePath, data, 0644); err != nil {
+	if err := writeSecureConfigFile(c.FilePath, data); err != nil {
 		return err
 	}
 	// Re-migrate any plaintext secrets that yaml.Marshal produced.
@@ -67,7 +63,9 @@ func (c *Config) Save() error {
 		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: re-migrated %d plaintext secret(s)", len(migrated))
-		recompactConfigFile(c.FilePath)
+		if err := recompactConfigFile(c.FilePath); err != nil {
+			debug.Log("config", "Save: recompact error: %v", err)
+		}
 	}
 	return nil
 }
@@ -135,10 +133,7 @@ func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(fp), 0755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := util.AtomicWriteFile(fp, updated, 0644); err != nil {
+	if err := writeSecureConfigFile(fp, updated); err != nil {
 		return err
 	}
 
@@ -385,7 +380,7 @@ func recompactConfigFile(path string) error {
 		return err
 	}
 	data = stripDefaultsFromYAML(data)
-	return os.WriteFile(path, data, 0644)
+	return writeSecureConfigFile(path, data)
 }
 
 // stripDefaultsFromYAML removes top-level YAML entries that are identical to

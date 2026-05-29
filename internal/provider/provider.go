@@ -81,12 +81,13 @@ type TokenUsage struct {
 	PromptTokensTotal int `json:"prompt_tokens_total,omitempty"`
 }
 
-func (u *TokenUsage) Add(delta TokenUsage) {
+func (u TokenUsage) Add(delta TokenUsage) TokenUsage {
 	u.InputTokens += delta.InputTokens
 	u.OutputTokens += delta.OutputTokens
 	u.CacheRead += delta.CacheRead
 	u.CacheWrite += delta.CacheWrite
 	u.PromptTokensTotal += delta.PromptTokensTotal
+	return u
 }
 
 func (u TokenUsage) Total() int {

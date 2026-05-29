@@ -282,7 +282,12 @@ class _WorkspaceCacheSqlStore {
     try {
       final dir = await getApplicationSupportDirectory();
       return p.join(dir.path, 'workspace_cache_v2.sqlite');
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _reportWorkspaceCacheError(
+        'resolve workspace cache database path',
+        error,
+        stackTrace,
+      );
       return p.join(
         Directory.systemTemp.path,
         'ggcode_mobile_workspace_cache_v2.sqlite',
@@ -559,8 +564,21 @@ class _WorkspaceCacheSqlStore {
         );
       }
       _db.execute('COMMIT');
-    } catch (_) {
-      _db.execute('ROLLBACK');
+    } catch (error, stackTrace) {
+      try {
+        _db.execute('ROLLBACK');
+      } catch (rollbackError, rollbackStackTrace) {
+        _reportWorkspaceCacheError(
+          'rollback workspace cache write batch',
+          rollbackError,
+          rollbackStackTrace,
+        );
+      }
+      _reportWorkspaceCacheError(
+        'write workspace cache batch',
+        error,
+        stackTrace,
+      );
       rethrow;
     }
   }

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/safego"
@@ -19,7 +20,10 @@ type Collector struct {
 
 // NewCollector starts a background goroutine that drains ch and calls persist
 // for each event. cap is the channel buffer size (256 is a good default).
-func NewCollector(capacity int, persist func(MetricEvent)) *Collector {
+func NewCollector(ctx context.Context, capacity int, persist func(MetricEvent)) *Collector {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c := &Collector{
 		ch:      make(chan MetricEvent, capacity),
 		stopCh:  make(chan struct{}),
@@ -28,6 +32,16 @@ func NewCollector(capacity int, persist func(MetricEvent)) *Collector {
 	}
 	safego.Go("metrics.collector", func() {
 		defer close(c.doneCh)
+		drain := func() {
+			for {
+				select {
+				case m := <-c.ch:
+					persist(m)
+				default:
+					return
+				}
+			}
+		}
 		for {
 			select {
 			case m := <-c.ch:
@@ -43,15 +57,11 @@ func NewCollector(capacity int, persist func(MetricEvent)) *Collector {
 					}
 				}
 			case <-c.stopCh:
-				// Drain remaining events
-				for {
-					select {
-					case m := <-c.ch:
-						persist(m)
-					default:
-						return
-					}
-				}
+				drain()
+				return
+			case <-ctx.Done():
+				drain()
+				return
 			}
 		next:
 		}
@@ -93,4 +103,5 @@ func (c *Collector) Stop() {
 	c.stopOnce.Do(func() {
 		close(c.stopCh)
 	})
+	<-c.doneCh
 }

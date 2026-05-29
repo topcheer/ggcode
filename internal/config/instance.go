@@ -375,8 +375,8 @@ func (c *Config) SaveInstance(workspace string) error {
 	if dir == "" {
 		return fmt.Errorf("cannot determine instance directory for workspace %s", workspace)
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating instance config directory: %w", err)
+	if err := ensureSecureConfigDir(dir); err != nil {
+		return err
 	}
 	path := filepath.Join(dir, "ggcode.yaml")
 
@@ -399,7 +399,7 @@ func (c *Config) SaveInstance(workspace string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling instance config: %w", err)
 	}
-	if err := writeFileAtomic(path, data, 0644); err != nil {
+	if err := writeFileAtomic(path, data, secureConfigFileMode); err != nil {
 		return err
 	}
 	debug.Log("config", "saved instance config to %s (%d bytes)", path, len(data))
@@ -489,30 +489,8 @@ func (c *Config) SetSaveScope(scope string) error {
 }
 
 // writeFileAtomic writes data to a temp file then renames.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".ggcode-instance-*")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-	return nil
+func writeFileAtomic(path string, data []byte, _ os.FileMode) error {
+	return writeSecureConfigFile(path, data)
 }
 
 // LoadWithInstance loads the global config and applies instance-level overrides.
@@ -598,11 +576,11 @@ func MigrateA2AYaml(workspace string) bool {
 	if instDir == "" {
 		return false
 	}
-	if err := os.MkdirAll(instDir, 0755); err != nil {
+	if err := ensureSecureConfigDir(instDir); err != nil {
 		return false
 	}
 	instPath := filepath.Join(instDir, "ggcode.yaml")
-	if err := writeFileAtomic(instPath, out, 0644); err != nil {
+	if err := writeFileAtomic(instPath, out, secureConfigFileMode); err != nil {
 		return false
 	}
 

@@ -549,7 +549,7 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 		mu.Unlock()
 		return
 	}
-	m.session.TokenUsage.Add(usage)
+	m.session.TokenUsage = m.session.TokenUsage.Add(usage)
 	m.session.AddUsageForEndpoint(m.session.Vendor, m.session.Endpoint, usage)
 	m.session.UpdatedAt = time.Now()
 	ses := m.session

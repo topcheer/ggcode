@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -323,7 +324,6 @@ func TestSaveInstance(t *testing.T) {
 		Vendor:   "openai",
 		Language: "zh-CN",
 	}
-
 	if err := cfg.SaveInstance(workspace); err != nil {
 		t.Fatalf("SaveInstance error: %v", err)
 	}
@@ -344,6 +344,52 @@ func TestSaveInstance(t *testing.T) {
 	}
 	if loaded.Language != "zh-CN" {
 		t.Errorf("Language = %q, want %q", loaded.Language, "zh-CN")
+	}
+}
+
+func TestSaveInstanceSecuresPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not reliable on Windows")
+	}
+
+	withTestHome(t)
+	workspace := filepath.Join(t.TempDir(), "project")
+	instDir := InstanceDir(workspace)
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	if err := os.MkdirAll(instDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(instPath, []byte("language: en\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(instDir, 0o755); err != nil {
+		t.Fatalf("Chmod(dir) error = %v", err)
+	}
+	if err := os.Chmod(instPath, 0o644); err != nil {
+		t.Fatalf("Chmod(path) error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.globalSnap = deepCopyConfig(cfg)
+	cfg.Language = "zh-CN"
+	cfg.SetInstancePaths(workspace)
+	if err := cfg.SaveInstance(workspace); err != nil {
+		t.Fatalf("SaveInstance() error = %v", err)
+	}
+
+	info, err := os.Stat(instPath)
+	if err != nil {
+		t.Fatalf("Stat(path) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != secureConfigFileMode {
+		t.Fatalf("instance config mode = %o, want %o", got, secureConfigFileMode)
+	}
+	dirInfo, err := os.Stat(instDir)
+	if err != nil {
+		t.Fatalf("Stat(dir) error = %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != secureConfigDirMode {
+		t.Fatalf("instance dir mode = %o, want %o", got, secureConfigDirMode)
 	}
 }
 
@@ -1178,7 +1224,6 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	if !MigrateA2AYaml(workspace) {
 		t.Fatal("MigrateA2AYaml should return true on successful migration")
 	}
-
 	// Verify instance config was created with a2a content
 	inst := LoadInstanceConfig(workspace)
 	if inst == nil {
@@ -1199,6 +1244,44 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	// Second call should return false (already migrated)
 	if MigrateA2AYaml(workspace) {
 		t.Error("second MigrateA2AYaml call should return false")
+	}
+}
+
+func TestMigrateA2AYaml_SecuresPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not reliable on Windows")
+	}
+
+	withTestHome(t)
+	workspace := filepath.Join(t.TempDir(), "project")
+	legacyDir := filepath.Join(workspace, ".ggcode")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacyPath := filepath.Join(legacyDir, "a2a.yaml")
+	if err := os.WriteFile(legacyPath, []byte("api_key: legacy-key\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if !MigrateA2AYaml(workspace) {
+		t.Fatal("expected MigrateA2AYaml() to migrate legacy config")
+	}
+
+	instDir := InstanceDir(workspace)
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	info, err := os.Stat(instPath)
+	if err != nil {
+		t.Fatalf("Stat(path) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != secureConfigFileMode {
+		t.Fatalf("instance config mode = %o, want %o", got, secureConfigFileMode)
+	}
+	dirInfo, err := os.Stat(instDir)
+	if err != nil {
+		t.Fatalf("Stat(dir) error = %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != secureConfigDirMode {
+		t.Fatalf("instance dir mode = %o, want %o", got, secureConfigDirMode)
 	}
 }
 
