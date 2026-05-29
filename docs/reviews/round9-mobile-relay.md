@@ -144,3 +144,37 @@
 | P2 | Connectivity-state-aware reconnect (new L) |
 | P2 | Adaptive ping + wakelock release (new L) |
 | P3 | Delete stale `MainActivity.kt` (M-31); tighten SDK floor (M-30); log cleanup failures (M-34) |
+
+---
+
+## 2026-05-29 addendum — share v2 rollout status
+
+### Current progress
+
+- Relay-issued share tickets are now implemented and deployed: relay owns `GGCODE_SHARE_V2_SECRET`, exposes `POST /share/session`, and returns server/client auth tickets plus the host renew token.
+- Host-side v2 no longer depends on shipping the signing secret inside distributed TUI/desktop/daemon binaries; the host only generates the `crypto_key` locally.
+- Mobile already understands both legacy and v2 share descriptors and keeps renew-token state local instead of embedding it into the public share URL.
+- Production Railway relay has the v2 signing secret configured, and the deployment carrying service-issued tickets has already been rolled out.
+- Manual production verification passed for the full v2 happy path against `https://gateway.ggcode.dev`: issue session -> server auth-ticket connect -> server renew-token reconnect -> client auth-ticket connect.
+
+### Important operational note
+
+- The relay is now **v2-capable**, but the system is **not yet globally switched to v2 by server-side policy alone**.
+- In the current code, new share creation is still gated by the **host runtime** through `GGCODE_SHARE_PROTOCOL=v2` (`internal/tunnel/share_protocol.go` / `internal/tunnel/session.go`).
+- The relay-side `GGCODE_SHARE_PROTOCOL` currently affects only the compatibility notice text; it does not force v2 issuance for hosts that did not request it.
+- If v2 issuance fails today, the host still falls back to legacy compatibility mode. That is intentional for the current staged rollout, but it is not the final hard-cutover behavior.
+
+### Future real cutover steps
+
+1. Keep the relay in dual-stack mode while new TUI/desktop/mobile builds with dormant v2 support continue to ship.
+2. Validate in real user/client traffic that:
+   - legacy share still works for mixed-version users;
+   - updated mobile can consume both legacy and v2 QR/link formats;
+   - updated hosts can create and sustain v2 sessions reliably.
+3. Perform a **soft cutover** by enabling `GGCODE_SHARE_PROTOCOL=v2` on the share-creating host side (or by changing the packaged default in a release) while leaving relay legacy handshake support online.
+4. Monitor issuance failures, renew/reconnect failures, and the share-mode distribution between legacy/v2 before tightening policy.
+5. Before the **hard cutover**, remove the host's silent fallback from v2 issuance failure to legacy compatibility and replace it with an explicit upgrade/service-availability notice.
+6. Only after the client population is sufficiently upgraded, choose whether to:
+   - continue allowing legacy websocket handshakes for old sessions only, or
+   - reject new legacy share creation / legacy connections with a mandatory-upgrade message.
+7. If future operations require a **relay-only switch** without touching host runtime config, add a follow-up control-plane change so hosts learn the desired share mode from relay/service policy instead of only from local `GGCODE_SHARE_PROTOCOL`.
