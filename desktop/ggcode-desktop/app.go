@@ -312,7 +312,7 @@ func (a *App) showShareDialog() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+		sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("desktop", Version))
 		info, err := sess.Start(ctx)
 		if err != nil {
 			fyne.Do(func() {
@@ -655,10 +655,15 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	androidLink := widget.NewHyperlink("Android (Closed Testing)", mustParseURL("https://play.google.com/apps/testing/gg.ai.ggcode.mobile"))
 	discordLink := widget.NewHyperlink("Discord", mustParseURL("https://discord.gg/F2v4mJmfG"))
 
-	content := container.NewVBox(
+	items := []fyne.CanvasObject{
 		widget.NewLabelWithStyle(t("share.mobile_connection"), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
 		widget.NewLabel(t("share.scan_hint")),
+	}
+	if info.CompatibilityNotice != "" {
+		items = append(items, widget.NewRichTextFromMarkdown("**Notice:** "+info.CompatibilityNotice))
+	}
+	items = append(items,
 		urlLabel,
 		container.NewHBox(copyBtn, stopBtn),
 		widget.NewSeparator(),
@@ -670,6 +675,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 			container.NewVBox(iosLink, androidLink, discordLink),
 		),
 	)
+	content := container.NewVBox(items...)
 
 	a.shareDialog = dialog.NewCustom(t("share.title"), t("share.close"), content, a.window)
 	a.shareDialog.Show()

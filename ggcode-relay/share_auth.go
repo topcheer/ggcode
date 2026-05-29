@@ -1,0 +1,301 @@
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	shareProtocolLegacy = 1
+	shareProtocolV2     = 2
+
+	shareModeLegacy = "legacy"
+	shareModeV2     = "v2"
+	shareModeCompat = "compat"
+
+	shareTicketKindConnect = "connect"
+	shareTicketKindRenew   = "renew"
+
+	shareProtocolEnv   = "GGCODE_SHARE_PROTOCOL"
+	shareSecretEnv     = "GGCODE_SHARE_V2_SECRET"
+	shareConnectTTLEnv = "GGCODE_SHARE_V2_CONNECT_TTL"
+	shareRenewTTLEnv   = "GGCODE_SHARE_V2_RENEW_TTL"
+)
+
+const (
+	defaultShareConnectTTL = 15 * time.Minute
+	defaultShareRenewTTL   = 30 * 24 * time.Hour
+)
+
+type shareAuthConfig struct {
+	Secret     string
+	ConnectTTL time.Duration
+	RenewTTL   time.Duration
+}
+
+type shareTicketClaims struct {
+	RoomID string `json:"room_id"`
+	Role   string `json:"role"`
+	Kind   string `json:"kind"`
+	Exp    int64  `json:"exp"`
+	V      int    `json:"v"`
+}
+
+type shareHandshake struct {
+	role            string
+	roomKey         string
+	protocolVersion int
+	shareMode       string
+	connectMode     string
+	authExpiresAt   time.Time
+	renewToken      string
+	renewExpiresAt  time.Time
+	notice          string
+	clientKind      string
+	clientVersion   string
+	capabilities    []string
+	cryptoKey       string
+}
+
+func loadShareAuthConfig() shareAuthConfig {
+	cfg := shareAuthConfig{
+		Secret:     strings.TrimSpace(os.Getenv(shareSecretEnv)),
+		ConnectTTL: defaultShareConnectTTL,
+		RenewTTL:   defaultShareRenewTTL,
+	}
+	if ttl := strings.TrimSpace(os.Getenv(shareConnectTTLEnv)); ttl != "" {
+		if parsed, err := time.ParseDuration(ttl); err == nil && parsed > 0 {
+			cfg.ConnectTTL = parsed
+		}
+	}
+	if ttl := strings.TrimSpace(os.Getenv(shareRenewTTLEnv)); ttl != "" {
+		if parsed, err := time.ParseDuration(ttl); err == nil && parsed > 0 {
+			cfg.RenewTTL = parsed
+		}
+	}
+	return cfg
+}
+
+func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandshake, int, string) {
+	q := r.URL.Query()
+	role := strings.TrimSpace(q.Get("role"))
+	if role != "server" && role != "client" {
+		return nil, http.StatusBadRequest, "invalid role"
+	}
+	rawToken := strings.TrimSpace(q.Get("token"))
+	roomID := strings.TrimSpace(q.Get("room_id"))
+	authTicket := strings.TrimSpace(q.Get("auth_ticket"))
+	renewToken := strings.TrimSpace(q.Get("renew_token"))
+	clientKind := strings.TrimSpace(q.Get("client"))
+	clientVersion := strings.TrimSpace(q.Get("client_version"))
+	capabilities := splitCaps(q.Get("caps"))
+	proto := strings.TrimSpace(q.Get("proto"))
+	protocolVersion := shareProtocolLegacy
+	if proto != "" {
+		value, err := strconv.Atoi(proto)
+		if err != nil {
+			return nil, http.StatusBadRequest, "invalid proto"
+		}
+		protocolVersion = value
+	}
+
+	hasV2Params := roomID != "" || authTicket != "" || renewToken != "" || protocolVersion >= shareProtocolV2
+	if !hasV2Params {
+		if rawToken == "" {
+			return nil, http.StatusBadRequest, "missing token"
+		}
+		notice := ""
+		if hasShareV2Capability(capabilities, clientVersion) {
+			notice = "Connected in legacy compatibility mode."
+		}
+		return &shareHandshake{
+			role:            role,
+			roomKey:         rawToken,
+			protocolVersion: shareProtocolLegacy,
+			shareMode:       shareModeLegacy,
+			connectMode:     shareModeLegacy,
+			notice:          notice,
+			clientKind:      clientKind,
+			clientVersion:   clientVersion,
+			capabilities:    capabilities,
+			cryptoKey:       rawToken,
+		}, http.StatusSwitchingProtocols, ""
+	}
+
+	if protocolVersion < shareProtocolV2 {
+		return nil, http.StatusBadRequest, "invalid proto"
+	}
+	if rawToken != "" {
+		return nil, http.StatusBadRequest, "legacy token cannot be combined with v2 params"
+	}
+	if roomID == "" {
+		return nil, http.StatusBadRequest, "missing room_id"
+	}
+	if authTicket == "" && renewToken == "" {
+		return nil, http.StatusUnauthorized, "missing auth ticket"
+	}
+	if authTicket != "" && renewToken != "" {
+		return nil, http.StatusBadRequest, "auth_ticket and renew_token are mutually exclusive"
+	}
+	if cfg.Secret == "" {
+		return nil, http.StatusServiceUnavailable, "share v2 unavailable"
+	}
+
+	kind := shareTicketKindConnect
+	tokenToVerify := authTicket
+	connectMode := "auth_ticket"
+	if renewToken != "" {
+		kind = shareTicketKindRenew
+		tokenToVerify = renewToken
+		connectMode = "renew_token"
+	}
+	claims, err := verifyShareTicket(cfg.Secret, tokenToVerify)
+	if err != nil {
+		return nil, http.StatusUnauthorized, "invalid auth ticket"
+	}
+	if claims.V < shareProtocolV2 {
+		return nil, http.StatusUnauthorized, "unsupported ticket version"
+	}
+	if claims.Role != role || claims.Kind != kind || claims.RoomID != roomID {
+		return nil, http.StatusUnauthorized, "ticket scope mismatch"
+	}
+	exp := time.Unix(claims.Exp, 0).UTC()
+	if time.Now().After(exp) {
+		return nil, http.StatusUnauthorized, "ticket expired"
+	}
+	nextRenewToken, renewExp, err := mintShareRenewToken(cfg.Secret, roomID, role, cfg.RenewTTL)
+	if err != nil {
+		return nil, http.StatusInternalServerError, "mint renew token"
+	}
+	notice := ""
+	if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
+		notice = "Experimental share v2 is enabled for this connection."
+	}
+	return &shareHandshake{
+		role:            role,
+		roomKey:         roomID,
+		protocolVersion: shareProtocolV2,
+		shareMode:       shareModeV2,
+		connectMode:     connectMode,
+		authExpiresAt:   exp,
+		renewToken:      nextRenewToken,
+		renewExpiresAt:  renewExp,
+		notice:          notice,
+		clientKind:      clientKind,
+		clientVersion:   clientVersion,
+		capabilities:    capabilities,
+		cryptoKey:       strings.TrimSpace(q.Get("crypto_key")),
+	}, http.StatusSwitchingProtocols, ""
+}
+
+func connectedShareMetadata(handshake *shareHandshake) map[string]any {
+	if handshake == nil {
+		return nil
+	}
+	data := map[string]any{
+		"protocol_version": handshake.protocolVersion,
+		"share_mode":       handshake.shareMode,
+		"connect_mode":     handshake.connectMode,
+	}
+	if handshake.roomKey != "" {
+		data["room_id"] = handshake.roomKey
+	}
+	if handshake.notice != "" {
+		data["notice"] = handshake.notice
+	}
+	if !handshake.authExpiresAt.IsZero() {
+		data["auth_expires_at"] = handshake.authExpiresAt.Format(time.RFC3339)
+	}
+	if handshake.renewToken != "" {
+		data["renew_token"] = handshake.renewToken
+		data["renew_expires_at"] = handshake.renewExpiresAt.Format(time.RFC3339)
+	}
+	return data
+}
+
+func splitCaps(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		capability := strings.TrimSpace(part)
+		if capability == "" {
+			continue
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		out = append(out, capability)
+	}
+	return out
+}
+
+func hasShareV2Capability(caps []string, clientVersion string) bool {
+	for _, capability := range caps {
+		if capability == "share_v2" || capability == "share_renew" || capability == "share_notice" {
+			return true
+		}
+	}
+	return strings.TrimSpace(clientVersion) != ""
+}
+
+func mintShareRenewToken(secret, roomID, role string, ttl time.Duration) (string, time.Time, error) {
+	exp := time.Now().UTC().Add(ttl)
+	token, err := signShareTicket(secret, shareTicketClaims{
+		RoomID: roomID,
+		Role:   role,
+		Kind:   shareTicketKindRenew,
+		Exp:    exp.Unix(),
+		V:      shareProtocolV2,
+	})
+	return token, exp, err
+}
+
+func signShareTicket(secret string, claims shareTicketClaims) (string, error) {
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	sig := mac.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func verifyShareTicket(secret, token string) (shareTicketClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return shareTicketClaims{}, errors.New("invalid share ticket")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return shareTicketClaims{}, fmt.Errorf("decode share payload: %w", err)
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return shareTicketClaims{}, fmt.Errorf("decode share signature: %w", err)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	if !hmac.Equal(sig, mac.Sum(nil)) {
+		return shareTicketClaims{}, errors.New("invalid share signature")
+	}
+	var claims shareTicketClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return shareTicketClaims{}, fmt.Errorf("decode share claims: %w", err)
+	}
+	return claims, nil
+}

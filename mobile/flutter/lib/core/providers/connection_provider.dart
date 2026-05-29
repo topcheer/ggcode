@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:developer';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../connection_service.dart';
 export '../connection_service.dart' show ConnectionStatus, normalizeTunnelUrl;
-import '../crypto.dart';
 import '../l10n/app_localizations.dart';
 import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
@@ -42,10 +42,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   static const _resumeClientIdKey = 'ggcode_tunnel_client_id';
   static const _resumeSessionIdKey = 'ggcode_tunnel_session_id';
   static const _resumeEventIdKey = 'ggcode_tunnel_last_event_id';
+  static const _resumeRoomIdKey = 'ggcode_tunnel_room_id';
+  static const _resumeRenewTokenKey = 'ggcode_tunnel_renew_token';
 
   String _clientId = '';
   String _sessionId = '';
   String _lastAppliedEventId = '';
+  String _shareRoomId = '';
+  String _shareRenewToken = '';
   bool _hasAuthoritativeProjection = false;
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
@@ -87,8 +91,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await connect(url, clearState: clearState);
   }
 
-  ConnectionService createConnectionService(String url, TunnelCrypto crypto) =>
-      ConnectionService(url: url, crypto: crypto);
+  ConnectionService createConnectionService(
+          ShareConnectionDescriptor descriptor) =>
+      ConnectionService(descriptor: descriptor);
 
   Future<void> connect(String url, {bool clearState = true}) async {
     url = normalizeTunnelUrl(url);
@@ -119,26 +124,31 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       service = null;
     }
 
+    var descriptor = ShareConnectionDescriptor.parse(url);
     state = state.copyWith(
-        status: ConnectionStatus.connecting, url: url, error: null);
+        status: ConnectionStatus.connecting,
+        url: descriptor.publicUrl,
+        error: null);
 
-    // Extract token from URL for encryption
-    final token = _extractToken(url) ?? '';
-    if (token.isEmpty) {
+    if (descriptor.cryptoMaterial.isEmpty) {
       state = state.copyWith(
           status: ConnectionStatus.disconnected,
-          error: 'Invalid URL: no token');
+          error: 'Invalid URL: missing crypto material');
       return;
     }
-
-    final crypto = TunnelCrypto(token);
-    service = createConnectionService(url, crypto);
 
     // Snapshot current UI state before loading persisted values.
     final uiSessionId = _sessionId;
     final uiHasContent = ref.read(sessionInfoProvider) != null;
 
     await _loadResumeState();
+    if (descriptor.isV2 &&
+        _shareRoomId.isNotEmpty &&
+        _shareRoomId == descriptor.roomId &&
+        _shareRenewToken.isNotEmpty) {
+      descriptor = descriptor.copyWith(renewToken: _shareRenewToken);
+    }
+    service = createConnectionService(descriptor);
 
     // _loadResumeState overwrites _sessionId/_lastAppliedEventId from prefs.
     final savedSessionId = _sessionId;
@@ -166,7 +176,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       (status) {
         state = state.copyWith(status: status);
         if (status == ConnectionStatus.connected) {
-          _saveUrl(url);
+          _saveUrl(service!.publicUrl);
           service?.sendResumeHello(
             clientId: _clientId,
             sessionId: _sessionId.isNotEmpty ? _sessionId : null,
@@ -207,6 +217,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
       },
     );
+
+    service!.metadataStream.listen((metadata) {
+      if (metadata.roomId.isNotEmpty) {
+        _shareRoomId = metadata.roomId;
+      }
+      if (metadata.renewToken.isNotEmpty) {
+        _shareRenewToken = metadata.renewToken;
+        _persistResumeState();
+      }
+      if (metadata.notice.isNotEmpty) {
+        debugPrint('[connection] relay notice: ${metadata.notice}');
+      }
+    });
 
     try {
       // dart:io WebSocket.connect properly awaits handshake
@@ -257,11 +280,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     service?.sendEncrypted(msg);
   }
 
-  String? _extractToken(String url) {
-    final uri = Uri.tryParse(url);
-    return uri?.queryParameters['token'];
-  }
-
   void _dispatchMessage(proto.WsMessage msg) {
     final chatNotifier = ref.read(chatProvider.notifier);
 
@@ -309,7 +327,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _persistResumeState();
         break;
 
-
       case 'language_change':
         if (msg.data != null) {
           final lang = msg.data!['language'] as String? ?? '';
@@ -347,7 +364,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'session_info':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         final data = proto.SessionInfoData.fromJson(msg.data!);
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
@@ -364,7 +384,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (_awaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
         }
-          unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
+        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
               data,
               lastEventId: _lastAppliedEventId,
@@ -372,7 +392,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'activity':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.ActivityData.fromJson(msg.data!);
           _setAgentActivity(data.activity);
@@ -381,7 +404,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'user_message':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.MessageData.fromJson(msg.data!);
           final displayText =
@@ -413,7 +439,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'system_message':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.MessageData.fromJson(msg.data!);
           final displayText =
@@ -432,7 +461,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'text':
       case 'stream_text':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.TextData.fromJson(msg.data!);
           final text = data.chunk.isNotEmpty
@@ -453,7 +485,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'reasoning':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.TextData.fromJson(msg.data!);
           final reasoningId = data.id.isNotEmpty
@@ -476,7 +511,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
       case 'stream_end':
       case 'text_done':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         final msgId = msg.data?['id'] as String? ?? msg.streamId;
         if (msgId != null && msgId.isNotEmpty) {
           chatNotifier.finalizeStreaming(msgId);
@@ -485,7 +523,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'reasoning_done':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         final msgId = msg.data?['id'] as String? ?? msg.streamId;
         if (msgId != null && msgId.isNotEmpty) {
           chatNotifier.finalizeReasoning(msgId);
@@ -495,7 +536,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'status':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.StatusData.fromJson(msg.data!);
           final normalized = _normalizeAgentStatus(data.status);
@@ -513,7 +557,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'tool_call':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           chatNotifier.handleToolCall(
             proto.ToolCallData.fromJson(msg.data!),
@@ -527,7 +574,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'tool_result':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           chatNotifier
               .handleToolResult(proto.ToolResultData.fromJson(msg.data!));
@@ -537,7 +587,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'approval_request':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.ApprovalRequestData.fromJson(msg.data!);
           ref.read(approvalProvider.notifier).set(ApprovalInfo(
@@ -548,7 +601,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'approval_result':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.ApprovalResultData.fromJson(msg.data!);
           final approval = ref.read(approvalProvider);
@@ -561,12 +617,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'ask_user_request':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.AskUserRequestData.fromJson(msg.data!);
           // Build a human-readable summary of the questions
-          final detail =
-              data.questions.map(describeAskUserQuestion).join('\n');
+          final detail = data.questions.map(describeAskUserQuestion).join('\n');
           final amsgId = msg.eventId ?? newAskUserMessageId();
           chatNotifier.addAskUserRequest(amsgId, data.title, detail);
           ref.read(askUserProvider.notifier).set(AskUserInfo(
@@ -580,7 +638,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'ask_user_response':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.AskUserResponseData.fromJson(msg.data!);
           final askUser = ref.read(askUserProvider);
@@ -599,7 +660,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_spawn':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentSpawnData.fromJson(msg.data!);
           _upsertSubagent(
@@ -615,7 +679,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_text':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentTextData.fromJson(msg.data!);
           _upsertSubagent(
@@ -628,7 +695,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_reasoning':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentReasoningData.fromJson(msg.data!);
           _upsertSubagent(
@@ -641,7 +711,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_reasoning_done':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentReasoningData.fromJson(msg.data!);
           final reasoningId = '${data.agentId}-${data.id}';
@@ -651,7 +724,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_status':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentStatusData.fromJson(msg.data!);
           _upsertSubagent(
@@ -663,7 +739,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_complete':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
           chatNotifier.finalizePendingReasoning(
@@ -695,7 +774,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_tool_call':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentToolCallData.fromJson(msg.data!);
           final agent = _upsertSubagent(
@@ -719,7 +801,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'subagent_tool_result':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final data = proto.SubagentToolResultData.fromJson(msg.data!);
           _upsertSubagent(agentId: data.agentId);
@@ -739,7 +824,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'error':
-        if (!_shouldApplyEvent(msg)) { _ackSkippedEvent(msg); break; }
+        if (!_shouldApplyEvent(msg)) {
+          _ackSkippedEvent(msg);
+          break;
+        }
         if (msg.data != null) {
           final errMsg = msg.data!['message'] as String? ?? 'Unknown error';
           chatNotifier.addErrorMessage(
@@ -854,6 +942,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = prefs.getString(_resumeSessionIdKey) ?? _sessionId;
     _lastAppliedEventId =
         prefs.getString(_resumeEventIdKey) ?? _lastAppliedEventId;
+    _shareRoomId = prefs.getString(_resumeRoomIdKey) ?? _shareRoomId;
+    _shareRenewToken =
+        prefs.getString(_resumeRenewTokenKey) ?? _shareRenewToken;
   }
 
   Future<void> _handlePermanentRoomFailure(
@@ -1098,14 +1189,27 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await prefs.setString(_resumeClientIdKey, _clientId);
     await prefs.setString(_resumeSessionIdKey, _sessionId);
     await prefs.setString(_resumeEventIdKey, _lastAppliedEventId);
+    if (_shareRoomId.isNotEmpty) {
+      await prefs.setString(_resumeRoomIdKey, _shareRoomId);
+    } else {
+      await prefs.remove(_resumeRoomIdKey);
+    }
+    if (_shareRenewToken.isNotEmpty) {
+      await prefs.setString(_resumeRenewTokenKey, _shareRenewToken);
+    } else {
+      await prefs.remove(_resumeRenewTokenKey);
+    }
   }
 
   Future<void> _clearPersistedResumeState([SharedPreferences? prefs]) async {
     final store = prefs ?? await SharedPreferences.getInstance();
     await store.remove(_resumeSessionIdKey);
     await store.remove(_resumeEventIdKey);
+    await store.remove(_resumeRoomIdKey);
+    await store.remove(_resumeRenewTokenKey);
+    _shareRoomId = '';
+    _shareRenewToken = '';
   }
 }
 
 // ---- Message delivery status for ack tracking ----
-

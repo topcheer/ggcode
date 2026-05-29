@@ -609,23 +609,19 @@ func (h *hub) trace(route, roomToken string, msg relayMessage) {
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
+	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
+	if handshake == nil {
+		http.Error(w, reason, status)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 
-	token := r.URL.Query().Get("token")
-	role := r.URL.Query().Get("role")
+	token := handshake.roomKey
+	role := handshake.role
 	clientID := r.URL.Query().Get("client_id")
-
-	if token == "" {
-		conn.Close()
-		return
-	}
-	if role != "server" && role != "client" {
-		conn.Close()
-		return
-	}
 
 	room := h.getOrCreateRoom(token)
 	p := newPeer(h, room, role, conn)
@@ -669,6 +665,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		Type:        "connected",
 		SessionID:   room.sessionID,
 		LastEventID: tail,
+		Data:        mustJSON(connectedShareMetadata(handshake)),
 	})
 
 	// Notify server that a client connected.

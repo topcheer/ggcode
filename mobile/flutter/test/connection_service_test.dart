@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ggcode_mobile/core/connection_service.dart';
-import 'package:ggcode_mobile/core/crypto.dart';
 
 void main() {
   test('relay recovery delay prefers retry_after_ms when present', () {
@@ -12,6 +11,18 @@ void main() {
       relayRetryAfterMs(const {'retry_after_ms': 60000}),
       60000,
     );
+  });
+
+  test('ShareConnectionDescriptor keeps renew token out of public URL', () {
+    final descriptor = ShareConnectionDescriptor.parse(
+      'wss://relay.example/ws?proto=2&room_id=room-1&auth_ticket=auth-1&crypto_key=crypto-1',
+    ).copyWith(renewToken: 'renew-1');
+
+    expect(descriptor.isV2, isTrue);
+    expect(descriptor.cryptoMaterial, 'crypto-1');
+    expect(descriptor.publicUrl, isNot(contains('renew_token=')));
+    expect(descriptor.publicUrl, contains('auth_ticket=auth-1'));
+    expect(descriptor.runtimeUrl(), contains('renew_token=renew-1'));
   });
 
   test('ConnectionService does not retry when relay returns room not found',
@@ -30,8 +41,9 @@ void main() {
     });
 
     final service = ConnectionService(
-      url: 'ws://${server.address.host}:${server.port}/ws?token=stale-token',
-      crypto: TunnelCrypto('stale-token'),
+      descriptor: ShareConnectionDescriptor.parse(
+        'ws://${server.address.host}:${server.port}/ws?token=stale-token',
+      ),
     );
     addTearDown(service.dispose);
 
