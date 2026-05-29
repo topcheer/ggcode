@@ -608,6 +608,25 @@ func (h *hub) trace(route, roomToken string, msg relayMessage) {
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
+func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	issued, err := issueShareSession(loadShareAuthConfig())
+	if err != nil {
+		if err.Error() == "share v2 unavailable" {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[relay] issued share session: room=%s", shortToken(issued.RoomID))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(issued)
+}
+
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
 	if handshake == nil {
@@ -719,6 +738,7 @@ func main() {
 	h := newHub(store)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/share/session", h.handleShareSession)
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)

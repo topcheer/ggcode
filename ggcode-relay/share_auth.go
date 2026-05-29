@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +50,18 @@ type shareTicketClaims struct {
 	Kind   string `json:"kind"`
 	Exp    int64  `json:"exp"`
 	V      int    `json:"v"`
+}
+
+type issuedShareSessionResponse struct {
+	ProtocolVersion  int    `json:"protocol_version"`
+	ShareMode        string `json:"share_mode"`
+	RoomID           string `json:"room_id"`
+	ServerAuthTicket string `json:"server_auth_ticket"`
+	ClientAuthTicket string `json:"client_auth_ticket"`
+	ServerRenewToken string `json:"server_renew_token,omitempty"`
+	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
+	RenewExpiresAt   string `json:"renew_expires_at,omitempty"`
+	Notice           string `json:"notice,omitempty"`
 }
 
 type shareHandshake struct {
@@ -254,14 +268,69 @@ func hasShareV2Capability(caps []string, clientVersion string) bool {
 
 func mintShareRenewToken(secret, roomID, role string, ttl time.Duration) (string, time.Time, error) {
 	exp := time.Now().UTC().Add(ttl)
-	token, err := signShareTicket(secret, shareTicketClaims{
+	token, err := mintShareTicket(secret, roomID, role, shareTicketKindRenew, exp)
+	return token, exp, err
+}
+
+func mintShareConnectTicket(secret, roomID, role string, ttl time.Duration) (string, time.Time, error) {
+	exp := time.Now().UTC().Add(ttl)
+	token, err := mintShareTicket(secret, roomID, role, shareTicketKindConnect, exp)
+	return token, exp, err
+}
+
+func mintShareTicket(secret, roomID, role, kind string, exp time.Time) (string, error) {
+	return signShareTicket(secret, shareTicketClaims{
 		RoomID: roomID,
 		Role:   role,
-		Kind:   shareTicketKindRenew,
+		Kind:   kind,
 		Exp:    exp.Unix(),
 		V:      shareProtocolV2,
 	})
-	return token, exp, err
+}
+
+func issueShareSession(cfg shareAuthConfig) (issuedShareSessionResponse, error) {
+	if strings.TrimSpace(cfg.Secret) == "" {
+		return issuedShareSessionResponse{}, errors.New("share v2 unavailable")
+	}
+	roomID, err := randomHex(16)
+	if err != nil {
+		return issuedShareSessionResponse{}, err
+	}
+	serverConnect, authExp, err := mintShareConnectTicket(cfg.Secret, roomID, "server", cfg.ConnectTTL)
+	if err != nil {
+		return issuedShareSessionResponse{}, err
+	}
+	clientConnect, _, err := mintShareConnectTicket(cfg.Secret, roomID, "client", cfg.ConnectTTL)
+	if err != nil {
+		return issuedShareSessionResponse{}, err
+	}
+	serverRenew, renewExp, err := mintShareRenewToken(cfg.Secret, roomID, "server", cfg.RenewTTL)
+	if err != nil {
+		return issuedShareSessionResponse{}, err
+	}
+	notice := ""
+	if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
+		notice = "Experimental share v2 is enabled for this session."
+	}
+	return issuedShareSessionResponse{
+		ProtocolVersion:  shareProtocolV2,
+		ShareMode:        shareModeV2,
+		RoomID:           roomID,
+		ServerAuthTicket: serverConnect,
+		ClientAuthTicket: clientConnect,
+		ServerRenewToken: serverRenew,
+		AuthExpiresAt:    authExp.UTC().Format(time.RFC3339),
+		RenewExpiresAt:   renewExp.UTC().Format(time.RFC3339),
+		Notice:           notice,
+	}, nil
+}
+
+func randomHex(bytes int) (string, error) {
+	raw := make([]byte, bytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 func signShareTicket(secret string, claims shareTicketClaims) (string, error) {
