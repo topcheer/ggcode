@@ -204,9 +204,6 @@ func (p *peer) readLoop(h *hub) {
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
 		}
-		if !h.allowPublishedMessage(p, msg.Type) {
-			continue
-		}
 		h.traceRelayMessage("ws_recv", p.room.token, p.clientID, msg, "peer_role="+p.role)
 
 		switch msg.Type {
@@ -596,7 +593,6 @@ type hub struct {
 	stats    *relayStats
 	tracer   *relayTraceLogger
 	security relaySecurityConfig
-	limiters *relayRateLimiters
 	mu       sync.RWMutex
 }
 
@@ -611,7 +607,6 @@ func newHubWithSecurity(store *relayStore, security relaySecurityConfig) *hub {
 		stats:    newRelayStats(),
 		tracer:   newRelayTraceLogger(),
 		security: security,
-		limiters: newRelayRateLimiters(security),
 	}
 }
 
@@ -812,9 +807,6 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSecureTransport(w, r) {
 		return
 	}
-	if !h.enforceIPRateLimit(w, r, h.limiters.shareSessionByIP, "share_session") {
-		return
-	}
 	requestedProtocol, err := requestedShareProtocolVersion(r)
 	if err != nil {
 		http.Error(w, "invalid proto", http.StatusBadRequest)
@@ -840,15 +832,9 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSecureTransport(w, r) {
 		return
 	}
-	if !h.enforceIPRateLimit(w, r, h.limiters.wsByIP, "ws_ip") {
-		return
-	}
 	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
 	if handshake == nil {
 		http.Error(w, reason, status)
-		return
-	}
-	if !h.enforceRateLimit(w, h.limiters.wsByRoom, handshake.roomKey, "ws_room") {
 		return
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
