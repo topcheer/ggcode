@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ggcode_mobile/core/connection_service.dart';
-import 'package:ggcode_mobile/core/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
@@ -18,10 +17,10 @@ class _FakeConnectionService extends ConnectionService {
 
   _FakeConnectionService()
       : super(
-          url: 'ws://example.test/ws?token=test-token',
-          crypto: TunnelCrypto('test-token'),
+          descriptor: ShareConnectionDescriptor.parse(
+            'ws://example.test/ws?token=test-token',
+          ),
         );
-
 }
 
 class _CaptureResumeHelloService extends _FakeConnectionService {
@@ -161,11 +160,13 @@ class _BlockingConnectService extends _FakeConnectionService {
 }
 
 class _TestConnectionNotifier extends ConnectionNotifier {
-  static ConnectionService Function(String url, TunnelCrypto crypto)? factory;
+  static ConnectionService Function(ShareConnectionDescriptor descriptor)?
+      factory;
 
   @override
-  ConnectionService createConnectionService(String url, TunnelCrypto crypto) {
-    return factory!(url, crypto);
+  ConnectionService createConnectionService(
+      ShareConnectionDescriptor descriptor) {
+    return factory!(descriptor);
   }
 }
 
@@ -930,7 +931,7 @@ void main() {
     );
 
     final service = _PermanentRoomFailureService();
-    _TestConnectionNotifier.factory = (_, __) => service;
+    _TestConnectionNotifier.factory = (_) => service;
     final container = ProviderContainer(
       overrides: [
         connectionProvider.overrideWith(_TestConnectionNotifier.new),
@@ -982,7 +983,7 @@ void main() {
     );
 
     final service = _ServerOfflineService();
-    _TestConnectionNotifier.factory = (_, __) => service;
+    _TestConnectionNotifier.factory = (_) => service;
     final container = ProviderContainer(
       overrides: [
         connectionProvider.overrideWith(_TestConnectionNotifier.new),
@@ -1032,7 +1033,7 @@ void main() {
   test('connect coalesces concurrent requests for the same url', () async {
     final service = _BlockingConnectService();
     var factoryCalls = 0;
-    _TestConnectionNotifier.factory = (_, __) {
+    _TestConnectionNotifier.factory = (_) {
       factoryCalls++;
       return service;
     };
@@ -1074,7 +1075,7 @@ void main() {
     );
 
     final service = _CaptureResumeHelloService();
-    _TestConnectionNotifier.factory = (_, __) => service;
+    _TestConnectionNotifier.factory = (_) => service;
     final container = ProviderContainer(
       overrides: [
         connectionProvider.overrideWith(_TestConnectionNotifier.new),

@@ -2,8 +2,6 @@ package tunnel
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -30,35 +28,91 @@ type Session struct {
 	token    string
 	onMsg    func(msg GatewayMessage)
 	onConn   func(info RelayConnectedState)
+	meta     RelayClientMetadata
 	mu       sync.RWMutex
 	info     *SessionInfo
 }
 
 // SessionInfo contains the connection details after a session starts.
 type SessionInfo struct {
-	ConnectURL string // wss://relay.ggcode.app/ws?role=client&token=abc123
-	Token      string
-	QRCode     string // terminal-friendly QR code (text)
-	QRCodePNG  []byte // PNG image bytes for GUI display
-	QRLines    []string
+	ConnectURL          string // ws/wss tunnel URL for the mobile client
+	Token               string
+	QRCode              string // terminal-friendly QR code (text)
+	QRCodePNG           []byte // PNG image bytes for GUI display
+	QRLines             []string
+	ProtocolVersion     int
+	ShareMode           string
+	CompatibilityNotice string
+	RoomID              string
+	AuthExpiresAt       time.Time
+	RenewExpiresAt      time.Time
+}
+
+type SessionOption func(*Session)
+
+func WithClientMetadata(kind, version string) SessionOption {
+	return func(s *Session) {
+		s.meta = defaultRelayClientMetadata(kind, version)
+	}
+}
+
+func WithClientCapabilities(capabilities ...string) SessionOption {
+	return func(s *Session) {
+		if s.meta.Capabilities == nil {
+			s.meta = defaultRelayClientMetadata("", "")
+		}
+		s.meta.Capabilities = append([]string(nil), capabilities...)
+	}
 }
 
 // NewSession creates a new relay session.
-func NewSession(relayURL string) *Session {
-	return &Session{relayURL: strings.TrimSuffix(relayURL, "/")}
+func NewSession(relayURL string, opts ...SessionOption) *Session {
+	sess := &Session{
+		relayURL: strings.TrimSuffix(relayURL, "/"),
+		meta:     defaultRelayClientMetadata("", ""),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(sess)
+		}
+	}
+	return sess
 }
 
 // Start connects to the relay server and returns connection info.
 func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
-	// Generate random token (48 hex chars = 24 bytes → AES-192)
-	tokenBytes := make([]byte, 24)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return nil, err
+	cfg := loadShareRuntimeConfig()
+	publicDesc := ShareDescriptor{}
+	serverDesc := ShareDescriptor{}
+	var err error
+	switch {
+	case cfg.v2Enabled():
+		serverDesc, publicDesc, err = buildV2ShareDescriptors(cfg)
+		if err != nil {
+			return nil, err
+		}
+		s.token = publicDesc.SessionToken()
+	case cfg.v2RequestedWithoutSecret():
+		token, err := randomHex(24)
+		if err != nil {
+			return nil, err
+		}
+		s.token = token
+		serverDesc = newLegacyShareDescriptor(token)
+		publicDesc = serverDesc
+		publicDesc.Notice = "Share v2 was requested locally but no GGCODE_SHARE_V2_SECRET is configured; using legacy compatibility mode."
+		publicDesc.ShareMode = ShareModeCompat
+	default:
+		token, err := randomHex(24)
+		if err != nil {
+			return nil, err
+		}
+		s.token = token
+		serverDesc = newLegacyShareDescriptor(token)
+		publicDesc = serverDesc
 	}
-	s.token = hex.EncodeToString(tokenBytes)
 
-	// Create relay client
-	client, err := NewRelayClient(s.relayURL, s.token)
+	client, err := NewRelayClientWithDescriptor(s.relayURL, serverDesc, "server", s.meta)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +143,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	}
 
 	// Build connect URL
-	connectURL := client.ConnectURL()
+	connectURL := publicDesc.PublicConnectURL(s.relayURL)
 
 	// Generate QR code
 	qrStr, _ := QRCodeForURL(connectURL)
@@ -97,11 +151,17 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	qrPNG, _ := QRCodePNG(connectURL)
 
 	info := &SessionInfo{
-		ConnectURL: connectURL,
-		Token:      s.token,
-		QRCode:     qrStr,
-		QRCodePNG:  qrPNG,
-		QRLines:    qrLines,
+		ConnectURL:          connectURL,
+		Token:               publicDesc.SessionToken(),
+		QRCode:              qrStr,
+		QRCodePNG:           qrPNG,
+		QRLines:             qrLines,
+		ProtocolVersion:     publicDesc.ProtocolVersion,
+		ShareMode:           publicDesc.ShareMode,
+		CompatibilityNotice: publicDesc.Notice,
+		RoomID:              publicDesc.RoomID,
+		AuthExpiresAt:       publicDesc.AuthExpiresAt,
+		RenewExpiresAt:      publicDesc.RenewExpiresAt,
 	}
 
 	s.mu.Lock()

@@ -106,7 +106,11 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 			m.chatWriteSystem(nextSystemID(), "No active tunnel. Use /tunnel to start one.")
 		} else {
 			info := m.tunnelSession.Info()
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Relay active:\n  Connect: %s", info.ConnectURL))
+			status := fmt.Sprintf("Relay active:\n  Connect: %s", info.ConnectURL)
+			if info.CompatibilityNotice != "" {
+				status += "\n  Notice: " + info.CompatibilityNotice
+			}
+			m.chatWriteSystem(nextSystemID(), status)
 		}
 		return nil
 
@@ -114,9 +118,13 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 		if m.tunnelSession != nil {
 			// Already active — re-show QR overlay
 			info := m.tunnelSession.Info()
+			subtitle := "Scan with GGCode Mobile to connect"
+			if info.CompatibilityNotice != "" {
+				subtitle += " - " + info.CompatibilityNotice
+			}
 			m.openQROverlayDirect(
 				"Mobile Tunnel",
-				"Scan with GGCode Mobile to connect",
+				subtitle,
 				info.QRCode,
 				info.ConnectURL,
 			)
@@ -202,7 +210,7 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+		sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("tui", version.Version))
 		info, err := sess.Start(ctx)
 		if err != nil {
 			return tunnelStartMsg{generation: generation, err: err}
@@ -276,9 +284,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// Open the QR overlay immediately. Fresh share rooms do not need an eager
 	// snapshot/replay seed here because broker.handleRelayConnected will publish
 	// the authoritative snapshot when the first client actually attaches.
+	subtitle := "Scan with GGCode Mobile to connect"
+	if msg.info.CompatibilityNotice != "" {
+		subtitle += " - " + msg.info.CompatibilityNotice
+	}
 	m.openQROverlayDirect(
 		"Mobile Tunnel",
-		"Scan with GGCode Mobile to connect",
+		subtitle,
 		msg.info.QRCode,
 		msg.info.ConnectURL,
 	)

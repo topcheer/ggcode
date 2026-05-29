@@ -20,6 +20,9 @@ type RelayClient struct {
 	relayURL string
 	token    string
 	crypto   *Crypto
+	role     string
+	meta     RelayClientMetadata
+	desc     ShareDescriptor
 
 	conn           *websocket.Conn
 	connMu         sync.Mutex
@@ -41,10 +44,17 @@ type RelayClient struct {
 }
 
 type RelayConnectedState struct {
-	Role         string
-	SessionID    string
-	HistoryCount int
-	LastEventID  string
+	Role            string
+	SessionID       string
+	HistoryCount    int
+	LastEventID     string
+	ProtocolVersion int
+	ShareMode       string
+	RoomID          string
+	ConnectMode     string
+	Notice          string
+	AuthExpiresAt   time.Time
+	RenewExpiresAt  time.Time
 }
 
 const (
@@ -66,14 +76,27 @@ func relayReconnectDelay(attempt int) time.Duration {
 }
 
 func NewRelayClient(relayURL, token string) (*RelayClient, error) {
-	crypto, err := NewCrypto(token)
+	return NewRelayClientWithDescriptor(relayURL, newLegacyShareDescriptor(token), "server", RelayClientMetadata{})
+}
+
+func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role string, meta RelayClientMetadata) (*RelayClient, error) {
+	crypto, err := NewCrypto(desc.CryptoMaterial())
 	if err != nil {
 		return nil, err
 	}
+	if meta.Capabilities == nil {
+		meta.Capabilities = append([]string(nil), defaultShareCapabilities...)
+	}
+	if role == "" {
+		role = "server"
+	}
 	return &RelayClient{
 		relayURL:       strings.TrimSuffix(relayURL, "/"),
-		token:          token,
+		token:          desc.SessionToken(),
 		crypto:         crypto,
+		role:           role,
+		meta:           meta,
+		desc:           desc,
 		sendCh:         make(chan []byte, 256),
 		stopCh:         make(chan struct{}),
 		gracefulStopCh: make(chan struct{}),
@@ -92,7 +115,7 @@ func (rc *RelayClient) Connect() error {
 }
 
 func (rc *RelayClient) dial() (*websocket.Conn, error) {
-	url := fmt.Sprintf("%s/ws?role=server&token=%s", rc.relayURL, rc.token)
+	url := rc.currentShareDescriptor().RuntimeConnectURL(rc.relayURL, rc.role, rc.meta, true)
 	conn, _, err := websocket.DefaultDialer.Dial(url, http.Header{})
 	if err != nil {
 		return nil, fmt.Errorf("relay dial: %w", err)
@@ -290,16 +313,60 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		switch relayMsg.Type {
 		case "connected":
 			debug.Log("tunnel", "relay-client: confirmed as %s", relayMsg.Role)
+			state := RelayConnectedState{
+				Role:         relayMsg.Role,
+				SessionID:    relayMsg.SessionID,
+				HistoryCount: relayMsg.Count,
+				LastEventID:  relayMsg.LastEventID,
+			}
+			if state.Role == "" {
+				state.Role = rc.role
+			}
+			if len(relayMsg.Data) > 0 {
+				var meta struct {
+					ProtocolVersion int    `json:"protocol_version,omitempty"`
+					ShareMode       string `json:"share_mode,omitempty"`
+					RoomID          string `json:"room_id,omitempty"`
+					ConnectMode     string `json:"connect_mode,omitempty"`
+					Notice          string `json:"notice,omitempty"`
+					RenewToken      string `json:"renew_token,omitempty"`
+					AuthExpiresAt   string `json:"auth_expires_at,omitempty"`
+					RenewExpiresAt  string `json:"renew_expires_at,omitempty"`
+				}
+				if err := json.Unmarshal(relayMsg.Data, &meta); err == nil {
+					state.ProtocolVersion = meta.ProtocolVersion
+					state.ShareMode = meta.ShareMode
+					state.RoomID = meta.RoomID
+					state.ConnectMode = meta.ConnectMode
+					state.Notice = meta.Notice
+					if meta.AuthExpiresAt != "" {
+						if ts, err := time.Parse(time.RFC3339, meta.AuthExpiresAt); err == nil {
+							state.AuthExpiresAt = ts
+						}
+					}
+					if meta.RenewExpiresAt != "" {
+						if ts, err := time.Parse(time.RFC3339, meta.RenewExpiresAt); err == nil {
+							state.RenewExpiresAt = ts
+						}
+					}
+					if meta.RenewToken != "" {
+						rc.updateShareDescriptor(func(desc *ShareDescriptor) {
+							desc.RenewToken = meta.RenewToken
+							if !state.RenewExpiresAt.IsZero() {
+								desc.RenewExpiresAt = state.RenewExpiresAt
+							}
+							if !state.AuthExpiresAt.IsZero() {
+								desc.AuthExpiresAt = state.AuthExpiresAt
+							}
+						})
+					}
+				}
+			}
 			rc.mu.RLock()
 			fn := rc.onConnected
 			rc.mu.RUnlock()
 			if fn != nil {
-				fn(RelayConnectedState{
-					Role:         relayMsg.Role,
-					SessionID:    relayMsg.SessionID,
-					HistoryCount: relayMsg.Count,
-					LastEventID:  relayMsg.LastEventID,
-				})
+				fn(state)
 			}
 
 		case EventActiveSession:
@@ -558,9 +625,22 @@ func (rc *RelayClient) CloseGracefully(timeout time.Duration) {
 }
 
 func (rc *RelayClient) ConnectURL() string {
-	return fmt.Sprintf("%s/ws?role=client&token=%s", rc.relayURL, rc.token)
+	return rc.currentShareDescriptor().PublicConnectURL(rc.relayURL)
 }
 
 func (rc *RelayClient) Token() string {
 	return rc.token
+}
+
+func (rc *RelayClient) currentShareDescriptor() ShareDescriptor {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	return rc.desc
+}
+
+func (rc *RelayClient) updateShareDescriptor(fn func(desc *ShareDescriptor)) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	fn(&rc.desc)
+	rc.token = rc.desc.SessionToken()
 }

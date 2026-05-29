@@ -52,8 +52,154 @@ int? relayRetryAfterMs(Map<String, dynamic>? data) {
   return null;
 }
 
+class ShareConnectionDescriptor {
+  final String relayUrl;
+  final int protocolVersion;
+  final String shareMode;
+  final String token;
+  final String roomId;
+  final String authTicket;
+  final String renewToken;
+  final String cryptoKey;
+
+  const ShareConnectionDescriptor({
+    required this.relayUrl,
+    required this.protocolVersion,
+    required this.shareMode,
+    required this.token,
+    required this.roomId,
+    required this.authTicket,
+    required this.renewToken,
+    required this.cryptoKey,
+  });
+
+  factory ShareConnectionDescriptor.parse(String raw) {
+    final normalized = normalizeTunnelUrl(raw);
+    final uri = Uri.parse(normalized);
+    final proto = int.tryParse(uri.queryParameters['proto'] ?? '') ?? 1;
+    final roomId = uri.queryParameters['room_id'] ?? '';
+    final authTicket = uri.queryParameters['auth_ticket'] ?? '';
+    final renewToken = uri.queryParameters['renew_token'] ?? '';
+    final token = uri.queryParameters['token'] ?? '';
+    final cryptoKey = uri.queryParameters['crypto_key'] ?? '';
+    final isV2 = proto >= 2 ||
+        roomId.isNotEmpty ||
+        authTicket.isNotEmpty ||
+        renewToken.isNotEmpty;
+    return ShareConnectionDescriptor(
+      relayUrl: '${uri.scheme}://${uri.authority}${uri.path}',
+      protocolVersion: isV2 ? 2 : 1,
+      shareMode: isV2 ? 'v2' : 'legacy',
+      token: token,
+      roomId: roomId,
+      authTicket: authTicket,
+      renewToken: renewToken,
+      cryptoKey: cryptoKey,
+    );
+  }
+
+  bool get isV2 => protocolVersion >= 2 && roomId.isNotEmpty;
+
+  String get cryptoMaterial => cryptoKey.isNotEmpty ? cryptoKey : token;
+
+  String get publicUrl => _buildUrl(publicOnly: true);
+
+  String runtimeUrl() => _buildUrl(publicOnly: false);
+
+  ShareConnectionDescriptor copyWith({
+    String? relayUrl,
+    int? protocolVersion,
+    String? shareMode,
+    String? token,
+    String? roomId,
+    String? authTicket,
+    String? renewToken,
+    String? cryptoKey,
+  }) {
+    return ShareConnectionDescriptor(
+      relayUrl: relayUrl ?? this.relayUrl,
+      protocolVersion: protocolVersion ?? this.protocolVersion,
+      shareMode: shareMode ?? this.shareMode,
+      token: token ?? this.token,
+      roomId: roomId ?? this.roomId,
+      authTicket: authTicket ?? this.authTicket,
+      renewToken: renewToken ?? this.renewToken,
+      cryptoKey: cryptoKey ?? this.cryptoKey,
+    );
+  }
+
+  String _buildUrl({required bool publicOnly}) {
+    final uri = Uri.parse(relayUrl);
+    final query = <String, String>{};
+    if (isV2) {
+      query['proto'] = protocolVersion.toString();
+      query['room_id'] = roomId;
+      if (cryptoKey.isNotEmpty) {
+        query['crypto_key'] = cryptoKey;
+      }
+      if (!publicOnly) {
+        query['role'] = 'client';
+        query['client'] = 'mobile';
+        query['caps'] = 'share_v2,share_notice,share_renew';
+      }
+      if (!publicOnly && renewToken.isNotEmpty) {
+        query['renew_token'] = renewToken;
+      } else if (authTicket.isNotEmpty) {
+        query['auth_ticket'] = authTicket;
+      }
+    } else {
+      query['token'] = token;
+      if (!publicOnly) {
+        query['role'] = 'client';
+        query['client'] = 'mobile';
+        query['caps'] = 'share_v2,share_notice,share_renew';
+      }
+    }
+    return uri.replace(queryParameters: query).toString();
+  }
+}
+
+class ShareConnectionMetadata {
+  final int protocolVersion;
+  final String shareMode;
+  final String roomId;
+  final String connectMode;
+  final String notice;
+  final String renewToken;
+  final DateTime? authExpiresAt;
+  final DateTime? renewExpiresAt;
+
+  const ShareConnectionMetadata({
+    required this.protocolVersion,
+    required this.shareMode,
+    required this.roomId,
+    required this.connectMode,
+    required this.notice,
+    required this.renewToken,
+    required this.authExpiresAt,
+    required this.renewExpiresAt,
+  });
+
+  factory ShareConnectionMetadata.fromRelay(Map<String, dynamic>? data) {
+    final map = data ?? const <String, dynamic>{};
+    return ShareConnectionMetadata(
+      protocolVersion: map['protocol_version'] is int
+          ? map['protocol_version'] as int
+          : int.tryParse('${map['protocol_version'] ?? ''}') ?? 1,
+      shareMode: map['share_mode'] as String? ?? '',
+      roomId: map['room_id'] as String? ?? '',
+      connectMode: map['connect_mode'] as String? ?? '',
+      notice: map['notice'] as String? ?? '',
+      renewToken: map['renew_token'] as String? ?? '',
+      authExpiresAt: DateTime.tryParse(map['auth_expires_at'] as String? ?? ''),
+      renewExpiresAt:
+          DateTime.tryParse(map['renew_expires_at'] as String? ?? ''),
+    );
+  }
+}
+
 class ConnectionService {
-  final String url;
+  ShareConnectionDescriptor _descriptor;
   final TunnelCrypto crypto;
   WebSocket? _socket;
   bool _disposed = false;
@@ -67,11 +213,17 @@ class ConnectionService {
   final _errorController = StreamController<String>.broadcast();
   final _messageController = StreamController<proto.WsMessage>.broadcast();
   final _ackController = StreamController<AckEvent>.broadcast();
+  final _metadataController =
+      StreamController<ShareConnectionMetadata>.broadcast();
 
   Stream<ConnectionStatus> get statusStream => _statusController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<proto.WsMessage> get messageStream => _messageController.stream;
   Stream<AckEvent> get ackStream => _ackController.stream;
+  Stream<ShareConnectionMetadata> get metadataStream =>
+      _metadataController.stream;
+  String get publicUrl => _descriptor.publicUrl;
+  ShareConnectionDescriptor get descriptor => _descriptor;
 
   Timer? _heartbeatTimer;
   StreamSubscription? _socketSub;
@@ -80,15 +232,17 @@ class ConnectionService {
   Future<void> _queue = Future.value();
   int _decryptErrorCount = 0;
 
-  ConnectionService({required this.url, required this.crypto});
+  ConnectionService({required ShareConnectionDescriptor descriptor})
+      : _descriptor = descriptor,
+        crypto = TunnelCrypto(descriptor.cryptoMaterial);
 
   Future<void> connect() async {
     _cancelReconnect();
     _statusController.add(ConnectionStatus.connecting);
 
     try {
-      _socket =
-          await WebSocket.connect(url).timeout(const Duration(seconds: 30));
+      _socket = await WebSocket.connect(_descriptor.runtimeUrl())
+          .timeout(const Duration(seconds: 30));
     } catch (e) {
       if (!_disposed) {
         final error = _formatConnectError(e);
@@ -197,9 +351,28 @@ class ConnectionService {
 
     switch (type) {
       case 'connected':
+        final data = map['data'] is Map<String, dynamic>
+            ? map['data'] as Map<String, dynamic>
+            : map['data'] is Map
+                ? Map<String, dynamic>.from(map['data'] as Map)
+                : null;
+        final metadata = ShareConnectionMetadata.fromRelay(data);
+        if (metadata.renewToken.isNotEmpty) {
+          _descriptor = _descriptor.copyWith(
+            renewToken: metadata.renewToken,
+            shareMode: metadata.shareMode.isNotEmpty
+                ? metadata.shareMode
+                : _descriptor.shareMode,
+            protocolVersion: metadata.protocolVersion,
+            roomId: metadata.roomId.isNotEmpty
+                ? metadata.roomId
+                : _descriptor.roomId,
+          );
+        }
         _everConnected = true;
         _serverOfflineReconnect = false;
         _statusController.add(ConnectionStatus.connected);
+        _metadataController.add(metadata);
         _startHeartbeat();
         break;
 
@@ -300,8 +473,10 @@ class ConnectionService {
             );
           }
           _decryptErrorCount = 0;
-          final replayTag = map['event_id'] != null ? ' event=${map['event_id']}' : '';
-          debugPrint('[connection] encrypted decrypted:${replayTag} type=${msg.type} sessionId=${msg.sessionId}');
+          final replayTag =
+              map['event_id'] != null ? ' event=${map['event_id']}' : '';
+          debugPrint(
+              '[connection] encrypted decrypted:$replayTag type=${msg.type} sessionId=${msg.sessionId}');
           _messageController.add(msg);
         } catch (e) {
           _decryptErrorCount++;
@@ -408,6 +583,7 @@ class ConnectionService {
     _errorController.close();
     _messageController.close();
     _ackController.close();
+    _metadataController.close();
   }
 }
 
