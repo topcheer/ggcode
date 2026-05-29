@@ -391,6 +391,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       body: Column(
         children: [
           const StatusBar(),
+          if (connState.relaySync != null)
+            _RelaySyncBanner(sync: connState.relaySync!),
           if (isHistorical)
             _HistoricalSessionBanner(
               onReturnToLive: () async {
@@ -866,6 +868,118 @@ class _HistoricalSessionBanner extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _RelaySyncBanner extends StatelessWidget {
+  final RelaySyncState sync;
+
+  const _RelaySyncBanner({required this.sync});
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _title();
+    final detail = _detail();
+    final isWarning = sync.stalled;
+
+    return Container(
+      key: const Key('relay-sync-banner'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isWarning
+            ? AppColors.warning.withValues(alpha: 0.12)
+            : AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        border: Border.all(
+          color: isWarning
+              ? AppColors.warning.withValues(alpha: 0.45)
+              : AppColors.border,
+        ),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: isWarning
+                ? Icon(
+                    Icons.sync_problem,
+                    size: 16,
+                    color: AppColors.warning,
+                  )
+                : const CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _title() {
+    if (sync.stalled) {
+      return t('relay_sync.stalled_title');
+    }
+    switch (sync.phase) {
+      case RelaySyncPhase.waiting:
+        return t('relay_sync.waiting_title');
+      case RelaySyncPhase.replaying:
+        return t(sync.resumeMode == 'full_history'
+            ? 'relay_sync.full_history_title'
+            : 'relay_sync.replaying_title');
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_title');
+    }
+  }
+
+  String _detail() {
+    if (sync.stalled) {
+      return t(
+        'relay_sync.stalled_detail',
+        args: {
+          'count': (sync.remainingReplayCount ?? 0).toString(),
+        },
+      );
+    }
+    switch (sync.phase) {
+      case RelaySyncPhase.waiting:
+        return t('relay_sync.waiting_detail');
+      case RelaySyncPhase.replaying:
+        return t(
+          'relay_sync.replaying_detail',
+          args: {
+            'count': (sync.remainingReplayCount ?? 0).toString(),
+          },
+        );
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_detail');
+    }
   }
 }
 
