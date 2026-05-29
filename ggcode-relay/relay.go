@@ -678,7 +678,28 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	role := handshake.role
 	clientID := r.URL.Query().Get("client_id")
 
-	room := h.getOrCreateRoom(token)
+	var room *room
+	if role == "client" {
+		// Clients may only join existing rooms; they must not create one.
+		h.mu.RLock()
+		var ok bool
+		room, ok = h.rooms[token]
+		h.mu.RUnlock()
+		if !ok {
+			// Send an error frame so the client recognises this as a
+			// permanent failure (room not found) rather than a transient
+			// disconnect that triggers reconnect.
+			_ = conn.WriteJSON(relayMessage{
+				Type:   "error",
+				Reason: "Room not found: stale or expired share token",
+			})
+			conn.Close()
+			log.Printf("[relay] client rejected: room=%s not found", shortToken(token))
+			return
+		}
+	} else {
+		room = h.getOrCreateRoom(token)
+	}
 	p := newPeer(h, room, role, conn)
 	p.clientID = clientID
 
