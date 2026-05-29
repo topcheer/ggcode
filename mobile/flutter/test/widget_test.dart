@@ -179,6 +179,41 @@ void main() {
     expect(find.byType(ChatScreen), findsNothing);
   });
 
+  testWidgets('ChatScreen shows relay sync banner while catch-up is pending',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+
+    notifier.emit(
+      TunnelConnectionState(
+        status: ConnectionStatus.connected,
+        url: 'wss://example.test/ws?token=abc',
+        relaySync: const RelaySyncState(
+          phase: RelaySyncPhase.replaying,
+          remainingReplayCount: 12,
+          resumeMode: 'full_history',
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(ChatScreen), findsOneWidget);
+    expect(find.byKey(const Key('relay-sync-banner')), findsOneWidget);
+  });
+
   testWidgets('AppShell ask_user modal dismisses composer focus',
       (WidgetTester tester) async {
     await tester.pumpWidget(

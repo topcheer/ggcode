@@ -159,6 +159,62 @@ class _BlockingConnectService extends _FakeConnectionService {
   }
 }
 
+class _ManualConnectionService extends _FakeConnectionService {
+  final _status = StreamController<ConnectionStatus>.broadcast();
+  final _errors = StreamController<String>.broadcast();
+  final _messages = StreamController<proto.WsMessage>.broadcast();
+  final _acks = StreamController<AckEvent>.broadcast();
+  final _metadata = StreamController<ShareConnectionMetadata>.broadcast();
+
+  _ManualConnectionService(
+      {this.connectGate, this.emitConnectedOnConnect = true});
+
+  final Completer<void>? connectGate;
+  final bool emitConnectedOnConnect;
+  int connectCalls = 0;
+  int disposeCalls = 0;
+  int disconnectCalls = 0;
+
+  @override
+  Stream<ConnectionStatus> get statusStream => _status.stream;
+
+  @override
+  Stream<String> get errorStream => _errors.stream;
+
+  @override
+  Stream<proto.WsMessage> get messageStream => _messages.stream;
+
+  @override
+  Stream<AckEvent> get ackStream => _acks.stream;
+
+  @override
+  Stream<ShareConnectionMetadata> get metadataStream => _metadata.stream;
+
+  @override
+  Future<void> connect() async {
+    connectCalls++;
+    if (connectGate != null) {
+      await connectGate!.future;
+    }
+    if (emitConnectedOnConnect) {
+      _status.add(ConnectionStatus.connected);
+    }
+  }
+
+  void emitStatus(ConnectionStatus status) => _status.add(status);
+  void emitError(String error) => _errors.add(error);
+
+  @override
+  void disconnect() {
+    disconnectCalls++;
+  }
+
+  @override
+  void dispose() {
+    disposeCalls++;
+  }
+}
+
 class _TestConnectionNotifier extends ConnectionNotifier {
   static ConnectionService Function(ShareConnectionDescriptor descriptor)?
       factory;
@@ -1062,6 +1118,245 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
     expect(state.url, 'wss://example.test/ws?token=room-a');
+  });
+
+  test('restore shows relay sync state until replayed events are applied',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-1', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    var state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.connected);
+    expect(state.relaySync?.phase, RelaySyncPhase.waiting);
+
+    service.emit(proto.WsMessage(
+      type: 'resume_ack',
+      sessionId: 'sess-1',
+      data: {
+        'session_id': 'sess-1',
+        'resume_mode': 'full_history',
+        'replay_count': 2,
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    state = container.read(connectionProvider);
+    expect(state.relaySync?.phase, RelaySyncPhase.replaying);
+    expect(state.relaySync?.remainingReplayCount, 2);
+    expect(state.relaySync?.resumeMode, 'full_history');
+
+    service.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000121',
+      data: {'text': 'sync-1'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(
+        container.read(connectionProvider).relaySync?.remainingReplayCount, 1);
+
+    service.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000122',
+      data: {'text': 'sync-2'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).relaySync, isNull);
+  });
+
+  test('resume_ack with zero replay count clears relay sync state', () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-1', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: const [],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).relaySync, isNotNull);
+
+    service.emit(proto.WsMessage(
+      type: 'resume_ack',
+      sessionId: 'sess-1',
+      data: {
+        'session_id': 'sess-1',
+        'resume_mode': 'incremental',
+        'replay_count': 0,
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).relaySync, isNull);
+  });
+
+  test('connect ignores stale earlier attempt after switching to a new url',
+      () async {
+    final gateA = Completer<void>();
+    final serviceA = _ManualConnectionService(
+      connectGate: gateA,
+      emitConnectedOnConnect: true,
+    );
+    final serviceB = _ManualConnectionService();
+    final servicesByToken = <String, _ManualConnectionService>{
+      'room-a': serviceA,
+      'room-b': serviceB,
+    };
+    _TestConnectionNotifier.factory = (descriptor) {
+      return servicesByToken[descriptor.token]!;
+    };
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    final connectA = notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    final connectB = notifier.connect('wss://example.test/ws?token=room-b');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(serviceA.disposeCalls, 1);
+    expect(serviceB.connectCalls, 1);
+
+    gateA.complete();
+    await Future.wait([connectA, connectB]);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.connected);
+    expect(state.url, 'wss://example.test/ws?token=room-b');
+  });
+
+  test('stale callbacks from old service are ignored after reconnect',
+      () async {
+    final serviceA = _ManualConnectionService();
+    final serviceB = _ManualConnectionService();
+    var factoryCalls = 0;
+    _TestConnectionNotifier.factory = (_) {
+      factoryCalls++;
+      return factoryCalls == 1 ? serviceA : serviceB;
+    };
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(
+        container.read(connectionProvider).status, ConnectionStatus.connected);
+
+    await notifier.connect('wss://example.test/ws?token=room-b');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).url,
+        'wss://example.test/ws?token=room-b');
+
+    serviceA.emitStatus(ConnectionStatus.disconnected);
+    serviceA.emitError('Room not found: stale or expired share token');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.connected);
+    expect(state.url, 'wss://example.test/ws?token=room-b');
+    expect(state.error, isNot(contains('Room not found')));
+  });
+
+  test('disposing provider disposes the active service', () async {
+    final service = _ManualConnectionService();
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    container.dispose();
+    _TestConnectionNotifier.factory = null;
+
+    expect(service.disposeCalls, 1);
   });
 
   test('reconnect replaces cached busy state with authoritative idle status',

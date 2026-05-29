@@ -21,19 +21,70 @@ final connectionProvider =
   ConnectionNotifier.new,
 );
 
+const _noTunnelStateChange = Object();
+
+enum RelaySyncPhase { waiting, replaying, snapshot }
+
+class RelaySyncState {
+  final RelaySyncPhase phase;
+  final int? remainingReplayCount;
+  final String? resumeMode;
+  final bool stalled;
+
+  const RelaySyncState({
+    required this.phase,
+    this.remainingReplayCount,
+    this.resumeMode,
+    this.stalled = false,
+  });
+
+  RelaySyncState copyWith({
+    RelaySyncPhase? phase,
+    Object? remainingReplayCount = _noTunnelStateChange,
+    Object? resumeMode = _noTunnelStateChange,
+    bool? stalled,
+  }) {
+    return RelaySyncState(
+      phase: phase ?? this.phase,
+      remainingReplayCount:
+          identical(remainingReplayCount, _noTunnelStateChange)
+              ? this.remainingReplayCount
+              : remainingReplayCount as int?,
+      resumeMode: identical(resumeMode, _noTunnelStateChange)
+          ? this.resumeMode
+          : resumeMode as String?,
+      stalled: stalled ?? this.stalled,
+    );
+  }
+}
+
 class TunnelConnectionState {
   final ConnectionStatus status;
   final String? url;
   final String? error;
+  final RelaySyncState? relaySync;
 
-  TunnelConnectionState({required this.status, this.url, this.error});
+  TunnelConnectionState({
+    required this.status,
+    this.url,
+    this.error,
+    this.relaySync,
+  });
 
   TunnelConnectionState copyWith(
-          {ConnectionStatus? status, String? url, String? error}) =>
+          {ConnectionStatus? status,
+          Object? url = _noTunnelStateChange,
+          Object? error = _noTunnelStateChange,
+          Object? relaySync = _noTunnelStateChange}) =>
       TunnelConnectionState(
         status: status ?? this.status,
-        url: url ?? this.url,
-        error: error ?? this.error,
+        url: identical(url, _noTunnelStateChange) ? this.url : url as String?,
+        error: identical(error, _noTunnelStateChange)
+            ? this.error
+            : error as String?,
+        relaySync: identical(relaySync, _noTunnelStateChange)
+            ? this.relaySync
+            : relaySync as RelaySyncState?,
       );
 }
 
@@ -56,9 +107,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
   bool _awaitingSnapshotProjection = false;
+  int _connectionGeneration = 0;
+  final List<StreamSubscription<dynamic>> _serviceSubscriptions =
+      <StreamSubscription<dynamic>>[];
+  final Map<String, Timer> _subagentCleanupTimers = <String, Timer>{};
+  Timer? _relaySyncTimeout;
+  int _pendingReplayCount = 0;
+  String _pendingResumeMode = '';
 
   @override
   TunnelConnectionState build() {
+    ref.onDispose(_disposeNotifier);
     return TunnelConnectionState(status: ConnectionStatus.disconnected);
   }
 
@@ -114,23 +173,25 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _connectImpl(String url, {required bool clearState}) async {
+    final generation = _nextConnectionGeneration();
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
+    if (!_isConnectionGenerationCurrent(generation)) return;
     await cache.activateWorkspaceUrl(url);
+    if (!_isConnectionGenerationCurrent(generation)) return;
 
     // Disconnect previous if any
-    if (service != null) {
-      service!.dispose();
-      service = null;
-    }
+    _disposeActiveService();
 
     var descriptor = ShareConnectionDescriptor.parse(url);
     state = state.copyWith(
         status: ConnectionStatus.connecting,
         url: descriptor.publicUrl,
-        error: null);
+        error: null,
+        relaySync: null);
 
     if (descriptor.cryptoMaterial.isEmpty) {
+      if (!_isConnectionGenerationCurrent(generation)) return;
       state = state.copyWith(
           status: ConnectionStatus.disconnected,
           error: 'Invalid URL: missing crypto material');
@@ -142,13 +203,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final uiHasContent = ref.read(sessionInfoProvider) != null;
 
     await _loadResumeState();
+    if (!_isConnectionGenerationCurrent(generation)) return;
     if (descriptor.isV2 &&
         _shareRoomId.isNotEmpty &&
         _shareRoomId == descriptor.roomId &&
         _shareRenewToken.isNotEmpty) {
       descriptor = descriptor.copyWith(renewToken: _shareRenewToken);
     }
-    service = createConnectionService(descriptor);
+    final localService = createConnectionService(descriptor);
+    if (!_isConnectionGenerationCurrent(generation)) {
+      localService.dispose();
+      return;
+    }
+    service = localService;
 
     // _loadResumeState overwrites _sessionId/_lastAppliedEventId from prefs.
     final savedSessionId = _sessionId;
@@ -156,6 +223,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (uiHasContent && uiSessionId == savedSessionId) {
       // UI already renders this session — keep it. Ordinal dedup will skip
       // relay replay events we already have rendered.
+      _beginRelaySyncWaiting();
     } else {
       // Different session or fresh connect — clear UI, restore from SQLite.
       _clearUiProjection();
@@ -165,76 +233,24 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _awaitingSnapshotProjection = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
-      _restoreProjectionFromCache(
+      final restoredProjection = _restoreProjectionFromCache(
         adoptCursor: false,
         seedCursorIfUnset: true,
       );
+      if (restoredProjection || savedSessionId.isNotEmpty) {
+        _beginRelaySyncWaiting();
+      } else {
+        _clearRelaySyncState();
+      }
     }
 
-    // Listen to connection status changes
-    service!.statusStream.listen(
-      (status) {
-        state = state.copyWith(status: status);
-        if (status == ConnectionStatus.connected) {
-          _saveUrl(service!.publicUrl);
-          service?.sendResumeHello(
-            clientId: _clientId,
-            sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-          );
-        }
-      },
-    );
-
-    // Listen to error messages
-    service!.errorStream.listen(
-      (error) {
-        if (isPermanentRoomFailureMessage(error)) {
-          unawaited(_handlePermanentRoomFailure(url, error));
-          return;
-        }
-        state = state.copyWith(error: error);
-      },
-    );
-
-    // Listen to messages from server
-    service!.messageStream.listen(
-      (msg) => _dispatchMessage(msg),
-    );
-
-    // Listen to ack events and forward to ChatNotifier
-    service!.ackStream.listen(
-      (ack) {
-        final chatNotifier = ref.read(chatProvider.notifier);
-        switch (ack.type) {
-          case 'relay_ack':
-            chatNotifier.updateMessageStatus(
-                ack.messageId, MessageStatus.delivered);
-            break;
-          case 'server_ack':
-            chatNotifier.updateMessageStatus(
-                ack.messageId, MessageStatus.acknowledged);
-            break;
-        }
-      },
-    );
-
-    service!.metadataStream.listen((metadata) {
-      if (metadata.roomId.isNotEmpty) {
-        _shareRoomId = metadata.roomId;
-      }
-      if (metadata.renewToken.isNotEmpty) {
-        _shareRenewToken = metadata.renewToken;
-        _persistResumeState();
-      }
-      if (metadata.notice.isNotEmpty) {
-        debugPrint('[connection] relay notice: ${metadata.notice}');
-      }
-    });
+    _bindService(localService, generation, url);
 
     try {
       // dart:io WebSocket.connect properly awaits handshake
-      await service!.connect();
+      await localService.connect();
     } catch (e) {
+      if (!_isConnectionGenerationCurrent(generation)) return;
       state = state.copyWith(
           status: ConnectionStatus.disconnected, error: e.toString());
     }
@@ -252,18 +268,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   void disconnect() {
+    _nextConnectionGeneration();
     service?.disconnect();
+    _disposeActiveService();
+    _clearRelaySyncState();
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
 
   Future<void> leaveSession() async {
-    service?.dispose();
-    service = null;
+    _nextConnectionGeneration();
+    _disposeActiveService();
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
     _awaitingSnapshotProjection = false;
+    _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
@@ -317,6 +337,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         _sessionId = sessionId;
+        final replayCount = (msg.data?['replay_count'] as num?)?.toInt() ?? 0;
+        final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
+        _beginResumeReplaySync(
+          replayCount: replayCount,
+          resumeMode: resumeMode,
+        );
         // Always restore local snapshot first — relay replay will skip
         // already-cached events via ordinal dedup.
         _restoreSessionProjectionIfAvailable(sessionId);
@@ -352,6 +378,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _recentEventIds.clear();
         _recentEventSet.clear();
         _awaitingSnapshotProjection = true;
+        _beginSnapshotSync();
         _markProjectionAuthoritative();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
@@ -381,8 +408,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         _markEventApplied(msg);
         _markProjectionAuthoritative();
-        if (_awaitingSnapshotProjection) {
+        final wasAwaitingSnapshotProjection = _awaitingSnapshotProjection;
+        if (wasAwaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
+          if (_pendingReplayCount == 0) {
+            _clearRelaySyncState();
+          }
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
@@ -757,18 +788,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             success: data.success,
             summary: data.summary,
           );
-          // Auto-remove completed agent tab after 5 seconds
-          Future.delayed(const Duration(seconds: 5), () {
-            final current =
-                Map<String, SubagentInfo>.from(ref.read(subagentProvider));
-            current.remove(data.agentId);
-            ref.read(subagentProvider.notifier).set(current);
-            // Also remove messages for this agent
-            final msgs = ref.read(chatProvider);
-            ref
-                .read(chatProvider.notifier)
-                .set(msgs.where((m) => m.sourceId != data.agentId).toList());
-          });
+          _scheduleSubagentCleanup(
+            data.agentId,
+            generation: _connectionGeneration,
+          );
         }
         _markEventApplied(msg);
         break;
@@ -843,6 +866,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // Relay told us the room is temporarily offline. Keep the current
         // projection and selection so reconnect stays pinned to this room.
         ref.read(workspaceCacheProvider.notifier).markDisconnected();
+        _clearRelaySyncState();
         state = state.copyWith(
           status: ConnectionStatus.disconnected,
           error: state.error?.isNotEmpty == true
@@ -855,12 +879,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         unawaited(_handlePermanentRoomFailure(
           state.url ?? '',
           'Sharing stopped',
+          sourceService: service,
+          generation: _connectionGeneration,
         ));
         break;
     }
   }
 
   void _clearUiProjection() {
+    _cancelSubagentCleanupTimers();
     ref.read(chatProvider.notifier).clearMessages();
     ref.read(subagentProvider.notifier).clear();
     ref.read(approvalProvider.notifier).set(null);
@@ -948,24 +975,35 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _handlePermanentRoomFailure(
-      String failedUrl, String error) async {
+    String failedUrl,
+    String error, {
+    required ConnectionService? sourceService,
+    required int generation,
+  }) async {
     final normalizedFailedUrl = normalizeTunnelUrl(failedUrl);
     final currentUrl = normalizeTunnelUrl(state.url ?? '');
-    if (normalizedFailedUrl.isEmpty || currentUrl != normalizedFailedUrl) {
+    if (!_isConnectionGenerationCurrent(generation) ||
+        normalizedFailedUrl.isEmpty ||
+        currentUrl != normalizedFailedUrl ||
+        sourceService == null ||
+        !identical(service, sourceService)) {
       return;
     }
-    service?.dispose();
-    service = null;
+    _disposeActiveService();
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
     _awaitingSnapshotProjection = false;
+    _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
     await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearSelection();
-    if (!ref.mounted) return;
+    if (!_isConnectionGenerationCurrent(generation) ||
+        normalizeTunnelUrl(state.url ?? '') != normalizedFailedUrl) {
+      return;
+    }
     state = TunnelConnectionState(
       status: ConnectionStatus.disconnected,
       error: error,
@@ -1012,6 +1050,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// ACK a skipped (already-cached) event so relay can advance its cursor.
   void _ackSkippedEvent(proto.WsMessage msg) {
     final eventId = msg.eventId;
+    _noteReplayProgress(eventId);
     if (eventId != null && eventId.isNotEmpty && _clientId.isNotEmpty) {
       service?.sendAck(clientId: _clientId, eventId: eventId);
     }
@@ -1029,6 +1068,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           .updateLiveCursor(_sessionId, _lastAppliedEventId));
       return;
     }
+    _noteReplayProgress(eventId);
     _lastAppliedEventId = eventId;
     // Send ACK to relay so it advances the cursor.
     if (_clientId.isNotEmpty) {
@@ -1105,17 +1145,83 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return true;
   }
 
+  void _bindService(
+      ConnectionService localService, int generation, String connectUrl) {
+    _cancelServiceSubscriptions();
+    _serviceSubscriptions.addAll([
+      localService.statusStream.listen((status) {
+        if (!_isActiveConnection(localService, generation)) return;
+        state = state.copyWith(status: status);
+        if (status == ConnectionStatus.connected) {
+          _saveUrl(localService.publicUrl);
+          localService.sendResumeHello(
+            clientId: _clientId,
+            sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+          );
+        } else if (status == ConnectionStatus.disconnected) {
+          _clearRelaySyncState();
+        }
+      }),
+      localService.errorStream.listen((error) {
+        if (!_isActiveConnection(localService, generation)) return;
+        if (isPermanentRoomFailureMessage(error)) {
+          unawaited(_handlePermanentRoomFailure(
+            connectUrl,
+            error,
+            sourceService: localService,
+            generation: generation,
+          ));
+          return;
+        }
+        state = state.copyWith(error: error);
+      }),
+      localService.messageStream.listen((msg) {
+        if (!_isActiveConnection(localService, generation)) return;
+        _dispatchMessage(msg);
+      }),
+      localService.ackStream.listen((ack) {
+        if (!_isActiveConnection(localService, generation)) return;
+        final chatNotifier = ref.read(chatProvider.notifier);
+        switch (ack.type) {
+          case 'relay_ack':
+            chatNotifier.updateMessageStatus(
+                ack.messageId, MessageStatus.delivered);
+            break;
+          case 'server_ack':
+            chatNotifier.updateMessageStatus(
+                ack.messageId, MessageStatus.acknowledged);
+            break;
+        }
+      }),
+      localService.metadataStream.listen((metadata) {
+        if (!_isActiveConnection(localService, generation)) return;
+        if (metadata.roomId.isNotEmpty) {
+          _shareRoomId = metadata.roomId;
+        }
+        if (metadata.renewToken.isNotEmpty) {
+          _shareRenewToken = metadata.renewToken;
+          _persistResumeState();
+        }
+        if (metadata.notice.isNotEmpty) {
+          debugPrint('[connection] relay notice: ${metadata.notice}');
+        }
+      }),
+    ]);
+  }
+
   void _restoreSessionProjectionIfAvailable(String sessionId) {
     if (sessionId.isEmpty || !_canRestoreSessionProjection()) {
       log('[tunnel] _restoreSessionProjectionIfAvailable: SKIP session=$sessionId canRestore=${_canRestoreSessionProjection()} hasAuth=$_hasAuthoritativeProjection subs=${ref.read(subagentProvider).isEmpty} info=${ref.read(sessionInfoProvider)}');
       return;
     }
     log('[tunnel] _restoreSessionProjectionIfAvailable: restoring session=$sessionId');
+    final generation = _connectionGeneration;
     unawaited(
       ref
           .read(workspaceCacheProvider.notifier)
           .attachSessionToActiveWorkspace(sessionId)
           .then((restored) {
+        if (!_isConnectionGenerationCurrent(generation)) return;
         log('[tunnel] attachSession returned: restored=$restored canRestore=${_canRestoreSessionProjection()} lastEvent=$_lastAppliedEventId');
         if (restored && _canRestoreSessionProjection()) {
           _restoreProjectionFromCache(
@@ -1176,8 +1282,146 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           : existing?.summary,
     );
     agents[agentId] = next;
+    if (!next.completed) {
+      _cancelSubagentCleanup(agentId);
+    }
     ref.read(subagentProvider.notifier).set(agents);
     return next;
+  }
+
+  int _nextConnectionGeneration() => ++_connectionGeneration;
+
+  bool _isConnectionGenerationCurrent(int generation) =>
+      ref.mounted && generation == _connectionGeneration;
+
+  bool _isActiveConnection(ConnectionService candidate, int generation) =>
+      _isConnectionGenerationCurrent(generation) &&
+      identical(service, candidate);
+
+  void _cancelServiceSubscriptions() {
+    for (final sub in _serviceSubscriptions) {
+      unawaited(sub.cancel());
+    }
+    _serviceSubscriptions.clear();
+  }
+
+  void _disposeActiveService() {
+    _cancelServiceSubscriptions();
+    final current = service;
+    service = null;
+    current?.dispose();
+  }
+
+  void _beginRelaySyncWaiting() {
+    _pendingReplayCount = 0;
+    _pendingResumeMode = '';
+    _setRelaySyncState(const RelaySyncState(phase: RelaySyncPhase.waiting));
+  }
+
+  void _beginResumeReplaySync({
+    required int replayCount,
+    required String resumeMode,
+  }) {
+    if (replayCount <= 0) {
+      _clearRelaySyncState();
+      return;
+    }
+    _pendingReplayCount = replayCount;
+    _pendingResumeMode = resumeMode;
+    _setRelaySyncState(
+      RelaySyncState(
+        phase: RelaySyncPhase.replaying,
+        remainingReplayCount: replayCount,
+        resumeMode: resumeMode,
+      ),
+    );
+  }
+
+  void _beginSnapshotSync() {
+    _pendingReplayCount = 0;
+    _pendingResumeMode = '';
+    _setRelaySyncState(const RelaySyncState(phase: RelaySyncPhase.snapshot));
+  }
+
+  void _noteReplayProgress(String? eventId) {
+    if (_pendingReplayCount <= 0 || eventId == null || eventId.isEmpty) {
+      return;
+    }
+    _pendingReplayCount--;
+    if (_pendingReplayCount <= 0) {
+      _clearRelaySyncState();
+      return;
+    }
+    final current = state.relaySync;
+    _setRelaySyncState(
+      RelaySyncState(
+        phase: RelaySyncPhase.replaying,
+        remainingReplayCount: _pendingReplayCount,
+        resumeMode: _pendingResumeMode,
+        stalled: current?.stalled ?? false,
+      ),
+    );
+  }
+
+  void _setRelaySyncState(RelaySyncState? relaySync) {
+    _relaySyncTimeout?.cancel();
+    state = state.copyWith(relaySync: relaySync);
+    if (relaySync == null) {
+      return;
+    }
+    _relaySyncTimeout = Timer(const Duration(seconds: 30), () {
+      if (!ref.mounted || state.relaySync == null) return;
+      state = state.copyWith(
+        relaySync: state.relaySync!.copyWith(stalled: true),
+      );
+    });
+  }
+
+  void _clearRelaySyncState() {
+    _pendingReplayCount = 0;
+    _pendingResumeMode = '';
+    _relaySyncTimeout?.cancel();
+    _relaySyncTimeout = null;
+    if (state.relaySync != null) {
+      state = state.copyWith(relaySync: null);
+    }
+  }
+
+  void _scheduleSubagentCleanup(String agentId, {required int generation}) {
+    _cancelSubagentCleanup(agentId);
+    _subagentCleanupTimers[agentId] = Timer(const Duration(seconds: 5), () {
+      if (!_isConnectionGenerationCurrent(generation)) return;
+      final current =
+          Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+      current.remove(agentId);
+      ref.read(subagentProvider.notifier).set(current);
+      final msgs = ref.read(chatProvider);
+      ref
+          .read(chatProvider.notifier)
+          .set(msgs.where((m) => m.sourceId != agentId).toList());
+      _subagentCleanupTimers.remove(agentId);
+    });
+  }
+
+  void _cancelSubagentCleanup(String agentId) {
+    _subagentCleanupTimers.remove(agentId)?.cancel();
+  }
+
+  void _cancelSubagentCleanupTimers() {
+    for (final timer in _subagentCleanupTimers.values) {
+      timer.cancel();
+    }
+    _subagentCleanupTimers.clear();
+  }
+
+  void _disposeNotifier() {
+    _nextConnectionGeneration();
+    _cancelSubagentCleanupTimers();
+    _pendingReplayCount = 0;
+    _pendingResumeMode = '';
+    _relaySyncTimeout?.cancel();
+    _relaySyncTimeout = null;
+    _disposeActiveService();
   }
 
   void _persistResumeState() {
