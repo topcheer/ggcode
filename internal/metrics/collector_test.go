@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ func TestCollector_DeliversEvents(t *testing.T) {
 	var mu sync.Mutex
 	var received []MetricEvent
 
-	c := NewCollector(16, func(m MetricEvent) {
+	c := NewCollector(context.Background(), 16, func(m MetricEvent) {
 		mu.Lock()
 		received = append(received, m)
 		mu.Unlock()
@@ -38,7 +39,7 @@ func TestCollector_DeliversEvents(t *testing.T) {
 
 func TestCollector_DropsWhenFull(t *testing.T) {
 	block := make(chan struct{})
-	c := NewCollector(2, func(m MetricEvent) {
+	c := NewCollector(context.Background(), 2, func(m MetricEvent) {
 		<-block // block to fill the channel
 	})
 
@@ -68,7 +69,7 @@ func TestCollector_StopDrainsRemaining(t *testing.T) {
 	var mu sync.Mutex
 	var received []MetricEvent
 
-	c := NewCollector(16, func(m MetricEvent) {
+	c := NewCollector(context.Background(), 16, func(m MetricEvent) {
 		mu.Lock()
 		received = append(received, m)
 		mu.Unlock()
@@ -78,11 +79,37 @@ func TestCollector_StopDrainsRemaining(t *testing.T) {
 	c.Emit(MetricEvent{Type: "tool"})
 	c.Stop()
 
-	// After Stop, remaining events should be drained
-	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(received) != 2 {
 		t.Fatalf("expected 2 events after stop, got %d", len(received))
+	}
+}
+
+func TestCollector_ContextCancelDrainsRemaining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var received []MetricEvent
+	done := make(chan struct{})
+	c := NewCollector(ctx, 16, func(m MetricEvent) {
+		mu.Lock()
+		received = append(received, m)
+		count := len(received)
+		mu.Unlock()
+		if count == 2 {
+			close(done)
+		}
+	})
+
+	c.Emit(MetricEvent{Type: "llm"})
+	c.Emit(MetricEvent{Type: "tool"})
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("collector did not drain after context cancellation")
 	}
 }

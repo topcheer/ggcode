@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -341,7 +342,7 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	debug.Log("dingtalk", "adapter=%s callback: sender=%s(%s) conv=%s text=%q webhook=%q robotCode=%q convType=%q",
 		a.name, callbackData.SenderNick, callbackData.SenderStaffID,
 		callbackData.ConversationID, text,
-		callbackData.SessionWebhook, callbackData.RobotCode, callbackData.ConversationType)
+		redactDingTalkURL(callbackData.SessionWebhook), callbackData.RobotCode, callbackData.ConversationType)
 
 	if text == "" {
 		debug.Log("dingtalk", "adapter=%s empty text, skipping", a.name)
@@ -509,8 +510,9 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	}
 	token, _ := result["accessToken"].(string)
 	if token == "" {
-		debug.Log("dingtalk", "adapter=%s token response: %s", a.name, string(data))
-		return fmt.Errorf("DingTalk accessToken is empty: %s", string(data))
+		redacted := redactDingTalkResponse(string(data))
+		debug.Log("dingtalk", "adapter=%s token response: %s", a.name, redacted)
+		return fmt.Errorf("DingTalk accessToken is empty: %s", redacted)
 	}
 	expire := 7200
 	if exp, ok := result["expireIn"]; ok {
@@ -574,12 +576,13 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	endpoint, _ := result["endpoint"].(string)
 	ticket, _ := result["ticket"].(string)
 	if endpoint == "" || ticket == "" {
-		debug.Log("dingtalk", "adapter=%s streamOpen response: %s", a.name, string(data))
-		return "", fmt.Errorf("DingTalk stream endpoint/ticket empty: %s", strings.TrimSpace(string(data)))
+		redacted := redactDingTalkResponse(string(data))
+		debug.Log("dingtalk", "adapter=%s streamOpen response: %s", a.name, redacted)
+		return "", fmt.Errorf("DingTalk stream endpoint/ticket empty: %s", strings.TrimSpace(redacted))
 	}
 
 	wsURL := fmt.Sprintf("%s?ticket=%s", endpoint, ticket)
-	debug.Log("dingtalk", "adapter=%s wsURL=%s", a.name, wsURL)
+	debug.Log("dingtalk", "adapter=%s wsURL=%s", a.name, redactDingTalkURL(wsURL))
 	return wsURL, nil
 }
 
@@ -660,7 +663,7 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
 	}
 	return nil
 }
@@ -708,7 +711,7 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
 	}
 	return nil
 }
@@ -778,4 +781,80 @@ func dingtalkMarkdownTitle(text string) string {
 	}
 
 	return fallback
+}
+
+func redactDingTalkResponse(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		redacted, err := json.Marshal(redactDingTalkValue(decoded, ""))
+		if err == nil {
+			return string(redacted)
+		}
+	}
+
+	return redactDingTalkURL(trimmed)
+}
+
+func redactDingTalkValue(value any, key string) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for k, v := range typed {
+			typed[k] = redactDingTalkValue(v, k)
+		}
+		return typed
+	case []any:
+		for i, v := range typed {
+			typed[i] = redactDingTalkValue(v, key)
+		}
+		return typed
+	case string:
+		if isDingTalkSensitiveKey(key) {
+			return redactSecret(typed)
+		}
+		return redactDingTalkURL(typed)
+	default:
+		return value
+	}
+}
+
+func redactDingTalkURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	query := u.Query()
+	changed := false
+	for key := range query {
+		if isDingTalkSensitiveKey(key) {
+			query.Set(key, redactSecret(query.Get(key)))
+			changed = true
+		}
+	}
+	if changed {
+		u.RawQuery = query.Encode()
+	}
+	return u.String()
+}
+
+func isDingTalkSensitiveKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(key, "token") ||
+		strings.Contains(key, "secret") ||
+		strings.Contains(key, "ticket") ||
+		strings.Contains(key, "webhook")
+}
+
+func redactSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 8 {
+		return "[redacted]"
+	}
+	return value[:4] + "..." + value[len(value)-4:]
 }

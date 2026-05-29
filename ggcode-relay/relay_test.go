@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -320,6 +322,7 @@ func TestHubDestroyRoom(t *testing.T) {
 	p := newPeer(h, r, "client", nil)
 	p.ready = true
 	r.clients[p] = struct{}{}
+	r.offlineTimer = time.NewTimer(time.Hour)
 
 	h.destroyRoom("token")
 
@@ -340,6 +343,161 @@ func TestHubDestroyRoom(t *testing.T) {
 	h.mu.RUnlock()
 	if exists {
 		t.Fatal("room should be removed from hub")
+	}
+	if r.offlineTimer != nil {
+		t.Fatal("offline timer should be cleared on explicit destroy")
+	}
+}
+
+func TestHubRemoveRoomIfEmptyDestroysPersistedState(t *testing.T) {
+	store := newStoreForTest(t)
+	h := newHub(store)
+	token := "token-empty-1234567890"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+	if err := store.saveClientCursor(hashToken(token), "client-1", "sess-1", "ev-000000001"); err != nil {
+		t.Fatal(err)
+	}
+
+	r := h.getOrCreateRoom(token)
+	r.offlineTimer = time.NewTimer(time.Hour)
+
+	h.removeRoomIfEmpty(r)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := store.loadRoom(token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor, err := store.loadClientCursor(hashToken(token), "client-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.sessionID == "" && len(state.history) == 0 && cursor == "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	h.mu.RLock()
+	_, exists := h.rooms[token]
+	h.mu.RUnlock()
+	if exists {
+		t.Fatal("room should be removed from hub")
+	}
+	if r.offlineTimer != nil {
+		t.Fatal("offline timer should be cleared when empty room is removed")
+	}
+	state, err := store.loadRoom(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID != "" || len(state.history) != 0 {
+		t.Fatalf("expected empty room state after cleanup, got session=%q history=%d", state.sessionID, len(state.history))
+	}
+	cursor, err := store.loadClientCursor(hashToken(token), "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "" {
+		t.Fatalf("expected cursor to be removed, got %q", cursor)
+	}
+}
+
+func TestNotifyRoomRecoveringDoesNotCreateRoom(t *testing.T) {
+	h := newHub(nil)
+
+	h.notifyRoomRecovering("missing-room", "sess-1")
+
+	h.mu.RLock()
+	_, exists := h.rooms["missing-room"]
+	h.mu.RUnlock()
+	if exists {
+		t.Fatal("notifyRoomRecovering should not resurrect a missing room")
+	}
+}
+
+func TestRelayAdminAuthorized(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/nuke", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	if !relayAdminAuthorized(req, "secret-token") {
+		t.Fatal("expected bearer token auth to succeed")
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/nuke", nil)
+	req2.Header.Set("X-GGCode-Admin-Token", "secret-token")
+	if !relayAdminAuthorized(req2, "secret-token") {
+		t.Fatal("expected header token auth to succeed")
+	}
+	if relayAdminAuthorized(req2, "wrong-token") {
+		t.Fatal("expected mismatched token auth to fail")
+	}
+}
+
+func TestNukeHandlerDisabledWithoutAdminToken(t *testing.T) {
+	store := newStoreForTest(t)
+	h := newHub(store)
+	handler := newNukeHandler(store, h, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/nuke", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when nuke is disabled, got %d", rec.Code)
+	}
+}
+
+func TestNukeHandlerRequiresAdminToken(t *testing.T) {
+	store := newStoreForTest(t)
+	h := newHub(store)
+	handler := newNukeHandler(store, h, "secret-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/nuke", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without admin token, got %d", rec.Code)
+	}
+}
+
+func TestNukeHandlerAuthorizedClearsRoomsAndTimers(t *testing.T) {
+	store := newStoreForTest(t)
+	h := newHub(store)
+	token := "token-nuke-1234567890"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+
+	r := h.getOrCreateRoom(token)
+	r.offlineTimer = time.NewTimer(time.Hour)
+	client := newPeer(h, r, "client", nil)
+	client.ready = true
+	r.clients[client] = struct{}{}
+
+	handler := newNukeHandler(store, h, "secret-token")
+	req := httptest.NewRequest(http.MethodPost, "/nuke", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with admin token, got %d", rec.Code)
+	}
+	if r.offlineTimer != nil {
+		t.Fatal("expected room offline timer to be cleared by nuke")
+	}
+	h.mu.RLock()
+	_, exists := h.rooms[token]
+	h.mu.RUnlock()
+	if exists {
+		t.Fatal("expected nuke to clear in-memory rooms")
+	}
+	state, err := store.loadRoom(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID != "" || len(state.history) != 0 {
+		t.Fatalf("expected persisted room state to be nuked, got session=%q history=%d", state.sessionID, len(state.history))
 	}
 }
 

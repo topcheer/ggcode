@@ -2,8 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"os"
-	"path/filepath"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -31,8 +29,8 @@ func setWindowIcon(w fyne.Window) {
 	w.SetIcon(fyne.NewStaticResource("icon.png", iconBytes))
 
 	// macOS: write icon to temp file and set as dock icon via native API.
-	tmpIcon := filepath.Join(os.TempDir(), "ggcode-icon.png")
-	if err := os.WriteFile(tmpIcon, iconBytes, 0644); err == nil {
+	tmpIcon, err := writeTempDataFile("ggcode-icon", ".png", iconBytes)
+	if err == nil {
 		setDockIconMac(tmpIcon)
 	}
 }

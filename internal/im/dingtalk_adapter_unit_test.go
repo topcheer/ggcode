@@ -267,6 +267,39 @@ func TestDingtalkStreamOpen_SuccessfulMarshal(t *testing.T) {
 	}
 }
 
+func TestRedactDingTalkResponse(t *testing.T) {
+	raw := `{"accessToken":"abcd1234efgh5678","ticket":"ticket-12345678","sessionWebhook":"https://oapi.dingtalk.com/robot/sendByToken?token=secret-token-1234","nested":{"clientSecret":"my-client-secret"}}`
+	redacted := redactDingTalkResponse(raw)
+
+	for _, secret := range []string{
+		"abcd1234efgh5678",
+		"ticket-12345678",
+		"secret-token-1234",
+		"my-client-secret",
+	} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("expected %q to be redacted from %q", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "abcd...5678") {
+		t.Fatalf("expected access token preview in %q", redacted)
+	}
+	if !strings.Contains(redacted, "http...1234") {
+		t.Fatalf("expected webhook token preview in %q", redacted)
+	}
+}
+
+func TestRedactDingTalkURL(t *testing.T) {
+	raw := "wss://example.com/ws?ticket=abcd1234efgh5678&foo=bar"
+	redacted := redactDingTalkURL(raw)
+	if strings.Contains(redacted, "abcd1234efgh5678") {
+		t.Fatalf("expected ticket to be redacted from %q", redacted)
+	}
+	if !strings.Contains(redacted, "foo=bar") {
+		t.Fatalf("expected non-sensitive query param to survive in %q", redacted)
+	}
+}
+
 func TestDingtalkSendMarkdownViaWebhook_MarshalError(t *testing.T) {
 	a := &dingtalkAdapter{
 		name:      "test",

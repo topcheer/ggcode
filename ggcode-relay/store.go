@@ -346,6 +346,9 @@ func (s *relayStore) destroyRoom(token string) error {
 	if _, err = tx.Exec(`DELETE FROM relay_sessions WHERE token_hash = ?`, tokenHash); err != nil {
 		return fmt.Errorf("delete room sessions: %w", err)
 	}
+	if _, err = tx.Exec(`DELETE FROM relay_client_cursors WHERE room_token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete room cursors: %w", err)
+	}
 	if _, err = tx.Exec(`DELETE FROM relay_rooms WHERE token_hash = ?`, tokenHash); err != nil {
 		return fmt.Errorf("delete room: %w", err)
 	}

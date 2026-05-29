@@ -89,6 +89,24 @@ func TestRequireAuth_WrongToken(t *testing.T) {
 	}
 }
 
+func TestAuthTokenMatches(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	if !authTokenMatches(s.Token(), s.Token()) {
+		t.Fatal("expected matching token to authenticate")
+	}
+	if authTokenMatches("wrong-token", s.Token()) {
+		t.Fatal("expected different token to fail")
+	}
+	if authTokenMatches("", s.Token()) {
+		t.Fatal("expected empty provided token to fail")
+	}
+	if authTokenMatches(s.Token(), "") {
+		t.Fatal("expected empty expected token to fail")
+	}
+}
+
 func TestRequireAuth_PartialBearer(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)

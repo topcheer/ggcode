@@ -53,6 +53,7 @@ type REPL struct {
 	webuiToken          string // webui auth token, displayed in URL fragment
 	knightStartupHint   string // one-time hint shown at startup (e.g. lock conflict)
 	metricCollector     *metrics.Collector
+	metricCancel        context.CancelFunc
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -64,7 +65,9 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	}
 	if a != nil {
 		a.SetUsageHandler(r.recordSessionUsage)
-		r.metricCollector = metrics.NewCollector(256, func(ev metrics.MetricEvent) {
+		collectorCtx, collectorCancel := context.WithCancel(context.Background())
+		r.metricCancel = collectorCancel
+		r.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
 			r.recordMetric(ev)
 		})
 		a.SetMetricHandler(r.metricCollector.Emit)
@@ -768,6 +771,9 @@ func (r *REPL) Run() error {
 	}
 	// Drain remaining metrics before session save.
 	if r.metricCollector != nil {
+		if r.metricCancel != nil {
+			r.metricCancel()
+		}
 		r.metricCollector.Stop()
 	}
 	if r.imManager != nil {

@@ -2,6 +2,18 @@ package provider
 
 import "testing"
 
+func TestTokenUsageAddReturnsCombinedCopy(t *testing.T) {
+	base := TokenUsage{InputTokens: 10, CacheRead: 2}
+	sum := base.Add(TokenUsage{OutputTokens: 3, PromptTokensTotal: 13})
+
+	if base.OutputTokens != 0 || base.PromptTokensTotal != 0 {
+		t.Fatalf("Add mutated receiver: %+v", base)
+	}
+	if sum.InputTokens != 10 || sum.OutputTokens != 3 || sum.CacheRead != 2 || sum.PromptTokensTotal != 13 {
+		t.Fatalf("Add returned wrong aggregate: %+v", sum)
+	}
+}
+
 func TestTokenUsageCacheHitPercent(t *testing.T) {
 	tests := []struct {
 		name  string

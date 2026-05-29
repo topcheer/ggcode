@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/auth"
@@ -450,6 +451,49 @@ func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
 	}
 	if cfg.FirstRun {
 		t.Fatal("expected SaveLanguagePreference to clear first-run flag")
+	}
+}
+
+func TestSaveLanguagePreferenceSecuresConfigPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not reliable on Windows")
+	}
+
+	withTestHome(t)
+	dir := filepath.Join(t.TempDir(), "nested")
+	path := filepath.Join(dir, "ggcode.yaml")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("language: en\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("Chmod(dir) error = %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod(path) error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.FilePath = path
+	if err := cfg.SaveLanguagePreference("zh-CN"); err != nil {
+		t.Fatalf("SaveLanguagePreference() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(path) error = %v", err)
+	}
+	if got := info.Mode().Perm(); got != secureConfigFileMode {
+		t.Fatalf("config mode = %o, want %o", got, secureConfigFileMode)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("Stat(dir) error = %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != secureConfigDirMode {
+		t.Fatalf("config dir mode = %o, want %o", got, secureConfigDirMode)
 	}
 }
 

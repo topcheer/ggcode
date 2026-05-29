@@ -115,6 +115,9 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 	store := newStoreForTest(t)
 	token := "token-1234567890abcdef"
 	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+	if err := store.saveClientCursor(hashToken(token), "client-1", "sess-1", "ev-000000001"); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.destroyRoom(token); err != nil {
 		t.Fatal(err)
@@ -133,6 +136,13 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 	}
 	if len(history) != 1 {
 		t.Fatalf("expected logical session history to survive room destroy, got %d events", len(history))
+	}
+	cursor, err := store.loadClientCursor(hashToken(token), "client-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "" {
+		t.Fatalf("expected room cursor to be removed, got %q", cursor)
 	}
 }
 

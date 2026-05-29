@@ -225,8 +225,11 @@ func (e *sendEntry) TypedShortcut(s fyne.Shortcut) {
 
 // tryPasteImageFromClipboard reads image from system clipboard (cross-platform).
 func (e *sendEntry) tryPasteImageFromClipboard() bool {
-	tmpFile := os.TempDir() + string(os.PathSeparator) + "ggcode-clipboard-paste.png"
-	os.Remove(tmpFile)
+	tmpFile, err := createTempPath("ggcode-clipboard-paste", ".png")
+	if err != nil {
+		return false
+	}
+	defer os.Remove(tmpFile)
 
 	var ok bool
 	switch runtime.GOOS {
@@ -240,6 +243,9 @@ func (e *sendEntry) tryPasteImageFromClipboard() bool {
 		return false
 	}
 	if !ok {
+		return false
+	}
+	if err := os.Chmod(tmpFile, desktopTempFileMode); err != nil {
 		return false
 	}
 	info, err := os.Stat(tmpFile)
@@ -274,11 +280,11 @@ end try`
 func pasteImageLinux(tmpFile string) bool {
 	out, err := exec.Command("xclip", "-selection", "clipboard", "-t", "image/png", "-o").Output()
 	if err == nil && len(out) > 0 {
-		return os.WriteFile(tmpFile, out, 0644) == nil
+		return os.WriteFile(tmpFile, out, desktopTempFileMode) == nil
 	}
 	out, err = exec.Command("wl-paste", "--type", "image/png").Output()
 	if err == nil && len(out) > 0 {
-		return os.WriteFile(tmpFile, out, 0644) == nil
+		return os.WriteFile(tmpFile, out, desktopTempFileMode) == nil
 	}
 	return false
 }

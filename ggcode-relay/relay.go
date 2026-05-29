@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -472,17 +475,39 @@ func (h *hub) getOrCreateRoom(token string) *room {
 
 func (h *hub) removeRoomIfEmpty(r *room) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	r.mu.RLock()
-	empty := r.server == nil && len(r.clients) == 0
-	r.mu.RUnlock()
-	if empty {
-		delete(h.rooms, r.token)
+	current, ok := h.rooms[r.token]
+	if !ok || current != r {
+		h.mu.Unlock()
+		return
 	}
+	r.mu.Lock()
+	empty := r.server == nil && len(r.clients) == 0
+	if !empty {
+		r.mu.Unlock()
+		h.mu.Unlock()
+		return
+	}
+	stopOfflineTimerLocked(r)
+	delete(h.rooms, r.token)
+	r.mu.Unlock()
+	h.mu.Unlock()
+
+	if h.store != nil {
+		go func() { _ = h.store.destroyRoom(r.token) }()
+	}
+	if h.stats != nil {
+		h.stats.recordRoomDestroy()
+	}
+	log.Printf("[relay] empty room destroyed: room=%s", shortToken(r.token))
 }
 
 func (h *hub) notifyRoomRecovering(token, sessionID string) {
-	r := h.getOrCreateRoom(token)
+	h.mu.RLock()
+	r := h.rooms[token]
+	h.mu.RUnlock()
+	if r == nil {
+		return
+	}
 	r.mu.RLock()
 	srv := r.server
 	clients := len(r.clients)
@@ -499,18 +524,19 @@ func (h *hub) notifyRoomRecovering(token, sessionID string) {
 }
 
 func (h *hub) scheduleRoomExpiry(token string) {
-	h.mu.RLock()
+	h.mu.Lock()
 	r := h.rooms[token]
-	h.mu.RUnlock()
 	if r == nil {
+		h.mu.Unlock()
 		return
 	}
-	if r.offlineTimer != nil {
-		r.offlineTimer.Stop()
-	}
+	r.mu.Lock()
+	stopOfflineTimerLocked(r)
 	r.offlineTimer = time.AfterFunc(5*time.Minute, func() {
 		h.expireRoom(token)
 	})
+	r.mu.Unlock()
+	h.mu.Unlock()
 }
 
 func (h *hub) expireRoom(token string) {
@@ -520,14 +546,16 @@ func (h *hub) expireRoom(token string) {
 		h.mu.Unlock()
 		return
 	}
-	r.mu.RLock()
+	r.mu.Lock()
 	hasServer := r.server != nil
-	r.mu.RUnlock()
 	if hasServer {
+		r.mu.Unlock()
 		h.mu.Unlock()
 		return
 	}
+	stopOfflineTimerLocked(r)
 	delete(h.rooms, token)
+	r.mu.Unlock()
 	h.mu.Unlock()
 
 	notice := relayMessage{Type: "sharing_stopped"}
@@ -578,6 +606,7 @@ func (h *hub) destroyRoom(token string) {
 
 	notice := relayMessage{Type: "sharing_stopped"}
 	r.mu.Lock()
+	stopOfflineTimerLocked(r)
 	for c := range r.clients {
 		c.send(notice)
 	}
@@ -595,6 +624,13 @@ func (h *hub) destroyRoom(token string) {
 		h.stats.recordRoomDestroy()
 	}
 	log.Printf("[relay] room destroyed: room=%s", shortToken(token))
+}
+
+func stopOfflineTimerLocked(r *room) {
+	if r.offlineTimer != nil {
+		r.offlineTimer.Stop()
+		r.offlineTimer = nil
+	}
 }
 
 // trace is a convenience wrapper.
@@ -657,10 +693,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			room.mu.Lock()
 		}
 		room.server = p
-		if room.offlineTimer != nil {
-			room.offlineTimer.Stop()
-			room.offlineTimer = nil
-		}
+		stopOfflineTimerLocked(room)
 	} else {
 		room.clients[p] = struct{}{}
 	}
@@ -717,9 +750,71 @@ func (r *room) notifyServerClientConnected() {
 
 // ─── Main ───
 
+const relayAdminTokenEnv = "GGCODE_RELAY_ADMIN_TOKEN"
+
 func mustJSON(v interface{}) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+func constantTimeMatch(provided, expected string) bool {
+	if provided == "" || expected == "" {
+		return false
+	}
+	providedHash := sha256.Sum256([]byte(provided))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
+}
+
+func relayAdminAuthorized(r *http.Request, expectedToken string) bool {
+	if expectedToken == "" {
+		return false
+	}
+	token := strings.TrimSpace(r.Header.Get("X-GGCode-Admin-Token"))
+	if token == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			token = strings.TrimSpace(auth[7:])
+		}
+	}
+	return constantTimeMatch(token, expectedToken)
+}
+
+func newNukeHandler(store *relayStore, h *hub, adminToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		if adminToken == "" {
+			http.Error(w, "nuke disabled", http.StatusServiceUnavailable)
+			return
+		}
+		if !relayAdminAuthorized(r, adminToken) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ggcode-relay"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := store.nukeAll(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		h.mu.Lock()
+		for token, r := range h.rooms {
+			r.mu.Lock()
+			stopOfflineTimerLocked(r)
+			for c := range r.clients {
+				c.send(relayMessage{Type: "sharing_stopped"})
+			}
+			if r.server != nil {
+				r.server.send(relayMessage{Type: "sharing_stopped"})
+			}
+			r.mu.Unlock()
+			delete(h.rooms, token)
+		}
+		h.mu.Unlock()
+		w.WriteHeader(200)
+	}
 }
 
 func main() {
@@ -736,6 +831,7 @@ func main() {
 	defer store.Close()
 
 	h := newHub(store)
+	adminToken := strings.TrimSpace(os.Getenv(relayAdminTokenEnv))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/share/session", h.handleShareSession)
@@ -752,30 +848,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snap)
 	})
-	mux.HandleFunc("/nuke", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "POST only", 405)
-			return
-		}
-		if err := store.nukeAll(); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		h.mu.Lock()
-		for token, r := range h.rooms {
-			r.mu.RLock()
-			for c := range r.clients {
-				c.send(relayMessage{Type: "sharing_stopped"})
-			}
-			if r.server != nil {
-				r.server.send(relayMessage{Type: "sharing_stopped"})
-			}
-			r.mu.RUnlock()
-			delete(h.rooms, token)
-		}
-		h.mu.Unlock()
-		w.WriteHeader(200)
-	})
+	if adminToken == "" {
+		log.Printf("[relay] /nuke disabled: %s is not set", relayAdminTokenEnv)
+	}
+	mux.HandleFunc("/nuke", newNukeHandler(store, h, adminToken))
 
 	// Background tasks.
 	go func() {

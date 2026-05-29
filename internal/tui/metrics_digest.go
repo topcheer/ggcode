@@ -15,7 +15,7 @@ func (m *Model) appendTurnMetricsDigest(turnIndex int) {
 	if !ok {
 		return
 	}
-	m.chatWriteLocalSystem(nextSystemID(), formatTurnMetricsDigest(m.currentLanguage(), turn))
+	m.chatWriteSystem(nextSystemID(), formatTurnMetricsDigest(m.currentLanguage(), turn))
 	m.lastMetricDigestTurn = turnIndex
 }
 

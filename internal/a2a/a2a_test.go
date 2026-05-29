@@ -1322,9 +1322,23 @@ func TestCleanupExpiredTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	deadline := time.Now().Add(2 * time.Second)
+	terminal := false
+	for time.Now().Before(deadline) {
+		info, ok := handler.GetTask(task.ID)
+		if ok && info.Status.State.IsTerminal() {
+			terminal = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !terminal {
+		t.Fatalf("task %s did not reach terminal state before cleanup test", task.ID)
+	}
+
 	handler.mu.Lock()
 	internal := handler.tasks[task.ID]
-	internal.Status = TaskStatus{State: TaskStateCompleted}
+	internal.Status = TaskStatus{State: internal.Status.State}
 	internal.UpdatedAt = time.Now().Add(-maxCompletedAge - time.Minute)
 	handler.mu.Unlock()
 

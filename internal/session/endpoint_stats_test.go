@@ -82,6 +82,22 @@ func TestUsageForEndpointFallsBackToLegacyTotal(t *testing.T) {
 	}
 }
 
+func TestUsageForEndpointRebuildsMissingBucketsFromHistory(t *testing.T) {
+	ses := &Session{
+		Vendor:   "zai",
+		Endpoint: "default",
+		UsageHistory: []UsageEntry{
+			{Vendor: "zai", Endpoint: "default", Usage: provider.TokenUsage{InputTokens: 7}},
+			{Vendor: "zai", Endpoint: "default", Usage: provider.TokenUsage{OutputTokens: 2}},
+		},
+	}
+
+	got := ses.UsageForEndpoint("zai", "default")
+	if got.InputTokens != 7 || got.OutputTokens != 2 {
+		t.Fatalf("expected rebuilt history usage, got %+v", got)
+	}
+}
+
 func TestMetricsForEndpointFallsBackToLegacyMetrics(t *testing.T) {
 	ses := &Session{
 		Vendor:   "zai",
@@ -91,5 +107,18 @@ func TestMetricsForEndpointFallsBackToLegacyMetrics(t *testing.T) {
 
 	if got := ses.MetricsForEndpoint("zai", "default"); len(got) != 1 {
 		t.Fatalf("expected legacy fallback metrics, got %d", len(got))
+	}
+}
+
+func TestMetricsForEndpointReturnsCopy(t *testing.T) {
+	ses := NewSession("zai", "default", "glm")
+	ses.AppendMetricForEndpoint("zai", "default", metrics.MetricEvent{Type: "llm"})
+
+	got := ses.MetricsForEndpoint("zai", "default")
+	got[0].Type = "tool"
+
+	again := ses.MetricsForEndpoint("zai", "default")
+	if len(again) != 1 || again[0].Type != "llm" {
+		t.Fatalf("expected copied metrics slice, got %+v", again)
 	}
 }
