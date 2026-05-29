@@ -33,6 +33,13 @@ func TestNewRelayClient(t *testing.T) {
 	}
 }
 
+func TestNewRelayClientRejectsRemoteInsecureRelayURL(t *testing.T) {
+	_, err := NewRelayClient("ws://relay.example.com", "0123456789abcdef0123456789abcdef")
+	if err == nil || !strings.Contains(err.Error(), "insecure relay URL") {
+		t.Fatalf("NewRelayClient() error = %v, want insecure relay URL error", err)
+	}
+}
+
 func TestRelayClientConnectURL(t *testing.T) {
 	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
 	if err != nil {
@@ -175,5 +182,59 @@ func TestRelayReconnectDelay(t *testing.T) {
 		if got := relayReconnectDelay(tt.attempt); got != tt.want {
 			t.Fatalf("relayReconnectDelay(%d) = %v, want %v", tt.attempt, got, tt.want)
 		}
+	}
+}
+
+func TestRelayClientHandleKeyOfferRespondsWithWrappedKey(t *testing.T) {
+	serverPub, serverPriv, err := generateShareKeyExchangeKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientPub, clientPriv, err := generateShareKeyExchangeKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := NewRelayClientWithDescriptor("wss://relay.example.com", ShareDescriptor{
+		ProtocolVersion:  ShareProtocolV3,
+		ShareMode:        ShareModeV3,
+		RoomID:           "room-1",
+		AuthTicket:       "server-auth",
+		RenewToken:       "server-renew",
+		CryptoKey:        "room-secret",
+		ServerPublicKey:  serverPub,
+		ServerPrivateKey: serverPriv,
+	}, "server", RelayClientMetadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+
+	payload := json.RawMessage(`{"client_public_key":"` + clientPub + `"}`)
+	if err := rc.handleKeyOffer("client-1", payload); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case raw := <-rc.sendCh:
+		var relayMsg struct {
+			Type     string         `json:"type"`
+			ClientID string         `json:"client_id"`
+			Data     relayKeyAccept `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &relayMsg); err != nil {
+			t.Fatal(err)
+		}
+		if relayMsg.Type != "key_accept" || relayMsg.ClientID != "client-1" {
+			t.Fatalf("unexpected relay msg: %+v", relayMsg)
+		}
+		roomKey, err := unwrapShareRoomKey(relayMsg.Data.Nonce, relayMsg.Data.Ciphertext, "room-1", "client-1", clientPriv, serverPub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if roomKey != "room-secret" {
+			t.Fatalf("wrapped room key = %q, want room-secret", roomKey)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for key_accept")
 	}
 }

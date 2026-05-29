@@ -19,9 +19,11 @@ import (
 const (
 	shareProtocolLegacy = 1
 	shareProtocolV2     = 2
+	shareProtocolV3     = 3
 
 	shareModeLegacy = "legacy"
 	shareModeV2     = "v2"
+	shareModeV3     = "v3"
 	shareModeCompat = "compat"
 
 	shareTicketKindConnect = "connect"
@@ -190,15 +192,22 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if err != nil {
 		return nil, http.StatusInternalServerError, "mint renew token"
 	}
+	shareMode := shareModeV2
+	if protocolVersion >= shareProtocolV3 {
+		shareMode = shareModeV3
+	}
 	notice := ""
 	if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
 		notice = "Experimental share v2 is enabled for this connection."
 	}
+	if protocolVersion >= shareProtocolV3 {
+		notice = "Experimental share v3 is enabled for this connection."
+	}
 	return &shareHandshake{
 		role:            role,
 		roomKey:         roomID,
-		protocolVersion: shareProtocolV2,
-		shareMode:       shareModeV2,
+		protocolVersion: protocolVersion,
+		shareMode:       shareMode,
 		connectMode:     connectMode,
 		authExpiresAt:   exp,
 		renewToken:      nextRenewToken,
@@ -234,6 +243,18 @@ func connectedShareMetadata(handshake *shareHandshake) map[string]any {
 		data["renew_expires_at"] = handshake.renewExpiresAt.Format(time.RFC3339)
 	}
 	return data
+}
+
+func requestedShareProtocolVersion(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("proto"))
+	if raw == "" {
+		return shareProtocolV2, nil
+	}
+	protocolVersion, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	return protocolVersion, nil
 }
 
 func splitCaps(raw string) []string {
@@ -288,9 +309,15 @@ func mintShareTicket(secret, roomID, role, kind string, exp time.Time) (string, 
 	})
 }
 
-func issueShareSession(cfg shareAuthConfig) (issuedShareSessionResponse, error) {
+func issueShareSession(cfg shareAuthConfig, requestedProtocol int) (issuedShareSessionResponse, error) {
 	if strings.TrimSpace(cfg.Secret) == "" {
 		return issuedShareSessionResponse{}, errors.New("share v2 unavailable")
+	}
+	if requestedProtocol < shareProtocolV2 {
+		requestedProtocol = shareProtocolV2
+	}
+	if requestedProtocol > shareProtocolV3 {
+		return issuedShareSessionResponse{}, fmt.Errorf("unsupported share protocol %d", requestedProtocol)
 	}
 	roomID, err := randomHex(16)
 	if err != nil {
@@ -308,13 +335,17 @@ func issueShareSession(cfg shareAuthConfig) (issuedShareSessionResponse, error) 
 	if err != nil {
 		return issuedShareSessionResponse{}, err
 	}
+	shareMode := shareModeV2
 	notice := ""
-	if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
+	if requestedProtocol >= shareProtocolV3 {
+		shareMode = shareModeV3
+		notice = "Experimental share v3 is enabled for this session."
+	} else if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
 		notice = "Experimental share v2 is enabled for this session."
 	}
 	return issuedShareSessionResponse{
-		ProtocolVersion:  shareProtocolV2,
-		ShareMode:        shareModeV2,
+		ProtocolVersion:  requestedProtocol,
+		ShareMode:        shareMode,
 		RoomID:           roomID,
 		ServerAuthTicket: serverConnect,
 		ClientAuthTicket: clientConnect,

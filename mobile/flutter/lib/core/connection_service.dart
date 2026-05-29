@@ -21,6 +21,47 @@ String normalizeTunnelUrl(String raw) {
   return url;
 }
 
+bool isLocalTunnelHost(String host) {
+  final normalized = host.trim().toLowerCase();
+  if (normalized.isEmpty) return false;
+  if (normalized == 'localhost' ||
+      normalized == 'host.docker.internal' ||
+      normalized == 'gateway.docker.internal' ||
+      normalized.endsWith('.local') ||
+      !normalized.contains('.')) {
+    return true;
+  }
+  final ip = InternetAddress.tryParse(host);
+  if (ip == null) return false;
+  return ip.isLoopback || ip.isLinkLocal || _isPrivateTunnelAddress(ip);
+}
+
+bool _isPrivateTunnelAddress(InternetAddress address) {
+  final raw = address.rawAddress;
+  if (address.type == InternetAddressType.IPv4 && raw.length == 4) {
+    return raw[0] == 10 ||
+        (raw[0] == 172 && raw[1] >= 16 && raw[1] <= 31) ||
+        (raw[0] == 192 && raw[1] == 168);
+  }
+  if (address.type == InternetAddressType.IPv6 && raw.length == 16) {
+    return (raw[0] & 0xfe) == 0xfc;
+  }
+  return false;
+}
+
+String? tunnelUrlSecurityError(String raw) {
+  Uri uri;
+  try {
+    uri = Uri.parse(normalizeTunnelUrl(raw));
+  } catch (_) {
+    return null;
+  }
+  if (uri.scheme != 'ws' || isLocalTunnelHost(uri.host)) {
+    return null;
+  }
+  return 'Insecure relay URL is only allowed for localhost or private network hosts';
+}
+
 enum ConnectionStatus {
   disconnected,
   connecting,
@@ -61,6 +102,7 @@ class ShareConnectionDescriptor {
   final String authTicket;
   final String renewToken;
   final String cryptoKey;
+  final String serverPublicKey;
 
   const ShareConnectionDescriptor({
     required this.relayUrl,
@@ -71,6 +113,7 @@ class ShareConnectionDescriptor {
     required this.authTicket,
     required this.renewToken,
     required this.cryptoKey,
+    required this.serverPublicKey,
   });
 
   factory ShareConnectionDescriptor.parse(String raw) {
@@ -82,23 +125,31 @@ class ShareConnectionDescriptor {
     final renewToken = uri.queryParameters['renew_token'] ?? '';
     final token = uri.queryParameters['token'] ?? '';
     final cryptoKey = uri.queryParameters['crypto_key'] ?? '';
+    final serverPublicKey = uri.queryParameters['kx_pub'] ?? '';
     final isV2 = proto >= 2 ||
         roomId.isNotEmpty ||
         authTicket.isNotEmpty ||
         renewToken.isNotEmpty;
+    final protocolVersion = isV2 ? (proto >= 3 ? 3 : 2) : 1;
     return ShareConnectionDescriptor(
       relayUrl: '${uri.scheme}://${uri.authority}${uri.path}',
-      protocolVersion: isV2 ? 2 : 1,
-      shareMode: isV2 ? 'v2' : 'legacy',
+      protocolVersion: protocolVersion,
+      shareMode: protocolVersion >= 3
+          ? 'v3'
+          : isV2
+              ? 'v2'
+              : 'legacy',
       token: token,
       roomId: roomId,
       authTicket: authTicket,
       renewToken: renewToken,
       cryptoKey: cryptoKey,
+      serverPublicKey: serverPublicKey,
     );
   }
 
   bool get isV2 => protocolVersion >= 2 && roomId.isNotEmpty;
+  bool get isV3 => protocolVersion >= 3 && roomId.isNotEmpty;
 
   String get cryptoMaterial => cryptoKey.isNotEmpty ? cryptoKey : token;
 
@@ -115,6 +166,7 @@ class ShareConnectionDescriptor {
     String? authTicket,
     String? renewToken,
     String? cryptoKey,
+    String? serverPublicKey,
   }) {
     return ShareConnectionDescriptor(
       relayUrl: relayUrl ?? this.relayUrl,
@@ -125,6 +177,7 @@ class ShareConnectionDescriptor {
       authTicket: authTicket ?? this.authTicket,
       renewToken: renewToken ?? this.renewToken,
       cryptoKey: cryptoKey ?? this.cryptoKey,
+      serverPublicKey: serverPublicKey ?? this.serverPublicKey,
     );
   }
 
@@ -134,13 +187,16 @@ class ShareConnectionDescriptor {
     if (isV2) {
       query['proto'] = protocolVersion.toString();
       query['room_id'] = roomId;
-      if (cryptoKey.isNotEmpty) {
+      if (serverPublicKey.isNotEmpty) {
+        query['kx_pub'] = serverPublicKey;
+      }
+      if (!isV3 && cryptoKey.isNotEmpty) {
         query['crypto_key'] = cryptoKey;
       }
       if (!publicOnly) {
         query['role'] = 'client';
         query['client'] = 'mobile';
-        query['caps'] = 'share_v2,share_notice,share_renew';
+        query['caps'] = 'share_v2,share_v3,share_notice,share_renew';
       }
       if (!publicOnly && renewToken.isNotEmpty) {
         query['renew_token'] = renewToken;
@@ -152,7 +208,7 @@ class ShareConnectionDescriptor {
       if (!publicOnly) {
         query['role'] = 'client';
         query['client'] = 'mobile';
-        query['caps'] = 'share_v2,share_notice,share_renew';
+        query['caps'] = 'share_v2,share_v3,share_notice,share_renew';
       }
     }
     return uri.replace(queryParameters: query).toString();
@@ -200,9 +256,10 @@ class ShareConnectionMetadata {
 
 class ConnectionService {
   ShareConnectionDescriptor _descriptor;
-  final TunnelCrypto crypto;
+  TunnelCrypto? _crypto;
   WebSocket? _socket;
   bool _disposed = false;
+  bool _permanentFailure = false;
   bool _serverOfflineReconnect = false;
   bool _everConnected = false;
   int _reconnectAttempts = 0;
@@ -231,21 +288,40 @@ class ConnectionService {
   // Sequential message processing queue
   Future<void> _queue = Future.value();
   int _decryptErrorCount = 0;
+  String _clientId = '';
+  ShareKeyExchangeState? _keyExchangeState;
+  Completer<void>? _keyExchangeReady;
+  bool _keyOfferSent = false;
 
   ConnectionService({required ShareConnectionDescriptor descriptor})
-      : _descriptor = descriptor,
-        crypto = TunnelCrypto(descriptor.cryptoMaterial);
+      : _descriptor = descriptor {
+    if (!descriptor.isV3) {
+      _crypto = TunnelCrypto(descriptor.cryptoMaterial);
+    }
+  }
 
   Future<void> connect() async {
     _cancelReconnect();
+    _permanentFailure = false;
+    _resetHandshakeState();
     _statusController.add(ConnectionStatus.connecting);
 
+    final runtimeUrl = _descriptor.runtimeUrl();
+    final securityError = tunnelUrlSecurityError(runtimeUrl);
+    if (securityError != null) {
+      _permanentFailure = true;
+      _errorController.add(securityError);
+      _statusController.add(ConnectionStatus.disconnected);
+      return;
+    }
+
     try {
-      _socket = await WebSocket.connect(_descriptor.runtimeUrl())
+      _socket = await WebSocket.connect(runtimeUrl)
           .timeout(const Duration(seconds: 30));
     } catch (e) {
       if (!_disposed) {
         final error = _formatConnectError(e);
+        _permanentFailure = isPermanentRoomFailureMessage(error);
         _errorController.add(error);
         _statusController.add(ConnectionStatus.disconnected);
         if (isPermanentRoomFailureMessage(error)) {
@@ -284,18 +360,26 @@ class ConnectionService {
       },
       onDone: () {
         _cleanup();
-        if (!_disposed) {
+        if (_disposed) return;
+        _queue.whenComplete(() {
+          if (_disposed || _permanentFailure) {
+            return;
+          }
           _statusController.add(ConnectionStatus.disconnected);
           if (_serverOfflineReconnect || _everConnected) {
             _scheduleServerOfflineReconnect();
           } else {
             _scheduleReconnect();
           }
-        }
+        });
       },
       onError: (e) {
         _cleanup();
-        if (!_disposed) {
+        if (_disposed) return;
+        _queue.whenComplete(() {
+          if (_disposed || _permanentFailure) {
+            return;
+          }
           _errorController.add('Connection error: $e');
           _statusController.add(ConnectionStatus.disconnected);
           if (_serverOfflineReconnect || _everConnected) {
@@ -303,7 +387,7 @@ class ConnectionService {
           } else {
             _scheduleReconnect();
           }
-        }
+        });
       },
     );
   }
@@ -371,6 +455,12 @@ class ConnectionService {
         }
         _everConnected = true;
         _serverOfflineReconnect = false;
+        if (_descriptor.isV3 &&
+            _descriptor.serverPublicKey.isEmpty &&
+            metadata.protocolVersion >= 3) {
+          _handlePermanentRelayFailure('Missing share v3 server public key');
+          break;
+        }
         _statusController.add(ConnectionStatus.connected);
         _metadataController.add(metadata);
         _startHeartbeat();
@@ -380,8 +470,17 @@ class ConnectionService {
         break;
 
       case 'active_session':
+        if (_descriptor.isV3 && !_keyOfferSent) {
+          try {
+            await _beginKeyExchange();
+          } catch (error) {
+            _handlePermanentRelayFailure('Share key exchange failed: $error');
+            break;
+          }
+        }
         _messageController.add(proto.WsMessage(
           sessionId: map['session_id'] as String?,
+          generation: (map['generation'] as num?)?.toInt(),
           type: type,
           data: Map<String, dynamic>.from(map)
             ..remove('type')
@@ -403,6 +502,7 @@ class ConnectionService {
         if (!_disposed) {
           _messageController.add(proto.WsMessage(
             sessionId: map['session_id'] as String?,
+            generation: (map['generation'] as num?)?.toInt(),
             type: 'server_offline',
             data: data,
           ));
@@ -427,6 +527,10 @@ class ConnectionService {
         }
         break;
 
+      case 'key_accept':
+        await _handleKeyAccept(map);
+        break;
+
       case 'sharing_stopped':
         // User explicitly stopped sharing — permanent disconnect.
         _cleanup();
@@ -437,11 +541,23 @@ class ConnectionService {
         }
         break;
 
+      case 'error':
+        final reason = map['reason'] as String? ?? 'Relay error';
+        if (isPermanentRoomFailureMessage(reason)) {
+          _handlePermanentRelayFailure(
+            'Room not found: stale or expired share token',
+          );
+        } else {
+          _errorController.add(reason);
+        }
+        break;
+
       case 'resume_ack':
       case 'resume_miss':
       case 'snapshot_reset':
         _messageController.add(proto.WsMessage(
           sessionId: map['session_id'] as String?,
+          generation: (map['generation'] as num?)?.toInt(),
           type: type,
           data: Map<String, dynamic>.from(map)
             ..remove('type')
@@ -453,6 +569,11 @@ class ConnectionService {
         final nonce = map['nonce'] as String? ?? '';
         final ciphertext = map['ciphertext'] as String? ?? '';
         if (nonce.isEmpty || ciphertext.isEmpty) return;
+        final crypto = _crypto;
+        if (crypto == null) {
+          _errorController.add('Share key exchange is still pending');
+          return;
+        }
 
         try {
           final plaintextBytes = await crypto.decryptData(nonce, ciphertext);
@@ -468,6 +589,18 @@ class ConnectionService {
               streamId: (msg.streamId?.isNotEmpty ?? false)
                   ? msg.streamId
                   : map['stream_id'] as String?,
+              generation:
+                  msg.generation ?? (map['generation'] as num?)?.toInt(),
+              type: msg.type,
+              data: msg.data,
+            );
+          } else if (msg.generation == null && map['generation'] is num) {
+            msg = proto.WsMessage(
+              sessionId: msg.sessionId,
+              eventId: msg.eventId,
+              streamId: msg.streamId,
+              messageId: msg.messageId,
+              generation: (map['generation'] as num).toInt(),
               type: msg.type,
               data: msg.data,
             );
@@ -488,6 +621,74 @@ class ConnectionService {
     }
   }
 
+  void _resetHandshakeState() {
+    _keyOfferSent = false;
+    _keyExchangeState = null;
+    if (_descriptor.isV3) {
+      _crypto = null;
+      _keyExchangeReady = Completer<void>();
+    } else {
+      _crypto = TunnelCrypto(_descriptor.cryptoMaterial);
+      _keyExchangeReady = null;
+    }
+  }
+
+  Future<void> _beginKeyExchange() async {
+    if (!_descriptor.isV3 || _keyOfferSent) return;
+    if (_descriptor.serverPublicKey.isEmpty) {
+      throw StateError('missing share v3 server public key');
+    }
+    if (_clientId.isEmpty) {
+      throw StateError('missing client id for share v3 key exchange');
+    }
+    _keyExchangeState = await ShareKeyExchangeState.create();
+    _keyOfferSent = true;
+    send({
+      'type': 'key_offer',
+      'client_id': _clientId,
+      'data': {
+        'client_public_key': _keyExchangeState!.clientPublicKey,
+      },
+    });
+  }
+
+  Future<void> _handleKeyAccept(Map<String, dynamic> map) async {
+    if (!_descriptor.isV3) return;
+    try {
+      final data = map['data'] is Map<String, dynamic>
+          ? map['data'] as Map<String, dynamic>
+          : map['data'] is Map
+              ? Map<String, dynamic>.from(map['data'] as Map)
+              : const <String, dynamic>{};
+      final nonce = data['nonce'] as String? ?? '';
+      final ciphertext = data['ciphertext'] as String? ?? '';
+      if (nonce.isEmpty || ciphertext.isEmpty) {
+        throw StateError('missing share v3 wrapped room key');
+      }
+      final state = _keyExchangeState;
+      if (state == null) {
+        throw StateError('share v3 key exchange was not initialized');
+      }
+      final roomKey = await state.unwrapRoomKey(
+        nonce: nonce,
+        ciphertext: ciphertext,
+        roomId: _descriptor.roomId,
+        clientId: _clientId,
+        serverPublicKey: _descriptor.serverPublicKey,
+      );
+      _crypto = TunnelCrypto(roomKey);
+      if (!(_keyExchangeReady?.isCompleted ?? true)) {
+        _keyExchangeReady!.complete();
+      }
+      send({
+        'type': 'key_ready',
+        'client_id': _clientId,
+      });
+    } catch (error) {
+      _errorController.add('Share key exchange failed: $error');
+    }
+  }
+
   String _formatConnectError(Object error) {
     final raw = error.toString();
     if (isPermanentRoomFailureMessage(raw)) {
@@ -500,6 +701,19 @@ class ConnectionService {
     _stopHeartbeat();
     _socketSub?.cancel();
     _socketSub = null;
+  }
+
+  void _handlePermanentRelayFailure(String error) {
+    _permanentFailure = true;
+    _cancelReconnect();
+    _serverOfflineReconnect = false;
+    _cleanup();
+    _socket?.close();
+    _socket = null;
+    if (!_disposed) {
+      _errorController.add(error);
+      _statusController.add(ConnectionStatus.disconnected);
+    }
   }
 
   void _startHeartbeat() {
@@ -522,6 +736,7 @@ class ConnectionService {
     required String clientId,
     String? sessionId,
   }) {
+    _clientId = clientId;
     send({
       'type': 'resume_hello',
       'client_id': clientId,
@@ -556,6 +771,16 @@ class ConnectionService {
   }
 
   Future<void> sendEncrypted(proto.WsMessage msg) async {
+    if (_descriptor.isV3) {
+      final ready = _keyExchangeReady;
+      if (ready != null && !ready.isCompleted) {
+        await ready.future;
+      }
+    }
+    final crypto = _crypto;
+    if (crypto == null) {
+      throw StateError('Tunnel crypto is not ready');
+    }
     final plaintext = utf8.encode(msg.toJson());
     final encrypted = await crypto.encryptData(plaintext);
     final relayMsg = jsonEncode({
@@ -570,7 +795,9 @@ class ConnectionService {
 
   void disconnect() {
     _cancelReconnect();
+    _permanentFailure = false;
     _serverOfflineReconnect = false;
+    _resetHandshakeState();
     _cleanup();
     _socket?.close();
     _socket = null;

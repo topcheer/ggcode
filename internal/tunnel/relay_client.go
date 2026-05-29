@@ -43,9 +43,19 @@ type RelayClient struct {
 	mu          sync.RWMutex
 }
 
+type relayKeyOffer struct {
+	ClientPublicKey string `json:"client_public_key"`
+}
+
+type relayKeyAccept struct {
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
+}
+
 type RelayConnectedState struct {
 	Role            string
 	SessionID       string
+	Generation      uint64
 	HistoryCount    int
 	LastEventID     string
 	ProtocolVersion int
@@ -80,6 +90,9 @@ func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 }
 
 func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role string, meta RelayClientMetadata) (*RelayClient, error) {
+	if err := validateRelayURLSecurity(relayURL); err != nil {
+		return nil, err
+	}
 	crypto, err := NewCrypto(desc.CryptoMaterial())
 	if err != nil {
 		return nil, err
@@ -298,7 +311,9 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			SessionID   string          `json:"session_id,omitempty"`
 			EventID     string          `json:"event_id,omitempty"`
 			StreamID    string          `json:"stream_id,omitempty"`
+			ClientID    string          `json:"client_id,omitempty"`
 			MessageID   string          `json:"message_id,omitempty"`
+			Generation  uint64          `json:"generation,omitempty"`
 			LastEventID string          `json:"last_event_id,omitempty"`
 			Count       int             `json:"count,omitempty"`
 			Nonce       string          `json:"nonce,omitempty"`
@@ -316,6 +331,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			state := RelayConnectedState{
 				Role:         relayMsg.Role,
 				SessionID:    relayMsg.SessionID,
+				Generation:   relayMsg.Generation,
 				HistoryCount: relayMsg.Count,
 				LastEventID:  relayMsg.LastEventID,
 			}
@@ -438,6 +454,12 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 				SessionID: relayMsg.SessionID,
 				Data:      relayMsg.Data,
 			})
+		case "key_offer":
+			if rc.role == "server" {
+				if err := rc.handleKeyOffer(relayMsg.ClientID, relayMsg.Data); err != nil {
+					debug.Log("tunnel", "relay-client: key offer error: %v", err)
+				}
+			}
 		case "theme_change":
 			rc.deliver(GatewayMessage{
 				Type:      CmdThemeChange,
@@ -643,4 +665,50 @@ func (rc *RelayClient) updateShareDescriptor(fn func(desc *ShareDescriptor)) {
 	defer rc.mu.Unlock()
 	fn(&rc.desc)
 	rc.token = rc.desc.SessionToken()
+}
+
+func (rc *RelayClient) handleKeyOffer(clientID string, raw json.RawMessage) error {
+	if strings.TrimSpace(clientID) == "" {
+		return fmt.Errorf("missing client id")
+	}
+	desc := rc.currentShareDescriptor()
+	if !desc.IsV3() {
+		return nil
+	}
+	if strings.TrimSpace(desc.RoomID) == "" {
+		return fmt.Errorf("missing room id")
+	}
+	if strings.TrimSpace(desc.CryptoKey) == "" {
+		return fmt.Errorf("missing room key")
+	}
+	if strings.TrimSpace(desc.ServerPrivateKey) == "" {
+		return fmt.Errorf("missing server private key")
+	}
+	var offer relayKeyOffer
+	if err := json.Unmarshal(raw, &offer); err != nil {
+		return err
+	}
+	if strings.TrimSpace(offer.ClientPublicKey) == "" {
+		return fmt.Errorf("missing client public key")
+	}
+	nonce, ciphertext, err := wrapShareRoomKey(desc.CryptoKey, desc.RoomID, clientID, desc.ServerPrivateKey, offer.ClientPublicKey)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(struct {
+		Type     string         `json:"type"`
+		ClientID string         `json:"client_id"`
+		Data     relayKeyAccept `json:"data"`
+	}{
+		Type:     "key_accept",
+		ClientID: clientID,
+		Data: relayKeyAccept{
+			Nonce:      nonce,
+			Ciphertext: ciphertext,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return rc.enqueueRaw(payload)
 }

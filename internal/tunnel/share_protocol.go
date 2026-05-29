@@ -18,9 +18,11 @@ import (
 const (
 	ShareProtocolLegacy = 1
 	ShareProtocolV2     = 2
+	ShareProtocolV3     = 3
 
 	ShareModeLegacy = "legacy"
 	ShareModeV2     = "v2"
+	ShareModeV3     = "v3"
 	ShareModeCompat = "compat"
 
 	shareProtocolEnv        = "GGCODE_SHARE_PROTOCOL"
@@ -30,12 +32,14 @@ const (
 
 var defaultShareCapabilities = []string{
 	"share_v2",
+	"share_v3",
 	"share_notice",
 	"share_renew",
 }
 
 type ShareRuntimeConfig struct {
 	EnableV2 bool
+	EnableV3 bool
 }
 
 type RelayClientMetadata struct {
@@ -45,16 +49,18 @@ type RelayClientMetadata struct {
 }
 
 type ShareDescriptor struct {
-	ProtocolVersion int
-	ShareMode       string
-	RoomID          string
-	Token           string
-	AuthTicket      string
-	RenewToken      string
-	CryptoKey       string
-	Notice          string
-	AuthExpiresAt   time.Time
-	RenewExpiresAt  time.Time
+	ProtocolVersion  int
+	ShareMode        string
+	RoomID           string
+	Token            string
+	AuthTicket       string
+	RenewToken       string
+	CryptoKey        string
+	ServerPublicKey  string
+	ServerPrivateKey string
+	Notice           string
+	AuthExpiresAt    time.Time
+	RenewExpiresAt   time.Time
 }
 
 type relayIssuedShareSessionResponse struct {
@@ -74,6 +80,9 @@ func loadShareRuntimeConfig() ShareRuntimeConfig {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(shareProtocolEnv))) {
 	case "2", ShareModeV2:
 		cfg.EnableV2 = true
+	case "3", ShareModeV3:
+		cfg.EnableV2 = true
+		cfg.EnableV3 = true
 	}
 	return cfg
 }
@@ -82,8 +91,26 @@ func (cfg ShareRuntimeConfig) v2Enabled() bool {
 	return cfg.EnableV2
 }
 
+func (cfg ShareRuntimeConfig) v3Enabled() bool {
+	return cfg.EnableV3
+}
+
+func (cfg ShareRuntimeConfig) issuedProtocolVersion() int {
+	if cfg.EnableV3 {
+		return ShareProtocolV3
+	}
+	if cfg.EnableV2 {
+		return ShareProtocolV2
+	}
+	return ShareProtocolLegacy
+}
+
 func (d ShareDescriptor) IsV2() bool {
 	return d.ProtocolVersion >= ShareProtocolV2 && d.RoomID != ""
+}
+
+func (d ShareDescriptor) IsV3() bool {
+	return d.ProtocolVersion >= ShareProtocolV3 && d.RoomID != ""
 }
 
 func (d ShareDescriptor) CryptoMaterial() string {
@@ -128,8 +155,11 @@ func buildShareURL(relayURL string, d ShareDescriptor, role string, meta RelayCl
 	if d.IsV2() {
 		q.Set("proto", strconv.Itoa(d.ProtocolVersion))
 		q.Set("room_id", d.RoomID)
-		if cryptoKey := strings.TrimSpace(d.CryptoKey); cryptoKey != "" {
+		if cryptoKey := strings.TrimSpace(d.CryptoKey); cryptoKey != "" && !d.IsV3() {
 			q.Set("crypto_key", cryptoKey)
+		}
+		if serverPublicKey := strings.TrimSpace(d.ServerPublicKey); serverPublicKey != "" {
+			q.Set("kx_pub", serverPublicKey)
 		}
 		if preferRenew && strings.TrimSpace(d.RenewToken) != "" {
 			q.Set("renew_token", d.RenewToken)
@@ -176,10 +206,13 @@ func newLegacyShareDescriptor(token string) ShareDescriptor {
 	}
 }
 
-func requestIssuedShareSession(ctx context.Context, relayURL string) (server ShareDescriptor, client ShareDescriptor, err error) {
+func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRuntimeConfig) (server ShareDescriptor, client ShareDescriptor, err error) {
 	endpoint, err := shareSessionEndpoint(relayURL)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	if cfg.issuedProtocolVersion() >= ShareProtocolV2 {
+		endpoint = endpoint + "?proto=" + strconv.Itoa(cfg.issuedProtocolVersion())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
@@ -202,13 +235,14 @@ func requestIssuedShareSession(ctx context.Context, relayURL string) (server Sha
 	}
 
 	var issued relayIssuedShareSessionResponse
-	decoder := json.NewDecoder(resp.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&issued); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("decode issued share session: %w", err)
 	}
 	if issued.ProtocolVersion < ShareProtocolV2 {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: invalid protocol version %d", issued.ProtocolVersion)
+	}
+	if requested := cfg.issuedProtocolVersion(); requested >= ShareProtocolV2 && issued.ProtocolVersion != requested {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: relay returned protocol %d, want %d", issued.ProtocolVersion, requested)
 	}
 	if strings.TrimSpace(issued.RoomID) == "" || strings.TrimSpace(issued.ServerAuthTicket) == "" || strings.TrimSpace(issued.ClientAuthTicket) == "" {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: incomplete descriptor")
@@ -222,10 +256,6 @@ func requestIssuedShareSession(ctx context.Context, relayURL string) (server Sha
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session renew expiry: %w", err)
 	}
-	cryptoKey, err := randomHex(32)
-	if err != nil {
-		return ShareDescriptor{}, ShareDescriptor{}, err
-	}
 	shareMode := strings.TrimSpace(issued.ShareMode)
 	if shareMode == "" {
 		shareMode = ShareModeV2
@@ -234,27 +264,44 @@ func requestIssuedShareSession(ctx context.Context, relayURL string) (server Sha
 		ProtocolVersion: issued.ProtocolVersion,
 		ShareMode:       shareMode,
 		RoomID:          issued.RoomID,
-		CryptoKey:       cryptoKey,
 		Notice:          issued.Notice,
 		AuthExpiresAt:   authExpiresAt,
 		RenewExpiresAt:  renewExpiresAt,
 	}
+	cryptoKey, err := randomHex(32)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	if issued.ProtocolVersion >= ShareProtocolV3 {
+		publicKey, privateKey, err := generateShareKeyExchangeKeyPair()
+		if err != nil {
+			return ShareDescriptor{}, ShareDescriptor{}, err
+		}
+		base.ServerPublicKey = publicKey
+		base.ServerPrivateKey = privateKey
+	} else {
+		base.CryptoKey = cryptoKey
+	}
 	server = base
+	server.CryptoKey = cryptoKey
 	server.AuthTicket = issued.ServerAuthTicket
 	server.RenewToken = issued.ServerRenewToken
 	client = base
+	if issued.ProtocolVersion >= ShareProtocolV3 {
+		client.ServerPrivateKey = ""
+		client.CryptoKey = ""
+	}
 	client.AuthTicket = issued.ClientAuthTicket
 	return server, client, nil
 }
 
 func shareSessionEndpoint(relayURL string) (string, error) {
-	base := strings.TrimSpace(strings.TrimSuffix(relayURL, "/"))
-	if base == "" {
-		return "", fmt.Errorf("empty relay URL")
+	if err := validateRelayURLSecurity(relayURL); err != nil {
+		return "", err
 	}
-	u, err := url.Parse(base)
+	u, err := parseRelayURLBase(relayURL)
 	if err != nil {
-		return "", fmt.Errorf("parse relay URL: %w", err)
+		return "", err
 	}
 	switch u.Scheme {
 	case "ws":

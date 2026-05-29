@@ -23,15 +23,16 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	d := &drainHelper{}
 
 	b := &Broker{
-		session:          sess,
-		outDone:          make(chan struct{}),
-		textBuf:          make(map[string]*textEntry),
-		activeText:       make(map[string]*textEntry),
-		textTick:         time.NewTicker(300 * time.Millisecond),
-		textDone:         make(chan struct{}),
-		sendWaiters:      make(map[string]chan struct{}),
-		toolArgs:         make(map[string]string),
-		subagentToolArgs: make(map[string]string),
+		session:           sess,
+		sessionGeneration: 1,
+		outDone:           make(chan struct{}),
+		textBuf:           make(map[string]*textEntry),
+		activeText:        make(map[string]*textEntry),
+		textTick:          time.NewTicker(300 * time.Millisecond),
+		textDone:          make(chan struct{}),
+		sendWaiters:       make(map[string]chan struct{}),
+		toolArgs:          make(map[string]string),
+		subagentToolArgs:  make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
@@ -50,6 +51,14 @@ type drainHelper struct {
 	b    *Broker
 	msgs []GatewayMessage
 	mu   sync.Mutex
+}
+
+func mustMarshalJSON(v any) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
 // drain reads all pending outbound messages.
@@ -1425,6 +1434,45 @@ func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(
 	}
 	if msgs[len(msgs)-1].Type != EventStatus {
 		t.Fatalf("expected status after snapshot history, got %q", msgs[len(msgs)-1].Type)
+	}
+}
+
+func TestBrokerHandleClientConnectedDropsStaleSnapshotAfterSessionSwitch(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.sessionGeneration = 1
+
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	releaseReplay := make(chan struct{})
+	b.SetReplayProvider(func() []GatewayMessage {
+		<-releaseReplay
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSystemMessage,
+				Data:      mustMarshalJSON(MessageData{Text: "stale replay"}),
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 0,
+	})
+	b.SwitchSession("sess-next")
+	d.drain()
+	close(releaseReplay)
+
+	time.Sleep(50 * time.Millisecond)
+	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected stale snapshot replay to be dropped after session switch, got %+v", msgs)
 	}
 }
 
