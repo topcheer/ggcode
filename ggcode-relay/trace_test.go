@@ -46,3 +46,47 @@ func TestRelayTraceLoggerLogsSecondEventAsTail(t *testing.T) {
 		t.Fatalf("tail log = %q, want %q", lines[1], "second tail=true suppressed=0")
 	}
 }
+
+func TestTraceRelayMessageDoesNotSuppressControlMessages(t *testing.T) {
+	var lines []string
+	h := &hub{
+		tracer: newRelayTraceLoggerWithSink(50*time.Millisecond, func(line string) {
+			lines = append(lines, line)
+		}),
+	}
+
+	h.traceRelayMessage("ws_recv", "room-1234567890", "client-1", relayMessage{Type: "resume_hello"}, "")
+	h.traceRelayMessage("ws_recv", "room-1234567890", "client-1", relayMessage{Type: "resume_hello"}, "")
+
+	if len(lines) != 2 {
+		t.Fatalf("expected both control traces immediately, got %d: %+v", len(lines), lines)
+	}
+}
+
+func TestTraceRelayMessageSuppressesEncryptedMessages(t *testing.T) {
+	var lines []string
+	h := &hub{
+		tracer: newRelayTraceLoggerWithSink(50*time.Millisecond, func(line string) {
+			lines = append(lines, line)
+		}),
+	}
+
+	h.traceRelayMessage("server_broadcast", "room-1234567890", "client-1", relayMessage{
+		Type:      "encrypted",
+		SessionID: "session-1",
+		EventID:   "event-1",
+	}, "")
+	h.traceRelayMessage("server_broadcast", "room-1234567890", "client-1", relayMessage{
+		Type:      "encrypted",
+		SessionID: "session-1",
+		EventID:   "event-1",
+	}, "")
+	if len(lines) != 1 {
+		t.Fatalf("expected encrypted trace to suppress duplicates before flush, got %d: %+v", len(lines), lines)
+	}
+
+	h.tracer.flushAgedAt(time.Now().Add(100 * time.Millisecond))
+	if len(lines) != 2 {
+		t.Fatalf("expected encrypted tail log after flush, got %d: %+v", len(lines), lines)
+	}
+}

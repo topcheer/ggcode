@@ -145,6 +145,9 @@ func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
 
 // send enqueues a message. Blocks if the send buffer is full (back-pressure).
 func (p *peer) send(msg relayMessage) {
+	if p.hub != nil && p.room != nil {
+		p.hub.traceRelayMessage("ws_send", p.room.token, p.clientID, msg, "peer_role="+p.role)
+	}
 	data, _ := json.Marshal(msg)
 	p.sendRaw(data)
 }
@@ -204,6 +207,7 @@ func (p *peer) readLoop(h *hub) {
 		if !h.allowPublishedMessage(p, msg.Type) {
 			continue
 		}
+		h.traceRelayMessage("ws_recv", p.room.token, p.clientID, msg, "peer_role="+p.role)
 
 		switch msg.Type {
 		case "encrypted":
@@ -223,11 +227,7 @@ func (p *peer) readLoop(h *hub) {
 				p.onKeyReady(msg, h)
 			}
 		case "stop_sharing":
-			if p.role == "server" {
-				h.trace("server_request", p.room.token, msg)
-				roomDestroyed = true
-				h.destroyRoom(p.room.token)
-			}
+			roomDestroyed = p.onStopSharing(msg, h)
 		case "resume_hello", "resume_from":
 			if p.role == "client" {
 				h.trace("client_request", p.room.token, msg)
@@ -473,6 +473,15 @@ func (p *peer) onKeyReady(msg relayMessage, h *hub) {
 		return
 	}
 	p.finishResumeLocked(p.clientID, h)
+}
+
+func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
+	if p.role != "server" || p.room == nil || h == nil {
+		return false
+	}
+	h.trace("server_request", p.room.token, msg)
+	h.destroyRoom(p.room.token)
+	return true
 }
 
 func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed bool, hydrated bool, loadedCount int) {
@@ -788,9 +797,7 @@ func stopOfflineTimerLocked(r *room) {
 
 // trace is a convenience wrapper.
 func (h *hub) trace(route, roomToken string, msg relayMessage) {
-	if h.tracer != nil {
-		h.tracer.Log(route, traceMessageSummary(route, roomToken, "", msg, ""))
-	}
+	h.traceRelayMessage(route, roomToken, "", msg, "")
 }
 
 // ─── WebSocket handler ───
@@ -823,7 +830,8 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.reserveIssuedRoom(issued.RoomID, defaultPendingRoomTTL)
-	log.Printf("[relay] issued share session: room=%s", shortToken(issued.RoomID))
+	log.Printf("[relay] issued share session: room=%s proto=%d share=%s",
+		shortToken(issued.RoomID), issued.ProtocolVersion, issued.ShareMode)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(issued)
 }
@@ -921,8 +929,9 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	if h.stats != nil {
 		h.stats.recordConnect(role)
 	}
-	log.Printf("[relay] %s connected: room=%s session=%s clients=%d buffered=%d",
-		role, shortToken(token), room.sessionID, clients, len(room.history))
+	log.Printf("[relay] %s connected: room=%s session=%s clients=%d buffered=%d proto=%d share=%s connect=%s client=%s client_kind=%s client_version=%s",
+		role, shortToken(token), room.sessionID, clients, len(room.history),
+		handshake.protocolVersion, handshake.shareMode, handshake.connectMode, clientID, handshake.clientKind, handshake.clientVersion)
 
 	// Send initial "connected" with current tail.
 	room.mu.RLock()

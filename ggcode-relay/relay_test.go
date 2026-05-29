@@ -470,6 +470,45 @@ func TestHubDestroyRoom(t *testing.T) {
 	}
 }
 
+func TestPeerOnStopSharingDestroysRoom(t *testing.T) {
+	h := newHub(nil)
+	r := h.getOrCreateRoom("token")
+	server := newPeer(h, r, "server", nil)
+	client := newPeer(h, r, "client", nil)
+	client.ready = true
+	r.server = server
+	r.clients[client] = struct{}{}
+	r.offlineTimer = time.NewTimer(time.Hour)
+
+	roomDestroyed := server.onStopSharing(relayMessage{Type: "stop_sharing"}, h)
+	if !roomDestroyed {
+		t.Fatal("expected onStopSharing to destroy the room")
+	}
+
+	select {
+	case raw := <-client.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "sharing_stopped" {
+			t.Fatalf("expected sharing_stopped, got %s", msg.Type)
+		}
+	default:
+		t.Fatal("client should be notified when sharing stops explicitly")
+	}
+
+	h.mu.RLock()
+	_, exists := h.rooms["token"]
+	h.mu.RUnlock()
+	if exists {
+		t.Fatal("room should be removed from hub")
+	}
+	if r.offlineTimer != nil {
+		t.Fatal("offline timer should be cleared on explicit stop_sharing")
+	}
+}
+
 func TestHubRemoveRoomIfEmptyDestroysPersistedState(t *testing.T) {
 	store := newStoreForTest(t)
 	h := newHub(store)

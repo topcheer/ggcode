@@ -51,6 +51,13 @@ func (l *relayTraceLogger) Log(key, summary string) {
 	l.logAt(time.Now(), key, summary)
 }
 
+func (l *relayTraceLogger) LogImmediate(summary string) {
+	if l == nil || l.sink == nil {
+		return
+	}
+	l.sink(summary)
+}
+
 func (l *relayTraceLogger) logAt(now time.Time, key, summary string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -115,6 +122,11 @@ func (h *hub) traceRelayMessage(route, roomToken, clientID string, msg relayMess
 	if h == nil || h.tracer == nil {
 		return
 	}
+	summary := traceMessageSummary(route, roomToken, clientID, msg, extra)
+	if !shouldSuppressTraceMessage(msg) {
+		h.tracer.LogImmediate(summary)
+		return
+	}
 	keyClientID := clientID
 	if keyClientID == "" {
 		keyClientID = msg.ClientID
@@ -125,8 +137,11 @@ func (h *hub) traceRelayMessage(route, roomToken, clientID string, msg relayMess
 		shortTraceField(keyClientID),
 		msg.Type,
 		shortTraceField(msg.SessionID),
+		shortTraceField(msg.EventID),
+		shortTraceField(msg.StreamID),
+		shortTraceField(msg.MessageID),
 	}, "|")
-	h.tracer.Log(key, traceMessageSummary(route, roomToken, clientID, msg, extra))
+	h.tracer.Log(key, summary)
 }
 
 func (h *hub) traceRoomEvent(route, roomToken, clientID string, ev roomEvent, extra string) {
@@ -143,6 +158,10 @@ func (h *hub) flushTraceLogs() {
 		return
 	}
 	h.tracer.FlushAged()
+}
+
+func shouldSuppressTraceMessage(msg relayMessage) bool {
+	return msg.Type == "encrypted"
 }
 
 func traceMessageSummary(route, roomToken, clientID string, msg relayMessage, extra string) string {
@@ -181,6 +200,15 @@ func traceMessageSummary(route, roomToken, clientID string, msg relayMessage, ex
 	}
 	if msg.ResumeMode != "" {
 		parts = append(parts, "mode="+msg.ResumeMode)
+	}
+	if msg.Generation > 0 {
+		parts = append(parts, fmt.Sprintf("generation=%d", msg.Generation))
+	}
+	if msg.RetryAfterMS > 0 {
+		parts = append(parts, fmt.Sprintf("retry_after_ms=%d", msg.RetryAfterMS))
+	}
+	if msg.Reason != "" {
+		parts = append(parts, "reason="+shortTraceField(msg.Reason))
 	}
 	if extra != "" {
 		parts = append(parts, extra)
