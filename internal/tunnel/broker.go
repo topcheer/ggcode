@@ -32,9 +32,10 @@ type Broker struct {
 	eventRecorder  func(msg GatewayMessage)
 
 	// Session-scoped event identity.
-	sessionMu sync.RWMutex
-	sessionID string
-	nextEvent atomic.Int64
+	sessionMu         sync.RWMutex
+	sessionID         string
+	sessionGeneration uint64
+	nextEvent         atomic.Int64
 
 	// Send queue: all outbound messages go here.
 	// The sender goroutine drains it continuously (no ACK blocking).
@@ -98,17 +99,18 @@ type SnapshotEvent struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:          sess,
-		sessionID:        newTunnelSessionID(),
-		outDone:          make(chan struct{}),
-		textBuf:          make(map[string]*textEntry),
-		activeText:       make(map[string]*textEntry),
-		textTick:         time.NewTicker(300 * time.Millisecond),
-		textDone:         make(chan struct{}),
-		sendWaiters:      make(map[string]chan struct{}),
-		toolArgs:         make(map[string]string),
-		subagentToolArgs: make(map[string]string),
-		activeReasoning:  make(map[string]string),
+		session:           sess,
+		sessionID:         newTunnelSessionID(),
+		sessionGeneration: 1,
+		outDone:           make(chan struct{}),
+		textBuf:           make(map[string]*textEntry),
+		activeText:        make(map[string]*textEntry),
+		textTick:          time.NewTicker(300 * time.Millisecond),
+		textDone:          make(chan struct{}),
+		sendWaiters:       make(map[string]chan struct{}),
+		toolArgs:          make(map[string]string),
+		subagentToolArgs:  make(map[string]string),
+		activeReasoning:   make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
@@ -329,10 +331,27 @@ func (b *Broker) SessionID() string {
 	return b.sessionID
 }
 
+func (b *Broker) sessionState() (string, uint64) {
+	b.sessionMu.RLock()
+	defer b.sessionMu.RUnlock()
+	return b.sessionID, b.sessionGeneration
+}
+
+func (b *Broker) isSessionStateCurrent(sessionID string, generation uint64) bool {
+	b.sessionMu.RLock()
+	defer b.sessionMu.RUnlock()
+	return b.sessionID == sessionID && b.sessionGeneration == generation
+}
+
 func (b *Broker) resetSession() string {
 	b.sessionMu.Lock()
 	defer b.sessionMu.Unlock()
 	b.sessionID = newTunnelSessionID()
+	if b.sessionGeneration == 0 {
+		b.sessionGeneration = 1
+	} else {
+		b.sessionGeneration++
+	}
 	b.nextEvent.Store(0)
 	b.clientProjectionSeeded.Store(false)
 	return b.sessionID
@@ -390,8 +409,15 @@ func (b *Broker) BindSession(sessionID string) bool {
 	changed := b.sessionID != sessionID
 	b.sessionID = sessionID
 	if changed {
+		if b.sessionGeneration == 0 {
+			b.sessionGeneration = 1
+		} else {
+			b.sessionGeneration++
+		}
 		b.nextEvent.Store(0)
 		b.clientProjectionSeeded.Store(false)
+	} else if b.sessionGeneration == 0 {
+		b.sessionGeneration = 1
 	}
 	b.sessionMu.Unlock()
 	return changed
@@ -494,7 +520,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if b.onConnect != nil {
 		b.onConnect(info)
 	}
-	currentSessionID := b.SessionID()
+	currentSessionID, currentGeneration := b.sessionState()
 	if info.Role == "client" {
 		// A newly joined mobile client should NOT force-reset existing clients when
 		// the room already has retained history for the current active session.
@@ -533,16 +559,38 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		go func() {
 			defer b.endProjectionSync()
 			defer b.endClientReplaySync()
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
 			debug.Log("tunnel", "broker: client connected (relay session=%q count=%d local session=%q), publishing authoritative snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 			b.flushAllText()
-			_ = b.session.SendActiveSession(b.SessionID())
-			if replayed := b.replayCanonicalEvents(true); replayed {
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
+			_ = b.session.SendActiveSession(currentSessionID)
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
+			events := b.canonicalReplayEvents()
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
+			if replayed := b.replayCanonicalEvents(true, events); replayed {
 				b.clientProjectionSeeded.Store(true)
+				return
+			}
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
 			activeText := b.activeTextSnapshot()
 			b.enqueueControl(EventSnapshotReset, nil)
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
 			b.sendSnapshotDirect(snapshot)
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
 			b.replayActiveText(activeText)
 			b.clientProjectionSeeded.Store(true)
 		}()
@@ -578,14 +626,36 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	b.beginProjectionSync()
 	go func() {
 		defer b.endProjectionSync()
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
 		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
 		b.flushAllText()
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
 		_ = b.session.SendActiveSession(currentSessionID)
-		if replayed := b.replayCanonicalEvents(false); replayed {
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
+		events := b.canonicalReplayEvents()
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
+		if replayed := b.replayCanonicalEvents(false, events); replayed {
+			return
+		}
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
 		activeText := b.activeTextSnapshot()
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
 		b.sendSnapshotDirect(snapshot)
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
 		b.replayActiveText(activeText)
 	}()
 }
@@ -1304,14 +1374,17 @@ func (b *Broker) recordEvent(msg GatewayMessage) {
 	}
 }
 
-func (b *Broker) replayCanonicalEvents(reset bool) bool {
+func (b *Broker) canonicalReplayEvents() []GatewayMessage {
 	b.snapshotMu.RLock()
 	provider := b.replayProvider
 	b.snapshotMu.RUnlock()
 	if provider == nil {
-		return false
+		return nil
 	}
-	events := provider()
+	return provider()
+}
+
+func (b *Broker) replayCanonicalEvents(reset bool, events []GatewayMessage) bool {
 	if len(events) == 0 {
 		return false
 	}

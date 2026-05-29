@@ -72,6 +72,7 @@ func TestRoomAppendEventDedupes(t *testing.T) {
 func TestRoomNotifyServerClientConnected(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
+	r.generation = 2
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
 	r.server = server
@@ -84,11 +85,47 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			t.Fatal(err)
 		}
-		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" {
+		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" || msg.Generation != 2 {
 			t.Fatalf("unexpected: %+v", msg)
 		}
 	default:
 		t.Fatal("expected notification")
+	}
+}
+
+func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.generation = 1
+	r.history = []roomEvent{{eventID: "ev-000000001"}}
+
+	h := newHub(nil)
+	server := newPeer(h, r, "server", nil)
+	client := newPeer(h, r, "client", nil)
+	r.clients[client] = struct{}{}
+
+	server.onActiveSession(relayMessage{Type: "active_session", SessionID: "sess-2"})
+
+	if r.sessionID != "sess-2" {
+		t.Fatalf("expected session switch, got %q", r.sessionID)
+	}
+	if r.generation != 2 {
+		t.Fatalf("expected generation 2, got %d", r.generation)
+	}
+	if len(r.history) != 0 {
+		t.Fatalf("expected room history cleared on switch, got %d entries", len(r.history))
+	}
+
+	msgs := drainSendCh(client.sendCh)
+	if len(msgs) != 1 {
+		t.Fatalf("expected active_session broadcast, got %d messages", len(msgs))
+	}
+	var msg relayMessage
+	if err := json.Unmarshal(msgs[0], &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "active_session" || msg.SessionID != "sess-2" || msg.Generation != 2 {
+		t.Fatalf("unexpected active_session broadcast: %+v", msg)
 	}
 }
 
@@ -97,6 +134,7 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
+	r.generation = 3
 	r.history = []roomEvent{
 		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
 		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
@@ -125,9 +163,15 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	if json.Unmarshal(msgs[0], &first) != nil || first.Type != "active_session" {
 		t.Fatalf("first message should be active_session, got %s", string(msgs[0]))
 	}
+	if first.Generation != 3 {
+		t.Fatalf("expected active_session generation 3, got %d", first.Generation)
+	}
 	var ack relayMessage
 	if json.Unmarshal(msgs[1], &ack) != nil || ack.Type != "resume_ack" {
 		t.Fatalf("first message should be resume_ack, got %s", string(msgs[0]))
+	}
+	if ack.Generation != 3 {
+		t.Fatalf("expected resume_ack generation 3, got %d", ack.Generation)
 	}
 
 	// Since cursor was empty, resume_ack should say full_history.
@@ -154,6 +198,83 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	msgs := drainSendCh(p.sendCh)
 	if len(msgs) != 4 { // active_session + resume_ack + ev-2 + ev-3
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+}
+
+func TestPeerOnResumeV3WaitsForKeyReady(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.generation = 4
+	r.protocolVersion = shareProtocolV3
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
+	}
+
+	h := newHub(nil)
+	p := newPeer(h, r, "client", nil)
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	if p.ready {
+		t.Fatal("v3 peer should not be ready before key exchange completes")
+	}
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 1 {
+		t.Fatalf("expected only active_session before key_ready, got %d messages", len(msgs))
+	}
+	var first relayMessage
+	if json.Unmarshal(msgs[0], &first) != nil || first.Type != "active_session" {
+		t.Fatalf("expected active_session before key_ready, got %s", string(msgs[0]))
+	}
+
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
+	if !p.ready {
+		t.Fatal("v3 peer should become ready after key_ready")
+	}
+	msgs = drainSendCh(p.sendCh)
+	if len(msgs) != 3 {
+		t.Fatalf("expected resume_ack + replay after key_ready, got %d messages", len(msgs))
+	}
+	var ack relayMessage
+	if json.Unmarshal(msgs[0], &ack) != nil || ack.Type != "resume_ack" {
+		t.Fatalf("expected resume_ack after key_ready, got %s", string(msgs[0]))
+	}
+}
+
+func TestPeerForwardKeyAcceptTargetsSingleClient(t *testing.T) {
+	r := newRoom("token")
+	h := newHub(nil)
+	target := newPeer(h, r, "client", nil)
+	target.clientID = "client-1"
+	other := newPeer(h, r, "client", nil)
+	other.clientID = "client-2"
+	server := newPeer(h, r, "server", nil)
+	r.clients[target] = struct{}{}
+	r.clients[other] = struct{}{}
+	r.clientsByID[target.clientID] = target
+	r.clientsByID[other.clientID] = other
+	r.server = server
+
+	server.forwardKeyAccept(relayMessage{
+		Type:     "key_accept",
+		ClientID: "client-1",
+		Data:     mustJSON(map[string]any{"nonce": "n", "ciphertext": "c"}),
+	})
+
+	targetMsgs := drainSendCh(target.sendCh)
+	otherMsgs := drainSendCh(other.sendCh)
+	if len(targetMsgs) != 1 {
+		t.Fatalf("expected 1 targeted key_accept, got %d", len(targetMsgs))
+	}
+	if len(otherMsgs) != 0 {
+		t.Fatalf("expected no key_accept for non-target client, got %d", len(otherMsgs))
+	}
+	var msg relayMessage
+	if err := json.Unmarshal(targetMsgs[0], &msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "key_accept" || msg.ClientID != "client-1" {
+		t.Fatalf("unexpected targeted message: %+v", msg)
 	}
 }
 
@@ -359,7 +480,6 @@ func TestHubRemoveRoomIfEmptyDestroysPersistedState(t *testing.T) {
 	}
 
 	r := h.getOrCreateRoom(token)
-	r.offlineTimer = time.NewTimer(time.Hour)
 
 	h.removeRoomIfEmpty(r)
 
@@ -404,6 +524,30 @@ func TestHubRemoveRoomIfEmptyDestroysPersistedState(t *testing.T) {
 	}
 }
 
+func TestHubRemoveRoomIfEmptyKeepsRetainedRoom(t *testing.T) {
+	store := newStoreForTest(t)
+	h := newHub(store)
+	token := "token-retained-1234567890"
+	persistTestEvent(t, store, token, "sess-1", "ev-000000001")
+
+	r := h.reserveIssuedRoom(token, time.Hour)
+	h.removeRoomIfEmpty(r)
+
+	h.mu.RLock()
+	current := h.rooms[token]
+	h.mu.RUnlock()
+	if current != r {
+		t.Fatal("retained room should remain in hub while expiry timer is armed")
+	}
+	state, err := store.loadRoom(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.sessionID == "" && len(state.history) == 0 {
+		t.Fatal("retained room cleanup should not destroy persisted state")
+	}
+}
+
 func TestNotifyRoomRecoveringDoesNotCreateRoom(t *testing.T) {
 	h := newHub(nil)
 
@@ -414,6 +558,40 @@ func TestNotifyRoomRecoveringDoesNotCreateRoom(t *testing.T) {
 	h.mu.RUnlock()
 	if exists {
 		t.Fatal("notifyRoomRecovering should not resurrect a missing room")
+	}
+}
+
+func TestNotifyRoomRecoveringNotifiesClients(t *testing.T) {
+	h := newHub(nil)
+	r := h.getOrCreateRoom("token-recovering")
+	r.sessionID = "sess-1"
+	client := newPeer(h, r, "client", nil)
+	client.ready = true
+	r.clients[client] = struct{}{}
+
+	h.notifyRoomRecovering(r.token, r.sessionID)
+
+	select {
+	case raw := <-client.sendCh:
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "server_offline" {
+			t.Fatalf("expected server_offline, got %s", msg.Type)
+		}
+		var data map[string]interface{}
+		if err := json.Unmarshal(msg.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["state"] != "recovering" {
+			t.Fatalf("expected recovering state, got %+v", data)
+		}
+		if data["retry_after_ms"] == nil {
+			t.Fatalf("expected retry_after_ms in data, got %+v", data)
+		}
+	default:
+		t.Fatal("client should have received server_offline notice")
 	}
 }
 

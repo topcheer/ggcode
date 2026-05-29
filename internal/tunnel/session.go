@@ -81,13 +81,16 @@ func NewSession(relayURL string, opts ...SessionOption) *Session {
 
 // Start connects to the relay server and returns connection info.
 func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
+	if err := validateRelayURLSecurity(s.relayURL); err != nil {
+		return nil, err
+	}
 	cfg := loadShareRuntimeConfig()
 	publicDesc := ShareDescriptor{}
 	serverDesc := ShareDescriptor{}
 	var err error
 	switch {
 	case cfg.v2Enabled():
-		serverDesc, publicDesc, err = requestIssuedShareSession(ctx, s.relayURL)
+		serverDesc, publicDesc, err = requestIssuedShareSession(ctx, s.relayURL, cfg)
 		if err == nil {
 			s.token = publicDesc.SessionToken()
 			break
@@ -99,7 +102,11 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		s.token = token
 		serverDesc = newLegacyShareDescriptor(token)
 		publicDesc = serverDesc
-		publicDesc.Notice = fmt.Sprintf("Share v2 was requested locally but relay issuance failed; using legacy compatibility mode. (%v)", err)
+		requestedMode := "Share v2"
+		if cfg.v3Enabled() {
+			requestedMode = "Share v3"
+		}
+		publicDesc.Notice = fmt.Sprintf("%s was requested locally but relay issuance failed; using legacy compatibility mode. (%v)", requestedMode, err)
 		publicDesc.ShareMode = ShareModeCompat
 	default:
 		token, err := randomHex(24)

@@ -102,6 +102,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _shareRoomId = '';
   String _shareRenewToken = '';
   bool _hasAuthoritativeProjection = false;
+  int _relaySessionGeneration = 0;
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
   Future<void>? _connectInFlight;
@@ -230,6 +231,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _sessionId = savedSessionId;
       _lastAppliedEventId =
           savedSessionId.isNotEmpty ? _lastAppliedEventId : '';
+      _relaySessionGeneration = 0;
       _awaitingSnapshotProjection = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
@@ -272,6 +274,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     service?.disconnect();
     _disposeActiveService();
     _clearRelaySyncState();
+    _relaySessionGeneration = 0;
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
@@ -282,6 +285,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
+    _relaySessionGeneration = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
     _recentEventIds.clear();
@@ -318,6 +322,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         log('[tunnel] active_session: session=$sessionId currentSession=$_sessionId lastEvent=$_lastAppliedEventId');
         if (sessionId.isEmpty) break;
+        if (!_acceptRelayGeneration(msg, sessionId: sessionId)) {
+          break;
+        }
         if (_sessionId.isNotEmpty && _sessionId != sessionId) {
           _clearUiProjection();
           _lastAppliedEventId = '';
@@ -326,6 +333,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _recentEventSet.clear();
         }
         _sessionId = sessionId;
+        if (msg.generation != null && msg.generation! > 0) {
+          _relaySessionGeneration = msg.generation!;
+        }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
@@ -336,7 +346,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'resume_ack':
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
+        if (!_acceptRelayGeneration(msg, sessionId: sessionId)) {
+          break;
+        }
         _sessionId = sessionId;
+        if (msg.generation != null && msg.generation! > 0) {
+          _relaySessionGeneration = msg.generation!;
+        }
         final replayCount = (msg.data?['replay_count'] as num?)?.toInt() ?? 0;
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
         _beginResumeReplaySync(
@@ -373,6 +389,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'snapshot_reset':
+        if (!_acceptRelayGeneration(
+          msg,
+          sessionId: msg.sessionId ?? _sessionId,
+        )) {
+          break;
+        }
         _clearUiProjection();
         _lastAppliedEventId = '';
         _recentEventIds.clear();
@@ -382,6 +404,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _markProjectionAuthoritative();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
+        }
+        if (msg.generation != null && msg.generation! > 0) {
+          _relaySessionGeneration = msg.generation!;
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             _sessionId, ref.read(sessionInfoProvider),
@@ -993,6 +1018,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
+    _relaySessionGeneration = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
     _recentEventIds.clear();
@@ -1010,7 +1036,44 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     );
   }
 
+  bool _acceptRelayGeneration(proto.WsMessage msg, {String? sessionId}) {
+    final generation = msg.generation ?? 0;
+    if (generation <= 0) {
+      return true;
+    }
+    if (_relaySessionGeneration > 0 && generation < _relaySessionGeneration) {
+      return false;
+    }
+    if (generation > _relaySessionGeneration) {
+      final nextSessionId = sessionId ?? msg.sessionId ?? _sessionId;
+      _resetForRelayGeneration(nextSessionId, generation);
+    }
+    return true;
+  }
+
+  void _resetForRelayGeneration(String sessionId, int generation) {
+    final previousSessionId = _sessionId;
+    _clearUiProjection();
+    _hasAuthoritativeProjection = false;
+    _lastAppliedEventId = '';
+    _recentEventIds.clear();
+    _recentEventSet.clear();
+    _awaitingSnapshotProjection = false;
+    _relaySessionGeneration = generation;
+    _sessionId = sessionId;
+    if (sessionId.isNotEmpty) {
+      unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
+            sessionId,
+            previousSessionId: previousSessionId,
+            sessionInfo: ref.read(sessionInfoProvider),
+          ));
+    }
+  }
+
   bool _shouldApplyEvent(proto.WsMessage msg) {
+    if (!_acceptRelayGeneration(msg, sessionId: msg.sessionId ?? _sessionId)) {
+      return false;
+    }
     final eventId = msg.eventId;
     final sessionId = msg.sessionId ?? _sessionId;
     if (sessionId.isNotEmpty &&

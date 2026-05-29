@@ -1721,6 +1721,58 @@ void main() {
   });
 
   test(
+      'ConnectionNotifier drops stale older-generation events after a newer active_session switch',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      generation: 1,
+      type: 'active_session',
+      data: {'session_id': 'sess-old'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      eventId: 'ev-000000001',
+      generation: 1,
+      type: 'system_message',
+      data: {'text': 'old live'},
+    ));
+
+    expect(container.read(displayedMessagesProvider), hasLength(1));
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-new',
+      generation: 2,
+      type: 'active_session',
+      data: {'session_id': 'sess-new'},
+    ));
+
+    expect(container.read(displayedMessagesProvider), isEmpty);
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-old',
+      eventId: 'ev-000000002',
+      generation: 1,
+      type: 'system_message',
+      data: {'text': 'stale replay'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-new',
+      eventId: 'ev-000000003',
+      generation: 2,
+      type: 'system_message',
+      data: {'text': 'fresh live'},
+    ));
+
+    final messages = container.read(displayedMessagesProvider);
+    expect(messages, hasLength(1));
+    expect(messages.single.text, 'fresh live');
+  });
+
+  test(
       'ConnectionNotifier renders system messages and preserves post-tool text ordering',
       () {
     final container = ProviderContainer();
