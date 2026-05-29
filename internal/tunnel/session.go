@@ -87,12 +87,11 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	var err error
 	switch {
 	case cfg.v2Enabled():
-		serverDesc, publicDesc, err = buildV2ShareDescriptors(cfg)
-		if err != nil {
-			return nil, err
+		serverDesc, publicDesc, err = requestIssuedShareSession(ctx, s.relayURL)
+		if err == nil {
+			s.token = publicDesc.SessionToken()
+			break
 		}
-		s.token = publicDesc.SessionToken()
-	case cfg.v2RequestedWithoutSecret():
 		token, err := randomHex(24)
 		if err != nil {
 			return nil, err
@@ -100,7 +99,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		s.token = token
 		serverDesc = newLegacyShareDescriptor(token)
 		publicDesc = serverDesc
-		publicDesc.Notice = "Share v2 was requested locally but no GGCODE_SHARE_V2_SECRET is configured; using legacy compatibility mode."
+		publicDesc.Notice = fmt.Sprintf("Share v2 was requested locally but relay issuance failed; using legacy compatibility mode. (%v)", err)
 		publicDesc.ShareMode = ShareModeCompat
 	default:
 		token, err := randomHex(24)

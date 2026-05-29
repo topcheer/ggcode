@@ -1,13 +1,13 @@
 package tunnel
 
 import (
-	"crypto/hmac"
+	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -23,18 +23,9 @@ const (
 	ShareModeV2     = "v2"
 	ShareModeCompat = "compat"
 
-	ShareTicketKindConnect = "connect"
-	ShareTicketKindRenew   = "renew"
-
-	shareProtocolEnv   = "GGCODE_SHARE_PROTOCOL"
-	shareSecretEnv     = "GGCODE_SHARE_V2_SECRET"
-	shareConnectTTLEnv = "GGCODE_SHARE_V2_CONNECT_TTL"
-	shareRenewTTLEnv   = "GGCODE_SHARE_V2_RENEW_TTL"
-)
-
-const (
-	defaultShareConnectTTL = 15 * time.Minute
-	defaultShareRenewTTL   = 30 * 24 * time.Hour
+	shareProtocolEnv        = "GGCODE_SHARE_PROTOCOL"
+	shareSessionPath        = "/share/session"
+	defaultShareIssueTimout = 15 * time.Second
 )
 
 var defaultShareCapabilities = []string{
@@ -44,10 +35,7 @@ var defaultShareCapabilities = []string{
 }
 
 type ShareRuntimeConfig struct {
-	EnableV2   bool
-	Secret     string
-	ConnectTTL time.Duration
-	RenewTTL   time.Duration
+	EnableV2 bool
 }
 
 type RelayClientMetadata struct {
@@ -69,43 +57,29 @@ type ShareDescriptor struct {
 	RenewExpiresAt  time.Time
 }
 
-type shareTicketClaims struct {
-	RoomID string `json:"room_id"`
-	Role   string `json:"role"`
-	Kind   string `json:"kind"`
-	Exp    int64  `json:"exp"`
-	V      int    `json:"v"`
+type relayIssuedShareSessionResponse struct {
+	ProtocolVersion  int    `json:"protocol_version"`
+	ShareMode        string `json:"share_mode"`
+	RoomID           string `json:"room_id"`
+	ServerAuthTicket string `json:"server_auth_ticket"`
+	ClientAuthTicket string `json:"client_auth_ticket"`
+	ServerRenewToken string `json:"server_renew_token,omitempty"`
+	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
+	RenewExpiresAt   string `json:"renew_expires_at,omitempty"`
+	Notice           string `json:"notice,omitempty"`
 }
 
 func loadShareRuntimeConfig() ShareRuntimeConfig {
-	cfg := ShareRuntimeConfig{
-		Secret:     strings.TrimSpace(os.Getenv(shareSecretEnv)),
-		ConnectTTL: defaultShareConnectTTL,
-		RenewTTL:   defaultShareRenewTTL,
-	}
+	cfg := ShareRuntimeConfig{}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(shareProtocolEnv))) {
 	case "2", ShareModeV2:
 		cfg.EnableV2 = true
-	}
-	if ttl := strings.TrimSpace(os.Getenv(shareConnectTTLEnv)); ttl != "" {
-		if parsed, err := time.ParseDuration(ttl); err == nil && parsed > 0 {
-			cfg.ConnectTTL = parsed
-		}
-	}
-	if ttl := strings.TrimSpace(os.Getenv(shareRenewTTLEnv)); ttl != "" {
-		if parsed, err := time.ParseDuration(ttl); err == nil && parsed > 0 {
-			cfg.RenewTTL = parsed
-		}
 	}
 	return cfg
 }
 
 func (cfg ShareRuntimeConfig) v2Enabled() bool {
-	return cfg.EnableV2 && strings.TrimSpace(cfg.Secret) != ""
-}
-
-func (cfg ShareRuntimeConfig) v2RequestedWithoutSecret() bool {
-	return cfg.EnableV2 && strings.TrimSpace(cfg.Secret) == ""
+	return cfg.EnableV2
 }
 
 func (d ShareDescriptor) IsV2() bool {
@@ -202,82 +176,111 @@ func newLegacyShareDescriptor(token string) ShareDescriptor {
 	}
 }
 
-func buildV2ShareDescriptors(cfg ShareRuntimeConfig) (server ShareDescriptor, client ShareDescriptor, err error) {
-	roomID, err := randomHex(16)
+func requestIssuedShareSession(ctx context.Context, relayURL string) (server ShareDescriptor, client ShareDescriptor, err error) {
+	endpoint, err := shareSessionEndpoint(relayURL)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: defaultShareIssueTimout}).Do(req)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: %s", msg)
+	}
+
+	var issued relayIssuedShareSessionResponse
+	decoder := json.NewDecoder(resp.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&issued); err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("decode issued share session: %w", err)
+	}
+	if issued.ProtocolVersion < ShareProtocolV2 {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: invalid protocol version %d", issued.ProtocolVersion)
+	}
+	if strings.TrimSpace(issued.RoomID) == "" || strings.TrimSpace(issued.ServerAuthTicket) == "" || strings.TrimSpace(issued.ClientAuthTicket) == "" {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: incomplete descriptor")
+	}
+
+	authExpiresAt, err := parseShareTimestamp(issued.AuthExpiresAt)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session auth expiry: %w", err)
+	}
+	renewExpiresAt, err := parseShareTimestamp(issued.RenewExpiresAt)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session renew expiry: %w", err)
 	}
 	cryptoKey, err := randomHex(32)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
 	}
-	now := time.Now().UTC()
-	connectExp := now.Add(cfg.ConnectTTL)
-	renewExp := now.Add(cfg.RenewTTL)
-	serverConnect, err := signShareTicket(cfg.Secret, shareTicketClaims{
-		RoomID: roomID,
-		Role:   "server",
-		Kind:   ShareTicketKindConnect,
-		Exp:    connectExp.Unix(),
-		V:      ShareProtocolV2,
-	})
-	if err != nil {
-		return ShareDescriptor{}, ShareDescriptor{}, err
+	shareMode := strings.TrimSpace(issued.ShareMode)
+	if shareMode == "" {
+		shareMode = ShareModeV2
 	}
-	clientConnect, err := signShareTicket(cfg.Secret, shareTicketClaims{
-		RoomID: roomID,
-		Role:   "client",
-		Kind:   ShareTicketKindConnect,
-		Exp:    connectExp.Unix(),
-		V:      ShareProtocolV2,
-	})
-	if err != nil {
-		return ShareDescriptor{}, ShareDescriptor{}, err
-	}
-	serverRenew, err := signShareTicket(cfg.Secret, shareTicketClaims{
-		RoomID: roomID,
-		Role:   "server",
-		Kind:   ShareTicketKindRenew,
-		Exp:    renewExp.Unix(),
-		V:      ShareProtocolV2,
-	})
-	if err != nil {
-		return ShareDescriptor{}, ShareDescriptor{}, err
-	}
-	clientRenew, err := signShareTicket(cfg.Secret, shareTicketClaims{
-		RoomID: roomID,
-		Role:   "client",
-		Kind:   ShareTicketKindRenew,
-		Exp:    renewExp.Unix(),
-		V:      ShareProtocolV2,
-	})
-	if err != nil {
-		return ShareDescriptor{}, ShareDescriptor{}, err
-	}
-	notice := "Experimental share v2 is enabled locally."
-	server = ShareDescriptor{
-		ProtocolVersion: ShareProtocolV2,
-		ShareMode:       ShareModeV2,
-		RoomID:          roomID,
-		AuthTicket:      serverConnect,
-		RenewToken:      serverRenew,
+	base := ShareDescriptor{
+		ProtocolVersion: issued.ProtocolVersion,
+		ShareMode:       shareMode,
+		RoomID:          issued.RoomID,
 		CryptoKey:       cryptoKey,
-		Notice:          notice,
-		AuthExpiresAt:   connectExp,
-		RenewExpiresAt:  renewExp,
+		Notice:          issued.Notice,
+		AuthExpiresAt:   authExpiresAt,
+		RenewExpiresAt:  renewExpiresAt,
 	}
-	client = ShareDescriptor{
-		ProtocolVersion: ShareProtocolV2,
-		ShareMode:       ShareModeV2,
-		RoomID:          roomID,
-		AuthTicket:      clientConnect,
-		RenewToken:      clientRenew,
-		CryptoKey:       cryptoKey,
-		Notice:          notice,
-		AuthExpiresAt:   connectExp,
-		RenewExpiresAt:  renewExp,
-	}
+	server = base
+	server.AuthTicket = issued.ServerAuthTicket
+	server.RenewToken = issued.ServerRenewToken
+	client = base
+	client.AuthTicket = issued.ClientAuthTicket
 	return server, client, nil
+}
+
+func shareSessionEndpoint(relayURL string) (string, error) {
+	base := strings.TrimSpace(strings.TrimSuffix(relayURL, "/"))
+	if base == "" {
+		return "", fmt.Errorf("empty relay URL")
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("parse relay URL: %w", err)
+	}
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("unsupported relay scheme %q", u.Scheme)
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = strings.TrimSuffix(u.Path, "/") + shareSessionPath
+	return u.String(), nil
+}
+
+func parseShareTimestamp(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
 }
 
 func randomHex(bytes int) (string, error) {
@@ -286,40 +289,4 @@ func randomHex(bytes int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
-}
-
-func signShareTicket(secret string, claims shareTicketClaims) (string, error) {
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	sig := mac.Sum(nil)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
-}
-
-func verifyShareTicket(secret, token string) (shareTicketClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return shareTicketClaims{}, fmt.Errorf("invalid share ticket")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return shareTicketClaims{}, fmt.Errorf("decode share payload: %w", err)
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return shareTicketClaims{}, fmt.Errorf("decode share signature: %w", err)
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return shareTicketClaims{}, fmt.Errorf("invalid share signature")
-	}
-	var claims shareTicketClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return shareTicketClaims{}, fmt.Errorf("decode share claims: %w", err)
-	}
-	return claims, nil
 }
