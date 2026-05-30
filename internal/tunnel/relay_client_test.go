@@ -4,6 +4,8 @@ package tunnel
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +41,22 @@ func TestRelayClientConnectURL(t *testing.T) {
 	}
 	if !strings.HasPrefix(url, "wss://") {
 		t.Error("ConnectURL should start with wss://")
+	}
+}
+
+func TestRelayClientConnectIncludesHandshakeReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "GGCode share v3 is required. Please upgrade GGCode TUI/GUI/Mobile to the latest version.", http.StatusGone)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	rc := testRelayClient(t, wsURL)
+	defer rc.Close()
+
+	err := rc.Connect()
+	if err == nil || !strings.Contains(err.Error(), "Please upgrade GGCode TUI/GUI/Mobile to the latest version") {
+		t.Fatalf("Connect() error = %v, want handshake reason in dial error", err)
 	}
 }
 

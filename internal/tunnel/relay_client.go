@@ -133,8 +133,17 @@ func (rc *RelayClient) Connect() error {
 
 func (rc *RelayClient) dial() (*websocket.Conn, error) {
 	url := rc.currentShareDescriptor().RuntimeConnectURL(rc.relayURL, rc.role, rc.meta, true)
-	conn, _, err := websocket.DefaultDialer.Dial(url, http.Header{})
+	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{})
 	if err != nil {
+		if resp != nil {
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			reason := strings.TrimSpace(string(body))
+			if readErr == nil && reason != "" {
+				return nil, fmt.Errorf("relay dial: %s (%s)", reason, resp.Status)
+			}
+			return nil, fmt.Errorf("relay dial: %s", resp.Status)
+		}
 		return nil, fmt.Errorf("relay dial: %w", err)
 	}
 	rc.connMu.Lock()
