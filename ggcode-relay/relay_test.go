@@ -109,7 +109,7 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 	}
 }
 
-func TestLegacyClientResumeDoesNotNotifyServerCompletion(t *testing.T) {
+func TestLegacyClientResumeNotifiesServerCompletion(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
@@ -122,8 +122,25 @@ func TestLegacyClientResumeDoesNotNotifyServerCompletion(t *testing.T) {
 
 	select {
 	case raw := <-server.sendCh:
-		t.Fatalf("expected no resume-complete notification for legacy client, got %s", raw)
+		var msg relayMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatalf("unmarshal relay message: %v", err)
+		}
+		if msg.Type != "connected" {
+			t.Fatalf("expected connected notification, got %+v", msg)
+		}
+		var meta struct {
+			ProtocolVersion int  `json:"protocol_version"`
+			ResumeComplete  bool `json:"resume_complete"`
+		}
+		if err := json.Unmarshal(msg.Data, &meta); err != nil {
+			t.Fatalf("unmarshal metadata: %v", err)
+		}
+		if meta.ProtocolVersion != shareProtocolLegacy || !meta.ResumeComplete {
+			t.Fatalf("unexpected metadata: %+v", meta)
+		}
 	default:
+		t.Fatal("expected resume-complete notification for legacy client")
 	}
 }
 

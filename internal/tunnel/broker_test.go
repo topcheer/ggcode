@@ -1377,6 +1377,24 @@ func TestBrokerHandleLegacyClientConnectedSendsActiveSessionWithoutAuthoritative
 
 	time.Sleep(10 * time.Millisecond)
 	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected no authoritative replay before legacy resume completes, got %+v", msgs)
+	}
+	select {
+	case raw := <-activeClient.sendCh:
+		t.Fatalf("expected no active_session before legacy resume completes, got %s", raw)
+	default:
+	}
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:            "client",
+		SessionID:       "sess-local",
+		HistoryCount:    0,
+		ProtocolVersion: ShareProtocolLegacy,
+		ResumeComplete:  true,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+	if msgs := d.drain(); len(msgs) != 0 {
 		t.Fatalf("expected legacy clients to rely on relay history without authoritative replay, got %+v", msgs)
 	}
 	select {

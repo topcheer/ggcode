@@ -459,9 +459,7 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 	}
 	log.Printf("[relay] resume room=%s client=%s cursor=%s mode=%s replay=%d",
 		shortToken(p.room.token), clientID, p.cursor, mode, len(replay))
-	if p.protocolVersion >= shareProtocolV2 {
-		p.notifyServerClientConnected(true)
-	}
+	p.notifyServerClientConnected(true)
 }
 
 func (p *peer) onKeyReady(msg relayMessage, h *hub) {
