@@ -127,6 +127,7 @@ type peer struct {
 	sendCh             chan []byte
 	done               chan struct{}
 	clientID           string
+	protocolVersion    int
 	ready              bool
 	waitingForKeyReady bool
 	cursor             string // relay-authoritative ACK cursor
@@ -458,7 +459,9 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 	}
 	log.Printf("[relay] resume room=%s client=%s cursor=%s mode=%s replay=%d",
 		shortToken(p.room.token), clientID, p.cursor, mode, len(replay))
-	p.room.notifyServerClientConnected(true)
+	if p.protocolVersion >= shareProtocolV2 {
+		p.notifyServerClientConnected(true)
+	}
 }
 
 func (p *peer) onKeyReady(msg relayMessage, h *hub) {
@@ -865,6 +868,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	p := newPeer(h, room, role, conn)
 	p.clientID = clientID
+	p.protocolVersion = handshake.protocolVersion
 
 	room.mu.Lock()
 	if handshake.protocolVersion > room.protocolVersion {
@@ -929,14 +933,21 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Notify server that a client connected.
 	if role == "client" {
-		room.notifyServerClientConnected(false)
+		p.notifyServerClientConnected(false)
 	}
 
 	go p.writeLoop()
 	p.readLoop(h) // blocks until disconnect
 }
 
-func (r *room) notifyServerClientConnected(resumeComplete bool) {
+func (p *peer) notifyServerClientConnected(resumeComplete bool) {
+	if p == nil || p.room == nil || p.room.server == nil {
+		return
+	}
+	p.room.notifyServerClientConnected(p.protocolVersion, resumeComplete)
+}
+
+func (r *room) notifyServerClientConnected(protocolVersion int, resumeComplete bool) {
 	if r.server == nil {
 		return
 	}
@@ -944,7 +955,6 @@ func (r *room) notifyServerClientConnected(resumeComplete bool) {
 	generation := r.ensureGenerationLocked()
 	sessionID := r.sessionID
 	count := len(r.history)
-	protocolVersion := r.protocolVersion
 	tail := ""
 	if count > 0 {
 		n := count

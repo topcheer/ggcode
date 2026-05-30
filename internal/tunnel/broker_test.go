@@ -1328,13 +1328,7 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
-func TestBrokerHandleLegacyClientConnectedDelaysAuthoritativeReplay(t *testing.T) {
-	oldDelay := legacyClientAuthoritativeReplayDelay
-	legacyClientAuthoritativeReplayDelay = 40 * time.Millisecond
-	defer func() {
-		legacyClientAuthoritativeReplayDelay = oldDelay
-	}()
-
+func TestBrokerHandleLegacyClientConnectedSkipsAuthoritativeReplay(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1380,11 +1374,6 @@ func TestBrokerHandleLegacyClientConnectedDelaysAuthoritativeReplay(t *testing.T
 		HistoryCount:    0,
 		ProtocolVersion: ShareProtocolLegacy,
 	})
-
-	time.Sleep(10 * time.Millisecond)
-	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected legacy replay to wait for resume completion, got %+v", msgs)
-	}
 	b.handleRelayConnected(RelayConnectedState{
 		Role:            "client",
 		SessionID:       "sess-local",
@@ -1394,43 +1383,23 @@ func TestBrokerHandleLegacyClientConnectedDelaysAuthoritativeReplay(t *testing.T
 	})
 
 	time.Sleep(10 * time.Millisecond)
+	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected legacy clients to rely on relay history without authoritative replay, got %+v", msgs)
+	}
 	select {
 	case raw := <-activeClient.sendCh:
 		var msg struct {
-			Type      string          `json:"type"`
-			SessionID string          `json:"session_id"`
-			Data      json.RawMessage `json:"data"`
+			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			t.Fatalf("unmarshal active_session payload: %v", err)
+			t.Fatalf("unmarshal relay payload: %v", err)
 		}
-		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" {
-			t.Fatalf("expected active_session before legacy replay delay, got %+v", msg)
-		}
+		t.Fatalf("expected no active_session for legacy client replay path, got %+v", msg)
 	default:
-		t.Fatalf("expected active_session before legacy replay delay")
-	}
-	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected canonical replay to still be delayed, got %+v", msgs)
-	}
-
-	time.Sleep(60 * time.Millisecond)
-	msgs := d.drain()
-	if len(msgs) != 3 {
-		t.Fatalf("expected delayed snapshot reset plus canonical replay, got %d messages", len(msgs))
-	}
-	if msgs[0].Type != EventSnapshotReset || msgs[1].Type != EventSessionInfo || msgs[2].Type != EventText {
-		t.Fatalf("unexpected delayed replay sequence: %+v", msgs)
 	}
 }
 
 func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightReplay(t *testing.T) {
-	oldDelay := legacyClientAuthoritativeReplayDelay
-	legacyClientAuthoritativeReplayDelay = 40 * time.Millisecond
-	defer func() {
-		legacyClientAuthoritativeReplayDelay = oldDelay
-	}()
-
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1447,7 +1416,19 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
 		}
 	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var replayCalls int
+	var replayMu sync.Mutex
 	b.SetReplayProvider(func() []GatewayMessage {
+		replayMu.Lock()
+		replayCalls++
+		call := replayCalls
+		replayMu.Unlock()
+		if call == 1 {
+			close(started)
+			<-release
+		}
 		return []GatewayMessage{
 			{
 				SessionID: "sess-local",
@@ -1469,17 +1450,23 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 		Role:            "client",
 		SessionID:       "sess-local",
 		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolLegacy,
-		ResumeComplete:  true,
+		ProtocolVersion: ShareProtocolV2,
 	})
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first client replay to start")
+	}
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 0,
+		Role:            "client",
+		SessionID:       "sess-local",
+		HistoryCount:    1,
+		LastEventID:     "ev-remote-tail",
+		ProtocolVersion: ShareProtocolV2,
 	})
+	close(release)
 
-	time.Sleep(90 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
 	msgs := d.drain()
 	if len(msgs) != 6 {
 		t.Fatalf("expected replay for original and queued client connects, got %+v", msgs)
