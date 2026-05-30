@@ -59,6 +59,7 @@ type room struct {
 	sessionID       string
 	generation      uint64
 	protocolVersion int
+	upgradeReason   string
 	history         []roomEvent
 	bootstrap       map[string]roomEvent
 	server          *peer
@@ -880,10 +881,17 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		serverMissing := room.server == nil
 		retained := room.offlineTimer != nil
 		sessionID := room.sessionID
+		upgradeReason := room.upgradeReason
 		state := roomRecoveryStateLocked(room)
 		room.mu.RUnlock()
 		if serverMissing {
-			if retained {
+			if upgradeReason != "" {
+				_ = conn.WriteJSON(relayMessage{
+					Type:   "error",
+					Reason: upgradeReason,
+				})
+				log.Printf("[relay] client rejected: room=%s requires upgrade", shortToken(token))
+			} else if retained {
 				_ = conn.WriteJSON(relayServerOfflineMessage(sessionID, state, retryAfterForState(state)))
 				log.Printf("[relay] client waiting: room=%s state=%s", shortToken(token), state)
 			} else {
@@ -902,6 +910,18 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	p := newPeer(h, room, role, conn)
 	p.clientID = clientID
 	p.protocolVersion = handshake.protocolVersion
+	if handshake.postConnectErr != "" && role == "client" {
+		logUpgradedClientReject(r, handshake.postConnectErr)
+		upgradeErr := relayMessage{
+			Type:   "error",
+			Reason: handshake.postConnectErr,
+		}
+		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.WriteJSON(upgradeErr)
+		conn.Close()
+		return
+	}
 
 	room.mu.RLock()
 	tail := ""
@@ -937,6 +957,10 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if handshake.postConnectErr != "" {
+		room.mu.Lock()
+		room.upgradeReason = handshake.postConnectErr
+		room.mu.Unlock()
+		h.scheduleRoomExpiry(token, defaultPendingRoomTTL)
 		logUpgradedClientReject(r, handshake.postConnectErr)
 		upgradeErr := relayMessage{
 			Type:   "error",
@@ -950,6 +974,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	room.mu.Lock()
+	room.upgradeReason = ""
 	if handshake.protocolVersion > room.protocolVersion {
 		room.protocolVersion = handshake.protocolVersion
 	}

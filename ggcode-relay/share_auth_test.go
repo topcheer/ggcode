@@ -246,7 +246,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	}
 }
 
-func TestHandleWSMissingTunnelCapabilityReturnsConnectedNoticeAndError(t *testing.T) {
+func TestHandleWSMissingTunnelCapabilityClientGetsErrorBeforeConnected(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	h := newHub(nil)
 	mux := http.NewServeMux()
@@ -300,21 +300,74 @@ func TestHandleWSMissingTunnelCapabilityReturnsConnectedNoticeAndError(t *testin
 	if err := conn.ReadJSON(&msg); err != nil {
 		t.Fatal(err)
 	}
+	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
+		t.Fatalf("unexpected relay error: %+v", msg)
+	}
+}
+
+func TestHandleWSOldServerMakesNewClientsSeeUpgradeError(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	h := newHub(nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/share/session", h.handleShareSession)
+	mux.HandleFunc("/ws", h.handleWS)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/share/session", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("share session status = %d", resp.StatusCode)
+	}
+	var issued issuedShareSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
+		t.Fatal(err)
+	}
+
+	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=server&proto=3&room_id=" + issued.RoomID +
+		"&auth_ticket=" + issued.ServerAuthTicket +
+		"&caps=share_v2,share_v3" +
+		"&crypto_key=test-crypto"
+	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverConn.Close()
+	var msg relayMessage
+	if err := serverConn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
 	if msg.Type != "connected" {
 		t.Fatalf("expected connected, got %+v", msg)
 	}
-	var data map[string]any
-	if err := json.Unmarshal(msg.Data, &data); err != nil {
+	if err := serverConn.ReadJSON(&msg); err != nil {
 		t.Fatal(err)
 	}
-	if got := data["notice"]; got != shareUpgradeRequiredMessage {
-		t.Fatalf("connected notice = %v, want %q", got, shareUpgradeRequiredMessage)
+	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
+		t.Fatalf("unexpected old server relay error: %+v", msg)
 	}
 
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
+		"&auth_ticket=" + issued.ClientAuthTicket +
+		"&caps=" + requiredTunnelCapability
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
 	if err := conn.ReadJSON(&msg); err != nil {
 		t.Fatal(err)
 	}
 	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("unexpected relay error: %+v", msg)
+		t.Fatalf("unexpected new client relay error: %+v", msg)
 	}
 }
