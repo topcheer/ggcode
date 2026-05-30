@@ -130,8 +130,10 @@ func TestClientResumeNotifiesServerCompletion(t *testing.T) {
 	r.server = server
 	client := newPeer(nil, r, "client", nil)
 	client.protocolVersion = shareProtocolV3
+	client.clientID = "client-1"
+	client.waitingForKeyReady = true
 
-	client.finishResumeLocked("client-1", &hub{})
+	client.finishResume("client-1", &hub{})
 
 	select {
 	case raw := <-server.sendCh:
@@ -607,6 +609,53 @@ func TestPeerSendBackpressures(t *testing.T) {
 		close(p.done)
 	}()
 	p.sendRaw([]byte("overflow")) // should return via done
+}
+
+func TestServerBroadcastBackpressureDoesNotHoldRoomLock(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	h := newHub(nil)
+	server := newPeer(h, r, "server", nil)
+	blocked := newPeer(h, r, "client", nil)
+	blocked.ready = true
+	r.clients[blocked] = struct{}{}
+
+	for i := 0; i < cap(blocked.sendCh); i++ {
+		blocked.sendRaw([]byte("x"))
+	}
+
+	broadcastDone := make(chan struct{})
+	go func() {
+		server.handleServerBroadcast(nil, relayMessage{
+			Type:      "encrypted",
+			SessionID: "sess-1",
+			EventID:   "ev-000000001",
+		})
+		close(broadcastDone)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	lockReleased := make(chan struct{})
+	go func() {
+		r.mu.RLock()
+		r.mu.RUnlock()
+		close(lockReleased)
+	}()
+
+	select {
+	case <-lockReleased:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("room lock stayed blocked behind backpressured send")
+	}
+
+	close(blocked.done)
+
+	select {
+	case <-broadcastDone:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("broadcast did not finish after unblocking peer")
+	}
 }
 
 // ─── Integration: full ACK lifecycle ───
