@@ -359,6 +359,7 @@ func (m *Model) bindTunnelProjectionSession() {
 	}
 	broker := m.ensureTunnelProjectionBroker()
 	store := m.tunnelProjectionStore
+	var replay []tunnel.GatewayMessage
 	if store == nil {
 		var err error
 		store, err = tunnel.NewDefaultProjectionStore()
@@ -371,19 +372,92 @@ func (m *Model) bindTunnelProjectionSession() {
 
 	broker.SwitchSession(m.session.ID)
 	if store != nil {
-		replay, err := store.ReplayEvents(m.session.ID)
+		var err error
+		replay, err = store.ReplayEvents(m.session.ID)
 		if err != nil {
 			debug.Log("tunnel", "projection: load replay failed for %s: %v", m.session.ID, err)
 		} else {
+			replay = m.hydrateProjectionReplayFromIncompleteSessionLedger(store, replay)
 			broker.PrimeEventIDs(replay)
 		}
 	}
 	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 		m.recordProjectionEvent(ev)
 	})
+	m.ensureProjectionBootstrap(broker, replay)
 	if m.tunnelMsgID == "" {
 		m.tunnelMsgID = broker.NextMessageID()
 	}
+}
+
+func (m *Model) ensureProjectionBootstrap(broker *tunnel.Broker, replay []tunnel.GatewayMessage) {
+	if broker == nil || len(replay) == 0 {
+		return
+	}
+	snapshot := m.tunnelSnapshot()
+	if !projectionReplayHasType(replay, tunnel.EventSessionInfo) && snapshot.SessionInfo != (tunnel.SessionInfoData{}) {
+		broker.SendSessionInfo(snapshot.SessionInfo)
+	}
+	if !projectionReplayHasType(replay, tunnel.EventStatus) && snapshot.Status.Status != "" {
+		broker.PushStatus(snapshot.Status.Status, snapshot.Status.Message)
+	}
+	if !projectionReplayHasType(replay, tunnel.EventActivity) && snapshot.Activity.Activity != "" {
+		broker.PushActivity(snapshot.Activity.Activity)
+	}
+}
+
+func projectionReplayHasType(events []tunnel.GatewayMessage, eventType string) bool {
+	for _, ev := range events {
+		if ev.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) hydrateProjectionReplayFromIncompleteSessionLedger(store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
+	if store == nil || m.session == nil || m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+		return replay
+	}
+	sessionID := strings.TrimSpace(m.session.ID)
+	if sessionID == "" {
+		return replay
+	}
+	seen := make(map[string]struct{}, len(replay))
+	for _, msg := range replay {
+		if msg.EventID != "" {
+			seen[msg.EventID] = struct{}{}
+		}
+	}
+	appended := false
+	for _, ev := range m.session.TunnelEvents {
+		if ev.EventID != "" {
+			if _, ok := seen[ev.EventID]; ok {
+				continue
+			}
+			seen[ev.EventID] = struct{}{}
+		}
+		if err := store.Append(tunnel.GatewayMessage{
+			SessionID: sessionID,
+			EventID:   ev.EventID,
+			StreamID:  ev.StreamID,
+			Type:      ev.Type,
+			Data:      append(json.RawMessage(nil), ev.Data...),
+		}); err != nil {
+			debug.Log("tunnel", "projection: hydrate from session ledger failed for %s event=%s: %v", sessionID, ev.EventID, err)
+			return replay
+		}
+		appended = true
+	}
+	if !appended {
+		return replay
+	}
+	updated, err := store.ReplayEvents(sessionID)
+	if err != nil {
+		debug.Log("tunnel", "projection: reload after session-ledger hydrate failed for %s: %v", sessionID, err)
+		return replay
+	}
+	return updated
 }
 
 func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {

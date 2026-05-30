@@ -97,7 +97,7 @@ func TestBuildProjectionReplaySkipsBootstrapDuplicatesAlreadyInTail(t *testing.T
 	if len(replay) != 4 {
 		t.Fatalf("replay len = %d, want 4", len(replay))
 	}
-	if replay[0].EventID != "info-1" || replay[1].EventID != "activity-3" || replay[2].EventID != "status-2" || replay[3].EventID != "text-4" {
+	if replay[0].EventID != "info-1" || replay[1].EventID != "status-2" || replay[2].EventID != "activity-3" || replay[3].EventID != "text-4" {
 		t.Fatalf("unexpected replay order: %#v", replay)
 	}
 }

@@ -458,6 +458,7 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 	}
 	log.Printf("[relay] resume room=%s client=%s cursor=%s mode=%s replay=%d",
 		shortToken(p.room.token), clientID, p.cursor, mode, len(replay))
+	p.room.notifyServerClientConnected(true)
 }
 
 func (p *peer) onKeyReady(msg relayMessage, h *hub) {
@@ -928,14 +929,14 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Notify server that a client connected.
 	if role == "client" {
-		room.notifyServerClientConnected()
+		room.notifyServerClientConnected(false)
 	}
 
 	go p.writeLoop()
 	p.readLoop(h) // blocks until disconnect
 }
 
-func (r *room) notifyServerClientConnected() {
+func (r *room) notifyServerClientConnected(resumeComplete bool) {
 	if r.server == nil {
 		return
 	}
@@ -943,6 +944,7 @@ func (r *room) notifyServerClientConnected() {
 	generation := r.ensureGenerationLocked()
 	sessionID := r.sessionID
 	count := len(r.history)
+	protocolVersion := r.protocolVersion
 	tail := ""
 	if count > 0 {
 		n := count
@@ -956,6 +958,10 @@ func (r *room) notifyServerClientConnected() {
 		SessionID:   sessionID,
 		Count:       count,
 		LastEventID: tail,
+		Data: mustJSON(map[string]any{
+			"protocol_version": protocolVersion,
+			"resume_complete":  resumeComplete,
+		}),
 	})
 }
 

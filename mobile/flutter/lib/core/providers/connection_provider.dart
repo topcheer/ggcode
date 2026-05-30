@@ -1175,7 +1175,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   bool _canRestoreSessionProjection() {
-    return !_hasAuthoritativeProjection &&
+    return !_awaitingSnapshotProjection &&
+        !_hasAuthoritativeProjection &&
         ref.read(subagentProvider).isEmpty &&
         ref.read(sessionInfoProvider) == null;
   }

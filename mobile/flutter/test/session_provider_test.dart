@@ -1604,6 +1604,57 @@ void main() {
   });
 
   test(
+      'ConnectionNotifier ignores async cached restore that completes after snapshot_reset',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000120',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    cache.markDisconnected();
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'active_session',
+      data: {'session_id': 'sess-live'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'snapshot_reset',
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(container.read(chatProvider), isEmpty);
+    expect(notifier.lastAppliedEventId, isEmpty);
+  });
+
+  test(
       'workspace cache does not reattach cached session after scanning a new room',
       () async {
     final info = proto.SessionInfoData(

@@ -1153,7 +1153,7 @@ func TestBrokerHandleFirstClientConnectedPublishesAuthoritativeSnapshotWhenState
 	}
 }
 
-func TestBrokerHandleAdditionalClientConnectedTrustsRetainedRelayHistoryWhenLocalReplayIsEmpty(t *testing.T) {
+func TestBrokerHandleAdditionalClientConnectedReseedsWhenLocalReplayIsEmpty(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1180,8 +1180,14 @@ func TestBrokerHandleAdditionalClientConnectedTrustsRetainedRelayHistoryWhenLoca
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) != 0 {
-		t.Fatalf("expected retained relay history to avoid authoritative reset when local replay is empty, got %+v", msgs)
+	if len(msgs) != 6 {
+		t.Fatalf("expected authoritative snapshot reseed when local replay is empty, got %+v", msgs)
+	}
+	if msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected snapshot_reset first, got %q", msgs[0].Type)
+	}
+	if msgs[1].Type != EventSessionInfo {
+		t.Fatalf("expected session_info after snapshot_reset, got %q", msgs[1].Type)
 	}
 }
 
@@ -1319,6 +1325,173 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 	if msgs[2].Type != EventText {
 		t.Fatalf("expected text replay after session_info, got %q", msgs[2].Type)
+	}
+}
+
+func TestBrokerHandleLegacyClientConnectedDelaysAuthoritativeReplay(t *testing.T) {
+	oldDelay := legacyClientAuthoritativeReplayDelay
+	legacyClientAuthoritativeReplayDelay = 40 * time.Millisecond
+	defer func() {
+		legacyClientAuthoritativeReplayDelay = oldDelay
+	}()
+
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	activeClient, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.session.client = activeClient
+	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	textJSON, err := json.Marshal(TextData{ID: "msg-1", Chunk: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      infoJSON,
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      textJSON,
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:            "client",
+		SessionID:       "sess-local",
+		HistoryCount:    0,
+		ProtocolVersion: ShareProtocolLegacy,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected legacy replay to wait for resume completion, got %+v", msgs)
+	}
+	b.handleRelayConnected(RelayConnectedState{
+		Role:            "client",
+		SessionID:       "sess-local",
+		HistoryCount:    0,
+		ProtocolVersion: ShareProtocolLegacy,
+		ResumeComplete:  true,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+	select {
+	case raw := <-activeClient.sendCh:
+		var msg struct {
+			Type      string          `json:"type"`
+			SessionID string          `json:"session_id"`
+			Data      json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatalf("unmarshal active_session payload: %v", err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" {
+			t.Fatalf("expected active_session before legacy replay delay, got %+v", msg)
+		}
+	default:
+		t.Fatalf("expected active_session before legacy replay delay")
+	}
+	if msgs := d.drain(); len(msgs) != 0 {
+		t.Fatalf("expected canonical replay to still be delayed, got %+v", msgs)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 3 {
+		t.Fatalf("expected delayed snapshot reset plus canonical replay, got %d messages", len(msgs))
+	}
+	if msgs[0].Type != EventSnapshotReset || msgs[1].Type != EventSessionInfo || msgs[2].Type != EventText {
+		t.Fatalf("unexpected delayed replay sequence: %+v", msgs)
+	}
+}
+
+func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightReplay(t *testing.T) {
+	oldDelay := legacyClientAuthoritativeReplayDelay
+	legacyClientAuthoritativeReplayDelay = 40 * time.Millisecond
+	defer func() {
+		legacyClientAuthoritativeReplayDelay = oldDelay
+	}()
+
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	textJSON, err := json.Marshal(TextData{ID: "msg-1", Chunk: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      infoJSON,
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      textJSON,
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:            "client",
+		SessionID:       "sess-local",
+		HistoryCount:    0,
+		ProtocolVersion: ShareProtocolLegacy,
+		ResumeComplete:  true,
+	})
+	time.Sleep(10 * time.Millisecond)
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 0,
+	})
+
+	time.Sleep(90 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 6 {
+		t.Fatalf("expected replay for original and queued client connects, got %+v", msgs)
+	}
+	resetCount := 0
+	for _, msg := range msgs {
+		if msg.Type == EventSnapshotReset {
+			resetCount++
+		}
+	}
+	if resetCount != 2 {
+		t.Fatalf("expected two snapshot resets for distinct queued client connects, got %d in %+v", resetCount, msgs)
 	}
 }
 

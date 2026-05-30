@@ -59,6 +59,7 @@ type RelayConnectedState struct {
 	HistoryCount    int
 	LastEventID     string
 	ProtocolVersion int
+	ResumeComplete  bool
 	ShareMode       string
 	RoomID          string
 	ConnectMode     string
@@ -341,6 +342,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			if len(relayMsg.Data) > 0 {
 				var meta struct {
 					ProtocolVersion int    `json:"protocol_version,omitempty"`
+					ResumeComplete  bool   `json:"resume_complete,omitempty"`
 					ShareMode       string `json:"share_mode,omitempty"`
 					RoomID          string `json:"room_id,omitempty"`
 					ConnectMode     string `json:"connect_mode,omitempty"`
@@ -351,6 +353,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 				}
 				if err := json.Unmarshal(relayMsg.Data, &meta); err == nil {
 					state.ProtocolVersion = meta.ProtocolVersion
+					state.ResumeComplete = meta.ResumeComplete
 					state.ShareMode = meta.ShareMode
 					state.RoomID = meta.RoomID
 					state.ConnectMode = meta.ConnectMode

@@ -80,6 +80,8 @@ type Broker struct {
 
 	clientReplayMu         sync.Mutex
 	clientReplayInFlight   bool
+	activeClientReplay     *pendingClientReplay
+	pendingClientReplay    *pendingClientReplay
 	clientProjectionSeeded atomic.Bool
 }
 
@@ -96,6 +98,14 @@ type SnapshotEvent struct {
 	StreamID string
 	Data     json.RawMessage
 }
+
+type pendingClientReplay struct {
+	info       RelayConnectedState
+	sessionID  string
+	generation uint64
+}
+
+var legacyClientAuthoritativeReplayDelay = 200 * time.Millisecond
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
@@ -533,6 +543,10 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	}
 	currentSessionID, currentGeneration := b.sessionState()
 	if info.Role == "client" {
+		if info.ProtocolVersion == ShareProtocolLegacy && !info.ResumeComplete {
+			debug.Log("tunnel", "broker: waiting for legacy client resume completion before authoritative replay (session=%q)", currentSessionID)
+			return
+		}
 		// A newly joined mobile client should NOT force-reset existing clients when
 		// the room already has retained history for the current active session.
 		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
@@ -548,21 +562,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if provider == nil {
 			return
 		}
-		snapshot := provider()
-		if snapshot.Status.Status == "" {
-			if status, ok := b.CurrentStatus(); ok {
-				snapshot.Status = status
-			}
-		}
-		if snapshot.Activity.Activity == "" {
-			if activity, ok := b.CurrentActivity(); ok {
-				snapshot.Activity = activity
-			}
-		}
-		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
-			return
-		}
-		if !b.beginClientReplaySync() {
+		if !b.beginClientReplaySync(info, currentSessionID, currentGeneration) {
 			debug.Log("tunnel", "broker: coalescing duplicate client replay sync for session=%q count=%d", currentSessionID, info.HistoryCount)
 			return
 		}
@@ -582,6 +582,18 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
+			if delay := authoritativeReplayDelay(info); delay > 0 {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-b.outDone:
+					return
+				}
+				if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+					return
+				}
+			}
 			events := b.canonicalReplayEvents()
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
@@ -594,6 +606,10 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			activeText := b.activeTextSnapshot()
+			snapshot, ok := b.currentSnapshot(provider)
+			if !ok {
+				return
+			}
 			b.enqueueControl(EventSnapshotReset, nil)
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
@@ -671,12 +687,26 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	}()
 }
 
-func (b *Broker) beginClientReplaySync() bool {
+func (b *Broker) beginClientReplaySync(info RelayConnectedState, sessionID string, generation uint64) bool {
 	b.clientReplayMu.Lock()
 	defer b.clientReplayMu.Unlock()
+	next := &pendingClientReplay{
+		info:       info,
+		sessionID:  sessionID,
+		generation: generation,
+	}
 	if b.clientReplayInFlight {
+		if b.activeClientReplay != nil &&
+			b.activeClientReplay.info == info &&
+			b.activeClientReplay.sessionID == sessionID &&
+			b.activeClientReplay.generation == generation {
+			return false
+		}
+		b.pendingClientReplay = next
 		return false
 	}
+	b.activeClientReplay = next
+	b.pendingClientReplay = nil
 	b.clientReplayInFlight = true
 	return true
 }
@@ -684,7 +714,20 @@ func (b *Broker) beginClientReplaySync() bool {
 func (b *Broker) endClientReplaySync() {
 	b.clientReplayMu.Lock()
 	b.clientReplayInFlight = false
+	b.activeClientReplay = nil
+	pending := b.pendingClientReplay
+	b.pendingClientReplay = nil
 	b.clientReplayMu.Unlock()
+	if pending == nil {
+		return
+	}
+	go func(next pendingClientReplay) {
+		b.waitProjectionSync()
+		if !b.isSessionStateCurrent(next.sessionID, next.generation) {
+			return
+		}
+		b.handleRelayConnected(next.info)
+	}(*pending)
 }
 
 func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID string) bool {
@@ -698,18 +741,42 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 		return true
 	}
 	events := provider()
-	if len(events) == 0 {
-		// During a live share the room can already hold authoritative retained
-		// history even though local canonical replay is intentionally unavailable.
-		// In that case, additional client joins should reuse relay history rather
-		// than resetting existing ready clients with a fresh snapshot.
-		return true
-	}
 	if len(events) != info.HistoryCount {
 		return false
 	}
 	lastEventID := events[len(events)-1].EventID
 	return lastEventID != "" && lastEventID == info.LastEventID
+}
+
+func (b *Broker) currentSnapshot(provider func() BrokerSnapshot) (BrokerSnapshot, bool) {
+	if provider == nil {
+		return BrokerSnapshot{}, false
+	}
+	snapshot := provider()
+	if snapshot.Status.Status == "" {
+		if status, ok := b.CurrentStatus(); ok {
+			snapshot.Status = status
+		}
+	}
+	if snapshot.Activity.Activity == "" {
+		if activity, ok := b.CurrentActivity(); ok {
+			snapshot.Activity = activity
+		}
+	}
+	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" && snapshot.Activity.Activity == "" {
+		return BrokerSnapshot{}, false
+	}
+	return snapshot, true
+}
+
+func authoritativeReplayDelay(info RelayConnectedState) time.Duration {
+	if info.Role != "client" {
+		return 0
+	}
+	if info.ProtocolVersion > 0 && info.ProtocolVersion < ShareProtocolV2 {
+		return legacyClientAuthoritativeReplayDelay
+	}
+	return 0
 }
 
 // ─── User message ───
