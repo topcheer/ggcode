@@ -202,7 +202,7 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 		authExpiresAt:   exp,
 		renewToken:      nextRenewToken,
 		renewExpiresAt:  renewExp,
-		notice:          "",
+		notice:          postConnectErr,
 		clientKind:      clientKind,
 		clientVersion:   clientVersion,
 		capabilities:    capabilities,

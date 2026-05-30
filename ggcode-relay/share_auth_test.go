@@ -128,6 +128,9 @@ func TestValidateShareHandshakeRejectsMissingTunnelCapability(t *testing.T) {
 	if handshake.postConnectErr != shareUpgradeRequiredMessage {
 		t.Fatalf("postConnectErr = %q, want %q", handshake.postConnectErr, shareUpgradeRequiredMessage)
 	}
+	if handshake.notice != shareUpgradeRequiredMessage {
+		t.Fatalf("notice = %q, want %q", handshake.notice, shareUpgradeRequiredMessage)
+	}
 }
 
 func TestHandleShareSession(t *testing.T) {
@@ -243,7 +246,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	}
 }
 
-func TestHandleWSMissingTunnelCapabilityReturnsRelayErrorFrame(t *testing.T) {
+func TestHandleWSMissingTunnelCapabilityReturnsLegacyVisibleSequence(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	h := newHub(nil)
 	mux := http.NewServeMux()
@@ -269,6 +272,20 @@ func TestHandleWSMissingTunnelCapabilityReturnsRelayErrorFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=server&proto=3&room_id=" + issued.RoomID +
+		"&auth_ticket=" + issued.ServerAuthTicket +
+		"&caps=" + requiredTunnelCapability +
+		"&crypto_key=test-crypto"
+	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverConn.Close()
+	if err := serverConn.ReadJSON(&relayMessage{}); err != nil {
+		t.Fatal(err)
+	}
+
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
 		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
 		"&auth_ticket=" + issued.ClientAuthTicket +
@@ -283,7 +300,28 @@ func TestHandleWSMissingTunnelCapabilityReturnsRelayErrorFrame(t *testing.T) {
 	if err := conn.ReadJSON(&msg); err != nil {
 		t.Fatal(err)
 	}
+	if msg.Type != "connected" {
+		t.Fatalf("expected connected, got %+v", msg)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if got := data["notice"]; got != shareUpgradeRequiredMessage {
+		t.Fatalf("connected notice = %v, want %q", got, shareUpgradeRequiredMessage)
+	}
+
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
 	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
 		t.Fatalf("unexpected relay error: %+v", msg)
+	}
+
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "sharing_stopped" {
+		t.Fatalf("expected sharing_stopped, got %+v", msg)
 	}
 }
