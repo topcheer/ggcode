@@ -74,7 +74,22 @@ bool isPermanentRoomFailureMessage(String error) {
   final lower = error.toLowerCase();
   return lower.contains('room not found') ||
       lower.contains('stale or expired share token') ||
+      lower.contains('upgrade required') ||
+      lower.contains('please upgrade ggcode') ||
       lower.contains('http status code: 410') ||
+      lower.contains('status code: 410');
+}
+
+bool isUpgradeRequiredMessage(String error) {
+  final lower = error.toLowerCase();
+  return lower.contains('upgrade required') ||
+      lower.contains('please upgrade ggcode') ||
+      lower.contains('ggcode share v3 is required');
+}
+
+bool isHttpGoneConnectError(String error) {
+  final lower = error.toLowerCase();
+  return lower.contains('http status code: 410') ||
       lower.contains('status code: 410');
 }
 
@@ -601,7 +616,11 @@ class ConnectionService {
 
       case 'error':
         final reason = map['reason'] as String? ?? 'Relay error';
-        if (isPermanentRoomFailureMessage(reason)) {
+        if (isUpgradeRequiredMessage(reason)) {
+          _handlePermanentRelayFailure(
+            'Upgrade required: please update GGCode Mobile/Desktop to the latest version.',
+          );
+        } else if (isPermanentRoomFailureMessage(reason)) {
           _handlePermanentRelayFailure(
             'Room not found: stale or expired share token',
           );
@@ -750,6 +769,10 @@ class ConnectionService {
 
   String _formatConnectError(Object error) {
     final raw = error.toString();
+    if (isUpgradeRequiredMessage(raw) ||
+        (_descriptor.protocolVersion >= 3 && isHttpGoneConnectError(raw))) {
+      return 'Upgrade required: please update GGCode Mobile/Desktop to the latest version.';
+    }
     if (isPermanentRoomFailureMessage(raw)) {
       return 'Room not found: stale or expired share token';
     }

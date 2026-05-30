@@ -86,6 +86,43 @@ void main() {
     );
   });
 
+  test('ConnectionService surfaces upgrade required on relay 410 handshake',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    server.listen((request) async {
+      request.response.statusCode = HttpStatus.gone;
+      request.response.write(
+        'GGCode share v3 is required. Please upgrade GGCode TUI/GUI/Mobile to the latest version.',
+      );
+      await request.response.close();
+    });
+
+    final service = ConnectionService(
+      descriptor: ShareConnectionDescriptor.parse(
+        'ws://${server.address.host}:${server.port}/ws?proto=3&room_id=room-upgrade&auth_ticket=auth-upgrade',
+      ),
+    );
+    addTearDown(service.dispose);
+
+    final errors = <String>[];
+    final errorSub = service.errorStream.listen(errors.add);
+    addTearDown(errorSub.cancel);
+
+    await service.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    expect(
+      errors,
+      contains(
+        'Upgrade required: please update GGCode Mobile/Desktop to the latest version.',
+      ),
+    );
+  });
+
   test('ConnectionService rejects remote insecure relay URLs before dialing',
       () async {
     final service = ConnectionService(
@@ -155,6 +192,46 @@ void main() {
     expect(
       errors.where((error) => error.contains('Room not found')),
       isNotEmpty,
+    );
+  });
+
+  test(
+      'ConnectionService surfaces upgrade required when relay sends error frame',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(jsonEncode({
+        'type': 'error',
+        'reason':
+            'GGCode share v3 is required. Please upgrade GGCode TUI/GUI/Mobile to the latest version.',
+      }));
+      await socket.close();
+    });
+
+    final service = ConnectionService(
+      descriptor: ShareConnectionDescriptor.parse(
+        'ws://${server.address.host}:${server.port}/ws?proto=3&room_id=room-upgrade&auth_ticket=auth-upgrade',
+      ),
+    );
+    addTearDown(service.dispose);
+
+    final errors = <String>[];
+    final errorSub = service.errorStream.listen(errors.add);
+    addTearDown(errorSub.cancel);
+
+    await service.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    expect(
+      errors,
+      contains(
+        'Upgrade required: please update GGCode Mobile/Desktop to the latest version.',
+      ),
     );
   });
 
