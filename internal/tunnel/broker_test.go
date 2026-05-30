@@ -1328,7 +1328,7 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
-func TestBrokerHandleLegacyClientConnectedSendsActiveSessionWithoutAuthoritativeReplay(t *testing.T) {
+func TestBrokerHandleLegacyClientConnectedSkipsPerClientBootstrap(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1381,7 +1381,7 @@ func TestBrokerHandleLegacyClientConnectedSendsActiveSessionWithoutAuthoritative
 	}
 	select {
 	case raw := <-activeClient.sendCh:
-		t.Fatalf("expected no active_session before legacy resume completes, got %s", raw)
+		t.Fatalf("expected no broker bootstrap before legacy resume completes, got %s", raw)
 	default:
 	}
 
@@ -1395,22 +1395,12 @@ func TestBrokerHandleLegacyClientConnectedSendsActiveSessionWithoutAuthoritative
 
 	time.Sleep(10 * time.Millisecond)
 	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected legacy clients to rely on relay history without authoritative replay, got %+v", msgs)
+		t.Fatalf("expected legacy clients to rely on relay-side bootstrap without broker replay, got %+v", msgs)
 	}
 	select {
 	case raw := <-activeClient.sendCh:
-		var msg struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id"`
-		}
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			t.Fatalf("unmarshal relay payload: %v", err)
-		}
-		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" {
-			t.Fatalf("expected active_session for legacy client replay path, got %+v", msg)
-		}
+		t.Fatalf("expected no broker bootstrap after legacy resume completes, got %s", raw)
 	default:
-		t.Fatal("expected active_session for legacy client replay path")
 	}
 }
 

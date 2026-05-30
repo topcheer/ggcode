@@ -445,6 +445,14 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 		Generation: generation,
 		Data:       mustJSON(map[string]interface{}{"resume_mode": mode, "replay_count": len(replay)}),
 	})
+	if p.protocolVersion < shareProtocolV2 {
+		p.send(relayMessage{
+			Type:       "snapshot_reset",
+			SessionID:  p.room.sessionID,
+			ClientID:   clientID,
+			Generation: generation,
+		})
+	}
 
 	for _, ev := range replay {
 		h.traceRoomEvent("replay_send", p.room.token, p.clientID, ev, "mode="+mode)
