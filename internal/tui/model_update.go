@@ -361,8 +361,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		sysMsg := m.t("cron.firing")
 		m.suppressNextTunnelSystem = sysMsg
 		m.chatWriteSystem(nextSystemID(), sysMsg)
-		if m.tunnelBroker != nil {
-			m.tunnelBroker.PushUserMessageData(tunnel.MessageData{
+		if broker := m.tunnelEventBroker(); broker != nil {
+			broker.PushUserMessageData(tunnel.MessageData{
 				Text:        msg.Prompt,
 				DisplayText: sysMsg,
 				Kind:        tunnel.MessageKindCron,

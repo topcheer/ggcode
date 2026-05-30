@@ -36,8 +36,10 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	if hadShellOutput && shellOutputID != "" && m.tunnelBroker != nil {
-		m.tunnelBroker.PushTextDone(shellOutputID)
+	if hadShellOutput && shellOutputID != "" {
+		if broker := m.tunnelEventBroker(); broker != nil {
+			broker.PushTextDone(shellOutputID)
+		}
 	}
 	// Auto-exit shell mode so user returns to the prompt
 	m.setShellMode(false)

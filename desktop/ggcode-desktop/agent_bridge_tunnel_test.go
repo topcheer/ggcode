@@ -190,6 +190,45 @@ func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedgerDesktop(t
 	}
 }
 
+func TestCurrentSessionTunnelEventsPrefersProjectionStoreDesktop(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	projectionStore, err := tunnel.NewProjectionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new projection store: %v", err)
+	}
+	bridge.sessionStore = store
+	bridge.tunnelProjectionStore = projectionStore
+	bridge.currentSes = &session.Session{
+		ID:                   "sess-desktop-projection",
+		CreatedAt:            time.Now().Add(-time.Minute),
+		UpdatedAt:            time.Now(),
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{EventID: "legacy-1", Type: tunnel.EventUserMessage, Data: []byte(`{"text":"legacy"}`)},
+		},
+	}
+	if err := projectionStore.Append(tunnel.GatewayMessage{
+		SessionID: "sess-desktop-projection",
+		EventID:   "projection-1",
+		Type:      tunnel.EventUserMessage,
+		Data:      []byte(`{"text":"projection"}`),
+	}); err != nil {
+		t.Fatalf("append projection event: %v", err)
+	}
+
+	events := bridge.CurrentSessionTunnelEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 projected event, got %d", len(events))
+	}
+	if events[0].EventID != "projection-1" {
+		t.Fatalf("expected projection replay to win, got %q", events[0].EventID)
+	}
+}
+
 func TestResetCurrentSessionTunnelLedgerDesktopClearsCanonicalReplay(t *testing.T) {
 	store, err := session.NewJSONLStore(t.TempDir())
 	if err != nil {
@@ -317,6 +356,39 @@ func TestAgentBridgeHandleCronPromptPushesCronTunnelEvent(t *testing.T) {
 	}
 	if !sawCron {
 		t.Fatal("expected cron user_message tunnel event")
+	}
+}
+
+func TestAgentBridgeEnsureSessionCreatesProjectionBrokerDesktop(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	projectionStore, err := tunnel.NewProjectionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new projection store: %v", err)
+	}
+	bridge.sessionStore = store
+	bridge.tunnelProjectionStore = projectionStore
+	bridge.ensureSession()
+	bridge.working = true
+
+	bridge.handleCronPrompt("check status")
+
+	events := bridge.CurrentSessionTunnelEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected cron event to be persisted through projection broker, got %d", len(events))
+	}
+	if events[0].Type != tunnel.EventUserMessage {
+		t.Fatalf("expected user_message event, got %q", events[0].Type)
+	}
+	var data tunnel.MessageData
+	if err := json.Unmarshal(events[0].Data, &data); err != nil {
+		t.Fatalf("unmarshal message data: %v", err)
+	}
+	if data.Kind != tunnel.MessageKindCron || data.Text != "check status" {
+		t.Fatalf("unexpected cron projection payload: %+v", data)
 	}
 }
 

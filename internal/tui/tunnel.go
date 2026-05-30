@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/chat"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -243,9 +244,12 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.bindTunnelProjectionSession()
 	m.tunnelSession = msg.session
 	m.tunnelBroker = msg.broker
-	m.tunnelMsgID = msg.broker.NextMessageID()
+	if m.tunnelMsgID == "" && m.tunnelProjectionBroker != nil {
+		m.tunnelMsgID = m.tunnelProjectionBroker.NextMessageID()
+	}
 	m.tunnelSpawned = make(map[string]bool)
 
 	// Register inbound command handler.
@@ -270,9 +274,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	msg.broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 		return m.currentSessionTunnelReplayEvents()
 	})
-	msg.broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-		m.recordTunnelEvent(ev)
-	})
+	msg.broker.SetEventRecorder(nil)
 	if m.session != nil && m.session.ID != "" {
 		msg.broker.BindSession(m.session.ID)
 		sessionID := m.session.ID
@@ -340,37 +342,94 @@ func subagentTunnelReasoningMsgID(agentID string) string {
 	return fmt.Sprintf("sa-%s-reasoning", agentID)
 }
 
+func (m *Model) tunnelEventBroker() *tunnel.Broker {
+	return m.tunnelProjectionBroker
+}
+
+func (m *Model) ensureTunnelProjectionBroker() *tunnel.Broker {
+	if m.tunnelProjectionBroker == nil {
+		m.tunnelProjectionBroker = tunnel.NewBroker(nil)
+	}
+	return m.tunnelProjectionBroker
+}
+
+func (m *Model) bindTunnelProjectionSession() {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return
+	}
+	broker := m.ensureTunnelProjectionBroker()
+	store := m.tunnelProjectionStore
+	if store == nil {
+		var err error
+		store, err = tunnel.NewDefaultProjectionStore()
+		if err != nil {
+			debug.Log("tunnel", "projection: init store failed for %s: %v", m.session.ID, err)
+		} else {
+			m.tunnelProjectionStore = store
+		}
+	}
+
+	broker.SwitchSession(m.session.ID)
+	if store != nil {
+		replay, err := store.ReplayEvents(m.session.ID)
+		if err != nil {
+			debug.Log("tunnel", "projection: load replay failed for %s: %v", m.session.ID, err)
+		} else {
+			broker.PrimeEventIDs(replay)
+		}
+	}
+	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		m.recordProjectionEvent(ev)
+	})
+	if m.tunnelMsgID == "" {
+		m.tunnelMsgID = broker.NextMessageID()
+	}
+}
+
+func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
+	if m.tunnelProjectionStore != nil {
+		if err := m.tunnelProjectionStore.Append(ev); err != nil {
+			debug.Log("tunnel", "projection: append failed for %s event=%s: %v", ev.SessionID, ev.EventID, err)
+		}
+	}
+	m.recordTunnelEvent(ev)
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.PublishRecordedEvent(ev)
+	}
+}
+
 // pushTunnelEvent pushes a provider stream event to the mobile client.
 // Called from the agent stream callback in submit.go. Nil-safe.
 func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
-	if m.tunnelBroker == nil {
+	broker := m.tunnelEventBroker()
+	if broker == nil {
 		return
 	}
 
 	switch ev.Type {
 	case provider.StreamEventText:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushText(m.tunnelMsgID, ev.Text)
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushText(m.tunnelMsgID, ev.Text)
 
 	case provider.StreamEventReasoning:
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			m.tunnelBroker.PushReasoning(m.tunnelReasoningMsgID(), chunk)
+			broker.PushReasoning(m.tunnelReasoningMsgID(), chunk)
 		}
 
 	case provider.StreamEventToolCallDone:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushTextDone(m.tunnelMsgID)
 		name := ev.Tool.Name
 		if name == "" {
 			name = "tool"
 		}
 		present := describeTool(m.currentLanguage(), name, string(ev.Tool.Arguments))
 		title := toolCallDisplayName(name, string(ev.Tool.Arguments))
-		m.tunnelBroker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
-		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
+		broker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
+		m.tunnelMsgID = broker.NextMessageID()
 
 	case provider.StreamEventToolResult:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
 		content := ev.Result
 		if len([]rune(content)) > 2000 {
 			content = truncateRunes(content, 2000, "\n...(truncated)")
@@ -378,38 +437,38 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		m.pushTunnelToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 
 	case provider.StreamEventSystem:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
-		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushTextDone(m.tunnelMsgID)
+		m.tunnelMsgID = broker.NextMessageID()
 
 	case provider.StreamEventDone:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
-		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushTextDone(m.tunnelMsgID)
+		m.tunnelMsgID = broker.NextMessageID()
 
 	case provider.StreamEventError:
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushTextDone(m.tunnelMsgID)
 		if ev.Error != nil {
-			m.tunnelBroker.PushError(sanitizeAPIError(ev.Error).Error())
+			broker.PushError(sanitizeAPIError(ev.Error).Error())
 		}
-		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
+		m.tunnelMsgID = broker.NextMessageID()
 	}
 }
 
 // pushTunnelUserMessage echoes a locally-typed user message to the mobile client.
 func (m *Model) pushTunnelUserMessage(text string) {
-	if m.tunnelBroker != nil {
+	if broker := m.tunnelEventBroker(); broker != nil {
 		if m.tunnelUserMessageOverride != nil {
 			override := *m.tunnelUserMessageOverride
 			if override.Text == "" {
 				override.Text = text
 			}
 			m.tunnelUserMessageOverride = nil
-			m.tunnelBroker.PushUserMessageData(override)
+			broker.PushUserMessageData(override)
 			return
 		}
-		m.tunnelBroker.PushUserMessage(text)
+		broker.PushUserMessage(text)
 	}
 }
 
@@ -431,21 +490,21 @@ func (m *Model) setNextTunnelUserMessageOverride(data tunnel.MessageData) {
 }
 
 func (m *Model) pushTunnelToolResult(toolID, toolName, result string, isError bool) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushToolResult(toolID, toolName, result, isError)
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushToolResult(toolID, toolName, result, isError)
 	}
 }
 
 // pushTunnelStatus sends a main-agent status update to the mobile client.
 func (m *Model) pushTunnelStatus(status, message string) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushStatus(status, message)
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushStatus(status, message)
 	}
 }
 
 func (m *Model) pushTunnelActivity(activity string) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushActivity(strings.TrimSpace(activity))
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushActivity(strings.TrimSpace(activity))
 	}
 }
 
@@ -460,12 +519,12 @@ func (m *Model) pushTunnelCurrentActivity() {
 
 // pushTunnelCancel notifies mobile that the current run was cancelled.
 func (m *Model) pushTunnelCancel() {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushReasoningDone(m.tunnelReasoningMsgID())
-		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		broker.PushTextDone(m.tunnelMsgID)
 		m.pushTunnelStatus(tunnel.StatusIdle, "cancelled")
 		m.pushTunnelActivity("")
-		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
+		m.tunnelMsgID = broker.NextMessageID()
 	}
 }
 
@@ -473,7 +532,8 @@ func (m *Model) pushTunnelCancel() {
 
 // pushSubAgentTunnelEvent pushes sub-agent lifecycle events to the mobile client.
 func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
-	if m.tunnelBroker == nil {
+	broker := m.tunnelEventBroker()
+	if broker == nil {
 		return
 	}
 
@@ -481,63 +541,64 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 	case subagent.StatusRunning:
 		if !m.tunnelSpawned[sa.ID] {
 			m.tunnelSpawned[sa.ID] = true
-			m.tunnelBroker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
+			broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
 		}
-		m.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
+		broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
 
 	case subagent.StatusCompleted:
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
 		if sa.Result != "" {
 			msgID := subagentTunnelTextMsgID(sa.ID)
-			m.tunnelBroker.PushSubagentText(sa.ID, msgID, sa.Result, true)
+			broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
 		}
-		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
+		broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
 
 	case subagent.StatusFailed:
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
 		errMsg := ""
 		if sa.Error != nil {
 			errMsg = sa.Error.Error()
 		}
-		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
+		broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
 
 	case subagent.StatusCancelled:
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
-		m.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(sa.ID))
+		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 	}
 }
 
 // pushSubAgentTunnelStreamText pushes streaming text from a sub-agent.
 func (m *Model) pushSubAgentTunnelStreamText(agentID, text string) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
 		msgID := subagentTunnelTextMsgID(agentID)
-		m.tunnelBroker.PushSubagentText(agentID, msgID, text, false)
+		broker.PushSubagentText(agentID, msgID, text, false)
 	}
 }
 
 func (m *Model) pushSubAgentTunnelReasoning(agentID, text string) {
-	if m.tunnelBroker == nil {
+	broker := m.tunnelEventBroker()
+	if broker == nil {
 		return
 	}
 	if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
-		m.tunnelBroker.PushSubagentReasoning(agentID, subagentTunnelReasoningMsgID(agentID), chunk, false)
+		broker.PushSubagentReasoning(agentID, subagentTunnelReasoningMsgID(agentID), chunk, false)
 	}
 }
 
 // pushSubAgentTunnelToolCall pushes a tool call from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayName, args, detail string) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
-		m.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
+		broker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
 	}
 }
 
 // pushSubAgentTunnelToolResult pushes a tool result from a sub-agent.
 func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, result string, isError bool) {
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
-		m.tunnelBroker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
+	if broker := m.tunnelEventBroker(); broker != nil {
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
+		broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
 	}
 }
 
@@ -545,7 +606,8 @@ func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, result s
 
 // pushSwarmTunnelEvent pushes swarm/teammate events to the mobile client.
 func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
-	if m.tunnelBroker == nil {
+	broker := m.tunnelEventBroker()
+	if broker == nil {
 		return
 	}
 
@@ -553,15 +615,15 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 	case "teammate_tool_call":
 		detail := describeTool(LangEnglish, ev.CurrentTool, ev.ToolArgs).Detail
 		title := toolCallDisplayName(ev.CurrentTool, ev.ToolArgs)
-		m.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, title, ev.ToolArgs, detail)
-		m.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
+		broker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, title, ev.ToolArgs, detail)
+		broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 	case "teammate_tool_result":
-		m.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 
 	case "teammate_text":
 		msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-		m.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+		broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
 
 	case "teammate_spawned":
 		color := ""
@@ -570,16 +632,16 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 				color = snap.Color
 			}
 		}
-		m.tunnelBroker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
+		broker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
 
 	case "teammate_working":
-		m.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
+		broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
 		if m.swarmMgr != nil {
 			if snap, ok := m.swarmMgr.TeammateSnapshot(ev.TeammateID); ok && len(snap.Events) > 0 {
 				last := snap.Events[len(snap.Events)-1]
 				if last.Type == swarm.TeammateEventText && last.Text != "" {
 					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-					m.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
+					broker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
 				}
 			}
 		}
@@ -587,17 +649,17 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 	case "teammate_idle":
 		if ev.Result != "" {
 			msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-			m.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
+			broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
 		}
 		success := ev.Error == nil
 		summary := ev.Result
 		if ev.Error != nil {
 			summary = ev.Error.Error()
 		}
-		m.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
+		broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
 
 	case "teammate_shutdown":
-		m.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
+		broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
 	}
 }
 
@@ -1294,7 +1356,18 @@ func (m *Model) reseedTunnelSnapshotAfterStart(seeded tunnel.BrokerSnapshot) {
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
-	if m.session == nil || !m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+	if m.session == nil {
+		return nil
+	}
+	if m.tunnelProjectionStore != nil && strings.TrimSpace(m.session.ID) != "" {
+		events, err := m.tunnelProjectionStore.ReplayEvents(m.session.ID)
+		if err != nil {
+			debug.Log("tunnel", "projection: replay load failed for %s: %v", m.session.ID, err)
+		} else if len(events) > 0 {
+			return events
+		}
+	}
+	if !m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
 		return nil
 	}
 	out := make([]tunnel.GatewayMessage, 0, len(m.session.TunnelEvents))
@@ -1756,22 +1829,25 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 }
 
 func (m *Model) nextTunnelRequestID() string {
-	if m.tunnelBroker == nil {
+	if broker := m.tunnelEventBroker(); broker == nil {
 		return ""
+	} else {
+		return broker.NextMessageID()
 	}
-	return m.tunnelBroker.NextMessageID()
 }
 
 func (m *Model) pushTunnelApprovalResult(id, decision string) {
-	if m.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+	broker := m.tunnelEventBroker()
+	if broker == nil || strings.TrimSpace(id) == "" {
 		return
 	}
-	m.tunnelBroker.PushApprovalResult(id, decision)
+	broker.PushApprovalResult(id, decision)
 	m.pushTunnelCurrentStatus()
 }
 
 func (m *Model) pushTunnelAskUserResponse(id string, response toolpkg.AskUserResponse) {
-	if m.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+	broker := m.tunnelEventBroker()
+	if broker == nil || strings.TrimSpace(id) == "" {
 		return
 	}
 	answers := make([]tunnel.AskUserAnswer, len(response.Answers))
@@ -1782,7 +1858,7 @@ func (m *Model) pushTunnelAskUserResponse(id string, response toolpkg.AskUserRes
 			FreeformText: answer.FreeformText,
 		}
 	}
-	m.tunnelBroker.PushAskUserResponse(id, response.Status, answers)
+	broker.PushAskUserResponse(id, response.Status, answers)
 	m.pushTunnelCurrentStatus()
 }
 

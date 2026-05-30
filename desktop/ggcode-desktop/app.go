@@ -385,12 +385,6 @@ func (a *App) showShareDialog() {
 		a.setTunnelState(sess, broker)
 		if a.agentBridge != nil {
 			a.agentBridge.ensureSession()
-			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
-				return a.agentBridge.CurrentSessionTunnelEvents()
-			})
-			broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-				a.agentBridge.RecordTunnelEvent(ev)
-			})
 
 			snapshot := a.tunnelSnapshot()
 			switchedSession := false
@@ -1153,12 +1147,6 @@ func (a *App) startChat() {
 	}
 	if broker := a.currentTunnelBroker(); broker != nil {
 		bridge.AttachTunnelBroker(broker)
-		broker.SetReplayProvider(func() []tunnel.GatewayMessage {
-			return bridge.CurrentSessionTunnelEvents()
-		})
-		broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-			bridge.RecordTunnelEvent(ev)
-		})
 		if current := bridge.CurrentSession(); current != nil {
 			broker.SwitchSession(current.ID)
 			bridge.ResetCurrentSessionTunnelLedger()

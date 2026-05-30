@@ -73,7 +73,7 @@ func TestRelayStoreLoadRoomUsesCurrentSessionOnly(t *testing.T) {
 	}
 }
 
-func TestRelayStoreLoadRoomFallsBackToGlobalSessionHistory(t *testing.T) {
+func TestRelayStoreLoadRoomDoesNotReuseHistoryFromOtherRooms(t *testing.T) {
 	store := newStoreForTest(t)
 	originToken := "token-origin-1234567890"
 	newToken := "token-fresh-1234567890"
@@ -89,8 +89,8 @@ func TestRelayStoreLoadRoomFallsBackToGlobalSessionHistory(t *testing.T) {
 	if state.sessionID != "sess-1" {
 		t.Fatalf("sessionID = %q, want sess-1", state.sessionID)
 	}
-	if len(state.history) != 1 || state.history[0].eventID != "ev-000000001" {
-		t.Fatalf("expected global session history fallback, got %+v", state.history)
+	if len(state.history) != 0 {
+		t.Fatalf("expected no cross-room history reuse, got %+v", state.history)
 	}
 }
 
@@ -130,13 +130,6 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 	if state.sessionID != "" || len(state.history) != 0 {
 		t.Fatalf("expected destroyed room state to be empty, got session=%q history=%d", state.sessionID, len(state.history))
 	}
-	history, err := store.loadSessionHistory("sess-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("expected logical session history to survive room destroy, got %d events", len(history))
-	}
 	cursor, err := store.loadClientCursor(hashToken(token), "client-1")
 	if err != nil {
 		t.Fatal(err)
@@ -163,13 +156,13 @@ func TestRelayStoreStatsSnapshotCountsPersistedRows(t *testing.T) {
 	if stats.RoomSessions != 2 {
 		t.Fatalf("room sessions = %d, want 2", stats.RoomSessions)
 	}
-	if stats.GlobalSessions != 2 {
-		t.Fatalf("global sessions = %d, want 2", stats.GlobalSessions)
+	if stats.GlobalSessions != 0 {
+		t.Fatalf("global sessions = %d, want 0", stats.GlobalSessions)
 	}
 	if stats.RoomEvents != 1 {
 		t.Fatalf("room events = %d, want 1", stats.RoomEvents)
 	}
-	if stats.GlobalEvents != 1 {
-		t.Fatalf("global events = %d, want 1", stats.GlobalEvents)
+	if stats.GlobalEvents != 0 {
+		t.Fatalf("global events = %d, want 0", stats.GlobalEvents)
 	}
 }

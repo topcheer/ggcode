@@ -122,14 +122,16 @@ func NewBroker(sess *Session) *Broker {
 	go b.textFlushLoop()
 
 	// Handle incoming messages from mobile
-	sess.OnMessage(func(msg GatewayMessage) {
-		if b.onCommand != nil {
-			b.onCommand(msg)
-		}
-	})
-	sess.OnConnected(func(info RelayConnectedState) {
-		b.handleRelayConnected(info)
-	})
+	if sess != nil {
+		sess.OnMessage(func(msg GatewayMessage) {
+			if b.onCommand != nil {
+				b.onCommand(msg)
+			}
+		})
+		sess.OnConnected(func(info RelayConnectedState) {
+			b.handleRelayConnected(info)
+		})
+	}
 
 	return b
 }
@@ -170,8 +172,10 @@ func (b *Broker) senderLoop() {
 		b.outMu.Unlock()
 
 		for _, msg := range batch {
-			if err := b.session.Send(msg); err != nil {
-				debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
+			if b.session != nil {
+				if err := b.session.Send(msg); err != nil {
+					debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
+				}
 			}
 			b.signalSent(msg.EventID)
 		}
@@ -449,12 +453,19 @@ func (b *Broker) SwitchSession(sessionID string) {
 	b.clientReplayInFlight = false
 	b.clientReplayMu.Unlock()
 
-	_ = b.session.SendActiveSession(sessionID)
+	b.sendActiveSession(sessionID)
 	b.resetProjectionAndEnqueue(true)
 }
 
 func (b *Broker) AnnounceActiveSession(sessionID string) {
 	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	b.sendActiveSession(sessionID)
+}
+
+func (b *Broker) sendActiveSession(sessionID string) {
+	if b == nil || b.session == nil {
 		return
 	}
 	_ = b.session.SendActiveSession(sessionID)
@@ -567,7 +578,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			_ = b.session.SendActiveSession(currentSessionID)
+			b.sendActiveSession(currentSessionID)
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
@@ -634,7 +645,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
-		_ = b.session.SendActiveSession(currentSessionID)
+		b.sendActiveSession(currentSessionID)
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
@@ -1406,6 +1417,17 @@ func (b *Broker) ReplayEvents(events []GatewayMessage, reset bool) {
 	}
 	for _, msg := range events {
 		b.enqueueRecorded(msg)
+	}
+}
+
+func (b *Broker) PublishRecordedEvent(msg GatewayMessage) {
+	b.waitProjectionSync()
+	b.enqueueRecorded(msg)
+}
+
+func (b *Broker) PrimeEventIDs(events []GatewayMessage) {
+	for _, msg := range events {
+		b.bumpNextEvent(msg.EventID)
 	}
 }
 
