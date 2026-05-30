@@ -852,6 +852,15 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if handshake.postConnectErr != "" {
+		logUpgradedClientReject(r, handshake.postConnectErr)
+		_ = conn.WriteJSON(relayMessage{
+			Type:   "error",
+			Reason: handshake.postConnectErr,
+		})
+		conn.Close()
+		return
+	}
 
 	token := handshake.roomKey
 	role := handshake.role
@@ -984,6 +993,18 @@ func logRejectedHandshake(r *http.Request, status int, reason string) {
 	caps := strings.TrimSpace(q.Get("caps"))
 	log.Printf("[relay] handshake rejected: status=%d reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
 		status, reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
+}
+
+func logUpgradedClientReject(r *http.Request, reason string) {
+	q := r.URL.Query()
+	roomID := strings.TrimSpace(q.Get("room_id"))
+	role := strings.TrimSpace(q.Get("role"))
+	proto := strings.TrimSpace(q.Get("proto"))
+	clientKind := strings.TrimSpace(q.Get("client"))
+	clientVersion := strings.TrimSpace(q.Get("client_version"))
+	caps := strings.TrimSpace(q.Get("caps"))
+	log.Printf("[relay] upgraded client rejected: reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
+		reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
 }
 
 func (p *peer) notifyServerClientConnected(resumeComplete bool) {
