@@ -59,6 +59,7 @@ type room struct {
 	generation      uint64
 	protocolVersion int
 	history         []roomEvent
+	bootstrap       map[string]roomEvent
 	server          *peer
 	clients         map[*peer]struct{}
 	clientsByID     map[string]*peer
@@ -71,6 +72,7 @@ type room struct {
 func newRoom(token string) *room {
 	return &room{
 		token:       token,
+		bootstrap:   make(map[string]roomEvent),
 		clients:     make(map[*peer]struct{}),
 		clientsByID: make(map[string]*peer),
 	}
@@ -89,6 +91,29 @@ func (r *room) appendEvent(ev roomEvent) {
 	}
 	r.history = append(r.history, ev)
 	r.lastEventAt = time.Now()
+}
+
+func (r *room) rememberBootstrap(ev roomEvent) {
+	if ev.typ == "" || len(ev.raw) == 0 {
+		return
+	}
+	r.bootstrap[ev.typ] = ev
+}
+
+func (r *room) bootstrapEvents(sessionID string) []roomEvent {
+	order := []string{"session_info", "status", "activity"}
+	out := make([]roomEvent, 0, len(order))
+	for _, typ := range order {
+		ev, ok := r.bootstrap[typ]
+		if !ok {
+			continue
+		}
+		if sessionID != "" && ev.sessionID != "" && ev.sessionID != sessionID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
 }
 
 func (r *room) ensureGenerationLocked() uint64 {
@@ -307,6 +332,15 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	}
 
 	p.room.mu.Lock()
+	switch msg.Type {
+	case "session_info", "status", "activity":
+		p.room.rememberBootstrap(roomEvent{
+			sessionID:  msg.SessionID,
+			typ:        msg.Type,
+			generation: generation,
+			raw:        append([]byte(nil), wire...),
+		})
+	}
 	ev := roomEvent{
 		sessionID:  msg.SessionID,
 		eventID:    msg.EventID,
@@ -452,6 +486,16 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 			ClientID:   clientID,
 			Generation: generation,
 		})
+		for _, ev := range p.room.bootstrapEvents(p.room.sessionID) {
+			var bootstrap relayMessage
+			if err := json.Unmarshal(ev.raw, &bootstrap); err != nil {
+				p.sendRaw(ev.raw)
+				continue
+			}
+			bootstrap.EventID = ""
+			bootstrap.StreamID = ""
+			p.send(bootstrap)
+		}
 	}
 
 	for _, ev := range replay {

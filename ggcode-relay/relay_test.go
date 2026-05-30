@@ -328,6 +328,82 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	}
 }
 
+func TestLegacyResumeReplaysBootstrapAfterSnapshotReset(t *testing.T) {
+	r := newRoom("token")
+	h := newHub(nil)
+	server := newPeer(h, r, "server", nil)
+	server.handleServerBroadcast(nil, relayMessage{
+		Type:      "session_info",
+		SessionID: "sess-1",
+		EventID:   "ev-27",
+		Data:      mustJSON(map[string]any{"workspace": "/tmp/project"}),
+	})
+	server.handleServerBroadcast(nil, relayMessage{
+		Type:      "status",
+		SessionID: "sess-1",
+		EventID:   "ev-295",
+		Data:      mustJSON(map[string]any{"status": "connected"}),
+	})
+	server.handleServerBroadcast(nil, relayMessage{
+		Type:      "activity",
+		SessionID: "sess-1",
+		EventID:   "ev-296",
+		Data:      mustJSON(map[string]any{"activity": "thinking"}),
+	})
+	server.handleServerBroadcast(nil, relayMessage{
+		Type:      "text",
+		SessionID: "sess-1",
+		EventID:   "ev-297",
+		Data:      mustJSON(map[string]any{"text": "hello"}),
+	})
+
+	p := newPeer(h, r, "client", nil)
+	p.clientID = "client-1"
+	p.protocolVersion = shareProtocolLegacy
+
+	p.onResume(relayMessage{ClientID: "client-1"}, h)
+
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 10 {
+		t.Fatalf("expected 10 messages, got %d", len(msgs))
+	}
+	expected := []string{"active_session", "resume_ack", "snapshot_reset", "session_info", "status", "activity"}
+	for i, want := range expected {
+		var msg relayMessage
+		if err := json.Unmarshal(msgs[i], &msg); err != nil {
+			t.Fatalf("unmarshal message %d: %v", i, err)
+		}
+		if msg.Type != want {
+			t.Fatalf("message %d: expected %s, got %s", i, want, msg.Type)
+		}
+		if i >= 3 && msg.EventID != "" {
+			t.Fatalf("bootstrap message %d should clear event_id for legacy replay, got %q", i, msg.EventID)
+		}
+	}
+
+	replayExpected := []struct {
+		typ     string
+		eventID string
+	}{
+		{typ: "session_info", eventID: "ev-27"},
+		{typ: "status", eventID: "ev-295"},
+		{typ: "activity", eventID: "ev-296"},
+		{typ: "text", eventID: "ev-297"},
+	}
+	for i, want := range replayExpected {
+		var replay relayMessage
+		if err := json.Unmarshal(msgs[6+i], &replay); err != nil {
+			t.Fatalf("unmarshal replay message %d: %v", i, err)
+		}
+		if replay.Type != want.typ {
+			t.Fatalf("replay message %d: expected %s, got %s", i, want.typ, replay.Type)
+		}
+		if replay.EventID != want.eventID {
+			t.Fatalf("replay message %d: expected event_id %q, got %q", i, want.eventID, replay.EventID)
+		}
+	}
+}
+
 func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
