@@ -35,6 +35,7 @@ var defaultShareCapabilities = []string{
 	"share_v3",
 	"share_notice",
 	"share_renew",
+	"tunnel_messages_v1",
 }
 
 type ShareRuntimeConfig struct {
