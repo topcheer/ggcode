@@ -6,8 +6,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // ─── Room tests ───
@@ -90,6 +93,42 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected notification")
+	}
+}
+
+func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
+	h := newHub(nil)
+	room := newRoom("legacy-token")
+	room.sessionID = "sess-1"
+	room.history = []roomEvent{{eventID: "ev-000000001"}}
+	room.server = newPeer(h, room, "server", nil)
+	h.rooms["legacy-token"] = room
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", h.handleWS)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=client&token=legacy-token"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var msg relayMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "connected" {
+		t.Fatalf("expected connected, got %+v", msg)
+	}
+	if msg.SessionID != "sess-1" || msg.LastEventID != "ev-000000001" {
+		t.Fatalf("unexpected connected payload: %+v", msg)
 	}
 }
 
