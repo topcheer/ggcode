@@ -103,23 +103,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final cache = ref.watch(workspaceCacheProvider);
     final cacheNotifier = ref.read(workspaceCacheProvider.notifier);
     final isHistorical = ref.watch(isHistoricalViewProvider);
-    final currentWorkspace = cache.selectedWorkspaceKey != null &&
-            cache.selectedWorkspaceKey!.isNotEmpty
-        ? cache.workspaces[cache.selectedWorkspaceKey!]
-        : null;
-    final currentSessions = currentWorkspace == null
-        ? const <CachedSessionRecord>[]
-        : cacheNotifier.sessionsForWorkspace(currentWorkspace.key);
-    CachedSessionRecord? currentSession;
-    if (cache.selectedSessionId != null &&
-        cache.selectedSessionId!.isNotEmpty) {
-      for (final session in currentSessions) {
-        if (session.sessionId == cache.selectedSessionId) {
-          currentSession = session;
-          break;
-        }
-      }
-    }
+    final currentSession =
+        cache.selectedSessionId == null || cache.selectedSessionId!.isEmpty
+            ? null
+            : cacheNotifier.sessionForId(cache.selectedSessionId!);
+    final currentWorkspace =
+        currentSession != null && currentSession.workspaceKey.isNotEmpty
+            ? cache.workspaces[currentSession.workspaceKey]
+            : (cache.selectedWorkspaceKey != null &&
+                    cache.selectedWorkspaceKey!.isNotEmpty
+                ? cache.workspaces[cache.selectedWorkspaceKey!]
+                : null);
 
     // Build tab list: main + all agents (active first, then completed)
     final tabIds = <String>['main'];
@@ -406,7 +400,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 }
                 await ref
                     .read(workspaceCacheProvider.notifier)
-                    .selectSession(liveWorkspaceKey, liveSessionId);
+                    .selectSession(liveSessionId);
               },
             ),
           Expanded(
@@ -459,11 +453,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final cache = ref.read(workspaceCacheProvider);
     final notifier = ref.read(workspaceCacheProvider.notifier);
     final workspaces = notifier.sortedWorkspaces();
-    final selectedWorkspaceKey = cache.selectedWorkspaceKey;
-    final sessionList =
-        selectedWorkspaceKey == null || selectedWorkspaceKey.isEmpty
-            ? const <CachedSessionRecord>[]
-            : notifier.sessionsForWorkspace(selectedWorkspaceKey);
+    final sessionList = notifier.sortedSessions();
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF141421),
@@ -519,9 +509,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         .connectWorkspace(workspace.key);
                   },
                 ),
-              if (selectedWorkspaceKey != null &&
-                  selectedWorkspaceKey.isNotEmpty &&
-                  sessionList.isNotEmpty) ...[
+              if (sessionList.isNotEmpty) ...[
                 SizedBox(height: 16),
                 Text(
                   'Sessions',
@@ -565,8 +553,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       Navigator.of(ctx).pop();
                       await ref
                           .read(workspaceCacheProvider.notifier)
-                          .selectSession(
-                              selectedWorkspaceKey, session.sessionId);
+                          .selectSession(session.sessionId);
                     },
                   ),
               ],

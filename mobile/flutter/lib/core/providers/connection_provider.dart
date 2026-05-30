@@ -124,11 +124,25 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   String get currentSessionId => _sessionId;
   String get lastAppliedEventId => _lastAppliedEventId;
+  bool get canPersistLiveProjection =>
+      _hasAuthoritativeProjection &&
+      !_awaitingSnapshotProjection &&
+      _sessionId.isNotEmpty;
 
   Future<void> restoreSelectedWorkspace() async {
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    final workspaceKey = ref.read(workspaceCacheProvider).selectedWorkspaceKey;
+    final cacheState = ref.read(workspaceCacheProvider);
+    final selectedSessionId = cacheState.selectedSessionId;
+    if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
+      final session = cache.sessionForId(selectedSessionId);
+      if (session != null && session.workspaceKey.isNotEmpty) {
+        _restoreCachedAgentStatus(sessionId: selectedSessionId);
+        await connectWorkspace(session.workspaceKey, clearState: false);
+        return;
+      }
+    }
+    final workspaceKey = cacheState.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return;
     _restoreCachedAgentStatus(workspaceKey: workspaceKey);
     await connectWorkspace(workspaceKey, clearState: false);
@@ -211,6 +225,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final uiHasContent = ref.read(sessionInfoProvider) != null;
 
     await _loadResumeState();
+    if (!_isConnectionGenerationCurrent(generation)) return;
+    await _resetResumeIdentityForSparseSnapshot();
     if (!_isConnectionGenerationCurrent(generation)) return;
     if (descriptor.isV2 &&
         _shareRoomId.isNotEmpty &&
@@ -531,6 +547,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           }
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'text':
@@ -968,20 +985,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _restoreCachedAgentStatus({String? workspaceKey, String? sessionId}) {
     final cacheState = ref.read(workspaceCacheProvider);
-    final resolvedWorkspaceKey = workspaceKey ??
-        cacheState.selectedWorkspaceKey ??
-        cacheState.liveWorkspaceKey;
     final resolvedSessionId =
         sessionId ?? cacheState.selectedSessionId ?? cacheState.liveSessionId;
-    if (resolvedWorkspaceKey == null ||
-        resolvedWorkspaceKey.isEmpty ||
-        resolvedSessionId == null ||
-        resolvedSessionId.isEmpty) {
+    if (resolvedSessionId == null || resolvedSessionId.isEmpty) {
       return;
     }
     final snapshot = ref
         .read(workspaceCacheProvider.notifier)
-        .snapshotFor(resolvedWorkspaceKey, resolvedSessionId);
+        .snapshotFor(resolvedSessionId);
     if (snapshot == null) return;
     _setAgentStatus(snapshot.agentStatus, '');
     _setAgentActivity(snapshot.agentStatusMessage);
@@ -1043,7 +1054,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _recentEventSet.clear();
     final prefs = await SharedPreferences.getInstance();
     await _clearPersistedResumeState(prefs);
-    await ref.read(workspaceCacheProvider.notifier).clearSelection();
+    await ref.read(workspaceCacheProvider.notifier).clearReconnectTarget(
+          sessionId: _sessionId,
+          workspaceKey: ref.read(workspaceCacheProvider).liveWorkspaceKey ??
+              ref.read(workspaceCacheProvider).selectedWorkspaceKey,
+        );
     if (!_isConnectionGenerationCurrent(generation) ||
         normalizeTunnelUrl(state.url ?? '') != normalizedFailedUrl) {
       return;
@@ -1186,18 +1201,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     bool seedCursorIfUnset = false,
   }) {
     final cacheState = ref.read(workspaceCacheProvider);
-    final workspaceKey = cacheState.selectedWorkspaceKey;
     final sessionId = cacheState.selectedSessionId;
-    if (workspaceKey == null ||
-        workspaceKey.isEmpty ||
-        sessionId == null ||
-        sessionId.isEmpty) {
+    if (sessionId == null || sessionId.isEmpty) {
       return false;
     }
-    final snapshot = ref
-        .read(workspaceCacheProvider.notifier)
-        .snapshotFor(workspaceKey, sessionId);
+    final snapshot =
+        ref.read(workspaceCacheProvider.notifier).snapshotFor(sessionId);
     if (snapshot == null) {
+      return false;
+    }
+    final sparseSnapshot = _isSparseResumeSnapshot(snapshot);
+    if (!adoptCursor && seedCursorIfUnset && sparseSnapshot) {
       return false;
     }
     ref
@@ -1213,10 +1227,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _setAgentStatus(snapshot.agentStatus, '');
     _setAgentActivity(snapshot.agentStatusMessage);
     final snapshotCursor = snapshot.lastEventId;
-    if (adoptCursor) {
+    final canSeedCursor = !sparseSnapshot;
+    if (adoptCursor && canSeedCursor) {
       _sessionId = sessionId;
       _lastAppliedEventId = snapshotCursor;
     } else if (seedCursorIfUnset &&
+        canSeedCursor &&
         _lastAppliedEventId.isEmpty &&
         snapshotCursor.isNotEmpty) {
       if (_sessionId.isEmpty || _sessionId == sessionId) {
@@ -1321,6 +1337,36 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _markProjectionAuthoritative() {
     _hasAuthoritativeProjection = true;
+  }
+
+  bool _isSparseResumeSnapshot(CachedSessionSnapshot snapshot) {
+    return snapshot.sessionInfo == null &&
+        snapshot.lastEventId.isNotEmpty &&
+        snapshot.messages.length <= 8;
+  }
+
+  Future<void> _resetResumeIdentityForSparseSnapshot() async {
+    final cacheState = ref.read(workspaceCacheProvider);
+    final sessionId = cacheState.selectedSessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      return;
+    }
+    final snapshot =
+        ref.read(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+    if (snapshot == null || !_isSparseResumeSnapshot(snapshot)) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    _clientId = const Uuid().v4();
+    _sessionId = sessionId;
+    _lastAppliedEventId = '';
+    _shareRoomId = '';
+    _shareRenewToken = '';
+    await prefs.setString(_resumeClientIdKey, _clientId);
+    await prefs.setString(_resumeSessionIdKey, _sessionId);
+    await prefs.remove(_resumeEventIdKey);
+    await prefs.remove(_resumeRoomIdKey);
+    await prefs.remove(_resumeRenewTokenKey);
   }
 
   void handleIncomingForTest(proto.WsMessage msg) {

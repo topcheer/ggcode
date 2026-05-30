@@ -706,10 +706,7 @@ void main() {
     final restoredState = restored.read(workspaceCacheProvider);
     expect(restoredState.selectedWorkspaceKey, isNotNull);
     expect(restoredState.selectedSessionId, 'sess-1');
-    final snapshot = restoredCache.snapshotFor(
-      restoredState.selectedWorkspaceKey!,
-      'sess-1',
-    );
+    final snapshot = restoredCache.snapshotFor('sess-1');
     expect(snapshot, isNotNull);
     expect(snapshot!.messages.single.text, 'hello');
     expect(snapshot.agentStatus, 'busy');
@@ -757,11 +754,7 @@ void main() {
     final restoredCache = restored.read(workspaceCacheProvider.notifier);
     await restoredCache.initialize();
 
-    final restoredState = restored.read(workspaceCacheProvider);
-    final snapshot = restoredCache.snapshotFor(
-      restoredState.selectedWorkspaceKey!,
-      'sess-full',
-    );
+    final snapshot = restoredCache.snapshotFor('sess-full');
     expect(snapshot, isNotNull);
     expect(snapshot!.messages, hasLength(400));
     expect(snapshot.messages.first.text, 'message-0');
@@ -806,11 +799,7 @@ void main() {
     final restoredCache = restored.read(workspaceCacheProvider.notifier);
     await restoredCache.initialize();
 
-    final restoredState = restored.read(workspaceCacheProvider);
-    final snapshot = restoredCache.snapshotFor(
-      restoredState.selectedWorkspaceKey!,
-      'sess-flush',
-    );
+    final snapshot = restoredCache.snapshotFor('sess-flush');
     expect(snapshot, isNotNull);
     expect(snapshot!.messages.single.text, 'persist immediately');
   });
@@ -892,9 +881,7 @@ void main() {
       lastEventId: 'ev-0002',
     );
 
-    final workspaceKey =
-        container.read(workspaceCacheProvider).selectedWorkspaceKey!;
-    await cache.selectSession(workspaceKey, 'sess-old');
+    await cache.selectSession('sess-old');
 
     expect(container.read(isHistoricalViewProvider), isTrue);
     expect(container.read(canSendMessagesProvider), isFalse);
@@ -1014,7 +1001,8 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
 
     expect(cacheState.selectedWorkspaceKey, isNull);
-    expect(cacheState.selectedSessionId, isNull);
+    // Session stays in cache but workspaceKey is cleared — won't auto-reconnect.
+    expect(cacheState.selectedSessionId, 'sess-stale');
     expect(connState.status, ConnectionStatus.disconnected);
     expect(connState.url, isNull);
     expect(connState.error, contains('Room not found'));
@@ -1655,7 +1643,7 @@ void main() {
   });
 
   test(
-      'workspace cache does not reattach cached session after scanning a new room',
+      'workspace cache reattaches cached session after scanning a new room for the same session',
       () async {
     final info = proto.SessionInfoData(
       workspace: '/tmp/demo',
@@ -1692,18 +1680,156 @@ void main() {
     await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
     final adopted = await cache.attachSessionToActiveWorkspace('sess-room');
 
-    expect(adopted, isFalse);
+    expect(adopted, isTrue);
     final cacheState = container.read(workspaceCacheProvider);
-    final snapshot = cache.snapshotFor(
-      cacheState.selectedWorkspaceKey!,
-      'sess-room',
-    );
-    expect(cacheState.selectedSessionId, isNull);
-    expect(snapshot, isNull);
+    final snapshot = cache.snapshotFor('sess-room');
+    expect(cacheState.selectedSessionId, 'sess-room');
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages, hasLength(1));
+    expect(snapshot.messages.single.text, 'cached from old room');
   });
 
   test(
-      'ConnectionNotifier does not restore cached session after active_session moves to a new room',
+      'workspace cache ignores non-authoritative live projection updates during room rebinding',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached from old room',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    await cache.registerLiveSession('sess-room', info,
+        lastEventId: 'ev-000000120');
+    expect(await cache.attachSessionToActiveWorkspace('sess-room'), isTrue);
+
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-2',
+          text: 'Starting tunnel...',
+          time: DateTime.parse('2026-01-01T00:01:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: '',
+      lastEventId: 'ev-000000121',
+      authoritative: false,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    final snapshot = cache.snapshotFor('sess-room');
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages, hasLength(1));
+    expect(snapshot.messages.single.text, 'cached from old room');
+  });
+
+  test(
+      'workspace cache preserves richer snapshot when sparse reconnect tail arrives',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    await cache.registerLiveSession('sess-rich', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'user-1',
+          isUser: true,
+          text: 'hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'msg-1',
+          text: 'full cached answer',
+          time: DateTime.parse('2026-01-01T00:00:01Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000214',
+          text: 'Resumed session: sess-rich',
+          time: DateTime.parse('2026-01-01T00:01:00Z'),
+        ),
+        ChatMessage(
+          id: 'ev-000000217',
+          text: 'Starting tunnel...',
+          time: DateTime.parse('2026-01-01T00:01:01Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: null,
+      agentStatus: 'idle',
+      agentStatusMessage: '',
+      lastEventId: 'ev-000000217',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    final snapshot = cache.snapshotFor('sess-rich');
+    expect(snapshot, isNotNull);
+    expect(snapshot!.sessionInfo, isNotNull);
+    expect(snapshot.lastEventId, 'ev-000000217');
+    expect(
+      snapshot.messages.map((message) => message.text),
+      containsAll([
+        'hello',
+        'full cached answer',
+        'Resumed session: sess-rich',
+        'Starting tunnel...',
+      ]),
+    );
+  });
+
+  test(
+      'ConnectionNotifier restores cached session after active_session moves to a new room for the same session',
       () async {
     final info = proto.SessionInfoData(
       workspace: '/tmp/demo',
@@ -1749,7 +1875,11 @@ void main() {
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
-    expect(container.read(displayedMessagesProvider), isEmpty);
+    expect(container.read(displayedMessagesProvider), hasLength(1));
+    expect(
+      container.read(displayedMessagesProvider).single.text,
+      'cached after room switch',
+    );
   });
 
   test(
@@ -1833,6 +1963,11 @@ void main() {
       type: 'active_session',
       data: {'session_id': 'sess-room'},
     ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    // After the active_session switch to sess-room, select it so
+    // displayedMessagesProvider reads from the live chat (not a stale snapshot).
+    await cache.selectSession('sess-room');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     expect(container.read(displayedMessagesProvider), hasLength(1));
@@ -2134,6 +2269,66 @@ void main() {
             .read(chatProvider)
             .where((m) => m.text == 'cached old session'),
         isEmpty);
+  });
+
+  test(
+      'ConnectionNotifier resets sparse cached resume identity before connecting',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-old',
+      'ggcode_tunnel_session_id': 'sess-sparse',
+      'ggcode_tunnel_last_event_id': 'ev-000000120',
+    });
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      service.dispose();
+    });
+
+    final container = ProviderContainer(overrides: [
+      connectionProvider.overrideWith(_TestConnectionNotifier.new),
+    ]);
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    await cache.registerLiveSession('sess-sparse', null,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000214',
+          text: 'Resumed session: sess-sparse',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'ev-000000217',
+          text: 'Starting tunnel...',
+          time: DateTime.parse('2026-01-01T00:00:01Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: null,
+      agentStatus: 'idle',
+      agentStatusMessage: '',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('ws://example.test/ws?token=test-token');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(service.resumeHelloRequests, 1);
+    expect(service.resumeSessionId, 'sess-sparse');
+    expect(service.resumeClientId, isNotNull);
+    expect(service.resumeClientId, isNot('client-old'));
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('ggcode_tunnel_client_id'), service.resumeClientId);
+    expect(prefs.getString('ggcode_tunnel_last_event_id'), isNull);
   });
 
   test('ConnectionNotifier sends resume_hello after relay connected', () async {

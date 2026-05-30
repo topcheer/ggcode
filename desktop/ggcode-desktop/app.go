@@ -81,6 +81,10 @@ type nativeTitlebarConfig struct {
 	LeadingInset float32
 }
 
+type shareInviteRefresher interface {
+	RefreshInvite(context.Context) (*tunnel.SessionInfo, error)
+}
+
 func (a *App) currentTunnelSession() *tunnel.Session {
 	a.tunnelMu.RLock()
 	defer a.tunnelMu.RUnlock()
@@ -292,34 +296,17 @@ func (a *App) showAbout() {
 // showShareDialog starts a tunnel and shows the connection QR code + URL.
 func (a *App) showShareDialog() {
 	if sess := a.currentTunnelSession(); sess != nil {
-		// Already running — show current info
-		info := sess.Info()
-		if info != nil {
-			a.showTunnelInfo(info)
-		}
+		a.runShareDialogAction(func(ctx context.Context) (*tunnel.SessionInfo, error) {
+			return refreshShareInvite(ctx, sess)
+		}, "tunnel invite refresh failed")
 		return
 	}
 
-	// Show "connecting..." dialog
-	statusLabel := widget.NewLabel(t("status.establishing_tunnel"))
-	statusLabel.Alignment = fyne.TextAlignCenter
-	progress := widget.NewProgressBarInfinite()
-	connectContent := container.NewVBox(statusLabel, progress)
-	connectWin := dialog.NewCustom(t("share.title"), t("common.cancel"), connectContent, a.window)
-	connectWin.Show()
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
+	a.runShareDialogAction(func(ctx context.Context) (*tunnel.SessionInfo, error) {
 		sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("desktop", Version))
 		info, err := sess.Start(ctx)
 		if err != nil {
-			fyne.Do(func() {
-				connectWin.Hide()
-				dialog.ShowError(fmt.Errorf("tunnel failed: %v", err), a.window)
-			})
-			return
+			return nil, err
 		}
 
 		broker := tunnel.NewBroker(sess)
@@ -409,9 +396,39 @@ func (a *App) showShareDialog() {
 			}
 		}
 
+		return info, nil
+	}, "tunnel failed")
+}
+
+func refreshShareInvite(ctx context.Context, sess shareInviteRefresher) (*tunnel.SessionInfo, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("tunnel session: nil session")
+	}
+	return sess.RefreshInvite(ctx)
+}
+
+func (a *App) runShareDialogAction(run func(context.Context) (*tunnel.SessionInfo, error), errPrefix string) {
+	statusLabel := widget.NewLabel(t("status.establishing_tunnel"))
+	statusLabel.Alignment = fyne.TextAlignCenter
+	progress := widget.NewProgressBarInfinite()
+	connectContent := container.NewVBox(statusLabel, progress)
+	connectWin := dialog.NewCustom(t("share.title"), t("common.cancel"), connectContent, a.window)
+	connectWin.Show()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		info, err := run(ctx)
 		fyne.Do(func() {
 			connectWin.Hide()
-			a.showTunnelInfo(info)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("%s: %w", errPrefix, err), a.window)
+				return
+			}
+			if info != nil {
+				a.showTunnelInfo(info)
+			}
 		})
 	}()
 }
