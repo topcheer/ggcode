@@ -32,6 +32,13 @@ type tunnelStartMsg struct {
 	err        error
 }
 
+type tunnelRefreshMsg struct {
+	generation uint64
+	session    *tunnel.Session
+	info       *tunnel.SessionInfo
+	err        error
+}
+
 // tunnelStopMsg is sent when the tunnel has stopped.
 type tunnelStopMsg struct{}
 
@@ -117,19 +124,7 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 
 	case "", "start", "on":
 		if m.tunnelSession != nil {
-			// Already active — re-show QR overlay
-			info := m.tunnelSession.Info()
-			subtitle := "Scan with GGCode Mobile to connect"
-			if info.CompatibilityNotice != "" {
-				subtitle += " - " + info.CompatibilityNotice
-			}
-			m.openQROverlayDirect(
-				"Mobile Tunnel",
-				subtitle,
-				info.QRCode,
-				info.ConnectURL,
-			)
-			return nil
+			return m.refreshTunnelInvite(m.tunnelGeneration, m.tunnelSession)
 		}
 		if m.tunnelStarting {
 			return nil
@@ -222,6 +217,18 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 	}
 }
 
+func (m *Model) refreshTunnelInvite(generation uint64, sess *tunnel.Session) tea.Cmd {
+	return func() tea.Msg {
+		if sess == nil {
+			return tunnelRefreshMsg{generation: generation, err: fmt.Errorf("tunnel session: no active session")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		info, err := sess.RefreshInvite(ctx)
+		return tunnelRefreshMsg{generation: generation, session: sess, info: info, err: err}
+	}
+}
+
 func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		if msg.broker != nil || msg.session != nil {
@@ -297,6 +304,33 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.ConnectURL,
 	)
 
+	return m, nil
+}
+
+func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) || msg.session == nil || msg.session != m.tunnelSession {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel share refresh failed: %v", msg.err))
+		m.chatListScrollToBottom()
+		return m, nil
+	}
+	if msg.info == nil {
+		m.chatWriteSystem(nextSystemID(), "Tunnel share refresh failed: missing refreshed invite")
+		m.chatListScrollToBottom()
+		return m, nil
+	}
+	subtitle := "Scan with GGCode Mobile to connect"
+	if msg.info.CompatibilityNotice != "" {
+		subtitle += " - " + msg.info.CompatibilityNotice
+	}
+	m.openQROverlayDirect(
+		"Mobile Tunnel",
+		subtitle,
+		msg.info.QRCode,
+		msg.info.ConnectURL,
+	)
 	return m, nil
 }
 
@@ -1454,6 +1488,7 @@ func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
 			Data:      ev.Data,
 		})
 	}
+	tunnel.SortReplayEvents(out)
 	return out
 }
 

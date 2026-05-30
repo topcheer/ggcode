@@ -901,6 +901,56 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(issued)
 }
 
+func (h *hub) handleRefreshShareSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req refreshShareSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid refresh request", http.StatusBadRequest)
+		return
+	}
+	roomID := strings.TrimSpace(req.RoomID)
+	h.mu.RLock()
+	room := h.rooms[roomID]
+	h.mu.RUnlock()
+	if room == nil {
+		http.Error(w, "room not live", http.StatusGone)
+		return
+	}
+	room.mu.RLock()
+	serverConnected := room.server != nil
+	protocolVersion := room.protocolVersion
+	shareMode := shareModeV3
+	if protocolVersion >= shareProtocolV3 {
+		shareMode = shareModeV3
+	}
+	room.mu.RUnlock()
+	if !serverConnected {
+		http.Error(w, "room not live", http.StatusGone)
+		return
+	}
+	refreshed, err := refreshShareSession(loadShareAuthConfig(), req, protocolVersion, shareMode)
+	if err != nil {
+		switch err.Error() {
+		case "share v3 unavailable":
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		case "ticket scope mismatch":
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		case "missing room refresh token":
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
+		return
+	}
+	log.Printf("[relay] refreshed share session: room=%s proto=%d share=%s",
+		shortToken(refreshed.RoomID), refreshed.ProtocolVersion, refreshed.ShareMode)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(refreshed)
+}
+
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
 	if handshake == nil {
@@ -1270,6 +1320,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/share/session", h.handleShareSession)
+	mux.HandleFunc("/share/session/refresh", h.handleRefreshShareSession)
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)

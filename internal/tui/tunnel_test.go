@@ -686,15 +686,18 @@ func TestBindTunnelProjectionSessionBackfillsSessionInfoIntoProjectionStore(t *t
 	if len(replay) < 2 {
 		t.Fatalf("expected replay to include bootstrap plus seeded event, got %d", len(replay))
 	}
-	if replay[0].Type != tunnel.EventSessionInfo {
-		t.Fatalf("expected first replay event session_info, got %q", replay[0].Type)
-	}
 	var sawSystemMessage bool
-	for _, ev := range replay[1:] {
+	var sawSessionInfo bool
+	for _, ev := range replay {
 		if ev.Type == tunnel.EventSystemMessage {
 			sawSystemMessage = true
-			break
 		}
+		if ev.Type == tunnel.EventSessionInfo {
+			sawSessionInfo = true
+		}
+	}
+	if !sawSessionInfo {
+		t.Fatalf("expected replay to include session_info bootstrap, got %#v", replay)
 	}
 	if !sawSystemMessage {
 		t.Fatalf("expected replay to retain seeded system_message, got %#v", replay)
@@ -765,6 +768,36 @@ func TestBindTunnelProjectionSessionHydratesIncompleteSessionLedgerIntoProjectio
 	}
 	if !sawReasoning || !sawText || !sawTextDone {
 		t.Fatalf("expected replay to include hydrated reasoning/text events, got %#v", replay)
+	}
+}
+
+func TestCurrentSessionTunnelReplayEventsSortsLegacyLedgerByEventID(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel()
+	ses := &session.Session{
+		ID:                   "sess-old",
+		CreatedAt:            time.Now().Add(-time.Hour),
+		UpdatedAt:            time.Now(),
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{EventID: "ev-000000003", Type: tunnel.EventTextDone, Data: json.RawMessage(`{"id":"msg-1","done":true}`)},
+			{EventID: "ev-000000001", Type: tunnel.EventText, Data: json.RawMessage(`{"id":"msg-1","chunk":"hello"}`)},
+			{EventID: "ev-000000002", Type: tunnel.EventActivity, Data: json.RawMessage(`{"activity":"thinking"}`)},
+		},
+	}
+
+	m.SetSession(ses, store)
+
+	replay := m.currentSessionTunnelReplayEvents()
+	got := []string{replay[0].EventID, replay[1].EventID, replay[2].EventID}
+	want := []string{"ev-000000001", "ev-000000002", "ev-000000003"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replay[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
 	}
 }
 
@@ -1660,6 +1693,17 @@ func TestHandleTunnelCommand_ShareAlias(t *testing.T) {
 	_ = m.handleTunnelCommand("/share status")
 }
 
+func TestHandleTunnelCommand_ShareRefreshesExistingTunnel(t *testing.T) {
+	m := newTestModel()
+	m.tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
+
+	cmd := m.handleTunnelCommand("/share")
+
+	if cmd == nil {
+		t.Fatal("expected refresh command for active tunnel")
+	}
+}
+
 func TestHandleTunnelCommand_DoesNotStartWhileStarting(t *testing.T) {
 	m := newTestModel()
 	m.tunnelStarting = true
@@ -1672,6 +1716,30 @@ func TestHandleTunnelCommand_DoesNotStartWhileStarting(t *testing.T) {
 	rendered := stripAnsi(renderedOutput(&m))
 	if strings.Contains(rendered, "Starting tunnel...") {
 		t.Fatalf("did not expect duplicate starting message, got: %s", rendered)
+	}
+}
+
+func TestHandleTunnelRefreshMsgOpensOverlay(t *testing.T) {
+	m := newTestModel()
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+	m.tunnelSession = sess
+	m.tunnelGeneration = 2
+
+	got, _ := m.handleTunnelRefreshMsg(tunnelRefreshMsg{
+		generation: 2,
+		session:    sess,
+		info: &tunnel.SessionInfo{
+			ConnectURL:          "wss://test.local/ws?role=client&auth_ticket=fresh",
+			QRCode:              "qr",
+			CompatibilityNotice: "fresh",
+		},
+	})
+	updated := got.(*Model)
+	if updated.qrOverlay == nil {
+		t.Fatal("expected QR overlay to open")
+	}
+	if updated.qrOverlay.footer != "wss://test.local/ws?role=client&auth_ticket=fresh" {
+		t.Fatalf("unexpected QR overlay URL: %+v", updated.qrOverlay)
 	}
 }
 

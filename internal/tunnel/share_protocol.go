@@ -27,6 +27,7 @@ const (
 
 	shareProtocolEnv        = "GGCODE_SHARE_PROTOCOL"
 	shareSessionPath        = "/share/session"
+	shareSessionRefreshPath = "/share/session/refresh"
 	defaultShareIssueTimout = 15 * time.Second
 )
 
@@ -69,6 +70,22 @@ type relayIssuedShareSessionResponse struct {
 	ShareMode        string `json:"share_mode"`
 	RoomID           string `json:"room_id"`
 	ServerAuthTicket string `json:"server_auth_ticket"`
+	ClientAuthTicket string `json:"client_auth_ticket"`
+	ServerRenewToken string `json:"server_renew_token,omitempty"`
+	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
+	RenewExpiresAt   string `json:"renew_expires_at,omitempty"`
+	Notice           string `json:"notice,omitempty"`
+}
+
+type relayRefreshShareSessionRequest struct {
+	RoomID           string `json:"room_id"`
+	ServerRenewToken string `json:"server_renew_token"`
+}
+
+type relayRefreshedShareSessionResponse struct {
+	ProtocolVersion  int    `json:"protocol_version"`
+	ShareMode        string `json:"share_mode"`
+	RoomID           string `json:"room_id"`
 	ClientAuthTicket string `json:"client_auth_ticket"`
 	ServerRenewToken string `json:"server_renew_token,omitempty"`
 	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
@@ -266,16 +283,19 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	server.CryptoKey = cryptoKey
 	server.AuthTicket = issued.ServerAuthTicket
 	server.RenewToken = issued.ServerRenewToken
-	client = base
-	if issued.ProtocolVersion >= ShareProtocolV3 {
-		client.ServerPrivateKey = ""
-		client.CryptoKey = ""
-	}
-	client.AuthTicket = issued.ClientAuthTicket
+	client = publicShareDescriptorFromServer(server, issued.ClientAuthTicket)
 	return server, client, nil
 }
 
 func shareSessionEndpoint(relayURL string) (string, error) {
+	return shareEndpoint(relayURL, shareSessionPath)
+}
+
+func shareSessionRefreshEndpoint(relayURL string) (string, error) {
+	return shareEndpoint(relayURL, shareSessionRefreshPath)
+}
+
+func shareEndpoint(relayURL, path string) (string, error) {
 	if err := validateRelayURLSecurity(relayURL); err != nil {
 		return "", err
 	}
@@ -294,8 +314,88 @@ func shareSessionEndpoint(relayURL string) (string, error) {
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
-	u.Path = strings.TrimSuffix(u.Path, "/") + shareSessionPath
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	return u.String(), nil
+}
+
+func refreshIssuedShareSession(ctx context.Context, relayURL string, server ShareDescriptor) (updatedServer ShareDescriptor, client ShareDescriptor, err error) {
+	roomID := strings.TrimSpace(server.RoomID)
+	renewToken := strings.TrimSpace(server.RenewToken)
+	if roomID == "" || renewToken == "" {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: incomplete descriptor")
+	}
+	endpoint, err := shareSessionRefreshEndpoint(relayURL)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	body, err := json.Marshal(relayRefreshShareSessionRequest{
+		RoomID:           roomID,
+		ServerRenewToken: renewToken,
+	})
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: defaultShareIssueTimout}).Do(req)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: %s", msg)
+	}
+	var refreshed relayRefreshedShareSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&refreshed); err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("decode refreshed share session: %w", err)
+	}
+	if strings.TrimSpace(refreshed.RoomID) == "" || strings.TrimSpace(refreshed.ClientAuthTicket) == "" || strings.TrimSpace(refreshed.ServerRenewToken) == "" {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: incomplete descriptor")
+	}
+	if refreshed.RoomID != roomID {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: relay returned mismatched room %q", refreshed.RoomID)
+	}
+	authExpiresAt, err := parseShareTimestamp(refreshed.AuthExpiresAt)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session auth expiry: %w", err)
+	}
+	renewExpiresAt, err := parseShareTimestamp(refreshed.RenewExpiresAt)
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session renew expiry: %w", err)
+	}
+	updatedServer = server
+	if refreshed.ProtocolVersion != 0 {
+		updatedServer.ProtocolVersion = refreshed.ProtocolVersion
+	}
+	if shareMode := strings.TrimSpace(refreshed.ShareMode); shareMode != "" {
+		updatedServer.ShareMode = shareMode
+	}
+	updatedServer.Notice = refreshed.Notice
+	updatedServer.AuthExpiresAt = authExpiresAt
+	updatedServer.RenewExpiresAt = renewExpiresAt
+	updatedServer.RenewToken = refreshed.ServerRenewToken
+	client = publicShareDescriptorFromServer(updatedServer, refreshed.ClientAuthTicket)
+	return updatedServer, client, nil
+}
+
+func publicShareDescriptorFromServer(server ShareDescriptor, clientAuthTicket string) ShareDescriptor {
+	client := server
+	client.AuthTicket = clientAuthTicket
+	client.RenewToken = ""
+	if client.ProtocolVersion >= ShareProtocolV3 {
+		client.ServerPrivateKey = ""
+		client.CryptoKey = ""
+	}
+	return client
 }
 
 func parseShareTimestamp(raw string) (time.Time, error) {

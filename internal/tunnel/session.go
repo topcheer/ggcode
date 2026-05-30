@@ -179,13 +179,50 @@ func (s *Session) SendActiveSession(sessionID string) error {
 func (s *Session) Info() *SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.info
+	return cloneSessionInfo(s.info)
 }
 
 func (s *Session) Stop() {
 	if s.client != nil {
 		s.client.Close()
 	}
+}
+
+func (s *Session) RefreshInvite(ctx context.Context) (*SessionInfo, error) {
+	if err := validateRelayURLSecurity(s.relayURL); err != nil {
+		return nil, err
+	}
+	if s.client == nil {
+		return nil, fmt.Errorf("tunnel session: no relay client")
+	}
+	serverDesc, publicDesc, err := refreshIssuedShareSession(ctx, s.relayURL, s.client.currentShareDescriptor())
+	if err != nil {
+		return nil, err
+	}
+	s.client.updateShareDescriptor(func(desc *ShareDescriptor) {
+		*desc = serverDesc
+	})
+	connectURL := publicDesc.PublicConnectURL(s.relayURL)
+	qrStr, _ := QRCodeForURL(connectURL)
+	qrLines, _ := QRCodeLines(connectURL)
+	qrPNG, _ := QRCodePNG(connectURL)
+	info := &SessionInfo{
+		ConnectURL:          connectURL,
+		Token:               publicDesc.SessionToken(),
+		QRCode:              qrStr,
+		QRCodePNG:           qrPNG,
+		QRLines:             qrLines,
+		ProtocolVersion:     publicDesc.ProtocolVersion,
+		ShareMode:           publicDesc.ShareMode,
+		CompatibilityNotice: publicDesc.Notice,
+		RoomID:              publicDesc.RoomID,
+		AuthExpiresAt:       publicDesc.AuthExpiresAt,
+		RenewExpiresAt:      publicDesc.RenewExpiresAt,
+	}
+	s.mu.Lock()
+	s.info = info
+	s.mu.Unlock()
+	return cloneSessionInfo(info), nil
 }
 
 func (s *Session) StopGracefully(timeout time.Duration) {
@@ -199,4 +236,14 @@ func (s *Session) DestroyGracefully(timeout time.Duration) {
 		_ = s.client.DestroyRoom()
 		s.client.CloseGracefully(timeout)
 	}
+}
+
+func cloneSessionInfo(info *SessionInfo) *SessionInfo {
+	if info == nil {
+		return nil
+	}
+	cloned := *info
+	cloned.QRCodePNG = append([]byte(nil), info.QRCodePNG...)
+	cloned.QRLines = append([]string(nil), info.QRLines...)
+	return &cloned
 }
