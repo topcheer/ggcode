@@ -196,7 +196,8 @@ class ShareConnectionDescriptor {
       if (!publicOnly) {
         query['role'] = 'client';
         query['client'] = 'mobile';
-        query['caps'] = 'share_v2,share_v3,share_notice,share_renew';
+        query['caps'] =
+            'share_v2,share_v3,share_notice,share_renew,tunnel_messages_v1';
       }
       if (!publicOnly && renewToken.isNotEmpty) {
         query['renew_token'] = renewToken;
@@ -208,7 +209,8 @@ class ShareConnectionDescriptor {
       if (!publicOnly) {
         query['role'] = 'client';
         query['client'] = 'mobile';
-        query['caps'] = 'share_v2,share_v3,share_notice,share_renew';
+        query['caps'] =
+            'share_v2,share_v3,share_notice,share_renew,tunnel_messages_v1';
       }
     }
     return uri.replace(queryParameters: query).toString();

@@ -57,7 +57,7 @@ func TestValidateShareHandshakeAcceptsIssuedTickets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&crypto_key=abc123&kx_pub=server-pub", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps="+requiredTunnelCapability+"&crypto_key=abc123&kx_pub=server-pub", nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake == nil || status != http.StatusSwitchingProtocols || reason != "" {
 		t.Fatalf("unexpected handshake: handshake=%+v status=%d reason=%q", handshake, status, reason)
@@ -90,7 +90,7 @@ func TestValidateShareHandshakeRejectsIssuedTicketScopeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket, nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps="+requiredTunnelCapability, nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake != nil || status != http.StatusUnauthorized || reason != "ticket scope mismatch" {
 		t.Fatalf("unexpected mismatch result: handshake=%+v status=%d reason=%q", handshake, status, reason)
@@ -107,6 +107,23 @@ func TestValidateShareHandshakeRejectsLegacyProtocol(t *testing.T) {
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake != nil || status != http.StatusGone || reason != shareUpgradeRequiredMessage {
 		t.Fatalf("unexpected legacy result: handshake=%+v status=%d reason=%q", handshake, status, reason)
+	}
+}
+
+func TestValidateShareHandshakeRejectsMissingTunnelCapability(t *testing.T) {
+	cfg := shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}
+	issued, err := issueShareSession(cfg, shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ClientAuthTicket+"&caps=share_v2,share_v3", nil)
+	handshake, status, reason := validateShareHandshake(req, cfg)
+	if handshake != nil || status != http.StatusGone || reason != shareUpgradeRequiredMessage {
+		t.Fatalf("unexpected capability gate result: handshake=%+v status=%d reason=%q", handshake, status, reason)
 	}
 }
 
@@ -190,7 +207,8 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
 		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
-		"&auth_ticket=" + issued.ClientAuthTicket
+		"&auth_ticket=" + issued.ClientAuthTicket +
+		"&caps=" + requiredTunnelCapability
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)

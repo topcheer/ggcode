@@ -21,6 +21,7 @@ const (
 	shareProtocolV2              = 2
 	shareProtocolV3              = 3
 	requiredShareProtocolVersion = shareProtocolV3
+	requiredTunnelCapability     = "tunnel_messages_v1"
 
 	shareModeLegacy = "legacy"
 	shareModeV2     = "v2"
@@ -144,6 +145,9 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if protocolVersion > requiredShareProtocolVersion {
 		return nil, http.StatusBadRequest, fmt.Sprintf("unsupported share protocol %d", protocolVersion)
 	}
+	if !hasCapability(capabilities, requiredTunnelCapability) {
+		return nil, http.StatusGone, shareUpgradeRequiredMessage
+	}
 	if rawToken != "" {
 		return nil, http.StatusGone, shareUpgradeRequiredMessage
 	}
@@ -230,6 +234,19 @@ func connectedShareMetadata(handshake *shareHandshake) map[string]any {
 		data["renew_expires_at"] = handshake.renewExpiresAt.Format(time.RFC3339)
 	}
 	return data
+}
+
+func hasCapability(caps []string, required string) bool {
+	required = strings.TrimSpace(required)
+	if required == "" {
+		return true
+	}
+	for _, capability := range caps {
+		if strings.TrimSpace(capability) == required {
+			return true
+		}
+	}
+	return false
 }
 
 func requestedShareProtocolVersion(r *http.Request) (int, error) {

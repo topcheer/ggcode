@@ -174,7 +174,7 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 	defer server.Close()
 
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket + "&caps=" + requiredTunnelCapability
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	defer server.Close()
 
 	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=server&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ServerAuthTicket + "&crypto_key=abc123&kx_pub=server-pub"
+		"/ws?role=server&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ServerAuthTicket + "&caps=" + requiredTunnelCapability + "&crypto_key=abc123&kx_pub=server-pub"
 	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +225,7 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	}
 
 	clientURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket + "&caps=" + requiredTunnelCapability
 	clientConn, _, err := websocket.DefaultDialer.Dial(clientURL, nil)
 	if err != nil {
 		t.Fatal(err)
