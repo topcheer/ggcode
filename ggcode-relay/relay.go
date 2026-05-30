@@ -844,6 +844,7 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
 	if handshake == nil {
+		logRejectedHandshake(r, status, reason)
 		http.Error(w, reason, status)
 		return
 	}
@@ -951,6 +952,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 				delete(room.clientsByID, p.clientID)
 			}
 		}
+
 		room.mu.Unlock()
 		conn.Close()
 		return
@@ -970,6 +972,18 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	go p.writeLoop()
 	p.readLoop(h) // blocks until disconnect
+}
+
+func logRejectedHandshake(r *http.Request, status int, reason string) {
+	q := r.URL.Query()
+	roomID := strings.TrimSpace(q.Get("room_id"))
+	role := strings.TrimSpace(q.Get("role"))
+	proto := strings.TrimSpace(q.Get("proto"))
+	clientKind := strings.TrimSpace(q.Get("client"))
+	clientVersion := strings.TrimSpace(q.Get("client_version"))
+	caps := strings.TrimSpace(q.Get("caps"))
+	log.Printf("[relay] handshake rejected: status=%d reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
+		status, reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
 }
 
 func (p *peer) notifyServerClientConnected(resumeComplete bool) {
