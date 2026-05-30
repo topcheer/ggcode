@@ -852,15 +852,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if handshake.postConnectErr != "" {
-		logUpgradedClientReject(r, handshake.postConnectErr)
-		_ = conn.WriteJSON(relayMessage{
-			Type:   "error",
-			Reason: handshake.postConnectErr,
-		})
-		conn.Close()
-		return
-	}
 
 	token := handshake.roomKey
 	role := handshake.role
@@ -912,27 +903,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	p.clientID = clientID
 	p.protocolVersion = handshake.protocolVersion
 
-	room.mu.Lock()
-	if handshake.protocolVersion > room.protocolVersion {
-		room.protocolVersion = handshake.protocolVersion
-	}
-	if role == "server" {
-		if room.server != nil {
-			// Kick old server.
-			old := room.server
-			room.server = nil
-			room.mu.Unlock()
-			old.send(relayMessage{Type: "sharing_stopped"})
-			room.mu.Lock()
-		}
-		room.server = p
-		stopOfflineTimerLocked(room)
-	} else {
-		room.clients[p] = struct{}{}
-	}
-	clients := len(room.clients)
-	room.mu.Unlock()
-
 	room.mu.RLock()
 	tail := ""
 	if n := len(room.history); n > 0 {
@@ -966,6 +936,43 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	if handshake.postConnectErr != "" {
+		logUpgradedClientReject(r, handshake.postConnectErr)
+		upgradeErr := relayMessage{
+			Type:   "error",
+			Reason: handshake.postConnectErr,
+		}
+		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		if err := conn.WriteJSON(upgradeErr); err == nil {
+			stopMsg := relayMessage{Type: "sharing_stopped"}
+			h.traceRelayMessage("ws_write", token, clientID, stopMsg, "peer_role="+role+" initial=false upgrade_stop=true")
+			_ = conn.WriteJSON(stopMsg)
+		}
+		conn.Close()
+		return
+	}
+
+	room.mu.Lock()
+	if handshake.protocolVersion > room.protocolVersion {
+		room.protocolVersion = handshake.protocolVersion
+	}
+	if role == "server" {
+		if room.server != nil {
+			// Kick old server.
+			old := room.server
+			room.server = nil
+			room.mu.Unlock()
+			old.send(relayMessage{Type: "sharing_stopped"})
+			room.mu.Lock()
+		}
+		room.server = p
+		stopOfflineTimerLocked(room)
+	} else {
+		room.clients[p] = struct{}{}
+	}
+	clients := len(room.clients)
+	room.mu.Unlock()
 
 	if h.stats != nil {
 		h.stats.recordConnect(role)
