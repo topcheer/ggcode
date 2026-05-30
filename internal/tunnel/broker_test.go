@@ -1328,7 +1328,7 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
-func TestBrokerHandleLegacyClientConnectedSkipsAuthoritativeReplay(t *testing.T) {
+func TestBrokerHandleLegacyClientConnectedSendsActiveSessionWithoutAuthoritativeReplay(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
@@ -1374,13 +1374,6 @@ func TestBrokerHandleLegacyClientConnectedSkipsAuthoritativeReplay(t *testing.T)
 		HistoryCount:    0,
 		ProtocolVersion: ShareProtocolLegacy,
 	})
-	b.handleRelayConnected(RelayConnectedState{
-		Role:            "client",
-		SessionID:       "sess-local",
-		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolLegacy,
-		ResumeComplete:  true,
-	})
 
 	time.Sleep(10 * time.Millisecond)
 	if msgs := d.drain(); len(msgs) != 0 {
@@ -1389,13 +1382,17 @@ func TestBrokerHandleLegacyClientConnectedSkipsAuthoritativeReplay(t *testing.T)
 	select {
 	case raw := <-activeClient.sendCh:
 		var msg struct {
-			Type string `json:"type"`
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			t.Fatalf("unmarshal relay payload: %v", err)
 		}
-		t.Fatalf("expected no active_session for legacy client replay path, got %+v", msg)
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" {
+			t.Fatalf("expected active_session for legacy client replay path, got %+v", msg)
+		}
 	default:
+		t.Fatal("expected active_session for legacy client replay path")
 	}
 }
 

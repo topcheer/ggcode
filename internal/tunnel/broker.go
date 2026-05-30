@@ -543,6 +543,9 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role == "client" {
 		if info.ProtocolVersion == ShareProtocolLegacy {
 			debug.Log("tunnel", "broker: legacy client connected; relying on relay room history only (session=%q count=%d)", currentSessionID, info.HistoryCount)
+			if currentSessionID != "" {
+				b.sendActiveSession(currentSessionID)
+			}
 			if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
 				b.bumpNextEvent(info.LastEventID)
 				// Still flush any buffered live text so the joining client's resume replay
