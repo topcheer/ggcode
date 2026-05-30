@@ -65,10 +65,7 @@ func TestSessionStopNilClient(t *testing.T) {
 
 func TestSessionStopWithClient(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := testRelayClient(t, "wss://relay.example.com")
 	sess.client = rc
 	sess.Stop()
 	if !rc.closed {
@@ -78,10 +75,7 @@ func TestSessionStopWithClient(t *testing.T) {
 
 func TestSessionStopGracefullyWithClient(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := testRelayClient(t, "wss://relay.example.com")
 	sess.client = rc
 	sess.StopGracefully(50 * time.Millisecond)
 	if !rc.closed {
@@ -91,10 +85,7 @@ func TestSessionStopGracefullyWithClient(t *testing.T) {
 
 func TestSessionDestroyGracefullyWithClient(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := testRelayClient(t, "wss://relay.example.com")
 	sess.client = rc
 	sess.DestroyGracefully(50 * time.Millisecond)
 	if !rc.closed {

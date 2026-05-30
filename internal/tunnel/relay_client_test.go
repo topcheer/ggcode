@@ -11,37 +11,21 @@ import (
 )
 
 func TestNewRelayClient(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com/", "0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
-	if rc.relayURL != "wss://relay.example.com" {
-		t.Errorf("relayURL = %q, want trailing slash trimmed", rc.relayURL)
-	}
-	if rc.token != "0123456789abcdef0123456789abcdef" {
-		t.Errorf("token mismatch")
-	}
-	if rc.crypto == nil {
-		t.Error("crypto should be initialized")
-	}
-	if rc.sendCh == nil {
-		t.Error("sendCh should be initialized")
-	}
-	if rc.stopCh == nil {
-		t.Error("stopCh should be initialized")
+	_, err := NewRelayClient("wss://relay.example.com/", "0123456789abcdef0123456789abcdef")
+	if err == nil || !strings.Contains(err.Error(), "legacy relay clients are unsupported") {
+		t.Fatalf("NewRelayClient() error = %v, want legacy unsupported error", err)
 	}
 }
 
-func TestNewRelayClientRejectsRemoteInsecureRelayURL(t *testing.T) {
-	_, err := NewRelayClient("ws://relay.example.com", "0123456789abcdef0123456789abcdef")
+func TestNewRelayClientWithDescriptorRejectsRemoteInsecureRelayURL(t *testing.T) {
+	_, err := NewRelayClientWithDescriptor("ws://relay.example.com", testShareDescriptor(t), "server", RelayClientMetadata{})
 	if err == nil || !strings.Contains(err.Error(), "insecure relay URL") {
-		t.Fatalf("NewRelayClient() error = %v, want insecure relay URL error", err)
+		t.Fatalf("NewRelayClientWithDescriptor() error = %v, want insecure relay URL error", err)
 	}
 }
 
 func TestRelayClientConnectURL(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
+	rc, err := NewRelayClientWithDescriptor("wss://relay.example.com", testShareDescriptor(t), "server", RelayClientMetadata{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +34,8 @@ func TestRelayClientConnectURL(t *testing.T) {
 	if !strings.Contains(url, "role=client") {
 		t.Error("ConnectURL should contain role=client")
 	}
-	if !strings.Contains(url, "token=0123456789abcdef01234567") {
-		t.Error("ConnectURL should contain token")
+	if !strings.Contains(url, "proto=3") || !strings.Contains(url, "room_id=") || !strings.Contains(url, "auth_ticket=") {
+		t.Error("ConnectURL should contain v3 room parameters")
 	}
 	if !strings.HasPrefix(url, "wss://") {
 		t.Error("ConnectURL should start with wss://")
@@ -59,7 +43,7 @@ func TestRelayClientConnectURL(t *testing.T) {
 }
 
 func TestRelayClientSendEncryptsMessage(t *testing.T) {
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := testRelayClient(t, "wss://test.local")
 	defer rc.Close()
 
 	msg := GatewayMessage{
@@ -92,7 +76,7 @@ func TestRelayClientSendEncryptsMessage(t *testing.T) {
 }
 
 func TestRelayClientSendMessageID(t *testing.T) {
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := testRelayClient(t, "wss://test.local")
 	defer rc.Close()
 
 	msg := GatewayMessage{
@@ -119,7 +103,7 @@ func TestRelayClientSendMessageID(t *testing.T) {
 }
 
 func TestRelayClientDestroyRoomSendsStopSharing(t *testing.T) {
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := testRelayClient(t, "wss://test.local")
 	defer rc.Close()
 
 	if err := rc.DestroyRoom(); err != nil {
@@ -143,7 +127,7 @@ func TestRelayClientDestroyRoomSendsStopSharing(t *testing.T) {
 }
 
 func TestRelayClientOnAck(t *testing.T) {
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := testRelayClient(t, "wss://test.local")
 	defer rc.Close()
 
 	var acks []struct {
@@ -181,7 +165,7 @@ func TestRelayClientOnAck(t *testing.T) {
 }
 
 func TestRelayClientClosedSend(t *testing.T) {
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := testRelayClient(t, "wss://test.local")
 	rc.Close()
 
 	msg := GatewayMessage{Type: "test"}

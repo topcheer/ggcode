@@ -85,38 +85,11 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		return nil, err
 	}
 	cfg := loadShareRuntimeConfig()
-	publicDesc := ShareDescriptor{}
-	serverDesc := ShareDescriptor{}
-	var err error
-	switch {
-	case cfg.v2Enabled():
-		serverDesc, publicDesc, err = requestIssuedShareSession(ctx, s.relayURL, cfg)
-		if err == nil {
-			s.token = publicDesc.SessionToken()
-			break
-		}
-		token, err := randomHex(24)
-		if err != nil {
-			return nil, err
-		}
-		s.token = token
-		serverDesc = newLegacyShareDescriptor(token)
-		publicDesc = serverDesc
-		requestedMode := "Share v2"
-		if cfg.v3Enabled() {
-			requestedMode = "Share v3"
-		}
-		publicDesc.Notice = fmt.Sprintf("%s was requested locally but relay issuance failed; using legacy compatibility mode. (%v)", requestedMode, err)
-		publicDesc.ShareMode = ShareModeCompat
-	default:
-		token, err := randomHex(24)
-		if err != nil {
-			return nil, err
-		}
-		s.token = token
-		serverDesc = newLegacyShareDescriptor(token)
-		publicDesc = serverDesc
+	serverDesc, publicDesc, err := requestIssuedShareSession(ctx, s.relayURL, cfg)
+	if err != nil {
+		return nil, err
 	}
+	s.token = publicDesc.SessionToken()
 
 	client, err := NewRelayClientWithDescriptor(s.relayURL, serverDesc, "server", s.meta)
 	if err != nil {

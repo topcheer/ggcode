@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	shareProtocolLegacy = 1
-	shareProtocolV2     = 2
-	shareProtocolV3     = 3
+	shareProtocolLegacy          = 1
+	shareProtocolV2              = 2
+	shareProtocolV3              = 3
+	requiredShareProtocolVersion = shareProtocolV3
 
 	shareModeLegacy = "legacy"
 	shareModeV2     = "v2"
@@ -39,6 +40,10 @@ const (
 	defaultShareConnectTTL = 15 * time.Minute
 	defaultShareRenewTTL   = 30 * 24 * time.Hour
 )
+
+const shareUpgradeRequiredMessage = "GGCode share v3 is required. Please upgrade GGCode TUI/GUI/Mobile to the latest version."
+
+var errShareUpgradeRequired = errors.New(shareUpgradeRequiredMessage)
 
 type shareAuthConfig struct {
 	Secret     string
@@ -116,7 +121,7 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	clientVersion := strings.TrimSpace(q.Get("client_version"))
 	capabilities := splitCaps(q.Get("caps"))
 	proto := strings.TrimSpace(q.Get("proto"))
-	protocolVersion := shareProtocolLegacy
+	protocolVersion := 0
 	if proto != "" {
 		value, err := strconv.Atoi(proto)
 		if err != nil {
@@ -130,29 +135,17 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 		if rawToken == "" {
 			return nil, http.StatusBadRequest, "missing token"
 		}
-		notice := ""
-		if hasShareV2Capability(capabilities, clientVersion) {
-			notice = "Connected in legacy compatibility mode."
-		}
-		return &shareHandshake{
-			role:            role,
-			roomKey:         rawToken,
-			protocolVersion: shareProtocolLegacy,
-			shareMode:       shareModeLegacy,
-			connectMode:     shareModeLegacy,
-			notice:          notice,
-			clientKind:      clientKind,
-			clientVersion:   clientVersion,
-			capabilities:    capabilities,
-			cryptoKey:       rawToken,
-		}, http.StatusSwitchingProtocols, ""
+		return nil, http.StatusGone, shareUpgradeRequiredMessage
 	}
 
-	if protocolVersion < shareProtocolV2 {
-		return nil, http.StatusBadRequest, "invalid proto"
+	if protocolVersion < requiredShareProtocolVersion {
+		return nil, http.StatusGone, shareUpgradeRequiredMessage
+	}
+	if protocolVersion > requiredShareProtocolVersion {
+		return nil, http.StatusBadRequest, fmt.Sprintf("unsupported share protocol %d", protocolVersion)
 	}
 	if rawToken != "" {
-		return nil, http.StatusBadRequest, "legacy token cannot be combined with v2 params"
+		return nil, http.StatusGone, shareUpgradeRequiredMessage
 	}
 	if roomID == "" {
 		return nil, http.StatusBadRequest, "missing room_id"
@@ -179,7 +172,7 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if err != nil {
 		return nil, http.StatusUnauthorized, "invalid auth ticket"
 	}
-	if claims.V < shareProtocolV2 {
+	if claims.V < requiredShareProtocolVersion {
 		return nil, http.StatusUnauthorized, "unsupported ticket version"
 	}
 	if claims.Role != role || claims.Kind != kind || claims.RoomID != roomID {
@@ -193,27 +186,16 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if err != nil {
 		return nil, http.StatusInternalServerError, "mint renew token"
 	}
-	shareMode := shareModeV2
-	if protocolVersion >= shareProtocolV3 {
-		shareMode = shareModeV3
-	}
-	notice := ""
-	if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
-		notice = "Experimental share v2 is enabled for this connection."
-	}
-	if protocolVersion >= shareProtocolV3 {
-		notice = "Experimental share v3 is enabled for this connection."
-	}
 	return &shareHandshake{
 		role:            role,
 		roomKey:         roomID,
 		protocolVersion: protocolVersion,
-		shareMode:       shareMode,
+		shareMode:       shareModeV3,
 		connectMode:     connectMode,
 		authExpiresAt:   exp,
 		renewToken:      nextRenewToken,
 		renewExpiresAt:  renewExp,
-		notice:          notice,
+		notice:          "",
 		clientKind:      clientKind,
 		clientVersion:   clientVersion,
 		capabilities:    capabilities,
@@ -253,7 +235,7 @@ func connectedShareMetadata(handshake *shareHandshake) map[string]any {
 func requestedShareProtocolVersion(r *http.Request) (int, error) {
 	raw := strings.TrimSpace(r.URL.Query().Get("proto"))
 	if raw == "" {
-		return shareProtocolV2, nil
+		return requiredShareProtocolVersion, nil
 	}
 	protocolVersion, err := strconv.Atoi(raw)
 	if err != nil {
@@ -310,18 +292,21 @@ func mintShareTicket(secret, roomID, role, kind string, exp time.Time) (string, 
 		Role:   role,
 		Kind:   kind,
 		Exp:    exp.Unix(),
-		V:      shareProtocolV2,
+		V:      requiredShareProtocolVersion,
 	})
 }
 
 func issueShareSession(cfg shareAuthConfig, requestedProtocol int) (issuedShareSessionResponse, error) {
 	if strings.TrimSpace(cfg.Secret) == "" {
-		return issuedShareSessionResponse{}, errors.New("share v2 unavailable")
+		return issuedShareSessionResponse{}, errors.New("share v3 unavailable")
 	}
-	if requestedProtocol < shareProtocolV2 {
-		requestedProtocol = shareProtocolV2
+	if requestedProtocol == 0 {
+		requestedProtocol = requiredShareProtocolVersion
 	}
-	if requestedProtocol > shareProtocolV3 {
+	if requestedProtocol < requiredShareProtocolVersion {
+		return issuedShareSessionResponse{}, errShareUpgradeRequired
+	}
+	if requestedProtocol > requiredShareProtocolVersion {
 		return issuedShareSessionResponse{}, fmt.Errorf("unsupported share protocol %d", requestedProtocol)
 	}
 	roomID, err := randomHex(16)
@@ -340,24 +325,16 @@ func issueShareSession(cfg shareAuthConfig, requestedProtocol int) (issuedShareS
 	if err != nil {
 		return issuedShareSessionResponse{}, err
 	}
-	shareMode := shareModeV2
-	notice := ""
-	if requestedProtocol >= shareProtocolV3 {
-		shareMode = shareModeV3
-		notice = "Experimental share v3 is enabled for this session."
-	} else if strings.EqualFold(os.Getenv(shareProtocolEnv), shareModeV2) {
-		notice = "Experimental share v2 is enabled for this session."
-	}
 	return issuedShareSessionResponse{
-		ProtocolVersion:  requestedProtocol,
-		ShareMode:        shareMode,
+		ProtocolVersion:  requiredShareProtocolVersion,
+		ShareMode:        shareModeV3,
 		RoomID:           roomID,
 		ServerAuthTicket: serverConnect,
 		ClientAuthTicket: clientConnect,
 		ServerRenewToken: serverRenew,
 		AuthExpiresAt:    authExp.UTC().Format(time.RFC3339),
 		RenewExpiresAt:   renewExp.UTC().Format(time.RFC3339),
-		Notice:           notice,
+		Notice:           "",
 	}, nil
 }
 

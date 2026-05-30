@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -452,15 +453,10 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		Generation: generation,
 	})
 
-	if p.room.protocolVersion >= shareProtocolV3 {
-		p.ready = false
-		p.waitingForKeyReady = true
-		log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s generation=%d",
-			shortToken(p.room.token), msg.ClientID, p.cursor, generation)
-		return
-	}
-
-	p.finishResumeLocked(msg.ClientID, h)
+	p.ready = false
+	p.waitingForKeyReady = true
+	log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s generation=%d",
+		shortToken(p.room.token), msg.ClientID, p.cursor, generation)
 }
 
 func (p *peer) finishResumeLocked(clientID string, h *hub) {
@@ -479,24 +475,6 @@ func (p *peer) finishResumeLocked(clientID string, h *hub) {
 		Generation: generation,
 		Data:       mustJSON(map[string]interface{}{"resume_mode": mode, "replay_count": len(replay)}),
 	})
-	if p.protocolVersion < shareProtocolV2 {
-		p.send(relayMessage{
-			Type:       "snapshot_reset",
-			SessionID:  p.room.sessionID,
-			ClientID:   clientID,
-			Generation: generation,
-		})
-		for _, ev := range p.room.bootstrapEvents(p.room.sessionID) {
-			var bootstrap relayMessage
-			if err := json.Unmarshal(ev.raw, &bootstrap); err != nil {
-				p.sendRaw(ev.raw)
-				continue
-			}
-			bootstrap.EventID = ""
-			bootstrap.StreamID = ""
-			p.send(bootstrap)
-		}
-	}
 
 	for _, ev := range replay {
 		h.traceRoomEvent("replay_send", p.room.token, p.clientID, ev, "mode="+mode)
@@ -845,11 +823,15 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := issueShareSession(loadShareAuthConfig(), requestedProtocol)
 	if err != nil {
-		if err.Error() == "share v2 unavailable" {
+		if errors.Is(err, errShareUpgradeRequired) {
+			http.Error(w, err.Error(), http.StatusGone)
+			return
+		}
+		if err.Error() == "share v3 unavailable" {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	h.reserveIssuedRoom(issued.RoomID, defaultPendingRoomTTL)

@@ -25,6 +25,7 @@ type relayTraceState struct {
 	lastSeen    time.Time
 	pendingTail string
 	pendingSeen int
+	sampledSeen int
 }
 
 func newRelayTraceLogger() *relayTraceLogger {
@@ -56,6 +57,27 @@ func (l *relayTraceLogger) LogImmediate(summary string) {
 		return
 	}
 	l.sink(summary)
+}
+
+func (l *relayTraceLogger) LogEveryN(key, summary string, n int) {
+	if l == nil || l.sink == nil || n <= 0 {
+		return
+	}
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	state, ok := l.states[key]
+	if !ok {
+		state = &relayTraceState{}
+		l.states[key] = state
+	}
+	state.lastSeen = now
+	state.sampledSeen++
+	if state.sampledSeen%n != 0 {
+		return
+	}
+	l.sink(fmt.Sprintf("%s sampled=%d", summary, state.sampledSeen))
 }
 
 func (l *relayTraceLogger) logAt(now time.Time, key, summary string) {
@@ -123,10 +145,6 @@ func (h *hub) traceRelayMessage(route, roomToken, clientID string, msg relayMess
 		return
 	}
 	summary := traceMessageSummary(route, roomToken, clientID, msg, extra)
-	if !shouldSuppressTraceMessage(msg) {
-		h.tracer.LogImmediate(summary)
-		return
-	}
 	keyClientID := clientID
 	if keyClientID == "" {
 		keyClientID = msg.ClientID
@@ -141,6 +159,14 @@ func (h *hub) traceRelayMessage(route, roomToken, clientID string, msg relayMess
 		shortTraceField(msg.StreamID),
 		shortTraceField(msg.MessageID),
 	}, "|")
+	if isHeartbeatTraceMessage(msg) {
+		h.tracer.LogEveryN(key, summary, 100)
+		return
+	}
+	if !shouldSuppressTraceMessage(msg) {
+		h.tracer.LogImmediate(summary)
+		return
+	}
 	h.tracer.Log(key, summary)
 }
 
@@ -162,6 +188,10 @@ func (h *hub) flushTraceLogs() {
 
 func shouldSuppressTraceMessage(msg relayMessage) bool {
 	return msg.Type == "encrypted"
+}
+
+func isHeartbeatTraceMessage(msg relayMessage) bool {
+	return msg.Type == "ping" || msg.Type == "pong"
 }
 
 func traceMessageSummary(route, roomToken, clientID string, msg relayMessage, extra string) string {
