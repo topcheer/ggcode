@@ -13,6 +13,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func testIssuedShareSession(t *testing.T) issuedShareSessionResponse {
+	t.Helper()
+	issued, err := issueShareSession(shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}, shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issued
+}
+
 // ─── Room tests ───
 
 func TestRoomEventsAfter(t *testing.T) {
@@ -76,12 +89,12 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
 	r.generation = 2
-	r.protocolVersion = shareProtocolV2
+	r.protocolVersion = shareProtocolV3
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
 	r.server = server
 	client := newPeer(nil, r, "client", nil)
-	client.protocolVersion = shareProtocolLegacy
+	client.protocolVersion = shareProtocolV3
 
 	client.notifyServerClientConnected(true)
 
@@ -101,7 +114,7 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		if err := json.Unmarshal(msg.Data, &meta); err != nil {
 			t.Fatal(err)
 		}
-		if meta.ProtocolVersion != shareProtocolLegacy || !meta.ResumeComplete {
+		if meta.ProtocolVersion != shareProtocolV3 || !meta.ResumeComplete {
 			t.Fatalf("unexpected metadata: %+v", meta)
 		}
 	default:
@@ -109,14 +122,14 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 	}
 }
 
-func TestLegacyClientResumeNotifiesServerCompletion(t *testing.T) {
+func TestClientResumeNotifiesServerCompletion(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
 	r.server = server
 	client := newPeer(nil, r, "client", nil)
-	client.protocolVersion = shareProtocolLegacy
+	client.protocolVersion = shareProtocolV3
 
 	client.finishResumeLocked("client-1", &hub{})
 
@@ -136,21 +149,24 @@ func TestLegacyClientResumeNotifiesServerCompletion(t *testing.T) {
 		if err := json.Unmarshal(msg.Data, &meta); err != nil {
 			t.Fatalf("unmarshal metadata: %v", err)
 		}
-		if meta.ProtocolVersion != shareProtocolLegacy || !meta.ResumeComplete {
+		if meta.ProtocolVersion != shareProtocolV3 || !meta.ResumeComplete {
 			t.Fatalf("unexpected metadata: %+v", meta)
 		}
 	default:
-		t.Fatal("expected resume-complete notification for legacy client")
+		t.Fatal("expected resume-complete notification for client")
 	}
 }
 
 func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	issued := testIssuedShareSession(t)
 	h := newHub(nil)
-	room := newRoom("legacy-token")
+	room := newRoom(issued.RoomID)
 	room.sessionID = "sess-1"
+	room.protocolVersion = shareProtocolV3
 	room.history = []roomEvent{{eventID: "ev-000000001"}}
 	room.server = newPeer(h, room, "server", nil)
-	h.rooms["legacy-token"] = room
+	h.rooms[issued.RoomID] = room
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
@@ -158,7 +174,7 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 	defer server.Close()
 
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&token=legacy-token"
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +197,8 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 }
 
 func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	issued := testIssuedShareSession(t)
 	h := newHub(nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
@@ -188,7 +206,7 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	defer server.Close()
 
 	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=server&token=legacy-token"
+		"/ws?role=server&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ServerAuthTicket + "&crypto_key=abc123&kx_pub=server-pub"
 	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +225,7 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	}
 
 	clientURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&token=legacy-token"
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket
 	clientConn, _, err := websocket.DefaultDialer.Dial(clientURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -293,14 +311,18 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	if p.clientID != "client-1" {
 		t.Fatalf("clientID not set")
 	}
+	if p.ready {
+		t.Fatalf("peer should wait for key_ready")
+	}
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 	if !p.ready {
-		t.Fatalf("peer should be ready")
+		t.Fatalf("peer should be ready after key_ready")
 	}
 
-	// Should have: active_session + resume_ack + snapshot_reset + 3 replay events = 6 messages.
+	// Should have: active_session + resume_ack + 3 replay events = 5 messages.
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 6 {
-		t.Fatalf("expected 6 messages, got %d", len(msgs))
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 
 	var first relayMessage
@@ -317,18 +339,13 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	if ack.Generation != 3 {
 		t.Fatalf("expected resume_ack generation 3, got %d", ack.Generation)
 	}
-	var reset relayMessage
-	if json.Unmarshal(msgs[2], &reset) != nil || reset.Type != "snapshot_reset" {
-		t.Fatalf("third message should be snapshot_reset, got %s", string(msgs[2]))
-	}
-
 	// Since cursor was empty, resume_ack should say full_history.
 	if string(ack.Data) != `{"replay_count":3,"resume_mode":"full_history"}` {
 		t.Fatalf("unexpected ack data: %s", string(ack.Data))
 	}
 }
 
-func TestLegacyResumeReplaysBootstrapAfterSnapshotReset(t *testing.T) {
+func TestV3ResumeReplaysBootstrapEventsInHistory(t *testing.T) {
 	r := newRoom("token")
 	h := newHub(nil)
 	server := newPeer(h, r, "server", nil)
@@ -359,15 +376,16 @@ func TestLegacyResumeReplaysBootstrapAfterSnapshotReset(t *testing.T) {
 
 	p := newPeer(h, r, "client", nil)
 	p.clientID = "client-1"
-	p.protocolVersion = shareProtocolLegacy
+	p.protocolVersion = shareProtocolV3
 
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 10 {
-		t.Fatalf("expected 10 messages, got %d", len(msgs))
+	if len(msgs) != 6 {
+		t.Fatalf("expected 6 messages, got %d", len(msgs))
 	}
-	expected := []string{"active_session", "resume_ack", "snapshot_reset", "session_info", "status", "activity"}
+	expected := []string{"active_session", "resume_ack", "session_info", "status", "activity"}
 	for i, want := range expected {
 		var msg relayMessage
 		if err := json.Unmarshal(msgs[i], &msg); err != nil {
@@ -376,31 +394,27 @@ func TestLegacyResumeReplaysBootstrapAfterSnapshotReset(t *testing.T) {
 		if msg.Type != want {
 			t.Fatalf("message %d: expected %s, got %s", i, want, msg.Type)
 		}
-		if i >= 3 && msg.EventID != "" {
-			t.Fatalf("bootstrap message %d should clear event_id for legacy replay, got %q", i, msg.EventID)
+		if i >= 2 && msg.EventID == "" {
+			t.Fatalf("message %d should preserve event_id in v3 replay", i)
 		}
+	}
+	var ack relayMessage
+	if err := json.Unmarshal(msgs[1], &ack); err != nil {
+		t.Fatalf("unmarshal resume_ack: %v", err)
+	}
+	if string(ack.Data) != `{"replay_count":4,"resume_mode":"full_history"}` {
+		t.Fatalf("unexpected ack data: %s", string(ack.Data))
 	}
 
-	replayExpected := []struct {
-		typ     string
-		eventID string
-	}{
-		{typ: "session_info", eventID: "ev-27"},
-		{typ: "status", eventID: "ev-295"},
-		{typ: "activity", eventID: "ev-296"},
-		{typ: "text", eventID: "ev-297"},
+	var replay relayMessage
+	if err := json.Unmarshal(msgs[5], &replay); err != nil {
+		t.Fatalf("unmarshal replay message: %v", err)
 	}
-	for i, want := range replayExpected {
-		var replay relayMessage
-		if err := json.Unmarshal(msgs[6+i], &replay); err != nil {
-			t.Fatalf("unmarshal replay message %d: %v", i, err)
-		}
-		if replay.Type != want.typ {
-			t.Fatalf("replay message %d: expected %s, got %s", i, want.typ, replay.Type)
-		}
-		if replay.EventID != want.eventID {
-			t.Fatalf("replay message %d: expected event_id %q, got %q", i, want.eventID, replay.EventID)
-		}
+	if replay.Type != "text" {
+		t.Fatalf("expected replay event after bootstrap, got %s", replay.Type)
+	}
+	if replay.EventID != "ev-297" {
+		t.Fatalf("expected replay event_id to remain intact, got %q", replay.EventID)
 	}
 }
 
@@ -418,10 +432,11 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	p.cursor = "ev-000000001" // already ACK'd ev-1
 
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 5 { // active_session + resume_ack + snapshot_reset + ev-2 + ev-3
-		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	if len(msgs) != 4 { // active_session + resume_ack + ev-2 + ev-3
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
 
@@ -568,11 +583,12 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 	p := newPeer(h, r, "client", nil)
 
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	// Should replay only ev-3 and ev-4 (after cursor ev-2).
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 5 { // active_session + resume_ack + snapshot_reset + ev-3 + ev-4
-		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	if len(msgs) != 4 { // active_session + resume_ack + ev-3 + ev-4
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
 	}
 }
 
@@ -616,6 +632,7 @@ func TestFullACKLifecycle(t *testing.T) {
 
 	// Step 1: Resume (no cursor → full replay).
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 	drainSendCh(p.sendCh)
 
 	// Step 2: ACK ev-3.
@@ -628,11 +645,12 @@ func TestFullACKLifecycle(t *testing.T) {
 	// Step 4: Disconnect and reconnect (new peer, same clientID).
 	p2 := newPeer(h, r, "client", nil)
 	p2.onResume(relayMessage{ClientID: "client-1"}, h)
+	p2.onKeyReady(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p2.sendCh)
 	// Should only replay ev-4 (cursor at ev-3).
-	if len(msgs) != 4 { // active_session + resume_ack + snapshot_reset + ev-4
-		t.Fatalf("expected 4 messages after reconnect, got %d", len(msgs))
+	if len(msgs) != 3 { // active_session + resume_ack + ev-4
+		t.Fatalf("expected 3 messages after reconnect, got %d", len(msgs))
 	}
 
 	var first relayMessage
@@ -645,10 +663,10 @@ func TestFullACKLifecycle(t *testing.T) {
 	if ack.Type != "resume_ack" {
 		t.Fatalf("expected resume_ack")
 	}
-	var reset relayMessage
-	json.Unmarshal(msgs[2], &reset)
-	if reset.Type != "snapshot_reset" {
-		t.Fatalf("expected snapshot_reset before replay, got %s", reset.Type)
+	var replay relayMessage
+	json.Unmarshal(msgs[2], &replay)
+	if replay.EventID != "ev-000000004" {
+		t.Fatalf("expected replay event ev-000000004, got %+v", replay)
 	}
 }
 

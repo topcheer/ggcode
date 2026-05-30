@@ -16,7 +16,7 @@ import (
 // inspect the outbound queue directly.
 func newBrokerForTest() (*Broker, *drainHelper) {
 	sess := NewSession("wss://test.local")
-	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	rc := mustTestRelayClient("wss://test.local")
 	rc.Close()
 	sess.client = rc
 
@@ -895,10 +895,7 @@ func TestBrokerSeedHistoryPreservesToolDetail(t *testing.T) {
 
 func TestBrokerSeedHistoryLargeBurstDoesNotDrop(t *testing.T) {
 	sess := NewSession("wss://test.local")
-	rc, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := testRelayClient(t, "wss://test.local")
 	defer rc.Close()
 	sess.client = rc
 
@@ -1328,14 +1325,11 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
-func TestBrokerHandleLegacyClientConnectedSkipsPerClientBootstrap(t *testing.T) {
+func TestBrokerHandleUnsupportedOldClientConnectedSkipsPerClientBootstrap(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
-	activeClient, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
-	if err != nil {
-		t.Fatal(err)
-	}
+	activeClient := testRelayClient(t, "wss://test.local")
 	b.session.client = activeClient
 	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
 	if err != nil {
@@ -1372,34 +1366,16 @@ func TestBrokerHandleLegacyClientConnectedSkipsPerClientBootstrap(t *testing.T) 
 		Role:            "client",
 		SessionID:       "sess-local",
 		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolLegacy,
+		ProtocolVersion: ShareProtocolV2,
 	})
 
 	time.Sleep(10 * time.Millisecond)
 	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected no authoritative replay before legacy resume completes, got %+v", msgs)
+		t.Fatalf("expected no authoritative replay for unsupported client, got %+v", msgs)
 	}
 	select {
 	case raw := <-activeClient.sendCh:
-		t.Fatalf("expected no broker bootstrap before legacy resume completes, got %s", raw)
-	default:
-	}
-
-	b.handleRelayConnected(RelayConnectedState{
-		Role:            "client",
-		SessionID:       "sess-local",
-		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolLegacy,
-		ResumeComplete:  true,
-	})
-
-	time.Sleep(10 * time.Millisecond)
-	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected legacy clients to rely on relay-side bootstrap without broker replay, got %+v", msgs)
-	}
-	select {
-	case raw := <-activeClient.sendCh:
-		t.Fatalf("expected no broker bootstrap after legacy resume completes, got %s", raw)
+		t.Fatalf("expected no broker bootstrap for unsupported client, got %s", raw)
 	default:
 	}
 }
@@ -1455,7 +1431,7 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 		Role:            "client",
 		SessionID:       "sess-local",
 		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolV2,
+		ProtocolVersion: ShareProtocolV3,
 	})
 	select {
 	case <-started:
@@ -1467,7 +1443,7 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 		SessionID:       "sess-local",
 		HistoryCount:    1,
 		LastEventID:     "ev-remote-tail",
-		ProtocolVersion: ShareProtocolV2,
+		ProtocolVersion: ShareProtocolV3,
 	})
 	close(release)
 
@@ -1836,10 +1812,7 @@ func TestBrokerStop(t *testing.T) {
 
 func TestBrokerStopSharingGracefullySendsStopEventBeforeClosing(t *testing.T) {
 	sess := NewSession("wss://test.local")
-	rc, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := testRelayClient(t, "wss://test.local")
 	sess.client = rc
 
 	b := NewBroker(sess)

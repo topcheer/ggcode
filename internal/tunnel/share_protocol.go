@@ -9,16 +9,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	ShareProtocolLegacy = 1
-	ShareProtocolV2     = 2
-	ShareProtocolV3     = 3
+	ShareProtocolLegacy          = 1
+	ShareProtocolV2              = 2
+	ShareProtocolV3              = 3
+	RequiredShareProtocolVersion = ShareProtocolV3
 
 	ShareModeLegacy = "legacy"
 	ShareModeV2     = "v2"
@@ -76,15 +76,10 @@ type relayIssuedShareSessionResponse struct {
 }
 
 func loadShareRuntimeConfig() ShareRuntimeConfig {
-	cfg := ShareRuntimeConfig{}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(shareProtocolEnv))) {
-	case "2", ShareModeV2:
-		cfg.EnableV2 = true
-	case "3", ShareModeV3:
-		cfg.EnableV2 = true
-		cfg.EnableV3 = true
+	return ShareRuntimeConfig{
+		EnableV2: true,
+		EnableV3: true,
 	}
-	return cfg
 }
 
 func (cfg ShareRuntimeConfig) v2Enabled() bool {
@@ -96,13 +91,7 @@ func (cfg ShareRuntimeConfig) v3Enabled() bool {
 }
 
 func (cfg ShareRuntimeConfig) issuedProtocolVersion() int {
-	if cfg.EnableV3 {
-		return ShareProtocolV3
-	}
-	if cfg.EnableV2 {
-		return ShareProtocolV2
-	}
-	return ShareProtocolLegacy
+	return RequiredShareProtocolVersion
 }
 
 func (d ShareDescriptor) IsV2() bool {
@@ -198,22 +187,12 @@ func defaultRelayClientMetadata(kind, version string) RelayClientMetadata {
 	}
 }
 
-func newLegacyShareDescriptor(token string) ShareDescriptor {
-	return ShareDescriptor{
-		ProtocolVersion: ShareProtocolLegacy,
-		ShareMode:       ShareModeLegacy,
-		Token:           token,
-	}
-}
-
 func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRuntimeConfig) (server ShareDescriptor, client ShareDescriptor, err error) {
 	endpoint, err := shareSessionEndpoint(relayURL)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
 	}
-	if cfg.issuedProtocolVersion() >= ShareProtocolV2 {
-		endpoint = endpoint + "?proto=" + strconv.Itoa(cfg.issuedProtocolVersion())
-	}
+	endpoint = endpoint + "?proto=" + strconv.Itoa(cfg.issuedProtocolVersion())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
@@ -238,10 +217,10 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("decode issued share session: %w", err)
 	}
-	if issued.ProtocolVersion < ShareProtocolV2 {
+	if issued.ProtocolVersion < RequiredShareProtocolVersion {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: invalid protocol version %d", issued.ProtocolVersion)
 	}
-	if requested := cfg.issuedProtocolVersion(); requested >= ShareProtocolV2 && issued.ProtocolVersion != requested {
+	if requested := cfg.issuedProtocolVersion(); issued.ProtocolVersion != requested {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: relay returned protocol %d, want %d", issued.ProtocolVersion, requested)
 	}
 	if strings.TrimSpace(issued.RoomID) == "" || strings.TrimSpace(issued.ServerAuthTicket) == "" || strings.TrimSpace(issued.ClientAuthTicket) == "" {

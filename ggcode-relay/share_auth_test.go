@@ -17,11 +17,11 @@ func TestIssueShareSession(t *testing.T) {
 		ConnectTTL: time.Minute,
 		RenewTTL:   time.Hour,
 	}
-	issued, err := issueShareSession(cfg, shareProtocolV2)
+	issued, err := issueShareSession(cfg, shareProtocolV3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if issued.ProtocolVersion != shareProtocolV2 || issued.ShareMode != shareModeV2 || issued.RoomID == "" {
+	if issued.ProtocolVersion != shareProtocolV3 || issued.ShareMode != shareModeV3 || issued.RoomID == "" {
 		t.Fatalf("unexpected issued session: %+v", issued)
 	}
 	serverClaims, err := verifyShareTicket(cfg.Secret, issued.ServerAuthTicket)
@@ -53,16 +53,16 @@ func TestValidateShareHandshakeAcceptsIssuedTickets(t *testing.T) {
 		ConnectTTL: time.Minute,
 		RenewTTL:   time.Hour,
 	}
-	issued, err := issueShareSession(cfg, shareProtocolV2)
+	issued, err := issueShareSession(cfg, shareProtocolV3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=2&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&crypto_key=abc123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&crypto_key=abc123&kx_pub=server-pub", nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake == nil || status != http.StatusSwitchingProtocols || reason != "" {
 		t.Fatalf("unexpected handshake: handshake=%+v status=%d reason=%q", handshake, status, reason)
 	}
-	if handshake.roomKey != issued.RoomID || handshake.shareMode != shareModeV2 || handshake.renewToken == "" {
+	if handshake.roomKey != issued.RoomID || handshake.shareMode != shareModeV3 || handshake.renewToken == "" {
 		t.Fatalf("unexpected handshake contents: %+v", handshake)
 	}
 }
@@ -86,14 +86,27 @@ func TestValidateShareHandshakeRejectsIssuedTicketScopeMismatch(t *testing.T) {
 		ConnectTTL: time.Minute,
 		RenewTTL:   time.Hour,
 	}
-	issued, err := issueShareSession(cfg, shareProtocolV2)
+	issued, err := issueShareSession(cfg, shareProtocolV3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=2&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket, nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket, nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake != nil || status != http.StatusUnauthorized || reason != "ticket scope mismatch" {
 		t.Fatalf("unexpected mismatch result: handshake=%+v status=%d reason=%q", handshake, status, reason)
+	}
+}
+
+func TestValidateShareHandshakeRejectsLegacyProtocol(t *testing.T) {
+	cfg := shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&token=legacy-token", nil)
+	handshake, status, reason := validateShareHandshake(req, cfg)
+	if handshake != nil || status != http.StatusGone || reason != shareUpgradeRequiredMessage {
+		t.Fatalf("unexpected legacy result: handshake=%+v status=%d reason=%q", handshake, status, reason)
 	}
 }
 
@@ -176,7 +189,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	}
 
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&proto=2&room_id=" + issued.RoomID +
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
 		"&auth_ticket=" + issued.ClientAuthTicket
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

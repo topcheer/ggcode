@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -89,8 +90,9 @@ func (m Model) renderQROverlay() string {
 
 	// Footer (URI or extra info)
 	if o.footer != "" {
+		footer := wrapOverlayFooter(o.footer, max(24, m.boxInnerWidth(m.mainColumnWidth())-6))
 		footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-		body = append(body, footerStyle.Render(fmt.Sprintf(" %s", o.footer)), "")
+		body = append(body, footerStyle.Render(fmt.Sprintf(" %s", footer)), "")
 	}
 
 	// Mobile app download links
@@ -133,4 +135,41 @@ func indentLines(s string, n int) string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+func wrapOverlayFooter(s string, width int) string {
+	if width <= 0 || utf8.RuneCountInString(s) <= width {
+		return s
+	}
+
+	var lines []string
+	for _, rawLine := range strings.Split(s, "\n") {
+		line := strings.TrimSpace(rawLine)
+		for utf8.RuneCountInString(line) > width {
+			cut := footerWrapBreakpoint(line, width)
+			lines = append(lines, strings.TrimSpace(line[:cut]))
+			line = strings.TrimSpace(line[cut:])
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n ")
+}
+
+func footerWrapBreakpoint(s string, width int) int {
+	if width <= 0 || len(s) <= width {
+		return len(s)
+	}
+	runes := []rune(s)
+	if len(runes) <= width {
+		return len(s)
+	}
+	for i := width; i > max(width/2, 1); i-- {
+		switch runes[i-1] {
+		case '&', '?', '/':
+			return len(string(runes[:i]))
+		}
+	}
+	return len(string(runes[:width]))
 }

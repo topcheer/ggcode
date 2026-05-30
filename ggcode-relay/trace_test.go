@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,5 +89,25 @@ func TestTraceRelayMessageSuppressesEncryptedMessages(t *testing.T) {
 	h.tracer.flushAgedAt(time.Now().Add(100 * time.Millisecond))
 	if len(lines) != 2 {
 		t.Fatalf("expected encrypted tail log after flush, got %d: %+v", len(lines), lines)
+	}
+}
+
+func TestTraceRelayMessageSamplesHeartbeatMessages(t *testing.T) {
+	var lines []string
+	h := &hub{
+		tracer: newRelayTraceLoggerWithSink(50*time.Millisecond, func(line string) {
+			lines = append(lines, line)
+		}),
+	}
+
+	for i := 0; i < 199; i++ {
+		h.traceRelayMessage("ws_recv", "room-1234567890", "client-1", relayMessage{Type: "ping"}, "")
+	}
+
+	if len(lines) != 1 {
+		t.Fatalf("expected a single sampled heartbeat log, got %d: %+v", len(lines), lines)
+	}
+	if got := lines[0]; got == "" || !strings.Contains(got, "sampled=100") {
+		t.Fatalf("heartbeat log = %q, want sampled=100", got)
 	}
 }

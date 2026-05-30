@@ -153,3 +153,16 @@ func TestQROverlay_Render_ContainsDiscordChannel(t *testing.T) {
 		t.Fatalf("expected Discord link in QR overlay, got:\n%s", rendered)
 	}
 }
+
+func TestWrapOverlayFooterWrapsLongURL(t *testing.T) {
+	wrapped := wrapOverlayFooter(
+		"wss://gateway.ggcode.dev/ws?role=client&proto=3&room_id=room-1234567890&auth_ticket=auth-abcdefghijklmnopqrstuvwxyz",
+		80,
+	)
+	if !strings.Contains(wrapped, "room_id=room-1234567890") {
+		t.Fatalf("expected wrapped footer to preserve url content, got:\n%s", wrapped)
+	}
+	if !strings.Contains(wrapped, "\n auth_ticket=") {
+		t.Fatalf("expected wrapped footer to place auth_ticket on a new line, got:\n%s", wrapped)
+	}
+}

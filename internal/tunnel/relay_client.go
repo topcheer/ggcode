@@ -86,13 +86,16 @@ func relayReconnectDelay(attempt int) time.Duration {
 	}
 }
 
-func NewRelayClient(relayURL, token string) (*RelayClient, error) {
-	return NewRelayClientWithDescriptor(relayURL, newLegacyShareDescriptor(token), "server", RelayClientMetadata{})
+func NewRelayClient(_, _ string) (*RelayClient, error) {
+	return nil, fmt.Errorf("legacy relay clients are unsupported; use an issued share v3 descriptor")
 }
 
 func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role string, meta RelayClientMetadata) (*RelayClient, error) {
 	if err := validateRelayURLSecurity(relayURL); err != nil {
 		return nil, err
+	}
+	if !desc.IsV3() {
+		return nil, fmt.Errorf("share v3 descriptor required")
 	}
 	crypto, err := NewCrypto(desc.CryptoMaterial())
 	if err != nil {

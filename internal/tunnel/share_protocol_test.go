@@ -51,8 +51,8 @@ func TestRequestIssuedShareSession(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(relayIssuedShareSessionResponse{
-			ProtocolVersion:  ShareProtocolV2,
-			ShareMode:        ShareModeV2,
+			ProtocolVersion:  ShareProtocolV3,
+			ShareMode:        ShareModeV3,
 			RoomID:           "room-1",
 			ServerAuthTicket: "server-connect",
 			ClientAuthTicket: "client-connect",
@@ -65,7 +65,7 @@ func TestRequestIssuedShareSession(t *testing.T) {
 	defer srv.Close()
 
 	relayURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV2: true})
+	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV2: true, EnableV3: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,11 @@ func TestRequestIssuedShareSession(t *testing.T) {
 	if client.RenewToken != "" {
 		t.Fatalf("client renew token should be empty, got %q", client.RenewToken)
 	}
-	if server.CryptoKey == "" || client.CryptoKey == "" || server.CryptoKey != client.CryptoKey {
-		t.Fatalf("crypto keys not shared correctly: server=%q client=%q", server.CryptoKey, client.CryptoKey)
+	if server.CryptoKey == "" {
+		t.Fatalf("server crypto key should be set, got %q", server.CryptoKey)
+	}
+	if client.CryptoKey != "" {
+		t.Fatalf("public client descriptor should omit crypto key, got %q", client.CryptoKey)
 	}
 	if !server.AuthExpiresAt.Equal(authExp) || !client.RenewExpiresAt.Equal(renewExp) {
 		t.Fatalf("unexpected expiry parsing: %#v %#v", server, client)

@@ -541,14 +541,8 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	}
 	currentSessionID, currentGeneration := b.sessionState()
 	if info.Role == "client" {
-		if info.ProtocolVersion == ShareProtocolLegacy {
-			debug.Log("tunnel", "broker: legacy client connected; relying on relay room history only (session=%q count=%d)", currentSessionID, info.HistoryCount)
-			if info.ResumeComplete && b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
-				b.bumpNextEvent(info.LastEventID)
-				// Still flush any buffered live text so the joining client's resume replay
-				// can observe the latest assistant chunks without resetting the room.
-				b.flushAllText()
-			}
+		if info.ProtocolVersion != 0 && info.ProtocolVersion < ShareProtocolV3 {
+			debug.Log("tunnel", "broker: rejecting unsupported relay client protocol=%d session=%q", info.ProtocolVersion, currentSessionID)
 			return
 		}
 		// A newly joined mobile client should NOT force-reset existing clients when
