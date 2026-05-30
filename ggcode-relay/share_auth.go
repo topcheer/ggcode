@@ -72,6 +72,22 @@ type issuedShareSessionResponse struct {
 	Notice           string `json:"notice,omitempty"`
 }
 
+type refreshShareSessionRequest struct {
+	RoomID           string `json:"room_id"`
+	ServerRenewToken string `json:"server_renew_token"`
+}
+
+type refreshedShareSessionResponse struct {
+	ProtocolVersion  int    `json:"protocol_version"`
+	ShareMode        string `json:"share_mode"`
+	RoomID           string `json:"room_id"`
+	ClientAuthTicket string `json:"client_auth_ticket"`
+	ServerRenewToken string `json:"server_renew_token,omitempty"`
+	AuthExpiresAt    string `json:"auth_expires_at,omitempty"`
+	RenewExpiresAt   string `json:"renew_expires_at,omitempty"`
+	Notice           string `json:"notice,omitempty"`
+}
+
 type shareHandshake struct {
 	role            string
 	roomKey         string
@@ -355,6 +371,48 @@ func issueShareSession(cfg shareAuthConfig, requestedProtocol int) (issuedShareS
 		AuthExpiresAt:    authExp.UTC().Format(time.RFC3339),
 		RenewExpiresAt:   renewExp.UTC().Format(time.RFC3339),
 		Notice:           "",
+	}, nil
+}
+
+func refreshShareSession(cfg shareAuthConfig, req refreshShareSessionRequest, protocolVersion int, shareMode string) (refreshedShareSessionResponse, error) {
+	if strings.TrimSpace(cfg.Secret) == "" {
+		return refreshedShareSessionResponse{}, errors.New("share v3 unavailable")
+	}
+	roomID := strings.TrimSpace(req.RoomID)
+	renewToken := strings.TrimSpace(req.ServerRenewToken)
+	if roomID == "" || renewToken == "" {
+		return refreshedShareSessionResponse{}, errors.New("missing room refresh token")
+	}
+	claims, err := verifyShareTicket(cfg.Secret, renewToken)
+	if err != nil {
+		return refreshedShareSessionResponse{}, err
+	}
+	if claims.RoomID != roomID || claims.Role != "server" || claims.Kind != shareTicketKindRenew {
+		return refreshedShareSessionResponse{}, errors.New("ticket scope mismatch")
+	}
+	clientConnect, authExp, err := mintShareConnectTicket(cfg.Secret, roomID, "client", cfg.ConnectTTL)
+	if err != nil {
+		return refreshedShareSessionResponse{}, err
+	}
+	serverRenew, renewExp, err := mintShareRenewToken(cfg.Secret, roomID, "server", cfg.RenewTTL)
+	if err != nil {
+		return refreshedShareSessionResponse{}, err
+	}
+	if protocolVersion == 0 {
+		protocolVersion = requiredShareProtocolVersion
+	}
+	shareMode = strings.TrimSpace(shareMode)
+	if shareMode == "" {
+		shareMode = shareModeV3
+	}
+	return refreshedShareSessionResponse{
+		ProtocolVersion:  protocolVersion,
+		ShareMode:        shareMode,
+		RoomID:           roomID,
+		ClientAuthTicket: clientConnect,
+		ServerRenewToken: serverRenew,
+		AuthExpiresAt:    authExp.UTC().Format(time.RFC3339),
+		RenewExpiresAt:   renewExp.UTC().Format(time.RFC3339),
 	}, nil
 }
 

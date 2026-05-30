@@ -125,7 +125,6 @@ func buildProjectionReplay(state *projectionFile) []GatewayMessage {
 	if len(events) > tailLimit {
 		events = events[len(events)-tailLimit:]
 	}
-	events = filterBootstrapEvents(events, state)
 
 	eventIDs := make(map[string]struct{}, len(events))
 	for _, msg := range events {
@@ -144,37 +143,7 @@ func buildProjectionReplay(state *projectionFile) []GatewayMessage {
 		out = append(out, msg)
 	}
 	out = append(out, events...)
-	return out
-}
-
-func filterBootstrapEvents(events []GatewayMessage, state *projectionFile) []GatewayMessage {
-	if len(events) == 0 || state == nil {
-		return events
-	}
-	filterSessionInfo := state.SessionInfo != nil
-	filterStatus := state.Status != nil
-	filterActivity := state.Activity != nil
-	if !filterSessionInfo && !filterStatus && !filterActivity {
-		return events
-	}
-	out := make([]GatewayMessage, 0, len(events))
-	for _, msg := range events {
-		switch msg.Type {
-		case EventSessionInfo:
-			if filterSessionInfo {
-				continue
-			}
-		case EventStatus:
-			if filterStatus {
-				continue
-			}
-		case EventActivity:
-			if filterActivity {
-				continue
-			}
-		}
-		out = append(out, msg)
-	}
+	SortReplayEvents(out)
 	return out
 }
 

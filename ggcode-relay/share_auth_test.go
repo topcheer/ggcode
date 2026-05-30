@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -182,6 +183,106 @@ func TestHandleShareSessionV3(t *testing.T) {
 	}
 	if issued.ProtocolVersion != shareProtocolV3 || issued.ShareMode != shareModeV3 {
 		t.Fatalf("unexpected issued v3 response: %+v", issued)
+	}
+}
+
+func TestRefreshShareSession(t *testing.T) {
+	cfg := shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}
+	issued, err := issueShareSession(cfg, shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := refreshShareSession(cfg, refreshShareSessionRequest{
+		RoomID:           issued.RoomID,
+		ServerRenewToken: issued.ServerRenewToken,
+	}, shareProtocolV3, shareModeV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.RoomID != issued.RoomID || refreshed.ClientAuthTicket == "" || refreshed.ServerRenewToken == "" {
+		t.Fatalf("unexpected refreshed response: %+v", refreshed)
+	}
+	clientClaims, err := verifyShareTicket(cfg.Secret, refreshed.ClientAuthTicket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientClaims.Role != "client" || clientClaims.Kind != shareTicketKindConnect || clientClaims.RoomID != issued.RoomID {
+		t.Fatalf("unexpected refreshed client claims: %+v", clientClaims)
+	}
+	renewClaims, err := verifyShareTicket(cfg.Secret, refreshed.ServerRenewToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewClaims.Role != "server" || renewClaims.Kind != shareTicketKindRenew || renewClaims.RoomID != issued.RoomID {
+		t.Fatalf("unexpected refreshed renew claims: %+v", renewClaims)
+	}
+}
+
+func TestHandleRefreshShareSession(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	h := newHub(nil)
+	issued, err := issueShareSession(loadShareAuthConfig(), shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := h.reserveIssuedRoom(issued.RoomID, defaultPendingRoomTTL)
+	room.mu.Lock()
+	room.server = &peer{role: "server", room: room}
+	room.protocolVersion = shareProtocolV3
+	room.mu.Unlock()
+
+	body, err := json.Marshal(refreshShareSessionRequest{
+		RoomID:           issued.RoomID,
+		ServerRenewToken: issued.ServerRenewToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/share/session/refresh", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.handleRefreshShareSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var refreshed refreshedShareSessionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.RoomID != issued.RoomID || refreshed.ClientAuthTicket == "" || refreshed.ServerRenewToken == "" {
+		t.Fatalf("unexpected refreshed response: %+v", refreshed)
+	}
+	if refreshed.ProtocolVersion != shareProtocolV3 || refreshed.ShareMode != shareModeV3 {
+		t.Fatalf("unexpected refreshed metadata: %+v", refreshed)
+	}
+}
+
+func TestHandleRefreshShareSessionRejectsMissingRoom(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	cfg := loadShareAuthConfig()
+	issued, err := issueShareSession(cfg, shareProtocolV3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(refreshShareSessionRequest{
+		RoomID:           issued.RoomID,
+		ServerRenewToken: issued.ServerRenewToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/share/session/refresh", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	newHub(nil).handleRefreshShareSession(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusGone)
 	}
 }
 

@@ -39,6 +39,16 @@ func TestShareSessionEndpointAllowsPrivateInsecureRelayURL(t *testing.T) {
 	}
 }
 
+func TestShareSessionRefreshEndpointConvertsWebsocketURL(t *testing.T) {
+	got, err := shareSessionRefreshEndpoint("wss://relay.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://relay.example.com/share/session/refresh"; got != want {
+		t.Fatalf("shareSessionRefreshEndpoint() = %q, want %q", got, want)
+	}
+}
+
 func TestRequestIssuedShareSession(t *testing.T) {
 	authExp := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 	renewExp := authExp.Add(24 * time.Hour)
@@ -132,5 +142,71 @@ func TestRequestIssuedShareSessionV3OmitsPublicCryptoKey(t *testing.T) {
 	}
 	if strings.Contains(client.PublicConnectURL(relayURL), "crypto_key=") {
 		t.Fatalf("public v3 URL should not include crypto_key: %s", client.PublicConnectURL(relayURL))
+	}
+}
+
+func TestRefreshIssuedShareSession(t *testing.T) {
+	authExp := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	renewExp := authExp.Add(24 * time.Hour)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != shareSessionRefreshPath {
+			t.Fatalf("path = %s, want %s", r.URL.Path, shareSessionRefreshPath)
+		}
+		var req relayRefreshShareSessionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if req.RoomID != "room-1" || req.ServerRenewToken != "server-renew" {
+			t.Fatalf("unexpected refresh request: %+v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(relayRefreshedShareSessionResponse{
+			ProtocolVersion:  ShareProtocolV3,
+			ShareMode:        ShareModeV3,
+			RoomID:           "room-1",
+			ClientAuthTicket: "client-connect-2",
+			ServerRenewToken: "server-renew-2",
+			AuthExpiresAt:    authExp.Format(time.RFC3339),
+			RenewExpiresAt:   renewExp.Format(time.RFC3339),
+			Notice:           "refreshed",
+		})
+	}))
+	defer srv.Close()
+
+	relayURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	server := testShareDescriptor(t)
+	server.RoomID = "room-1"
+	server.RenewToken = "server-renew"
+	server.AuthTicket = "server-connect"
+
+	updatedServer, client, err := refreshIssuedShareSession(context.Background(), relayURL, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("refresh requests = %d, want 1", requests)
+	}
+	if updatedServer.RoomID != server.RoomID || updatedServer.CryptoKey != server.CryptoKey || updatedServer.ServerPrivateKey != server.ServerPrivateKey {
+		t.Fatalf("refresh should preserve server crypto material: before=%+v after=%+v", server, updatedServer)
+	}
+	if updatedServer.RenewToken != "server-renew-2" {
+		t.Fatalf("updated server renew token = %q", updatedServer.RenewToken)
+	}
+	if client.AuthTicket != "client-connect-2" {
+		t.Fatalf("refreshed client auth ticket = %q", client.AuthTicket)
+	}
+	if client.CryptoKey != "" || client.ServerPrivateKey != "" {
+		t.Fatalf("public refreshed descriptor leaked private crypto material: %+v", client)
+	}
+	if client.ServerPublicKey != server.ServerPublicKey {
+		t.Fatalf("expected public key to be preserved, got %+v", client)
+	}
+	if strings.Contains(client.PublicConnectURL(relayURL), "server-renew-2") {
+		t.Fatalf("public connect url leaked server renew token: %s", client.PublicConnectURL(relayURL))
 	}
 }
