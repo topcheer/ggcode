@@ -420,50 +420,71 @@ class _WorkspaceCacheSqlStore {
       FROM cache_sessions
       ORDER BY last_updated_at DESC
     ''');
-    return rows
-        .map(
-          (row) => CachedSessionRecord(
-            workspaceKey: row['workspace_key'] as String? ?? '',
-            sessionId: row['session_id'] as String? ?? '',
-            title: row['title'] as String? ?? '',
-            model: row['model'] as String? ?? '',
-            provider: row['provider'] as String? ?? '',
-            mode: row['mode'] as String? ?? '',
-            version: row['version'] as String? ?? '',
-            lastEventId: row['last_event_id'] as String? ?? '',
-            lastUpdatedAt: DateTime.tryParse(
-                  row['last_updated_at'] as String? ?? '',
-                ) ??
+    final deduped = <String, CachedSessionRecord>{};
+    for (final row in rows) {
+      final record = CachedSessionRecord(
+        workspaceKey: row['workspace_key'] as String? ?? '',
+        sessionId: row['session_id'] as String? ?? '',
+        title: row['title'] as String? ?? '',
+        model: row['model'] as String? ?? '',
+        provider: row['provider'] as String? ?? '',
+        mode: row['mode'] as String? ?? '',
+        version: row['version'] as String? ?? '',
+        lastEventId: row['last_event_id'] as String? ?? '',
+        lastUpdatedAt:
+            DateTime.tryParse(row['last_updated_at'] as String? ?? '') ??
                 DateTime.fromMillisecondsSinceEpoch(0),
-          ),
-        )
-        .toList();
+      );
+      if (record.sessionId.isEmpty || deduped.containsKey(record.sessionId)) {
+        continue;
+      }
+      deduped[record.sessionId] = record;
+    }
+    return deduped.values.toList();
   }
 
-  CachedSessionSnapshot? loadSnapshot(String workspaceKey, String sessionId) {
+  CachedSessionSnapshot? loadSnapshot(String sessionId) {
     final rows = _db.select(
       '''
-      SELECT payload_json
+      SELECT payload_json, updated_at
       FROM cache_snapshots
-      WHERE workspace_key = ? AND session_id = ?
+      WHERE session_id = ?
+      ORDER BY updated_at DESC
       ''',
-      [workspaceKey, sessionId],
+      [sessionId],
     );
     if (rows.isEmpty) {
       return null;
     }
-    final payload = rows.first['payload_json'] as String? ?? '';
-    if (payload.isEmpty) {
-      return null;
+    CachedSessionSnapshot? bestSnapshot;
+    DateTime bestUpdatedAt = DateTime.fromMillisecondsSinceEpoch(0);
+    for (final row in rows) {
+      final payload = row['payload_json'] as String? ?? '';
+      if (payload.isEmpty) {
+        continue;
+      }
+      final json = _decodeJsonObjectOrEmpty(
+        payload,
+        'decode cached snapshot $sessionId',
+      );
+      if (json.isEmpty) {
+        continue;
+      }
+      final snapshot = CachedSessionSnapshot.fromJson(json);
+      final updatedAt = DateTime.tryParse(row['updated_at'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      if (bestSnapshot == null ||
+          _isBetterStoredSnapshot(
+            candidate: snapshot,
+            candidateUpdatedAt: updatedAt,
+            current: bestSnapshot,
+            currentUpdatedAt: bestUpdatedAt,
+          )) {
+        bestSnapshot = snapshot;
+        bestUpdatedAt = updatedAt;
+      }
     }
-    final json = _decodeJsonObjectOrEmpty(
-      payload,
-      'decode cached snapshot $workspaceKey/$sessionId',
-    );
-    if (json.isEmpty) {
-      return null;
-    }
-    return CachedSessionSnapshot.fromJson(json);
+    return bestSnapshot;
   }
 
   void upsertWorkspace(WorkspaceRecord record) {
@@ -488,6 +509,10 @@ class _WorkspaceCacheSqlStore {
   }
 
   void upsertSession(CachedSessionRecord record) {
+    _db.execute(
+      'DELETE FROM cache_sessions WHERE session_id = ?',
+      [record.sessionId],
+    );
     _db.execute(
       '''
       INSERT INTO cache_sessions(
@@ -523,6 +548,10 @@ class _WorkspaceCacheSqlStore {
     String sessionId,
     CachedSessionSnapshot snapshot,
   ) {
+    _db.execute(
+      'DELETE FROM cache_snapshots WHERE session_id = ?',
+      [sessionId],
+    );
     _db.execute(
       '''
       INSERT INTO cache_snapshots(workspace_key, session_id, payload_json, updated_at)
@@ -630,6 +659,131 @@ class _WorkspaceCacheSqlStore {
   void dispose() {
     _db.dispose();
   }
+
+  bool _isBetterStoredSnapshot({
+    required CachedSessionSnapshot candidate,
+    required DateTime candidateUpdatedAt,
+    required CachedSessionSnapshot current,
+    required DateTime currentUpdatedAt,
+  }) {
+    final candidateScore = _storedSnapshotScore(candidate);
+    final currentScore = _storedSnapshotScore(current);
+    if (candidateScore != currentScore) {
+      return candidateScore > currentScore;
+    }
+
+    final candidateCursor = _eventOrdinal(candidate.lastEventId);
+    final currentCursor = _eventOrdinal(current.lastEventId);
+    if (candidateCursor != currentCursor) {
+      return candidateCursor > currentCursor;
+    }
+
+    return candidateUpdatedAt.isAfter(currentUpdatedAt);
+  }
+
+  int _storedSnapshotScore(CachedSessionSnapshot snapshot) {
+    return (snapshot.messages.length * 100) +
+        (snapshot.subagents.length * 10) +
+        (snapshot.sessionInfo == null ? 0 : 1);
+  }
+
+  int _eventOrdinal(String eventId) {
+    final match = RegExp(r'(\d+)$').firstMatch(eventId);
+    if (match == null) {
+      return -1;
+    }
+    return int.tryParse(match.group(1) ?? '') ?? -1;
+  }
+}
+
+CachedSessionSnapshot _coalesceCachedSnapshotForPersistence({
+  required CachedSessionSnapshot? existing,
+  required CachedSessionSnapshot candidate,
+}) {
+  if (existing == null) {
+    return candidate;
+  }
+  if (!_shouldPreserveExistingCachedSnapshot(
+      existing: existing, candidate: candidate)) {
+    return candidate;
+  }
+  return _mergeCachedSnapshots(existing: existing, candidate: candidate);
+}
+
+bool _shouldPreserveExistingCachedSnapshot({
+  required CachedSessionSnapshot existing,
+  required CachedSessionSnapshot candidate,
+}) {
+  if (existing.sessionInfo != null && candidate.sessionInfo == null) {
+    return true;
+  }
+  return _cachedSnapshotScore(existing) > _cachedSnapshotScore(candidate);
+}
+
+CachedSessionSnapshot _mergeCachedSnapshots({
+  required CachedSessionSnapshot existing,
+  required CachedSessionSnapshot candidate,
+}) {
+  final mergedMessages = <ChatMessage>[];
+  final candidateById = <String, ChatMessage>{};
+  final appendedAnonymous = <ChatMessage>[];
+  for (final message in candidate.messages) {
+    if (message.id.isEmpty) {
+      appendedAnonymous.add(message);
+      continue;
+    }
+    candidateById[message.id] = message;
+  }
+  final seenIds = <String>{};
+  for (final message in existing.messages) {
+    if (message.id.isNotEmpty) {
+      final replacement = candidateById.remove(message.id);
+      mergedMessages.add(replacement ?? message);
+      seenIds.add(message.id);
+      continue;
+    }
+    mergedMessages.add(message);
+  }
+  for (final message in candidate.messages) {
+    if (message.id.isEmpty) {
+      continue;
+    }
+    if (seenIds.add(message.id)) {
+      mergedMessages.add(message);
+    }
+  }
+  mergedMessages.addAll(appendedAnonymous);
+
+  final mergedSubagents = Map<String, SubagentInfo>.from(existing.subagents)
+    ..addAll(candidate.subagents);
+  final existingCursor = _cachedEventOrdinal(existing.lastEventId);
+  final candidateCursor = _cachedEventOrdinal(candidate.lastEventId);
+  final mergedStatusMessage = candidate.agentStatusMessage.isNotEmpty
+      ? candidate.agentStatusMessage
+      : existing.agentStatusMessage;
+  return CachedSessionSnapshot(
+    messages: mergedMessages,
+    subagents: mergedSubagents,
+    sessionInfo: candidate.sessionInfo ?? existing.sessionInfo,
+    agentStatus: candidate.agentStatus,
+    agentStatusMessage: mergedStatusMessage,
+    lastEventId:
+        candidateCursor >= existingCursor ? candidate.lastEventId : existing.lastEventId,
+  );
+}
+
+int _cachedSnapshotScore(CachedSessionSnapshot snapshot) {
+  return (snapshot.messages.length * 100) +
+      (snapshot.subagents.length * 10) +
+      (snapshot.sessionInfo == null ? 0 : 1);
+}
+
+int _cachedEventOrdinal(String eventId) {
+  final match = RegExp(r'(\d+)$').firstMatch(eventId);
+  if (match == null) {
+    return -1;
+  }
+  return int.tryParse(match.group(1) ?? '') ?? -1;
 }
 
 final workspaceCacheProvider =
@@ -701,9 +855,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         }
       }
       for (final record in _store!.loadSessions()) {
-        if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
-          sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
-              record;
+        if (record.sessionId.isNotEmpty) {
+          sessions[record.sessionId] = record;
         }
       }
     } catch (error, stackTrace) {
@@ -754,6 +907,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   String? urlForWorkspace(String workspaceKey) =>
       state.workspaces[workspaceKey]?.url;
 
+  CachedSessionRecord? sessionForId(String sessionId) =>
+      state.sessions[sessionId];
+
   Future<void> activateWorkspaceUrl(String url) async {
     await initialize();
     if (!ref.mounted) return;
@@ -761,10 +917,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final key = _workspaceKeyForUrl(normalized);
     final now = DateTime.now();
     final current = state.workspaces[key];
-    final sessions = sessionsForWorkspace(key);
     final selectedSessionId = current?.lastSessionId.isNotEmpty == true
         ? current!.lastSessionId
-        : (sessions.isNotEmpty ? sessions.first.sessionId : null);
+        : null;
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces)
       ..[key] = (current ??
               WorkspaceRecord(
@@ -800,6 +955,46 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     _scheduleFlush();
   }
 
+  Future<void> clearReconnectTarget({
+    String? sessionId,
+    String? workspaceKey,
+  }) async {
+    await initialize();
+    if (!ref.mounted) return;
+    final targetSessionId = sessionId ?? state.selectedSessionId;
+    final targetWorkspaceKey =
+        workspaceKey ?? state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    final sessions = Map<String, CachedSessionRecord>.from(state.sessions);
+    if (targetSessionId != null && targetSessionId.isNotEmpty) {
+      final existing = sessions[targetSessionId];
+      if (existing != null &&
+          (targetWorkspaceKey == null ||
+              targetWorkspaceKey.isEmpty ||
+              existing.workspaceKey == targetWorkspaceKey)) {
+        sessions[targetSessionId] = CachedSessionRecord(
+          workspaceKey: '',
+          sessionId: existing.sessionId,
+          title: existing.title,
+          model: existing.model,
+          provider: existing.provider,
+          mode: existing.mode,
+          version: existing.version,
+          lastEventId: existing.lastEventId,
+          lastUpdatedAt: DateTime.now(),
+        );
+        _dirtySessions.add(targetSessionId);
+      }
+    }
+    state = state.copyWith(
+      sessions: sessions,
+      selectedWorkspaceKey: null,
+      liveWorkspaceKey: null,
+      liveSessionId: null,
+    );
+    _selectionDirty = true;
+    _scheduleFlush();
+  }
+
   void markDisconnected() {
     state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
   }
@@ -811,30 +1006,49 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return false;
 
-    final targetKey = _sessionCacheKey(workspaceKey, sessionId);
-    await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    await _ensureSnapshotLoaded(sessionId);
     if (!ref.mounted) return false;
-    final targetRecord = state.sessions[targetKey];
-    final hasTargetSnapshot = state.snapshots.containsKey(targetKey);
+    final targetRecord = state.sessions[sessionId];
+    final hasTargetSnapshot = state.snapshots.containsKey(sessionId);
     if (targetRecord == null) {
       return false;
     }
-    if (state.selectedWorkspaceKey == workspaceKey &&
-        (state.selectedSessionId == null || state.selectedSessionId!.isEmpty)) {
-      state = state.copyWith(selectedSessionId: sessionId);
-      await _persistIndex();
-    }
-    return hasTargetSnapshot;
-  }
-
-  Future<void> selectSession(String workspaceKey, String sessionId) async {
-    await initialize();
-    if (!ref.mounted) return;
+    final updatedRecord = targetRecord.workspaceKey == workspaceKey
+        ? targetRecord
+        : targetRecord.copyWith(lastUpdatedAt: DateTime.now());
     state = state.copyWith(
+      sessions: Map<String, CachedSessionRecord>.from(state.sessions)
+        ..[sessionId] = CachedSessionRecord(
+          workspaceKey: workspaceKey,
+          sessionId: updatedRecord.sessionId,
+          title: updatedRecord.title,
+          model: updatedRecord.model,
+          provider: updatedRecord.provider,
+          mode: updatedRecord.mode,
+          version: updatedRecord.version,
+          lastEventId: updatedRecord.lastEventId,
+          lastUpdatedAt: updatedRecord.lastUpdatedAt,
+        ),
       selectedWorkspaceKey: workspaceKey,
       selectedSessionId: sessionId,
     );
-    await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    _dirtySessions.add(sessionId);
+    _selectionDirty = true;
+    _scheduleFlush();
+    return hasTargetSnapshot;
+  }
+
+  Future<void> selectSession(String sessionId) async {
+    await initialize();
+    if (!ref.mounted) return;
+    final record = state.sessions[sessionId];
+    state = state.copyWith(
+      selectedWorkspaceKey: record?.workspaceKey.isNotEmpty == true
+          ? record!.workspaceKey
+          : state.selectedWorkspaceKey,
+      selectedSessionId: sessionId,
+    );
+    await _ensureSnapshotLoaded(sessionId);
     if (!ref.mounted) return;
     _selectionDirty = true;
     _scheduleFlush();
@@ -854,13 +1068,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final previousLiveSessionId = state.liveSessionId;
     final lastKnownLiveSessionId =
         state.workspaces[workspaceKey]?.lastSessionId;
-    final selectionFollowedLive = state.selectedWorkspaceKey == workspaceKey &&
-        (state.selectedSessionId == null ||
-            state.selectedSessionId!.isEmpty ||
-            state.selectedSessionId == previousLiveSessionId ||
-            (previousLiveSessionId == null &&
-                state.selectedSessionId == lastKnownLiveSessionId));
-    final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
+    final selectionFollowedLive = state.selectedSessionId == null ||
+        state.selectedSessionId!.isEmpty ||
+        state.selectedSessionId == previousLiveSessionId ||
+        (previousLiveSessionId == null &&
+            state.selectedSessionId == lastKnownLiveSessionId);
+    final sessionKey = sessionId;
     final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
       ..[sessionKey] = (state.sessions[sessionKey] ??
               CachedSessionRecord(
@@ -909,7 +1122,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     }
     _scheduleFlush();
     if (selectionFollowedLive) {
-      await _ensureSnapshotLoaded(workspaceKey, sessionId);
+      await _ensureSnapshotLoaded(sessionId);
     }
   }
 
@@ -921,11 +1134,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     await registerLiveSession(
       sessionId,
       sessionInfo,
-      lastEventId: state
-          .sessions[_sessionCacheKey(
-              state.liveWorkspaceKey ?? state.selectedWorkspaceKey ?? '',
-              sessionId)]
-          ?.lastEventId,
+      lastEventId: state.sessions[sessionId]?.lastEventId,
     );
     if (previousSessionId.isEmpty || previousSessionId == sessionId) return;
   }
@@ -934,18 +1143,15 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (sessionId.isEmpty) return;
     await initialize();
     if (!ref.mounted) return;
-    final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
-    if (workspaceKey == null || workspaceKey.isEmpty) return;
-    final key = _sessionCacheKey(workspaceKey, sessionId);
-    final record = state.sessions[key];
+    final record = state.sessions[sessionId];
     if (record == null) return;
     final updated = Map<String, CachedSessionRecord>.from(state.sessions)
-      ..[key] = record.copyWith(
+      ..[sessionId] = record.copyWith(
         lastEventId: lastEventId,
         lastUpdatedAt: DateTime.now(),
       );
     state = state.copyWith(sessions: updated);
-    _dirtySessions.add(key);
+    _dirtySessions.add(sessionId);
     _scheduleFlush();
   }
 
@@ -956,6 +1162,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String agentStatus,
     required String agentStatusMessage,
     required String lastEventId,
+    bool authoritative = true,
   }) async {
     await initialize();
     if (!ref.mounted) return;
@@ -967,7 +1174,11 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         sessionId.isEmpty) {
       return;
     }
-    final snapshot = CachedSessionSnapshot(
+    if (!authoritative) {
+      return;
+    }
+    final snapshotKey = sessionId;
+    final candidateSnapshot = CachedSessionSnapshot(
       messages: List<ChatMessage>.from(messages),
       subagents: Map<String, SubagentInfo>.from(subagents),
       sessionInfo: sessionInfo,
@@ -975,7 +1186,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       agentStatusMessage: agentStatusMessage,
       lastEventId: lastEventId,
     );
-    final snapshotKey = _sessionCacheKey(workspaceKey, sessionId);
+    final existingSnapshot =
+        state.snapshots[snapshotKey] ?? _store?.loadSnapshot(sessionId);
+    final snapshot = _coalesceCachedSnapshotForPersistence(
+      existing: existingSnapshot,
+      candidate: candidateSnapshot,
+    );
     final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots)
       ..[snapshotKey] = snapshot;
     final now = DateTime.now();
@@ -1039,6 +1255,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     return items;
   }
 
+  List<CachedSessionRecord> sortedSessions() {
+    final items = state.sessions.values.toList()
+      ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    return items;
+  }
+
   List<CachedSessionRecord> sessionsForWorkspace(String workspaceKey) {
     final items = state.sessions.values
         .where((record) => record.workspaceKey == workspaceKey)
@@ -1047,28 +1269,26 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     return items;
   }
 
-  CachedSessionSnapshot? snapshotFor(String workspaceKey, String sessionId) {
-    final key = _sessionCacheKey(workspaceKey, sessionId);
-    final cached = state.snapshots[key];
+  CachedSessionSnapshot? snapshotFor(String sessionId) {
+    final cached = state.snapshots[sessionId];
     if (cached != null) {
       return cached;
     }
-    final snapshot = _store?.loadSnapshot(workspaceKey, sessionId);
+    final snapshot = _store?.loadSnapshot(sessionId);
     if (snapshot == null) {
       return null;
     }
     state = state.copyWith(
       snapshots: Map<String, CachedSessionSnapshot>.from(state.snapshots)
-        ..[key] = snapshot,
+        ..[sessionId] = snapshot,
     );
     return snapshot;
   }
 
-  Future<void> _ensureSnapshotLoaded(
-      String workspaceKey, String sessionId) async {
+  Future<void> _ensureSnapshotLoaded(String sessionId) async {
     await initialize();
     if (!ref.mounted) return;
-    snapshotFor(workspaceKey, sessionId);
+    snapshotFor(sessionId);
   }
 
   void _scheduleFlush() {
@@ -1109,12 +1329,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     for (final key in pendingSnapshotKeys) {
       final snapshot = state.snapshots[key];
       if (snapshot == null) continue;
-      final split = key.split('::');
-      if (split.length != 2) continue;
+      final session = state.sessions[key];
+      if (session == null || session.workspaceKey.isEmpty) continue;
       pendingSnapshotWrites.add(
         _SnapshotWrite(
-          workspaceKey: split[0],
-          sessionId: split[1],
+          workspaceKey: session.workspaceKey,
+          sessionId: key,
           snapshot: snapshot,
         ),
       );
@@ -1169,17 +1389,13 @@ final displayedMessagesProvider = Provider<List<ChatMessage>>((ref) {
   if (_isViewingLive(cache)) {
     return ref.watch(chatProvider);
   }
-  final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return const [];
   }
   return ref
           .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(workspaceKey, sessionId)
+          .snapshotFor(sessionId)
           ?.messages ??
       const [];
 });
@@ -1189,17 +1405,13 @@ final displayedSubagentProvider = Provider<Map<String, SubagentInfo>>((ref) {
   if (_isViewingLive(cache)) {
     return ref.watch(subagentProvider);
   }
-  final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return const {};
   }
   return ref
           .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(workspaceKey, sessionId)
+          .snapshotFor(sessionId)
           ?.subagents ??
       const {};
 });
@@ -1209,17 +1421,13 @@ final displayedSessionInfoProvider = Provider<proto.SessionInfoData?>((ref) {
   if (_isViewingLive(cache)) {
     return ref.watch(sessionInfoProvider);
   }
-  final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return null;
   }
   return ref
       .watch(workspaceCacheProvider.notifier)
-      .snapshotFor(workspaceKey, sessionId)
+      .snapshotFor(sessionId)
       ?.sessionInfo;
 });
 
@@ -1228,17 +1436,13 @@ final displayedAgentStatusProvider = Provider<String>((ref) {
   if (_isViewingLive(cache)) {
     return _normalizedCachedAgentStatus(ref.watch(agentStatusProvider));
   }
-  final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return 'idle';
   }
   return _normalizedCachedAgentStatus(ref
           .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(workspaceKey, sessionId)
+          .snapshotFor(sessionId)
           ?.agentStatus ??
       'idle');
 });
@@ -1248,29 +1452,21 @@ final displayedAgentStatusMessageProvider = Provider<String>((ref) {
   if (_isViewingLive(cache)) {
     return ref.watch(agentStatusMessageProvider);
   }
-  final workspaceKey = cache.selectedWorkspaceKey;
   final sessionId = cache.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return '';
   }
   return ref
           .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(workspaceKey, sessionId)
+          .snapshotFor(sessionId)
           ?.agentStatusMessage ??
       '';
 });
 
 final isHistoricalViewProvider = Provider<bool>((ref) {
   final cache = ref.watch(workspaceCacheProvider);
-  final selectedWorkspaceKey = cache.selectedWorkspaceKey;
   final selectedSessionId = cache.selectedSessionId;
-  if (selectedWorkspaceKey == null ||
-      selectedWorkspaceKey.isEmpty ||
-      selectedSessionId == null ||
-      selectedSessionId.isEmpty) {
+  if (selectedSessionId == null || selectedSessionId.isEmpty) {
     return false;
   }
   return !_isViewingLive(cache);
@@ -1283,16 +1479,11 @@ final canSendMessagesProvider = Provider<bool>((ref) {
 });
 
 bool _isViewingLive(WorkspaceCacheState state) {
-  final workspaceKey = state.selectedWorkspaceKey;
   final sessionId = state.selectedSessionId;
-  if (workspaceKey == null ||
-      workspaceKey.isEmpty ||
-      sessionId == null ||
-      sessionId.isEmpty) {
+  if (sessionId == null || sessionId.isEmpty) {
     return true;
   }
-  return workspaceKey == state.liveWorkspaceKey &&
-      sessionId == state.liveSessionId;
+  return sessionId == state.liveSessionId;
 }
 
 String _normalizedCachedAgentStatus(String status) {

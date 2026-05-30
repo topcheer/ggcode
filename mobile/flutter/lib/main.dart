@@ -210,6 +210,8 @@ class _AppShellState extends ConsumerState<AppShell>
             agentStatusMessage: ref.read(agentStatusMessageProvider),
             lastEventId:
                 ref.read(connectionProvider.notifier).lastAppliedEventId,
+            authoritative:
+                ref.read(connectionProvider.notifier).canPersistLiveProjection,
           );
     }
 
@@ -233,9 +235,11 @@ class _AppShellState extends ConsumerState<AppShell>
         workspaceCache.initialized &&
         !_bootstrapSelectionEvaluated) {
       _bootstrapSelectionEvaluated = true;
+      final selectedSessionId = workspaceCache.selectedSessionId;
       final selectedWorkspaceKey = workspaceCache.selectedWorkspaceKey;
-      if (selectedWorkspaceKey != null &&
-          selectedWorkspaceKey.isNotEmpty &&
+      if (((selectedSessionId != null && selectedSessionId.isNotEmpty) ||
+              (selectedWorkspaceKey != null &&
+                  selectedWorkspaceKey.isNotEmpty)) &&
           !_bootstrapReconnectIssued) {
         _bootstrapReconnectIssued = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -252,15 +256,12 @@ class _AppShellState extends ConsumerState<AppShell>
 
     // Show ConnectScreen only before first successful connection.
     // Once connected, always show ChatScreen (connection status shown in AppBar).
-    final hasSelectedWorkspace = workspaceCache.selectedWorkspaceKey != null &&
-        workspaceCache.selectedWorkspaceKey!.isNotEmpty;
     final hasSelectedSession = workspaceCache.selectedSessionId != null &&
         workspaceCache.selectedSessionId!.isNotEmpty;
     if (!_hasConnected &&
         !_demoMode &&
-        (!hasSelectedWorkspace ||
-            (!hasSelectedSession &&
-                connState.status != ConnectionStatus.connected))) {
+        !hasSelectedSession &&
+        connState.status != ConnectionStatus.connected) {
       return const ConnectScreen();
     }
 

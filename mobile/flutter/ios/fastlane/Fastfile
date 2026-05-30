@@ -153,7 +153,7 @@ platform :ios do
         skip_waiting_for_build_processing: true,
         skip_submission: true,
         distribute_only: false,
-        changelog: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync",
+        changelog: "Bug fixes and stability improvements.",
         beta_app_review_info: {
           contact_email: "support@ggcode.dev",
           contact_first_name: "GGCode",
@@ -179,7 +179,7 @@ platform :ios do
         skip_waiting_for_build_processing: true,
         skip_submission: true,
         distribute_only: false,
-        changelog: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync",
+        changelog: "Bug fixes and stability improvements.",
         beta_app_review_info: {
           contact_email: "support@ggcode.dev",
           contact_first_name: "GGCode",
@@ -314,7 +314,7 @@ platform :ios do
         skip_submission: false,
         distribute_only: true,
         build_number: build.version,
-        changelog: "Version #{version_str}"
+        changelog: "Bug fixes and stability improvements."
       )
     end
   rescue => e
@@ -357,7 +357,22 @@ platform :ios do
     ios_version.select_build(build_id: build.id)
     UI.success("Build associated")
 
-    # 3. Set review notes
+    # 3. Set What's New (required by App Store)
+    begin
+      localizations = ios_version.get_app_store_version_localizations
+      en_loc = localizations.find { |l| l.locale == "en-US" }
+      whats_new_text = "Bug fixes and stability improvements."
+      if en_loc
+        en_loc.update(attributes: { whatsNew: whats_new_text })
+      else
+        ios_version.create_app_store_version_localization(attributes: { locale: "en-US", whatsNew: whats_new_text })
+      end
+      UI.success("What's New set")
+    rescue => e
+      UI.error("What's New: #{e.message}")
+    end
+
+    # 4. Set review notes
     begin
       review_detail = ios_version.fetch_app_store_review_detail
       review_attrs = {
