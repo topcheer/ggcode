@@ -297,10 +297,10 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 		t.Fatalf("peer should be ready")
 	}
 
-	// Should have: active_session + resume_ack + 3 replay events = 5 messages.
+	// Should have: active_session + resume_ack + snapshot_reset + 3 replay events = 6 messages.
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 5 {
-		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	if len(msgs) != 6 {
+		t.Fatalf("expected 6 messages, got %d", len(msgs))
 	}
 
 	var first relayMessage
@@ -316,6 +316,10 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	}
 	if ack.Generation != 3 {
 		t.Fatalf("expected resume_ack generation 3, got %d", ack.Generation)
+	}
+	var reset relayMessage
+	if json.Unmarshal(msgs[2], &reset) != nil || reset.Type != "snapshot_reset" {
+		t.Fatalf("third message should be snapshot_reset, got %s", string(msgs[2]))
 	}
 
 	// Since cursor was empty, resume_ack should say full_history.
@@ -340,8 +344,8 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 4 { // active_session + resume_ack + ev-2 + ev-3
-		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	if len(msgs) != 5 { // active_session + resume_ack + snapshot_reset + ev-2 + ev-3
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 }
 
@@ -357,6 +361,7 @@ func TestPeerOnResumeV3WaitsForKeyReady(t *testing.T) {
 
 	h := newHub(nil)
 	p := newPeer(h, r, "client", nil)
+	p.protocolVersion = shareProtocolV3
 	p.onResume(relayMessage{ClientID: "client-1"}, h)
 
 	if p.ready {
@@ -490,8 +495,8 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 
 	// Should replay only ev-3 and ev-4 (after cursor ev-2).
 	msgs := drainSendCh(p.sendCh)
-	if len(msgs) != 4 { // active_session + resume_ack + ev-3 + ev-4
-		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	if len(msgs) != 5 { // active_session + resume_ack + snapshot_reset + ev-3 + ev-4
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 }
 
@@ -550,8 +555,8 @@ func TestFullACKLifecycle(t *testing.T) {
 
 	msgs := drainSendCh(p2.sendCh)
 	// Should only replay ev-4 (cursor at ev-3).
-	if len(msgs) != 3 { // active_session + resume_ack + ev-4
-		t.Fatalf("expected 3 messages after reconnect, got %d", len(msgs))
+	if len(msgs) != 4 { // active_session + resume_ack + snapshot_reset + ev-4
+		t.Fatalf("expected 4 messages after reconnect, got %d", len(msgs))
 	}
 
 	var first relayMessage
@@ -563,6 +568,11 @@ func TestFullACKLifecycle(t *testing.T) {
 	json.Unmarshal(msgs[1], &ack)
 	if ack.Type != "resume_ack" {
 		t.Fatalf("expected resume_ack")
+	}
+	var reset relayMessage
+	json.Unmarshal(msgs[2], &reset)
+	if reset.Type != "snapshot_reset" {
+		t.Fatalf("expected snapshot_reset before replay, got %s", reset.Type)
 	}
 }
 
