@@ -246,7 +246,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	}
 }
 
-func TestHandleWSMissingTunnelCapabilityReturnsLegacyVisibleSequence(t *testing.T) {
+func TestHandleWSMissingTunnelCapabilityReturnsConnectedNoticeAndError(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	h := newHub(nil)
 	mux := http.NewServeMux()
@@ -316,12 +316,5 @@ func TestHandleWSMissingTunnelCapabilityReturnsLegacyVisibleSequence(t *testing.
 	}
 	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
 		t.Fatalf("unexpected relay error: %+v", msg)
-	}
-
-	if err := conn.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "sharing_stopped" {
-		t.Fatalf("expected sharing_stopped, got %+v", msg)
 	}
 }

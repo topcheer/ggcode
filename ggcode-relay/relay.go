@@ -944,11 +944,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
 		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		if err := conn.WriteJSON(upgradeErr); err == nil {
-			stopMsg := relayMessage{Type: "sharing_stopped"}
-			h.traceRelayMessage("ws_write", token, clientID, stopMsg, "peer_role="+role+" initial=false upgrade_stop=true")
-			_ = conn.WriteJSON(stopMsg)
-		}
+		_ = conn.WriteJSON(upgradeErr)
 		conn.Close()
 		return
 	}
