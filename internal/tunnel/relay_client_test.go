@@ -118,6 +118,30 @@ func TestRelayClientSendMessageID(t *testing.T) {
 	}
 }
 
+func TestRelayClientDestroyRoomSendsStopSharing(t *testing.T) {
+	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	defer rc.Close()
+
+	if err := rc.DestroyRoom(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case raw := <-rc.sendCh:
+		var relayMsg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &relayMsg); err != nil {
+			t.Fatal(err)
+		}
+		if relayMsg.Type != "stop_sharing" {
+			t.Fatalf("expected stop_sharing, got %q", relayMsg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for control message on sendCh")
+	}
+}
+
 func TestRelayClientOnAck(t *testing.T) {
 	rc, _ := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
 	defer rc.Close()

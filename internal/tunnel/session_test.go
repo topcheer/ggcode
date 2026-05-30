@@ -3,6 +3,7 @@
 package tunnel
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -98,6 +99,20 @@ func TestSessionDestroyGracefullyWithClient(t *testing.T) {
 	sess.DestroyGracefully(50 * time.Millisecond)
 	if !rc.closed {
 		t.Error("client should be closed after session DestroyGracefully")
+	}
+	select {
+	case raw := <-rc.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != "stop_sharing" {
+			t.Fatalf("expected stop_sharing, got %q", msg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stop_sharing")
 	}
 }
 

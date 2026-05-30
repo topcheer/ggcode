@@ -1,5 +1,6 @@
-import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ggcode_mobile/core/connection_service.dart';
@@ -155,5 +156,89 @@ void main() {
       errors.where((error) => error.contains('Room not found')),
       isNotEmpty,
     );
+  });
+
+  test('ConnectionService tolerates non-string connected metadata fields',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(jsonEncode({
+        'type': 'connected',
+        'data': {
+          'protocol_version': 1,
+          'share_mode': {'mode': 'legacy'},
+          'room_id': 123,
+          'connect_mode': true,
+          'notice': ['hello'],
+          'renew_token': {'token': 'renew'},
+        },
+      }));
+    });
+
+    final service = ConnectionService(
+      descriptor: ShareConnectionDescriptor.parse(
+        'ws://${server.address.host}:${server.port}/ws?token=test-token',
+      ),
+    );
+    addTearDown(service.dispose);
+
+    final statuses = <ConnectionStatus>[];
+    final statusSub = service.statusStream.listen(statuses.add);
+    addTearDown(statusSub.cancel);
+
+    await service.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(statuses, contains(ConnectionStatus.connected));
+  });
+
+  test('ConnectionService flushes armed resume hello after relay connected',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    final received = Completer<Map<String, dynamic>>();
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(jsonEncode({
+        'type': 'connected',
+        'data': {
+          'protocol_version': 1,
+          'share_mode': 'legacy',
+          'room_id': 'room-1',
+          'connect_mode': 'legacy',
+          'notice': '',
+          'renew_token': '',
+        },
+      }));
+      socket.listen((message) {
+        if (!received.isCompleted) {
+          received
+              .complete(jsonDecode(message as String) as Map<String, dynamic>);
+        }
+      });
+    });
+
+    final service = ConnectionService(
+      descriptor: ShareConnectionDescriptor.parse(
+        'ws://${server.address.host}:${server.port}/ws?token=test-token',
+      ),
+    );
+    addTearDown(service.dispose);
+    service.armResumeHello(clientId: 'client-1', sessionId: 'sess-1');
+
+    await service.connect();
+    final resume = await received.future.timeout(const Duration(seconds: 2));
+
+    expect(resume['type'], 'resume_hello');
+    expect(resume['client_id'], 'client-1');
+    expect(resume['session_id'], 'sess-1');
   });
 }

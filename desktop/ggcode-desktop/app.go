@@ -687,7 +687,7 @@ func (a *App) closeTunnelGracefully(timeout time.Duration) {
 	if broker != nil {
 		broker.StopSharingGracefully(timeout)
 	} else if sess != nil {
-		sess.StopGracefully(timeout)
+		sess.DestroyGracefully(timeout)
 	}
 	a.clearTunnelState()
 }

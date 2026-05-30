@@ -157,6 +157,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   Future<void> connect(String url, {bool clearState = true}) async {
     url = normalizeTunnelUrl(url);
+    final activeUrl = normalizeTunnelUrl(state.url ?? '');
+    if (service != null &&
+        activeUrl == url &&
+        (state.status == ConnectionStatus.connecting ||
+            state.status == ConnectionStatus.connected)) {
+      return _connectInFlight ?? Future<void>.value();
+    }
     if (_connectInFlight != null && _connectInFlightUrl == url) {
       return _connectInFlight!;
     }
@@ -191,7 +198,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         error: null,
         relaySync: null);
 
-    if (descriptor.cryptoMaterial.isEmpty) {
+    if (!descriptor.isV3 && descriptor.cryptoMaterial.isEmpty) {
       if (!_isConnectionGenerationCurrent(generation)) return;
       state = state.copyWith(
           status: ConnectionStatus.disconnected,
@@ -217,6 +224,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       return;
     }
     service = localService;
+    debugPrint(
+      '[connection] provider connect url=${descriptor.publicUrl} clearState=$clearState '
+      'savedSession=$_sessionId lastEvent=$_lastAppliedEventId client=${_clientId.isNotEmpty}',
+    );
 
     // _loadResumeState overwrites _sessionId/_lastAppliedEventId from prefs.
     final savedSessionId = _sessionId;
@@ -247,6 +258,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     _bindService(localService, generation, url);
+    localService.armResumeHello(
+      clientId: _clientId,
+      sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+    );
 
     try {
       // dart:io WebSocket.connect properly awaits handshake
@@ -355,6 +370,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         final replayCount = (msg.data?['replay_count'] as num?)?.toInt() ?? 0;
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
+        debugPrint(
+          '[connection] resume_ack session=$sessionId replay=$replayCount mode=$resumeMode',
+        );
         _beginResumeReplaySync(
           replayCount: replayCount,
           resumeMode: resumeMode,
@@ -1214,6 +1232,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _serviceSubscriptions.addAll([
       localService.statusStream.listen((status) {
         if (!_isActiveConnection(localService, generation)) return;
+        debugPrint(
+          '[connection] provider status=$status generation=$generation '
+          'session=$_sessionId lastEvent=$_lastAppliedEventId',
+        );
         state = state.copyWith(status: status);
         if (status == ConnectionStatus.connected) {
           _saveUrl(localService.publicUrl);
@@ -1428,6 +1450,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _setRelaySyncState(RelaySyncState? relaySync) {
     _relaySyncTimeout?.cancel();
+    debugPrint(
+      '[connection] relaySync=${relaySync == null ? 'clear' : '${relaySync.phase}:${relaySync.remainingReplayCount}:${relaySync.resumeMode}:stalled=${relaySync.stalled}'}',
+    );
     state = state.copyWith(relaySync: relaySync);
     if (relaySync == null) {
       return;

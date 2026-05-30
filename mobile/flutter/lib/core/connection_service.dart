@@ -222,6 +222,7 @@ class ShareConnectionMetadata {
   final String connectMode;
   final String notice;
   final String renewToken;
+  final String serverPublicKey;
   final DateTime? authExpiresAt;
   final DateTime? renewExpiresAt;
 
@@ -232,24 +233,30 @@ class ShareConnectionMetadata {
     required this.connectMode,
     required this.notice,
     required this.renewToken,
+    required this.serverPublicKey,
     required this.authExpiresAt,
     required this.renewExpiresAt,
   });
 
   factory ShareConnectionMetadata.fromRelay(Map<String, dynamic>? data) {
     final map = data ?? const <String, dynamic>{};
+    String stringValue(dynamic value) {
+      if (value == null) return '';
+      return value is String ? value : value.toString();
+    }
+
     return ShareConnectionMetadata(
       protocolVersion: map['protocol_version'] is int
           ? map['protocol_version'] as int
           : int.tryParse('${map['protocol_version'] ?? ''}') ?? 1,
-      shareMode: map['share_mode'] as String? ?? '',
-      roomId: map['room_id'] as String? ?? '',
-      connectMode: map['connect_mode'] as String? ?? '',
-      notice: map['notice'] as String? ?? '',
-      renewToken: map['renew_token'] as String? ?? '',
-      authExpiresAt: DateTime.tryParse(map['auth_expires_at'] as String? ?? ''),
-      renewExpiresAt:
-          DateTime.tryParse(map['renew_expires_at'] as String? ?? ''),
+      shareMode: stringValue(map['share_mode']),
+      roomId: stringValue(map['room_id']),
+      connectMode: stringValue(map['connect_mode']),
+      notice: stringValue(map['notice']),
+      renewToken: stringValue(map['renew_token']),
+      serverPublicKey: stringValue(map['kx_pub']),
+      authExpiresAt: DateTime.tryParse(stringValue(map['auth_expires_at'])),
+      renewExpiresAt: DateTime.tryParse(stringValue(map['renew_expires_at'])),
     );
   }
 }
@@ -289,6 +296,8 @@ class ConnectionService {
   Future<void> _queue = Future.value();
   int _decryptErrorCount = 0;
   String _clientId = '';
+  String? _pendingResumeSessionId;
+  bool _resumeHelloSent = false;
   ShareKeyExchangeState? _keyExchangeState;
   Completer<void>? _keyExchangeReady;
   bool _keyOfferSent = false;
@@ -307,6 +316,13 @@ class ConnectionService {
     _statusController.add(ConnectionStatus.connecting);
 
     final runtimeUrl = _descriptor.runtimeUrl();
+    final runtimeUri = Uri.tryParse(runtimeUrl);
+    debugPrint(
+      '[connection] connect start host=${runtimeUri?.host ?? ''} path=${runtimeUri?.path ?? ''} '
+      'proto=${_descriptor.protocolVersion} share=${_descriptor.shareMode} '
+      'room=${_descriptor.roomId} hasAuth=${_descriptor.authTicket.isNotEmpty} '
+      'hasRenew=${_descriptor.renewToken.isNotEmpty}',
+    );
     final securityError = tunnelUrlSecurityError(runtimeUrl);
     if (securityError != null) {
       _permanentFailure = true;
@@ -318,6 +334,9 @@ class ConnectionService {
     try {
       _socket = await WebSocket.connect(runtimeUrl)
           .timeout(const Duration(seconds: 30));
+      debugPrint(
+        '[connection] websocket connected host=${runtimeUri?.host ?? ''} path=${runtimeUri?.path ?? ''}',
+      );
     } catch (e) {
       if (!_disposed) {
         final error = _formatConnectError(e);
@@ -353,10 +372,21 @@ class ConnectionService {
         // Enqueue for sequential processing. Catch errors to prevent a
         // single bad message from breaking the entire chain — all subsequent
         // messages would be silently dropped otherwise.
-        _queue = _queue.then((_) => _handleRelayMessage(data)).catchError((e) {
-          // Swallow to keep the chain alive; _handleRelayMessage handles
-          // its own errors internally for known cases.
-        });
+        _queue = _queue.then((_) => _handleRelayMessage(data)).catchError(
+          (error, stackTrace) {
+            debugPrint('[connection] failed to handle relay message: $error');
+            _errorController.add('Relay message handling failed: $error');
+            FlutterError.reportError(
+              FlutterErrorDetails(
+                exception: error,
+                stack: stackTrace,
+                library: 'connection_service',
+                context: ErrorDescription(
+                    'while handling a relay websocket message'),
+              ),
+            );
+          },
+        );
       },
       onDone: () {
         _cleanup();
@@ -440,18 +470,39 @@ class ConnectionService {
             : map['data'] is Map
                 ? Map<String, dynamic>.from(map['data'] as Map)
                 : null;
-        final metadata = ShareConnectionMetadata.fromRelay(data);
-        if (metadata.renewToken.isNotEmpty) {
+        var metadata = const ShareConnectionMetadata(
+          protocolVersion: 1,
+          shareMode: '',
+          roomId: '',
+          connectMode: '',
+          notice: '',
+          renewToken: '',
+          serverPublicKey: '',
+          authExpiresAt: null,
+          renewExpiresAt: null,
+        );
+        try {
+          metadata = ShareConnectionMetadata.fromRelay(data);
           _descriptor = _descriptor.copyWith(
-            renewToken: metadata.renewToken,
+            renewToken: metadata.renewToken.isNotEmpty
+                ? metadata.renewToken
+                : _descriptor.renewToken,
             shareMode: metadata.shareMode.isNotEmpty
                 ? metadata.shareMode
                 : _descriptor.shareMode,
-            protocolVersion: metadata.protocolVersion,
+            protocolVersion: metadata.protocolVersion > 0
+                ? metadata.protocolVersion
+                : _descriptor.protocolVersion,
             roomId: metadata.roomId.isNotEmpty
                 ? metadata.roomId
                 : _descriptor.roomId,
+            serverPublicKey: metadata.serverPublicKey.isNotEmpty
+                ? metadata.serverPublicKey
+                : _descriptor.serverPublicKey,
           );
+        } catch (error) {
+          debugPrint('[connection] invalid relay connected metadata: $error');
+          _errorController.add('Invalid relay connected metadata: $error');
         }
         _everConnected = true;
         _serverOfflineReconnect = false;
@@ -463,6 +514,11 @@ class ConnectionService {
         }
         _statusController.add(ConnectionStatus.connected);
         _metadataController.add(metadata);
+        debugPrint(
+          '[connection] relay connected proto=${metadata.protocolVersion} share=${metadata.shareMode} '
+          'connect=${metadata.connectMode} room=${metadata.roomId} notice=${metadata.notice}',
+        );
+        _flushPendingResumeHello();
         _startHeartbeat();
         break;
 
@@ -623,6 +679,7 @@ class ConnectionService {
 
   void _resetHandshakeState() {
     _keyOfferSent = false;
+    _resumeHelloSent = false;
     _keyExchangeState = null;
     if (_descriptor.isV3) {
       _crypto = null;
@@ -732,11 +789,38 @@ class ConnectionService {
     _socket?.add(jsonEncode(data));
   }
 
-  void sendResumeHello({
+  void armResumeHello({
     required String clientId,
     String? sessionId,
   }) {
     _clientId = clientId;
+    _pendingResumeSessionId = sessionId;
+    debugPrint(
+      '[connection] arm resume_hello client=${clientId.isNotEmpty} session=${sessionId ?? ''}',
+    );
+  }
+
+  void _flushPendingResumeHello() {
+    if (_resumeHelloSent || _clientId.isEmpty || _socket == null) {
+      return;
+    }
+    sendResumeHello(
+      clientId: _clientId,
+      sessionId: _pendingResumeSessionId,
+    );
+  }
+
+  void sendResumeHello({
+    required String clientId,
+    String? sessionId,
+  }) {
+    if (_resumeHelloSent) return;
+    _clientId = clientId;
+    _pendingResumeSessionId = sessionId;
+    _resumeHelloSent = true;
+    debugPrint(
+      '[connection] send resume_hello client=${clientId.isNotEmpty} session=${sessionId ?? ''}',
+    );
     send({
       'type': 'resume_hello',
       'client_id': clientId,
