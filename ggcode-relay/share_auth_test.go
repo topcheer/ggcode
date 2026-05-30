@@ -67,6 +67,19 @@ func TestValidateShareHandshakeAcceptsIssuedTickets(t *testing.T) {
 	}
 }
 
+func TestConnectedShareMetadataIncludesV3ServerPublicKey(t *testing.T) {
+	metadata := connectedShareMetadata(&shareHandshake{
+		protocolVersion: shareProtocolV3,
+		shareMode:       shareModeV3,
+		connectMode:     shareTicketKindConnect,
+		roomKey:         "room-3",
+		serverPublicKey: "server-pub",
+	})
+	if metadata["kx_pub"] != "server-pub" {
+		t.Fatalf("expected kx_pub in connected metadata, got %+v", metadata)
+	}
+}
+
 func TestValidateShareHandshakeRejectsIssuedTicketScopeMismatch(t *testing.T) {
 	cfg := shareAuthConfig{
 		Secret:     "relay-secret",
