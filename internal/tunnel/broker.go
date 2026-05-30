@@ -105,8 +105,6 @@ type pendingClientReplay struct {
 	generation uint64
 }
 
-var legacyClientAuthoritativeReplayDelay = 200 * time.Millisecond
-
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
 		session:           sess,
@@ -543,8 +541,14 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	}
 	currentSessionID, currentGeneration := b.sessionState()
 	if info.Role == "client" {
-		if info.ProtocolVersion == ShareProtocolLegacy && !info.ResumeComplete {
-			debug.Log("tunnel", "broker: waiting for legacy client resume completion before authoritative replay (session=%q)", currentSessionID)
+		if info.ProtocolVersion == ShareProtocolLegacy {
+			debug.Log("tunnel", "broker: legacy client connected; relying on relay room history only (session=%q count=%d)", currentSessionID, info.HistoryCount)
+			if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
+				b.bumpNextEvent(info.LastEventID)
+				// Still flush any buffered live text so the joining client's resume replay
+				// can observe the latest assistant chunks without resetting the room.
+				b.flushAllText()
+			}
 			return
 		}
 		// A newly joined mobile client should NOT force-reset existing clients when
@@ -581,18 +585,6 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			b.sendActiveSession(currentSessionID)
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
-			}
-			if delay := authoritativeReplayDelay(info); delay > 0 {
-				timer := time.NewTimer(delay)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-b.outDone:
-					return
-				}
-				if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
-					return
-				}
 			}
 			events := b.canonicalReplayEvents()
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
@@ -767,16 +759,6 @@ func (b *Broker) currentSnapshot(provider func() BrokerSnapshot) (BrokerSnapshot
 		return BrokerSnapshot{}, false
 	}
 	return snapshot, true
-}
-
-func authoritativeReplayDelay(info RelayConnectedState) time.Duration {
-	if info.Role != "client" {
-		return 0
-	}
-	if info.ProtocolVersion > 0 && info.ProtocolVersion < ShareProtocolV2 {
-		return legacyClientAuthoritativeReplayDelay
-	}
-	return 0
 }
 
 // ─── User message ───

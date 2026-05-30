@@ -76,12 +76,14 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
 	r.generation = 2
-	r.protocolVersion = 1
+	r.protocolVersion = shareProtocolV2
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
 	r.server = server
+	client := newPeer(nil, r, "client", nil)
+	client.protocolVersion = shareProtocolLegacy
 
-	r.notifyServerClientConnected(true)
+	client.notifyServerClientConnected(true)
 
 	select {
 	case raw := <-server.sendCh:
@@ -99,11 +101,29 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		if err := json.Unmarshal(msg.Data, &meta); err != nil {
 			t.Fatal(err)
 		}
-		if meta.ProtocolVersion != 1 || !meta.ResumeComplete {
+		if meta.ProtocolVersion != shareProtocolLegacy || !meta.ResumeComplete {
 			t.Fatalf("unexpected metadata: %+v", meta)
 		}
 	default:
 		t.Fatal("expected notification")
+	}
+}
+
+func TestLegacyClientResumeDoesNotNotifyServerCompletion(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{{eventID: "ev-000000001"}}
+	server := newPeer(nil, r, "server", nil)
+	r.server = server
+	client := newPeer(nil, r, "client", nil)
+	client.protocolVersion = shareProtocolLegacy
+
+	client.finishResumeLocked("client-1", &hub{})
+
+	select {
+	case raw := <-server.sendCh:
+		t.Fatalf("expected no resume-complete notification for legacy client, got %s", raw)
+	default:
 	}
 }
 
