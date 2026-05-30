@@ -490,13 +490,7 @@ func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed boo
 
 	p.room.mu.RLock()
 	expectedSessionID := p.room.sessionID
-	shouldHydrate := p.hub.store != nil && (expectedSessionID != sessionID || len(p.room.history) == 0)
 	p.room.mu.RUnlock()
-
-	var loaded []roomEvent
-	if shouldHydrate {
-		loaded, _ = p.hub.store.loadSessionHistory(sessionID)
-	}
 
 	p.room.mu.Lock()
 	defer p.room.mu.Unlock()
@@ -516,14 +510,6 @@ func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed boo
 		}
 	}
 	generation = p.room.ensureGenerationLocked()
-	if shouldHydrate && len(p.room.history) == 0 {
-		if len(loaded) > 0 {
-			p.room.history = append([]roomEvent(nil), loaded...)
-			p.room.lastEventAt = time.Now()
-		}
-		hydrated = true
-		loadedCount = len(loaded)
-	}
 	return generation, changed, hydrated, loadedCount
 }
 

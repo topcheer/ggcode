@@ -103,6 +103,20 @@ func TestBrokerOnCommand(t *testing.T) {
 	b.OnCommand(func(cmd GatewayMessage) {})
 }
 
+func TestBrokerSwitchSessionWithoutRelaySession(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+	b.session = nil
+
+	b.SwitchSession("sess-1")
+	b.AnnounceActiveSession("sess-1")
+
+	got, _ := b.sessionState()
+	if got != "sess-1" {
+		t.Fatalf("current session id = %q, want sess-1", got)
+	}
+}
+
 func TestBrokerOnRelayConnected(t *testing.T) {
 	b, _ := newBrokerForTest()
 	defer b.Stop()

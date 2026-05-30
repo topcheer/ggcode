@@ -28,8 +28,8 @@ func (m *Model) chatWriteSystem(id, text string) {
 		m.suppressNextTunnelSystem = ""
 		return
 	}
-	if m.tunnelBroker != nil && strings.TrimSpace(text) != "" {
-		m.tunnelBroker.PushSystemMessage(text)
+	if broker := m.tunnelEventBroker(); broker != nil && strings.TrimSpace(text) != "" {
+		broker.PushSystemMessage(text)
 	}
 }
 

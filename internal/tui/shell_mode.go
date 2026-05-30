@@ -128,8 +128,8 @@ func (m *Model) appendShellChunk(chunk string) {
 		// Append only the new incremental chunk text.
 		m.chatAppendSystemText(m.shellOutputID, "\n"+strings.TrimRight(chunk, "\n"))
 	}
-	if m.tunnelBroker != nil && m.shellOutputID != "" {
-		m.tunnelBroker.PushTextData(tunnel.TextData{
+	if broker := m.tunnelEventBroker(); broker != nil && m.shellOutputID != "" {
+		broker.PushTextData(tunnel.TextData{
 			ID:    m.shellOutputID,
 			Chunk: chunk,
 			Kind:  tunnel.MessageKindShellOutput,

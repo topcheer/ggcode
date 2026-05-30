@@ -79,18 +79,20 @@ type AgentBridge struct {
 	swarmEventCounts map[string]int       // per-teammate cached event count for incremental updates
 
 	// Mobile tunnel broker (nil if not sharing).
-	tunnelBroker      *tunnel.Broker
-	tunnelMsgID       string
-	spawnedSet        map[string]bool // tracks which subagents have been announced to mobile
-	approvalRespCh    chan permission.Decision
-	approvalRequestID string
-	approvalToolName  string
-	approvalDialog    dialog.Dialog
-	askUserRespCh     chan tool.AskUserResponse
-	askUserRequestID  string
-	askUserRequest    tool.AskUserRequest
-	askUserDialog     dialog.Dialog
-	cronScheduler     *cron.Scheduler
+	tunnelBroker           *tunnel.Broker
+	tunnelProjectionBroker *tunnel.Broker
+	tunnelProjectionStore  *tunnel.ProjectionStore
+	tunnelMsgID            string
+	spawnedSet             map[string]bool // tracks which subagents have been announced to mobile
+	approvalRespCh         chan permission.Decision
+	approvalRequestID      string
+	approvalToolName       string
+	approvalDialog         dialog.Dialog
+	askUserRespCh          chan tool.AskUserResponse
+	askUserRequestID       string
+	askUserRequest         tool.AskUserRequest
+	askUserDialog          dialog.Dialog
+	cronScheduler          *cron.Scheduler
 }
 
 type pendingMessage struct {
@@ -101,7 +103,85 @@ type pendingMessage struct {
 func (b *AgentBridge) currentTunnelBroker() *tunnel.Broker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.tunnelProjectionBroker != nil {
+		return b.tunnelProjectionBroker
+	}
 	return b.tunnelBroker
+}
+
+func (b *AgentBridge) currentShareTunnelBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tunnelBroker
+}
+
+func (b *AgentBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelProjectionBroker == nil {
+		b.tunnelProjectionBroker = tunnel.NewBroker(nil)
+	}
+	return b.tunnelProjectionBroker
+}
+
+func (b *AgentBridge) bindTunnelProjectionSession() {
+	b.mu.Lock()
+	currentSes := b.currentSes
+	store := b.tunnelProjectionStore
+	b.mu.Unlock()
+	if currentSes == nil || strings.TrimSpace(currentSes.ID) == "" {
+		return
+	}
+
+	broker := b.ensureTunnelProjectionBroker()
+	if store == nil {
+		var err error
+		store, err = tunnel.NewDefaultProjectionStore()
+		if err != nil {
+			log.Printf("[desktop] projection store init failed for %s: %v", currentSes.ID, err)
+		} else {
+			b.mu.Lock()
+			if b.tunnelProjectionStore == nil {
+				b.tunnelProjectionStore = store
+			}
+			store = b.tunnelProjectionStore
+			b.mu.Unlock()
+		}
+	}
+
+	broker.SwitchSession(currentSes.ID)
+	if store != nil {
+		replay, err := store.ReplayEvents(currentSes.ID)
+		if err != nil {
+			log.Printf("[desktop] projection replay load failed for %s: %v", currentSes.ID, err)
+		} else {
+			broker.PrimeEventIDs(replay)
+		}
+	}
+	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		b.recordProjectionEvent(ev)
+	})
+
+	b.mu.Lock()
+	if b.tunnelMsgID == "" {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	b.mu.Unlock()
+}
+
+func (b *AgentBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
+	b.mu.Lock()
+	store := b.tunnelProjectionStore
+	b.mu.Unlock()
+	if store != nil {
+		if err := store.Append(msg); err != nil {
+			log.Printf("[desktop] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
+		}
+	}
+	b.RecordTunnelEvent(msg)
+	if broker := b.currentShareTunnelBroker(); broker != nil {
+		broker.PublishRecordedEvent(msg)
+	}
 }
 
 func (b *AgentBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
@@ -173,6 +253,11 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	if broker == nil {
 		return
 	}
+	b.bindTunnelProjectionSession()
+	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+		return b.CurrentSessionTunnelEvents()
+	})
+	broker.SetEventRecorder(nil)
 	if currentSes != nil && currentSes.ID != "" {
 		broker.AnnounceActiveSession(currentSes.ID)
 	}
@@ -204,11 +289,16 @@ func (b *AgentBridge) DetachTunnelBroker() {
 
 func (b *AgentBridge) ClearCurrentSession() {
 	b.mu.Lock()
+	projectionBroker := b.tunnelProjectionBroker
+	b.tunnelMsgID = ""
 	defer b.mu.Unlock()
 	b.currentSes = nil
 	if b.ui != nil {
 		b.ui.SetSessionUsage(provider.TokenUsage{})
 		b.ui.SetSessionMetrics(nil)
+	}
+	if projectionBroker != nil {
+		projectionBroker.ResetSession()
 	}
 }
 
@@ -1839,7 +1929,8 @@ func (b *AgentBridge) ensureSession() {
 		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
 		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
 	}
-	if broker := b.currentTunnelBroker(); broker != nil {
+	b.bindTunnelProjectionSession()
+	if broker := b.currentShareTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
 	}
 }
@@ -1859,8 +1950,20 @@ func (b *AgentBridge) CurrentSession() *session.Session {
 func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 	b.mu.Lock()
 	currentSes := b.currentSes
+	store := b.tunnelProjectionStore
 	b.mu.Unlock()
-	if currentSes == nil || !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 {
+	if currentSes == nil {
+		return nil
+	}
+	if store != nil && strings.TrimSpace(currentSes.ID) != "" {
+		events, err := store.ReplayEvents(currentSes.ID)
+		if err != nil {
+			log.Printf("[desktop] projection replay load failed for %s: %v", currentSes.ID, err)
+		} else if len(events) > 0 {
+			return events
+		}
+	}
+	if !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 {
 		return nil
 	}
 	out := make([]tunnel.GatewayMessage, 0, len(currentSes.TunnelEvents))
@@ -2367,11 +2470,12 @@ func (b *AgentBridge) ResumeSession(id string) error {
 	b.usageTurnIndex = session.LastTurnIndex(ses)
 	b.lastMetricDigestTurn = b.usageTurnIndex
 	b.mu.Unlock()
+	b.bindTunnelProjectionSession()
 	if b.ui != nil {
 		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
 		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
 	}
-	if broker := b.currentTunnelBroker(); broker != nil {
+	if broker := b.currentShareTunnelBroker(); broker != nil {
 		broker.AnnounceActiveSession(ses.ID)
 	}
 	return nil

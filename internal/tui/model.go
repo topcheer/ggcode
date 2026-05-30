@@ -260,6 +260,8 @@ type Model struct {
 	// Mobile tunnel
 	tunnelSession             *tunnel.Session
 	tunnelBroker              *tunnel.Broker
+	tunnelProjectionBroker    *tunnel.Broker
+	tunnelProjectionStore     *tunnel.ProjectionStore
 	tunnelMsgID               string
 	tunnelPendingApprovalID   string
 	tunnelPendingAskUserID    string
@@ -526,6 +528,7 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.sessionStore = store
 	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.lastMetricDigestTurn = m.usageTurnIndex
+	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
 	// Register this instance for multi-instance detection and auto-mute

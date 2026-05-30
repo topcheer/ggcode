@@ -25,10 +25,10 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 		m.approvalNotifiedIM = true
 	}
 	// Push to mobile tunnel client
-	if m.tunnelBroker != nil {
+	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingApprovalID = m.nextTunnelRequestID()
-		m.tunnelBroker.PushApprovalRequest(m.tunnelPendingApprovalID, msg.ToolName, msg.Input)
-		m.tunnelBroker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushApprovalRequest(m.tunnelPendingApprovalID, msg.ToolName, msg.Input)
+		broker.PushStatus(tunnel.StatusBusy, "")
 	}
 	return m, nil
 
@@ -74,7 +74,7 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 		}
 	}
 	// Push to mobile tunnel client
-	if m.tunnelBroker != nil {
+	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingAskUserID = m.nextTunnelRequestID()
 		questions := make([]tunnel.AskUserQuestion, len(msg.Request.Questions))
 		for i, q := range msg.Request.Questions {
@@ -91,8 +91,8 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 				Placeholder:   q.Placeholder,
 			}
 		}
-		m.tunnelBroker.PushAskUserRequest(m.tunnelPendingAskUserID, msg.Request.Title, questions)
-		m.tunnelBroker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushAskUserRequest(m.tunnelPendingAskUserID, msg.Request.Title, questions)
+		broker.PushStatus(tunnel.StatusBusy, "")
 	}
 	return m, nil
 
