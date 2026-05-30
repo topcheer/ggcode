@@ -900,26 +900,45 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	clients := len(room.clients)
 	room.mu.Unlock()
 
-	if h.stats != nil {
-		h.stats.recordConnect(role)
-	}
-	log.Printf("[relay] %s connected: room=%s session=%s clients=%d buffered=%d proto=%d share=%s connect=%s client=%s client_kind=%s client_version=%s",
-		role, shortToken(token), room.sessionID, clients, len(room.history),
-		handshake.protocolVersion, handshake.shareMode, handshake.connectMode, clientID, handshake.clientKind, handshake.clientVersion)
-
-	// Send initial "connected" with current tail.
 	room.mu.RLock()
 	tail := ""
 	if n := len(room.history); n > 0 {
 		tail = room.history[n-1].eventID
 	}
+	sessionID := room.sessionID
+	buffered := len(room.history)
 	room.mu.RUnlock()
-	p.send(relayMessage{
+	initialConnected := relayMessage{
 		Type:        "connected",
-		SessionID:   room.sessionID,
+		SessionID:   sessionID,
 		LastEventID: tail,
 		Data:        mustJSON(connectedShareMetadata(handshake)),
-	})
+	}
+	h.traceRelayMessage("ws_write", token, clientID, initialConnected, "peer_role="+role+" initial=true")
+	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	if err := conn.WriteJSON(initialConnected); err != nil {
+		room.mu.Lock()
+		if role == "server" {
+			if room.server == p {
+				room.server = nil
+			}
+		} else {
+			delete(room.clients, p)
+			if p.clientID != "" && room.clientsByID[p.clientID] == p {
+				delete(room.clientsByID, p.clientID)
+			}
+		}
+		room.mu.Unlock()
+		conn.Close()
+		return
+	}
+
+	if h.stats != nil {
+		h.stats.recordConnect(role)
+	}
+	log.Printf("[relay] %s connected: room=%s session=%s clients=%d buffered=%d proto=%d share=%s connect=%s client=%s client_kind=%s client_version=%s",
+		role, shortToken(token), sessionID, clients, buffered,
+		handshake.protocolVersion, handshake.shareMode, handshake.connectMode, clientID, handshake.clientKind, handshake.clientVersion)
 
 	// Notify server that a client connected.
 	if role == "client" {
