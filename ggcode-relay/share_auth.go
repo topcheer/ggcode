@@ -78,6 +78,7 @@ type shareHandshake struct {
 	protocolVersion int
 	shareMode       string
 	connectMode     string
+	postConnectErr  string
 	authExpiresAt   time.Time
 	renewToken      string
 	renewExpiresAt  time.Time
@@ -145,9 +146,6 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if protocolVersion > requiredShareProtocolVersion {
 		return nil, http.StatusBadRequest, fmt.Sprintf("unsupported share protocol %d", protocolVersion)
 	}
-	if !hasCapability(capabilities, requiredTunnelCapability) {
-		return nil, http.StatusGone, shareUpgradeRequiredMessage
-	}
 	if rawToken != "" {
 		return nil, http.StatusGone, shareUpgradeRequiredMessage
 	}
@@ -190,12 +188,17 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if err != nil {
 		return nil, http.StatusInternalServerError, "mint renew token"
 	}
+	postConnectErr := ""
+	if !hasCapability(capabilities, requiredTunnelCapability) {
+		postConnectErr = shareUpgradeRequiredMessage
+	}
 	return &shareHandshake{
 		role:            role,
 		roomKey:         roomID,
 		protocolVersion: protocolVersion,
 		shareMode:       shareModeV3,
 		connectMode:     connectMode,
+		postConnectErr:  postConnectErr,
 		authExpiresAt:   exp,
 		renewToken:      nextRenewToken,
 		renewExpiresAt:  renewExp,
