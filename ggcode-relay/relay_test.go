@@ -132,6 +132,63 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 	}
 }
 
+func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
+	h := newHub(nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", h.handleWS)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=server&token=legacy-token"
+	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverConn.Close()
+	if err := serverConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var serverConnected relayMessage
+	if err := serverConn.ReadJSON(&serverConnected); err != nil {
+		t.Fatal(err)
+	}
+	if serverConnected.Type != "connected" {
+		t.Fatalf("expected initial server connected, got %+v", serverConnected)
+	}
+
+	clientURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=client&token=legacy-token"
+	clientConn, _, err := websocket.DefaultDialer.Dial(clientURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close()
+	if err := clientConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var clientConnected relayMessage
+	if err := clientConn.ReadJSON(&clientConnected); err != nil {
+		t.Fatal(err)
+	}
+	if clientConnected.Type != "connected" {
+		t.Fatalf("expected initial client connected, got %+v", clientConnected)
+	}
+
+	if err := serverConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var notify relayMessage
+	if err := serverConn.ReadJSON(&notify); err != nil {
+		t.Fatal(err)
+	}
+	if notify.Type != "connected" || notify.Role != "client" {
+		t.Fatalf("expected client notify on server connection, got %+v", notify)
+	}
+}
+
 func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
