@@ -651,6 +651,123 @@ func TestResetCurrentSessionTunnelLedgerClearsCanonicalReplay(t *testing.T) {
 	}
 }
 
+func TestBindTunnelProjectionSessionBackfillsSessionInfoIntoProjectionStore(t *testing.T) {
+	store := newTestSessionStore(t)
+	projectionStore, err := tunnel.NewProjectionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new projection store: %v", err)
+	}
+	if err := projectionStore.Append(tunnel.GatewayMessage{
+		SessionID: "sess-bootstrap",
+		EventID:   "ev-000000001",
+		Type:      tunnel.EventSystemMessage,
+		Data:      json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		t.Fatalf("seed projection event: %v", err)
+	}
+
+	m := newTestModel()
+	m.sessionStore = store
+	m.tunnelProjectionStore = projectionStore
+	m.activeModel = "gpt-test"
+	m.activeVendor = "openai"
+	ses := &session.Session{
+		ID:        "sess-bootstrap",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
+	}
+
+	m.SetSession(ses, store)
+
+	replay, err := projectionStore.ReplayEvents("sess-bootstrap")
+	if err != nil {
+		t.Fatalf("load projection replay: %v", err)
+	}
+	if len(replay) < 2 {
+		t.Fatalf("expected replay to include bootstrap plus seeded event, got %d", len(replay))
+	}
+	if replay[0].Type != tunnel.EventSessionInfo {
+		t.Fatalf("expected first replay event session_info, got %q", replay[0].Type)
+	}
+	var sawSystemMessage bool
+	for _, ev := range replay[1:] {
+		if ev.Type == tunnel.EventSystemMessage {
+			sawSystemMessage = true
+			break
+		}
+	}
+	if !sawSystemMessage {
+		t.Fatalf("expected replay to retain seeded system_message, got %#v", replay)
+	}
+}
+
+func TestBindTunnelProjectionSessionHydratesIncompleteSessionLedgerIntoProjectionReplay(t *testing.T) {
+	store := newTestSessionStore(t)
+	projectionStore, err := tunnel.NewProjectionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new projection store: %v", err)
+	}
+	if err := projectionStore.Append(tunnel.GatewayMessage{
+		SessionID: "sess-old",
+		EventID:   "ev-000000001",
+		Type:      tunnel.EventSystemMessage,
+		Data:      json.RawMessage(`{"text":"shared started"}`),
+	}); err != nil {
+		t.Fatalf("seed projection event: %v", err)
+	}
+
+	m := newTestModel()
+	m.sessionStore = store
+	m.tunnelProjectionStore = projectionStore
+	ses := &session.Session{
+		ID:                   "sess-old",
+		CreatedAt:            time.Now().Add(-time.Hour),
+		UpdatedAt:            time.Now(),
+		TunnelEventsComplete: false,
+		TunnelEvents: []session.TunnelEvent{
+			{
+				EventID:  "ev-000000101",
+				StreamID: "msg-1-reasoning",
+				Type:     tunnel.EventReasoning,
+				Data:     json.RawMessage(`{"id":"msg-1-reasoning","chunk":"thinking"}`),
+			},
+			{
+				EventID:  "ev-000000102",
+				StreamID: "msg-1",
+				Type:     tunnel.EventText,
+				Data:     json.RawMessage(`{"id":"msg-1","chunk":"answer"}`),
+			},
+			{
+				EventID:  "ev-000000103",
+				StreamID: "msg-1",
+				Type:     tunnel.EventTextDone,
+				Data:     json.RawMessage(`{"id":"msg-1","done":true}`),
+			},
+		},
+	}
+
+	m.SetSession(ses, store)
+
+	replay := m.currentSessionTunnelReplayEvents()
+	if len(replay) < 4 {
+		t.Fatalf("expected replay to include system + hydrated tunnel events, got %d", len(replay))
+	}
+	var sawReasoning, sawText, sawTextDone bool
+	for _, ev := range replay {
+		switch ev.Type {
+		case tunnel.EventReasoning:
+			sawReasoning = true
+		case tunnel.EventText:
+			sawText = true
+		case tunnel.EventTextDone:
+			sawTextDone = true
+		}
+	}
+	if !sawReasoning || !sawText || !sawTextDone {
+		t.Fatalf("expected replay to include hydrated reasoning/text events, got %#v", replay)
+	}
+}
+
 func TestTunnelSnapshotMatchesDetectsMidShareProjectionGap(t *testing.T) {
 	seeded := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{Workspace: "/tmp/project", Version: "dev"},

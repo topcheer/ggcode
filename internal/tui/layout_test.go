@@ -26,6 +26,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // stripAnsi removes ANSI escape sequences (CSI and OSC) from a string so
@@ -45,6 +46,11 @@ func absInt(x int) int {
 
 func newTestModel() Model {
 	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
+	store, err := tunnel.NewProjectionStore(filepath.Join(os.TempDir(), fmt.Sprintf("ggcode-tui-test-projection-%d", time.Now().UnixNano())))
+	if err != nil {
+		panic(err)
+	}
+	m.tunnelProjectionStore = store
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.inputReady = true
 	m.sidebarVisible = true

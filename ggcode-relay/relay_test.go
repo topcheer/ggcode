@@ -76,11 +76,12 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
 	r.generation = 2
+	r.protocolVersion = 1
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
 	r.server = server
 
-	r.notifyServerClientConnected()
+	r.notifyServerClientConnected(true)
 
 	select {
 	case raw := <-server.sendCh:
@@ -90,6 +91,16 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		}
 		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" || msg.Generation != 2 {
 			t.Fatalf("unexpected: %+v", msg)
+		}
+		var meta struct {
+			ProtocolVersion int  `json:"protocol_version"`
+			ResumeComplete  bool `json:"resume_complete"`
+		}
+		if err := json.Unmarshal(msg.Data, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if meta.ProtocolVersion != 1 || !meta.ResumeComplete {
+			t.Fatalf("unexpected metadata: %+v", meta)
 		}
 	default:
 		t.Fatal("expected notification")
