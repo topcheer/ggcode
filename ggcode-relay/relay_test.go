@@ -718,6 +718,19 @@ func TestNukeHandlerAuthorizedClearsRoomsAndTimers(t *testing.T) {
 	}
 }
 
+func TestStatsHandlerIsPublic(t *testing.T) {
+	h := newHub(nil)
+	handler := newStatsHandler(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected public stats endpoint, got %d", rec.Code)
+	}
+}
+
 // ─── Helpers ───
 
 func drainSendCh(ch chan []byte) [][]byte {

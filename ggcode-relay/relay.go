@@ -588,25 +588,19 @@ func (p *peer) forwardKeyAccept(msg relayMessage) {
 // ─── Hub ───
 
 type hub struct {
-	rooms    map[string]*room
-	store    *relayStore
-	stats    *relayStats
-	tracer   *relayTraceLogger
-	security relaySecurityConfig
-	mu       sync.RWMutex
+	rooms  map[string]*room
+	store  *relayStore
+	stats  *relayStats
+	tracer *relayTraceLogger
+	mu     sync.RWMutex
 }
 
 func newHub(store *relayStore) *hub {
-	return newHubWithSecurity(store, loadRelaySecurityConfig())
-}
-
-func newHubWithSecurity(store *relayStore, security relaySecurityConfig) *hub {
 	return &hub{
-		rooms:    make(map[string]*room),
-		store:    store,
-		stats:    newRelayStats(),
-		tracer:   newRelayTraceLogger(),
-		security: security,
+		rooms:  make(map[string]*room),
+		store:  store,
+		stats:  newRelayStats(),
+		tracer: newRelayTraceLogger(),
 	}
 }
 
@@ -804,9 +798,6 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if !h.requireSecureTransport(w, r) {
-		return
-	}
 	requestedProtocol, err := requestedShareProtocolVersion(r)
 	if err != nil {
 		http.Error(w, "invalid proto", http.StatusBadRequest)
@@ -829,9 +820,6 @@ func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSecureTransport(w, r) {
-		return
-	}
 	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
 	if handshake == nil {
 		http.Error(w, reason, status)
@@ -1031,9 +1019,6 @@ func newNukeHandler(store *relayStore, h *hub, adminToken string) http.HandlerFu
 			http.Error(w, "POST only", 405)
 			return
 		}
-		if !h.requireSecureTransport(w, r) {
-			return
-		}
 		if adminToken == "" {
 			http.Error(w, "nuke disabled", http.StatusServiceUnavailable)
 			return
@@ -1065,22 +1050,8 @@ func newNukeHandler(store *relayStore, h *hub, adminToken string) http.HandlerFu
 	}
 }
 
-func newStatsHandler(h *hub, adminToken string) http.HandlerFunc {
+func newStatsHandler(h *hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !h.requireSecureTransport(w, r) {
-			return
-		}
-		if !h.security.PublicStats {
-			if adminToken == "" {
-				http.Error(w, "stats disabled", http.StatusServiceUnavailable)
-				return
-			}
-			if !relayAdminAuthorized(r, adminToken) {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="ggcode-relay"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
 		snap, err := h.stats.snapshot(h)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -1104,10 +1075,8 @@ func main() {
 	}
 	defer store.Close()
 
-	security := loadRelaySecurityConfig()
-	h := newHubWithSecurity(store, security)
+	h := newHub(store)
 	adminToken := strings.TrimSpace(os.Getenv(relayAdminTokenEnv))
-	security.logStartup(adminToken)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/share/session", h.handleShareSession)
@@ -1115,7 +1084,7 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
 	})
-	mux.HandleFunc("/stats", newStatsHandler(h, adminToken))
+	mux.HandleFunc("/stats", newStatsHandler(h))
 	if adminToken == "" {
 		log.Printf("[relay] /nuke disabled: %s is not set", relayAdminTokenEnv)
 	}

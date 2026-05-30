@@ -80,6 +80,7 @@ type shareHandshake struct {
 	clientVersion   string
 	capabilities    []string
 	cryptoKey       string
+	serverPublicKey string
 }
 
 func loadShareAuthConfig() shareAuthConfig {
@@ -217,6 +218,7 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 		clientVersion:   clientVersion,
 		capabilities:    capabilities,
 		cryptoKey:       strings.TrimSpace(q.Get("crypto_key")),
+		serverPublicKey: strings.TrimSpace(q.Get("kx_pub")),
 	}, http.StatusSwitchingProtocols, ""
 }
 
@@ -234,6 +236,9 @@ func connectedShareMetadata(handshake *shareHandshake) map[string]any {
 	}
 	if handshake.notice != "" {
 		data["notice"] = handshake.notice
+	}
+	if handshake.serverPublicKey != "" {
+		data["kx_pub"] = handshake.serverPublicKey
 	}
 	if !handshake.authExpiresAt.IsZero() {
 		data["auth_expires_at"] = handshake.authExpiresAt.Format(time.RFC3339)
