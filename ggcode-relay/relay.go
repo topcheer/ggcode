@@ -942,9 +942,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Notify server that a client connected.
 	if role == "client" {
-		room.mu.Lock()
 		room.notifyServerClientConnected()
-		room.mu.Unlock()
 	}
 
 	go p.writeLoop()
