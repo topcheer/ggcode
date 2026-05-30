@@ -22,6 +22,8 @@ import 'package:ggcode_mobile/features/connect/connect_screen.dart';
 import 'package:ggcode_mobile/main.dart';
 
 class _FakeConnectionNotifier extends ConnectionNotifier {
+  int restoreCalls = 0;
+
   @override
   TunnelConnectionState build() =>
       TunnelConnectionState(status: ConnectionStatus.disconnected);
@@ -30,7 +32,9 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
   Future<void> connect(String url, {bool clearState = true}) async {}
 
   @override
-  Future<void> restoreSelectedWorkspace() async {}
+  Future<void> restoreSelectedWorkspace() async {
+    restoreCalls += 1;
+  }
 
   @override
   Future<void> reconnect() async {}
@@ -46,6 +50,28 @@ class _ConnectedConnectionNotifier extends _FakeConnectionNotifier {
         status: ConnectionStatus.connected,
         url: 'wss://example.test/ws?token=abc',
       );
+}
+
+class _PreloadedWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
+  @override
+  WorkspaceCacheState build() => WorkspaceCacheState(
+        initialized: true,
+        workspaces: {
+          'workspace-1': WorkspaceRecord(
+            key: 'workspace-1',
+            url: 'wss://example.test/ws?token=abc',
+            displayName: 'example.test',
+            lastSessionId: '',
+            lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        },
+        sessions: const {},
+        snapshots: const {},
+        selectedWorkspaceKey: 'workspace-1',
+      );
+
+  @override
+  Future<void> initialize() async {}
 }
 
 void main() {
@@ -177,6 +203,62 @@ void main() {
 
     expect(find.byType(ConnectScreen), findsOneWidget);
     expect(find.byType(ChatScreen), findsNothing);
+  });
+
+  testWidgets(
+      'AppShell does not auto-restore when workspace selection changes after startup',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+    final cache = container.read(workspaceCacheProvider.notifier);
+
+    expect(notifier.restoreCalls, 0);
+
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await tester.pump();
+    await tester.pump();
+
+    expect(notifier.restoreCalls, 0);
+  });
+
+  testWidgets('AppShell bootstraps auto-restore once for preloaded workspace',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_PreloadedWorkspaceCacheNotifier.new),
+        ],
+        child: const GGCodeApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final context = tester.element(find.byType(GGCodeApp));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+
+    expect(notifier.restoreCalls, 1);
+
+    await tester.pump();
+    await tester.pump();
+
+    expect(notifier.restoreCalls, 1);
   });
 
   testWidgets('ChatScreen shows relay sync banner while catch-up is pending',

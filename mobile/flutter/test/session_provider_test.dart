@@ -1120,6 +1120,49 @@ void main() {
     expect(state.url, 'wss://example.test/ws?token=room-a');
   });
 
+  test(
+      'connect keeps the current same-url service while relay connected is still pending',
+      () async {
+    final serviceA = _ManualConnectionService(
+      emitConnectedOnConnect: false,
+    );
+    final serviceB = _ManualConnectionService();
+    final services = [serviceA, serviceB];
+    var factoryCalls = 0;
+    _TestConnectionNotifier.factory = (_) => services[factoryCalls++];
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(
+        container.read(connectionProvider).status, ConnectionStatus.connecting);
+    expect(serviceA.connectCalls, 1);
+
+    await notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(factoryCalls, 1);
+    expect(serviceA.disposeCalls, 0);
+    expect(serviceB.connectCalls, 0);
+
+    serviceA.emitStatus(ConnectionStatus.connected);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final state = container.read(connectionProvider);
+    expect(state.status, ConnectionStatus.connected);
+    expect(state.url, 'wss://example.test/ws?token=room-a');
+  });
+
   test('restore shows relay sync state until replayed events are applied',
       () async {
     final info = proto.SessionInfoData(
@@ -1298,6 +1341,35 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
     expect(state.url, 'wss://example.test/ws?token=room-b');
+  });
+
+  test('connect accepts share v3 url without public crypto key', () async {
+    final service = _ManualConnectionService();
+    ShareConnectionDescriptor? capturedDescriptor;
+    _TestConnectionNotifier.factory = (descriptor) {
+      capturedDescriptor = descriptor;
+      return service;
+    };
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    await container.read(connectionProvider.notifier).connect(
+          'wss://relay.example/ws?proto=3&room_id=room-3&auth_ticket=auth-3&kx_pub=server-pub',
+        );
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(capturedDescriptor, isNotNull);
+    expect(capturedDescriptor!.isV3, isTrue);
+    expect(capturedDescriptor!.cryptoMaterial, isEmpty);
+    expect(service.connectCalls, 1);
+    expect(container.read(connectionProvider).error, isNull);
   });
 
   test('stale callbacks from old service are ignored after reconnect',
@@ -2011,5 +2083,97 @@ void main() {
             .read(chatProvider)
             .where((m) => m.text == 'cached old session'),
         isEmpty);
+  });
+
+  test('ConnectionNotifier sends resume_hello after relay connected', () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-1',
+      'ggcode_tunnel_session_id': 'sess-1',
+    });
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    final received = Completer<Map<String, dynamic>>();
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(jsonEncode({
+        'type': 'connected',
+        'data': {
+          'protocol_version': 1,
+          'share_mode': 'legacy',
+          'connect_mode': 'token',
+          'room_id': 'room-1',
+        },
+      }));
+      socket.listen((data) {
+        if (data is! String || received.isCompleted) {
+          return;
+        }
+        received.complete(jsonDecode(data) as Map<String, dynamic>);
+      });
+    });
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier
+        .connect('ws://${server.address.host}:${server.port}/ws?token=test');
+
+    final message = await received.future.timeout(const Duration(seconds: 2));
+    expect(message['type'], 'resume_hello');
+    expect(message['client_id'], 'client-1');
+    expect(message['session_id'], 'sess-1');
+  });
+
+  test(
+      'ConnectionNotifier resumes v3 session when relay connected metadata supplies kx_pub',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-v3',
+      'ggcode_tunnel_session_id': 'sess-v3',
+    });
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() async {
+      await server.close(force: true);
+    });
+
+    final received = Completer<Map<String, dynamic>>();
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.add(jsonEncode({
+        'type': 'connected',
+        'data': {
+          'protocol_version': 3,
+          'share_mode': 'v3',
+          'connect_mode': 'ticket',
+          'room_id': 'room-3',
+          'kx_pub': 'server-pub',
+        },
+      }));
+      socket.listen((data) {
+        if (data is! String || received.isCompleted) {
+          return;
+        }
+        received.complete(jsonDecode(data) as Map<String, dynamic>);
+      });
+    });
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect(
+      'ws://${server.address.host}:${server.port}/ws?proto=3&room_id=room-3&auth_ticket=test-ticket',
+    );
+
+    final message = await received.future.timeout(const Duration(seconds: 2));
+    expect(message['type'], 'resume_hello');
+    expect(message['client_id'], 'client-v3');
+    expect(message['session_id'], 'sess-v3');
   });
 }

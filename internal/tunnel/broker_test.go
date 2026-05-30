@@ -1671,18 +1671,24 @@ func TestBrokerStopSharingGracefullySendsStopEventBeforeClosing(t *testing.T) {
 		t.Fatal("relay client should be closed after graceful broker stop")
 	}
 
-	var types []string
-	for i := 0; i < 2; i++ {
+	var gatewayTypes []string
+	var controlType string
+	for i := 0; i < 3; i++ {
 		select {
 		case raw := <-rc.sendCh:
-			var envelope struct {
+			var meta struct {
+				Type       string `json:"type"`
 				Nonce      string `json:"nonce"`
 				Ciphertext string `json:"ciphertext"`
 			}
-			if err := json.Unmarshal(raw, &envelope); err != nil {
+			if err := json.Unmarshal(raw, &meta); err != nil {
 				t.Fatal(err)
 			}
-			plain, err := rc.crypto.Decrypt(envelope.Nonce, envelope.Ciphertext)
+			if meta.Type == "stop_sharing" {
+				controlType = meta.Type
+				continue
+			}
+			plain, err := rc.crypto.Decrypt(meta.Nonce, meta.Ciphertext)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1690,14 +1696,17 @@ func TestBrokerStopSharingGracefullySendsStopEventBeforeClosing(t *testing.T) {
 			if err := json.Unmarshal(plain, &msg); err != nil {
 				t.Fatal(err)
 			}
-			types = append(types, msg.Type)
+			gatewayTypes = append(gatewayTypes, msg.Type)
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for relayed message %d", i)
 		}
 	}
 
-	if len(types) != 2 || types[0] != EventStatus || types[1] != "sharing_stopped" {
-		t.Fatalf("unexpected graceful shutdown ordering: %v", types)
+	if len(gatewayTypes) != 2 || gatewayTypes[0] != EventStatus || gatewayTypes[1] != "sharing_stopped" {
+		t.Fatalf("unexpected graceful shutdown ordering: %v", gatewayTypes)
+	}
+	if controlType != "stop_sharing" {
+		t.Fatalf("expected stop_sharing control message, got %q", controlType)
 	}
 }
 

@@ -48,6 +48,7 @@ class _AppShellState extends ConsumerState<AppShell>
   bool _wasConnectedBeforeBackground = false;
   bool _hasConnected = false;
   bool _bootstrapReconnectIssued = false;
+  bool _bootstrapSelectionEvaluated = false;
 
   @override
   void initState() {
@@ -228,20 +229,19 @@ class _AppShellState extends ConsumerState<AppShell>
       persistLiveProjection();
     });
 
-    final shouldBootstrapConnect = !_demoMode &&
+    if (!_demoMode &&
         workspaceCache.initialized &&
-        workspaceCache.selectedWorkspaceKey != null &&
-        workspaceCache.selectedWorkspaceKey!.isNotEmpty &&
-        !_bootstrapReconnectIssued;
-    if (shouldBootstrapConnect) {
-      _bootstrapReconnectIssued = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(connectionProvider.notifier).restoreSelectedWorkspace();
-      });
-    }
-    if (workspaceCache.selectedWorkspaceKey == null ||
-        workspaceCache.selectedWorkspaceKey!.isEmpty) {
-      _bootstrapReconnectIssued = false;
+        !_bootstrapSelectionEvaluated) {
+      _bootstrapSelectionEvaluated = true;
+      final selectedWorkspaceKey = workspaceCache.selectedWorkspaceKey;
+      if (selectedWorkspaceKey != null &&
+          selectedWorkspaceKey.isNotEmpty &&
+          !_bootstrapReconnectIssued) {
+        _bootstrapReconnectIssued = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          ref.read(connectionProvider.notifier).restoreSelectedWorkspace();
+        });
+      }
     }
 
     if (!_demoMode && !workspaceCache.initialized) {

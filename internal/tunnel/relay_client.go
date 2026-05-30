@@ -569,7 +569,7 @@ func (rc *RelayClient) DestroyRoom() error {
 	data, err := json.Marshal(struct {
 		Type string `json:"type"`
 	}{
-		Type: "destroy_room",
+		Type: "stop_sharing",
 	})
 	if err != nil {
 		return err

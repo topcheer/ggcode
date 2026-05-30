@@ -185,7 +185,7 @@ func stopDetachedTunnelGracefully(sess *tunnel.Session, broker *tunnel.Broker, t
 		return
 	}
 	if sess != nil {
-		sess.StopGracefully(timeout)
+		sess.DestroyGracefully(timeout)
 	}
 }
 
