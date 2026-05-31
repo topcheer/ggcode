@@ -343,6 +343,15 @@ func (b *Broker) SessionID() string {
 	return b.sessionID
 }
 
+func (b *Broker) AuthorityEpoch() uint64 {
+	b.sessionMu.RLock()
+	defer b.sessionMu.RUnlock()
+	if b.sessionGeneration == 0 {
+		return 1
+	}
+	return b.sessionGeneration
+}
+
 func (b *Broker) sessionState() (string, uint64) {
 	b.sessionMu.RLock()
 	defer b.sessionMu.RUnlock()
@@ -435,6 +444,15 @@ func (b *Broker) BindSession(sessionID string) bool {
 	return changed
 }
 
+func (b *Broker) SetAuthorityEpoch(epoch uint64) {
+	if epoch == 0 {
+		epoch = 1
+	}
+	b.sessionMu.Lock()
+	b.sessionGeneration = epoch
+	b.sessionMu.Unlock()
+}
+
 func (b *Broker) SwitchSession(sessionID string) {
 	if !b.BindSession(sessionID) && strings.TrimSpace(sessionID) == "" {
 		return
@@ -478,21 +496,21 @@ func (b *Broker) sendActiveSession(sessionID string) {
 	if b == nil || b.session == nil {
 		return
 	}
-	_ = b.session.SendActiveSession(sessionID)
+	_ = b.session.SendActiveSession(sessionID, b.AuthorityEpoch())
 }
 
 func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
 	if b == nil || b.session == nil {
 		return
 	}
-	_ = b.session.SendActiveSessionWithMode(sessionID, mode)
+	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch())
 }
 
 func (b *Broker) markRelayReady() {
 	if b == nil || b.session == nil {
 		return
 	}
-	_ = b.session.SendServerReady()
+	_ = b.session.SendServerReady(b.AuthorityEpoch())
 }
 
 func (b *Broker) resetSessionPreservingActiveText() {
@@ -750,35 +768,58 @@ type relayRecoveryPlan struct {
 }
 
 func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID string) bool {
-	if info.SessionID != currentSessionID || info.HistoryCount == 0 {
+	if info.SessionID != currentSessionID {
 		return false
 	}
-	b.snapshotMu.RLock()
-	provider := b.replayProvider
-	b.snapshotMu.RUnlock()
-	if provider == nil {
-		return true
+	if info.AuthorityEpoch == 0 || info.AuthorityEpoch != b.AuthorityEpoch() {
+		return false
 	}
-	events := provider()
+	events, available := b.canonicalReplayState()
+	if !available {
+		return false
+	}
 	if len(events) != info.HistoryCount {
 		return false
+	}
+	if ProjectionHash(events) != strings.TrimSpace(info.ProjectionHash) {
+		return false
+	}
+	if len(events) == 0 {
+		return strings.TrimSpace(info.LastEventID) == ""
 	}
 	lastEventID := events[len(events)-1].EventID
 	return lastEventID != "" && lastEventID == info.LastEventID
 }
 
 func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID string) (relayRecoveryPlan, []GatewayMessage) {
-	if info.SessionID != currentSessionID {
-		return relayRecoveryPlan{replayFrom: 0}, b.canonicalReplayEvents()
+	events, available := b.canonicalReplayState()
+	if !available {
+		return relayRecoveryPlan{reset: info.HistoryCount > 0}, nil
 	}
-	events := b.canonicalReplayEvents()
+	currentAuthority := b.AuthorityEpoch()
+	if info.AuthorityEpoch == 0 || info.AuthorityEpoch != currentAuthority {
+		if len(events) == 0 && info.HistoryCount == 0 {
+			return relayRecoveryPlan{trusted: true}, events
+		}
+		return relayRecoveryPlan{reset: info.HistoryCount > 0, replayFrom: 0}, events
+	}
+	if info.SessionID != currentSessionID {
+		return relayRecoveryPlan{reset: info.HistoryCount > 0, replayFrom: 0}, events
+	}
 	if len(events) == 0 {
-		return relayRecoveryPlan{trusted: true}, nil
+		if info.HistoryCount == 0 && strings.TrimSpace(info.LastEventID) == "" && strings.TrimSpace(info.ProjectionHash) == "" {
+			return relayRecoveryPlan{trusted: true}, nil
+		}
+		return relayRecoveryPlan{reset: true, replayFrom: 0}, nil
 	}
 	if info.HistoryCount == 0 {
 		return relayRecoveryPlan{replayFrom: 0}, events
 	}
 	if info.HistoryCount > len(events) || info.LastEventID == "" {
+		return relayRecoveryPlan{reset: true, replayFrom: 0}, events
+	}
+	prefixHash := ProjectionHashPrefix(events, info.HistoryCount)
+	if prefixHash == "" || prefixHash != strings.TrimSpace(info.ProjectionHash) {
 		return relayRecoveryPlan{reset: true, replayFrom: 0}, events
 	}
 	last := events[info.HistoryCount-1].EventID
@@ -1450,11 +1491,12 @@ func (b *Broker) enqueueWithBytes(eventType, streamID string, dataBytes []byte, 
 	b.outMu.Lock()
 	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
-		SessionID: b.SessionID(),
-		EventID:   fmt.Sprintf("ev-%09d", eventNum),
-		StreamID:  streamID,
-		Type:      eventType,
-		Data:      dataBytes,
+		SessionID:      b.SessionID(),
+		EventID:        fmt.Sprintf("ev-%09d", eventNum),
+		StreamID:       streamID,
+		AuthorityEpoch: b.AuthorityEpoch(),
+		Type:           eventType,
+		Data:           dataBytes,
 	}
 	var wait <-chan struct{}
 	if waitForSend {
@@ -1493,6 +1535,20 @@ func (b *Broker) canonicalReplayEvents() []GatewayMessage {
 		return nil
 	}
 	return provider()
+}
+
+func (b *Broker) canonicalReplayState() ([]GatewayMessage, bool) {
+	b.snapshotMu.RLock()
+	provider := b.replayProvider
+	b.snapshotMu.RUnlock()
+	if provider == nil {
+		return nil, false
+	}
+	events := provider()
+	if events == nil {
+		return nil, false
+	}
+	return events, true
 }
 
 func (b *Broker) replayCanonicalEvents(reset bool, events []GatewayMessage) bool {

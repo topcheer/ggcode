@@ -1156,6 +1156,11 @@ func TestBrokerHandleRelayConnectedSkipsReseedWhenRelayStateRetained(t *testing.
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
+	events := []GatewayMessage{
+		{SessionID: "sess-local", EventID: "ev-000000001", Type: EventSessionInfo},
+		{SessionID: "sess-local", EventID: "ev-000000002", Type: EventStatus},
+	}
+	b.SetReplayProvider(func() []GatewayMessage { return events })
 	b.SetSnapshotProvider(func() BrokerSnapshot {
 		return BrokerSnapshot{
 			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
@@ -1164,9 +1169,12 @@ func TestBrokerHandleRelayConnectedSkipsReseedWhenRelayStateRetained(t *testing.
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "sess-local",
-		HistoryCount: 2,
+		Role:           "server",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   2,
+		LastEventID:    "ev-000000002",
+		ProjectionHash: ProjectionHash(events),
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1179,12 +1187,20 @@ func TestBrokerHandleRelayConnectedRetainedStateAdvancesEventCursor(t *testing.T
 	b, d := newBrokerForTest()
 	defer b.Stop()
 	b.sessionID = "sess-local"
+	events := []GatewayMessage{
+		{SessionID: "sess-local", EventID: "ev-000000001", Type: EventSessionInfo},
+		{SessionID: "sess-local", EventID: "ev-000000002", Type: EventStatus},
+		{SessionID: "sess-local", EventID: "ev-000000003", Type: EventActivity},
+	}
+	b.SetReplayProvider(func() []GatewayMessage { return events })
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "sess-local",
-		HistoryCount: 3,
-		LastEventID:  "ev-000000003",
+		Role:           "server",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   3,
+		LastEventID:    "ev-000000003",
+		ProjectionHash: ProjectionHash(events),
 	})
 	time.Sleep(50 * time.Millisecond)
 	if msgs := d.drain(); len(msgs) != 0 {
@@ -1240,10 +1256,12 @@ func TestBrokerHandleRelayConnectedReplaysOnlyMissingSuffixForRecoveredRelayHist
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "sess-local",
-		HistoryCount: 2,
-		LastEventID:  "ev-000000002",
+		Role:           "server",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   2,
+		LastEventID:    "ev-000000002",
+		ProjectionHash: ProjectionHashPrefix(b.canonicalReplayEvents(), 2),
 	})
 	time.Sleep(50 * time.Millisecond)
 
@@ -1326,10 +1344,11 @@ func TestBrokerHandleRelayConnectedResetsSameSessionWhenRecoveredHistoryDiverges
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "sess-local",
-		HistoryCount: 2,
-		LastEventID:  "ev-remote-bad",
+		Role:           "server",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   2,
+		LastEventID:    "ev-remote-bad",
 	})
 	time.Sleep(50 * time.Millisecond)
 
@@ -1388,10 +1407,12 @@ func TestBrokerHandleRelayConnectedMarksTrustedRecoveredRelayReady(t *testing.T)
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
-		LastEventID:  "ev-000000001",
+		Role:           "server",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
+		LastEventID:    "ev-000000001",
+		ProjectionHash: ProjectionHash([]GatewayMessage{{SessionID: "sess-local", EventID: "ev-000000001", Type: EventSessionInfo}}),
 	})
 	time.Sleep(50 * time.Millisecond)
 
@@ -1417,12 +1438,16 @@ func TestBrokerHandleRelayConnectedMarksTrustedEmptyServerReady(t *testing.T) {
 	live := mustTestRelayClient("wss://test.local")
 	defer live.Close()
 	b.session.client = live
+	b.sessionID = ""
+	b.SetReplayProvider(func() []GatewayMessage { return []GatewayMessage{} })
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "server",
-		SessionID:    "",
-		HistoryCount: 0,
-		LastEventID:  "",
+		Role:           "server",
+		SessionID:      "",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   0,
+		LastEventID:    "",
+		ProjectionHash: "",
 	})
 	time.Sleep(50 * time.Millisecond)
 
@@ -1458,9 +1483,10 @@ func TestBrokerHandleFirstClientConnectedPublishesAuthoritativeSnapshotWhenState
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1492,9 +1518,10 @@ func TestBrokerHandleAdditionalClientConnectedReseedsWhenLocalReplayIsEmpty(t *t
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1516,11 +1543,18 @@ func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *test
 	b.sessionID = "sess-local"
 	b.clientProjectionSeeded.Store(true)
 	b.PushText("msg-live", "partial answer")
+	events := []GatewayMessage{
+		{SessionID: "sess-local", EventID: "ev-000000001", Type: EventSessionInfo},
+	}
+	b.SetReplayProvider(func() []GatewayMessage { return events })
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
+		LastEventID:    "ev-000000001",
+		ProjectionHash: ProjectionHash(events),
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1570,10 +1604,11 @@ func TestBrokerHandleClientConnectedReseedsWhenLastEventDiffers(t *testing.T) {
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
-		LastEventID:  "ev-000000001",
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
+		LastEventID:    "ev-000000001",
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1626,9 +1661,10 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 1,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   1,
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1687,6 +1723,7 @@ func TestBrokerHandleUnsupportedOldClientConnectedSkipsPerClientBootstrap(t *tes
 	b.handleRelayConnected(RelayConnectedState{
 		Role:            "client",
 		SessionID:       "sess-local",
+		AuthorityEpoch:  b.AuthorityEpoch(),
 		HistoryCount:    0,
 		ProtocolVersion: ShareProtocolV2,
 	})
@@ -1752,6 +1789,7 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 	b.handleRelayConnected(RelayConnectedState{
 		Role:            "client",
 		SessionID:       "sess-local",
+		AuthorityEpoch:  b.AuthorityEpoch(),
 		HistoryCount:    0,
 		ProtocolVersion: ShareProtocolV3,
 	})
@@ -1763,6 +1801,7 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 	b.handleRelayConnected(RelayConnectedState{
 		Role:            "client",
 		SessionID:       "sess-local",
+		AuthorityEpoch:  b.AuthorityEpoch(),
 		HistoryCount:    1,
 		LastEventID:     "ev-remote-tail",
 		ProtocolVersion: ShareProtocolV3,
@@ -1801,7 +1840,7 @@ func TestBrokerHandleClientConnectedCoalescesDuplicateAuthoritativeSnapshots(t *
 	})
 	b.SetReplayProvider(func() []GatewayMessage { return nil })
 
-	info := RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 0}
+	info := RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 0}
 	b.handleRelayConnected(info)
 	b.handleRelayConnected(info)
 	time.Sleep(50 * time.Millisecond)
@@ -1854,7 +1893,7 @@ func TestBrokerHandleClientConnectedCoalescesDuplicateCanonicalReplay(t *testing
 		}
 	})
 
-	info := RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 1}
+	info := RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 1}
 	b.handleRelayConnected(info)
 	b.handleRelayConnected(info)
 	time.Sleep(50 * time.Millisecond)
@@ -1890,9 +1929,10 @@ func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 0,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   0,
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -1939,9 +1979,10 @@ func TestBrokerHandleClientConnectedDropsStaleSnapshotAfterSessionSwitch(t *test
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 0,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   0,
 	})
 	b.SwitchSession("sess-next")
 	d.drain()
@@ -1969,7 +2010,7 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	b.flushAllText()
 	d.drain()
 
-	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", HistoryCount: 0})
+	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 0})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
@@ -2008,9 +2049,10 @@ func TestBrokerClientConnectedSerializesConcurrentLiveEventsAfterSnapshot(t *tes
 	})
 
 	b.handleRelayConnected(RelayConnectedState{
-		Role:         "client",
-		SessionID:    "sess-local",
-		HistoryCount: 0,
+		Role:           "client",
+		SessionID:      "sess-local",
+		AuthorityEpoch: b.AuthorityEpoch(),
+		HistoryCount:   0,
 	})
 	b.PushToolResult("tool-1", "bash", "done", false)
 	b.PushText("msg-after-tool", "follow-up text")

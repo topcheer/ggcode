@@ -12,7 +12,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -474,61 +473,11 @@ func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
 // renderQRFromString generates a terminal-rendered QR code from a text string (URL).
 // Uses go-qrcode to generate the bitmap, then renders as Unicode half-block chars.
 func renderQRFromString(content string) (string, error) {
-	if strings.TrimSpace(content) == "" {
-		return "", fmt.Errorf("empty QR content")
-	}
-	code, err := qrcode.New(strings.TrimSpace(content), qrcode.Low)
+	rendered, err := renderCompactTerminalQRCode(content)
 	if err != nil {
 		return "", fmt.Errorf("generate QR: %w", err)
 	}
-	bitmap := code.Bitmap()
-	moduleCount := len(bitmap)
-	if moduleCount == 0 {
-		return "", fmt.Errorf("empty QR bitmap")
-	}
-
-	// Ensure even row count for half-block rendering
-	if moduleCount%2 == 1 {
-		padding := make([]bool, moduleCount)
-		bitmap = append(bitmap, padding)
-		moduleCount++
-	}
-
-	const (
-		whiteAll   = "█"
-		whiteBlack = "▀"
-		blackWhite = "▄"
-		blackAll   = " "
-	)
-
-	var lines []string
-	// Top border
-	lines = append(lines, strings.Repeat(whiteAll, moduleCount+2))
-
-	for row := 0; row < moduleCount; row += 2 {
-		var b strings.Builder
-		b.WriteString(whiteAll)
-		for col := 0; col < len(bitmap[row]); col++ {
-			top := bitmap[row][col]
-			bottom := bitmap[row+1][col]
-			switch {
-			case !top && !bottom:
-				b.WriteString(whiteAll)
-			case !top && bottom:
-				b.WriteString(whiteBlack)
-			case top && !bottom:
-				b.WriteString(blackWhite)
-			default:
-				b.WriteString(blackAll)
-			}
-		}
-		b.WriteString(whiteAll)
-		lines = append(lines, b.String())
-	}
-	// Bottom border
-	lines = append(lines, strings.Repeat(whiteAll, moduleCount+2))
-
-	return strings.Join(lines, "\n"), nil
+	return rendered, nil
 }
 
 // ---- Binding entries ----

@@ -56,8 +56,10 @@ type RelayConnectedState struct {
 	Role            string
 	SessionID       string
 	Generation      uint64
+	AuthorityEpoch  uint64
 	HistoryCount    int
 	LastEventID     string
+	ProjectionHash  string
 	ProtocolVersion int
 	ResumeComplete  bool
 	ShareMode       string
@@ -320,19 +322,21 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		}
 
 		var relayMsg struct {
-			Type        string          `json:"type"`
-			SessionID   string          `json:"session_id,omitempty"`
-			EventID     string          `json:"event_id,omitempty"`
-			StreamID    string          `json:"stream_id,omitempty"`
-			ClientID    string          `json:"client_id,omitempty"`
-			MessageID   string          `json:"message_id,omitempty"`
-			Generation  uint64          `json:"generation,omitempty"`
-			LastEventID string          `json:"last_event_id,omitempty"`
-			Count       int             `json:"count,omitempty"`
-			Nonce       string          `json:"nonce,omitempty"`
-			Ciphertext  string          `json:"ciphertext,omitempty"`
-			Role        string          `json:"role,omitempty"`
-			Data        json.RawMessage `json:"data,omitempty"`
+			Type           string          `json:"type"`
+			SessionID      string          `json:"session_id,omitempty"`
+			EventID        string          `json:"event_id,omitempty"`
+			StreamID       string          `json:"stream_id,omitempty"`
+			ClientID       string          `json:"client_id,omitempty"`
+			MessageID      string          `json:"message_id,omitempty"`
+			Generation     uint64          `json:"generation,omitempty"`
+			AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
+			LastEventID    string          `json:"last_event_id,omitempty"`
+			ProjectionHash string          `json:"projection_hash,omitempty"`
+			Count          int             `json:"count,omitempty"`
+			Nonce          string          `json:"nonce,omitempty"`
+			Ciphertext     string          `json:"ciphertext,omitempty"`
+			Role           string          `json:"role,omitempty"`
+			Data           json.RawMessage `json:"data,omitempty"`
 		}
 		if json.Unmarshal(raw, &relayMsg) != nil {
 			continue
@@ -342,11 +346,13 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		case "connected":
 			debug.Log("tunnel", "relay-client: confirmed as %s", relayMsg.Role)
 			state := RelayConnectedState{
-				Role:         relayMsg.Role,
-				SessionID:    relayMsg.SessionID,
-				Generation:   relayMsg.Generation,
-				HistoryCount: relayMsg.Count,
-				LastEventID:  relayMsg.LastEventID,
+				Role:           relayMsg.Role,
+				SessionID:      relayMsg.SessionID,
+				Generation:     relayMsg.Generation,
+				AuthorityEpoch: relayMsg.AuthorityEpoch,
+				HistoryCount:   relayMsg.Count,
+				LastEventID:    relayMsg.LastEventID,
+				ProjectionHash: relayMsg.ProjectionHash,
 			}
 			if state.Role == "" {
 				state.Role = rc.role
@@ -444,6 +450,9 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 			if msg.StreamID == "" {
 				msg.StreamID = relayMsg.StreamID
 			}
+			if msg.AuthorityEpoch == 0 {
+				msg.AuthorityEpoch = relayMsg.AuthorityEpoch
+			}
 
 			// Handle server_ack specially — deliver to ack callback, not general message handler.
 			if msg.Type == EventServerAck {
@@ -486,11 +495,11 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 	}
 }
 
-func (rc *RelayClient) SendActiveSession(sessionID string) error {
-	return rc.SendActiveSessionWithMode(sessionID, "")
+func (rc *RelayClient) SendActiveSession(sessionID string, authorityEpoch uint64) error {
+	return rc.SendActiveSessionWithMode(sessionID, "", authorityEpoch)
 }
 
-func (rc *RelayClient) SendServerReady() error {
+func (rc *RelayClient) SendServerReady(authorityEpoch uint64) error {
 	rc.closeMu.Lock()
 	if rc.closed {
 		rc.closeMu.Unlock()
@@ -498,9 +507,11 @@ func (rc *RelayClient) SendServerReady() error {
 	}
 	rc.closeMu.Unlock()
 	data, err := json.Marshal(struct {
-		Type string `json:"type"`
+		Type           string `json:"type"`
+		AuthorityEpoch uint64 `json:"authority_epoch,omitempty"`
 	}{
-		Type: EventServerReady,
+		Type:           EventServerReady,
+		AuthorityEpoch: authorityEpoch,
 	})
 	if err != nil {
 		return err
@@ -508,7 +519,7 @@ func (rc *RelayClient) SendServerReady() error {
 	return rc.enqueueRaw(data)
 }
 
-func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string) error {
+func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64) error {
 	rc.closeMu.Lock()
 	if rc.closed {
 		rc.closeMu.Unlock()
@@ -519,15 +530,17 @@ func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string) error {
 		return nil
 	}
 	data, err := json.Marshal(struct {
-		Type       string          `json:"type"`
-		SessionID  string          `json:"session_id,omitempty"`
-		ResumeMode string          `json:"resume_mode,omitempty"`
-		Data       json.RawMessage `json:"data,omitempty"`
+		Type           string          `json:"type"`
+		SessionID      string          `json:"session_id,omitempty"`
+		AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
+		ResumeMode     string          `json:"resume_mode,omitempty"`
+		Data           json.RawMessage `json:"data,omitempty"`
 	}{
-		Type:       EventActiveSession,
-		SessionID:  sessionID,
-		ResumeMode: mode,
-		Data:       mustRawJSON(ActiveSessionData{SessionID: sessionID}),
+		Type:           EventActiveSession,
+		SessionID:      sessionID,
+		AuthorityEpoch: authorityEpoch,
+		ResumeMode:     mode,
+		Data:           mustRawJSON(ActiveSessionData{SessionID: sessionID}),
 	})
 	if err != nil {
 		return err
@@ -580,21 +593,25 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 		relayMsg["message_id"] = msg.MessageID
 	}
 	envelope := struct {
-		Type       string `json:"type"`
-		SessionID  string `json:"session_id,omitempty"`
-		EventID    string `json:"event_id,omitempty"`
-		StreamID   string `json:"stream_id,omitempty"`
-		MessageID  string `json:"message_id,omitempty"`
-		Nonce      string `json:"nonce"`
-		Ciphertext string `json:"ciphertext"`
+		Type           string `json:"type"`
+		SessionID      string `json:"session_id,omitempty"`
+		EventID        string `json:"event_id,omitempty"`
+		StreamID       string `json:"stream_id,omitempty"`
+		MessageID      string `json:"message_id,omitempty"`
+		AuthorityEpoch uint64 `json:"authority_epoch,omitempty"`
+		EventHash      string `json:"event_hash,omitempty"`
+		Nonce          string `json:"nonce"`
+		Ciphertext     string `json:"ciphertext"`
 	}{
-		Type:       relayMsg["type"],
-		SessionID:  msg.SessionID,
-		EventID:    msg.EventID,
-		StreamID:   msg.StreamID,
-		MessageID:  msg.MessageID,
-		Nonce:      relayMsg["nonce"],
-		Ciphertext: relayMsg["ciphertext"],
+		Type:           relayMsg["type"],
+		SessionID:      msg.SessionID,
+		EventID:        msg.EventID,
+		StreamID:       msg.StreamID,
+		MessageID:      msg.MessageID,
+		AuthorityEpoch: msg.AuthorityEpoch,
+		EventHash:      ProjectionEventHash(msg),
+		Nonce:          relayMsg["nonce"],
+		Ciphertext:     relayMsg["ciphertext"],
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {

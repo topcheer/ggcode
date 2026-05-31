@@ -436,6 +436,52 @@ void main() {
     expect(text.text, 'done');
   });
 
+  test('subagent_complete finalizes live agent state and streaming text', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000001',
+        type: 'subagent_text',
+        data: {
+          'agent_id': 'sa-1',
+          'id': 'msg-1',
+          'chunk': 'still running',
+        },
+      ),
+    );
+
+    var messages = container.read(chatProvider);
+    expect(messages.single.streaming, isTrue);
+    expect(container.read(subagentProvider)['sa-1']!.completed, isFalse);
+
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-1',
+        eventId: 'ev-000000002',
+        type: 'subagent_complete',
+        data: {
+          'agent_id': 'sa-1',
+          'name': 'researcher',
+          'summary': 'done',
+          'success': true,
+        },
+      ),
+    );
+
+    final agent = container.read(subagentProvider)['sa-1']!;
+    expect(agent.completed, isTrue);
+    expect(agent.status, 'completed');
+    expect(agent.summary, 'done');
+
+    messages = container.read(chatProvider);
+    final text = messages.firstWhere((m) => m.id == 'sa-1-msg-1');
+    expect(text.streaming, isFalse);
+  });
+
   test('ChatNotifier formats teammate_spawn tool results', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -613,10 +659,12 @@ void main() {
 
     final notifier = container.read(chatProvider.notifier);
     notifier.addUserMessage('hello from mobile');
+    final localId = container.read(chatProvider).single.id;
 
     final absorbed = notifier.bindRemoteUserMessage(
       'hello from mobile',
       remoteMessageId: 'ev-0001',
+      localMessageId: localId,
     );
 
     expect(absorbed, isTrue);
@@ -624,6 +672,31 @@ void main() {
     expect(messages, hasLength(1));
     expect(messages.single.id, 'ev-0001');
     expect(messages.single.text, 'hello from mobile');
+  });
+
+  test('ChatNotifier binds remote user echo by exact local message id', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.addUserMessage('same text');
+    notifier.addUserMessage('same text');
+    final messagesBefore = container.read(chatProvider);
+    final firstLocalId = messagesBefore.first.id;
+    final secondLocalId = messagesBefore.last.id;
+
+    final absorbed = notifier.bindRemoteUserMessage(
+      'same text',
+      remoteMessageId: 'ev-0002',
+      localMessageId: firstLocalId,
+    );
+
+    expect(absorbed, isTrue);
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(2));
+    expect(messages.first.id, 'ev-0002');
+    expect(messages.first.text, 'same text');
+    expect(messages.last.id, secondLocalId);
   });
 
   test('ChatNotifier can render cron trigger as a non-user message', () {
@@ -675,6 +748,35 @@ void main() {
     expect(messages[0].text, 'git status');
     expect(messages[1].kind, 'shell_output');
     expect(messages[1].text, '\u001b[31mfail\u001b[0m\n');
+  });
+
+  test('ConnectionNotifier absorbs user_message by echoed local message id',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final chatNotifier = container.read(chatProvider.notifier);
+    chatNotifier.addUserMessage('same text');
+    chatNotifier.addUserMessage('same text');
+    final localMessages = container.read(chatProvider);
+    final firstLocalId = localMessages.first.id;
+    final secondLocalId = localMessages.last.id;
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-user-1',
+      type: 'user_message',
+      data: {
+        'text': 'same text',
+        'message_id': firstLocalId,
+      },
+    ));
+
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(2));
+    expect(messages.first.id, 'ev-user-1');
+    expect(messages.last.id, secondLocalId);
   });
 
   test('workspace cache persists snapshots and restores selected session',
@@ -929,6 +1031,61 @@ void main() {
 
     expect(container.read(displayedAgentStatusProvider), 'busy');
     expect(container.read(displayedAgentStatusMessageProvider), 'read_file');
+  });
+
+  test('historical view hides subagent and teammate tabs and messages',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    await cache.registerLiveSession('sess-history', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'main-1',
+          text: 'main reply',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'sub-1',
+          sourceId: 'agent-1',
+          sourceName: 'Writer',
+          text: 'subagent reply',
+          time: DateTime.parse('2026-01-01T00:00:01Z'),
+        ),
+      ],
+      subagents: {
+        'agent-1': SubagentInfo(
+          agentId: 'agent-1',
+          name: 'Writer',
+          task: 'Draft answer',
+        ),
+      },
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+    cache.markDisconnected();
+
+    expect(container.read(isHistoricalViewProvider), isTrue);
+    expect(container.read(displayedSubagentProvider), isEmpty);
+    expect(
+      container.read(displayedMessagesProvider).map((message) => message.id),
+      equals(['main-1']),
+    );
   });
 
   test('ConnectionNotifier keeps busy lifecycle separate from activity', () {
@@ -1559,6 +1716,72 @@ void main() {
   });
 
   test(
+      'ConnectionNotifier restore drops cached subagent and teammate artifacts',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    await cache.registerLiveSession('sess-restore', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'main-1',
+          text: 'main reply',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'sub-1',
+          sourceId: 'agent-1',
+          sourceName: 'Writer',
+          text: 'subagent reply',
+          time: DateTime.parse('2026-01-01T00:00:01Z'),
+        ),
+      ],
+      subagents: {
+        'agent-1': SubagentInfo(
+          agentId: 'agent-1',
+          name: 'Writer',
+          task: 'Draft answer',
+          completed: true,
+          success: true,
+        ),
+      },
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+    cache.markDisconnected();
+
+    container.read(chatProvider.notifier).clearMessages();
+    container.read(subagentProvider.notifier).clear();
+    container.read(sessionInfoProvider.notifier).set(null);
+
+    final notifier = container.read(connectionProvider.notifier);
+    final restored =
+        notifier.restoreProjectionFromCacheForTest(adoptCursor: false);
+
+    expect(restored, isTrue);
+    expect(container.read(subagentProvider), isEmpty);
+    expect(
+      container.read(chatProvider).map((message) => message.id),
+      equals(['main-1']),
+    );
+  });
+
+  test(
       'ConnectionNotifier does not restore cached projection after snapshot reset',
       () async {
     final info = proto.SessionInfoData(
@@ -1838,6 +2061,80 @@ void main() {
         'Resumed session: sess-rich',
         'Starting tunnel...',
       ]),
+    );
+  });
+
+  test(
+      'workspace cache drops cleaned up subagent tabs and messages from authoritative snapshots',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    await cache.registerLiveSession('sess-subagent', info,
+        lastEventId: 'ev-000000100');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'main-1',
+          text: 'main reply',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'sub-1',
+          sourceId: 'agent-1',
+          sourceName: 'Writer',
+          text: 'subagent reply',
+          time: DateTime.parse('2026-01-01T00:00:01Z'),
+        ),
+      ],
+      subagents: {
+        'agent-1': SubagentInfo(
+          agentId: 'agent-1',
+          name: 'Writer',
+          task: 'Draft answer',
+          completed: true,
+          success: true,
+        ),
+      },
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'main-1',
+          text: 'main reply',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000100',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+
+    final snapshot = cache.snapshotFor('sess-subagent');
+    expect(snapshot, isNotNull);
+    expect(snapshot!.subagents, isEmpty);
+    expect(
+      snapshot.messages.map((message) => message.id),
+      equals(['main-1']),
     );
   });
 

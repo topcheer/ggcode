@@ -9,7 +9,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/im"
 )
@@ -346,14 +345,13 @@ func (m *Model) pcShowQRCmd(sessionID string) tea.Cmd {
 		if err != nil {
 			return pcResultMsg{err: err}
 		}
-		qr, err := qrcode.New(uri, qrcode.Medium)
+		qr, err := renderCompactTerminalQRCode(uri)
 		if err != nil {
 			return pcResultMsg{err: err}
 		}
-		qr.DisableBorder = true
 		return pcResultMsg{
 			message:   "QR Code generated",
-			qrCode:    qr.ToSmallString(false),
+			qrCode:    qr,
 			inviteURI: uri,
 			showQR:    true,
 		}

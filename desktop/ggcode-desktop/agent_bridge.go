@@ -82,7 +82,9 @@ type AgentBridge struct {
 	tunnelBroker           *tunnel.Broker
 	tunnelProjectionBroker *tunnel.Broker
 	tunnelProjectionStore  *tunnel.ProjectionStore
+	tunnelProjectionBroken bool
 	tunnelMsgID            string
+	tunnelMsgNeedsFinalize bool
 	spawnedSet             map[string]bool // tracks which subagents have been announced to mobile
 	approvalRespCh         chan permission.Decision
 	approvalRequestID      string
@@ -134,10 +136,17 @@ func (b *AgentBridge) bindTunnelProjectionSession() {
 	}
 
 	broker := b.ensureTunnelProjectionBroker()
+	authorityEpoch := uint64(1)
+	b.mu.Lock()
+	b.tunnelProjectionBroken = false
+	b.mu.Unlock()
 	if store == nil {
 		var err error
 		store, err = tunnel.NewDefaultProjectionStore()
 		if err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
 			log.Printf("[desktop] projection store init failed for %s: %v", currentSes.ID, err)
 		} else {
 			b.mu.Lock()
@@ -151,13 +160,27 @@ func (b *AgentBridge) bindTunnelProjectionSession() {
 
 	broker.SwitchSession(currentSes.ID)
 	if store != nil {
+		var err error
+		authorityEpoch, err = store.AuthorityEpoch(currentSes.ID)
+		if err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
+			log.Printf("[desktop] projection authority epoch load failed for %s: %v", currentSes.ID, err)
+			authorityEpoch = 1
+		}
 		replay, err := store.ReplayEvents(currentSes.ID)
 		if err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
 			log.Printf("[desktop] projection replay load failed for %s: %v", currentSes.ID, err)
 		} else {
+			replay = b.hydrateProjectionReplayFromSessionLedger(currentSes, store, replay)
 			broker.PrimeEventIDs(replay)
 		}
 	}
+	broker.SetAuthorityEpoch(authorityEpoch)
 	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 		b.recordProjectionEvent(ev)
 	})
@@ -175,7 +198,12 @@ func (b *AgentBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
 	b.mu.Unlock()
 	if store != nil {
 		if err := store.Append(msg); err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
 			log.Printf("[desktop] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
+			b.RecordTunnelEvent(msg)
+			return
 		}
 	}
 	b.RecordTunnelEvent(msg)
@@ -211,6 +239,14 @@ func (b *AgentBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
 	return msgID + "-reasoning"
 }
 
+func (b *AgentBridge) markTunnelMainStreamActive() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelMsgID != "" {
+		b.tunnelMsgNeedsFinalize = true
+	}
+}
+
 func tunnelSubagentTextID(agentID string) string {
 	return fmt.Sprintf("sa-%s", agentID)
 }
@@ -219,14 +255,23 @@ func tunnelSubagentReasoningID(agentID string) string {
 	return fmt.Sprintf("sa-%s-reasoning", agentID)
 }
 
-func (b *AgentBridge) flushTunnelTextStream(broker *tunnel.Broker) {
+func (b *AgentBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {
 	if broker == nil {
 		return
 	}
+	b.mu.Lock()
+	if !force && !b.tunnelMsgNeedsFinalize {
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
 	broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 	msgID := b.ensureTunnelMsgID(broker)
 	broker.PushTextDone(msgID)
 	b.rotateTunnelMsgID(broker)
+	b.mu.Lock()
+	b.tunnelMsgNeedsFinalize = false
+	b.mu.Unlock()
 }
 
 func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
@@ -259,6 +304,8 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	})
 	broker.SetEventRecorder(nil)
 	if currentSes != nil && currentSes.ID != "" {
+		broker.BindSession(currentSes.ID)
+		broker.SetAuthorityEpoch(b.currentSessionTunnelAuthorityEpoch())
 		broker.AnnounceActiveSession(currentSes.ID)
 	}
 	if !working {
@@ -291,6 +338,7 @@ func (b *AgentBridge) ClearCurrentSession() {
 	b.mu.Lock()
 	projectionBroker := b.tunnelProjectionBroker
 	b.tunnelMsgID = ""
+	b.tunnelMsgNeedsFinalize = false
 	defer b.mu.Unlock()
 	b.currentSes = nil
 	if b.ui != nil {
@@ -312,6 +360,51 @@ func (b *AgentBridge) markTunnelSubagentSpawned(id string) bool {
 	return true
 }
 
+func (b *AgentBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
+	if sa == nil {
+		return
+	}
+	broker := b.currentTunnelBroker()
+	if broker == nil {
+		return
+	}
+
+	pushSpawn := func() {
+		if b.markTunnelSubagentSpawned(sa.ID) {
+			broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
+		}
+	}
+
+	switch sa.Status {
+	case subagent.StatusRunning:
+		pushSpawn()
+		broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
+
+	case subagent.StatusCompleted:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		if sa.Result != "" {
+			msgID := tunnelSubagentTextID(sa.ID)
+			broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
+		}
+		broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
+
+	case subagent.StatusFailed:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		errMsg := ""
+		if sa.Error != nil {
+			errMsg = sa.Error.Error()
+		}
+		broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
+
+	case subagent.StatusCancelled:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
+	}
+}
+
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
 	b := &AgentBridge{
 		cfg:        cfg,
@@ -328,6 +421,58 @@ func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config
 	}
 
 	return b
+}
+
+func (b *AgentBridge) registerSubagentCallbacks() {
+	if b.subAgentMgr == nil {
+		return
+	}
+
+	// Forward sub-agent events to UI.
+	b.subAgentMgr.SetOnUpdate(func(sa *subagent.SubAgent) {
+		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
+		if sa.Status == subagent.StatusRunning {
+			b.pushTunnelSubagentEvent(sa)
+		}
+	})
+	b.subAgentMgr.SetOnComplete(func(sa *subagent.SubAgent) {
+		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
+		b.pushTunnelSubagentEvent(sa)
+	})
+
+	// Forward sub-agent text chunks to mobile (unthrottled).
+	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
+			msgID := tunnelSubagentTextID(agentID)
+			broker.PushSubagentText(agentID, msgID, text, false)
+		}
+	})
+	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
+		if broker := b.currentTunnelBroker(); broker != nil {
+			if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
+				broker.PushSubagentReasoning(agentID, tunnelSubagentReasoningID(agentID), chunk, false)
+			}
+		}
+	})
+
+	// Forward sub-agent tool calls/results to mobile.
+	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
+			summary := detail
+			if summary == "" {
+				summary = toolArgSummary(toolName, args)
+			}
+			broker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
+		}
+	})
+	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
+			broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
+		}
+	})
 }
 
 func (b *AgentBridge) setupAgent() error {
@@ -389,76 +534,7 @@ func (b *AgentBridge) setupAgent() error {
 	})
 	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
 	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
-
-	// Forward sub-agent events to UI.
-	b.subAgentMgr.SetOnUpdate(func(sa *subagent.SubAgent) {
-		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
-
-		// Push to mobile client
-		if broker := b.currentTunnelBroker(); broker != nil {
-			switch sa.Status {
-			case subagent.StatusRunning:
-				if b.markTunnelSubagentSpawned(sa.ID) {
-					broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
-				}
-				broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
-
-			case subagent.StatusCompleted:
-				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-				if sa.Result != "" {
-					msgID := tunnelSubagentTextID(sa.ID)
-					broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
-				}
-				broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
-
-			case subagent.StatusFailed:
-				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-				errMsg := ""
-				if sa.Error != nil {
-					errMsg = sa.Error.Error()
-				}
-				broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
-
-			case subagent.StatusCancelled:
-				broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-				broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
-			}
-		}
-	})
-
-	// Forward sub-agent text chunks to mobile (unthrottled).
-	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			msgID := tunnelSubagentTextID(agentID)
-			broker.PushSubagentText(agentID, msgID, text, false)
-		}
-	})
-	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
-				broker.PushSubagentReasoning(agentID, tunnelSubagentReasoningID(agentID), chunk, false)
-			}
-		}
-	})
-
-	// Forward sub-agent tool calls/results to mobile.
-	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			summary := detail
-			if summary == "" {
-				summary = toolArgSummary(toolName, args)
-			}
-			broker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
-		}
-	})
-	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
-		}
-	})
+	b.registerSubagentCallbacks()
 
 	// Swarm manager.
 	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
@@ -825,6 +901,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 				b.ui.AppendAssistantText(ev.Text)
 				b.imRound.Text.WriteString(ev.Text)
 				if broker := b.currentTunnelBroker(); broker != nil {
+					b.markTunnelMainStreamActive()
 					broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 					broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
 				}
@@ -860,7 +937,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 					b.Emitter.TriggerTyping()
 				}
 				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker)
+					b.flushTunnelTextStream(broker, true)
 					broker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
 				}
 
@@ -909,13 +986,14 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 				})
 				// Mirror TUI: just close the current text stream and rotate.
 				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker)
+					b.flushTunnelTextStream(broker, true)
 				}
 
 			case provider.StreamEventReasoning:
 				if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
 					b.ui.AppendReasoning(chunk)
 					if broker := b.currentTunnelBroker(); broker != nil {
+						b.markTunnelMainStreamActive()
 						broker.PushReasoning(b.tunnelReasoningMsgID(broker), chunk)
 					}
 				}
@@ -937,13 +1015,13 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 				// when the entire agent run finishes (via RunStreamWithContent
 				// returning).
 				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker)
+					b.flushTunnelTextStream(broker, true)
 				}
 
 			case provider.StreamEventError:
 				// Mirror TUI: close text stream, push error, rotate.
 				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker)
+					b.flushTunnelTextStream(broker, true)
 					if ev.Error != nil {
 						broker.PushError(ev.Error.Error())
 					}
@@ -963,7 +1041,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 					Time:    time.Now(),
 				})
 				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker)
+					b.flushTunnelTextStream(broker, false)
 					broker.PushError(runErr.Error())
 				}
 			}
@@ -971,6 +1049,7 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 		// Mirror TUI handleDoneMsg: always push idle + clear activity
 		// when the entire agent run finishes (success or error).
 		if broker := b.currentTunnelBroker(); broker != nil {
+			b.flushTunnelTextStream(broker, false)
 			broker.PushStatus(tunnel.StatusIdle, "")
 			broker.PushActivity("")
 		}
@@ -1005,7 +1084,7 @@ func (b *AgentBridge) Cancel() {
 	b.mu.Unlock()
 	// Notify mobile client
 	if broker := b.currentTunnelBroker(); broker != nil {
-		b.flushTunnelTextStream(broker)
+		b.flushTunnelTextStream(broker, true)
 		broker.PushStatus(tunnel.StatusIdle, "cancelled")
 		broker.PushActivity("")
 	}
@@ -1951,32 +2030,81 @@ func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 	b.mu.Lock()
 	currentSes := b.currentSes
 	store := b.tunnelProjectionStore
+	broken := b.tunnelProjectionBroken
 	b.mu.Unlock()
-	if currentSes == nil {
+	if currentSes == nil || broken {
 		return nil
 	}
 	if store != nil && strings.TrimSpace(currentSes.ID) != "" {
 		events, err := store.ReplayEvents(currentSes.ID)
 		if err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
 			log.Printf("[desktop] projection replay load failed for %s: %v", currentSes.ID, err)
-		} else if len(events) > 0 {
+			return nil
+		}
+		if events != nil {
 			return events
 		}
 	}
-	if !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 {
-		return nil
+	return nil
+}
+
+func (b *AgentBridge) hydrateProjectionReplayFromSessionLedger(currentSes *session.Session, store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
+	if currentSes == nil || store == nil || !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 || strings.TrimSpace(currentSes.ID) == "" {
+		return replay
 	}
-	out := make([]tunnel.GatewayMessage, 0, len(currentSes.TunnelEvents))
+	seen := make(map[string]struct{}, len(replay))
+	for _, msg := range replay {
+		if msg.EventID != "" {
+			seen[msg.EventID] = struct{}{}
+		}
+	}
+	appended := false
 	for _, ev := range currentSes.TunnelEvents {
-		out = append(out, tunnel.GatewayMessage{
+		if ev.EventID != "" {
+			if _, ok := seen[ev.EventID]; ok {
+				continue
+			}
+			seen[ev.EventID] = struct{}{}
+		}
+		if err := store.Append(tunnel.GatewayMessage{
 			SessionID: currentSes.ID,
 			EventID:   ev.EventID,
 			StreamID:  ev.StreamID,
 			Type:      ev.Type,
-			Data:      ev.Data,
-		})
+			Data:      append(json.RawMessage(nil), ev.Data...),
+		}); err != nil {
+			log.Printf("[desktop] projection hydrate from session ledger failed for %s event=%s: %v", currentSes.ID, ev.EventID, err)
+			return replay
+		}
+		appended = true
 	}
-	return out
+	if !appended {
+		return replay
+	}
+	updated, err := store.ReplayEvents(currentSes.ID)
+	if err != nil {
+		log.Printf("[desktop] projection reload after session-ledger hydrate failed for %s: %v", currentSes.ID, err)
+		return replay
+	}
+	return updated
+}
+
+func (b *AgentBridge) currentSessionTunnelAuthorityEpoch() uint64 {
+	b.mu.Lock()
+	currentSes := b.currentSes
+	store := b.tunnelProjectionStore
+	b.mu.Unlock()
+	if currentSes == nil || strings.TrimSpace(currentSes.ID) == "" || store == nil {
+		return 1
+	}
+	epoch, err := store.AuthorityEpoch(currentSes.ID)
+	if err != nil || epoch == 0 {
+		return 1
+	}
+	return epoch
 }
 
 func desktopSessionMessagesToTunnelHistory(messages []provider.Message) []tunnel.HistoryEntry {
@@ -2391,9 +2519,22 @@ func (b *AgentBridge) PrepareCurrentSessionTunnelLedger() {
 	}
 	ses := b.currentSes
 	store := b.sessionStore
+	projectionStore := b.tunnelProjectionStore
+	projectionBroker := b.tunnelProjectionBroker
+	shareBroker := b.tunnelBroker
 	b.mu.Unlock()
 
 	_ = store.Save(ses)
+	if projectionStore != nil {
+		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
+			if projectionBroker != nil {
+				projectionBroker.SetAuthorityEpoch(epoch)
+			}
+			if shareBroker != nil {
+				shareBroker.SetAuthorityEpoch(epoch)
+			}
+		}
+	}
 }
 
 func (b *AgentBridge) ResetCurrentSessionTunnelLedger() {
@@ -2406,9 +2547,22 @@ func (b *AgentBridge) ResetCurrentSessionTunnelLedger() {
 	b.currentSes.TunnelEventsComplete = false
 	ses := b.currentSes
 	store := b.sessionStore
+	projectionStore := b.tunnelProjectionStore
+	projectionBroker := b.tunnelProjectionBroker
+	shareBroker := b.tunnelBroker
 	b.mu.Unlock()
 
 	_ = store.Save(ses)
+	if projectionStore != nil {
+		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
+			if projectionBroker != nil {
+				projectionBroker.SetAuthorityEpoch(epoch)
+			}
+			if shareBroker != nil {
+				shareBroker.SetAuthorityEpoch(epoch)
+			}
+		}
+	}
 }
 
 func (b *AgentBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {

@@ -20,12 +20,13 @@ type ProjectionStore struct {
 }
 
 type projectionFile struct {
-	Version     int              `json:"version"`
-	SessionID   string           `json:"session_id"`
-	SessionInfo *GatewayMessage  `json:"session_info,omitempty"`
-	Status      *GatewayMessage  `json:"status,omitempty"`
-	Activity    *GatewayMessage  `json:"activity,omitempty"`
-	Events      []GatewayMessage `json:"events,omitempty"`
+	Version        int              `json:"version"`
+	SessionID      string           `json:"session_id"`
+	AuthorityEpoch uint64           `json:"authority_epoch,omitempty"`
+	SessionInfo    *GatewayMessage  `json:"session_info,omitempty"`
+	Status         *GatewayMessage  `json:"status,omitempty"`
+	Activity       *GatewayMessage  `json:"activity,omitempty"`
+	Events         []GatewayMessage `json:"events,omitempty"`
 }
 
 func NewDefaultProjectionStore() (*ProjectionStore, error) {
@@ -57,6 +58,7 @@ func (s *ProjectionStore) Append(msg GatewayMessage) error {
 	}
 
 	cloned := cloneGatewayMessage(msg)
+	cloned.AuthorityEpoch = state.ensureAuthorityEpoch()
 	switch cloned.Type {
 	case EventSessionInfo:
 		state.SessionInfo = &cloned
@@ -87,6 +89,61 @@ func (s *ProjectionStore) ReplayEvents(sessionID string) ([]GatewayMessage, erro
 		return nil, err
 	}
 	return buildProjectionReplay(state), nil
+}
+
+func (s *ProjectionStore) AuthorityEpoch(sessionID string) (uint64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 1, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.loadLocked(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return state.ensureAuthorityEpoch(), nil
+}
+
+func (s *ProjectionStore) CutAuthority(sessionID string) (uint64, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.loadLocked(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	state.AuthorityEpoch = state.ensureAuthorityEpoch() + 1
+	state.SessionInfo = nil
+	state.Status = nil
+	state.Activity = nil
+	state.Events = nil
+	if err := s.saveLocked(state); err != nil {
+		return 0, err
+	}
+	return state.AuthorityEpoch, nil
+}
+
+func (s *ProjectionStore) DeleteSession(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.cache, sessionID)
+	path := s.sessionPath(sessionID)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func buildProjectionReplay(state *projectionFile) []GatewayMessage {
@@ -144,6 +201,12 @@ func buildProjectionReplay(state *projectionFile) []GatewayMessage {
 	}
 	out = append(out, events...)
 	SortReplayEvents(out)
+	authorityEpoch := state.ensureAuthorityEpoch()
+	for i := range out {
+		if out[i].AuthorityEpoch == 0 {
+			out[i].AuthorityEpoch = authorityEpoch
+		}
+	}
 	return out
 }
 
@@ -156,7 +219,7 @@ func (s *ProjectionStore) loadLocked(sessionID string) (*projectionFile, error) 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			state := &projectionFile{Version: 1, SessionID: sessionID}
+			state := &projectionFile{Version: 1, SessionID: sessionID, AuthorityEpoch: 1}
 			s.cache[sessionID] = state
 			return state, nil
 		}
@@ -173,6 +236,7 @@ func (s *ProjectionStore) loadLocked(sessionID string) (*projectionFile, error) 
 	if state.SessionID == "" {
 		state.SessionID = sessionID
 	}
+	state.ensureAuthorityEpoch()
 	s.cache[sessionID] = &state
 	return &state, nil
 }
@@ -184,6 +248,7 @@ func (s *ProjectionStore) saveLocked(state *projectionFile) error {
 	if state.Version == 0 {
 		state.Version = 1
 	}
+	state.ensureAuthorityEpoch()
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -207,4 +272,14 @@ func cloneGatewayMessage(msg GatewayMessage) GatewayMessage {
 		cloned.Data = append(json.RawMessage(nil), msg.Data...)
 	}
 	return cloned
+}
+
+func (s *projectionFile) ensureAuthorityEpoch() uint64 {
+	if s == nil || s.AuthorityEpoch == 0 {
+		if s != nil {
+			s.AuthorityEpoch = 1
+		}
+		return 1
+	}
+	return s.AuthorityEpoch
 }

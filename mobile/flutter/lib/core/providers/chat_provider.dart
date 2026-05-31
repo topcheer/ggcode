@@ -238,15 +238,33 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ];
   }
 
-  bool bindRemoteUserMessage(String text, {required String remoteMessageId}) {
-    final idx = state.lastIndexWhere(
-      (m) =>
-          m.isUser &&
-          m.sourceId == null &&
-          m.toolName == null &&
-          m.text == text &&
-          m.id.startsWith('user-'),
-    );
+  bool bindRemoteUserMessage(
+    String text, {
+    required String remoteMessageId,
+    String localMessageId = '',
+  }) {
+    var idx = -1;
+    final normalizedLocalMessageId = localMessageId.trim();
+    if (normalizedLocalMessageId.isNotEmpty) {
+      idx = state.lastIndexWhere(
+        (m) =>
+            m.isUser &&
+            m.sourceId == null &&
+            m.toolName == null &&
+            m.id == normalizedLocalMessageId &&
+            m.id.startsWith('user-'),
+      );
+    }
+    if (idx < 0) {
+      idx = state.lastIndexWhere(
+        (m) =>
+            m.isUser &&
+            m.sourceId == null &&
+            m.toolName == null &&
+            m.text == text &&
+            m.id.startsWith('user-'),
+      );
+    }
     if (idx < 0) {
       return false;
     }
@@ -707,6 +725,23 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         else
           state[i],
     ];
+  }
+
+  void finalizeStreamingMessagesForSource(String sourceId) {
+    var changed = false;
+    final next = [
+      for (final msg in state)
+        if (msg.sourceId == sourceId && msg.streaming)
+          () {
+            changed = true;
+            return msg.copyWith(streaming: false);
+          }()
+        else
+          msg,
+    ];
+    if (changed) {
+      state = next;
+    }
   }
 
   void addErrorMessage(String message, {String? messageId}) {

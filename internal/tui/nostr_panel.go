@@ -14,7 +14,6 @@ import (
 
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/nbd-wtf/go-nostr/nip19"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -355,11 +354,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		pubKey, _ := nostr.GetPublicKey(privateKey)
 		npub, _ := nip19.EncodePublicKey(pubKey)
 		var qrText string
-		qr, err := qrcode.New("nostr:"+npub, qrcode.Medium)
-		if err == nil {
-			qr.DisableBorder = true
-			qrText = qr.ToSmallString(false)
-		}
+		qrText, _ = renderCompactTerminalQRCode("nostr:" + npub)
 
 		var msg string
 		if len(fields) == 1 {

@@ -5,6 +5,9 @@ package tunnel
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/skip2/go-qrcode"
 )
 
 func TestQRCodeForURL(t *testing.T) {
@@ -68,6 +71,41 @@ func TestQRCodeForURLMinimalData(t *testing.T) {
 	}
 	if s == "" {
 		t.Error("QR code should handle minimal data")
+	}
+}
+
+func TestQRCodeForURLUsesCompactTerminalRendering(t *testing.T) {
+	url := "https://example.com/compact"
+	compact, err := QRCodeForURL(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defaultQR, err := qrcode.New(url, qrcode.Low)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRendered := strings.TrimRight(defaultQR.ToSmallString(false), "\n")
+	borderlessQR, err := newTerminalQRCode(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bitmap := padTerminalQRBitmap(borderlessQR.Bitmap(), terminalQRQuietZoneModules)
+
+	compactLines := strings.Split(compact, "\n")
+	defaultLines := strings.Split(defaultRendered, "\n")
+	if len(compactLines) >= len(defaultLines) {
+		t.Fatalf("expected compact QR to use fewer lines, got %d >= %d", len(compactLines), len(defaultLines))
+	}
+	if len(compactLines[0]) >= len(defaultLines[0]) {
+		t.Fatalf("expected compact QR to use fewer columns, got %d >= %d", len(compactLines[0]), len(defaultLines[0]))
+	}
+	expectedHeight := (len(bitmap) + 1) / 2
+	if len(compactLines) != expectedHeight {
+		t.Fatalf("expected compact QR height %d, got %d", expectedHeight, len(compactLines))
+	}
+	if gotWidth, wantWidth := utf8.RuneCountInString(compactLines[0]), len(bitmap[0]); gotWidth != wantWidth {
+		t.Fatalf("expected compact QR width %d, got %d", wantWidth, gotWidth)
 	}
 }
 

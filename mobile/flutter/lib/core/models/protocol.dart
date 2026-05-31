@@ -7,6 +7,7 @@ class WsMessage {
   final String? streamId;
   final String? messageId;
   final int? generation;
+  final int? authorityEpoch;
   final String type;
   final Map<String, dynamic>? data;
 
@@ -16,6 +17,7 @@ class WsMessage {
     this.streamId,
     this.messageId,
     this.generation,
+    this.authorityEpoch,
     required this.type,
     this.data,
   });
@@ -26,6 +28,7 @@ class WsMessage {
         'stream_id': streamId,
         'message_id': messageId,
         'generation': generation,
+        'authority_epoch': authorityEpoch,
         'type': type,
         'data': data,
       });
@@ -38,6 +41,7 @@ class WsMessage {
       streamId: map['stream_id'] as String?,
       messageId: map['message_id'] as String?,
       generation: (map['generation'] as num?)?.toInt(),
+      authorityEpoch: (map['authority_epoch'] as num?)?.toInt(),
       type: map['type'] as String,
       data: map['data'] as Map<String, dynamic>?,
     );

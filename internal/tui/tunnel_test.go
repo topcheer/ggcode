@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -752,8 +753,8 @@ func TestBindTunnelProjectionSessionHydratesIncompleteSessionLedgerIntoProjectio
 	m.SetSession(ses, store)
 
 	replay := m.currentSessionTunnelReplayEvents()
-	if len(replay) < 4 {
-		t.Fatalf("expected replay to include system + hydrated tunnel events, got %d", len(replay))
+	if len(replay) != 3 {
+		t.Fatalf("expected replay to stay projection-authoritative without hydrating incomplete session ledger, got %d", len(replay))
 	}
 	var sawReasoning, sawText, sawTextDone bool
 	for _, ev := range replay {
@@ -766,8 +767,8 @@ func TestBindTunnelProjectionSessionHydratesIncompleteSessionLedgerIntoProjectio
 			sawTextDone = true
 		}
 	}
-	if !sawReasoning || !sawText || !sawTextDone {
-		t.Fatalf("expected replay to include hydrated reasoning/text events, got %#v", replay)
+	if sawReasoning || sawText || sawTextDone {
+		t.Fatalf("expected incomplete session-ledger events to stay out of projection replay, got %#v", replay)
 	}
 }
 
@@ -1212,6 +1213,61 @@ func TestPushTunnelEventReasoningFinalizesBeforeText(t *testing.T) {
 	}
 }
 
+func TestHandleAgentDoneMsgFinalizesOpenTunnelStream(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.activeAgentRunID = 1
+	m.loading = true
+	m.tunnelMsgID = "msg-1"
+
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: "thinking"})
+	m.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "hello"})
+
+	next, _ := m.handleAgentDoneMsg(agentDoneMsg{RunID: 1})
+	*m = next
+
+	if m.tunnelMsgID == "msg-1" {
+		t.Fatal("expected agent done fallback to advance tunnel msg id")
+	}
+
+	var reasoningDone, textDone int
+	for _, ev := range m.session.TunnelEvents {
+		switch ev.Type {
+		case tunnel.EventReasoningDone:
+			reasoningDone++
+		case tunnel.EventTextDone:
+			textDone++
+		}
+	}
+	if reasoningDone == 0 {
+		t.Fatal("expected fallback reasoning_done event")
+	}
+	if textDone == 0 {
+		t.Fatal("expected fallback text_done event")
+	}
+}
+
+func TestTunnelMainStreamStateSurvivesModelCopies(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.setTunnelMainStream("msg-1", false)
+	m.activeAgentRunID = 1
+	m.loading = true
+
+	callbackCopy := *m
+	callbackCopy.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "hello"})
+	callbackCopy.pushTunnelEvent(provider.StreamEvent{Type: provider.StreamEventDone})
+
+	if got := m.currentTunnelMsgID(); got == "msg-1" {
+		t.Fatalf("expected shared tunnel state to advance after callback copy done, still %q", got)
+	}
+
+	next, _ := m.handleAgentDoneMsg(agentDoneMsg{RunID: 1})
+	*m = next
+
+	if got := m.currentTunnelMsgID(); got == "msg-1" {
+		t.Fatalf("expected tunnel msg id to remain advanced after done handling, still %q", got)
+	}
+}
+
 func TestCurrentTunnelHistoryMarksShellMessages(t *testing.T) {
 	m := newTestModel()
 	m.setShellMode(true)
@@ -1413,6 +1469,65 @@ func TestHandleTunnelClientCommand_EmptyText(t *testing.T) {
 	m.handleTunnelClientCommand(0, nil, cmd) // should not panic
 }
 
+func TestHandleTunnelInboundMsg_PreservesClientMessageIDWhenIdle(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 0,
+		text:       "hello from mobile",
+		messageID:  "user-1-123",
+	})
+	updated := got.(*Model)
+
+	if len(updated.session.TunnelEvents) == 0 {
+		t.Fatal("expected tunnel user_message event")
+	}
+	last := updated.session.TunnelEvents[len(updated.session.TunnelEvents)-1]
+	if last.Type != tunnel.EventUserMessage {
+		t.Fatalf("expected %q event, got %q", tunnel.EventUserMessage, last.Type)
+	}
+	var data tunnel.MessageData
+	if err := json.Unmarshal(last.Data, &data); err != nil {
+		t.Fatalf("unmarshal user_message data: %v", err)
+	}
+	if data.Text != "hello from mobile" {
+		t.Fatalf("unexpected user text %q", data.Text)
+	}
+	if data.MessageID != "user-1-123" {
+		t.Fatalf("expected client message id to round-trip, got %q", data.MessageID)
+	}
+}
+
+func TestHandleTunnelInboundMsg_PreservesClientMessageIDWhenBusy(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.cancelFunc = func() {}
+
+	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 0,
+		text:       "queued mobile input",
+		messageID:  "user-2-456",
+	})
+	updated := got.(*Model)
+
+	if updated.pendingSubmissionCount() != 1 {
+		t.Fatalf("expected one queued submission, got %d", updated.pendingSubmissionCount())
+	}
+	if len(updated.session.TunnelEvents) == 0 {
+		t.Fatal("expected tunnel user_message event")
+	}
+	last := updated.session.TunnelEvents[len(updated.session.TunnelEvents)-1]
+	if last.Type != tunnel.EventUserMessage {
+		t.Fatalf("expected %q event, got %q", tunnel.EventUserMessage, last.Type)
+	}
+	var data tunnel.MessageData
+	if err := json.Unmarshal(last.Data, &data); err != nil {
+		t.Fatalf("unmarshal user_message data: %v", err)
+	}
+	if data.MessageID != "user-2-456" {
+		t.Fatalf("expected queued client message id to round-trip, got %q", data.MessageID)
+	}
+}
+
 func TestHandleTunnelClientCommand_Interrupt(t *testing.T) {
 	m := newTestModel()
 	m.tunnelBroker = nil
@@ -1519,7 +1634,7 @@ func TestHandleTunnelInboundMsg_IgnoresStaleGeneration(t *testing.T) {
 	}
 }
 
-func TestHandleTunnelStartMsg_DoesNotSeedRelayBeforeClientConnect(t *testing.T) {
+func TestHandleTunnelStartMsg_EagerlySeedsSessionInfoForFreshShare(t *testing.T) {
 	m := newTestModel()
 	store := newTestSessionStore(t)
 	ses := session.NewSession("", "", "")
@@ -1548,8 +1663,55 @@ func TestHandleTunnelStartMsg_DoesNotSeedRelayBeforeClientConnect(t *testing.T) 
 	if updated.tunnelBroker.SessionID() != ses.ID {
 		t.Fatalf("expected broker session id to bind immediately, got %q want %q", updated.tunnelBroker.SessionID(), ses.ID)
 	}
-	if len(updated.session.TunnelEvents) != 0 {
-		t.Fatalf("expected share start to avoid eager relay seeding, got %d recorded events", len(updated.session.TunnelEvents))
+	replay := updated.currentSessionTunnelReplayEvents()
+	if len(replay) == 0 {
+		t.Fatal("expected fresh share start to seed canonical tunnel replay")
+	}
+	if got := replay[0].Type; got != tunnel.EventSessionInfo {
+		t.Fatalf("expected first eager bootstrap event %q, got %q", tunnel.EventSessionInfo, got)
+	}
+}
+
+func TestHandleTunnelStartMsg_LiveEventsContinueAfterShareStartBootstrap(t *testing.T) {
+	m := newTestModel()
+	store := newTestSessionStore(t)
+	ses := session.NewSession("", "", "")
+	m.SetSession(ses, store)
+	m.chatWriteUser(nextChatID(), "hello")
+
+	tunnelSession := tunnel.NewSession("wss://test.local")
+	broker := tunnel.NewBroker(tunnelSession)
+	defer broker.Stop()
+	defer tunnelSession.Stop()
+
+	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+		info: &tunnel.SessionInfo{
+			ConnectURL: "wss://test.local/ws?role=client&token=test",
+			QRCode:     "QR",
+		},
+		session: tunnelSession,
+		broker:  broker,
+	})
+	updated := got.(*Model)
+
+	replayBefore := updated.currentSessionTunnelReplayEvents()
+	if len(replayBefore) == 0 {
+		t.Fatal("expected canonical replay after share start")
+	}
+	lastBefore := replayBefore[len(replayBefore)-1].EventID
+
+	updated.pushTunnelUserMessage("after share start")
+
+	replayAfter := updated.currentSessionTunnelReplayEvents()
+	if len(replayAfter) <= len(replayBefore) {
+		t.Fatalf("expected live event to extend canonical replay, before=%d after=%d", len(replayBefore), len(replayAfter))
+	}
+	lastAfter := replayAfter[len(replayAfter)-1]
+	if lastAfter.Type != tunnel.EventUserMessage {
+		t.Fatalf("expected newest replay event to be user message, got %q", lastAfter.Type)
+	}
+	if eventOrdinalForTest(t, lastAfter.EventID) <= eventOrdinalForTest(t, lastBefore) {
+		t.Fatalf("expected live event id to advance beyond bootstrap, before=%q after=%q", lastBefore, lastAfter.EventID)
 	}
 }
 
@@ -1616,8 +1778,12 @@ func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(
 	if updated.session.TunnelEventsComplete {
 		t.Fatal("expected stale canonical replay ledger to be downgraded on share start")
 	}
-	if got := len(updated.currentSessionTunnelReplayEvents()); got != 0 {
-		t.Fatalf("expected stale canonical replay to be disabled, got %d events", got)
+	replay := updated.currentSessionTunnelReplayEvents()
+	if len(replay) == 0 {
+		t.Fatal("expected share start to replace stale replay with fresh canonical bootstrap")
+	}
+	if got := replay[0].Type; got != tunnel.EventSessionInfo {
+		t.Fatalf("expected refreshed canonical bootstrap to start with %q, got %q", tunnel.EventSessionInfo, got)
 	}
 	snapshot := updated.tunnelSnapshot()
 	if len(snapshot.History) != 4 {
@@ -1637,9 +1803,22 @@ func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(
 	if loaded.TunnelEventsComplete {
 		t.Fatal("expected downgraded replay flag to persist")
 	}
-	if len(loaded.TunnelEvents) != 0 {
-		t.Fatalf("expected stale replay events to be cleared, got %d", len(loaded.TunnelEvents))
+	if len(loaded.TunnelEvents) == 0 {
+		t.Fatal("expected fresh bootstrap events to be re-recorded after stale replay downgrade")
 	}
+	if got := loaded.TunnelEvents[0].Type; got != tunnel.EventSessionInfo {
+		t.Fatalf("expected refreshed bootstrap to start with %q, got %q", tunnel.EventSessionInfo, got)
+	}
+}
+
+func eventOrdinalForTest(t *testing.T, eventID string) int {
+	t.Helper()
+	raw := strings.TrimPrefix(eventID, "ev-")
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		t.Fatalf("parse event id %q: %v", eventID, err)
+	}
+	return n
 }
 
 // ─── handleTunnelModeChangeMsg tests ───
