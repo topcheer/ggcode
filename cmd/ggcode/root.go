@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/acp"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -493,6 +494,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	})
 	trace.Mark("register skill tool")
 
+	// Discover and register ACP agent clients (delegate tool)
+	acpClientMgr := acp.NewClientManager(workingDir, nil)
+	if len(acpClientMgr.Available()) > 0 {
+		_ = registry.Register(tool.DelegateTool{Manager: acpClientMgr})
+		debug.Log("startup", "discovered ACP agents: %v", acpClientMgr.Available())
+	}
+	trace.Mark("register acp client delegate tool")
+
 	// Detect git status
 	gitStatus := detectGitStatus(workingDir)
 	trace.Mark("detect git status")
@@ -778,6 +787,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
 	repl.SetSwarmManager(swarmMgr, registry)
+	repl.SetACPClientManager(acpClientMgr)
 	trace.Mark("setup swarm")
 
 	// Start webui for TUI mode (session browser + webchat)
