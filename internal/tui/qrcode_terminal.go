@@ -1,21 +1,37 @@
-package tunnel
+package tui
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/skip2/go-qrcode"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 const terminalQRQuietZoneModules = 1
 
-func newTerminalQRCode(content string) (*qrcode.QRCode, error) {
-	qr, err := qrcode.New(strings.TrimSpace(content), qrcode.Low)
+func newCompactTerminalQRCode(content string) (*qrcode.QRCode, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("empty QR content")
+	}
+	qr, err := qrcode.New(content, qrcode.Low)
 	if err != nil {
-		return nil, fmt.Errorf("qr generate: %w", err)
+		return nil, err
 	}
 	qr.DisableBorder = true
 	return qr, nil
+}
+
+func compactTerminalQRBitmap(content string) ([][]bool, error) {
+	qr, err := newCompactTerminalQRCode(content)
+	if err != nil {
+		return nil, err
+	}
+	bitmap := qr.Bitmap()
+	if len(bitmap) == 0 || len(bitmap[0]) == 0 {
+		return nil, fmt.Errorf("empty QR bitmap")
+	}
+	return padTerminalQRBitmap(bitmap, terminalQRQuietZoneModules), nil
 }
 
 func padTerminalQRBitmap(bitmap [][]bool, padding int) [][]bool {
@@ -75,32 +91,10 @@ func renderTerminalQRBitmap(bitmap [][]bool) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
-// QRCodeForURL generates a QR code string for the given URL using terminal-friendly block characters.
-// Returns a string that can be printed directly to a terminal.
-func QRCodeForURL(url string) (string, error) {
-	qr, err := newTerminalQRCode(url)
+func renderCompactTerminalQRCode(content string) (string, error) {
+	bitmap, err := compactTerminalQRBitmap(content)
 	if err != nil {
 		return "", err
 	}
-
-	return renderTerminalQRBitmap(padTerminalQRBitmap(qr.Bitmap(), terminalQRQuietZoneModules)), nil
-}
-
-// QRCodeLines returns the QR code as a slice of strings (one per line).
-func QRCodeLines(url string) ([]string, error) {
-	s, err := QRCodeForURL(url)
-	if err != nil {
-		return nil, err
-	}
-	return strings.Split(s, "\n"), nil
-}
-
-// QRCodePNG generates a PNG image of the QR code for the given URL.
-// Returns raw PNG bytes suitable for displaying in an image widget.
-func QRCodePNG(url string) ([]byte, error) {
-	png, err := qrcode.Encode(url, qrcode.Low, 256)
-	if err != nil {
-		return nil, fmt.Errorf("qr png: %w", err)
-	}
-	return png, nil
+	return renderTerminalQRBitmap(bitmap), nil
 }

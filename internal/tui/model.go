@@ -101,12 +101,13 @@ type Model struct {
 	streamPanel                     *streamPanelState
 	knightPanel                     *knightPanelState
 	streamViewState                 *streamViewStateData // shared pointer — survives Model copies
+	imRuntimeState                  *imRuntimeState
 	imEmitter                       *im.IMEmitter
 	instanceDetect                  *im.InstanceDetect
 	mcpServers                      []MCPInfo
 	a2aHandler                      *a2a.TaskHandler
-	a2aEventBuf                     []a2a.TaskEventMessage // recent events for display
-	a2aMu                           *sync.Mutex
+	a2aEventBuf                     []a2a.TaskEventMessage // cached recent events for display
+	a2aEventState                   *a2aEventBufferState
 	config                          *config.Config
 	language                        Language
 	startupVendor                   string
@@ -262,7 +263,10 @@ type Model struct {
 	tunnelBroker              *tunnel.Broker
 	tunnelProjectionBroker    *tunnel.Broker
 	tunnelProjectionStore     *tunnel.ProjectionStore
+	tunnelProjectionBroken    bool
 	tunnelMsgID               string
+	tunnelMsgNeedsFinalize    bool
+	tunnelMainStream          *tunnelMainStreamState
 	tunnelPendingApprovalID   string
 	tunnelPendingAskUserID    string
 	tunnelUserMessageOverride *tunnel.MessageData
@@ -285,6 +289,29 @@ type pendingSubmission struct {
 	Text           string
 	Hidden         bool
 	TunnelOverride *tunnel.MessageData
+}
+
+type a2aEventUpdatedMsg struct{}
+
+type imRuntimeState struct {
+	mu             sync.RWMutex
+	manager        *im.Manager
+	emitter        *im.IMEmitter
+	instanceDetect *im.InstanceDetect
+}
+
+type a2aEventBufferState struct {
+	mu     sync.Mutex
+	events []a2a.TaskEventMessage
+}
+
+// tunnelMainStreamState keeps the logical mobile/share assistant stream identity
+// behind a pointer so Bubble Tea model copies and background stream callbacks
+// stay synchronized on the same msg id lifecycle.
+type tunnelMainStreamState struct {
+	mu            sync.Mutex
+	msgID         string
+	needsFinalize bool
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -444,10 +471,86 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		urlOpener:            openSystemURL,
 		pending:              &pendingQueue{},
 		sessionMu:            &sync.Mutex{},
-		a2aMu:                &sync.Mutex{},
+		imRuntimeState:       &imRuntimeState{},
+		a2aEventState:        &a2aEventBufferState{},
+		tunnelMainStream:     &tunnelMainStreamState{},
 		streamViewState:      &streamViewStateData{},
 		terminalTitleWriter:  newTerminalTitleWriter(),
 	}
+}
+
+func (m *Model) ensureIMRuntimeState() *imRuntimeState {
+	if m.imRuntimeState == nil {
+		m.imRuntimeState = &imRuntimeState{
+			manager:        m.imManager,
+			emitter:        m.imEmitter,
+			instanceDetect: m.instanceDetect,
+		}
+	}
+	return m.imRuntimeState
+}
+
+func (m *Model) syncIMRuntimeCache() {
+	state := m.ensureIMRuntimeState()
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	m.imManager = state.manager
+	m.imEmitter = state.emitter
+	m.instanceDetect = state.instanceDetect
+}
+
+func (m *Model) storeIMRuntime(manager *im.Manager, emitter *im.IMEmitter, detect *im.InstanceDetect) {
+	state := m.ensureIMRuntimeState()
+	state.mu.Lock()
+	state.manager = manager
+	state.emitter = emitter
+	state.instanceDetect = detect
+	m.imManager = state.manager
+	m.imEmitter = state.emitter
+	m.instanceDetect = state.instanceDetect
+	state.mu.Unlock()
+}
+
+func (m *Model) storeIMInstanceDetect(detect *im.InstanceDetect) {
+	state := m.ensureIMRuntimeState()
+	state.mu.Lock()
+	state.instanceDetect = detect
+	m.imManager = state.manager
+	m.imEmitter = state.emitter
+	m.instanceDetect = state.instanceDetect
+	state.mu.Unlock()
+}
+
+func (m *Model) ensureA2AEventState() *a2aEventBufferState {
+	if m.a2aEventState == nil {
+		events := append([]a2a.TaskEventMessage(nil), m.a2aEventBuf...)
+		m.a2aEventState = &a2aEventBufferState{events: events}
+	}
+	return m.a2aEventState
+}
+
+func (m *Model) syncA2AEventCache() {
+	state := m.ensureA2AEventState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	m.a2aEventBuf = append(m.a2aEventBuf[:0], state.events...)
+}
+
+func (m *Model) appendA2AEvent(msg a2a.TaskEventMessage) {
+	state := m.ensureA2AEventState()
+	state.mu.Lock()
+	state.events = append(state.events, msg)
+	if len(state.events) > 20 {
+		state.events = state.events[len(state.events)-20:]
+	}
+	events := append([]a2a.TaskEventMessage(nil), state.events...)
+	state.mu.Unlock()
+	m.a2aEventBuf = events
+}
+
+func (m *Model) syncAsyncStateCaches() {
+	m.syncIMRuntimeCache()
+	m.syncA2AEventCache()
 }
 
 func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
@@ -605,20 +708,21 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 }
 
 func (m *Model) SetIMManager(mgr *im.Manager) {
-	m.imManager = mgr
+	var emitter *im.IMEmitter
 	if mgr != nil {
 		lang := "en"
 		if m.language == LangZhCN {
 			lang = "zh-CN"
 		}
 		workDir, _ := os.Getwd()
-		m.imEmitter = im.NewIMEmitter(mgr, lang, workDir)
+		emitter = im.NewIMEmitter(mgr, lang, workDir)
 		// If any bound adapter is WeChat, default to summary mode
 		// (WeChat iLink has a 5s context_token expiry + 5 msg limit per inbound).
 		if im.HasWechatAdapter(mgr) {
-			m.imEmitter.SetOutputMode(im.WechatDefaultOutputMode)
+			emitter.SetOutputMode(im.WechatDefaultOutputMode)
 		}
 	}
+	m.storeIMRuntime(mgr, emitter, nil)
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()
 	m.detectAndAutoMute()
@@ -643,7 +747,7 @@ func (m *Model) detectAndAutoMute() {
 	if err != nil {
 		return
 	}
-	m.instanceDetect = detect
+	m.storeIMInstanceDetect(detect)
 
 	if len(others) == 0 {
 		return
@@ -808,12 +912,10 @@ func (m *Model) SetA2AHandler(h *a2a.TaskHandler) {
 	m.a2aHandler = h
 	if h != nil {
 		h.SetOnTaskEvent(func(msg a2a.TaskEventMessage) {
-			m.a2aMu.Lock()
-			m.a2aEventBuf = append(m.a2aEventBuf, msg)
-			if len(m.a2aEventBuf) > 20 {
-				m.a2aEventBuf = m.a2aEventBuf[len(m.a2aEventBuf)-20:]
+			m.appendA2AEvent(msg)
+			if m.program != nil {
+				m.program.Send(a2aEventUpdatedMsg{})
 			}
-			m.a2aMu.Unlock()
 		})
 	}
 }

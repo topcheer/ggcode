@@ -12,7 +12,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -532,58 +531,11 @@ func qqShareCallbackData(workspace string) string {
 }
 
 func renderQQShareQRCode(link string) (string, error) {
-	code, err := qrcode.New(strings.TrimSpace(link), qrcode.Low)
+	rendered, err := renderCompactTerminalQRCode(link)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("QQ share QR bitmap is empty: %w", err)
 	}
-	bitmap := code.Bitmap()
-	if len(bitmap) == 0 {
-		return "", fmt.Errorf("QQ share QR bitmap is empty")
-	}
-
-	moduleCount := len(bitmap)
-	if moduleCount == 0 {
-		return "", fmt.Errorf("QQ share QR bitmap is empty")
-	}
-	if moduleCount%2 == 1 {
-		padding := make([]bool, moduleCount)
-		bitmap = append(bitmap, padding)
-	}
-
-	const (
-		whiteAll   = "█"
-		whiteBlack = "▀"
-		blackWhite = "▄"
-		blackAll   = " "
-	)
-
-	borderTop := strings.Repeat(blackWhite, moduleCount+3)
-	borderBottom := strings.Repeat(whiteBlack, moduleCount+3)
-	var lines []string
-
-	lines = append(lines, borderTop)
-	for row := 0; row < moduleCount; row += 2 {
-		var b strings.Builder
-		b.WriteString(whiteAll)
-		for col := 0; col < moduleCount; col++ {
-			top := bitmap[row][col]
-			bottom := bitmap[row+1][col]
-			switch {
-			case !top && !bottom:
-				b.WriteString(whiteAll)
-			case !top && bottom:
-				b.WriteString(whiteBlack)
-			case top && !bottom:
-				b.WriteString(blackWhite)
-			default:
-				b.WriteString(blackAll)
-			}
-		}
-		b.WriteString(whiteAll)
-		lines = append(lines, b.String())
-	}
-	lines = append(lines, borderBottom)
-	return strings.Join(lines, "\n"), nil
+	return rendered, nil
 }
 
 func wrapQQLink(text string, width int) string {

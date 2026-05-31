@@ -169,25 +169,25 @@ func (s *Session) Send(msg GatewayMessage) error {
 	return s.client.Send(msg)
 }
 
-func (s *Session) SendActiveSession(sessionID string) error {
+func (s *Session) SendActiveSession(sessionID string, authorityEpoch uint64) error {
 	if s.client == nil {
 		return fmt.Errorf("tunnel session: no relay client")
 	}
-	return s.client.SendActiveSession(sessionID)
+	return s.client.SendActiveSession(sessionID, authorityEpoch)
 }
 
-func (s *Session) SendActiveSessionWithMode(sessionID, mode string) error {
+func (s *Session) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64) error {
 	if s.client == nil {
 		return fmt.Errorf("tunnel session: no relay client")
 	}
-	return s.client.SendActiveSessionWithMode(sessionID, mode)
+	return s.client.SendActiveSessionWithMode(sessionID, mode, authorityEpoch)
 }
 
-func (s *Session) SendServerReady() error {
+func (s *Session) SendServerReady(authorityEpoch uint64) error {
 	if s.client == nil {
 		return fmt.Errorf("tunnel session: no relay client")
 	}
-	return s.client.SendServerReady()
+	return s.client.SendServerReady(authorityEpoch)
 }
 
 func (s *Session) Info() *SessionInfo {

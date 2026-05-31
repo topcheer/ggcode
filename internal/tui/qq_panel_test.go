@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	qrcode "github.com/skip2/go-qrcode"
@@ -20,6 +21,11 @@ func TestRenderQQShareQRCodeMatchesTerminalSmallStyle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
 	}
+	bitmap, err := compactTerminalQRBitmap(link)
+	if err != nil {
+		t.Fatalf("compactTerminalQRBitmap returned error: %v", err)
+	}
+	defaultLines := strings.Split(strings.TrimRight(code.ToSmallString(false), "\n"), "\n")
 
 	rendered, err := renderQQShareQRCode(link)
 	if err != nil {
@@ -35,14 +41,15 @@ func TestRenderQQShareQRCodeMatchesTerminalSmallStyle(t *testing.T) {
 	if len(lines) == 0 || len(lines[0]) == 0 || !strings.Contains(rendered, " ") {
 		t.Fatalf("expected non-empty QR output, got %q", rendered)
 	}
-	if len(lines) >= len(code.Bitmap()) {
-		t.Fatalf("expected height-compressed QR output, got %d lines for %d bitmap rows", len(lines), len(code.Bitmap()))
+	if len(lines) >= len(defaultLines) {
+		t.Fatalf("expected QR output smaller than default bordered render, got %d >= %d lines", len(lines), len(defaultLines))
 	}
-	if !strings.HasPrefix(lines[0], "▄▄▄") {
-		t.Fatalf("expected top border to use lower-half blocks, got %q", lines[0])
+	expectedHeight := (len(bitmap) + 1) / 2
+	if len(lines) != expectedHeight {
+		t.Fatalf("expected compact QR height %d, got %d", expectedHeight, len(lines))
 	}
-	if !strings.HasPrefix(lines[len(lines)-1], "▀▀▀") {
-		t.Fatalf("expected bottom border to use upper-half blocks, got %q", lines[len(lines)-1])
+	if gotWidth, wantWidth := utf8.RuneCountInString(lines[0]), len(bitmap[0]); gotWidth != wantWidth {
+		t.Fatalf("expected compact QR width %d, got %d", wantWidth, gotWidth)
 	}
 }
 

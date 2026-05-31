@@ -27,6 +27,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.rolloverTunnelMainStream(false)
 	m.pushTunnelCurrentStatus()
 	m.pushTunnelCurrentActivity()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
@@ -66,6 +67,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.rolloverTunnelMainStream(false)
 	m.pushTunnelCurrentStatus()
 	m.pushTunnelCurrentActivity()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
@@ -97,6 +99,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.rolloverTunnelMainStream(false)
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}
@@ -125,6 +128,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.rolloverTunnelMainStream(false)
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}

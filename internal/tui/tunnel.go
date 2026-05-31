@@ -48,6 +48,7 @@ type tunnelStopMsg struct{}
 type tunnelInboundMsg struct {
 	generation uint64
 	text       string
+	messageID  string
 }
 
 // tunnelModeChangeMsg carries a mode change request from mobile.
@@ -166,7 +167,7 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.closeQROverlay()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
-	m.tunnelMsgID = ""
+	m.resetTunnelMainStream()
 	m.tunnelPendingApprovalID = ""
 	m.tunnelPendingAskUserID = ""
 	m.tunnelClientNoticeShown = false
@@ -254,8 +255,8 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	m.bindTunnelProjectionSession()
 	m.tunnelSession = msg.session
 	m.tunnelBroker = msg.broker
-	if m.tunnelMsgID == "" && m.tunnelProjectionBroker != nil {
-		m.tunnelMsgID = m.tunnelProjectionBroker.NextMessageID()
+	if m.currentTunnelMsgID() == "" && m.tunnelProjectionBroker != nil {
+		m.setTunnelMainStream(m.tunnelProjectionBroker.NextMessageID(), false)
 	}
 	m.tunnelSpawned = make(map[string]bool)
 
@@ -277,22 +278,19 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// A resumed session can carry a canonical tunnel ledger that only reflects
 	// the pre-restart projection. Revalidate it before the first mobile attach so
 	// broker replay falls back to the current chat snapshot when needed.
-	m.prepareCurrentSessionTunnelLedger()
 	msg.broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 		return m.currentSessionTunnelReplayEvents()
 	})
 	msg.broker.SetEventRecorder(nil)
 	if m.session != nil && m.session.ID != "" {
 		msg.broker.BindSession(m.session.ID)
-		sessionID := m.session.ID
-		safego.Go("tui.tunnel.announceActiveSession", func() {
-			msg.broker.AnnounceActiveSession(sessionID)
-		})
+		msg.broker.SetAuthorityEpoch(m.currentSessionTunnelAuthorityEpoch())
 	}
+	m.seedTunnelRelayRoomAtShareStart()
 
-	// Open the QR overlay immediately. Fresh share rooms do not need an eager
-	// snapshot/replay seed here because broker.handleRelayConnected will publish
-	// the authoritative snapshot when the first client actually attaches.
+	// Fresh share rooms must contain canonical bootstrap history before older
+	// relay/mobile combinations attach, otherwise the client can stall waiting for
+	// session_info and later live events can reuse stale event ids.
 	subtitle := "Scan with GGCode Mobile to connect"
 	if msg.info.CompatibilityNotice != "" {
 		subtitle += " - " + msg.info.CompatibilityNotice
@@ -361,11 +359,89 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 
 // ─── Outbound: Agent stream events → mobile ───
 
-func (m *Model) tunnelReasoningMsgID() string {
-	if m.tunnelMsgID == "" {
+func tunnelReasoningMsgIDFor(msgID string) string {
+	if msgID == "" {
 		return ""
 	}
-	return m.tunnelMsgID + "-reasoning"
+	return msgID + "-reasoning"
+}
+
+func (m *Model) ensureTunnelMainStreamState() *tunnelMainStreamState {
+	if m.tunnelMainStream == nil {
+		m.tunnelMainStream = &tunnelMainStreamState{
+			msgID:         m.tunnelMsgID,
+			needsFinalize: m.tunnelMsgNeedsFinalize,
+		}
+	}
+	return m.tunnelMainStream
+}
+
+func (m *Model) syncTunnelMainStreamCache(msgID string, needsFinalize bool) {
+	m.tunnelMsgID = msgID
+	m.tunnelMsgNeedsFinalize = needsFinalize
+}
+
+func (m *Model) currentTunnelMsgID() string {
+	state := m.ensureTunnelMainStreamState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+	return state.msgID
+}
+
+func (m *Model) tunnelReasoningMsgID() string {
+	return tunnelReasoningMsgIDFor(m.currentTunnelMsgID())
+}
+
+func (m *Model) setTunnelMainStream(msgID string, needsFinalize bool) {
+	state := m.ensureTunnelMainStreamState()
+	state.mu.Lock()
+	state.msgID = msgID
+	state.needsFinalize = needsFinalize
+	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+	state.mu.Unlock()
+}
+
+func (m *Model) resetTunnelMainStream() {
+	state := m.ensureTunnelMainStreamState()
+	state.mu.Lock()
+	state.msgID = ""
+	state.needsFinalize = false
+	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+	state.mu.Unlock()
+}
+
+func (m *Model) markTunnelMainStreamActive() {
+	state := m.ensureTunnelMainStreamState()
+	state.mu.Lock()
+	if state.msgID != "" {
+		state.needsFinalize = true
+	}
+	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+	state.mu.Unlock()
+}
+
+func (m *Model) rolloverTunnelMainStream(force bool) {
+	broker := m.tunnelEventBroker()
+	if broker == nil {
+		return
+	}
+	state := m.ensureTunnelMainStreamState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.msgID == "" {
+		m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+		return
+	}
+	if !force && !state.needsFinalize {
+		m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
+		return
+	}
+	broker.PushReasoningDone(tunnelReasoningMsgIDFor(state.msgID))
+	broker.PushTextDone(state.msgID)
+	state.msgID = broker.NextMessageID()
+	state.needsFinalize = false
+	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
 }
 
 func subagentTunnelTextMsgID(agentID string) string {
@@ -394,10 +470,13 @@ func (m *Model) bindTunnelProjectionSession() {
 	broker := m.ensureTunnelProjectionBroker()
 	store := m.tunnelProjectionStore
 	var replay []tunnel.GatewayMessage
+	authorityEpoch := uint64(1)
+	m.tunnelProjectionBroken = false
 	if store == nil {
 		var err error
 		store, err = tunnel.NewDefaultProjectionStore()
 		if err != nil {
+			m.tunnelProjectionBroken = true
 			debug.Log("tunnel", "projection: init store failed for %s: %v", m.session.ID, err)
 		} else {
 			m.tunnelProjectionStore = store
@@ -407,20 +486,28 @@ func (m *Model) bindTunnelProjectionSession() {
 	broker.SwitchSession(m.session.ID)
 	if store != nil {
 		var err error
+		authorityEpoch, err = store.AuthorityEpoch(m.session.ID)
+		if err != nil {
+			m.tunnelProjectionBroken = true
+			debug.Log("tunnel", "projection: load authority epoch failed for %s: %v", m.session.ID, err)
+			authorityEpoch = 1
+		}
 		replay, err = store.ReplayEvents(m.session.ID)
 		if err != nil {
+			m.tunnelProjectionBroken = true
 			debug.Log("tunnel", "projection: load replay failed for %s: %v", m.session.ID, err)
 		} else {
-			replay = m.hydrateProjectionReplayFromIncompleteSessionLedger(store, replay)
+			replay = m.hydrateProjectionReplayFromSessionLedger(store, replay)
 			broker.PrimeEventIDs(replay)
 		}
 	}
+	broker.SetAuthorityEpoch(authorityEpoch)
 	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 		m.recordProjectionEvent(ev)
 	})
 	m.ensureProjectionBootstrap(broker, replay)
-	if m.tunnelMsgID == "" {
-		m.tunnelMsgID = broker.NextMessageID()
+	if m.currentTunnelMsgID() == "" {
+		m.setTunnelMainStream(broker.NextMessageID(), false)
 	}
 }
 
@@ -449,8 +536,22 @@ func projectionReplayHasType(events []tunnel.GatewayMessage, eventType string) b
 	return false
 }
 
-func (m *Model) hydrateProjectionReplayFromIncompleteSessionLedger(store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
-	if store == nil || m.session == nil || m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+func (m *Model) currentSessionTunnelAuthorityEpoch() uint64 {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return 1
+	}
+	if m.tunnelProjectionStore == nil {
+		return 1
+	}
+	epoch, err := m.tunnelProjectionStore.AuthorityEpoch(m.session.ID)
+	if err != nil || epoch == 0 {
+		return 1
+	}
+	return epoch
+}
+
+func (m *Model) hydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
+	if store == nil || m.session == nil || !m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
 		return replay
 	}
 	sessionID := strings.TrimSpace(m.session.ID)
@@ -497,7 +598,10 @@ func (m *Model) hydrateProjectionReplayFromIncompleteSessionLedger(store *tunnel
 func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
 	if m.tunnelProjectionStore != nil {
 		if err := m.tunnelProjectionStore.Append(ev); err != nil {
+			m.tunnelProjectionBroken = true
 			debug.Log("tunnel", "projection: append failed for %s event=%s: %v", ev.SessionID, ev.EventID, err)
+			m.recordTunnelEvent(ev)
+			return
 		}
 	}
 	m.recordTunnelEvent(ev)
@@ -516,17 +620,26 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 	switch ev.Type {
 	case provider.StreamEventText:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushText(m.tunnelMsgID, ev.Text)
+		msgID := m.currentTunnelMsgID()
+		if msgID == "" {
+			return
+		}
+		m.markTunnelMainStreamActive()
+		broker.PushReasoningDone(tunnelReasoningMsgIDFor(msgID))
+		broker.PushText(msgID, ev.Text)
 
 	case provider.StreamEventReasoning:
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			broker.PushReasoning(m.tunnelReasoningMsgID(), chunk)
+			msgID := m.currentTunnelMsgID()
+			if msgID == "" {
+				return
+			}
+			m.markTunnelMainStreamActive()
+			broker.PushReasoning(tunnelReasoningMsgIDFor(msgID), chunk)
 		}
 
 	case provider.StreamEventToolCallDone:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushTextDone(m.tunnelMsgID)
+		m.rolloverTunnelMainStream(true)
 		name := ev.Tool.Name
 		if name == "" {
 			name = "tool"
@@ -534,10 +647,9 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		present := describeTool(m.currentLanguage(), name, string(ev.Tool.Arguments))
 		title := toolCallDisplayName(name, string(ev.Tool.Arguments))
 		broker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
-		m.tunnelMsgID = broker.NextMessageID()
 
 	case provider.StreamEventToolResult:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
+		m.rolloverTunnelMainStream(false)
 		content := ev.Result
 		if len([]rune(content)) > 2000 {
 			content = truncateRunes(content, 2000, "\n...(truncated)")
@@ -545,22 +657,16 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		m.pushTunnelToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 
 	case provider.StreamEventSystem:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushTextDone(m.tunnelMsgID)
-		m.tunnelMsgID = broker.NextMessageID()
+		m.rolloverTunnelMainStream(true)
 
 	case provider.StreamEventDone:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushTextDone(m.tunnelMsgID)
-		m.tunnelMsgID = broker.NextMessageID()
+		m.rolloverTunnelMainStream(true)
 
 	case provider.StreamEventError:
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushTextDone(m.tunnelMsgID)
+		m.rolloverTunnelMainStream(true)
 		if ev.Error != nil {
 			broker.PushError(sanitizeAPIError(ev.Error).Error())
 		}
-		m.tunnelMsgID = broker.NextMessageID()
 	}
 }
 
@@ -628,11 +734,9 @@ func (m *Model) pushTunnelCurrentActivity() {
 // pushTunnelCancel notifies mobile that the current run was cancelled.
 func (m *Model) pushTunnelCancel() {
 	if broker := m.tunnelEventBroker(); broker != nil {
-		broker.PushReasoningDone(m.tunnelReasoningMsgID())
-		broker.PushTextDone(m.tunnelMsgID)
+		m.rolloverTunnelMainStream(true)
 		m.pushTunnelStatus(tunnel.StatusIdle, "cancelled")
 		m.pushTunnelActivity("")
-		m.tunnelMsgID = broker.NextMessageID()
 	}
 }
 
@@ -785,8 +889,13 @@ func (m *Model) handleTunnelClientCommand(generation uint64, broker *tunnel.Brok
 		if data.Text == "" {
 			return
 		}
+		messageID := tunnel.NormalizeClientMessageID(data.MessageID)
 		if m.program != nil {
-			m.program.Send(tunnelInboundMsg{generation: generation, text: data.Text})
+			m.program.Send(tunnelInboundMsg{
+				generation: generation,
+				text:       data.Text,
+				messageID:  messageID,
+			})
 		}
 		// Acknowledge to mobile client that the message was received by desktop.
 		if broker != nil {
@@ -861,6 +970,12 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 	if text == "/interrupt" {
 		m.cancelActiveRun()
 		return m, nil
+	}
+	if msg.messageID != "" {
+		m.setNextTunnelUserMessageOverride(tunnel.MessageData{
+			Text:      text,
+			MessageID: msg.messageID,
+		})
 	}
 
 	// Notify Knight idle timer.
@@ -1405,6 +1520,26 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	_, _ = m.publishTunnelSnapshotForCurrentSessionWithReport(reset)
 }
 
+func (m *Model) seedTunnelRelayRoomAtShareStart() {
+	if m.tunnelBroker == nil {
+		return
+	}
+	if m.session != nil && m.session.ID != "" {
+		m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+	}
+	m.prepareCurrentSessionTunnelLedger()
+	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
+		m.tunnelBroker.ReplayEvents(events, false)
+		return
+	}
+	snapshot := m.tunnelSnapshot()
+	if m.tunnelProjectionBroker != nil {
+		m.tunnelProjectionBroker.SendSnapshot(snapshot)
+		return
+	}
+	m.tunnelBroker.SendSnapshot(snapshot)
+}
+
 func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tunnel.BrokerSnapshot, bool) {
 	if m.tunnelBroker == nil {
 		return m.tunnelSnapshot(), false
@@ -1464,32 +1599,21 @@ func (m *Model) reseedTunnelSnapshotAfterStart(seeded tunnel.BrokerSnapshot) {
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
-	if m.session == nil {
+	if m.session == nil || m.tunnelProjectionBroken {
 		return nil
 	}
 	if m.tunnelProjectionStore != nil && strings.TrimSpace(m.session.ID) != "" {
 		events, err := m.tunnelProjectionStore.ReplayEvents(m.session.ID)
 		if err != nil {
+			m.tunnelProjectionBroken = true
 			debug.Log("tunnel", "projection: replay load failed for %s: %v", m.session.ID, err)
-		} else if len(events) > 0 {
+			return nil
+		}
+		if events != nil {
 			return events
 		}
 	}
-	if !m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
-		return nil
-	}
-	out := make([]tunnel.GatewayMessage, 0, len(m.session.TunnelEvents))
-	for _, ev := range m.session.TunnelEvents {
-		out = append(out, tunnel.GatewayMessage{
-			SessionID: m.session.ID,
-			EventID:   ev.EventID,
-			StreamID:  ev.StreamID,
-			Type:      ev.Type,
-			Data:      ev.Data,
-		})
-	}
-	tunnel.SortReplayEvents(out)
-	return out
+	return nil
 }
 
 func tunnelEventsToHistory(events []session.TunnelEvent) []tunnel.HistoryEntry {
@@ -1783,9 +1907,20 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	}
 	ses := m.session
 	store := m.sessionStore
+	projectionStore := m.tunnelProjectionStore
 	m.sessionMutex().Unlock()
 
 	_ = store.Save(ses)
+	if projectionStore != nil {
+		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
+			if m.tunnelProjectionBroker != nil {
+				m.tunnelProjectionBroker.SetAuthorityEpoch(epoch)
+			}
+			if m.tunnelBroker != nil {
+				m.tunnelBroker.SetAuthorityEpoch(epoch)
+			}
+		}
+	}
 }
 
 func (m *Model) resetCurrentSessionTunnelLedger() {
@@ -1798,9 +1933,20 @@ func (m *Model) resetCurrentSessionTunnelLedger() {
 	m.session.TunnelEventsComplete = false
 	ses := m.session
 	store := m.sessionStore
+	projectionStore := m.tunnelProjectionStore
 	m.sessionMutex().Unlock()
 
 	_ = store.Save(ses)
+	if projectionStore != nil {
+		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
+			if m.tunnelProjectionBroker != nil {
+				m.tunnelProjectionBroker.SetAuthorityEpoch(epoch)
+			}
+			if m.tunnelBroker != nil {
+				m.tunnelBroker.SetAuthorityEpoch(epoch)
+			}
+		}
+	}
 }
 
 func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {

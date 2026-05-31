@@ -113,6 +113,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   static const _resumeClientIdKey = 'ggcode_tunnel_client_id';
   static const _resumeSessionIdKey = 'ggcode_tunnel_session_id';
   static const _resumeEventIdKey = 'ggcode_tunnel_last_event_id';
+  static const _resumeAuthorityEpochKey = 'ggcode_tunnel_authority_epoch';
   static const _resumeRoomIdKey = 'ggcode_tunnel_room_id';
   static const _resumeRenewTokenKey = 'ggcode_tunnel_renew_token';
 
@@ -124,7 +125,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _shareRoomId = '';
   String _shareRenewToken = '';
   bool _hasAuthoritativeProjection = false;
-  int _relaySessionGeneration = 0;
+  int _relayAuthorityEpoch = 0;
   final List<String> _recentEventIds = <String>[];
   final Set<String> _recentEventSet = <String>{};
   Future<void>? _connectInFlight;
@@ -290,7 +291,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           savedSessionId.isNotEmpty ? _lastAppliedEventId : '';
       _lastDurableEventId =
           savedSessionId.isNotEmpty ? _lastDurableEventId : '';
-      _relaySessionGeneration = 0;
+      _relayAuthorityEpoch = 0;
       _awaitingSnapshotProjection = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
@@ -349,7 +350,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     service?.disconnect();
     _disposeActiveService();
     _clearRelaySyncState();
-    _relaySessionGeneration = 0;
+    _relayAuthorityEpoch = 0;
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(
       status: ConnectionStatus.disconnected,
@@ -365,7 +366,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _lastDurableEventId = '';
     _resumeOverrideEventId = '';
-    _relaySessionGeneration = 0;
+    _relayAuthorityEpoch = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
     _recentEventIds.clear();
@@ -405,7 +406,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         log('[tunnel] active_session: session=$sessionId currentSession=$_sessionId lastEvent=$_lastAppliedEventId');
         if (sessionId.isEmpty) break;
-        if (!_acceptRelayGeneration(msg, sessionId: sessionId)) {
+        if (!_acceptAuthorityEpoch(msg, sessionId: sessionId)) {
           break;
         }
         if (_sessionId.isNotEmpty && _sessionId != sessionId) {
@@ -418,15 +419,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _recentEventSet.clear();
         }
         _sessionId = sessionId;
-        if (msg.generation != null && msg.generation! > 0) {
-          _relaySessionGeneration = msg.generation!;
-        }
+        _noteAuthorityEpoch(msg);
         if (state.relaySync == null) {
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
-            lastEventId: _lastAppliedEventId));
+            lastEventId: _lastAppliedEventId,
+            authorityEpoch: _relayAuthorityEpoch));
         _restoreSessionProjectionIfAvailable(sessionId);
         _persistResumeState();
         break;
@@ -434,13 +434,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'resume_ack':
         final sessionId =
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
-        if (!_acceptRelayGeneration(msg, sessionId: sessionId)) {
+        if (!_acceptAuthorityEpoch(msg, sessionId: sessionId)) {
           break;
         }
         _sessionId = sessionId;
-        if (msg.generation != null && msg.generation! > 0) {
-          _relaySessionGeneration = msg.generation!;
-        }
+        _noteAuthorityEpoch(msg);
         final replayCount = (msg.data?['replay_count'] as num?)?.toInt() ?? 0;
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
         debugPrint(
@@ -457,7 +455,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _restoreSessionProjectionIfAvailable(sessionId);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
-            lastEventId: _lastAppliedEventId));
+            lastEventId: _lastAppliedEventId,
+            authorityEpoch: _relayAuthorityEpoch));
         _restoreCachedAgentStatus(sessionId: sessionId);
         _persistResumeState();
         break;
@@ -482,7 +481,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'snapshot_reset':
-        if (!_acceptRelayGeneration(
+        if (!_acceptAuthorityEpoch(
           msg,
           sessionId: msg.sessionId ?? _sessionId,
         )) {
@@ -498,12 +497,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
         }
-        if (msg.generation != null && msg.generation! > 0) {
-          _relaySessionGeneration = msg.generation!;
-        }
+        _noteAuthorityEpoch(msg);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             _sessionId, ref.read(sessionInfoProvider),
-            lastEventId: _lastAppliedEventId));
+            lastEventId: _lastAppliedEventId,
+            authorityEpoch: _relayAuthorityEpoch));
         _restoreCachedAgentStatus(sessionId: _sessionId);
         _persistResumeState();
         break;
@@ -537,6 +535,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
               data,
               lastEventId: _lastAppliedEventId,
+              authorityEpoch: _relayAuthorityEpoch,
             ));
         break;
 
@@ -573,6 +572,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             final absorbed = chatNotifier.bindRemoteUserMessage(
               data.text,
               remoteMessageId: remoteMessageId,
+              localMessageId: data.messageId,
             );
             if (!absorbed) {
               chatNotifier.addRemoteUserMessage(
@@ -899,6 +899,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             sourceId: data.agentId,
             collapse: true,
           );
+          chatNotifier.finalizeStreamingMessagesForSource(data.agentId);
           _upsertSubagent(
             agentId: data.agentId,
             name: data.name,
@@ -1086,6 +1087,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId =
         prefs.getString(_resumeEventIdKey) ?? _lastAppliedEventId;
     _lastDurableEventId = _lastAppliedEventId;
+    _relayAuthorityEpoch =
+        prefs.getInt(_resumeAuthorityEpochKey) ?? _relayAuthorityEpoch;
     _shareRoomId = prefs.getString(_resumeRoomIdKey) ?? _shareRoomId;
     _shareRenewToken =
         prefs.getString(_resumeRenewTokenKey) ?? _shareRenewToken;
@@ -1113,7 +1116,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _lastDurableEventId = '';
     _resumeOverrideEventId = '';
-    _relaySessionGeneration = 0;
+    _relayAuthorityEpoch = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
     _recentEventIds.clear();
@@ -1135,22 +1138,29 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     );
   }
 
-  bool _acceptRelayGeneration(proto.WsMessage msg, {String? sessionId}) {
-    final generation = msg.generation ?? 0;
-    if (generation <= 0) {
+  bool _acceptAuthorityEpoch(proto.WsMessage msg, {String? sessionId}) {
+    final authorityEpoch = msg.authorityEpoch ?? 0;
+    if (authorityEpoch <= 0) {
       return true;
     }
-    if (_relaySessionGeneration > 0 && generation < _relaySessionGeneration) {
+    if (_relayAuthorityEpoch > 0 && authorityEpoch < _relayAuthorityEpoch) {
       return false;
     }
-    if (generation > _relaySessionGeneration) {
+    if (authorityEpoch > _relayAuthorityEpoch) {
       final nextSessionId = sessionId ?? msg.sessionId ?? _sessionId;
-      _resetForRelayGeneration(nextSessionId, generation);
+      _resetForAuthorityEpoch(nextSessionId, authorityEpoch);
     }
     return true;
   }
 
-  void _resetForRelayGeneration(String sessionId, int generation) {
+  void _noteAuthorityEpoch(proto.WsMessage msg) {
+    final authorityEpoch = msg.authorityEpoch ?? 0;
+    if (authorityEpoch > 0) {
+      _relayAuthorityEpoch = authorityEpoch;
+    }
+  }
+
+  void _resetForAuthorityEpoch(String sessionId, int authorityEpoch) {
     final previousSessionId = _sessionId;
     _clearUiProjection();
     _hasAuthoritativeProjection = false;
@@ -1160,19 +1170,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _recentEventIds.clear();
     _recentEventSet.clear();
     _awaitingSnapshotProjection = false;
-    _relaySessionGeneration = generation;
+    _relayAuthorityEpoch = authorityEpoch;
     _sessionId = sessionId;
     if (sessionId.isNotEmpty) {
       unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
             sessionId,
             previousSessionId: previousSessionId,
             sessionInfo: ref.read(sessionInfoProvider),
+            authorityEpoch: authorityEpoch,
           ));
     }
   }
 
   bool _shouldApplyEvent(proto.WsMessage msg) {
-    if (!_acceptRelayGeneration(msg, sessionId: msg.sessionId ?? _sessionId)) {
+    if (!_acceptAuthorityEpoch(msg, sessionId: msg.sessionId ?? _sessionId)) {
       return false;
     }
     final eventId = msg.eventId;
@@ -1258,6 +1269,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   bool _restoreProjectionFromCache({
     bool adoptCursor = true,
     bool seedCursorIfUnset = false,
+    int? expectedAuthorityEpoch,
   }) {
     final cacheState = ref.read(workspaceCacheProvider);
     final sessionId = cacheState.selectedSessionId;
@@ -1269,15 +1281,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (snapshot == null) {
       return false;
     }
+    final authorityEpoch = expectedAuthorityEpoch ?? _relayAuthorityEpoch;
+    if (authorityEpoch > 0 && snapshot.authorityEpoch != authorityEpoch) {
+      return false;
+    }
     final sparseSnapshot = _isSparseResumeSnapshot(snapshot);
     if (!adoptCursor && seedCursorIfUnset && sparseSnapshot) {
       return false;
     }
-    ref
-        .read(chatProvider.notifier)
-        .set(List<ChatMessage>.from(snapshot.messages));
+    ref.read(chatProvider.notifier).set(historicalSnapshotMessages(snapshot));
     ref.read(subagentProvider.notifier).set(
-          Map<String, SubagentInfo>.from(snapshot.subagents),
+          historicalSnapshotSubagents(snapshot),
         );
     ref.read(sessionInfoProvider.notifier).set(snapshot.sessionInfo);
     if (snapshot.sessionInfo != null && snapshot.sessionInfo!.mode.isNotEmpty) {
@@ -1300,6 +1314,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _lastAppliedEventId = snapshotCursor;
         _lastDurableEventId = snapshotCursor;
       }
+    }
+    if (snapshot.authorityEpoch > 0) {
+      _relayAuthorityEpoch = snapshot.authorityEpoch;
     }
     return true;
   }
@@ -1401,6 +1418,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _restoreProjectionFromCache(
             adoptCursor: false,
             seedCursorIfUnset: true,
+            expectedAuthorityEpoch: _relayAuthorityEpoch,
           );
         }
       }),
@@ -1434,11 +1452,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = '';
     _lastDurableEventId = '';
     _resumeOverrideEventId = '';
+    _relayAuthorityEpoch = snapshot.authorityEpoch;
     _shareRoomId = '';
     _shareRenewToken = '';
     await prefs.setString(_resumeClientIdKey, _clientId);
     await prefs.setString(_resumeSessionIdKey, _sessionId);
     await prefs.remove(_resumeEventIdKey);
+    if (_relayAuthorityEpoch > 0) {
+      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
+    } else {
+      await prefs.remove(_resumeAuthorityEpochKey);
+    }
     await prefs.remove(_resumeRoomIdKey);
     await prefs.remove(_resumeRenewTokenKey);
   }
@@ -1470,8 +1494,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _lastAppliedEventId = snapshotCursor;
     _lastDurableEventId = snapshotCursor;
     _resumeOverrideEventId = snapshotCursor;
+    _relayAuthorityEpoch = snapshot.authorityEpoch;
     await prefs.setString(_resumeSessionIdKey, _sessionId);
     await prefs.setString(_resumeEventIdKey, _lastDurableEventId);
+    if (_relayAuthorityEpoch > 0) {
+      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
+    } else {
+      await prefs.remove(_resumeAuthorityEpochKey);
+    }
   }
 
   void _captureLiveProjectionForDurableResume() {
@@ -1482,6 +1512,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           agentStatus: ref.read(agentStatusProvider),
           agentStatusMessage: ref.read(agentStatusMessageProvider),
           lastEventId: _lastAppliedEventId,
+          authorityEpoch: _relayAuthorityEpoch,
           authoritative: _sessionId.isNotEmpty && !_awaitingSnapshotProjection,
         ));
   }
@@ -1757,6 +1788,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     } else {
       await prefs.remove(_resumeEventIdKey);
     }
+    if (_relayAuthorityEpoch > 0) {
+      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
+    } else {
+      await prefs.remove(_resumeAuthorityEpochKey);
+    }
     if (_shareRoomId.isNotEmpty) {
       await prefs.setString(_resumeRoomIdKey, _shareRoomId);
     } else {
@@ -1773,6 +1809,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final store = prefs ?? await SharedPreferences.getInstance();
     await store.remove(_resumeSessionIdKey);
     await store.remove(_resumeEventIdKey);
+    await store.remove(_resumeAuthorityEpochKey);
     await store.remove(_resumeRoomIdKey);
     await store.remove(_resumeRenewTokenKey);
     _shareRoomId = '';

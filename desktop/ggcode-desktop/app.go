@@ -108,6 +108,22 @@ func (a *App) clearTunnelState() {
 	a.setTunnelState(nil, nil)
 }
 
+func (a *App) forwardTunnelUserMessage(broker *tunnel.Broker, data tunnel.MessageData) {
+	text := strings.TrimSpace(data.Text)
+	if text == "" {
+		return
+	}
+	if broker != nil {
+		broker.PushUserMessageData(tunnel.MessageData{
+			Text:      text,
+			MessageID: tunnel.NormalizeClientMessageID(data.MessageID),
+		})
+	}
+	if a.agentBridge != nil {
+		_ = a.agentBridge.Send(text)
+	}
+}
+
 // NewApp creates the desktop app.
 func NewApp(fyneApp fyne.App) *App {
 	return &App{
@@ -326,9 +342,7 @@ func (a *App) showShareDialog() {
 							a.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
 						}
 					})
-					if a.agentBridge != nil {
-						a.agentBridge.Send(text)
-					}
+					a.forwardTunnelUserMessage(broker, data)
 				}
 				// Acknowledge to mobile client that the message was received by desktop.
 				broker.PushServerAck(data.MessageID)

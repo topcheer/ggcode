@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -226,6 +228,98 @@ func TestCurrentSessionTunnelEventsPrefersProjectionStoreDesktop(t *testing.T) {
 	}
 	if events[0].EventID != "projection-1" {
 		t.Fatalf("expected projection replay to win, got %q", events[0].EventID)
+	}
+}
+
+func TestDesktopSubagentCompleteBypassesThrottledUpdate(t *testing.T) {
+	bridge := NewAgentBridge(&config.Config{}, nil, &config.ResolvedEndpoint{}, t.TempDir(), NewUIState())
+	bridge.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	bridge.registerSubagentCallbacks()
+
+	broker := tunnel.NewBroker(nil)
+	t.Cleanup(broker.Stop)
+	bridge.AttachTunnelBroker(broker)
+
+	var recorded []tunnel.GatewayMessage
+	broker.SetEventRecorder(func(msg tunnel.GatewayMessage) {
+		recorded = append(recorded, msg)
+	})
+
+	agentID := bridge.subAgentMgr.Spawn("researcher", "check mobile state", "", nil, context.Background())
+	if ok := bridge.subAgentMgr.SetCancel(agentID, func() {}); !ok {
+		t.Fatal("expected SetCancel to mark subagent running")
+	}
+	bridge.subAgentMgr.Complete(agentID, "done", nil)
+
+	var sawSpawn, sawComplete bool
+	for _, msg := range recorded {
+		switch msg.Type {
+		case tunnel.EventSubagentSpawn:
+			var data tunnel.SubagentSpawnData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Fatalf("unmarshal spawn: %v", err)
+			}
+			if data.AgentID == agentID {
+				sawSpawn = true
+			}
+		case tunnel.EventSubagentComplete:
+			var data tunnel.SubagentCompleteData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Fatalf("unmarshal complete: %v", err)
+			}
+			if data.AgentID == agentID {
+				sawComplete = true
+			}
+		}
+	}
+
+	if !sawSpawn {
+		t.Fatal("expected subagent spawn to be recorded")
+	}
+	if !sawComplete {
+		t.Fatal("expected subagent completion to be recorded even when updates are throttled")
+	}
+
+	sa, ok := bridge.subAgentMgr.Get(agentID)
+	if !ok {
+		t.Fatalf("expected subagent %s to exist", agentID)
+	}
+	if got := agentPanelFromSubAgent(sa).Status; got != string(subagent.StatusCompleted) {
+		t.Fatalf("expected completed UI panel status, got %q", got)
+	}
+}
+
+func TestDesktopFlushTunnelTextStreamFallbackAdvancesMsgID(t *testing.T) {
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), NewUIState())
+	broker := tunnel.NewBroker(nil)
+	t.Cleanup(broker.Stop)
+
+	var recorded []tunnel.GatewayMessage
+	broker.SetEventRecorder(func(msg tunnel.GatewayMessage) {
+		recorded = append(recorded, msg)
+	})
+
+	bridge.tunnelBroker = broker
+	bridge.tunnelMsgID = broker.NextMessageID()
+	firstMsgID := bridge.tunnelMsgID
+	broker.PushText(firstMsgID, "hello")
+	bridge.markTunnelMainStreamActive()
+
+	bridge.flushTunnelTextStream(broker, false)
+
+	if bridge.tunnelMsgID == firstMsgID {
+		t.Fatal("expected fallback flush to advance tunnel msg id")
+	}
+
+	var textDone bool
+	for _, msg := range recorded {
+		switch msg.Type {
+		case tunnel.EventTextDone:
+			textDone = true
+		}
+	}
+	if !textDone {
+		t.Fatal("expected text_done event from fallback flush")
 	}
 }
 

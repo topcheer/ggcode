@@ -1,15 +1,18 @@
 package tunnel
 
+import "strings"
+
 import "encoding/json"
 
 // GatewayMessage is a JSON message exchanged over the encrypted channel.
 type GatewayMessage struct {
-	SessionID string          `json:"session_id,omitempty"`
-	EventID   string          `json:"event_id,omitempty"`
-	StreamID  string          `json:"stream_id,omitempty"`
-	MessageID string          `json:"message_id,omitempty"` // client-generated ID for ack tracking
-	Type      string          `json:"type"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	SessionID      string          `json:"session_id,omitempty"`
+	EventID        string          `json:"event_id,omitempty"`
+	StreamID       string          `json:"stream_id,omitempty"`
+	MessageID      string          `json:"message_id,omitempty"` // client-generated ID for ack tracking
+	AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
+	Type           string          `json:"type"`
+	Data           json.RawMessage `json:"data,omitempty"`
 }
 
 // Protocol defines the message types exchanged between the ggcode backend
@@ -223,6 +226,14 @@ type MessageData struct {
 	DisplayText string `json:"display_text,omitempty"`
 	Kind        string `json:"kind,omitempty"`
 	MessageID   string `json:"message_id,omitempty"` // client-generated ID for ack tracking
+}
+
+func NormalizeClientMessageID(messageID string) string {
+	messageID = strings.TrimSpace(messageID)
+	if !strings.HasPrefix(messageID, "user-") {
+		return ""
+	}
+	return messageID
 }
 
 // AckData carries an acknowledgement for a previously sent message.

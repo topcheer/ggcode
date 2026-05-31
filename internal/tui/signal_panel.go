@@ -14,7 +14,6 @@ import (
 
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
-	goqrcode "github.com/skip2/go-qrcode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -132,11 +131,11 @@ func renderQRCodeASCII(pngData []byte) string {
 	content := result.String()
 
 	// Step 3: Re-generate QR code as ASCII using go-qrcode
-	qr, err := goqrcode.New(content, goqrcode.Medium)
+	qr, err := renderCompactTerminalQRCode(content)
 	if err != nil {
 		return "(QR code regenerate failed)"
 	}
-	return qr.ToSmallString(false)
+	return qr
 }
 
 func maxSignal(v, min int) int {

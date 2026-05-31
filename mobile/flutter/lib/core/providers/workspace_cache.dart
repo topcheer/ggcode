@@ -72,6 +72,7 @@ class CachedSessionRecord {
   final String mode;
   final String version;
   final String lastEventId;
+  final int authorityEpoch;
   final DateTime lastUpdatedAt;
 
   const CachedSessionRecord({
@@ -83,6 +84,7 @@ class CachedSessionRecord {
     required this.mode,
     required this.version,
     required this.lastEventId,
+    this.authorityEpoch = 0,
     required this.lastUpdatedAt,
   });
 
@@ -93,6 +95,7 @@ class CachedSessionRecord {
     String? mode,
     String? version,
     String? lastEventId,
+    int? authorityEpoch,
     DateTime? lastUpdatedAt,
   }) =>
       CachedSessionRecord(
@@ -104,6 +107,7 @@ class CachedSessionRecord {
         mode: mode ?? this.mode,
         version: version ?? this.version,
         lastEventId: lastEventId ?? this.lastEventId,
+        authorityEpoch: authorityEpoch ?? this.authorityEpoch,
         lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
       );
 
@@ -116,6 +120,7 @@ class CachedSessionRecord {
         'mode': mode,
         'version': version,
         'last_event_id': lastEventId,
+        'authority_epoch': authorityEpoch,
         'last_updated_at': lastUpdatedAt.toIso8601String(),
       };
 
@@ -129,6 +134,7 @@ class CachedSessionRecord {
         mode: json['mode'] as String? ?? '',
         version: json['version'] as String? ?? '',
         lastEventId: json['last_event_id'] as String? ?? '',
+        authorityEpoch: (json['authority_epoch'] as num?)?.toInt() ?? 0,
         lastUpdatedAt:
             DateTime.tryParse(json['last_updated_at'] as String? ?? '') ??
                 DateTime.fromMillisecondsSinceEpoch(0),
@@ -142,6 +148,7 @@ class CachedSessionSnapshot {
   final String agentStatus;
   final String agentStatusMessage;
   final String lastEventId;
+  final int authorityEpoch;
 
   const CachedSessionSnapshot({
     required this.messages,
@@ -150,6 +157,7 @@ class CachedSessionSnapshot {
     this.agentStatus = 'idle',
     this.agentStatusMessage = '',
     this.lastEventId = '',
+    this.authorityEpoch = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -159,6 +167,7 @@ class CachedSessionSnapshot {
         'agent_status': _normalizedCachedAgentStatus(agentStatus),
         'agent_status_message': agentStatusMessage,
         'last_event_id': lastEventId,
+        'authority_epoch': authorityEpoch,
       };
 
   factory CachedSessionSnapshot.fromJson(Map<String, dynamic> json) {
@@ -181,6 +190,7 @@ class CachedSessionSnapshot {
       ),
       agentStatusMessage: json['agent_status_message'] as String? ?? '',
       lastEventId: json['last_event_id'] as String? ?? '',
+      authorityEpoch: (json['authority_epoch'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -324,6 +334,7 @@ class _WorkspaceCacheSqlStore {
         mode TEXT NOT NULL,
         version TEXT NOT NULL,
         last_event_id TEXT NOT NULL,
+        authority_epoch INTEGER NOT NULL DEFAULT 0,
         last_updated_at TEXT NOT NULL,
         PRIMARY KEY (workspace_key, session_id)
       );
@@ -346,6 +357,16 @@ class _WorkspaceCacheSqlStore {
       expected: '$_workspaceCacheProjectionVersion',
       resetStore: true,
     );
+    try {
+      _db.execute(
+        'ALTER TABLE cache_sessions ADD COLUMN authority_epoch INTEGER NOT NULL DEFAULT 0;',
+      );
+    } on SqliteException catch (err) {
+      final message = err.message.toLowerCase();
+      if (!message.contains('duplicate column name')) {
+        rethrow;
+      }
+    }
   }
 
   void _ensureVersion({
@@ -421,7 +442,7 @@ class _WorkspaceCacheSqlStore {
   List<CachedSessionRecord> loadSessions() {
     final rows = _db.select('''
       SELECT workspace_key, session_id, title, model, provider, mode, version,
-             last_event_id, last_updated_at
+             last_event_id, authority_epoch, last_updated_at
       FROM cache_sessions
       ORDER BY last_updated_at DESC
     ''');
@@ -436,6 +457,7 @@ class _WorkspaceCacheSqlStore {
         mode: row['mode'] as String? ?? '',
         version: row['version'] as String? ?? '',
         lastEventId: row['last_event_id'] as String? ?? '',
+        authorityEpoch: (row['authority_epoch'] as num?)?.toInt() ?? 0,
         lastUpdatedAt:
             DateTime.tryParse(row['last_updated_at'] as String? ?? '') ??
                 DateTime.fromMillisecondsSinceEpoch(0),
@@ -522,9 +544,9 @@ class _WorkspaceCacheSqlStore {
       '''
       INSERT INTO cache_sessions(
         workspace_key, session_id, title, model, provider, mode, version,
-        last_event_id, last_updated_at
+        last_event_id, authority_epoch, last_updated_at
       )
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_key, session_id) DO UPDATE SET
         title = excluded.title,
         model = excluded.model,
@@ -532,6 +554,7 @@ class _WorkspaceCacheSqlStore {
         mode = excluded.mode,
         version = excluded.version,
         last_event_id = excluded.last_event_id,
+        authority_epoch = excluded.authority_epoch,
         last_updated_at = excluded.last_updated_at
       ''',
       [
@@ -543,6 +566,7 @@ class _WorkspaceCacheSqlStore {
         record.mode,
         record.version,
         record.lastEventId,
+        record.authorityEpoch,
         record.lastUpdatedAt.toIso8601String(),
       ],
     );
@@ -722,13 +746,20 @@ bool _shouldPreserveExistingCachedSnapshot({
   if (existing.sessionInfo != null && candidate.sessionInfo == null) {
     return true;
   }
-  return _cachedSnapshotScore(existing) > _cachedSnapshotScore(candidate);
+  if (existing.authorityEpoch != 0 &&
+      candidate.authorityEpoch != 0 &&
+      existing.authorityEpoch != candidate.authorityEpoch) {
+    return false;
+  }
+  return _isSparseCachedSnapshot(candidate) &&
+      _cachedSnapshotScore(existing) > _cachedSnapshotScore(candidate);
 }
 
 CachedSessionSnapshot _mergeCachedSnapshots({
   required CachedSessionSnapshot existing,
   required CachedSessionSnapshot candidate,
 }) {
+  final preserveRichProjection = _isSparseCachedSnapshot(candidate);
   final mergedMessages = <ChatMessage>[];
   final candidateById = <String, ChatMessage>{};
   final appendedAnonymous = <ChatMessage>[];
@@ -767,14 +798,21 @@ CachedSessionSnapshot _mergeCachedSnapshots({
       ? candidate.agentStatusMessage
       : existing.agentStatusMessage;
   return CachedSessionSnapshot(
-    messages: mergedMessages,
-    subagents: mergedSubagents,
+    messages: preserveRichProjection
+        ? mergedMessages
+        : List<ChatMessage>.from(candidate.messages),
+    subagents: preserveRichProjection
+        ? mergedSubagents
+        : Map<String, SubagentInfo>.from(candidate.subagents),
     sessionInfo: candidate.sessionInfo ?? existing.sessionInfo,
     agentStatus: candidate.agentStatus,
     agentStatusMessage: mergedStatusMessage,
     lastEventId: candidateCursor >= existingCursor
         ? candidate.lastEventId
         : existing.lastEventId,
+    authorityEpoch: candidate.authorityEpoch != 0
+        ? candidate.authorityEpoch
+        : existing.authorityEpoch,
   );
 }
 
@@ -782,6 +820,12 @@ int _cachedSnapshotScore(CachedSessionSnapshot snapshot) {
   return (snapshot.messages.length * 100) +
       (snapshot.subagents.length * 10) +
       (snapshot.sessionInfo == null ? 0 : 1);
+}
+
+bool _isSparseCachedSnapshot(CachedSessionSnapshot snapshot) {
+  return snapshot.sessionInfo == null &&
+      snapshot.lastEventId.isNotEmpty &&
+      snapshot.messages.length <= 8;
 }
 
 int _cachedEventOrdinal(String eventId) {
@@ -1065,6 +1109,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     String sessionId,
     proto.SessionInfoData? sessionInfo, {
     String? lastEventId,
+    int? authorityEpoch,
   }) async {
     if (sessionId.isEmpty) return;
     await initialize();
@@ -1092,6 +1137,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 mode: sessionInfo?.mode ?? '',
                 version: sessionInfo?.version ?? '',
                 lastEventId: lastEventId ?? '',
+                authorityEpoch: authorityEpoch ?? 0,
                 lastUpdatedAt: now,
               ))
           .copyWith(
@@ -1101,6 +1147,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
         version: sessionInfo?.version ?? state.sessions[sessionKey]?.version,
         lastEventId: lastEventId ?? state.sessions[sessionKey]?.lastEventId,
+        authorityEpoch:
+            authorityEpoch ?? state.sessions[sessionKey]?.authorityEpoch,
         lastUpdatedAt: now,
       );
     final workspace = state.workspaces[workspaceKey];
@@ -1137,16 +1185,19 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     String sessionId, {
     required String previousSessionId,
     proto.SessionInfoData? sessionInfo,
+    int? authorityEpoch,
   }) async {
     await registerLiveSession(
       sessionId,
       sessionInfo,
       lastEventId: state.sessions[sessionId]?.lastEventId,
+      authorityEpoch: authorityEpoch,
     );
     if (previousSessionId.isEmpty || previousSessionId == sessionId) return;
   }
 
-  Future<void> updateLiveCursor(String sessionId, String lastEventId) async {
+  Future<void> updateLiveCursor(String sessionId, String lastEventId,
+      {int? authorityEpoch}) async {
     if (sessionId.isEmpty) return;
     await initialize();
     if (!ref.mounted) return;
@@ -1155,6 +1206,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final updated = Map<String, CachedSessionRecord>.from(state.sessions)
       ..[sessionId] = record.copyWith(
         lastEventId: lastEventId,
+        authorityEpoch: authorityEpoch ?? record.authorityEpoch,
         lastUpdatedAt: DateTime.now(),
       );
     state = state.copyWith(sessions: updated);
@@ -1169,6 +1221,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String agentStatus,
     required String agentStatusMessage,
     required String lastEventId,
+    int authorityEpoch = 0,
     bool authoritative = true,
   }) async {
     await initialize();
@@ -1192,6 +1245,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       agentStatus: _normalizedCachedAgentStatus(agentStatus),
       agentStatusMessage: agentStatusMessage,
       lastEventId: lastEventId,
+      authorityEpoch: authorityEpoch,
     );
     final existingSnapshot =
         state.snapshots[snapshotKey] ?? _store?.loadSnapshot(sessionId);
@@ -1213,6 +1267,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 mode: sessionInfo?.mode ?? '',
                 version: sessionInfo?.version ?? '',
                 lastEventId: lastEventId,
+                authorityEpoch: authorityEpoch,
                 lastUpdatedAt: now,
               ))
           .copyWith(
@@ -1223,6 +1278,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         mode: sessionInfo?.mode ?? state.sessions[snapshotKey]?.mode,
         version: sessionInfo?.version ?? state.sessions[snapshotKey]?.version,
         lastEventId: lastEventId,
+        authorityEpoch: authorityEpoch,
         lastUpdatedAt: now,
       );
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
@@ -1410,11 +1466,12 @@ final displayedMessagesProvider = Provider<List<ChatMessage>>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return const [];
   }
-  return ref
-          .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(sessionId)
-          ?.messages ??
-      const [];
+  final snapshot =
+      ref.watch(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+  if (snapshot == null) {
+    return const [];
+  }
+  return historicalSnapshotMessages(snapshot);
 });
 
 final displayedSubagentProvider = Provider<Map<String, SubagentInfo>>((ref) {
@@ -1426,11 +1483,12 @@ final displayedSubagentProvider = Provider<Map<String, SubagentInfo>>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return const {};
   }
-  return ref
-          .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(sessionId)
-          ?.subagents ??
-      const {};
+  final snapshot =
+      ref.watch(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+  if (snapshot == null) {
+    return const {};
+  }
+  return historicalSnapshotSubagents(snapshot);
 });
 
 final displayedSessionInfoProvider = Provider<proto.SessionInfoData?>((ref) {
@@ -1556,6 +1614,18 @@ void _reportWorkspaceCacheError(
       context: ErrorDescription(context),
     ),
   );
+}
+
+Map<String, SubagentInfo> historicalSnapshotSubagents(
+  CachedSessionSnapshot snapshot,
+) {
+  return const {};
+}
+
+List<ChatMessage> historicalSnapshotMessages(CachedSessionSnapshot snapshot) {
+  return snapshot.messages
+      .where((message) => message.sourceId == null)
+      .toList();
 }
 
 Map<String, dynamic>? _sessionInfoToJson(proto.SessionInfoData? info) {
