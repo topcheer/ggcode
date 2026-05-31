@@ -463,6 +463,7 @@ func (b *Broker) SwitchSession(sessionID string) {
 
 	b.sendActiveSession(sessionID)
 	b.resetProjectionAndEnqueue(true)
+	b.markRelayReady()
 }
 
 func (b *Broker) AnnounceActiveSession(sessionID string) {
@@ -470,6 +471,7 @@ func (b *Broker) AnnounceActiveSession(sessionID string) {
 		return
 	}
 	b.sendActiveSession(sessionID)
+	b.markRelayReady()
 }
 
 func (b *Broker) sendActiveSession(sessionID string) {
@@ -631,9 +633,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if info.LastEventID != "" {
 			b.bumpNextEvent(info.LastEventID)
 		}
-		if strings.TrimSpace(currentSessionID) != "" {
-			b.markRelayReady()
-		}
+		b.markRelayReady()
 		return
 	}
 	b.snapshotMu.RLock()
