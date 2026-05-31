@@ -20,10 +20,6 @@ concurrency:
   group: mobile-release-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  actions: write
-
 env:
   FLUTTER_VERSION: '3.38.7'
 
@@ -59,8 +55,6 @@ jobs:
 
       - name: Compute build number
         id: buildnum
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: .
         run: |
           # Resolve version name from tag or input
@@ -72,15 +66,13 @@ jobs:
             fi
           fi
 
-          # Auto-increment build sequence via GitHub variable
+          # Generate unique build number: YYYYMMDD + NN (10 digits).
+          # NN = last 2 digits of HHMM, unique per minute within the day.
           TODAY=$(date +%Y%m%d)
-          SEQ=$(gh variable list -R "${{ github.repository }}" --json name,value \
-            | jq -r '.[] | select(.name=="MOBILE_BUILD_SEQ") | .value // "0"')
-          SEQ=${SEQ:-0}
-          SEQ=$((SEQ + 1))
-          gh variable set MOBILE_BUILD_SEQ --body "$SEQ" -R "${{ github.repository }}"
+          SUFFIX=$(date +%H%M)
+          NN="${SUFFIX: -2}"
+          BUILD_NUMBER="${TODAY}${NN}"
 
-          BUILD_NUMBER="${TODAY}$(printf '%02d' $SEQ)"
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "build_name=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}  Build: ${BUILD_NUMBER}"
