@@ -17,6 +17,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/acp"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -161,6 +162,7 @@ type Model struct {
 	statsPanel                      *statsPanelState
 	inspectorPanel                  *inspectorPanelState
 	swarmMgr                        *swarm.Manager
+	acpClientMgr                    *acp.ClientManager
 	previewPanel                    *previewPanelState
 	fileBrowser                     *fileBrowserState
 	harnessPanel                    *harnessPanelState

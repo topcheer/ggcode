@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/acp"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -339,6 +340,11 @@ func (r *REPL) SetConfigTool(tools *tool.Registry) {
 // SetSendMessageTool registers the send_message tool for agent communication.
 func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.SendMessageTool{Manager: mgr})
+}
+
+// SetACPClientManager wires the ACP client manager for clean shutdown.
+func (r *REPL) SetACPClientManager(mgr *acp.ClientManager) {
+	r.model.acpClientMgr = mgr
 }
 
 // SetSwarmManager wires the swarm manager and registers swarm tools.
