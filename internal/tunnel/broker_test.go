@@ -117,6 +117,88 @@ func TestBrokerSwitchSessionWithoutRelaySession(t *testing.T) {
 	}
 }
 
+func TestBrokerAnnounceActiveSessionMarksRelayReady(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+
+	b.AnnounceActiveSession("sess-1")
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-1" {
+			t.Fatalf("unexpected active_session payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected active_session to be sent")
+	}
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected ready payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to follow active_session")
+	}
+}
+
+func TestBrokerSwitchSessionMarksRelayReady(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+
+	b.SwitchSession("sess-1")
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-1" {
+			t.Fatalf("unexpected active_session payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected active_session to be sent")
+	}
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected ready payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to follow session switch")
+	}
+}
+
 func TestBrokerOnRelayConnected(t *testing.T) {
 	b, _ := newBrokerForTest()
 	defer b.Stop()
@@ -1326,6 +1408,37 @@ func TestBrokerHandleRelayConnectedMarksTrustedRecoveredRelayReady(t *testing.T)
 		}
 	default:
 		t.Fatal("expected server_ready to be sent for trusted recovery")
+	}
+}
+
+func TestBrokerHandleRelayConnectedMarksTrustedEmptyServerReady(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "",
+		HistoryCount: 0,
+		LastEventID:  "",
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected trusted empty recovery payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to be sent for trusted empty recovery")
 	}
 }
 
