@@ -27,7 +27,9 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 
 ```bash
 brew tap topcheer/ggcode
-brew install ggcode
+brew install ggcode              # CLI
+brew install ggcode-desktop      # Desktop (Linux)
+brew install --cask ggcode-desktop  # Desktop (macOS DMG)
 ```
 
 ### Go installer
@@ -64,11 +66,9 @@ The Python wrapper also downloads the latest ggcode GitHub Release by default an
 ### winget
 
 ```powershell
-winget install --id gg.ai.ggcode-desktop
+winget install --id gg.ai.ggcode-cli        # CLI
+winget install --id gg.ai.ggcode-desktop    # Desktop
 ```
-
-The winget package tracks the desktop Windows installer. The release workflow can auto-submit
-updates after the initial package bootstrap once `WINGET_CREATE_GITHUB_TOKEN` is configured.
 
 ### Release archives and installer packages
 

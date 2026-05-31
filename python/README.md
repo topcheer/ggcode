@@ -53,9 +53,27 @@ or:
 GGCODE_INSTALL_VERSION=X.Y.Z ggcode
 ```
 
-## Native installers
+## Other install methods
 
-Prefer a native package? Download directly from [GitHub Releases](https://github.com/topcheer/ggcode/releases/latest):
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap topcheer/ggcode
+brew install ggcode              # CLI
+brew install ggcode-desktop      # Desktop (Linux)
+brew install --cask ggcode-desktop  # Desktop (macOS DMG)
+```
+
+### winget (Windows)
+
+```powershell
+winget install --id gg.ai.ggcode-cli        # CLI
+winget install --id gg.ai.ggcode-desktop    # Desktop
+```
+
+### Native release packages
+
+Download directly from [GitHub Releases](https://github.com/topcheer/ggcode/releases/latest):
 
 | Platform | Format | Install command |
 | --- | --- | --- |
