@@ -440,7 +440,7 @@ func (m *Model) ensureNostrRuntime() error {
 		return fmt.Errorf("creating IM pairing store: %w", err)
 	}
 	imMgr.SetPairingStore(pairingStore)
-	m.imManager = imMgr
+	m.SetIMManager(imMgr)
 	return nil
 }
 

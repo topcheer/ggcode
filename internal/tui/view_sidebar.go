@@ -207,12 +207,10 @@ func (m Model) renderSidebarA2ASection() string {
 	}
 
 	// Show last few events
-	m.a2aMu.Lock()
 	events := m.a2aEventBuf
 	if len(events) > 3 {
 		events = events[len(events)-3:]
 	}
-	m.a2aMu.Unlock()
 
 	for _, evt := range events {
 		icon := "●"

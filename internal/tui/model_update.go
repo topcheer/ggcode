@@ -27,6 +27,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		model, cmd = next.withTerminalTitleCmd(cmd)
 	}()
 
+	m.syncAsyncStateCaches()
 	model = m
 	// Handle spinner ticks first
 	var spinnerCmd tea.Cmd
@@ -54,6 +55,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case imRuntimeUpdatedMsg:
+		return m, nil
+
+	case a2aEventUpdatedMsg:
 		return m, nil
 
 	case tea.MouseWheelMsg:

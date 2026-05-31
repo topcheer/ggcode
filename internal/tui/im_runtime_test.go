@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -94,6 +95,39 @@ func TestSetSessionBindsIMRuntime(t *testing.T) {
 	}
 	if active.SessionID != ses.ID || active.Workspace != ses.Workspace {
 		t.Fatalf("unexpected IM session binding: %#v", active)
+	}
+}
+
+func TestSetIMManagerSurvivesModelCopies(t *testing.T) {
+	m := NewModel(nil, nil)
+	copyModel := m
+	imMgr := im.NewManager()
+
+	copyModel.SetIMManager(imMgr)
+
+	next, _ := m.Update(imRuntimeUpdatedMsg{})
+	updated := next.(Model)
+	if updated.imManager != imMgr {
+		t.Fatal("expected latest model to see IM manager set through copied model")
+	}
+	if updated.imEmitter == nil {
+		t.Fatal("expected latest model to rebuild IM emitter from shared runtime state")
+	}
+}
+
+func TestA2AEventBufferSurvivesModelCopies(t *testing.T) {
+	m := NewModel(nil, nil)
+	copyModel := m
+
+	copyModel.appendA2AEvent(a2a.TaskEventMessage{Type: "start", TaskID: "task-1", Message: "started"})
+
+	next, _ := m.Update(a2aEventUpdatedMsg{})
+	updated := next.(Model)
+	if len(updated.a2aEventBuf) != 1 {
+		t.Fatalf("expected copied-model A2A event to sync into latest model, got %d events", len(updated.a2aEventBuf))
+	}
+	if updated.a2aEventBuf[0].TaskID != "task-1" {
+		t.Fatalf("unexpected A2A event: %#v", updated.a2aEventBuf[0])
 	}
 }
 
