@@ -487,6 +487,28 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 }
 
 func (rc *RelayClient) SendActiveSession(sessionID string) error {
+	return rc.SendActiveSessionWithMode(sessionID, "")
+}
+
+func (rc *RelayClient) SendServerReady() error {
+	rc.closeMu.Lock()
+	if rc.closed {
+		rc.closeMu.Unlock()
+		return fmt.Errorf("relay client closed")
+	}
+	rc.closeMu.Unlock()
+	data, err := json.Marshal(struct {
+		Type string `json:"type"`
+	}{
+		Type: EventServerReady,
+	})
+	if err != nil {
+		return err
+	}
+	return rc.enqueueRaw(data)
+}
+
+func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string) error {
 	rc.closeMu.Lock()
 	if rc.closed {
 		rc.closeMu.Unlock()
@@ -497,13 +519,15 @@ func (rc *RelayClient) SendActiveSession(sessionID string) error {
 		return nil
 	}
 	data, err := json.Marshal(struct {
-		Type      string          `json:"type"`
-		SessionID string          `json:"session_id,omitempty"`
-		Data      json.RawMessage `json:"data,omitempty"`
+		Type       string          `json:"type"`
+		SessionID  string          `json:"session_id,omitempty"`
+		ResumeMode string          `json:"resume_mode,omitempty"`
+		Data       json.RawMessage `json:"data,omitempty"`
 	}{
-		Type:      EventActiveSession,
-		SessionID: sessionID,
-		Data:      mustRawJSON(ActiveSessionData{SessionID: sessionID}),
+		Type:       EventActiveSession,
+		SessionID:  sessionID,
+		ResumeMode: mode,
+		Data:       mustRawJSON(ActiveSessionData{SessionID: sessionID}),
 	})
 	if err != nil {
 		return err

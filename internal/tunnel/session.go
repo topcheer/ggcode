@@ -176,6 +176,20 @@ func (s *Session) SendActiveSession(sessionID string) error {
 	return s.client.SendActiveSession(sessionID)
 }
 
+func (s *Session) SendActiveSessionWithMode(sessionID, mode string) error {
+	if s.client == nil {
+		return fmt.Errorf("tunnel session: no relay client")
+	}
+	return s.client.SendActiveSessionWithMode(sessionID, mode)
+}
+
+func (s *Session) SendServerReady() error {
+	if s.client == nil {
+		return fmt.Errorf("tunnel session: no relay client")
+	}
+	return s.client.SendServerReady()
+}
+
 func (s *Session) Info() *SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

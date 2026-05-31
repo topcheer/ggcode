@@ -93,12 +93,75 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     super.dispose();
   }
 
+  String _progressTitle(TunnelConnectionState state) {
+    final sync = state.relaySync;
+    if (sync == null) {
+      return t('connect.connecting');
+    }
+    if (sync.stalled) {
+      return t('relay_sync.stalled_title');
+    }
+    switch (sync.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_title');
+      case RelaySyncPhase.waitingHost:
+        return t(sync.recoveryState == 'pending'
+            ? 'relay_sync.pending_title'
+            : 'relay_sync.waiting_host_title');
+      case RelaySyncPhase.waiting:
+        return t('relay_sync.waiting_title');
+      case RelaySyncPhase.replaying:
+        return t(sync.resumeMode == 'full_history'
+            ? 'relay_sync.full_history_title'
+            : 'relay_sync.replaying_title');
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_title');
+    }
+  }
+
+  String _progressDetail(TunnelConnectionState state) {
+    final sync = state.relaySync;
+    if (sync == null) {
+      return t('connect.connecting_detail');
+    }
+    if (sync.stalled) {
+      return t(
+        'relay_sync.stalled_detail',
+        args: {'count': (sync.remainingReplayCount ?? 0).toString()},
+      );
+    }
+    switch (sync.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_detail');
+      case RelaySyncPhase.waitingHost:
+        return t(
+          sync.recoveryState == 'pending'
+              ? 'relay_sync.pending_detail'
+              : sync.hasLocalState
+                  ? 'relay_sync.waiting_host_with_local_detail'
+                  : 'relay_sync.waiting_host_detail',
+        );
+      case RelaySyncPhase.waiting:
+        return t(sync.hasLocalState
+            ? 'relay_sync.waiting_with_local_detail'
+            : 'relay_sync.waiting_detail');
+      case RelaySyncPhase.replaying:
+        return t(
+          'relay_sync.replaying_detail',
+          args: {'count': (sync.remainingReplayCount ?? 0).toString()},
+        );
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_detail');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final connState = ref.watch(connectionProvider);
     final history = ref.watch(_historyProvider);
     final isConnecting = connState.status == ConnectionStatus.connecting;
     final errorMsg = connState.error;
+    final showProgress = isConnecting || connState.relaySync != null;
 
     if (_showScanner) {
       return Scaffold(
@@ -292,6 +355,58 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                       : const Text('Connect'),
                 ),
               ),
+
+              if (showProgress) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(AppRadii.sm),
+                    border: Border.all(
+                      color: AppColors.accent.withValues(alpha: 0.18),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _progressTitle(connState),
+                              style: TextStyle(
+                                color: AppColors.textPrimary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _progressDetail(connState),
+                              style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
 
               // Error message
               if (errorMsg != null) ...[

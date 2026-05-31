@@ -185,7 +185,9 @@ class _AppShellState extends ConsumerState<AppShell>
 
     // Track first successful connection
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
-      if (next.status == ConnectionStatus.connected && !_hasConnected) {
+      final connectedUsable = next.sessionReady ||
+          (next.status == ConnectionStatus.connected && next.relaySync == null);
+      if (connectedUsable && !_hasConnected) {
         setState(() {
           _hasConnected = true;
         });
@@ -258,10 +260,13 @@ class _AppShellState extends ConsumerState<AppShell>
     // Once connected, always show ChatScreen (connection status shown in AppBar).
     final hasSelectedSession = workspaceCache.selectedSessionId != null &&
         workspaceCache.selectedSessionId!.isNotEmpty;
+    final connectedUsable = connState.sessionReady ||
+        (connState.status == ConnectionStatus.connected &&
+            connState.relaySync == null);
     if (!_hasConnected &&
         !_demoMode &&
         !hasSelectedSession &&
-        connState.status != ConnectionStatus.connected) {
+        !connectedUsable) {
       return const ConnectScreen();
     }
 

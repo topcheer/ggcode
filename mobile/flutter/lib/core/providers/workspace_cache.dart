@@ -257,6 +257,11 @@ class _SnapshotWrite {
   final CachedSessionSnapshot snapshot;
 }
 
+typedef DurableSnapshotObserver = Future<void> Function(
+  String sessionId,
+  String lastEventId,
+);
+
 class _WorkspaceCacheSqlStore {
   _WorkspaceCacheSqlStore._(this._db);
 
@@ -767,8 +772,9 @@ CachedSessionSnapshot _mergeCachedSnapshots({
     sessionInfo: candidate.sessionInfo ?? existing.sessionInfo,
     agentStatus: candidate.agentStatus,
     agentStatusMessage: mergedStatusMessage,
-    lastEventId:
-        candidateCursor >= existingCursor ? candidate.lastEventId : existing.lastEventId,
+    lastEventId: candidateCursor >= existingCursor
+        ? candidate.lastEventId
+        : existing.lastEventId,
   );
 }
 
@@ -796,6 +802,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   _WorkspaceCacheSqlStore? _store;
   Future<void>? _initializeFuture;
   Timer? _flushTimer;
+  DurableSnapshotObserver? onDurableSnapshotPersisted;
   final Set<String> _dirtySnapshots = <String>{};
   final Set<String> _dirtySessions = <String>{};
   final Set<String> _dirtyWorkspaces = <String>{};
@@ -1348,6 +1355,16 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         sessions: pendingSessionRecords,
         snapshots: pendingSnapshotWrites,
       );
+      final notifyDurable = onDurableSnapshotPersisted;
+      if (notifyDurable != null) {
+        for (final entry in pendingSnapshotWrites) {
+          final lastEventId = entry.snapshot.lastEventId;
+          if (lastEventId.isEmpty) {
+            continue;
+          }
+          await notifyDurable(entry.sessionId, lastEventId);
+        }
+      }
     } catch (error, stackTrace) {
       _dirtyWorkspaces.addAll(pendingWorkspaces);
       _dirtySessions.addAll(pendingSessions);
@@ -1474,8 +1491,7 @@ final isHistoricalViewProvider = Provider<bool>((ref) {
 
 final canSendMessagesProvider = Provider<bool>((ref) {
   final conn = ref.watch(connectionProvider);
-  return conn.status == ConnectionStatus.connected &&
-      !ref.watch(isHistoricalViewProvider);
+  return conn.sessionReady && !ref.watch(isHistoricalViewProvider);
 });
 
 bool _isViewingLive(WorkspaceCacheState state) {
