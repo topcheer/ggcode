@@ -88,7 +88,7 @@ func TestRoomAppendEventDedupes(t *testing.T) {
 func TestRoomNotifyServerClientConnected(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
-	r.generation = 2
+	r.authorityEpoch = 2
 	r.protocolVersion = shareProtocolV3
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 	server := newPeer(nil, r, "server", nil)
@@ -104,7 +104,7 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			t.Fatal(err)
 		}
-		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" || msg.Generation != 2 {
+		if msg.Type != "connected" || msg.Role != "client" || msg.LastEventID != "ev-000000001" || msg.AuthorityEpoch != 2 {
 			t.Fatalf("unexpected: %+v", msg)
 		}
 		var meta struct {
@@ -360,7 +360,7 @@ func TestServerReadyIgnoresReplacedServer(t *testing.T) {
 func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
-	r.generation = 1
+	r.authorityEpoch = 1
 	r.history = []roomEvent{{eventID: "ev-000000001"}}
 
 	h := newHub(nil)
@@ -373,8 +373,8 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 	if r.sessionID != "sess-2" {
 		t.Fatalf("expected session switch, got %q", r.sessionID)
 	}
-	if r.generation != 2 {
-		t.Fatalf("expected generation 2, got %d", r.generation)
+	if r.authorityEpoch != 1 {
+		t.Fatalf("expected authority epoch 1 to be preserved, got %d", r.authorityEpoch)
 	}
 	if len(r.history) != 0 {
 		t.Fatalf("expected room history cleared on switch, got %d entries", len(r.history))
@@ -388,7 +388,7 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 	if err := json.Unmarshal(msgs[0], &msg); err != nil {
 		t.Fatal(err)
 	}
-	if msg.Type != "active_session" || msg.SessionID != "sess-2" || msg.Generation != 2 {
+	if msg.Type != "active_session" || msg.SessionID != "sess-2" || msg.AuthorityEpoch != 1 {
 		t.Fatalf("unexpected active_session broadcast: %+v", msg)
 	}
 }
@@ -398,7 +398,7 @@ func TestPeerOnActiveSessionBumpsGenerationOnSessionSwitch(t *testing.T) {
 func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
-	r.generation = 3
+	r.authorityEpoch = 3
 	r.history = []roomEvent{
 		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},
 		{eventID: "ev-000000002", raw: []byte(`{"type":"encrypted","event_id":"ev-000000002"}`)},
@@ -431,15 +431,15 @@ func TestPeerOnResumeReplaysFromCursor(t *testing.T) {
 	if json.Unmarshal(msgs[0], &first) != nil || first.Type != "active_session" {
 		t.Fatalf("first message should be active_session, got %s", string(msgs[0]))
 	}
-	if first.Generation != 3 {
-		t.Fatalf("expected active_session generation 3, got %d", first.Generation)
+	if first.AuthorityEpoch != 3 {
+		t.Fatalf("expected active_session authority_epoch 3, got %d", first.AuthorityEpoch)
 	}
 	var ack relayMessage
 	if json.Unmarshal(msgs[1], &ack) != nil || ack.Type != "resume_ack" {
 		t.Fatalf("first message should be resume_ack, got %s", string(msgs[0]))
 	}
-	if ack.Generation != 3 {
-		t.Fatalf("expected resume_ack generation 3, got %d", ack.Generation)
+	if ack.AuthorityEpoch != 3 {
+		t.Fatalf("expected resume_ack authority_epoch 3, got %d", ack.AuthorityEpoch)
 	}
 	// Since cursor was empty, resume_ack should say full_history.
 	if string(ack.Data) != `{"replay_count":3,"resume_mode":"full_history"}` {
@@ -542,10 +542,55 @@ func TestPeerOnResumeWithCursorOnlyReplaysNew(t *testing.T) {
 	}
 }
 
+func TestPeerOnResumeSessionMismatchForcesFullHistory(t *testing.T) {
+	r := newRoom("token")
+	r.sessionID = "sess-new"
+	r.protocolVersion = shareProtocolV3
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"type":"session_info","event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"type":"status","event_id":"ev-000000002"}`)},
+		{eventID: "ev-000000003", raw: []byte(`{"type":"activity","event_id":"ev-000000003"}`)},
+		{eventID: "ev-000000004", raw: []byte(`{"type":"text","event_id":"ev-000000004"}`)},
+	}
+
+	h := newHub(nil)
+	p := newPeer(h, r, "client", nil)
+	p.protocolVersion = shareProtocolV3
+	p.cursor = "ev-000000003"
+
+	p.onResume(relayMessage{
+		Type:      "resume_hello",
+		ClientID:  "client-1",
+		SessionID: "sess-old",
+	}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
+
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 6 { // active_session + resume_ack + full replay
+		t.Fatalf("expected 6 messages, got %d", len(msgs))
+	}
+
+	var ack relayMessage
+	if err := json.Unmarshal(msgs[1], &ack); err != nil {
+		t.Fatalf("unmarshal resume_ack: %v", err)
+	}
+	if string(ack.Data) != `{"replay_count":4,"resume_mode":"full_history"}` {
+		t.Fatalf("unexpected ack data: %s", string(ack.Data))
+	}
+
+	var replay relayMessage
+	if err := json.Unmarshal(msgs[2], &replay); err != nil {
+		t.Fatalf("unmarshal first replay message: %v", err)
+	}
+	if replay.Type != "session_info" {
+		t.Fatalf("expected session_info after session mismatch, got %s", replay.Type)
+	}
+}
+
 func TestPeerOnResumeV3WaitsForKeyReady(t *testing.T) {
 	r := newRoom("token")
 	r.sessionID = "sess-1"
-	r.generation = 4
+	r.authorityEpoch = 4
 	r.protocolVersion = shareProtocolV3
 	r.history = []roomEvent{
 		{eventID: "ev-000000001", raw: []byte(`{"type":"encrypted","event_id":"ev-000000001"}`)},

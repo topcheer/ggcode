@@ -26,31 +26,34 @@ const (
 // ─── Wire protocol ───
 
 type relayMessage struct {
-	Type         string          `json:"type"`
-	SessionID    string          `json:"session_id,omitempty"`
-	EventID      string          `json:"event_id,omitempty"`
-	StreamID     string          `json:"stream_id,omitempty"`
-	ClientID     string          `json:"client_id,omitempty"`
-	MessageID    string          `json:"message_id,omitempty"`
-	Generation   uint64          `json:"generation,omitempty"`
-	Role         string          `json:"role,omitempty"`
-	Reason       string          `json:"reason,omitempty"`
-	RetryAfterMS int             `json:"retry_after_ms,omitempty"`
-	ResumeMode   string          `json:"resume_mode,omitempty"`
-	Count        int             `json:"count,omitempty"`
-	LastEventID  string          `json:"last_event_id,omitempty"`
-	Nonce        json.RawMessage `json:"nonce,omitempty"`
-	Ciphertext   json.RawMessage `json:"ciphertext,omitempty"`
-	Data         json.RawMessage `json:"data,omitempty"`
+	Type           string          `json:"type"`
+	SessionID      string          `json:"session_id,omitempty"`
+	EventID        string          `json:"event_id,omitempty"`
+	StreamID       string          `json:"stream_id,omitempty"`
+	ClientID       string          `json:"client_id,omitempty"`
+	MessageID      string          `json:"message_id,omitempty"`
+	EventHash      string          `json:"event_hash,omitempty"`
+	ProjectionHash string          `json:"projection_hash,omitempty"`
+	Generation     uint64          `json:"generation,omitempty"`
+	AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
+	Role           string          `json:"role,omitempty"`
+	Reason         string          `json:"reason,omitempty"`
+	RetryAfterMS   int             `json:"retry_after_ms,omitempty"`
+	ResumeMode     string          `json:"resume_mode,omitempty"`
+	Count          int             `json:"count,omitempty"`
+	LastEventID    string          `json:"last_event_id,omitempty"`
+	Nonce          json.RawMessage `json:"nonce,omitempty"`
+	Ciphertext     json.RawMessage `json:"ciphertext,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
 }
 
 type roomEvent struct {
-	sessionID  string
-	eventID    string
-	streamID   string
-	typ        string
-	generation uint64
-	raw        []byte
+	sessionID string
+	eventID   string
+	streamID  string
+	eventHash string
+	typ       string
+	raw       []byte
 }
 
 // ─── Room ───
@@ -58,7 +61,7 @@ type roomEvent struct {
 type room struct {
 	token           string
 	sessionID       string
-	generation      uint64
+	authorityEpoch  uint64
 	protocolVersion int
 	upgradeReason   string
 	serverReady     bool
@@ -112,6 +115,7 @@ func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
 		return false, 0
 	}
 	r.sessionID = state.sessionID
+	r.authorityEpoch = state.authorityEpoch
 	r.history = append([]roomEvent(nil), state.history...)
 	r.bootstrap = make(map[string]roomEvent)
 	for _, ev := range r.history {
@@ -119,9 +123,6 @@ func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
 	}
 	if len(r.history) > 0 {
 		r.lastEventAt = time.Now()
-	}
-	if r.generation == 0 && r.sessionID != "" {
-		r.generation = 1
 	}
 	return true, len(r.history)
 }
@@ -149,6 +150,24 @@ func (r *room) bootstrapEvents(sessionID string) []roomEvent {
 	return out
 }
 
+func (r *room) projectionHashLocked(limit int) string {
+	if len(r.history) == 0 || limit == 0 {
+		return ""
+	}
+	if limit < 0 || limit > len(r.history) {
+		limit = len(r.history)
+	}
+	hasher := sha256.New()
+	for i := 0; i < limit; i++ {
+		if strings.TrimSpace(r.history[i].eventHash) == "" {
+			return ""
+		}
+		_, _ = hasher.Write([]byte(r.history[i].eventHash))
+		_, _ = hasher.Write([]byte{'\n'})
+	}
+	return hexEncodeSum(hasher.Sum(nil))
+}
+
 func (r *room) snapshotClientsLocked(filter func(*peer) bool) []*peer {
 	clients := make([]*peer, 0, len(r.clients))
 	for client := range r.clients {
@@ -160,11 +179,11 @@ func (r *room) snapshotClientsLocked(filter func(*peer) bool) []*peer {
 	return clients
 }
 
-func (r *room) ensureGenerationLocked() uint64 {
-	if r.generation == 0 && r.sessionID != "" {
-		r.generation = 1
+func (r *room) ensureAuthorityEpochLocked() uint64 {
+	if r.authorityEpoch == 0 {
+		r.authorityEpoch = 1
 	}
-	return r.generation
+	return r.authorityEpoch
 }
 
 func (r *room) eventsAfter(cursor string) []roomEvent {
@@ -363,14 +382,15 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	generation, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, false)
+	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
 	if msg.SessionID == "" {
 		p.room.mu.Lock()
 		msg.SessionID = p.room.sessionID
-		generation = p.room.ensureGenerationLocked()
+		authorityEpoch = p.room.ensureAuthorityEpochLocked()
 		p.room.mu.Unlock()
 	}
-	msg.Generation = generation
+	msg.Generation = 0
+	msg.AuthorityEpoch = authorityEpoch
 	wire := mustJSON(msg)
 
 	if hydrated {
@@ -385,19 +405,18 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	switch msg.Type {
 	case "session_info", "status", "activity":
 		p.room.rememberBootstrap(roomEvent{
-			sessionID:  msg.SessionID,
-			typ:        msg.Type,
-			generation: generation,
-			raw:        append([]byte(nil), wire...),
+			sessionID: msg.SessionID,
+			typ:       msg.Type,
+			raw:       append([]byte(nil), wire...),
 		})
 	}
 	ev := roomEvent{
-		sessionID:  msg.SessionID,
-		eventID:    msg.EventID,
-		streamID:   msg.StreamID,
-		typ:        "encrypted",
-		generation: generation,
-		raw:        append([]byte(nil), wire...),
+		sessionID: msg.SessionID,
+		eventID:   msg.EventID,
+		streamID:  msg.StreamID,
+		eventHash: msg.EventHash,
+		typ:       "encrypted",
+		raw:       append([]byte(nil), wire...),
 	}
 	p.room.appendEvent(ev)
 
@@ -446,9 +465,10 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	generation, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.ResumeMode == activeSessionModeReplace)
+	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
-	msg.Generation = generation
+	msg.Generation = 0
+	msg.AuthorityEpoch = authorityEpoch
 
 	p.room.mu.RLock()
 	clients := p.room.snapshotClientsLocked(nil)
@@ -469,7 +489,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	if p.hub.store != nil {
 		go func() {
-			_ = p.hub.store.persistActiveSession(p.room.token, sessionID)
+			_ = p.hub.store.persistActiveSession(p.room.token, sessionID, authorityEpoch)
 		}()
 	}
 }
@@ -485,8 +505,9 @@ func (p *peer) onServerReady() {
 	}
 	p.room.serverReady = true
 	sessionID := p.room.sessionID
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
 	p.room.mu.Unlock()
-	p.hub.trace("server_ready", p.room.token, relayMessage{Type: "server_ready", SessionID: sessionID})
+	p.hub.trace("server_ready", p.room.token, relayMessage{Type: "server_ready", SessionID: sessionID, AuthorityEpoch: authorityEpoch})
 }
 
 func (p *peer) onResume(msg relayMessage, h *hub) {
@@ -515,15 +536,18 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 	} else if p.cursor == "" {
 		p.cursor = loadedCursor
 	}
-	generation := p.room.ensureGenerationLocked()
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
 	sessionID := p.room.sessionID
+	if msg.SessionID != "" && sessionID != "" && msg.SessionID != sessionID {
+		p.cursor = ""
+	}
 
 	// 1. Send active_session so mobile can load its cached snapshot.
 	activeSession := relayMessage{
-		Type:       "active_session",
-		SessionID:  sessionID,
-		ClientID:   msg.ClientID,
-		Generation: generation,
+		Type:           "active_session",
+		SessionID:      sessionID,
+		ClientID:       msg.ClientID,
+		AuthorityEpoch: authorityEpoch,
 	}
 
 	p.ready = false
@@ -533,8 +557,8 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 	p.send(activeSession)
 	p.room.sendMu.Unlock()
 
-	log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s generation=%d",
-		shortToken(p.room.token), msg.ClientID, p.cursor, generation)
+	log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s authority_epoch=%d",
+		shortToken(p.room.token), msg.ClientID, p.cursor, authorityEpoch)
 }
 
 func (p *peer) prepareResumeLocked(clientID string) (relayMessage, []roomEvent, string) {
@@ -543,16 +567,16 @@ func (p *peer) prepareResumeLocked(clientID string) (relayMessage, []roomEvent, 
 	if p.cursor == "" {
 		mode = "full_history"
 	}
-	generation := p.room.ensureGenerationLocked()
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
 	sessionID := p.room.sessionID
 
 	// 2. Send resume_ack.
 	ack := relayMessage{
-		Type:       "resume_ack",
-		SessionID:  sessionID,
-		ClientID:   clientID,
-		Generation: generation,
-		Data:       mustJSON(map[string]interface{}{"resume_mode": mode, "replay_count": len(replay)}),
+		Type:           "resume_ack",
+		SessionID:      sessionID,
+		ClientID:       clientID,
+		AuthorityEpoch: authorityEpoch,
+		Data:           mustJSON(map[string]interface{}{"resume_mode": mode, "replay_count": len(replay)}),
 	}
 
 	p.ready = true
@@ -609,11 +633,14 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 	return true
 }
 
-func (p *peer) bindRoomSession(sessionID string, replaceHistory bool) (generation uint64, changed bool, hydrated bool, loadedCount int) {
+func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool, hydrated bool, loadedCount int) {
 	if sessionID == "" {
 		p.room.mu.Lock()
 		defer p.room.mu.Unlock()
-		return p.room.ensureGenerationLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+	}
+	if authorityEpoch == 0 {
+		authorityEpoch = 1
 	}
 
 	p.room.mu.RLock()
@@ -624,21 +651,18 @@ func (p *peer) bindRoomSession(sessionID string, replaceHistory bool) (generatio
 	defer p.room.mu.Unlock()
 
 	if expectedSessionID != sessionID && p.room.sessionID != expectedSessionID && p.room.sessionID != sessionID {
-		return p.room.ensureGenerationLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false, false, 0
 	}
 
 	changed = p.room.sessionID != sessionID
+	authorityChanged := p.room.authorityEpoch != 0 && p.room.authorityEpoch != authorityEpoch
 	p.room.sessionID = sessionID
-	if changed || replaceHistory {
+	if changed || replaceHistory || authorityChanged {
 		p.room.clearHistoryLocked()
-		if p.room.generation == 0 {
-			p.room.generation = 1
-		} else {
-			p.room.generation++
-		}
 	}
-	generation = p.room.ensureGenerationLocked()
-	return generation, changed, hydrated, loadedCount
+	p.room.authorityEpoch = authorityEpoch
+	epoch = p.room.ensureAuthorityEpochLocked()
+	return epoch, changed || authorityChanged, hydrated, loadedCount
 }
 
 func (h *hub) hydrateRoomFromStore(r *room) (bool, int) {
@@ -1108,13 +1132,21 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := room.sessionID
 	buffered := len(room.history)
+	projectionHash := room.projectionHashLocked(buffered)
+	authorityEpoch := room.authorityEpoch
+	if authorityEpoch == 0 {
+		authorityEpoch = 1
+	}
 	room.mu.RUnlock()
 	initialConnected := relayMessage{
-		Type:        "connected",
-		SessionID:   sessionID,
-		Count:       buffered,
-		LastEventID: tail,
-		Data:        mustJSON(connectedShareMetadata(handshake)),
+		Type:           "connected",
+		SessionID:      sessionID,
+		Generation:     0,
+		AuthorityEpoch: authorityEpoch,
+		Count:          buffered,
+		LastEventID:    tail,
+		ProjectionHash: projectionHash,
+		Data:           mustJSON(connectedShareMetadata(handshake)),
 	}
 	h.traceRelayMessage("ws_write", token, clientID, initialConnected, "peer_role="+role+" initial=true")
 	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
@@ -1236,7 +1268,7 @@ func (r *room) notifyServerClientConnectedLocked(protocolVersion int, resumeComp
 		r.mu.Unlock()
 		return
 	}
-	generation := r.ensureGenerationLocked()
+	authorityEpoch := r.ensureAuthorityEpochLocked()
 	sessionID := r.sessionID
 	count := len(r.history)
 	tail := ""
@@ -1244,19 +1276,35 @@ func (r *room) notifyServerClientConnectedLocked(protocolVersion int, resumeComp
 		n := count
 		tail = r.history[n-1].eventID
 	}
+	projectionHash := r.projectionHashLocked(count)
 	r.mu.Unlock()
 	server.send(relayMessage{
-		Type:        "connected",
-		Generation:  generation,
-		Role:        "client",
-		SessionID:   sessionID,
-		Count:       count,
-		LastEventID: tail,
+		Type:           "connected",
+		Generation:     0,
+		AuthorityEpoch: authorityEpoch,
+		Role:           "client",
+		SessionID:      sessionID,
+		Count:          count,
+		LastEventID:    tail,
+		ProjectionHash: projectionHash,
 		Data: mustJSON(map[string]any{
 			"protocol_version": protocolVersion,
 			"resume_complete":  resumeComplete,
 		}),
 	})
+}
+
+func hexEncodeSum(sum []byte) string {
+	if len(sum) == 0 {
+		return ""
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, len(sum)*2)
+	for i, b := range sum {
+		out[i*2] = hex[b>>4]
+		out[i*2+1] = hex[b&0x0f]
+	}
+	return string(out)
 }
 
 // ─── Main ───

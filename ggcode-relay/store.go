@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -25,8 +27,9 @@ type relayStore struct {
 }
 
 type persistedRoomState struct {
-	sessionID string
-	history   []roomEvent
+	sessionID      string
+	authorityEpoch uint64
+	history        []roomEvent
 }
 
 func openRelayStore(dbPath string, retention time.Duration) (*relayStore, error) {
@@ -54,6 +57,7 @@ func initRelaySchema(db *sql.DB) error {
 CREATE TABLE IF NOT EXISTS relay_rooms (
   token_hash TEXT PRIMARY KEY,
   current_session_id TEXT NOT NULL DEFAULT '',
+  current_authority_epoch INTEGER NOT NULL DEFAULT 1,
   updated_at TIMESTAMP NOT NULL
 );
 
@@ -115,6 +119,9 @@ CREATE TABLE IF NOT EXISTS relay_client_cursors (
 	if err != nil {
 		return fmt.Errorf("init relay schema: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE relay_rooms ADD COLUMN current_authority_epoch INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return fmt.Errorf("add relay room authority epoch column: %w", err)
+	}
 	return nil
 }
 
@@ -132,9 +139,9 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 	tokenHash := hashToken(token)
 	var state persistedRoomState
 	err := s.db.QueryRow(
-		`SELECT current_session_id FROM relay_rooms WHERE token_hash = ?`,
+		`SELECT current_session_id, current_authority_epoch FROM relay_rooms WHERE token_hash = ?`,
 		tokenHash,
-	).Scan(&state.sessionID)
+	).Scan(&state.sessionID, &state.authorityEpoch)
 	if err == sql.ErrNoRows {
 		return persistedRoomState{}, nil
 	}
@@ -142,6 +149,9 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 		return persistedRoomState{}, fmt.Errorf("query room: %w", err)
 	}
 	if state.sessionID == "" {
+		if state.authorityEpoch == 0 {
+			state.authorityEpoch = 1
+		}
 		return state, nil
 	}
 	rows, err := s.db.Query(
@@ -161,6 +171,12 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 			return persistedRoomState{}, fmt.Errorf("scan room event: %w", err)
 		}
 		ev.raw = append([]byte(nil), ev.raw...)
+		var meta struct {
+			EventHash string `json:"event_hash,omitempty"`
+		}
+		if err := json.Unmarshal(ev.raw, &meta); err == nil {
+			ev.eventHash = meta.EventHash
+		}
 		state.history = append(state.history, ev)
 	}
 	if err := rows.Err(); err != nil {
@@ -172,6 +188,9 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) error {
 	if s == nil || msg.SessionID == "" || msg.EventID == "" {
 		return nil
+	}
+	if msg.AuthorityEpoch == 0 {
+		msg.AuthorityEpoch = 1
 	}
 	tokenHash := hashToken(token)
 	now := time.Now().UTC()
@@ -185,12 +204,13 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 		}
 	}()
 	if _, err = tx.Exec(
-		`INSERT INTO relay_rooms(token_hash, current_session_id, updated_at)
-		 VALUES(?, ?, ?)
+		`INSERT INTO relay_rooms(token_hash, current_session_id, current_authority_epoch, updated_at)
+		 VALUES(?, ?, ?, ?)
 		 ON CONFLICT(token_hash) DO UPDATE SET
 		   current_session_id = excluded.current_session_id,
+		   current_authority_epoch = excluded.current_authority_epoch,
 		   updated_at = excluded.updated_at`,
-		tokenHash, msg.SessionID, now,
+		tokenHash, msg.SessionID, msg.AuthorityEpoch, now,
 	); err != nil {
 		return fmt.Errorf("upsert room: %w", err)
 	}
@@ -220,9 +240,12 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 	return nil
 }
 
-func (s *relayStore) persistActiveSession(token, sessionID string) error {
+func (s *relayStore) persistActiveSession(token, sessionID string, authorityEpoch uint64) error {
 	if s == nil || sessionID == "" {
 		return nil
+	}
+	if authorityEpoch == 0 {
+		authorityEpoch = 1
 	}
 	tokenHash := hashToken(token)
 	now := time.Now().UTC()
@@ -236,12 +259,13 @@ func (s *relayStore) persistActiveSession(token, sessionID string) error {
 		}
 	}()
 	if _, err = tx.Exec(
-		`INSERT INTO relay_rooms(token_hash, current_session_id, updated_at)
-		 VALUES(?, ?, ?)
+		`INSERT INTO relay_rooms(token_hash, current_session_id, current_authority_epoch, updated_at)
+		 VALUES(?, ?, ?, ?)
 		 ON CONFLICT(token_hash) DO UPDATE SET
 		   current_session_id = excluded.current_session_id,
+		   current_authority_epoch = excluded.current_authority_epoch,
 		   updated_at = excluded.updated_at`,
-		tokenHash, sessionID, now,
+		tokenHash, sessionID, authorityEpoch, now,
 	); err != nil {
 		return fmt.Errorf("upsert active room: %w", err)
 	}
