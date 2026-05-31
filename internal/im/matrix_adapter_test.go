@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -242,6 +243,22 @@ func TestSplitMatrixMessage(t *testing.T) {
 	for _, chunk := range chunks {
 		if len(chunk) > 25 { // allow slightly over for newline splits
 			t.Errorf("chunk too long (%d): %q", len(chunk), chunk)
+		}
+	}
+}
+
+func TestSplitMatrixMessage_DoesNotBreakUTF8(t *testing.T) {
+	msg := "你好世界🙂再见"
+	chunks := chunkText(msg, 3)
+	if strings.Join(chunks, "") != msg {
+		t.Fatalf("reassembled = %q, want %q", strings.Join(chunks, ""), msg)
+	}
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d invalid UTF-8: %q", i, chunk)
+		}
+		if len([]rune(chunk)) > 3 {
+			t.Fatalf("chunk %d has %d runes, want <= 3", i, len([]rune(chunk)))
 		}
 	}
 }

@@ -45,12 +45,13 @@ type mattermostAdapter struct {
 	replyMode      string // "thread" or "off"
 	allowedUsers   []string
 
-	mu        sync.RWMutex
-	ws        *websocket.Conn
-	conn      *http.Client
-	connected bool
-	closed    bool
-	seen      map[string]time.Time
+	mu          sync.RWMutex
+	ws          *websocket.Conn
+	conn        *http.Client
+	connected   bool
+	closed      bool
+	seen        map[string]time.Time
+	reactionAck reactionAckState
 }
 
 func newMattermostAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*mattermostAdapter, error) {
@@ -499,13 +500,41 @@ func splitMattermostText(text string, maxLen int) []string {
 	return chunks
 }
 
-// TriggerTyping implements the TypingIndicator interface.
-// Mattermost supports a "user is typing" WebSocket broadcast.
+// TriggerTyping adds a reaction acknowledgement to the latest real user post
+// when possible, and falls back to the native "user is typing" WebSocket
+// broadcast when there is no target post yet.
 func (a *mattermostAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
 		return nil
 	}
+	postID := strings.TrimSpace(LastReactionTargetMessageID(binding))
+	if postID != "" {
+		if !a.reactionAck.NeedsSend(binding, postID) {
+			return nil
+		}
+		a.mu.RLock()
+		botUserID := strings.TrimSpace(a.botUserID)
+		conn := a.conn
+		a.mu.RUnlock()
+		if botUserID != "" && conn != nil {
+			_, err := a.apiPost("reactions", map[string]any{
+				"user_id":    botUserID,
+				"post_id":    postID,
+				"emoji_name": reactionAckValue(PlatformMattermost, postID),
+			})
+			if err != nil {
+				debug.Log("mattermost", "adapter=%s typing reaction failed: %v", a.name, err)
+				return err
+			}
+			a.reactionAck.MarkSent(binding, postID)
+			return nil
+		}
+	}
+	return a.triggerNativeTyping(channelID)
+}
+
+func (a *mattermostAdapter) triggerNativeTyping(channelID string) error {
 	a.mu.RLock()
 	ws := a.ws
 	a.mu.RUnlock()

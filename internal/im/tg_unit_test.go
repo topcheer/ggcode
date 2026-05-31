@@ -3,8 +3,10 @@ package im
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tgmd "github.com/eekstunt/telegramify-markdown-go"
 
@@ -34,6 +36,24 @@ func TestSplitTGMessage(t *testing.T) {
 				t.Errorf("splitTGMessage(%q, %d) = %d chunks, want %d: %v", tc.input, tc.maxLen, len(chunks), tc.want, chunks)
 			}
 		})
+	}
+}
+
+func TestSplitTGMessage_DoesNotBreakUTF8(t *testing.T) {
+	chunks := splitTGMessage("  你好世界🙂再见  ", 3)
+	if got := len(chunks); got < 2 {
+		t.Fatalf("expected multiple chunks, got %d", got)
+	}
+	if joined := strings.Join(chunks, ""); joined != "你好世界🙂再见" {
+		t.Fatalf("joined = %q, want %q", joined, "你好世界🙂再见")
+	}
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d invalid UTF-8: %q", i, chunk)
+		}
+		if len([]rune(chunk)) > 3 {
+			t.Fatalf("chunk %d has %d runes, want <= 3", i, len([]rune(chunk)))
+		}
 	}
 }
 

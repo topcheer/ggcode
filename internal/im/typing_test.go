@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"maunium.net/go/mautrix"
 )
 
 // ============================================================
@@ -140,9 +142,91 @@ func TestTriggerTyping_MultipleAdapters(t *testing.T) {
 	}
 }
 
+func TestReactionAckState_DeduplicatesPerBinding(t *testing.T) {
+	var state reactionAckState
+	binding := ChannelBinding{Workspace: "/tmp/project", ChannelID: "ch-1"}
+	if !state.NeedsSend(binding, "msg-1") {
+		t.Fatal("first target should need send")
+	}
+	state.MarkSent(binding, "msg-1")
+	if state.NeedsSend(binding, "msg-1") {
+		t.Fatal("same target on same binding should be deduplicated")
+	}
+	if !state.NeedsSend(binding, "msg-2") {
+		t.Fatal("new target should need send")
+	}
+	otherBinding := ChannelBinding{Workspace: "/tmp/project", ChannelID: "ch-2"}
+	if !state.NeedsSend(otherBinding, "msg-1") {
+		t.Fatal("same target on different binding should still need send")
+	}
+}
+
+func TestReactionAckValue_IsStablePerTarget(t *testing.T) {
+	first := reactionAckValue(PlatformDiscord, "msg-1")
+	if first == "" {
+		t.Fatal("expected reaction for discord")
+	}
+	if got := reactionAckValue(PlatformDiscord, "msg-1"); got != first {
+		t.Fatalf("reaction should be stable for same target: %q vs %q", first, got)
+	}
+	if got := reactionAckValue(PlatformFeishu, "msg-1"); got != "Typing" {
+		t.Fatalf("feishu reaction = %q, want Typing", got)
+	}
+}
+
 // ============================================================
 // Telegram TriggerTyping
 // ============================================================
+
+func TestTGTriggerTyping_SetsReactionWhenMessageIDAvailable(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.Path
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	adapter := &tgAdapter{
+		httpClient: srv.Client(),
+		botToken:   "TEST_TOKEN",
+		apiBase:    srv.URL,
+	}
+
+	binding := ChannelBinding{ChannelID: "12345", LastInboundMessageID: "777"}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping second call: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if !strings.Contains(gotPath, "/botTEST_TOKEN/setMessageReaction") {
+		t.Errorf("path = %q, want /botTEST_TOKEN/setMessageReaction", gotPath)
+	}
+	if gotBody["chat_id"] != "12345" {
+		t.Errorf("chat_id = %v, want 12345", gotBody["chat_id"])
+	}
+	if gotBody["message_id"] != float64(777) {
+		t.Errorf("message_id = %v, want 777", gotBody["message_id"])
+	}
+	reactions, _ := gotBody["reaction"].([]any)
+	if len(reactions) != 1 {
+		t.Fatalf("reaction len = %d, want 1", len(reactions))
+	}
+	reaction, _ := reactions[0].(map[string]any)
+	if reaction["type"] != "emoji" || reaction["emoji"] != "👍" {
+		t.Errorf("reaction = %#v, want emoji 👍", reaction)
+	}
+}
 
 func TestTGTriggerTyping_SendsChatAction(t *testing.T) {
 	var gotPath string
@@ -234,6 +318,44 @@ func TestDiscordTriggerTyping_PostsToTypingEndpoint(t *testing.T) {
 	}
 	if gotAuth != "Bot BOT_TOKEN" {
 		t.Errorf("auth = %q, want Bot BOT_TOKEN", gotAuth)
+	}
+}
+
+func TestDiscordTriggerTyping_AddsReactionWhenMessageIDAvailable(t *testing.T) {
+	var gotPath string
+	var gotMethod string
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.EscapedPath()
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	adapter := &discordAdapter{
+		httpClient: srv.Client(),
+		token:      "BOT_TOKEN",
+		apiBase:    srv.URL,
+	}
+
+	binding := ChannelBinding{ChannelID: "999", LastInboundMessageID: "msg-1"}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping second call: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if gotMethod != http.MethodPut {
+		t.Fatalf("method = %s, want PUT", gotMethod)
+	}
+	wantPath := "/channels/999/messages/msg-1/reactions/" + url.PathEscape(reactionAckValue(PlatformDiscord, "msg-1")) + "/@me"
+	if gotPath != wantPath {
+		t.Errorf("path = %q, want %q", gotPath, wantPath)
 	}
 }
 
@@ -334,6 +456,41 @@ func TestFeishuTriggerTyping_PostsReaction(t *testing.T) {
 	rt, _ := gotBody["reaction_type"].(map[string]any)
 	if rt["emoji_type"] != "Typing" {
 		t.Errorf("reaction_type.emoji_type = %v, want Typing", rt["emoji_type"])
+	}
+}
+
+func TestFeishuTriggerTyping_PrefersLatestInboundMessageID(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer srv.Close()
+
+	adapter := &feishuAdapter{
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://open.feishu.cn"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		domain: "feishu",
+		token:  "token",
+	}
+
+	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
+		ChannelID:             "ch-1",
+		LastInboundMessageID:  "in-msg-1",
+		LastOutboundMessageID: "out-msg-1",
+	})
+	if err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+
+	if !strings.Contains(gotPath, "/messages/in-msg-1/reactions") {
+		t.Errorf("path = %q, should target latest inbound message ID", gotPath)
 	}
 }
 
@@ -460,8 +617,77 @@ func TestSlackTriggerTyping_AddsEyesReaction(t *testing.T) {
 	if gotBody["timestamp"] != "1234567890.123456" {
 		t.Errorf("timestamp = %v, want 1234567890.123456", gotBody["timestamp"])
 	}
-	if gotBody["name"] != "eyes" {
-		t.Errorf("name = %v, want eyes", gotBody["name"])
+	wantReaction := reactionAckValue(PlatformSlack, "1234567890.123456")
+	if gotBody["name"] != wantReaction {
+		t.Errorf("name = %v, want %s", gotBody["name"], wantReaction)
+	}
+}
+
+func TestSlackTriggerTyping_DeduplicatesReactionPerMessage(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	adapter := &slackAdapter{
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://slack.com"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		botToken: "xoxb-test-token",
+	}
+
+	binding := ChannelBinding{ChannelID: "C12345", LastInboundMessageID: "1234567890.123456"}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping second call: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+func TestSlackTriggerTyping_PrefersLatestInboundMessageID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	adapter := &slackAdapter{
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://slack.com"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		botToken: "xoxb-test-token",
+	}
+
+	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
+		ChannelID:             "C12345",
+		LastInboundMessageID:  "1234567890.123456",
+		LastOutboundMessageID: "9999999999.999999",
+	})
+	if err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+
+	if gotBody["timestamp"] != "1234567890.123456" {
+		t.Errorf("timestamp = %v, want latest inbound message id", gotBody["timestamp"])
 	}
 }
 
@@ -541,6 +767,113 @@ func TestSlackTriggerTyping_OtherError(t *testing.T) {
 	})
 	if err != nil {
 		t.Errorf("expected nil (logged only), got %v", err)
+	}
+}
+
+// ============================================================
+// Matrix TriggerTyping
+// ============================================================
+
+func TestMatrixTriggerTyping_SendsReaction(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.EscapedPath()
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"event_id":"$reaction-1"}`))
+	}))
+	defer srv.Close()
+
+	client, err := mautrix.NewClient(srv.URL, "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	adapter := &matrixAdapter{client: client}
+
+	binding := ChannelBinding{ChannelID: "!room:example", LastInboundMessageID: "$event-1"}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping second call: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if !strings.Contains(gotPath, "/send/m.reaction/") {
+		t.Fatalf("path = %q, want m.reaction send path", gotPath)
+	}
+	relatesTo, _ := gotBody["m.relates_to"].(map[string]any)
+	if relatesTo["event_id"] != "$event-1" {
+		t.Errorf("event_id = %v, want $event-1", relatesTo["event_id"])
+	}
+	if relatesTo["rel_type"] != "m.annotation" {
+		t.Errorf("rel_type = %v, want m.annotation", relatesTo["rel_type"])
+	}
+	wantReaction := reactionAckValue(PlatformMatrix, "$event-1")
+	if relatesTo["key"] != wantReaction {
+		t.Errorf("key = %v, want %s", relatesTo["key"], wantReaction)
+	}
+}
+
+// ============================================================
+// Mattermost TriggerTyping
+// ============================================================
+
+func TestMattermostTriggerTyping_PostsReaction(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotBody map[string]any
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	adapter := &mattermostAdapter{
+		conn:      srv.Client(),
+		baseURL:   srv.URL,
+		token:     "token",
+		botUserID: "bot-user",
+	}
+
+	binding := ChannelBinding{ChannelID: "channel-1", LastInboundMessageID: "post-1"}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping: %v", err)
+	}
+	if err := adapter.TriggerTyping(context.Background(), binding); err != nil {
+		t.Fatalf("TriggerTyping second call: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if gotPath != "/api/v4/reactions" {
+		t.Errorf("path = %q, want /api/v4/reactions", gotPath)
+	}
+	if gotAuth != "Bearer token" {
+		t.Errorf("auth = %q, want Bearer token", gotAuth)
+	}
+	if gotBody["user_id"] != "bot-user" {
+		t.Errorf("user_id = %v, want bot-user", gotBody["user_id"])
+	}
+	if gotBody["post_id"] != "post-1" {
+		t.Errorf("post_id = %v, want post-1", gotBody["post_id"])
+	}
+	wantReaction := reactionAckValue(PlatformMattermost, "post-1")
+	if gotBody["emoji_name"] != wantReaction {
+		t.Errorf("emoji_name = %v, want %s", gotBody["emoji_name"], wantReaction)
 	}
 }
 

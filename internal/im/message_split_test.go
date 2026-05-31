@@ -3,6 +3,7 @@ package im
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSplitMessage_ShortMessage(t *testing.T) {
@@ -88,6 +89,25 @@ func TestSplitMessage_Reassembly(t *testing.T) {
 	}
 }
 
+func TestSplitMessage_DoesNotBreakUTF8(t *testing.T) {
+	msg := "你好世界🙂再见"
+	chunks := SplitMessage(msg, 3)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	if got := strings.Join(chunks, ""); got != msg {
+		t.Fatalf("reassembled = %q, want %q", got, msg)
+	}
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d is not valid UTF-8: %q", i, chunk)
+		}
+		if len([]rune(chunk)) > 3 {
+			t.Fatalf("chunk %d has %d runes, want <= 3", i, len([]rune(chunk)))
+		}
+	}
+}
+
 func TestSplitMessageForPlatform(t *testing.T) {
 	longMsg := strings.Repeat("x", 5000)
 
@@ -128,6 +148,16 @@ func TestPlatformLimits(t *testing.T) {
 		} else if actual != expected {
 			t.Errorf("platform %v: limit=%d, want %d", platform, actual, expected)
 		}
+	}
+}
+
+func TestTruncateRunes_DoesNotBreakUTF8(t *testing.T) {
+	got := truncateRunes("你好世界🙂", 4, "...")
+	if got != "你..." {
+		t.Fatalf("truncateRunes() = %q, want %q", got, "你...")
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateRunes() produced invalid UTF-8: %q", got)
 	}
 }
 

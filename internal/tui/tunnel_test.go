@@ -1133,6 +1133,47 @@ func TestHandleSubAgentUpdateMsgPushesTunnelLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandleSubAgentUpdateMsgProjectionBrokerWithoutShareDoesNotPanic(t *testing.T) {
+	m := newTestModel()
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	ses := session.NewSession("", "", "")
+	m.SetSession(ses, store)
+
+	broker := tunnel.NewBroker(nil)
+	broker.Stop()
+	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		m.recordTunnelEvent(ev)
+	})
+	m.tunnelProjectionBroker = broker
+	m.tunnelBroker = nil
+	m.tunnelSpawned = nil
+
+	mgr := subagent.NewManager(config.SubAgentConfig{})
+	m.subAgentMgr = mgr
+
+	agentID := mgr.Spawn("reviewer", "review code", "review code", nil, context.Background())
+	mgr.SetCancel(agentID, func() {})
+
+	next, _ := m.handleSubAgentUpdateMsg(subAgentUpdateMsg{AgentID: agentID})
+	m = next
+
+	if m.tunnelSpawned == nil {
+		t.Fatal("expected tunnelSpawned to be lazily initialized")
+	}
+	if len(m.session.TunnelEvents) < 2 {
+		t.Fatalf("expected lifecycle events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentSpawn {
+		t.Fatalf("expected first event %q, got %q", tunnel.EventSubagentSpawn, got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentStatus {
+		t.Fatalf("expected second event %q, got %q", tunnel.EventSubagentStatus, got)
+	}
+}
+
 func TestHandleSubAgentTunnelToolMsgsPushEvents(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 

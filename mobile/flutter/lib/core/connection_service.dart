@@ -69,6 +69,9 @@ enum ConnectionStatus {
 }
 
 const Duration _defaultServerOfflineReconnectDelay = Duration(seconds: 60);
+const Duration _defaultRelayRestartReconnectDelay = Duration(seconds: 15);
+const int _webSocketCloseServiceRestart = 1012;
+const String _relayRestartReason = 'relay_restarting';
 
 bool isPermanentRoomFailureMessage(String error) {
   final lower = error.toLowerCase();
@@ -106,6 +109,33 @@ int? relayRetryAfterMs(Map<String, dynamic>? data) {
   if (raw is int && raw > 0) return raw;
   if (raw is String) return int.tryParse(raw);
   return null;
+}
+
+int? relayRestartRetryAfterMs(String? closeReason) {
+  if (closeReason == null || closeReason.isEmpty) return null;
+  final match = RegExp(r'retry_after_ms[=:](\d+)').firstMatch(closeReason);
+  if (match == null) return null;
+  return int.tryParse(match.group(1) ?? '');
+}
+
+bool isRelayRestartClose({
+  int? closeCode,
+  String? closeReason,
+  Object? error,
+}) {
+  final normalizedReason = (closeReason ?? '').toLowerCase();
+  final normalizedError = error?.toString().toLowerCase() ?? '';
+  return closeCode == _webSocketCloseServiceRestart ||
+      normalizedReason.contains(_relayRestartReason) ||
+      normalizedError.contains(_relayRestartReason);
+}
+
+Duration relayRestartRecoveryDelay({String? closeReason}) {
+  final retryAfterMs = relayRestartRetryAfterMs(closeReason);
+  if (retryAfterMs != null && retryAfterMs > 0) {
+    return relayRecoveryDelay(retryAfterMs);
+  }
+  return _defaultRelayRestartReconnectDelay;
 }
 
 class ShareConnectionDescriptor {
@@ -408,10 +438,18 @@ class ConnectionService {
         );
       },
       onDone: () {
+        final closeCode = _socket?.closeCode;
+        final closeReason = _socket?.closeReason;
         _cleanup();
         if (_disposed) return;
         _queue.whenComplete(() {
           if (_disposed || _permanentFailure) {
+            return;
+          }
+          if (_maybeHandleRelayRestartClose(
+            closeCode: closeCode,
+            closeReason: closeReason,
+          )) {
             return;
           }
           if (_serverOfflineReconnect) {
@@ -427,10 +465,19 @@ class ConnectionService {
         });
       },
       onError: (e) {
+        final closeCode = _socket?.closeCode;
+        final closeReason = _socket?.closeReason;
         _cleanup();
         if (_disposed) return;
         _queue.whenComplete(() {
           if (_disposed || _permanentFailure) {
+            return;
+          }
+          if (_maybeHandleRelayRestartClose(
+            closeCode: closeCode,
+            closeReason: closeReason,
+            error: e,
+          )) {
             return;
           }
           _errorController.add('Connection error: $e');
@@ -578,8 +625,12 @@ class ConnectionService {
                 ? Map<String, dynamic>.from(map['data'] as Map)
                 : null;
         final retryAfter = relayRecoveryDelay(relayRetryAfterMs(data));
+        final reason = data?['reason'] as String? ?? '';
+        final offlineLabel = reason == _relayRestartReason
+            ? 'Relay restarting'
+            : 'Relay recovering';
         _errorController.add(
-          'Relay recovering: reconnecting in ${retryAfter.inSeconds}s',
+          '$offlineLabel: reconnecting in ${retryAfter.inSeconds}s',
         );
         _cleanup();
         if (!_disposed) {
@@ -793,6 +844,38 @@ class ConnectionService {
     _stopHeartbeat();
     _socketSub?.cancel();
     _socketSub = null;
+  }
+
+  bool _maybeHandleRelayRestartClose({
+    int? closeCode,
+    String? closeReason,
+    Object? error,
+  }) {
+    if (_disposed || _permanentFailure || _serverOfflineReconnect) {
+      return false;
+    }
+    if (!isRelayRestartClose(
+      closeCode: closeCode,
+      closeReason: closeReason,
+      error: error,
+    )) {
+      return false;
+    }
+    final delay = relayRestartRecoveryDelay(closeReason: closeReason);
+    _errorController.add(
+      'Relay restarting: reconnecting in ${delay.inSeconds}s',
+    );
+    _messageController.add(proto.WsMessage(
+      type: 'server_offline',
+      data: {
+        'state': 'recovering',
+        'reason': _relayRestartReason,
+        'retry_after_ms': delay.inMilliseconds,
+      },
+    ));
+    _statusController.add(ConnectionStatus.connecting);
+    _scheduleServerOfflineReconnect(delay);
+    return true;
   }
 
   void _handlePermanentRelayFailure(String error) {

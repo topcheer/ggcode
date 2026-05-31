@@ -72,6 +72,7 @@ jobs:
           TODAY=$(date +%Y%m%d)
           SEQ=$(gh variable list -R "${{ github.repository }}" --json name,value \
             | jq -r '.[] | select(.name=="MOBILE_BUILD_SEQ") | .value // "0"')
+          SEQ=${SEQ:-0}
           SEQ=$((SEQ + 1))
           gh variable set MOBILE_BUILD_SEQ --body "$SEQ" -R "${{ github.repository }}"
 

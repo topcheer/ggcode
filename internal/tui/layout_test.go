@@ -1534,6 +1534,52 @@ func TestSidebarTaskTrackerPreservesOriginalOrder(t *testing.T) {
 	}
 }
 
+func TestSidebarTaskTrackerFallsBackToDefaultWhenAllTodosDone(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	now := time.Now()
+	m.todoSnapshot = map[string]todoStateItem{
+		"todo-1": {ID: "todo-1", Content: "First task", Status: "done", StartedAt: now.Add(-2 * time.Minute), UpdatedAt: now},
+		"todo-2": {ID: "todo-2", Content: "Second task", Status: "failed", StartedAt: now.Add(-time.Minute), UpdatedAt: now},
+	}
+	m.todoOrder = []string{"todo-1", "todo-2"}
+
+	sidebar := m.renderSidebar()
+	if strings.Contains(sidebar, "First task") || strings.Contains(sidebar, "Second task") {
+		t.Fatalf("expected completed todos to stop replacing the sidebar, got %q", sidebar)
+	}
+	if !strings.Contains(sidebar, "Session usage") && !strings.Contains(sidebar, "会话用量") {
+		t.Fatalf("expected default sidebar details once all todos are terminal, got %q", sidebar)
+	}
+}
+
+func TestRenderSidebarSessionUsageShowsNonCachedInputTokens(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.session = &session.Session{
+		Vendor:   "openai",
+		Endpoint: "default",
+		TokenUsage: provider.TokenUsage{
+			InputTokens:       1200,
+			OutputTokens:      300,
+			CacheRead:         800,
+			PromptTokensTotal: 1200,
+		},
+	}
+
+	rendered := stripAnsi(m.renderSidebarSessionUsageSection())
+	normalized := strings.Join(strings.Fields(rendered), " ")
+	if !strings.Contains(normalized, "total 1500") {
+		t.Fatalf("expected total to use non-cached input tokens, got %q", rendered)
+	}
+	if !strings.Contains(normalized, "input 400") {
+		t.Fatalf("expected input row to exclude cache read tokens, got %q", rendered)
+	}
+	if !strings.Contains(normalized, "cache read 800") {
+		t.Fatalf("expected cache read row to remain visible, got %q", rendered)
+	}
+}
+
 func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)

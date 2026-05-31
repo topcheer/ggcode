@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,12 +49,13 @@ type discordAdapter struct {
 	apiBase    string
 	stt        imstt.Transcriber
 
-	mu        sync.RWMutex
-	connected bool
-	sessionID string
-	sequence  int
-	ws        *websocket.Conn
-	botUserID string // set from READY event
+	mu          sync.RWMutex
+	connected   bool
+	sessionID   string
+	sequence    int
+	ws          *websocket.Conn
+	botUserID   string // set from READY event
+	reactionAck reactionAckState
 }
 
 func newDiscordAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*discordAdapter, error) {
@@ -567,12 +569,47 @@ func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, cont
 	return nil
 }
 
-// TriggerTyping triggers the "Bot is typing..." indicator in a Discord channel.
+// TriggerTyping adds a reaction acknowledgement to the latest real user message
+// when possible, and falls back to the native typing indicator when there is no
+// target message to acknowledge yet.
 func (a *discordAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
 		return nil
 	}
+	messageID := strings.TrimSpace(LastReactionTargetMessageID(binding))
+	if messageID == "" {
+		return a.triggerNativeTyping(ctx, channelID)
+	}
+	if !a.reactionAck.NeedsSend(binding, messageID) {
+		return nil
+	}
+	emoji := reactionAckValue(PlatformDiscord, messageID)
+	if emoji == "" {
+		return a.triggerNativeTyping(ctx, channelID)
+	}
+	url := a.apiBase + "/channels/" + channelID + "/messages/" + messageID + "/reactions/" + url.PathEscape(emoji) + "/@me"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+a.token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		debug.Log("discord", "adapter=%s typing reaction failed: %v", a.name, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		debug.Log("discord", "adapter=%s typing reaction failed [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil
+	}
+	a.reactionAck.MarkSent(binding, messageID)
+	return nil
+}
+
+func (a *discordAdapter) triggerNativeTyping(ctx context.Context, channelID string) error {
 	url := a.apiBase + "/channels/" + channelID + "/typing"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
@@ -727,24 +764,7 @@ func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filenam
 }
 
 func splitDiscordMessage(text string, maxLen int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > 0 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, true, false, false)
 }
 
 func jsonInt(v any) int {

@@ -64,7 +64,7 @@ func (m Model) renderSidebarSessionUsageSection() string {
 	rows := []string{
 		m.renderSidebarSectionTitle(m.t("panel.session_usage")),
 		renderUsageRow(m.t("label.total"), humanizeTokenCount(usage.Total())),
-		renderUsageRow(m.t("label.input"), humanizeTokenCount(usage.InputTokens)),
+		renderUsageRow(m.t("label.input"), humanizeTokenCount(usage.DisplayInputTokens())),
 		renderUsageRow(m.t("label.output"), humanizeTokenCount(usage.OutputTokens)),
 		renderUsageRow(m.t("label.cache_read"), humanizeTokenCount(usage.CacheRead)),
 		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
@@ -382,10 +382,17 @@ func (m Model) sidebarTrackedTodos() []todoStateItem {
 		return nil
 	}
 	items := make([]todoStateItem, 0, len(m.todoOrder))
+	hasActive := false
 	for _, id := range m.todoOrder {
 		if td, ok := m.todoSnapshot[id]; ok {
 			items = append(items, td)
+			if td.Status != "done" && td.Status != "failed" && td.Status != "blocked" {
+				hasActive = true
+			}
 		}
+	}
+	if !hasActive {
+		return nil
 	}
 	return items
 }
