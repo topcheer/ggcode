@@ -20,6 +20,10 @@ concurrency:
   group: mobile-release-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: write
+
 env:
   FLUTTER_VERSION: '3.38.7'
 
