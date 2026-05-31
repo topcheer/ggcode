@@ -68,7 +68,7 @@ nfpms:
       - src: ./README.md
         dst: /usr/share/doc/ggcode/README.md
 
-homebrew:
+brews:
   - name: ggcode
     homepage: https://github.com/topcheer/ggcode
     description: AI coding agent for the terminal with TUI, MCP, and IM integrations.

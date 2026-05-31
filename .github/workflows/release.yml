@@ -61,13 +61,13 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           install-only: true
-          version: latest
+          version: v2.7.0
       - name: Validate GoReleaser config
         run: goreleaser check
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: v2.7.0
           args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
