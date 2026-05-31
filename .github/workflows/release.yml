@@ -520,6 +520,93 @@ jobs:
             exit 1
           fi
 
+      - name: Update desktop Formula (macOS + Linux)
+        shell: bash
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured; skipping desktop Formula update."
+            exit 0
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="$GITHUB_REF_NAME"
+          TAP_REPO="topcheer/homebrew-ggcode"
+          FORMULA_PATH="Formula/ggcode-desktop.rb"
+          API="https://api.github.com/repos/$TAP_REPO/contents/$FORMULA_PATH"
+
+          # Download and compute SHA256 for each platform
+          echo "Computing SHA256 for desktop binaries..."
+          LINUX_ARM64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_arm64" | sha256sum | awk '{print $1}')
+          LINUX_AMD64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_amd64" | sha256sum | awk '{print $1}')
+
+          echo "linux_arm64:   $LINUX_ARM64_SHA"
+          echo "linux_amd64:   $LINUX_AMD64_SHA"
+
+          FORMULA=$(cat <<'FORMULAFILE'
+          # This file is auto-generated. DO NOT EDIT.
+          class GgcodeDesktop < Formula
+            desc "AI coding agent with a native desktop interface."
+            homepage "https://github.com/topcheer/ggcode"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
+
+            on_linux do
+              on_intel do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_linux_amd64"
+                sha256 "LINUX_AMD64_SHA_PLACEHOLDER"
+              end
+              on_arm do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_linux_arm64"
+                sha256 "LINUX_ARM64_SHA_PLACEHOLDER"
+              end
+            end
+
+            def install
+              bin.install Dir["ggcode-desktop_*"].first => "ggcode-desktop"
+            end
+          end
+          FORMULAFILE
+          )
+
+          # Replace placeholders
+          FORMULA="${FORMULA//VERSION_PLACEHOLDER/$VERSION}"
+          FORMULA="${FORMULA//LINUX_AMD64_SHA_PLACEHOLDER/$LINUX_AMD64_SHA}"
+          FORMULA="${FORMULA//LINUX_ARM64_SHA_PLACEHOLDER/$LINUX_ARM64_SHA}"
+
+          # Get current file SHA (for update)
+          FILE_SHA=$(curl -s -H "Authorization: token $HOMEBREW_TAP_TOKEN" "$API" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha','') if isinstance(d, dict) and 'sha' in d else '')")
+
+          PAYLOAD=$(python3 -c "
+          import json, base64
+          content = base64.b64encode(open('/dev/stdin','rb').read()).decode()
+          payload = {
+            'message': 'Update ggcode-desktop Formula to v${VERSION}',
+            'content': content,
+            'branch': 'main'
+          }
+          if '${FILE_SHA}':
+            payload['sha'] = '${FILE_SHA}'
+          print(json.dumps(payload))
+          " <<< "$FORMULA")
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$API")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "GitHub API response: HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Desktop Formula updated successfully to v${VERSION}"
+          else
+            echo "ERROR: Failed to update desktop Formula"
+            echo "$RESPONSE" | head -20
+            exit 1
+          fi
+
   publish-site-release-branch:
     name: Publish site release branch
     if: github.event_name != 'workflow_dispatch'
