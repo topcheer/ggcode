@@ -78,7 +78,7 @@ func TestRelayStoreLoadRoomDoesNotReuseHistoryFromOtherRooms(t *testing.T) {
 	originToken := "token-origin-1234567890"
 	newToken := "token-fresh-1234567890"
 	persistTestEvent(t, store, originToken, "sess-1", "ev-000000001")
-	if err := store.persistActiveSession(newToken, "sess-1"); err != nil {
+	if err := store.persistActiveSession(newToken, "sess-1", 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestRelayStoreDestroyRoomRemovesPersistedState(t *testing.T) {
 func TestRelayStoreStatsSnapshotCountsPersistedRows(t *testing.T) {
 	store := newStoreForTest(t)
 	persistTestEvent(t, store, "token-1234567890abcdef", "sess-1", "ev-000000001")
-	if err := store.persistActiveSession("token-abcdef1234567890", "sess-2"); err != nil {
+	if err := store.persistActiveSession("token-abcdef1234567890", "sess-2", 1); err != nil {
 		t.Fatal(err)
 	}
 

@@ -111,7 +111,7 @@ func TestValidateShareHandshakeRejectsLegacyProtocol(t *testing.T) {
 	}
 }
 
-func TestValidateShareHandshakeRejectsMissingTunnelCapability(t *testing.T) {
+func TestValidateShareHandshakeMissingTunnelCapabilityRequiresUpgrade(t *testing.T) {
 	cfg := shareAuthConfig{
 		Secret:     "relay-secret",
 		ConnectTTL: time.Minute,
@@ -347,7 +347,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	}
 }
 
-func TestHandleWSMissingTunnelCapabilityClientGetsErrorBeforeConnected(t *testing.T) {
+func TestHandleWSMissingTunnelCapabilityClientBehavesLikeNormalV3Client(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	h := newHub(nil)
 	mux := http.NewServeMux()
@@ -402,11 +402,11 @@ func TestHandleWSMissingTunnelCapabilityClientGetsErrorBeforeConnected(t *testin
 		t.Fatal(err)
 	}
 	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("unexpected relay error: %+v", msg)
+		t.Fatalf("expected upgrade error, got %+v", msg)
 	}
 }
 
-func TestHandleWSOldServerMakesNewClientsSeeUpgradeError(t *testing.T) {
+func TestHandleWSMissingTunnelCapabilityServerDoesNotPoisonRoom(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	h := newHub(nil)
 	mux := http.NewServeMux()
@@ -449,12 +449,6 @@ func TestHandleWSOldServerMakesNewClientsSeeUpgradeError(t *testing.T) {
 	if msg.Type != "connected" {
 		t.Fatalf("expected connected, got %+v", msg)
 	}
-	if err := serverConn.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("unexpected old server relay error: %+v", msg)
-	}
 
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
 		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
@@ -469,6 +463,6 @@ func TestHandleWSOldServerMakesNewClientsSeeUpgradeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("unexpected new client relay error: %+v", msg)
+		t.Fatalf("expected upgrade error, got %+v", msg)
 	}
 }
