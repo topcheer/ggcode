@@ -90,8 +90,31 @@ func (u TokenUsage) Add(delta TokenUsage) TokenUsage {
 	return u
 }
 
+func (u TokenUsage) DisplayInputTokens() int {
+	if u.CacheRead <= 0 {
+		return u.InputTokens
+	}
+	if u.PromptTokensTotal > 0 {
+		normalized := u.PromptTokensTotal - u.CacheRead
+		if normalized >= 0 {
+			if normalized < u.InputTokens {
+				return normalized
+			}
+			return u.InputTokens
+		}
+	}
+	return u.InputTokens
+}
+
+func (u TokenUsage) TotalInputTokens() int {
+	if u.PromptTokensTotal > 0 {
+		return u.PromptTokensTotal
+	}
+	return u.InputTokens
+}
+
 func (u TokenUsage) Total() int {
-	return u.InputTokens + u.OutputTokens
+	return u.TotalInputTokens() + u.OutputTokens
 }
 
 func (u TokenUsage) CacheHitPercent() int {

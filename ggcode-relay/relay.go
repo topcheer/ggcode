@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -8,8 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,6 +24,9 @@ const (
 	defaultRecoveryRetryAfter    = 15 * time.Second
 	defaultRecoveryRoomRetention = 5 * time.Minute
 	activeSessionModeReplace     = "replace_history"
+	relayRestartReason           = "relay_restarting"
+	relayShutdownNoticeDelay     = 150 * time.Millisecond
+	relayShutdownTimeout         = 5 * time.Second
 )
 
 // ─── Wire protocol ───
@@ -241,11 +247,38 @@ func (p *peer) send(msg relayMessage) {
 	p.sendRaw(data)
 }
 
+func (p *peer) trySend(msg relayMessage) bool {
+	if p.hub != nil && p.room != nil {
+		p.hub.traceRelayMessage("ws_send", p.room.token, p.clientID, msg, "peer_role="+p.role)
+	}
+	data, _ := json.Marshal(msg)
+	select {
+	case p.sendCh <- data:
+		return true
+	case <-p.done:
+		return false
+	default:
+		return false
+	}
+}
+
 func (p *peer) sendRaw(raw []byte) {
 	select {
 	case p.sendCh <- raw:
 	case <-p.done:
 	}
+}
+
+func (p *peer) closeWithReason(code int, reason string) {
+	if p == nil || p.conn == nil {
+		return
+	}
+	_ = p.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason),
+		time.Now().Add(time.Second),
+	)
+	_ = p.conn.Close()
 }
 
 // writeLoop drains sendCh and writes to the WebSocket.
@@ -835,6 +868,52 @@ func (h *hub) notifyRoomRecovering(token, sessionID string) {
 	log.Printf("[relay] server offline: room=%s clients=%d state=%s", shortToken(token), clients, state)
 }
 
+func (h *hub) notifyRelayRestarting() {
+	h.mu.RLock()
+	rooms := make([]*room, 0, len(h.rooms))
+	for _, room := range h.rooms {
+		rooms = append(rooms, room)
+	}
+	h.mu.RUnlock()
+	if len(rooms) == 0 {
+		return
+	}
+
+	peers := make([]*peer, 0, len(rooms)*2)
+	clientNotices := 0
+	for _, room := range rooms {
+		room.sendMu.Lock()
+		room.mu.RLock()
+		state := roomRecoveryStateLocked(room)
+		notice := relayServerOfflineMessageWithReason(
+			room.sessionID,
+			state,
+			retryAfterForState(state),
+			relayRestartReason,
+		)
+		clients := room.snapshotClientsLocked(nil)
+		server := room.server
+		room.mu.RUnlock()
+
+		for _, client := range clients {
+			if client.trySend(notice) {
+				clientNotices++
+			}
+			peers = append(peers, client)
+		}
+		if server != nil {
+			peers = append(peers, server)
+		}
+		room.sendMu.Unlock()
+	}
+
+	log.Printf("[relay] restart notice: rooms=%d peers=%d notified_clients=%d", len(rooms), len(peers), clientNotices)
+	time.Sleep(relayShutdownNoticeDelay)
+	for _, peer := range peers {
+		peer.closeWithReason(websocket.CloseServiceRestart, relayRestartReason)
+	}
+}
+
 func (h *hub) scheduleRoomExpiry(token string, delay time.Duration) {
 	h.mu.Lock()
 	r := h.rooms[token]
@@ -1331,13 +1410,21 @@ func retryAfterForState(state string) time.Duration {
 }
 
 func relayServerOfflineMessage(sessionID, state string, retryAfter time.Duration) relayMessage {
+	return relayServerOfflineMessageWithReason(sessionID, state, retryAfter, "")
+}
+
+func relayServerOfflineMessageWithReason(sessionID, state string, retryAfter time.Duration, reason string) relayMessage {
+	data := map[string]interface{}{
+		"state":          state,
+		"retry_after_ms": retryAfter.Milliseconds(),
+	}
+	if strings.TrimSpace(reason) != "" {
+		data["reason"] = reason
+	}
 	return relayMessage{
 		Type:      "server_offline",
 		SessionID: sessionID,
-		Data: mustJSON(map[string]interface{}{
-			"state":          state,
-			"retry_after_ms": retryAfter.Milliseconds(),
-		}),
+		Data:      mustJSON(data),
 	}
 }
 
@@ -1470,7 +1557,34 @@ func main() {
 	}()
 
 	log.Printf("[relay] listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		log.Fatal(err)
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case sig := <-sigCh:
+		log.Printf("[relay] shutting down after signal %s", sig)
+		h.notifyRelayRestarting()
+		ctx, cancel := context.WithTimeout(context.Background(), relayShutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[relay] shutdown error: %v", err)
+		}
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
 	}
 }

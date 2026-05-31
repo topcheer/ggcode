@@ -474,34 +474,35 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			fmt.Fprintf(os.Stderr, "tunnel failed: %v\n", err)
 		} else {
 			tunnelBroker = tunnel.NewBroker(tunnelSession)
-			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
-			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", info.ConnectURL)
-			fmt.Fprintf(os.Stderr, "%s\n", info.QRCode)
-			// Subscribe daemon bridge events to tunnel broker
-			bridge.Subscribe(func(ev provider.StreamEvent) {
-				switch ev.Type {
-				case provider.StreamEventText:
-					tunnelBroker.PushText(tunnelBroker.NextMessageID(), ev.Text)
-				case provider.StreamEventToolCallDone:
-					name := ev.Tool.Name
-					if name == "" {
-						name = "tool"
-					}
-					present := tool.DescribeTool(name, string(ev.Tool.Arguments))
-					tunnelBroker.PushToolCall(ev.Tool.ID, name, daemonToolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), present.Detail)
-				case provider.StreamEventToolResult:
-					tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
-				case provider.StreamEventDone:
-					tunnelBroker.PushStatus(tunnel.StatusIdle, "")
-				}
-			})
-			tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+			shareController := newDaemonTunnelShareController(tunnelBroker, bridge, tunnel.SessionInfoData{
 				Workspace: workingDir,
 				Model:     resolved.Model,
 				Provider:  resolved.VendorName,
 				Mode:      mode.String(),
 				Version:   version.Version,
 			})
+			bridge.SetRunStateHook(shareController.HandleRunState)
+			bridge.SetUserMessageHook(shareController.HandleUserMessage)
+			unsubscribeTunnel := bridge.Subscribe(shareController.HandleStreamEvent)
+			defer unsubscribeTunnel()
+			defer bridge.SetRunStateHook(nil)
+			defer bridge.SetUserMessageHook(nil)
+
+			tunnelBroker.OnCommand(func(cmd tunnel.GatewayMessage) {
+				shareController.HandleCommand(bridge, cmd)
+			})
+			tunnelBroker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+				return shareController.Snapshot()
+			})
+			if ses != nil && ses.ID != "" {
+				tunnelBroker.SwitchSession(ses.ID)
+			} else {
+				tunnelBroker.ResetSession()
+			}
+			tunnelBroker.SendSnapshot(shareController.Snapshot())
+			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
+			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", info.ConnectURL)
+			fmt.Fprintf(os.Stderr, "%s\n", info.QRCode)
 			defer tunnelSession.Stop()
 		}
 	}
@@ -1237,6 +1238,392 @@ func daemonToolDisplayName(toolName, rawArgs string) string {
 		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
 	return strings.Join(parts, " ")
+}
+
+type daemonTunnelCommandTarget interface {
+	SendUserMessage(content []provider.ContentBlock)
+	InterruptActiveRun() bool
+}
+
+type daemonTunnelBroker interface {
+	NextMessageID() string
+	PushText(msgID, text string)
+	PushTextDone(msgID string)
+	PushReasoning(msgID, text string)
+	PushReasoningDone(msgID string)
+	PushToolCall(toolID, toolName, displayName, rawArgs, detail string)
+	PushToolResult(toolID, toolName, result string, isError bool)
+	PushStatus(status, message string)
+	PushError(message string)
+	PushUserMessageData(data tunnel.MessageData)
+	PushServerAck(messageID string)
+}
+
+type daemonTunnelShareController struct {
+	broker      daemonTunnelBroker
+	bridge      *im.DaemonBridge
+	sessionInfo tunnel.SessionInfoData
+
+	mu            sync.Mutex
+	currentMsgID  string
+	needsFinalize bool
+	reasoningTail string
+	textTail      string
+	status        tunnel.StatusData
+	userOverride  *tunnel.MessageData
+}
+
+func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.DaemonBridge, sessionInfo tunnel.SessionInfoData) *daemonTunnelShareController {
+	status := tunnel.StatusData{Status: tunnel.StatusIdle}
+	if bridge != nil && bridge.HasActiveRun() {
+		status.Status = tunnel.StatusBusy
+	}
+	return &daemonTunnelShareController{
+		broker:      broker,
+		bridge:      bridge,
+		sessionInfo: sessionInfo,
+		status:      status,
+	}
+}
+
+func (c *daemonTunnelShareController) Snapshot() tunnel.BrokerSnapshot {
+	snapshot := tunnel.BrokerSnapshot{
+		SessionInfo: c.sessionInfo,
+		Status:      c.currentStatus(),
+	}
+	if c.bridge != nil {
+		history := daemonTunnelMessagesToHistory(c.bridge.Messages())
+		if tail := c.currentIncompleteHistoryTail(); len(tail) > 0 {
+			history = append(history, tail...)
+		}
+		if len(history) > 0 {
+			snapshot.History = history
+		}
+	}
+	return snapshot
+}
+
+func (c *daemonTunnelShareController) HandleRunState(busy bool) {
+	status := tunnel.StatusIdle
+	if busy {
+		status = tunnel.StatusBusy
+	}
+	c.setStatus(status, "")
+}
+
+func (c *daemonTunnelShareController) HandleUserMessage(content []provider.ContentBlock) {
+	if c == nil || c.broker == nil {
+		return
+	}
+	data := c.consumeUserMessageOverride()
+	if data.Text == "" {
+		data = daemonTunnelMessageDataFromContent(content)
+	}
+	if strings.TrimSpace(data.Text) == "" {
+		return
+	}
+	c.broker.PushUserMessageData(data)
+}
+
+func (c *daemonTunnelShareController) SetNextUserMessageOverride(data tunnel.MessageData) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data.MessageID = tunnel.NormalizeClientMessageID(data.MessageID)
+	c.userOverride = &data
+}
+
+func (c *daemonTunnelShareController) HandleCommand(target daemonTunnelCommandTarget, cmd tunnel.GatewayMessage) {
+	if c == nil || c.broker == nil || target == nil {
+		return
+	}
+	switch cmd.Type {
+	case tunnel.CmdMessage, "user_text":
+		var data tunnel.MessageData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			return
+		}
+		if strings.TrimSpace(data.Text) == "" {
+			return
+		}
+		c.SetNextUserMessageOverride(data)
+		target.SendUserMessage([]provider.ContentBlock{{Type: "text", Text: data.Text}})
+		c.broker.PushServerAck(data.MessageID)
+	case tunnel.CmdInterrupt:
+		if !target.InterruptActiveRun() {
+			return
+		}
+		c.cancelCurrentRun()
+	}
+}
+
+func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent) {
+	if c == nil || c.broker == nil {
+		return
+	}
+	switch ev.Type {
+	case provider.StreamEventText:
+		c.HandleRunState(true)
+		c.handleText(ev.Text)
+	case provider.StreamEventReasoning:
+		c.HandleRunState(true)
+		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
+			c.handleReasoning(chunk)
+		}
+	case provider.StreamEventToolCallDone:
+		c.HandleRunState(true)
+		c.rolloverMainStream(true)
+		name := strings.TrimSpace(ev.Tool.Name)
+		if name == "" {
+			name = "tool"
+		}
+		present := tool.DescribeTool(name, string(ev.Tool.Arguments))
+		c.broker.PushToolCall(ev.Tool.ID, name, daemonToolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), present.Detail)
+	case provider.StreamEventToolResult:
+		c.HandleRunState(true)
+		c.rolloverMainStream(false)
+		content := ev.Result
+		if len([]rune(content)) > 2000 {
+			content = daemonTruncateRunes(content, 2000, "\n...(truncated)")
+		}
+		c.broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
+	case provider.StreamEventSystem:
+		c.HandleRunState(true)
+		c.rolloverMainStream(true)
+	case provider.StreamEventDone:
+		c.rolloverMainStream(true)
+		c.HandleRunState(false)
+	case provider.StreamEventError:
+		c.rolloverMainStream(true)
+		if ev.Error != nil {
+			c.broker.PushError(provider.UserFacingError(ev.Error))
+		}
+		c.HandleRunState(false)
+	}
+}
+
+func (c *daemonTunnelShareController) currentStatus() tunnel.StatusData {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
+}
+
+func (c *daemonTunnelShareController) consumeUserMessageOverride() tunnel.MessageData {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.userOverride == nil {
+		return tunnel.MessageData{}
+	}
+	data := *c.userOverride
+	c.userOverride = nil
+	return data
+}
+
+func (c *daemonTunnelShareController) currentIncompleteHistoryTail() []tunnel.HistoryEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return daemonTunnelHistoryTail(c.reasoningTail, c.textTail)
+}
+
+func (c *daemonTunnelShareController) setStatus(status, message string) {
+	if c == nil || c.broker == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.status.Status == status && c.status.Message == message {
+		c.mu.Unlock()
+		return
+	}
+	c.status = tunnel.StatusData{Status: status, Message: message}
+	c.mu.Unlock()
+	c.broker.PushStatus(status, message)
+}
+
+func (c *daemonTunnelShareController) cancelCurrentRun() {
+	c.rolloverMainStream(true)
+	c.setStatus(tunnel.StatusIdle, "cancelled")
+}
+
+func (c *daemonTunnelShareController) handleReasoning(chunk string) {
+	msgID := c.currentOrNextMsgID()
+	if msgID == "" {
+		return
+	}
+	c.markMainStreamActive()
+	c.mu.Lock()
+	c.reasoningTail += chunk
+	c.mu.Unlock()
+	c.broker.PushReasoning(tunnelReasoningMsgIDFor(msgID), chunk)
+}
+
+func (c *daemonTunnelShareController) handleText(text string) {
+	msgID := c.currentOrNextMsgID()
+	if msgID == "" {
+		return
+	}
+	c.markMainStreamActive()
+	c.mu.Lock()
+	c.textTail += text
+	c.mu.Unlock()
+	c.broker.PushReasoningDone(tunnelReasoningMsgIDFor(msgID))
+	c.broker.PushText(msgID, text)
+}
+
+func (c *daemonTunnelShareController) currentOrNextMsgID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.currentMsgID == "" && c.broker != nil {
+		c.currentMsgID = c.broker.NextMessageID()
+	}
+	return c.currentMsgID
+}
+
+func (c *daemonTunnelShareController) markMainStreamActive() {
+	c.mu.Lock()
+	c.needsFinalize = true
+	c.mu.Unlock()
+}
+
+func (c *daemonTunnelShareController) rolloverMainStream(force bool) {
+	if c == nil || c.broker == nil {
+		return
+	}
+	c.mu.Lock()
+	msgID := strings.TrimSpace(c.currentMsgID)
+	needsFinalize := c.needsFinalize
+	c.currentMsgID = ""
+	c.needsFinalize = false
+	c.reasoningTail = ""
+	c.textTail = ""
+	c.mu.Unlock()
+	if msgID == "" {
+		return
+	}
+	c.broker.PushReasoningDone(tunnelReasoningMsgIDFor(msgID))
+	if !force && !needsFinalize {
+		return
+	}
+	c.broker.PushTextDone(msgID)
+}
+
+func daemonTunnelHistoryTail(reasoning, text string) []tunnel.HistoryEntry {
+	var history []tunnel.HistoryEntry
+	if reasoning = strings.TrimSpace(reasoning); reasoning != "" {
+		history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: reasoning})
+	}
+	if text = strings.TrimSpace(text); text != "" {
+		history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
+	}
+	return history
+}
+
+func daemonTunnelMessageDataFromContent(content []provider.ContentBlock) tunnel.MessageData {
+	var textParts []string
+	for _, block := range content {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			textParts = append(textParts, strings.TrimSpace(block.Text))
+		}
+	}
+	if len(textParts) == 0 {
+		return tunnel.MessageData{}
+	}
+	return tunnel.MessageData{Text: strings.Join(textParts, "\n")}
+}
+
+func daemonTunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
+	var history []tunnel.HistoryEntry
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			var textParts []string
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
+				case "tool_result":
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   daemonTruncateRunes(block.Output, 500, "..."),
+						IsError:  block.IsError,
+					})
+				}
+			}
+			if len(textParts) > 0 {
+				history = append(history, tunnel.HistoryEntry{Role: "user", Content: strings.Join(textParts, "\n")})
+			}
+		case "assistant":
+			for _, block := range msg.Content {
+				if reasoning := daemonContentBlockReasoningText(block); reasoning != "" {
+					history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: reasoning})
+				}
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: strings.TrimSpace(block.Text)})
+					}
+				case "tool_use":
+					present := tool.DescribeTool(block.ToolName, string(block.Input))
+					history = append(history, tunnel.HistoryEntry{
+						Role:            "tool_call",
+						ToolID:          block.ToolID,
+						ToolName:        block.ToolName,
+						ToolDisplayName: daemonToolDisplayName(block.ToolName, string(block.Input)),
+						ToolArgs:        daemonTruncateRunes(string(block.Input), 200, "..."),
+						ToolDetail:      present.Detail,
+					})
+				}
+			}
+		case "tool":
+			for _, block := range msg.Content {
+				if block.Type == "tool_result" {
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   daemonTruncateRunes(block.Output, 500, "..."),
+						IsError:  block.IsError,
+					})
+				}
+			}
+		}
+	}
+	return history
+}
+
+func daemonContentBlockReasoningText(block provider.ContentBlock) string {
+	if text := tunnel.NormalizeReasoningChunk(block.ReasoningContent); text != "" {
+		return text
+	}
+	if strings.TrimSpace(block.ThinkingData) != "" {
+		return tunnel.RedactedReasoningPlaceholder
+	}
+	return ""
+}
+
+func daemonTruncateRunes(s string, maxRunes int, suffix string) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	suffixRunes := []rune(suffix)
+	if len(suffixRunes) >= maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-len(suffixRunes)]) + suffix
+}
+
+func tunnelReasoningMsgIDFor(msgID string) string {
+	msgID = strings.TrimSpace(msgID)
+	if msgID == "" {
+		return ""
+	}
+	return msgID + "-reasoning"
 }
 
 // readKeyboard reads raw keystrokes from stdin and sends them to the channel.

@@ -65,6 +65,8 @@ type matrixAdapter struct {
 
 	// Transaction ID counter for send
 	txnID atomic.Int64
+
+	reactionAck reactionAckState
 }
 
 func newMatrixAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*matrixAdapter, error) {
@@ -581,6 +583,30 @@ func (a *matrixAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
 }
 
+func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	roomID := strings.TrimSpace(binding.ChannelID)
+	if roomID == "" {
+		roomID = strings.TrimSpace(binding.TargetID)
+	}
+	target := LastReactionTargetMessageID(binding)
+	if roomID == "" || target == "" || !a.reactionAck.NeedsSend(binding, target) {
+		return nil
+	}
+	if a.client == nil {
+		return fmt.Errorf("matrix adapter not connected")
+	}
+	reaction := reactionAckValue(PlatformMatrix, target)
+	if reaction == "" {
+		return nil
+	}
+	if _, err := a.client.SendReaction(ctx, id.RoomID(roomID), id.EventID(target), reaction); err != nil {
+		debug.Log("matrix", "adapter=%s typing reaction failed room=%s target=%s: %v", a.name, roomID, target, err)
+		return err
+	}
+	a.reactionAck.MarkSent(binding, target)
+	return nil
+}
+
 func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text string) error {
 	if a.client == nil {
 		return fmt.Errorf("matrix adapter not connected")
@@ -617,26 +643,7 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 }
 
 func chunkText(text string, maxLen int) []string {
-	if len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		// Try to break at newline
-		idx := strings.LastIndex(text[:maxLen], "\n")
-		if idx > maxLen/2 {
-			chunks = append(chunks, text[:idx])
-			text = text[idx+1:]
-		} else {
-			chunks = append(chunks, text[:maxLen])
-			text = text[maxLen:]
-		}
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, false, false, true)
 }
 
 func (a *matrixAdapter) publishState(healthy bool, status, lastErr string) {

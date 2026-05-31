@@ -263,7 +263,8 @@ type ShareLinkProvider interface {
 }
 
 // TypingIndicator is an optional interface that adapters can implement
-// to show a native "bot is typing" indicator on the IM platform.
+// to show a processing indicator on the IM platform, such as a native typing
+// signal or a reaction-style acknowledgement on the latest user message.
 type TypingIndicator interface {
 	TriggerTyping(ctx context.Context, binding ChannelBinding) error
 }
@@ -330,6 +331,21 @@ func LastMessageID(b ChannelBinding) string {
 		return id
 	}
 	if id := strings.TrimSpace(b.LastInboundMessageID); id != "" {
+		return id
+	}
+	return ""
+}
+
+// LastReactionTargetMessageID returns the preferred message ID for reaction-style
+// typing indicators. When the user has just sent a new message, reacting to that
+// inbound message makes it explicit that the bot has read and started processing
+// the latest user request. If no inbound message is known yet, fall back to the
+// bot's most recent outbound message.
+func LastReactionTargetMessageID(b ChannelBinding) string {
+	if id := strings.TrimSpace(b.LastInboundMessageID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(b.LastOutboundMessageID); id != "" {
 		return id
 	}
 	return ""

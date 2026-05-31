@@ -649,7 +649,7 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		return nil
 	}
 	if len(text) > wecomMaxTextLen {
-		text = text[:wecomMaxTextLen]
+		text = truncateRunes(text, wecomMaxTextLen, "")
 	}
 
 	// Try respond_msg if we have a tracked req_id for the last inbound message

@@ -61,6 +61,8 @@ type DaemonBridge struct {
 	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
 	followSink           daemon.FollowSink
 	onActivity           func()
+	onRunStateChange     func(bool)
+	onUserMessage        func([]provider.ContentBlock)
 	onRestart            func()                                               // trigger daemon self-restart
 	onProviderSwitch     func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
 	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
@@ -183,6 +185,18 @@ func (b *DaemonBridge) SetActivityHook(fn func()) {
 	b.mu.Unlock()
 }
 
+func (b *DaemonBridge) SetRunStateHook(fn func(bool)) {
+	b.mu.Lock()
+	b.onRunStateChange = fn
+	b.mu.Unlock()
+}
+
+func (b *DaemonBridge) SetUserMessageHook(fn func([]provider.ContentBlock)) {
+	b.mu.Lock()
+	b.onUserMessage = fn
+	b.mu.Unlock()
+}
+
 // SetRestartHook installs a callback to trigger daemon process restart.
 func (b *DaemonBridge) SetRestartHook(fn func()) {
 	b.mu.Lock()
@@ -206,6 +220,41 @@ func (b *DaemonBridge) ConsumeRestartDebug() bool {
 	b.restartDebug = false
 	b.mu.Unlock()
 	return v
+}
+
+func (b *DaemonBridge) HasActiveRun() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cancelFunc != nil
+}
+
+func (b *DaemonBridge) InterruptActiveRun() bool {
+	b.mu.Lock()
+	cancel := b.cancelFunc
+	b.mu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+func (b *DaemonBridge) notifyRunStateChange(busy bool) {
+	b.mu.Lock()
+	fn := b.onRunStateChange
+	b.mu.Unlock()
+	if fn != nil {
+		fn(busy)
+	}
+}
+
+func (b *DaemonBridge) notifyUserMessage(content []provider.ContentBlock) {
+	b.mu.Lock()
+	fn := b.onUserMessage
+	b.mu.Unlock()
+	if fn != nil {
+		fn(content)
+	}
 }
 
 // SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
@@ -269,6 +318,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if text == "" {
 		return nil
 	}
+	b.notifyUserMessage(content)
 
 	// Immediately trigger typing indicator so the user sees feedback
 	// before waiting for the first LLM token.
@@ -316,6 +366,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	})
 	b.cancelFunc = cancel
 	b.mu.Unlock()
+	b.notifyRunStateChange(true)
 
 	// Run agent (may loop if interruptions arrived mid-run).
 	for {
@@ -347,6 +398,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.cancelFunc = nil
 	b.agent.SetInterruptionHandler(nil)
 	b.mu.Unlock()
+	b.notifyRunStateChange(false)
 
 	return nil
 }
@@ -753,7 +805,7 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 	}
 	if b.sess.Title == "" || b.sess.Title == "New session" {
 		if len(text) > 60 {
-			b.sess.Title = text[:57] + "..."
+			b.sess.Title = truncateRunes(text, 60, "...")
 		} else {
 			b.sess.Title = text
 		}
@@ -1301,6 +1353,7 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	if text == "" && len(content) == 0 {
 		return
 	}
+	b.notifyUserMessage(content)
 
 	// Notify activity hook (Knight idle timer) for webchat messages too.
 	if text != "" {
@@ -1340,6 +1393,7 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	})
 	b.cancelFunc = cancel
 	b.mu.Unlock()
+	b.notifyRunStateChange(true)
 
 	// Start the run outside the lock
 	safego.Go("im.daemonBridge.run", func() {
@@ -1348,6 +1402,7 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 			b.cancelFunc = nil
 			b.agent.SetInterruptionHandler(nil)
 			b.mu.Unlock()
+			b.notifyRunStateChange(false)
 		}()
 		// Check if this input should be routed to harness auto-run
 		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {

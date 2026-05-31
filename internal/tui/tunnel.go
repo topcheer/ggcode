@@ -748,6 +748,9 @@ func (m *Model) pushSubAgentTunnelEvent(sa *subagent.SubAgent) {
 	if broker == nil {
 		return
 	}
+	if m.tunnelSpawned == nil {
+		m.tunnelSpawned = make(map[string]bool)
+	}
 
 	switch sa.Status {
 	case subagent.StatusRunning:

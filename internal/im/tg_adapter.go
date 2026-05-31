@@ -34,6 +34,7 @@ const (
 	tgMaxTextLen      = 4096
 	tgGetUpdatesPath  = "/bot%s/getUpdates"
 	tgSendMessagePath = "/bot%s/sendMessage"
+	tgSetReactionPath = "/bot%s/setMessageReaction"
 	tgSendPhotoPath   = "/bot%s/sendPhoto"
 	tgGetMePath       = "/bot%s/getMe"
 	tgGetFileBase     = "https://api.telegram.org/file/bot%s/%s"
@@ -54,6 +55,7 @@ type tgAdapter struct {
 	lastUpdateID int
 	connected    bool
 	seen         map[int]time.Time
+	reactionAck  reactionAckState
 }
 
 func newTGAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*tgAdapter, error) {
@@ -818,6 +820,34 @@ func (a *tgAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 	if channelID == "" {
 		return nil
 	}
+	messageID := strings.TrimSpace(LastReactionTargetMessageID(binding))
+	if messageID != "" {
+		if !a.reactionAck.NeedsSend(binding, messageID) {
+			return nil
+		}
+		parsedID, err := parseInt(messageID)
+		if err == nil && parsedID != 0 {
+			path := fmt.Sprintf(tgSetReactionPath, a.botToken)
+			body := map[string]any{
+				"chat_id":    channelID,
+				"message_id": parsedID,
+				"reaction": []map[string]string{{
+					"type":  "emoji",
+					"emoji": "👍",
+				}},
+			}
+			_, err = a.apiRequest(ctx, http.MethodPost, path, body, nil)
+			if err == nil {
+				a.reactionAck.MarkSent(binding, messageID)
+				return nil
+			}
+			debug.Log("tg", "adapter=%s reaction failed, falling back to typing: %v", a.name, err)
+		}
+	}
+	return a.triggerNativeTyping(ctx, channelID)
+}
+
+func (a *tgAdapter) triggerNativeTyping(ctx context.Context, channelID string) error {
 	path := "/bot" + a.botToken + "/sendChatAction"
 	body := map[string]any{"chat_id": channelID, "action": "typing"}
 	_, err := a.apiRequest(ctx, http.MethodPost, path, body, nil)
@@ -996,25 +1026,7 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 }
 
 func splitTGMessage(text string, maxLen int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		// Try to split at newline
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > 0 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, true, false, false)
 }
 
 // jsonInt64Str converts a JSON-decoded numeric value to its exact int64 string

@@ -55,3 +55,47 @@ func TestTokenUsageCacheHitPercent(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenUsageDisplayInputTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage TokenUsage
+		want  int
+	}{
+		{
+			name:  "openai style prompt tokens subtract cache read",
+			usage: TokenUsage{InputTokens: 1200, CacheRead: 800, CacheWrite: 64, PromptTokensTotal: 1200},
+			want:  400,
+		},
+		{
+			name:  "anthropic style input stays as non cached input",
+			usage: TokenUsage{InputTokens: 23, CacheRead: 8832, CacheWrite: 128, PromptTokensTotal: 8983},
+			want:  23,
+		},
+		{
+			name:  "uncached usage stays unchanged",
+			usage: TokenUsage{InputTokens: 300, PromptTokensTotal: 300},
+			want:  300,
+		},
+		{
+			name:  "invalid prompt total falls back to input tokens",
+			usage: TokenUsage{InputTokens: 100, CacheRead: 200, PromptTokensTotal: 50},
+			want:  100,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.usage.DisplayInputTokens(); got != tt.want {
+				t.Fatalf("DisplayInputTokens() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenUsageTotalUsesDisplayedInputTokens(t *testing.T) {
+	usage := TokenUsage{InputTokens: 1200, OutputTokens: 300, CacheRead: 800, CacheWrite: 64, PromptTokensTotal: 1200}
+	if got := usage.Total(); got != 1500 {
+		t.Fatalf("Total() = %d, want 1500", got)
+	}
+}

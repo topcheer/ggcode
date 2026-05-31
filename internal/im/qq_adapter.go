@@ -863,6 +863,29 @@ func (a *qqAdapter) ensureToken(ctx context.Context) (string, error) {
 	if token != "" && time.Now().Before(expires.Add(-60*time.Second)) {
 		return token, nil
 	}
+	// Retry token refresh up to 3 times to absorb transient failures
+	// (e.g. QQ API returns 200 with empty access_token on first try).
+	var lastErr error
+	for attempt := range 3 {
+		if attempt > 0 {
+			debug.Log("qq", "adapter=%s token refresh retry %d", a.name, attempt)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		tok, err := a.refreshTokenOnce(ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return tok, nil
+	}
+	return "", fmt.Errorf("QQ token refresh failed after 3 attempts: %w", lastErr)
+}
+
+func (a *qqAdapter) refreshTokenOnce(ctx context.Context) (string, error) {
 	debug.Log("qq", "adapter=%s refreshing token", a.name)
 	payload := map[string]string{
 		"appId":        a.appID,
@@ -891,8 +914,11 @@ func (a *qqAdapter) ensureToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if resp.StatusCode >= 400 || accessToken == "" {
-		return "", fmt.Errorf("QQ token request failed [%d]", resp.StatusCode)
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("QQ token request failed [%d]: %v", resp.StatusCode, data)
+	}
+	if accessToken == "" {
+		return "", fmt.Errorf("QQ token response missing access_token [%d]: %v", resp.StatusCode, data)
 	}
 	debug.Log("qq", "adapter=%s token refreshed", a.name)
 	a.mu.Lock()

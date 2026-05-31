@@ -40,9 +40,10 @@ type slackAdapter struct {
 	apiBase    string // override for tests
 	stt        imstt.Transcriber
 
-	mu        sync.RWMutex
-	connected bool
-	ws        *websocket.Conn
+	mu          sync.RWMutex
+	connected   bool
+	ws          *websocket.Conn
+	reactionAck reactionAckState
 }
 
 func newSlackAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*slackAdapter, error) {
@@ -537,13 +538,13 @@ func (a *slackAdapter) outboundText(event OutboundEvent) string {
 	}
 }
 
-// TriggerTyping adds an "eyes" emoji reaction on the most recent message to indicate
-// the bot is processing. Slack does not have a native typing indicator for bots,
-// so we use a reaction as a visual cue.
+// TriggerTyping adds a reaction on the latest real user message to
+// indicate the bot is processing. Slack does not have a native typing indicator
+// for bots, so we use a reaction as a visual cue.
 func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
-	ts := LastMessageID(binding)
-	if channelID == "" || ts == "" {
+	ts := LastReactionTargetMessageID(binding)
+	if channelID == "" || ts == "" || !a.reactionAck.NeedsSend(binding, ts) {
 		return nil
 	}
 	baseURL := slackAPIBase
@@ -554,7 +555,7 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	body := map[string]any{
 		"channel":   channelID,
 		"timestamp": ts,
-		"name":      "eyes",
+		"name":      reactionAckValue(PlatformSlack, ts),
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
@@ -579,8 +580,10 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 		// "already_reacted" is not an error — typing indicator already present
 		if errMsg != "already_reacted" {
 			debug.Log("slack", "adapter=%s typing reaction error: %s", a.name, errMsg)
+			return nil
 		}
 	}
+	a.reactionAck.MarkSent(binding, ts)
 	return nil
 }
 
@@ -790,24 +793,7 @@ func replaceDelimiters(text, from, to string) string {
 }
 
 func splitSlackMessage(text string, maxLen int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > 0 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, true, false, false)
 }
 
 // transcribeSlackAudio downloads an audio file from Slack and transcribes it via STT.

@@ -708,7 +708,7 @@ func TestSidebarShowsSessionUsage(t *testing.T) {
 	}
 
 	sidebar := stripAnsi(m.renderSidebar())
-	for _, want := range []string{"Session usage", "1540", "1200", "340", "800", "64", "67%", "cache read", "cache write", "cache hit"} {
+	for _, want := range []string{"Session usage", "1540", "400", "340", "800", "64", "67%", "cache read", "cache write", "cache hit"} {
 		if !strings.Contains(sidebar, want) {
 			t.Fatalf("expected %q in sidebar, got %q", want, sidebar)
 		}

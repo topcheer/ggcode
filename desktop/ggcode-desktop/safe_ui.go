@@ -161,7 +161,7 @@ func (u *UIState) SetTokenUsage(usage string, pct float64) {
 
 func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
 	total := humanizeTokens(usage.Total())
-	input := humanizeTokens(usage.InputTokens)
+	input := humanizeTokens(usage.DisplayInputTokens())
 	output := humanizeTokens(usage.OutputTokens)
 	cacheRead := humanizeTokens(usage.CacheRead)
 	cacheWrite := humanizeTokens(usage.CacheWrite)

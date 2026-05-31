@@ -509,25 +509,7 @@ func (a *ircAdapter) sendRaw(line string) error {
 }
 
 func splitIRCMessage(text string, maxLen int) []string {
-	if len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > maxLen/2 {
-			splitAt = idx + 1
-		} else if idx := strings.LastIndex(text[:maxLen], " "); idx > maxLen/2 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, false, true, true)
 }
 
 // TriggerTyping — IRC has no typing indicator.

@@ -87,8 +87,9 @@ type feishuAdapter struct {
 	// to 3x if the webhook does not respond within ~3s; we may legitimately
 	// take longer than that to respond, so dedup by event_id+message_id is
 	// required to avoid running the same agent turn 2-3x). See locks.md S1.
-	seenMu     sync.Mutex
-	seenEvents map[string]time.Time
+	seenMu      sync.Mutex
+	seenEvents  map[string]time.Time
+	reactionAck reactionAckState
 	// seenNonces deduplicates (timestamp,nonce) pairs presented to
 	// verifySignature, defeating brute replay even within the freshness
 	// window. See locks.md S2.
@@ -1164,12 +1165,12 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 	return parseFeishuMessageID(resp.Body)
 }
 
-// TriggerTyping adds a "Typing" emoji reaction on the most recent message to indicate
-// the bot is processing. Feishu does not have a native typing indicator, so we use
-// a Typing reaction as a visual cue.
+// TriggerTyping adds a "Typing" emoji reaction on the latest real user message to
+// indicate the bot is processing. Feishu does not have a native typing indicator,
+// so we use a Typing reaction as a visual cue.
 func (a *feishuAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
-	msgID := LastMessageID(binding)
-	if msgID == "" {
+	msgID := LastReactionTargetMessageID(binding)
+	if msgID == "" || !a.reactionAck.NeedsSend(binding, msgID) {
 		return nil
 	}
 	a.mu.RLock()
@@ -1197,7 +1198,9 @@ func (a *feishuAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if resp.StatusCode >= 400 {
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		debug.Log("feishu", "adapter=%s typing reaction [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil
 	}
+	a.reactionAck.MarkSent(binding, msgID)
 	return nil
 }
 
@@ -1444,24 +1447,7 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 }
 
 func splitFeishuMessage(text string, maxLen int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > 0 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, true, false, false)
 }
 
 func intValueStr(s string) (int, bool) {

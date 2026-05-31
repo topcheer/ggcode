@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -187,6 +188,22 @@ func TestSplitSignalMessage(t *testing.T) {
 	rejoined := strings.Join(chunks, "")
 	if rejoined != long {
 		t.Errorf("rejoined = %q, want %q", rejoined, long)
+	}
+}
+
+func TestSplitSignalMessage_DoesNotBreakUTF8(t *testing.T) {
+	msg := "你好世界🙂再见"
+	chunks := splitSignalMessage(msg, 3)
+	if got := strings.Join(chunks, ""); got != msg {
+		t.Fatalf("rejoined = %q, want %q", got, msg)
+	}
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d invalid UTF-8: %q", i, chunk)
+		}
+		if len([]rune(chunk)) > 3 {
+			t.Fatalf("chunk %d has %d runes, want <= 3", i, len([]rune(chunk)))
+		}
 	}
 }
 

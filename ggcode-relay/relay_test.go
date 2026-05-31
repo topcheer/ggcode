@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,6 +239,75 @@ func TestHandleWSClientWaitsUntilServerReady(t *testing.T) {
 	}
 	if data["state"] != "recovering" {
 		t.Fatalf("expected recovering state, got %+v", data)
+	}
+}
+
+func TestHubNotifyRelayRestartingSendsOfflineNoticeBeforeClose(t *testing.T) {
+	h := newHub(nil)
+	room := newRoom("token-restart")
+	room.sessionID = "sess-restart"
+	h.rooms[room.token] = room
+
+	peerReady := make(chan *peer, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		p := newPeer(h, room, "client", conn)
+		room.mu.Lock()
+		room.clients[p] = struct{}{}
+		room.mu.Unlock()
+		peerReady <- p
+		p.writeLoop()
+	}))
+	defer srv.Close()
+
+	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	select {
+	case <-peerReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for relay peer")
+	}
+
+	go h.notifyRelayRestarting()
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var msg relayMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("read restart notice: %v", err)
+	}
+	if msg.Type != "server_offline" {
+		t.Fatalf("expected server_offline, got %+v", msg)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatalf("unmarshal restart notice: %v", err)
+	}
+	if data["state"] != "recovering" {
+		t.Fatalf("expected recovering state, got %+v", data)
+	}
+	if data["reason"] != relayRestartReason {
+		t.Fatalf("expected restart reason, got %+v", data)
+	}
+
+	_, _, err = conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("expected close error, got %v", err)
+	}
+	if closeErr.Code != websocket.CloseServiceRestart || closeErr.Text != relayRestartReason {
+		t.Fatalf("unexpected close error: %+v", closeErr)
 	}
 }
 
