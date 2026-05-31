@@ -68,6 +68,24 @@ nfpms:
       - src: ./README.md
         dst: /usr/share/doc/ggcode/README.md
 
+brews:
+  - name: ggcode
+    homepage: https://github.com/topcheer/ggcode
+    description: AI coding agent for the terminal with TUI, MCP, and IM integrations.
+    license: MIT
+    skip_upload: auto
+    install: |
+      bin.install "ggcode"
+    repository:
+      owner: topcheer
+      name: homebrew-ggcode
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: ggcode-bot
+      email: bot@ggcode.dev
+    directory: Formula
+
 homebrew_casks:
   - name: ggcode
     homepage: https://github.com/topcheer/ggcode
