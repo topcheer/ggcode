@@ -30,6 +30,8 @@ class _CaptureResumeHelloService extends _FakeConnectionService {
   String? resumeClientId;
   String? resumeSessionId;
   String? resumeLastEventId;
+  String? resumeMessageType;
+  final List<String> ackedEventIds = <String>[];
 
   @override
   Stream<ConnectionStatus> get statusStream => _status.stream;
@@ -50,11 +52,21 @@ class _CaptureResumeHelloService extends _FakeConnectionService {
     required String clientId,
     String? sessionId,
     String? lastEventId,
+    String messageType = 'resume_hello',
   }) {
     resumeHelloRequests++;
     resumeClientId = clientId;
     resumeSessionId = sessionId;
     resumeLastEventId = lastEventId;
+    resumeMessageType = messageType;
+  }
+
+  @override
+  void sendAck({
+    required String clientId,
+    required String eventId,
+  }) {
+    ackedEventIds.add(eventId);
   }
 
   @override
@@ -118,7 +130,7 @@ class _ServerOfflineService extends _FakeConnectionService {
       type: 'server_offline',
       data: {'retry_after_ms': 60000},
     ));
-    _status.add(ConnectionStatus.disconnected);
+    _status.add(ConnectionStatus.connecting);
   }
 
   @override
@@ -1067,9 +1079,10 @@ void main() {
     final connState = container.read(connectionProvider);
     expect(cacheState.selectedWorkspaceKey, isNotNull);
     expect(cacheState.selectedSessionId, 'sess-room');
-    expect(connState.status, ConnectionStatus.disconnected);
+    expect(connState.status, ConnectionStatus.connecting);
     expect(connState.url, 'wss://example.test/ws?token=room-a');
-    expect(connState.error, 'Relay recovering');
+    expect(connState.error, isNull);
+    expect(connState.relaySync?.phase, RelaySyncPhase.waitingHost);
     expect(container.read(displayedMessagesProvider).single.text,
         'keep this while relay recovers');
   });
@@ -2269,6 +2282,143 @@ void main() {
             .read(chatProvider)
             .where((m) => m.text == 'cached old session'),
         isEmpty);
+  });
+
+  test(
+      'ConnectionNotifier requests replay from durable snapshot when persisted cursor leads cache',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'ggcode_tunnel_client_id': 'client-old',
+      'ggcode_tunnel_session_id': 'sess-live',
+      'ggcode_tunnel_last_event_id': 'ev-000000130',
+    });
+
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      service.dispose();
+    });
+
+    final container = ProviderContainer(overrides: [
+      connectionProvider.overrideWith(_TestConnectionNotifier.new),
+    ]);
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'ev-000000120',
+          text: 'cached durable tail',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    await cache.flushNow();
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('ws://example.test/ws?token=test-token');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(service.resumeHelloRequests, 1);
+    expect(service.resumeSessionId, 'sess-live');
+    expect(service.resumeClientId, 'client-old');
+    expect(service.resumeMessageType, 'resume_from');
+    expect(service.resumeLastEventId, 'ev-000000120');
+    expect(notifier.currentSessionId, 'sess-live');
+    expect(notifier.lastAppliedEventId, 'ev-000000120');
+    expect(container.read(chatProvider).single.text, 'cached durable tail');
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('ggcode_tunnel_client_id'), 'client-old');
+    expect(
+      prefs.getString('ggcode_tunnel_last_event_id'),
+      'ev-000000120',
+    );
+  });
+
+  test('ConnectionNotifier ACKs only after durable snapshot flush', () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      service.dispose();
+    });
+
+    final container = ProviderContainer(overrides: [
+      connectionProvider.overrideWith(_TestConnectionNotifier.new),
+    ]);
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    await cache.registerLiveSession('sess-live', info, lastEventId: '');
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('ws://example.test/ws?token=test-token');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    service.ackedEventIds.clear();
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      eventId: 'ev-000000001',
+      type: 'session_info',
+      data: {
+        'workspace': '/tmp/demo',
+        'model': 'gpt-5.4',
+        'provider': 'openai',
+        'mode': 'supervised',
+        'version': '1.0.0',
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    final prefsBeforeFlush = await SharedPreferences.getInstance();
+    expect(service.ackedEventIds, isEmpty);
+    expect(prefsBeforeFlush.getString('ggcode_tunnel_last_event_id'), isNull);
+
+    await cache.captureLiveProjection(
+      messages: container.read(chatProvider),
+      subagents: container.read(subagentProvider),
+      sessionInfo: container.read(sessionInfoProvider),
+      agentStatus: container.read(agentStatusProvider),
+      agentStatusMessage: container.read(agentStatusMessageProvider),
+      lastEventId: notifier.lastAppliedEventId,
+    );
+    await cache.flushNow();
+
+    expect(service.ackedEventIds, ['ev-000000001']);
+    final prefsAfterFlush = await SharedPreferences.getInstance();
+    expect(
+      prefsAfterFlush.getString('ggcode_tunnel_last_event_id'),
+      'ev-000000001',
+    );
   });
 
   test(

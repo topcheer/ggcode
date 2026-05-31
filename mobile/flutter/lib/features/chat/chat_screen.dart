@@ -934,6 +934,12 @@ class _RelaySyncBanner extends StatelessWidget {
       return t('relay_sync.stalled_title');
     }
     switch (sync.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_title');
+      case RelaySyncPhase.waitingHost:
+        return t(sync.recoveryState == 'pending'
+            ? 'relay_sync.pending_title'
+            : 'relay_sync.waiting_host_title');
       case RelaySyncPhase.waiting:
         return t('relay_sync.waiting_title');
       case RelaySyncPhase.replaying:
@@ -955,8 +961,20 @@ class _RelaySyncBanner extends StatelessWidget {
       );
     }
     switch (sync.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_detail');
+      case RelaySyncPhase.waitingHost:
+        return t(
+          sync.recoveryState == 'pending'
+              ? 'relay_sync.pending_detail'
+              : sync.hasLocalState
+                  ? 'relay_sync.waiting_host_with_local_detail'
+                  : 'relay_sync.waiting_host_detail',
+        );
       case RelaySyncPhase.waiting:
-        return t('relay_sync.waiting_detail');
+        return t(sync.hasLocalState
+            ? 'relay_sync.waiting_with_local_detail'
+            : 'relay_sync.waiting_detail');
       case RelaySyncPhase.replaying:
         return t(
           'relay_sync.replaying_detail',

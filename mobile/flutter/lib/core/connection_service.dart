@@ -314,6 +314,8 @@ class ConnectionService {
   int _decryptErrorCount = 0;
   String _clientId = '';
   String? _pendingResumeSessionId;
+  String? _pendingResumeLastEventId;
+  String _pendingResumeType = 'resume_hello';
   bool _resumeHelloSent = false;
   ShareKeyExchangeState? _keyExchangeState;
   Completer<void>? _keyExchangeReady;
@@ -412,10 +414,14 @@ class ConnectionService {
           if (_disposed || _permanentFailure) {
             return;
           }
-          _statusController.add(ConnectionStatus.disconnected);
-          if (_serverOfflineReconnect || _everConnected) {
+          if (_serverOfflineReconnect) {
+            _statusController.add(ConnectionStatus.connecting);
+            _scheduleServerOfflineReconnect();
+          } else if (_everConnected) {
+            _statusController.add(ConnectionStatus.disconnected);
             _scheduleServerOfflineReconnect();
           } else {
+            _statusController.add(ConnectionStatus.disconnected);
             _scheduleReconnect();
           }
         });
@@ -428,10 +434,14 @@ class ConnectionService {
             return;
           }
           _errorController.add('Connection error: $e');
-          _statusController.add(ConnectionStatus.disconnected);
-          if (_serverOfflineReconnect || _everConnected) {
+          if (_serverOfflineReconnect) {
+            _statusController.add(ConnectionStatus.connecting);
+            _scheduleServerOfflineReconnect();
+          } else if (_everConnected) {
+            _statusController.add(ConnectionStatus.disconnected);
             _scheduleServerOfflineReconnect();
           } else {
+            _statusController.add(ConnectionStatus.disconnected);
             _scheduleReconnect();
           }
         });
@@ -579,7 +589,7 @@ class ConnectionService {
             type: 'server_offline',
             data: data,
           ));
-          _statusController.add(ConnectionStatus.disconnected);
+          _statusController.add(ConnectionStatus.connecting);
           _scheduleServerOfflineReconnect(retryAfter);
         }
         break;
@@ -817,11 +827,16 @@ class ConnectionService {
   void armResumeHello({
     required String clientId,
     String? sessionId,
+    String? lastEventId,
+    String messageType = 'resume_hello',
   }) {
     _clientId = clientId;
     _pendingResumeSessionId = sessionId;
+    _pendingResumeLastEventId = lastEventId;
+    _pendingResumeType = messageType;
     debugPrint(
-      '[connection] arm resume_hello client=${clientId.isNotEmpty} session=${sessionId ?? ''}',
+      '[connection] arm $messageType client=${clientId.isNotEmpty} '
+      'session=${sessionId ?? ''} lastEvent=${lastEventId ?? ''}',
     );
   }
 
@@ -832,24 +847,33 @@ class ConnectionService {
     sendResumeHello(
       clientId: _clientId,
       sessionId: _pendingResumeSessionId,
+      lastEventId: _pendingResumeLastEventId,
+      messageType: _pendingResumeType,
     );
   }
 
   void sendResumeHello({
     required String clientId,
     String? sessionId,
+    String? lastEventId,
+    String messageType = 'resume_hello',
   }) {
     if (_resumeHelloSent) return;
     _clientId = clientId;
     _pendingResumeSessionId = sessionId;
+    _pendingResumeLastEventId = lastEventId;
+    _pendingResumeType = messageType;
     _resumeHelloSent = true;
     debugPrint(
-      '[connection] send resume_hello client=${clientId.isNotEmpty} session=${sessionId ?? ''}',
+      '[connection] send $messageType client=${clientId.isNotEmpty} '
+      'session=${sessionId ?? ''} lastEvent=${lastEventId ?? ''}',
     );
     send({
-      'type': 'resume_hello',
+      'type': messageType,
       'client_id': clientId,
       if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+      if (lastEventId != null && lastEventId.isNotEmpty)
+        'last_event_id': lastEventId,
     });
   }
 

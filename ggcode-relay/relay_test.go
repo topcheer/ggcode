@@ -168,6 +168,7 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 	room.protocolVersion = shareProtocolV3
 	room.history = []roomEvent{{eventID: "ev-000000001"}}
 	room.server = newPeer(h, room, "server", nil)
+	room.serverReady = true
 	h.rooms[issued.RoomID] = room
 
 	mux := http.NewServeMux()
@@ -198,6 +199,84 @@ func TestHandleWSClientWithLiveServerSendsConnected(t *testing.T) {
 	}
 }
 
+func TestHandleWSClientWaitsUntilServerReady(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	issued := testIssuedShareSession(t)
+	h := newHub(nil)
+	room := newRoom(issued.RoomID)
+	room.sessionID = "sess-1"
+	room.protocolVersion = shareProtocolV3
+	room.server = newPeer(h, room, "server", nil)
+	h.rooms[issued.RoomID] = room
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", h.handleWS)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=client&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ClientAuthTicket + "&caps=" + requiredTunnelCapability
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var msg relayMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "server_offline" {
+		t.Fatalf("expected server_offline while host is not ready, got %+v", msg)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["state"] != "recovering" {
+		t.Fatalf("expected recovering state, got %+v", data)
+	}
+}
+
+func TestHandleWSServerRestoresPersistedHistoryBeforeInitialConnected(t *testing.T) {
+	t.Setenv(shareSecretEnv, "relay-secret")
+	issued := testIssuedShareSession(t)
+	store := newStoreForTest(t)
+	persistTestEvent(t, store, issued.RoomID, "sess-1", "ev-000000001")
+	persistTestEvent(t, store, issued.RoomID, "sess-1", "ev-000000002")
+
+	h := newHub(store)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", h.handleWS)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
+		"/ws?role=server&proto=3&room_id=" + issued.RoomID + "&auth_ticket=" + issued.ServerAuthTicket + "&caps=" + requiredTunnelCapability + "&crypto_key=abc123&kx_pub=server-pub"
+	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	var msg relayMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != "connected" {
+		t.Fatalf("expected connected, got %+v", msg)
+	}
+	if msg.SessionID != "sess-1" || msg.Count != 2 || msg.LastEventID != "ev-000000002" {
+		t.Fatalf("unexpected restored connected payload: %+v", msg)
+	}
+}
+
 func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	t.Setenv(shareSecretEnv, "relay-secret")
 	issued := testIssuedShareSession(t)
@@ -224,6 +303,9 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	}
 	if serverConnected.Type != "connected" {
 		t.Fatalf("expected initial server connected, got %+v", serverConnected)
+	}
+	if err := serverConn.WriteJSON(relayMessage{Type: "server_ready"}); err != nil {
+		t.Fatal(err)
 	}
 
 	clientURL := strings.Replace(server.URL, "http://", "ws://", 1) +
@@ -254,6 +336,24 @@ func TestHandleWSClientNotifiesLiveServer(t *testing.T) {
 	}
 	if notify.Type != "connected" || notify.Role != "client" {
 		t.Fatalf("expected client notify on server connection, got %+v", notify)
+	}
+}
+
+func TestServerReadyIgnoresReplacedServer(t *testing.T) {
+	h := newHub(nil)
+	r := newRoom("token-ready")
+	oldServer := newPeer(h, r, "server", nil)
+	newServer := newPeer(h, r, "server", nil)
+	r.server = newServer
+
+	oldServer.onServerReady()
+	if r.serverReady {
+		t.Fatal("stale server_ready should not reopen client admission")
+	}
+
+	newServer.onServerReady()
+	if !r.serverReady {
+		t.Fatal("current server_ready should mark the room ready")
 	}
 }
 
@@ -591,6 +691,41 @@ func TestPeerOnResumeLoadsCursorFromDB(t *testing.T) {
 	msgs := drainSendCh(p.sendCh)
 	if len(msgs) != 4 { // active_session + resume_ack + ev-3 + ev-4
 		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+}
+
+func TestPeerResumeFromOverridesPersistedCursor(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openRelayStore(filepath.Join(dir, "test.db"), 72*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	_ = store.saveClientCursor(hashToken("token"), "client-1", "sess-1", "ev-000000003")
+
+	r := newRoom("token")
+	r.sessionID = "sess-1"
+	r.history = []roomEvent{
+		{eventID: "ev-000000001", raw: []byte(`{"event_id":"ev-000000001"}`)},
+		{eventID: "ev-000000002", raw: []byte(`{"event_id":"ev-000000002"}`)},
+		{eventID: "ev-000000003", raw: []byte(`{"event_id":"ev-000000003"}`)},
+		{eventID: "ev-000000004", raw: []byte(`{"event_id":"ev-000000004"}`)},
+	}
+
+	h := newHub(store)
+	p := newPeer(h, r, "client", nil)
+
+	p.onResume(relayMessage{
+		Type:        "resume_from",
+		ClientID:    "client-1",
+		LastEventID: "ev-000000001",
+	}, h)
+	p.onKeyReady(relayMessage{ClientID: "client-1"}, h)
+
+	msgs := drainSendCh(p.sendCh)
+	if len(msgs) != 5 { // active_session + resume_ack + ev-2 + ev-3 + ev-4
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
 	}
 }
 

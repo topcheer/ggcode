@@ -23,18 +23,28 @@ final connectionProvider =
 
 const _noTunnelStateChange = Object();
 
-enum RelaySyncPhase { waiting, replaying, snapshot }
+enum RelaySyncPhase {
+  restoringLocal,
+  waitingHost,
+  waiting,
+  replaying,
+  snapshot
+}
 
 class RelaySyncState {
   final RelaySyncPhase phase;
   final int? remainingReplayCount;
   final String? resumeMode;
+  final String? recoveryState;
+  final bool hasLocalState;
   final bool stalled;
 
   const RelaySyncState({
     required this.phase,
     this.remainingReplayCount,
     this.resumeMode,
+    this.recoveryState,
+    this.hasLocalState = false,
     this.stalled = false,
   });
 
@@ -42,6 +52,8 @@ class RelaySyncState {
     RelaySyncPhase? phase,
     Object? remainingReplayCount = _noTunnelStateChange,
     Object? resumeMode = _noTunnelStateChange,
+    Object? recoveryState = _noTunnelStateChange,
+    bool? hasLocalState,
     bool? stalled,
   }) {
     return RelaySyncState(
@@ -53,6 +65,10 @@ class RelaySyncState {
       resumeMode: identical(resumeMode, _noTunnelStateChange)
           ? this.resumeMode
           : resumeMode as String?,
+      recoveryState: identical(recoveryState, _noTunnelStateChange)
+          ? this.recoveryState
+          : recoveryState as String?,
+      hasLocalState: hasLocalState ?? this.hasLocalState,
       stalled: stalled ?? this.stalled,
     );
   }
@@ -63,19 +79,22 @@ class TunnelConnectionState {
   final String? url;
   final String? error;
   final RelaySyncState? relaySync;
+  final bool sessionReady;
 
   TunnelConnectionState({
     required this.status,
     this.url,
     this.error,
     this.relaySync,
+    this.sessionReady = false,
   });
 
   TunnelConnectionState copyWith(
           {ConnectionStatus? status,
           Object? url = _noTunnelStateChange,
           Object? error = _noTunnelStateChange,
-          Object? relaySync = _noTunnelStateChange}) =>
+          Object? relaySync = _noTunnelStateChange,
+          bool? sessionReady}) =>
       TunnelConnectionState(
         status: status ?? this.status,
         url: identical(url, _noTunnelStateChange) ? this.url : url as String?,
@@ -85,6 +104,7 @@ class TunnelConnectionState {
         relaySync: identical(relaySync, _noTunnelStateChange)
             ? this.relaySync
             : relaySync as RelaySyncState?,
+        sessionReady: sessionReady ?? this.sessionReady,
       );
 }
 
@@ -99,6 +119,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _clientId = '';
   String _sessionId = '';
   String _lastAppliedEventId = '';
+  String _lastDurableEventId = '';
+  String _resumeOverrideEventId = '';
   String _shareRoomId = '';
   String _shareRenewToken = '';
   bool _hasAuthoritativeProjection = false;
@@ -118,7 +140,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   @override
   TunnelConnectionState build() {
-    ref.onDispose(_disposeNotifier);
+    final cache = ref.read(workspaceCacheProvider.notifier);
+    cache.onDurableSnapshotPersisted = _handleDurableSnapshotPersisted;
+    ref.onDispose(() {
+      cache.onDurableSnapshotPersisted = null;
+      _disposeNotifier();
+    });
     return TunnelConnectionState(status: ConnectionStatus.disconnected);
   }
 
@@ -210,7 +237,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         status: ConnectionStatus.connecting,
         url: descriptor.publicUrl,
         error: null,
-        relaySync: null);
+        relaySync: null,
+        sessionReady: false);
 
     if (!descriptor.isV3 && descriptor.cryptoMaterial.isEmpty) {
       if (!_isConnectionGenerationCurrent(generation)) return;
@@ -227,6 +255,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await _loadResumeState();
     if (!_isConnectionGenerationCurrent(generation)) return;
     await _resetResumeIdentityForSparseSnapshot();
+    if (!_isConnectionGenerationCurrent(generation)) return;
+    await _prepareResumeOverrideForCursorSkew();
     if (!_isConnectionGenerationCurrent(generation)) return;
     if (descriptor.isV2 &&
         _shareRoomId.isNotEmpty &&
@@ -251,25 +281,33 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (uiHasContent && uiSessionId == savedSessionId) {
       // UI already renders this session — keep it. Ordinal dedup will skip
       // relay replay events we already have rendered.
-      _beginRelaySyncWaiting();
+      _beginRelaySyncWaiting(hasLocalState: true);
     } else {
       // Different session or fresh connect — clear UI, restore from SQLite.
       _clearUiProjection();
       _sessionId = savedSessionId;
       _lastAppliedEventId =
           savedSessionId.isNotEmpty ? _lastAppliedEventId : '';
+      _lastDurableEventId =
+          savedSessionId.isNotEmpty ? _lastDurableEventId : '';
       _relaySessionGeneration = 0;
       _awaitingSnapshotProjection = false;
       _recentEventIds.clear();
       _recentEventSet.clear();
+      final hadSavedSession = savedSessionId.isNotEmpty;
+      if (hadSavedSession) {
+        _beginLocalRestoreSync();
+      }
       final restoredProjection = _restoreProjectionFromCache(
         adoptCursor: false,
         seedCursorIfUnset: true,
       );
-      if (restoredProjection || savedSessionId.isNotEmpty) {
-        _beginRelaySyncWaiting();
+      if (restoredProjection || hadSavedSession) {
+        _beginRelaySyncWaiting(
+          hasLocalState: restoredProjection || hadSavedSession,
+        );
       } else {
-        _clearRelaySyncState();
+        _beginRelaySyncWaiting(hasLocalState: false);
       }
     }
 
@@ -277,6 +315,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     localService.armResumeHello(
       clientId: _clientId,
       sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+      lastEventId:
+          _resumeOverrideEventId.isNotEmpty ? _resumeOverrideEventId : null,
+      messageType:
+          _resumeOverrideEventId.isNotEmpty ? 'resume_from' : 'resume_hello',
     );
 
     try {
@@ -285,7 +327,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     } catch (e) {
       if (!_isConnectionGenerationCurrent(generation)) return;
       state = state.copyWith(
-          status: ConnectionStatus.disconnected, error: e.toString());
+          status: ConnectionStatus.disconnected,
+          error: e.toString(),
+          sessionReady: false);
     }
   }
 
@@ -307,7 +351,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearRelaySyncState();
     _relaySessionGeneration = 0;
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
-    state = state.copyWith(status: ConnectionStatus.disconnected);
+    state = state.copyWith(
+      status: ConnectionStatus.disconnected,
+      sessionReady: false,
+    );
   }
 
   Future<void> leaveSession() async {
@@ -316,6 +363,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
+    _lastDurableEventId = '';
+    _resumeOverrideEventId = '';
     _relaySessionGeneration = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
@@ -324,7 +373,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final prefs = await SharedPreferences.getInstance();
     await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearSelection();
-    state = TunnelConnectionState(status: ConnectionStatus.disconnected);
+    state = TunnelConnectionState(
+      status: ConnectionStatus.disconnected,
+      sessionReady: false,
+    );
   }
 
   void send(Map<String, dynamic> data) {
@@ -359,6 +411,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (_sessionId.isNotEmpty && _sessionId != sessionId) {
           _clearUiProjection();
           _lastAppliedEventId = '';
+          _lastDurableEventId = '';
+          _resumeOverrideEventId = '';
           _hasAuthoritativeProjection = false;
           _recentEventIds.clear();
           _recentEventSet.clear();
@@ -366,6 +420,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _sessionId = sessionId;
         if (msg.generation != null && msg.generation! > 0) {
           _relaySessionGeneration = msg.generation!;
+        }
+        if (state.relaySync == null) {
+          _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
@@ -389,9 +446,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         debugPrint(
           '[connection] resume_ack session=$sessionId replay=$replayCount mode=$resumeMode',
         );
+        _resumeOverrideEventId = '';
         _beginResumeReplaySync(
           replayCount: replayCount,
           resumeMode: resumeMode,
+          hasLocalState: _hasLocalSessionState(),
         );
         // Always restore local snapshot first — relay replay will skip
         // already-cached events via ordinal dedup.
@@ -470,9 +529,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final wasAwaitingSnapshotProjection = _awaitingSnapshotProjection;
         if (wasAwaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
-          if (_pendingReplayCount == 0) {
-            _clearRelaySyncState();
-          }
+        }
+        if (_pendingReplayCount == 0) {
+          _clearRelaySyncState();
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
@@ -926,12 +985,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // Relay told us the room is temporarily offline. Keep the current
         // projection and selection so reconnect stays pinned to this room.
         ref.read(workspaceCacheProvider.notifier).markDisconnected();
-        _clearRelaySyncState();
+        final recoveryState = msg.data?['state'] as String? ?? '';
+        _beginRelaySyncWaitingForHost(
+          recoveryState: recoveryState,
+          hasLocalState: _hasLocalSessionState(),
+        );
         state = state.copyWith(
-          status: ConnectionStatus.disconnected,
-          error: state.error?.isNotEmpty == true
-              ? state.error
-              : 'Relay recovering',
+          status: ConnectionStatus.connecting,
+          error: null,
+          sessionReady: false,
         );
         break;
 
@@ -1023,9 +1085,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _sessionId = prefs.getString(_resumeSessionIdKey) ?? _sessionId;
     _lastAppliedEventId =
         prefs.getString(_resumeEventIdKey) ?? _lastAppliedEventId;
+    _lastDurableEventId = _lastAppliedEventId;
     _shareRoomId = prefs.getString(_resumeRoomIdKey) ?? _shareRoomId;
     _shareRenewToken =
         prefs.getString(_resumeRenewTokenKey) ?? _shareRenewToken;
+    _resumeOverrideEventId = '';
   }
 
   Future<void> _handlePermanentRoomFailure(
@@ -1047,6 +1111,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _sessionId = '';
     _lastAppliedEventId = '';
+    _lastDurableEventId = '';
+    _resumeOverrideEventId = '';
     _relaySessionGeneration = 0;
     _awaitingSnapshotProjection = false;
     _clearRelaySyncState();
@@ -1089,6 +1155,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearUiProjection();
     _hasAuthoritativeProjection = false;
     _lastAppliedEventId = '';
+    _lastDurableEventId = '';
+    _resumeOverrideEventId = '';
     _recentEventIds.clear();
     _recentEventSet.clear();
     _awaitingSnapshotProjection = false;
@@ -1159,27 +1227,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     if (eventId == null || eventId.isEmpty) {
       _persistResumeState();
-      unawaited(ref
-          .read(workspaceCacheProvider.notifier)
-          .updateLiveCursor(_sessionId, _lastAppliedEventId));
+      _captureLiveProjectionForDurableResume();
       return;
     }
     _noteReplayProgress(eventId);
     _lastAppliedEventId = eventId;
-    // Send ACK to relay so it advances the cursor.
-    if (_clientId.isNotEmpty) {
-      service?.sendAck(clientId: _clientId, eventId: eventId);
-    }
     _recentEventSet.add(eventId);
     _recentEventIds.add(eventId);
     if (_recentEventIds.length > 1000) {
       final evicted = _recentEventIds.removeAt(0);
       _recentEventSet.remove(evicted);
     }
-    _persistResumeState();
-    unawaited(ref
-        .read(workspaceCacheProvider.notifier)
-        .updateLiveCursor(_sessionId, _lastAppliedEventId));
+    _captureLiveProjectionForDurableResume();
   }
 
   int? _parseEventOrdinal(String? eventId) {
@@ -1231,6 +1290,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (adoptCursor && canSeedCursor) {
       _sessionId = sessionId;
       _lastAppliedEventId = snapshotCursor;
+      _lastDurableEventId = snapshotCursor;
     } else if (seedCursorIfUnset &&
         canSeedCursor &&
         _lastAppliedEventId.isEmpty &&
@@ -1238,6 +1298,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       if (_sessionId.isEmpty || _sessionId == sessionId) {
         _sessionId = sessionId;
         _lastAppliedEventId = snapshotCursor;
+        _lastDurableEventId = snapshotCursor;
       }
     }
     return true;
@@ -1253,16 +1314,27 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           '[connection] provider status=$status generation=$generation '
           'session=$_sessionId lastEvent=$_lastAppliedEventId',
         );
-        state = state.copyWith(status: status);
+        state = state.copyWith(
+          status: status,
+          sessionReady:
+              status == ConnectionStatus.connected && state.sessionReady,
+        );
         if (status == ConnectionStatus.connected) {
           _saveUrl(localService.publicUrl);
           localService.sendResumeHello(
             clientId: _clientId,
             sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+            lastEventId: _resumeOverrideEventId.isNotEmpty
+                ? _resumeOverrideEventId
+                : null,
+            messageType: _resumeOverrideEventId.isNotEmpty
+                ? 'resume_from'
+                : 'resume_hello',
           );
         } else if (status == ConnectionStatus.disconnected) {
           _clearRelaySyncState();
         }
+        _syncSessionReady();
       }),
       localService.errorStream.listen((error) {
         if (!_isActiveConnection(localService, generation)) return;
@@ -1360,6 +1432,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clientId = const Uuid().v4();
     _sessionId = sessionId;
     _lastAppliedEventId = '';
+    _lastDurableEventId = '';
+    _resumeOverrideEventId = '';
     _shareRoomId = '';
     _shareRenewToken = '';
     await prefs.setString(_resumeClientIdKey, _clientId);
@@ -1367,6 +1441,72 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await prefs.remove(_resumeEventIdKey);
     await prefs.remove(_resumeRoomIdKey);
     await prefs.remove(_resumeRenewTokenKey);
+  }
+
+  Future<void> _prepareResumeOverrideForCursorSkew() async {
+    final cacheState = ref.read(workspaceCacheProvider);
+    final sessionId = cacheState.selectedSessionId;
+    if (sessionId == null ||
+        sessionId.isEmpty ||
+        _sessionId.isEmpty ||
+        _sessionId != sessionId ||
+        _lastAppliedEventId.isEmpty) {
+      return;
+    }
+    final snapshot =
+        ref.read(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+    final snapshotCursor = snapshot?.lastEventId ?? '';
+    final persistedOrdinal = _parseEventOrdinal(_lastAppliedEventId);
+    final snapshotOrdinal = _parseEventOrdinal(snapshotCursor);
+    if (snapshot == null ||
+        snapshotCursor.isEmpty ||
+        persistedOrdinal == null ||
+        snapshotOrdinal == null ||
+        persistedOrdinal <= snapshotOrdinal) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    _sessionId = sessionId;
+    _lastAppliedEventId = snapshotCursor;
+    _lastDurableEventId = snapshotCursor;
+    _resumeOverrideEventId = snapshotCursor;
+    await prefs.setString(_resumeSessionIdKey, _sessionId);
+    await prefs.setString(_resumeEventIdKey, _lastDurableEventId);
+  }
+
+  void _captureLiveProjectionForDurableResume() {
+    unawaited(ref.read(workspaceCacheProvider.notifier).captureLiveProjection(
+          messages: ref.read(chatProvider),
+          subagents: ref.read(subagentProvider),
+          sessionInfo: ref.read(sessionInfoProvider),
+          agentStatus: ref.read(agentStatusProvider),
+          agentStatusMessage: ref.read(agentStatusMessageProvider),
+          lastEventId: _lastAppliedEventId,
+          authoritative: _sessionId.isNotEmpty && !_awaitingSnapshotProjection,
+        ));
+  }
+
+  Future<void> _handleDurableSnapshotPersisted(
+    String sessionId,
+    String lastEventId,
+  ) async {
+    if (sessionId.isEmpty ||
+        lastEventId.isEmpty ||
+        (_sessionId.isNotEmpty && sessionId != _sessionId)) {
+      return;
+    }
+    final durableOrdinal = _parseEventOrdinal(_lastDurableEventId);
+    final nextOrdinal = _parseEventOrdinal(lastEventId);
+    if (nextOrdinal == null ||
+        (durableOrdinal != null && nextOrdinal <= durableOrdinal)) {
+      return;
+    }
+    _lastDurableEventId = lastEventId;
+    _resumeOverrideEventId = '';
+    await _persistResumeStateNow();
+    if (_clientId.isNotEmpty && _sessionId == sessionId) {
+      service?.sendAck(clientId: _clientId, eventId: lastEventId);
+    }
   }
 
   void handleIncomingForTest(proto.WsMessage msg) {
@@ -1444,15 +1584,41 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     current?.dispose();
   }
 
-  void _beginRelaySyncWaiting() {
+  void _beginLocalRestoreSync() {
+    _setRelaySyncState(const RelaySyncState(
+      phase: RelaySyncPhase.restoringLocal,
+      hasLocalState: true,
+    ));
+  }
+
+  void _beginRelaySyncWaitingForHost({
+    required String recoveryState,
+    required bool hasLocalState,
+  }) {
     _pendingReplayCount = 0;
     _pendingResumeMode = '';
-    _setRelaySyncState(const RelaySyncState(phase: RelaySyncPhase.waiting));
+    _setRelaySyncState(RelaySyncState(
+      phase: RelaySyncPhase.waitingHost,
+      recoveryState: recoveryState,
+      hasLocalState: hasLocalState,
+    ));
+  }
+
+  void _beginRelaySyncWaiting({required bool hasLocalState}) {
+    _pendingReplayCount = 0;
+    _pendingResumeMode = '';
+    _setRelaySyncState(
+      RelaySyncState(
+        phase: RelaySyncPhase.waiting,
+        hasLocalState: hasLocalState,
+      ),
+    );
   }
 
   void _beginResumeReplaySync({
     required int replayCount,
     required String resumeMode,
+    required bool hasLocalState,
   }) {
     if (replayCount <= 0) {
       _clearRelaySyncState();
@@ -1465,6 +1631,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         phase: RelaySyncPhase.replaying,
         remainingReplayCount: replayCount,
         resumeMode: resumeMode,
+        hasLocalState: hasLocalState,
       ),
     );
   }
@@ -1490,9 +1657,25 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         phase: RelaySyncPhase.replaying,
         remainingReplayCount: _pendingReplayCount,
         resumeMode: _pendingResumeMode,
+        hasLocalState: current?.hasLocalState ?? false,
         stalled: current?.stalled ?? false,
       ),
     );
+  }
+
+  bool _hasLocalSessionState() {
+    return _sessionId.isNotEmpty ||
+        ref.read(sessionInfoProvider) != null ||
+        ref.read(chatProvider).isNotEmpty;
+  }
+
+  void _syncSessionReady() {
+    final ready = state.status == ConnectionStatus.connected &&
+        !_awaitingSnapshotProjection &&
+        state.relaySync == null;
+    if (state.sessionReady != ready) {
+      state = state.copyWith(sessionReady: ready);
+    }
   }
 
   void _setRelaySyncState(RelaySyncState? relaySync) {
@@ -1501,6 +1684,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       '[connection] relaySync=${relaySync == null ? 'clear' : '${relaySync.phase}:${relaySync.remainingReplayCount}:${relaySync.resumeMode}:stalled=${relaySync.stalled}'}',
     );
     state = state.copyWith(relaySync: relaySync);
+    _syncSessionReady();
     if (relaySync == null) {
       return;
     }
@@ -1520,6 +1704,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (state.relaySync != null) {
       state = state.copyWith(relaySync: null);
     }
+    _syncSessionReady();
   }
 
   void _scheduleSubagentCleanup(String agentId, {required int generation}) {
@@ -1567,7 +1752,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_resumeClientIdKey, _clientId);
     await prefs.setString(_resumeSessionIdKey, _sessionId);
-    await prefs.setString(_resumeEventIdKey, _lastAppliedEventId);
+    if (_lastDurableEventId.isNotEmpty) {
+      await prefs.setString(_resumeEventIdKey, _lastDurableEventId);
+    } else {
+      await prefs.remove(_resumeEventIdKey);
+    }
     if (_shareRoomId.isNotEmpty) {
       await prefs.setString(_resumeRoomIdKey, _shareRoomId);
     } else {

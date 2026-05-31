@@ -22,6 +22,7 @@ type GatewayMessage struct {
 const (
 	EventConnected             = "connected"
 	EventActiveSession         = "active_session"
+	EventServerReady           = "server_ready" // host -> relay internal readiness gate
 	EventSessionInfo           = "session_info"
 	EventActivity              = "activity"     // main-agent activity text change
 	EventUserMessage           = "user_message" // user text from desktop
@@ -56,6 +57,8 @@ const (
 	EventRelayAck              = "relay_ack"  // Relay → Client: relay received the message
 	EventServerAck             = "server_ack" // Server → Client: desktop processed the message
 )
+
+const ActiveSessionModeReplaceHistory = "replace_history"
 
 // Client → Server command types.
 const (

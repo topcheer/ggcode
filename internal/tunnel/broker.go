@@ -479,6 +479,20 @@ func (b *Broker) sendActiveSession(sessionID string) {
 	_ = b.session.SendActiveSession(sessionID)
 }
 
+func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
+	if b == nil || b.session == nil {
+		return
+	}
+	_ = b.session.SendActiveSessionWithMode(sessionID, mode)
+}
+
+func (b *Broker) markRelayReady() {
+	if b == nil || b.session == nil {
+		return
+	}
+	_ = b.session.SendServerReady()
+}
+
 func (b *Broker) resetSessionPreservingActiveText() {
 	b.resetSessionAndEnqueue(false)
 }
@@ -612,8 +626,14 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 	if info.Role != "server" {
 		return
 	}
-	if b.trustRelayHistory(info, currentSessionID) {
-		b.bumpNextEvent(info.LastEventID)
+	plan, events := b.relayRecoveryPlan(info, currentSessionID)
+	if plan.trusted {
+		if info.LastEventID != "" {
+			b.bumpNextEvent(info.LastEventID)
+		}
+		if strings.TrimSpace(currentSessionID) != "" {
+			b.markRelayReady()
+		}
 		return
 	}
 	b.snapshotMu.RLock()
@@ -642,20 +662,26 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
-		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
+		debug.Log("tunnel", "broker: relay recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
 		b.flushAllText()
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
-		b.sendActiveSession(currentSessionID)
+		if plan.reset {
+			b.sendActiveSessionWithMode(currentSessionID, ActiveSessionModeReplaceHistory)
+		} else {
+			b.sendActiveSession(currentSessionID)
+		}
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
-		events := b.canonicalReplayEvents()
-		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
-			return
+		if plan.replayFrom < len(events) {
+			events = events[plan.replayFrom:]
+		} else {
+			events = nil
 		}
 		if replayed := b.replayCanonicalEvents(false, events); replayed {
+			b.markRelayReady()
 			return
 		}
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
@@ -670,6 +696,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			return
 		}
 		b.replayActiveText(activeText)
+		b.markRelayReady()
 	}()
 }
 
@@ -716,6 +743,12 @@ func (b *Broker) endClientReplaySync() {
 	}(*pending)
 }
 
+type relayRecoveryPlan struct {
+	trusted    bool
+	reset      bool
+	replayFrom int
+}
+
 func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID string) bool {
 	if info.SessionID != currentSessionID || info.HistoryCount == 0 {
 		return false
@@ -732,6 +765,30 @@ func (b *Broker) trustRelayHistory(info RelayConnectedState, currentSessionID st
 	}
 	lastEventID := events[len(events)-1].EventID
 	return lastEventID != "" && lastEventID == info.LastEventID
+}
+
+func (b *Broker) relayRecoveryPlan(info RelayConnectedState, currentSessionID string) (relayRecoveryPlan, []GatewayMessage) {
+	if info.SessionID != currentSessionID {
+		return relayRecoveryPlan{replayFrom: 0}, b.canonicalReplayEvents()
+	}
+	events := b.canonicalReplayEvents()
+	if len(events) == 0 {
+		return relayRecoveryPlan{trusted: true}, nil
+	}
+	if info.HistoryCount == 0 {
+		return relayRecoveryPlan{replayFrom: 0}, events
+	}
+	if info.HistoryCount > len(events) || info.LastEventID == "" {
+		return relayRecoveryPlan{reset: true, replayFrom: 0}, events
+	}
+	last := events[info.HistoryCount-1].EventID
+	if last == "" || last != info.LastEventID {
+		return relayRecoveryPlan{reset: true, replayFrom: 0}, events
+	}
+	if info.HistoryCount == len(events) {
+		return relayRecoveryPlan{trusted: true}, events
+	}
+	return relayRecoveryPlan{replayFrom: info.HistoryCount}, events
 }
 
 func (b *Broker) currentSnapshot(provider func() BrokerSnapshot) (BrokerSnapshot, bool) {

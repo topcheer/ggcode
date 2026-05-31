@@ -40,7 +40,9 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
   Future<void> reconnect() async {}
 
   void emit(TunnelConnectionState next) {
-    state = next;
+    state = next.status == ConnectionStatus.connected && next.relaySync == null
+        ? next.copyWith(sessionReady: true)
+        : next;
   }
 }
 
@@ -49,6 +51,7 @@ class _ConnectedConnectionNotifier extends _FakeConnectionNotifier {
   TunnelConnectionState build() => TunnelConnectionState(
         status: ConnectionStatus.connected,
         url: 'wss://example.test/ws?token=abc',
+        sessionReady: true,
       );
 }
 
@@ -68,6 +71,29 @@ class _PreloadedWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
         sessions: const {},
         snapshots: const {},
         selectedWorkspaceKey: 'workspace-1',
+      );
+
+  @override
+  Future<void> initialize() async {}
+}
+
+class _SelectedSessionWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
+  @override
+  WorkspaceCacheState build() => WorkspaceCacheState(
+        initialized: true,
+        workspaces: {
+          'workspace-1': WorkspaceRecord(
+            key: 'workspace-1',
+            url: 'wss://example.test/ws?token=abc',
+            displayName: 'example.test',
+            lastSessionId: 'sess-1',
+            lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          ),
+        },
+        sessions: const {},
+        snapshots: const {},
+        selectedWorkspaceKey: 'workspace-1',
+        selectedSessionId: 'sess-1',
       );
 
   @override
@@ -267,6 +293,8 @@ void main() {
       ProviderScope(
         overrides: [
           connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_SelectedSessionWorkspaceCacheNotifier.new),
         ],
         child: const GGCodeApp(),
       ),

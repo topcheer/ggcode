@@ -20,6 +20,7 @@ const (
 	defaultPendingRetryAfter     = 10 * time.Second
 	defaultRecoveryRetryAfter    = 15 * time.Second
 	defaultRecoveryRoomRetention = 5 * time.Minute
+	activeSessionModeReplace     = "replace_history"
 )
 
 // ─── Wire protocol ───
@@ -60,6 +61,7 @@ type room struct {
 	generation      uint64
 	protocolVersion int
 	upgradeReason   string
+	serverReady     bool
 	history         []roomEvent
 	bootstrap       map[string]roomEvent
 	server          *peer
@@ -94,6 +96,34 @@ func (r *room) appendEvent(ev roomEvent) {
 	}
 	r.history = append(r.history, ev)
 	r.lastEventAt = time.Now()
+}
+
+func (r *room) clearHistoryLocked() {
+	r.history = nil
+	r.bootstrap = make(map[string]roomEvent)
+	r.lastEventAt = time.Time{}
+}
+
+func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
+	if r.sessionID != "" || len(r.history) != 0 {
+		return false, 0
+	}
+	if state.sessionID == "" && len(state.history) == 0 {
+		return false, 0
+	}
+	r.sessionID = state.sessionID
+	r.history = append([]roomEvent(nil), state.history...)
+	r.bootstrap = make(map[string]roomEvent)
+	for _, ev := range r.history {
+		r.rememberBootstrap(ev)
+	}
+	if len(r.history) > 0 {
+		r.lastEventAt = time.Now()
+	}
+	if r.generation == 0 && r.sessionID != "" {
+		r.generation = 1
+	}
+	return true, len(r.history)
 }
 
 func (r *room) rememberBootstrap(ev roomEvent) {
@@ -278,6 +308,8 @@ func (p *peer) readLoop(h *hub) {
 			p.relayToOthers(msg)
 		case "ping":
 			p.send(relayMessage{Type: "pong"})
+		case "server_ready":
+			p.onServerReady()
 		}
 	}
 }
@@ -286,6 +318,7 @@ func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 	p.room.mu.Lock()
 	if p.role == "server" {
 		p.room.server = nil
+		p.room.serverReady = false
 		token := p.room.token
 		sessionID := p.room.sessionID
 		p.room.mu.Unlock()
@@ -330,7 +363,7 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	generation, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID)
+	generation, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, false)
 	if msg.SessionID == "" {
 		p.room.mu.Lock()
 		msg.SessionID = p.room.sessionID
@@ -413,7 +446,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
 
-	generation, changed, hydrated, loaded := p.bindRoomSession(sessionID)
+	generation, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
 	msg.Generation = generation
 
@@ -441,13 +474,29 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	}
 }
 
+func (p *peer) onServerReady() {
+	if p.role != "server" || p.room == nil {
+		return
+	}
+	p.room.mu.Lock()
+	if p.room.server != p {
+		p.room.mu.Unlock()
+		return
+	}
+	p.room.serverReady = true
+	sessionID := p.room.sessionID
+	p.room.mu.Unlock()
+	p.hub.trace("server_ready", p.room.token, relayMessage{Type: "server_ready", SessionID: sessionID})
+}
+
 func (p *peer) onResume(msg relayMessage, h *hub) {
 	if msg.ClientID == "" {
 		p.send(relayMessage{Type: "error", Reason: "missing client_id"})
 		return
 	}
 
-	// Relay is the cursor authority — load from DB if not in memory.
+	// Relay persists the last ACKed cursor, but resume_from lets the client
+	// request an earlier durable cursor for targeted replay recovery.
 	loadedCursor := ""
 	if p.cursor == "" && h.store != nil {
 		cursor, err := h.store.loadClientCursor(hashToken(p.room.token), msg.ClientID)
@@ -461,7 +510,9 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 	p.room.mu.Lock()
 	p.clientID = msg.ClientID
 	p.room.clientsByID[msg.ClientID] = p
-	if p.cursor == "" {
+	if msg.Type == "resume_from" {
+		p.cursor = msg.LastEventID
+	} else if p.cursor == "" {
 		p.cursor = loadedCursor
 	}
 	generation := p.room.ensureGenerationLocked()
@@ -558,7 +609,7 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 	return true
 }
 
-func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed bool, hydrated bool, loadedCount int) {
+func (p *peer) bindRoomSession(sessionID string, replaceHistory bool) (generation uint64, changed bool, hydrated bool, loadedCount int) {
 	if sessionID == "" {
 		p.room.mu.Lock()
 		defer p.room.mu.Unlock()
@@ -578,8 +629,8 @@ func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed boo
 
 	changed = p.room.sessionID != sessionID
 	p.room.sessionID = sessionID
-	if changed {
-		p.room.history = nil
+	if changed || replaceHistory {
+		p.room.clearHistoryLocked()
 		if p.room.generation == 0 {
 			p.room.generation = 1
 		} else {
@@ -588,6 +639,20 @@ func (p *peer) bindRoomSession(sessionID string) (generation uint64, changed boo
 	}
 	generation = p.room.ensureGenerationLocked()
 	return generation, changed, hydrated, loadedCount
+}
+
+func (h *hub) hydrateRoomFromStore(r *room) (bool, int) {
+	if h.store == nil || r == nil {
+		return false, 0
+	}
+	state, err := h.store.loadRoom(r.token)
+	if err != nil {
+		log.Printf("[relay] load room error: room=%s err=%v", shortToken(r.token), err)
+		return false, 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hydrateLocked(state)
 }
 
 func (p *peer) onAck(msg relayMessage, h *hub) {
@@ -988,21 +1053,22 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		room.mu.RLock()
 		serverMissing := room.server == nil
+		serverReady := room.serverReady
 		retained := room.offlineTimer != nil
 		sessionID := room.sessionID
 		upgradeReason := room.upgradeReason
 		state := roomRecoveryStateLocked(room)
 		room.mu.RUnlock()
-		if serverMissing {
+		if (serverMissing || !serverReady) && handshake.postConnectErr == "" {
 			if upgradeReason != "" {
 				_ = conn.WriteJSON(relayMessage{
 					Type:   "error",
 					Reason: upgradeReason,
 				})
 				log.Printf("[relay] client rejected: room=%s requires upgrade", shortToken(token))
-			} else if retained {
+			} else if retained || !serverMissing {
 				_ = conn.WriteJSON(relayServerOfflineMessage(sessionID, state, retryAfterForState(state)))
-				log.Printf("[relay] client waiting: room=%s state=%s", shortToken(token), state)
+				log.Printf("[relay] client waiting: room=%s state=%s server_ready=%t", shortToken(token), state, serverReady)
 			} else {
 				_ = conn.WriteJSON(relayMessage{
 					Type:   "error",
@@ -1015,6 +1081,9 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		room = h.getOrCreateRoom(token)
+		if hydrated, loaded := h.hydrateRoomFromStore(room); hydrated {
+			log.Printf("[relay] restored room=%s session=%s events=%d before server attach", shortToken(token), room.sessionID, loaded)
+		}
 	}
 	p := newPeer(h, room, role, conn)
 	p.clientID = clientID
@@ -1043,6 +1112,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	initialConnected := relayMessage{
 		Type:        "connected",
 		SessionID:   sessionID,
+		Count:       buffered,
 		LastEventID: tail,
 		Data:        mustJSON(connectedShareMetadata(handshake)),
 	}
@@ -1092,11 +1162,13 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			// Kick old server.
 			old := room.server
 			room.server = nil
+			room.serverReady = false
 			room.mu.Unlock()
 			old.send(relayMessage{Type: "sharing_stopped"})
 			room.mu.Lock()
 		}
 		room.server = p
+		room.serverReady = false
 		stopOfflineTimerLocked(room)
 	} else {
 		room.clients[p] = struct{}{}

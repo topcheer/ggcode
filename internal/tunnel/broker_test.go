@@ -1120,6 +1120,215 @@ func TestBrokerHandleRelayConnectedRetainedStateAdvancesEventCursor(t *testing.T
 	}
 }
 
+func TestBrokerHandleRelayConnectedReplaysOnlyMissingSuffixForRecoveredRelayHistory(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      mustMarshalJSON(SessionInfoData{Workspace: "/tmp/project", Version: "dev"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Chunk: "partial"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000003",
+				Type:      EventTextDone,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Done: true}),
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "sess-local",
+		HistoryCount: 2,
+		LastEventID:  "ev-000000002",
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type       string `json:"type"`
+			SessionID  string `json:"session_id"`
+			ResumeMode string `json:"resume_mode"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" || msg.ResumeMode != "" {
+			t.Fatalf("unexpected active_session payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected active_session to be sent to relay")
+	}
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected post-recovery control payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to be sent after suffix replay")
+	}
+
+	msgs := d.drain()
+	if len(msgs) != 1 {
+		t.Fatalf("expected only missing suffix replayed, got %+v", msgs)
+	}
+	if msgs[0].EventID != "ev-000000003" || msgs[0].Type != EventTextDone {
+		t.Fatalf("unexpected suffix replay: %+v", msgs[0])
+	}
+}
+
+func TestBrokerHandleRelayConnectedResetsSameSessionWhenRecoveredHistoryDiverges(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000001",
+				Type:      EventSessionInfo,
+				Data:      mustMarshalJSON(SessionInfoData{Workspace: "/tmp/project", Version: "dev"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000002",
+				Type:      EventText,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Chunk: "partial"}),
+			},
+			{
+				SessionID: "sess-local",
+				EventID:   "ev-000000003",
+				Type:      EventTextDone,
+				StreamID:  "msg-1",
+				Data:      mustMarshalJSON(TextData{ID: "msg-1", Done: true}),
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "sess-local",
+		HistoryCount: 2,
+		LastEventID:  "ev-remote-bad",
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type       string `json:"type"`
+			SessionID  string `json:"session_id"`
+			ResumeMode string `json:"resume_mode"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-local" || msg.ResumeMode != ActiveSessionModeReplaceHistory {
+			t.Fatalf("unexpected recovery reset payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected replace_history active_session to be sent to relay")
+	}
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected post-reset control payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to be sent after full replay")
+	}
+
+	msgs := d.drain()
+	if len(msgs) != 3 {
+		t.Fatalf("expected full replay after divergence, got %+v", msgs)
+	}
+	if msgs[0].EventID != "ev-000000001" || msgs[2].EventID != "ev-000000003" {
+		t.Fatalf("unexpected full replay order: %+v", msgs)
+	}
+}
+
+func TestBrokerHandleRelayConnectedMarksTrustedRecoveredRelayReady(t *testing.T) {
+	b, _ := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+	b.sessionID = "sess-local"
+	b.SetReplayProvider(func() []GatewayMessage {
+		return []GatewayMessage{
+			{SessionID: "sess-local", EventID: "ev-000000001", Type: EventSessionInfo},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "sess-local",
+		HistoryCount: 1,
+		LastEventID:  "ev-000000001",
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventServerReady {
+			t.Fatalf("unexpected trusted recovery payload: %+v", msg)
+		}
+	default:
+		t.Fatal("expected server_ready to be sent for trusted recovery")
+	}
+}
+
 func TestBrokerHandleFirstClientConnectedPublishesAuthoritativeSnapshotWhenStateRetained(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
