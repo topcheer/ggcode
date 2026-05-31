@@ -28,6 +28,9 @@ jobs:
   verify:
     name: Verify mobile
     runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.buildnum.outputs.build_number }}
+      build_name: ${{ steps.buildnum.outputs.build_name }}
     defaults:
       run:
         working-directory: mobile/flutter
@@ -49,6 +52,33 @@ jobs:
 
       - name: Test
         run: flutter test
+
+      - name: Compute build number
+        id: buildnum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: .
+        run: |
+          # Resolve version name from tag or input
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == v* ]]; then
+              VERSION="${REF#v}"
+            fi
+          fi
+
+          # Auto-increment build sequence via GitHub variable
+          TODAY=$(date +%Y%m%d)
+          SEQ=$(gh variable list -R "${{ github.repository }}" --json name,value \
+            | jq -r '.[] | select(.name=="MOBILE_BUILD_SEQ") | .value // "0"')
+          SEQ=$((SEQ + 1))
+          gh variable set MOBILE_BUILD_SEQ --body "$SEQ" -R "${{ github.repository }}"
+
+          BUILD_NUMBER="${TODAY}$(printf '%02d' $SEQ)"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "build_name=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}  Build: ${BUILD_NUMBER}"
 
   # ── Android ─────────────────────────────────────────────────
   build-android:
@@ -89,21 +119,11 @@ jobs:
           storeFile=upload.jks
           EOF
 
-      - name: Show version
-        run: |
-          VERSION="${{ inputs.version }}"
-          if [ -z "$VERSION" ]; then
-            REF="${{ github.ref_name }}"
-            if [[ "$REF" == v* ]]; then
-              VERSION="${REF#v}"
-            fi
-          fi
-          echo "Version: ${VERSION}"
-          grep '^version:' pubspec.yaml
-          # Version numbers are synced by pre-push hook; no CI bump
-
       - name: Build AAB
-        run: flutter build appbundle --release
+        run: >-
+          flutter build appbundle --release
+          --build-number=${{ needs.verify.outputs.build_number }}
+          --build-name=${{ needs.verify.outputs.build_name }}
 
       - name: Deploy to Google Play
         id: deploy_android
@@ -179,19 +199,6 @@ jobs:
           echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
           echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
 
-      - name: Show version
-        run: |
-          VERSION="${{ inputs.version }}"
-          if [ -z "$VERSION" ]; then
-            REF="${{ github.ref_name }}"
-            if [[ "$REF" == v* ]]; then
-              VERSION="${REF#v}"
-            fi
-          fi
-          echo "Version: ${VERSION}"
-          grep '^version:' pubspec.yaml
-          # Version numbers are synced by pre-push hook; no CI bump
-
       - name: Install iOS dependencies
         run: |
           cd ios
@@ -231,7 +238,9 @@ jobs:
           </plist>
           PLIST
 
-          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist \
+            --build-number=${{ needs.verify.outputs.build_number }} \
+            --build-name=${{ needs.verify.outputs.build_name }}
 
       - name: Upload to TestFlight & promote
         run: |
