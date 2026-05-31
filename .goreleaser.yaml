@@ -86,26 +86,8 @@ brews:
       email: bot@ggcode.dev
     directory: Formula
 
-homebrew_casks:
-  - name: ggcode
-    homepage: https://github.com/topcheer/ggcode
-    description: AI coding agent for the terminal with TUI, MCP, and IM integrations.
-    binaries:
-      - ggcode
-    repository:
-      owner: topcheer
-      name: homebrew-ggcode
-      branch: main
-      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    commit_author:
-      name: ggcode-bot
-      email: bot@ggcode.dev
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/ggcode"]
-          end
+# Desktop Cask is managed by .github/workflows/release.yml (publish-homebrew-desktop job)
+# because the desktop DMG is built outside GoReleaser.
 
 sboms:
   - artifacts: archive
