@@ -492,8 +492,14 @@ func (m *Model) ensureIMRuntimeState() *imRuntimeState {
 
 func (m *Model) syncIMRuntimeCache() {
 	state := m.ensureIMRuntimeState()
-	state.mu.RLock()
-	defer state.mu.RUnlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.manager == nil && state.emitter == nil && state.instanceDetect == nil &&
+		(m.imManager != nil || m.imEmitter != nil || m.instanceDetect != nil) {
+		state.manager = m.imManager
+		state.emitter = m.imEmitter
+		state.instanceDetect = m.instanceDetect
+	}
 	m.imManager = state.manager
 	m.imEmitter = state.emitter
 	m.instanceDetect = state.instanceDetect
@@ -533,6 +539,9 @@ func (m *Model) syncA2AEventCache() {
 	state := m.ensureA2AEventState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if len(state.events) == 0 && len(m.a2aEventBuf) > 0 {
+		state.events = append([]a2a.TaskEventMessage(nil), m.a2aEventBuf...)
+	}
 	m.a2aEventBuf = append(m.a2aEventBuf[:0], state.events...)
 }
 

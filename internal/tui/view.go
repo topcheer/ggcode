@@ -22,6 +22,7 @@ var (
 )
 
 func (m Model) View() tea.View {
+	m.syncAsyncStateCaches()
 	if m.quitting {
 		return tea.NewView("")
 	}
