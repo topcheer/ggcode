@@ -181,6 +181,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // This handles the case where an older relay doesn't send relay_ack.
     // Only mark as truly failed if the connection itself is broken.
     Future.delayed(const Duration(seconds: 5), () {
+      if (!ref.mounted) return;
       final idx = state.indexWhere((m) => m.id == messageId);
       if (idx < 0) return;
       final current = state[idx];
