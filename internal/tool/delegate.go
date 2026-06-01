@@ -13,6 +13,7 @@ import (
 type ACPAgentRegistry interface {
 	Available() []string
 	AgentInfo(name string) (title, description string, ok bool)
+	SetWorkingDir(dir string)
 	Get(ctx context.Context, name string) (ACPAgentClient, error)
 }
 
@@ -39,7 +40,9 @@ type ACPToolCallSummary struct {
 // DelegateTool delegates a task to an external ACP agent.
 // The tool is only registered when at least one ACP agent is discovered.
 type DelegateTool struct {
-	Manager ACPAgentRegistry
+	Manager      ACPAgentRegistry
+	WorkingDir   string
+	WorkingDirFn func() string
 }
 
 func (t DelegateTool) Name() string { return "delegate" }
@@ -111,6 +114,16 @@ func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 	if params.Prompt == "" {
 		return Result{Content: "delegate: 'prompt' parameter is required", IsError: true}, nil
+	}
+
+	workingDir := t.WorkingDir
+	if t.WorkingDirFn != nil {
+		if dir := t.WorkingDirFn(); dir != "" {
+			workingDir = dir
+		}
+	}
+	if workingDir != "" {
+		t.Manager.SetWorkingDir(workingDir)
 	}
 
 	client, err := t.Manager.Get(ctx, params.Agent)

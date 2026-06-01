@@ -20,6 +20,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/acp"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -237,6 +238,23 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 		},
 	})
+	acpClientMgr := acp.NewClientManager(workingDir, policy, mergedMCPServers)
+	if len(acpClientMgr.Available()) > 0 {
+		acpClientMgr.SetApprovalHandler(func(_ context.Context, _ string, _ string) permission.Decision {
+			return permission.Allow
+		})
+		_ = registry.Register(tool.DelegateTool{
+			Manager:    acpClientMgr,
+			WorkingDir: workingDir,
+			WorkingDirFn: func() string {
+				if ag != nil {
+					return ag.WorkingDir()
+				}
+				return workingDir
+			},
+		})
+		defer acpClientMgr.CloseAll()
+	}
 
 	// System prompt
 	gitStatus := detectGitStatus(workingDir)

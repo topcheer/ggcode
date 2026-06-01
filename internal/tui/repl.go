@@ -345,6 +345,26 @@ func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 // SetACPClientManager wires the ACP client manager for clean shutdown.
 func (r *REPL) SetACPClientManager(mgr *acp.ClientManager) {
 	r.model.acpClientMgr = mgr
+	if mgr == nil {
+		return
+	}
+	mgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
+		if r.program == nil {
+			return permission.Deny
+		}
+		resp := make(chan permission.Decision, 1)
+		r.program.Send(ApprovalMsg{
+			ToolName: toolName,
+			Input:    input,
+			Response: resp,
+		})
+		select {
+		case d := <-resp:
+			return d
+		case <-ctx.Done():
+			return permission.Deny
+		}
+	})
 }
 
 // SetSwarmManager wires the swarm manager and registers swarm tools.
@@ -784,6 +804,9 @@ func (r *REPL) Run() error {
 	}
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
+	}
+	if r.model.acpClientMgr != nil {
+		r.model.acpClientMgr.CloseAll()
 	}
 	if r.model.instanceDetect != nil {
 		r.model.instanceDetect.Unregister()

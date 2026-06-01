@@ -495,9 +495,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	trace.Mark("register skill tool")
 
 	// Discover and register ACP agent clients (delegate tool)
-	acpClientMgr := acp.NewClientManager(workingDir, nil)
+	acpClientMgr := acp.NewClientManager(workingDir, policy, mergedMCPServers)
 	if len(acpClientMgr.Available()) > 0 {
-		_ = registry.Register(tool.DelegateTool{Manager: acpClientMgr})
+		_ = registry.Register(tool.DelegateTool{
+			Manager:    acpClientMgr,
+			WorkingDir: workingDir,
+			WorkingDirFn: func() string {
+				if ag != nil {
+					return ag.WorkingDir()
+				}
+				return workingDir
+			},
+		})
 		debug.Log("startup", "discovered ACP agents: %v", acpClientMgr.Available())
 	}
 	trace.Mark("register acp client delegate tool")

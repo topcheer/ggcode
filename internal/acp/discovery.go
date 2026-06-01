@@ -1,8 +1,11 @@
 package acp
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -67,11 +70,26 @@ func Discover() []DiscoveredAgent {
 
 // findBinary searches for the first match among candidate binary names in $PATH.
 func findBinary(names []string) (string, error) {
+	cwd, _ := os.Getwd()
 	for _, name := range names {
 		path, err := exec.LookPath(name)
-		if err == nil {
-			return path, nil
+		if err != nil {
+			continue
 		}
+		if !filepath.IsAbs(path) {
+			debug.Log("acp-client", "skipping %q at non-absolute path %q", name, path)
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != "" {
+			path = resolved
+		}
+		if cwd != "" {
+			if rel, err := filepath.Rel(cwd, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				debug.Log("acp-client", "skipping %q at workspace-local path %q", name, path)
+				continue
+			}
+		}
+		return path, nil
 	}
 	return "", exec.ErrNotFound
 }

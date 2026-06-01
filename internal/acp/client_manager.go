@@ -3,7 +3,9 @@ package acp
 import (
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 )
 
 // ClientManager manages the lifecycle of all ACP agent clients.
@@ -12,30 +14,58 @@ type ClientManager struct {
 	discoveries  map[string]DiscoveredAgent
 	mu           sync.RWMutex
 	workingDir   string
+	policy       permission.PermissionPolicy
+	mcpServers   []MCPServer
 	onPermission PermissionHandler
+	onApproval   ApprovalHandler
 }
 
 // NewClientManager discovers and prepares (but does not start) ACP clients.
 // Agent processes are lazily started on first use via Get().
-func NewClientManager(workingDir string, onPermission PermissionHandler) *ClientManager {
+func NewClientManager(workingDir string, policy permission.PermissionPolicy, mcpConfigs []config.MCPServerConfig) *ClientManager {
 	mgr := &ClientManager{
-		clients:      make(map[string]*Client),
-		discoveries:  make(map[string]DiscoveredAgent),
-		workingDir:   workingDir,
-		onPermission: onPermission,
+		clients:     make(map[string]*Client),
+		discoveries: make(map[string]DiscoveredAgent),
+		workingDir:  workingDir,
+		policy:      policy,
+		mcpServers:  mcpServersFromConfig(mcpConfigs),
 	}
 
 	agents := Discover()
 	for _, agent := range agents {
 		mgr.discoveries[agent.Def.Name] = agent
-		mgr.clients[agent.Def.Name] = NewClient(agent, workingDir)
-		if onPermission != nil {
-			mgr.clients[agent.Def.Name].SetPermissionHandler(onPermission)
-		}
+		mgr.clients[agent.Def.Name] = NewClient(agent, workingDir, policy, mgr.mcpServers)
 		debug.Log("acp-client", "registered agent %q (%s)", agent.Def.Name, agent.Path)
 	}
 
 	return mgr
+}
+
+func (m *ClientManager) SetWorkingDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workingDir = dir
+	for _, client := range m.clients {
+		client.SetWorkingDir(dir)
+	}
+}
+
+func (m *ClientManager) SetPermissionHandler(h PermissionHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onPermission = h
+	for _, client := range m.clients {
+		client.SetPermissionHandler(h)
+	}
+}
+
+func (m *ClientManager) SetApprovalHandler(h ApprovalHandler) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onApproval = h
+	for _, client := range m.clients {
+		client.SetApprovalHandler(h)
+	}
 }
 
 // Available returns the list of available agent names.
