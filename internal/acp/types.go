@@ -173,7 +173,16 @@ type AuthenticateResponse struct {
 type NewSessionRequest struct {
 	Meta       json.RawMessage `json:"_meta,omitempty"`
 	CWD        string          `json:"cwd"`
-	MCPServers []MCPServer     `json:"mcpServers,omitempty"`
+	MCPServers []MCPServer     `json:"mcpServers"`
+}
+
+func (r NewSessionRequest) MarshalJSON() ([]byte, error) {
+	type alias NewSessionRequest
+	aux := alias(r)
+	if aux.MCPServers == nil {
+		aux.MCPServers = []MCPServer{}
+	}
+	return json.Marshal(aux)
 }
 
 // NewSessionResponse returns session info including available modes and config.
@@ -341,6 +350,14 @@ type PromptRequest struct {
 type PromptResponse struct {
 	Meta       json.RawMessage `json:"_meta,omitempty"`
 	StopReason StopReason      `json:"stopReason"`
+}
+
+// PromptCompleteNotification is emitted after the asynchronous ACP prompt loop
+// actually finishes. The session/prompt RPC still returns immediately.
+type PromptCompleteNotification struct {
+	Meta      json.RawMessage `json:"_meta,omitempty"`
+	SessionID string          `json:"sessionId"`
+	Response  PromptResponse  `json:"response"`
 }
 
 // StopReason describes why the agent stopped processing.

@@ -319,9 +319,21 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 			delete(h.agentLoops, promptParams.SessionID)
 			h.sessionsMu.Unlock()
 		}()
+		stopReason := StopReasonEndTurn
 		if err := loop.ExecutePrompt(ctx, promptParams.Prompt); err != nil {
 			debug.Log("acp", "agent loop error: %v", err)
+			if errors.Is(err, context.Canceled) {
+				stopReason = StopReasonCancelled
+			} else {
+				stopReason = StopReasonError
+			}
 		}
+		_ = h.transport.WriteNotification("session/prompt_complete", PromptCompleteNotification{
+			SessionID: promptParams.SessionID,
+			Response: PromptResponse{
+				StopReason: stopReason,
+			},
+		})
 		// Persist session after prompt execution
 		h.sessionsMu.RLock()
 		sDir := h.workspaceDirs[promptParams.SessionID]

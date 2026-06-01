@@ -39,6 +39,8 @@ func (m *mockACPAgentRegistry) AgentInfo(name string) (string, string, bool) {
 	return e.title, e.description, true
 }
 
+func (m *mockACPAgentRegistry) SetWorkingDir(string) {}
+
 func (m *mockACPAgentRegistry) Get(ctx context.Context, name string) (ACPAgentClient, error) {
 	if _, ok := m.agents[name]; !ok {
 		return nil, errAgentNotFound{name: name}

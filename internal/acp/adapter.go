@@ -20,28 +20,23 @@ func (m *ClientManager) Get(ctx context.Context, name string) (tool.ACPAgentClie
 
 // getInternal is the unexported implementation that returns *Client.
 func (m *ClientManager) getInternal(ctx context.Context, name string) (*Client, error) {
-	m.mu.Lock()
+	m.mu.RLock()
 	client, ok := m.clients[name]
+	workingDir := m.workingDir
+	onPermission := m.onPermission
+	onApproval := m.onApproval
 	if !ok {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return nil, ErrAgentNotFound{name: name}
 	}
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
-	// Start the agent if not running
-	if err := client.Start(ctx); err != nil {
+	client.SetWorkingDir(workingDir)
+	client.SetPermissionHandler(onPermission)
+	client.SetApprovalHandler(onApproval)
+
+	if err := client.EnsureReady(ctx); err != nil {
 		return nil, err
-	}
-
-	// Create a session if not yet created
-	client.mu.Lock()
-	hasSession := client.sessionID != ""
-	client.mu.Unlock()
-
-	if !hasSession {
-		if err := client.NewSession(ctx, m.workingDir); err != nil {
-			return nil, err
-		}
 	}
 
 	return client, nil

@@ -59,9 +59,13 @@ func TestDiscoverKnownAgents(t *testing.T) {
 	}
 
 	// Verify paths are correct
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, a := range agents {
-		if filepath.Dir(a.Path) != dir {
-			t.Errorf("agent %q path = %q, expected in %q", a.Def.Name, a.Path, dir)
+		if filepath.Dir(a.Path) != resolvedDir {
+			t.Errorf("agent %q path = %q, expected in %q", a.Def.Name, a.Path, resolvedDir)
 		}
 	}
 }
@@ -95,6 +99,25 @@ func TestFindBinaryNotFound(t *testing.T) {
 	if !os.IsNotExist(err) && err != exec.ErrNotFound {
 		// exec.LookPath returns exec.ErrNotFound on some platforms
 		t.Logf("got error: %v (acceptable)", err)
+	}
+}
+
+func TestFindBinaryRejectsWorkspaceLocalPath(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	name := "copilot-local-test"
+	path := filepath.Join(wd, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+
+	t.Setenv("PATH", wd)
+	if _, err := findBinary([]string{name}); err == nil {
+		t.Fatal("expected workspace-local binary to be rejected")
 	}
 }
 

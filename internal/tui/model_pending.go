@@ -82,13 +82,7 @@ func (m *Model) cancelActiveRun() {
 	}
 
 	m.spinner.Stop()
-	if m.harnessRunProject != nil {
-		m.statusActivity = m.t("status.cancelling")
-	} else {
-		m.loading = false
-		m.cancelFunc = nil
-		m.statusActivity = ""
-	}
+	m.statusActivity = m.t("status.cancelling")
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
@@ -134,7 +128,7 @@ func (m *Model) shutdownAll() {
 }
 
 func (m *Model) restorePendingInput() {
-	pending := m.pending.consume()
+	pending := m.pending.consumeVisiblePrefix()
 	pending = strings.TrimSpace(pending)
 	draft := strings.TrimSpace(m.input.Value())
 	switch {
@@ -227,6 +221,30 @@ func (q *pendingQueue) snapshot() []string {
 func (q *pendingQueue) consume() string {
 	text, _, _ := q.consumeDetailed()
 	return text
+}
+
+func (q *pendingQueue) consumeVisiblePrefix() string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return ""
+	}
+	first := q.items[0]
+	if first.Hidden || first.TunnelOverride != nil {
+		return ""
+	}
+	parts := []string{first.Text}
+	consumed := 1
+	for consumed < len(q.items) {
+		item := q.items[consumed]
+		if item.Hidden || item.TunnelOverride != nil {
+			break
+		}
+		parts = append(parts, item.Text)
+		consumed++
+	}
+	q.items = q.items[consumed:]
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
 func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {

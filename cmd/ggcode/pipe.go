@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/acp"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -115,6 +116,23 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		WorkingDir:   workingDir,
 		OnUsage:      nil,
 	})
+	acpClientMgr := acp.NewClientManager(workingDir, policy, mergedMCPServers)
+	if len(acpClientMgr.Available()) > 0 {
+		acpClientMgr.SetApprovalHandler(func(_ context.Context, _ string, _ string) permission.Decision {
+			return permission.Deny
+		})
+		_ = registry.Register(tool.DelegateTool{
+			Manager:    acpClientMgr,
+			WorkingDir: workingDir,
+			WorkingDirFn: func() string {
+				if ag != nil {
+					return ag.WorkingDir()
+				}
+				return workingDir
+			},
+		})
+		defer acpClientMgr.CloseAll()
+	}
 
 	buildCurrentSystemPrompt := func() string {
 		gitStatus := detectGitStatus(workingDir)

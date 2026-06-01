@@ -2598,14 +2598,17 @@ func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
 	if !cancelled {
 		t.Error("expected cancel func to be called")
 	}
-	if m2.loading {
-		t.Error("expected normal run interrupt to release loading immediately")
+	if !m2.loading {
+		t.Error("expected interrupted run to stay loading until final done arrives")
 	}
 	if m2.exitConfirmPending {
 		t.Error("expected interrupt not to arm exit confirmation")
 	}
 	if !m2.runCanceled {
 		t.Error("expected current run to be marked as canceled")
+	}
+	if m2.statusActivity != m2.t("status.cancelling") {
+		t.Fatalf("expected cancelling status, got %q", m2.statusActivity)
 	}
 	if !strings.Contains(renderedOutput(&m2), "[interrupted]") {
 		t.Error("expected interrupted marker in output")
@@ -2627,11 +2630,14 @@ func TestEscLoadingCancelsCurrentActivity(t *testing.T) {
 	if !cancelled {
 		t.Error("expected cancel func to be called on esc")
 	}
-	if m2.loading {
-		t.Error("expected normal run esc interrupt to release loading immediately")
+	if !m2.loading {
+		t.Error("expected esc interrupt to stay loading until final done arrives")
 	}
 	if !m2.runCanceled {
 		t.Error("expected current run to be marked as canceled by esc")
+	}
+	if m2.statusActivity != m2.t("status.cancelling") {
+		t.Fatalf("expected cancelling status after esc, got %q", m2.statusActivity)
 	}
 	if !strings.Contains(renderedOutput(&m2), "[interrupted]") {
 		t.Error("expected interrupted marker in output after esc")
@@ -2945,6 +2951,34 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	}
 }
 
+func TestCtrlCCancelDoesNotRestoreHiddenPendingSubmission(t *testing.T) {
+	m := newTestModel()
+	cancelled := false
+	m.loading = true
+	m.cancelFunc = func() { cancelled = true }
+	m.pending.items = []pendingSubmission{
+		{Text: "internal hidden follow-up", Hidden: true},
+		{Text: "visible user follow-up"},
+	}
+	m.input.SetValue("draft")
+
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Error("expected no command when cancelling active run")
+	}
+	if !cancelled {
+		t.Error("expected cancel func to run")
+	}
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("expected hidden pending submission to stay queued, got input %q", got)
+	}
+	if len(m.pending.items) != 2 {
+		t.Fatalf("expected hidden queue to remain intact, got %#v", m.pending.items)
+	}
+}
+
 func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -2956,11 +2990,11 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 
 	m.cancelActiveRun()
 
-	if m.loading {
-		t.Fatal("expected normal run cancel to release loading immediately")
+	if !m.loading {
+		t.Fatal("expected canceled run to remain loading until final done arrives")
 	}
-	if m.statusActivity != "" {
-		t.Fatalf("expected normal run status to clear immediately, got %q", m.statusActivity)
+	if m.statusActivity != m.t("status.cancelling") {
+		t.Fatalf("expected cancelling status, got %q", m.statusActivity)
 	}
 	if m.statusToolName != "" || m.statusToolArg != "" || m.statusToolCount != 0 {
 		t.Fatalf("expected tool status to clear, got %q / %q / %d", m.statusToolName, m.statusToolArg, m.statusToolCount)
@@ -2984,6 +3018,44 @@ func TestCancelActiveHarnessRunKeepsCancellingStatus(t *testing.T) {
 	}
 	if m.statusActivity != m.t("status.cancelling") {
 		t.Fatalf("expected harness cancel status, got %q", m.statusActivity)
+	}
+}
+
+func TestCancelledBusyRunKeepsSubAgentDoneQueued(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	m.loading = true
+	m.activeAgentRunID = 7
+	m.cancelFunc = func() {}
+
+	m.cancelActiveRun()
+
+	next, cmd := m.Update(subAgentDoneMsg{
+		AgentID:   "sa-1",
+		AgentName: "reviewer",
+		Kind:      "subagent",
+	})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected cancelled-but-unwinding run to queue subagent completion instead of starting a new run")
+	}
+	if !m.loading {
+		t.Fatal("expected run to remain in cancelling state until agentDone arrives")
+	}
+	if count := m.pendingSubmissionCount(); count != 1 {
+		t.Fatalf("expected queued subagent follow-up, got %d pending item(s)", count)
+	}
+
+	m, cmd = m.handleAgentDoneMsg(agentDoneMsg{RunID: 7})
+	if cmd != nil {
+		t.Fatal("expected cancelled agentDone not to auto-submit queued follow-up")
+	}
+	if m.loading {
+		t.Fatal("expected agentDone to clear loading after cancellation finishes")
+	}
+	if count := m.pendingSubmissionCount(); count != 1 {
+		t.Fatalf("expected queued hidden follow-up to remain pending after cancel, got %d", count)
 	}
 }
 

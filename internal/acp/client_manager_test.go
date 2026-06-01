@@ -5,12 +5,14 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 func TestClientManagerNew(t *testing.T) {
 	// Create manager with empty PATH (no agents found)
 	t.Setenv("PATH", t.TempDir())
-	mgr := NewClientManager(t.TempDir(), nil)
+	mgr := NewClientManager(t.TempDir(), nil, nil)
 
 	available := mgr.Available()
 	if len(available) != 0 {
@@ -20,7 +22,7 @@ func TestClientManagerNew(t *testing.T) {
 
 func TestClientManagerAgentInfoNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	mgr := NewClientManager(t.TempDir(), nil)
+	mgr := NewClientManager(t.TempDir(), nil, nil)
 
 	_, _, ok := mgr.AgentInfo("nonexistent")
 	if ok {
@@ -30,7 +32,7 @@ func TestClientManagerAgentInfoNotFound(t *testing.T) {
 
 func TestClientManagerGetNonexistent(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	mgr := NewClientManager(t.TempDir(), nil)
+	mgr := NewClientManager(t.TempDir(), nil, nil)
 
 	_, err := mgr.Get(context.Background(), "nonexistent")
 	if err == nil {
@@ -40,7 +42,7 @@ func TestClientManagerGetNonexistent(t *testing.T) {
 
 func TestClientManagerCloseAll(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	mgr := NewClientManager(t.TempDir(), nil)
+	mgr := NewClientManager(t.TempDir(), nil, nil)
 
 	// CloseAll should not panic even with no agents
 	mgr.CloseAll()
@@ -55,7 +57,7 @@ func TestClientManagerDiscoverWithAgents(t *testing.T) {
 	}
 
 	t.Setenv("PATH", dir)
-	mgr := NewClientManager(dir, nil)
+	mgr := NewClientManager(dir, nil, []config.MCPServerConfig{{Name: "repo-tools", Command: "node", Args: []string{"mcp.js"}}})
 
 	available := mgr.Available()
 	if len(available) != 1 {
@@ -74,6 +76,10 @@ func TestClientManagerDiscoverWithAgents(t *testing.T) {
 	}
 	if desc == "" {
 		t.Error("expected non-empty description")
+	}
+	client := mgr.clients["copilot"]
+	if len(client.mcpServers) != 1 || client.mcpServers[0].Name != "repo-tools" {
+		t.Fatalf("expected discovered client to inherit MCP passthrough config, got %+v", client.mcpServers)
 	}
 }
 
@@ -96,7 +102,7 @@ func TestClientGetWithoutStart(t *testing.T) {
 		Path: "/nonexistent/binary",
 	}
 
-	client := NewClient(agent, t.TempDir())
+	client := NewClient(agent, t.TempDir(), nil, nil)
 	if client.Name() != "test" {
 		t.Errorf("expected name = %q, got %q", "test", client.Name())
 	}

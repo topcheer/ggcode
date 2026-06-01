@@ -460,11 +460,11 @@ func TestCancelActiveRun_SetsCanceledFlag(t *testing.T) {
 	if !cancelCalled {
 		t.Error("expected cancelFunc to be called")
 	}
-	if m.loading {
-		t.Error("expected loading to be false after cancel")
+	if !m.loading {
+		t.Error("expected loading to remain true while cancellation unwinds")
 	}
-	if m.statusActivity != "" {
-		t.Errorf("expected empty statusActivity, got %q", m.statusActivity)
+	if m.statusActivity != m.t("status.cancelling") {
+		t.Errorf("expected cancelling statusActivity, got %q", m.statusActivity)
 	}
 }
 
