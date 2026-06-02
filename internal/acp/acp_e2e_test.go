@@ -3,17 +3,36 @@
 package acp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
+)
+
+const (
+	acpTimeoutHelperEnv    = "GGCODE_TEST_ACP_TIMEOUT_HELPER"
+	acpTimeoutStderrMarker = "GGCODE_TEST_ACP_TIMEOUT_STDERR_MARKER"
+	acpStreamHelperEnv     = "GGCODE_TEST_ACP_STREAM_HELPER"
+	acpStreamReadmeEnv     = "GGCODE_TEST_ACP_STREAM_README"
+	acpPromptResponseEnv   = "GGCODE_TEST_ACP_PROMPT_RESPONSE_HELPER"
+	acpIncompleteHelperEnv = "GGCODE_TEST_ACP_INCOMPLETE_HELPER"
+	acpPermissionHelperEnv = "GGCODE_TEST_ACP_PERMISSION_HELPER"
+	acpRealCopilotEnv      = "GGCODE_RUN_REAL_COPILOT_ACP_E2E"
+	acpRealCopilotCWD      = "GGCODE_REAL_COPILOT_ACP_E2E_CWD"
+	acpRealCopilotAsk      = "GGCODE_REAL_COPILOT_ACP_E2E_PROMPT"
 )
 
 // --- pipeTransport wraps a pair of pipes for bidirectional testing ---
@@ -181,7 +200,7 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 	}
 
 	// Client sends response
-	if err := clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "selected", "selectedOption": map[string]interface{}{"optionId": "allow"}}}); err != nil {
+	if err := clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "selected", "optionId": "allow"}}); err != nil {
 		t.Fatalf("client write response error: %v", err)
 	}
 
@@ -368,8 +387,11 @@ func TestE2ESendRequestTimeout(t *testing.T) {
 // --- Mock Provider for agent loop E2E ---
 
 type mockProvider struct {
-	events []provider.StreamEvent
-	delay  time.Duration
+	mu        sync.Mutex
+	events    []provider.StreamEvent
+	sequences [][]provider.StreamEvent
+	nextSeq   int
+	delay     time.Duration
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -377,10 +399,22 @@ func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, to
 	return &provider.ChatResponse{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("hello")}}}, nil
 }
 func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
-	ch := make(chan provider.StreamEvent, len(m.events)+1)
+	events := m.events
+	m.mu.Lock()
+	if len(m.sequences) > 0 {
+		idx := m.nextSeq
+		if idx >= len(m.sequences) {
+			idx = len(m.sequences) - 1
+		}
+		events = m.sequences[idx]
+		m.nextSeq++
+	}
+	m.mu.Unlock()
+
+	ch := make(chan provider.StreamEvent, len(events)+1)
 	go func() {
 		defer close(ch)
-		for _, e := range m.events {
+		for _, e := range events {
 			select {
 			case <-ctx.Done():
 				return
@@ -562,6 +596,775 @@ func TestE2EFullHandlerWithBidirectional(t *testing.T) {
 	// Cleanup
 	clientWrite.Close()
 	agentWrite.Close()
+}
+
+func TestACPTimeoutHelperProcess(t *testing.T) {
+	if os.Getenv(acpTimeoutHelperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	encoder := json.NewEncoder(os.Stdout)
+
+	for scanner.Scan() {
+		var req JSONRPCRequest
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			fmt.Fprintf(os.Stderr, "helper parse error: %v\n", err)
+			continue
+		}
+
+		switch req.Method {
+		case "initialize":
+			if err := encoder.Encode(JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result: InitializeResponse{
+					ProtocolVersion: ProtocolVersion,
+					AgentCapabilities: AgentCapabilities{
+						LoadSession: true,
+					},
+					AgentInfo: ImplementationInfo{
+						Name:    "timeout-helper",
+						Version: "1.0",
+					},
+				},
+			}); err != nil {
+				t.Fatalf("write initialize response: %v", err)
+			}
+		case "session/new":
+			if err := encoder.Encode(JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result: NewSessionResponse{
+					SessionID: "session-timeout-helper",
+				},
+			}); err != nil {
+				t.Fatalf("write session/new response: %v", err)
+			}
+		case "session/prompt":
+			fmt.Fprintln(os.Stderr, acpTimeoutStderrMarker)
+			// Intentionally do not respond so the client-side timeout path fires.
+		case "session/close":
+			if err := encoder.Encode(JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  CloseSessionResponse{},
+			}); err != nil {
+				t.Fatalf("write session/close response: %v", err)
+			}
+		default:
+			if req.ID != nil {
+				if err := encoder.Encode(JSONRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Result:  map[string]any{},
+				}); err != nil {
+					t.Fatalf("write fallback response: %v", err)
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("helper scanner error: %v", err)
+	}
+}
+
+func TestACPStreamHelperProcess(t *testing.T) {
+	if os.Getenv(acpStreamHelperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+
+	readmePath := os.Getenv(acpStreamReadmeEnv)
+	if readmePath == "" {
+		t.Fatal("missing stream helper README path")
+	}
+
+	transport := NewTransport(os.Stdin, os.Stdout)
+	cfg := &config.Config{MaxIterations: 5}
+	registry := tool.NewRegistry()
+	if err := tool.RegisterBuiltinTools(registry, nil, filepath.Dir(readmePath)); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	handler := NewHandler(cfg, registry, transport, &mockProvider{
+		sequences: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventText, Text: "Hello "},
+				{Type: provider.StreamEventText, Text: "from ACP"},
+				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{
+					ID:        "call-1",
+					Name:      "read_file",
+					Arguments: json.RawMessage(fmt.Sprintf(`{"path":%q}`, readmePath)),
+				}},
+				{Type: provider.StreamEventDone},
+			},
+			{
+				{Type: provider.StreamEventText, Text: "\nDone."},
+				{Type: provider.StreamEventDone},
+			},
+		},
+		delay: 10 * time.Millisecond,
+	})
+
+	if err := handler.Run(context.Background()); err != nil {
+		t.Fatalf("stream helper handler error: %v", err)
+	}
+}
+
+func TestACPIncompletePromptHelperProcess(t *testing.T) {
+	if os.Getenv(acpIncompleteHelperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+
+	transport := NewTransport(os.Stdin, os.Stdout)
+	for {
+		req, err := transport.ReadMessage()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			t.Fatalf("incomplete helper read error: %v", err)
+		}
+		if req == nil {
+			continue
+		}
+
+		switch req.Method {
+		case "initialize":
+			if err := transport.WriteResponse(req.ID, InitializeResponse{
+				ProtocolVersion: ProtocolVersion,
+				AgentCapabilities: AgentCapabilities{
+					LoadSession: false,
+				},
+				AgentInfo: ImplementationInfo{
+					Name:    "incomplete-helper",
+					Version: "1.0",
+				},
+			}); err != nil {
+				t.Fatalf("write initialize response: %v", err)
+			}
+		case "session/new":
+			if err := transport.WriteResponse(req.ID, NewSessionResponse{
+				SessionID: "session-incomplete-helper",
+			}); err != nil {
+				t.Fatalf("write session/new response: %v", err)
+			}
+		case "session/prompt":
+			if err := transport.WriteResponse(req.ID, PromptResponse{}); err != nil {
+				t.Fatalf("write session/prompt response: %v", err)
+			}
+			for i := 1; i <= 5; i++ {
+				rawInput := json.RawMessage(fmt.Sprintf(`{"command":"step-%d"}`, i))
+				if err := transport.WriteNotification("session/update", SessionNotification{
+					SessionID: "session-incomplete-helper",
+					Update: SessionUpdate{
+						Type:       UpdateToolCall,
+						ToolCallID: fmt.Sprintf("call-%d", i),
+						Title:      "Run",
+						Kind:       ToolKindExecute,
+						RawInput:   rawInput,
+					},
+				}); err != nil {
+					t.Fatalf("write tool call notification: %v", err)
+				}
+
+				status := ToolCallStatusCompleted
+				rawOutput := json.RawMessage(fmt.Sprintf(`"ok-%d"`, i))
+				if i == 5 {
+					status = ToolCallStatusFailed
+					rawOutput = json.RawMessage(`"exit status 1"`)
+				}
+				if err := transport.WriteNotification("session/update", SessionNotification{
+					SessionID: "session-incomplete-helper",
+					Update: SessionUpdate{
+						Type:       UpdateToolCallUpdate,
+						ToolCallID: fmt.Sprintf("call-%d", i),
+						Title:      "Run",
+						Kind:       ToolKindExecute,
+						Status:     status,
+						RawInput:   rawInput,
+						RawOutput:  rawOutput,
+					},
+				}); err != nil {
+					t.Fatalf("write tool update notification: %v", err)
+				}
+			}
+			// Intentionally omit session/prompt_complete to reproduce a hung agent.
+		case "session/cancel":
+			// Accept cancel notification and keep waiting for session/close.
+		case "session/close":
+			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
+				t.Fatalf("write session/close response: %v", err)
+			}
+			return
+		default:
+			if req.ID != nil {
+				if err := transport.WriteResponse(req.ID, map[string]any{}); err != nil {
+					t.Fatalf("write fallback response: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestACPPermissionStallHelperProcess(t *testing.T) {
+	if os.Getenv(acpPermissionHelperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+
+	transport := NewTransport(os.Stdin, os.Stdout)
+	for {
+		req, resp, err := transport.ReadAnyMessage()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			t.Fatalf("permission helper read error: %v", err)
+		}
+		if resp != nil {
+			transport.DeliverResponse(resp)
+			continue
+		}
+		if req == nil {
+			continue
+		}
+
+		switch req.Method {
+		case "initialize":
+			if err := transport.WriteResponse(req.ID, InitializeResponse{
+				ProtocolVersion: ProtocolVersion,
+				AgentCapabilities: AgentCapabilities{
+					LoadSession: false,
+				},
+				AgentInfo: ImplementationInfo{
+					Name:    "permission-helper",
+					Version: "1.0",
+				},
+			}); err != nil {
+				t.Fatalf("write initialize response: %v", err)
+			}
+		case "session/new":
+			if err := transport.WriteResponse(req.ID, NewSessionResponse{
+				SessionID: "session-permission-helper",
+			}); err != nil {
+				t.Fatalf("write session/new response: %v", err)
+			}
+		case "session/prompt":
+			if err := transport.WriteResponse(req.ID, PromptResponse{}); err != nil {
+				t.Fatalf("write session/prompt response: %v", err)
+			}
+			go func() {
+				_, _ = transport.SendRequest("session/request_permission", RequestPermissionRequest{
+					SessionID: "session-permission-helper",
+					ToolCall: &ToolCallUpdate{
+						ToolCallID: "perm-1",
+						Title:      "Execute tool: write_file",
+						Kind:       ToolKindExecute,
+						RawInput:   json.RawMessage(`{"path":"blocked.txt","content":"secret"}`),
+					},
+					Options: []PermissionOption{
+						{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
+						{OptionID: "reject", Name: "Reject", Kind: PermissionOptionRejectOnce},
+					},
+				}, 30*time.Second)
+			}()
+		case "session/cancel":
+			// Ignore; the parent test expects the client to time out before completing.
+		case "session/close":
+			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
+				t.Fatalf("write session/close response: %v", err)
+			}
+			return
+		default:
+			if req.ID != nil {
+				if err := transport.WriteResponse(req.ID, map[string]any{}); err != nil {
+					t.Fatalf("write fallback response: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestACPPromptResponseHelperProcess(t *testing.T) {
+	if os.Getenv(acpPromptResponseEnv) != "1" {
+		t.Skip("helper process only")
+	}
+
+	transport := NewTransport(os.Stdin, os.Stdout)
+	for {
+		req, resp, err := transport.ReadAnyMessage()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			t.Fatalf("prompt-response helper read error: %v", err)
+		}
+		if resp != nil {
+			transport.DeliverResponse(resp)
+			continue
+		}
+		if req == nil {
+			continue
+		}
+
+		switch req.Method {
+		case "initialize":
+			if err := transport.WriteResponse(req.ID, InitializeResponse{
+				ProtocolVersion: ProtocolVersion,
+				AgentCapabilities: AgentCapabilities{
+					LoadSession: false,
+				},
+				AgentInfo: ImplementationInfo{
+					Name:    "prompt-response-helper",
+					Version: "1.0",
+				},
+			}); err != nil {
+				t.Fatalf("write initialize response: %v", err)
+			}
+		case "session/new":
+			if err := transport.WriteResponse(req.ID, NewSessionResponse{
+				SessionID: "session-prompt-response-helper",
+			}); err != nil {
+				t.Fatalf("write session/new response: %v", err)
+			}
+		case "session/prompt":
+			for _, chunk := range []string{"Hello ", "from ", "Copilot-style ACP"} {
+				if err := transport.WriteNotification("session/update", SessionNotification{
+					SessionID: "session-prompt-response-helper",
+					Update: SessionUpdate{
+						Type:    UpdateAgentMessageChunk,
+						Content: ContentBlock{Type: "text", Text: chunk},
+					},
+				}); err != nil {
+					t.Fatalf("write text chunk notification: %v", err)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if err := transport.WriteResponse(req.ID, PromptResponse{
+				StopReason: StopReasonEndTurn,
+			}); err != nil {
+				t.Fatalf("write delayed session/prompt response: %v", err)
+			}
+			// Intentionally omit session/prompt_complete to mimic Copilot ACP behavior.
+		case "session/cancel":
+			// Ignore cancel; the parent test controls lifecycle.
+		case "session/close":
+			if err := transport.WriteResponse(req.ID, CloseSessionResponse{}); err != nil {
+				t.Fatalf("write session/close response: %v", err)
+			}
+			return
+		default:
+			if req.ID != nil {
+				if err := transport.WriteResponse(req.ID, map[string]any{}); err != nil {
+					t.Fatalf("write fallback response: %v", err)
+				}
+			}
+		}
+	}
+}
+
+func TestE2EClientPromptTimeoutCapturesStderrWithoutTerminalLeak(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	t.Setenv(acpTimeoutHelperEnv, "1")
+
+	stderrCapturePath := filepath.Join(t.TempDir(), "stderr-capture.txt")
+	stderrCapture, err := os.Create(stderrCapturePath)
+	if err != nil {
+		t.Fatalf("create stderr capture file: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = stderrCapture
+	defer func() {
+		os.Stderr = oldStderr
+		stderrCapture.Close()
+	}()
+
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "timeout-helper",
+				ACPCommand: []string{"-test.run=TestACPTimeoutHelperProcess", "--"},
+			},
+			Path: exe,
+		},
+		t.TempDir(),
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	defer client.Close()
+	if err := client.NewSession(ctx, t.TempDir()); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	_, err = client.sendRequest("session/prompt", PromptRequest{
+		SessionID: client.sessionID,
+		Prompt:    []ContentBlock{{Type: "text", Text: "please hang"}},
+	}, 200*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout waiting for client response to session/prompt") {
+		t.Fatalf("expected prompt timeout error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), acpTimeoutStderrMarker) {
+		t.Fatalf("expected recent stderr in error, got %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if err := stderrCapture.Sync(); err != nil {
+		t.Fatalf("sync stderr capture: %v", err)
+	}
+	captured, err := os.ReadFile(stderrCapturePath)
+	if err != nil {
+		t.Fatalf("read stderr capture: %v", err)
+	}
+	if strings.Contains(string(captured), acpTimeoutStderrMarker) {
+		t.Fatalf("expected child stderr to stay out of parent stderr, got %q", string(captured))
+	}
+}
+
+func TestE2EClientPromptStreamReceivesHelperSessionUpdates(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	t.Setenv(acpStreamHelperEnv, "1")
+	workspaceDir := t.TempDir()
+	readmePath := filepath.Join(workspaceDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("README contents\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	t.Setenv(acpStreamReadmeEnv, readmePath)
+
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "stream-helper",
+				ACPCommand: []string{"-test.run=TestACPStreamHelperProcess", "--"},
+			},
+			Path: exe,
+		},
+		workspaceDir,
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	defer client.Close()
+	if err := client.NewSession(ctx, workspaceDir); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	var events []tool.ACPPromptEvent
+	result, err := client.PromptStream(ctx, "read README.md", func(event tool.ACPPromptEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatalf("PromptStream error: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("expected prompt result")
+	}
+	if result.Text != "Hello from ACP\nDone." {
+		t.Fatalf("expected concatenated streamed text, got %q", result.Text)
+	}
+	if result.StopReason != string(StopReasonEndTurn) {
+		t.Fatalf("expected stop reason %q, got %q", StopReasonEndTurn, result.StopReason)
+	}
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call summary, got %d", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Name != "call-1" {
+		t.Fatalf("expected tool summary name call-1, got %+v", result.ToolCalls[0])
+	}
+	if result.ToolCalls[0].Status != string(ToolCallStatusCompleted) {
+		t.Fatalf("expected completed tool status, got %+v", result.ToolCalls[0])
+	}
+	if !strings.Contains(result.ToolCalls[0].Title, "README.md") {
+		t.Fatalf("expected tool summary title to mention README.md, got %+v", result.ToolCalls[0])
+	}
+
+	if len(events) != 5 {
+		t.Fatalf("expected 5 streamed events, got %d: %+v", len(events), events)
+	}
+	if events[0].Type != tool.ACPPromptEventText || events[0].Text != "Hello " {
+		t.Fatalf("unexpected first event: %+v", events[0])
+	}
+	if events[1].Type != tool.ACPPromptEventText || events[1].Text != "from ACP" {
+		t.Fatalf("unexpected second event: %+v", events[1])
+	}
+	if events[2].Type != tool.ACPPromptEventToolCall {
+		t.Fatalf("expected tool call event, got %+v", events[2])
+	}
+	if events[2].ToolID != "call-1" || events[2].ToolName != "read_file" || events[2].ToolArgs != fmt.Sprintf(`{"path":%q}`, readmePath) {
+		t.Fatalf("unexpected tool call event: %+v", events[2])
+	}
+	if events[3].Type != tool.ACPPromptEventToolResult {
+		t.Fatalf("expected tool result event, got %+v", events[3])
+	}
+	if events[3].ToolID != "call-1" || events[3].IsError || strings.TrimSpace(events[3].Result) == "" {
+		t.Fatalf("unexpected tool result event: %+v", events[3])
+	}
+	if events[4].Type != tool.ACPPromptEventText || events[4].Text != "\nDone." {
+		t.Fatalf("unexpected final text event: %+v", events[4])
+	}
+}
+
+func TestE2EClientPromptStreamTimesOutWhenAgentNeverCompletes(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	t.Setenv(acpIncompleteHelperEnv, "1")
+
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "incomplete-helper",
+				ACPCommand: []string{"-test.run=TestACPIncompletePromptHelperProcess", "--"},
+			},
+			Path: exe,
+		},
+		t.TempDir(),
+		nil,
+		nil,
+	)
+	client.promptIdleTime = 200 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	defer client.Close()
+	if err := client.NewSession(ctx, t.TempDir()); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	var events []tool.ACPPromptEvent
+	_, err = client.PromptStream(ctx, "complex hang case", func(event tool.ACPPromptEvent) {
+		events = append(events, event)
+	})
+	if err == nil {
+		t.Fatal("expected prompt completion timeout")
+	}
+	if !strings.Contains(err.Error(), "timeout waiting for agent prompt completion after 200ms") {
+		t.Fatalf("expected prompt completion timeout, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Recent ACP activity:\nsent session/prompt prompt_len=17") {
+		t.Fatalf("expected prompt activity trail in timeout error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "session/update tool_call_update id=call-5 title=Run status=failed result=exit status 1") {
+		t.Fatalf("expected failed final tool update in timeout error, got %v", err)
+	}
+	if len(events) != 10 {
+		t.Fatalf("expected 10 tool events before timeout, got %d: %+v", len(events), events)
+	}
+	last := events[len(events)-1]
+	if last.Type != tool.ACPPromptEventToolResult || !last.IsError || last.ToolID != "call-5" {
+		t.Fatalf("expected failed final tool result before timeout, got %+v", last)
+	}
+}
+
+func TestE2EClientPromptStreamCompletesFromSessionPromptResponseWithoutPromptComplete(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	t.Setenv(acpPromptResponseEnv, "1")
+
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "prompt-response-helper",
+				ACPCommand: []string{"-test.run=TestACPPromptResponseHelperProcess", "--"},
+			},
+			Path: exe,
+		},
+		t.TempDir(),
+		nil,
+		nil,
+	)
+	client.promptIdleTime = 200 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	defer client.Close()
+	if err := client.NewSession(ctx, t.TempDir()); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	var events []tool.ACPPromptEvent
+	result, err := client.PromptStream(ctx, "stream and finish via response", func(event tool.ACPPromptEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatalf("PromptStream error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected prompt result")
+	}
+	if result.Text != "Hello from Copilot-style ACP" {
+		t.Fatalf("unexpected prompt text: %q", result.Text)
+	}
+	if result.StopReason != string(StopReasonEndTurn) {
+		t.Fatalf("expected stop reason %q, got %q", StopReasonEndTurn, result.StopReason)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 streamed text events, got %d: %+v", len(events), events)
+	}
+	for i, expected := range []string{"Hello ", "from ", "Copilot-style ACP"} {
+		if events[i].Type != tool.ACPPromptEventText || events[i].Text != expected {
+			t.Fatalf("unexpected event %d: %+v", i, events[i])
+		}
+	}
+}
+
+func TestE2ERealCopilotPromptStreamCompletes(t *testing.T) {
+	if os.Getenv(acpRealCopilotEnv) != "1" {
+		t.Skip("set GGCODE_RUN_REAL_COPILOT_ACP_E2E=1 to run against local copilot --acp")
+	}
+
+	copilotPath, err := exec.LookPath("copilot")
+	if err != nil {
+		t.Skipf("copilot CLI not available: %v", err)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join(".", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	if cwd := strings.TrimSpace(os.Getenv(acpRealCopilotCWD)); cwd != "" {
+		repoRoot = cwd
+	}
+	prompt := "Run `git --no-pager status --short` in the current directory and answer in one short sentence."
+	if override := strings.TrimSpace(os.Getenv(acpRealCopilotAsk)); override != "" {
+		prompt = override
+	}
+
+	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{}, nil, permission.BypassMode)
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "copilot",
+				ACPCommand: []string{"--acp", "--stdio"},
+			},
+			Path: copilotPath,
+		},
+		repoRoot,
+		policy,
+		nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	t.Cleanup(func() {
+		done := make(chan struct{})
+		go func() {
+			client.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Log("client.Close still blocked after 5s; leaving subprocess cleanup to context/test shutdown")
+		}
+	})
+	if err := client.NewSession(ctx, repoRoot); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	t.Logf("starting real Copilot prompt cwd=%s prompt=%q", repoRoot, prompt)
+	var events []tool.ACPPromptEvent
+	result, err := client.PromptStream(ctx, prompt, func(ev tool.ACPPromptEvent) {
+		events = append(events, ev)
+		t.Logf("event: type=%s tool_id=%s tool_name=%s title=%s text_len=%d result_len=%d error=%v", ev.Type, ev.ToolID, ev.ToolName, ev.ToolTitle, len(ev.Text), len(ev.Result), ev.IsError)
+	})
+	t.Logf("real Copilot prompt returned: err=%v result=%+v", err, result)
+	if err != nil {
+		t.Logf("captured %d events before error", len(events))
+		t.Fatalf("PromptStream error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected prompt result")
+	}
+	if result.StopReason == "" {
+		t.Fatalf("expected non-empty stop reason, got result=%+v", result)
+	}
+	if strings.TrimSpace(result.Text) == "" {
+		t.Fatalf("expected non-empty text result, got %+v", result)
+	}
+}
+
+func TestE2EClientPromptTimeoutShowsPermissionStallActivity(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	t.Setenv(acpPermissionHelperEnv, "1")
+
+	client := NewClient(
+		DiscoveredAgent{
+			Def: AgentDef{
+				Name:       "permission-helper",
+				ACPCommand: []string{"-test.run=TestACPPermissionStallHelperProcess", "--"},
+			},
+			Path: exe,
+		},
+		t.TempDir(),
+		nil,
+		nil,
+	)
+	client.promptIdleTime = 200 * time.Millisecond
+	client.SetPermissionHandler(func(ctx context.Context, req RequestPermissionRequest) (RequestPermissionResponse, error) {
+		<-ctx.Done()
+		return RequestPermissionResponse{}, ctx.Err()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	defer client.Close()
+	if err := client.NewSession(ctx, t.TempDir()); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+
+	_, err = client.PromptStream(ctx, "stall on permission", nil)
+	if err == nil {
+		t.Fatal("expected prompt completion timeout")
+	}
+	if !strings.Contains(err.Error(), "timeout waiting for agent prompt completion after 200ms") {
+		t.Fatalf("expected prompt completion timeout, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "recv session/request_permission title=Execute tool: write_file kind=execute options=2") {
+		t.Fatalf("expected permission request activity in timeout error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "sent session/request_permission") {
+		t.Fatalf("expected stalled permission request without response activity, got %v", err)
+	}
 }
 
 // --- Test helpers ---

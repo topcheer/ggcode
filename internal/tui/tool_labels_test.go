@@ -30,3 +30,23 @@ func TestDescribeToolSwarmTaskCreateUsesSubject(t *testing.T) {
 		t.Fatalf("expected empty detail, got %q", got.Detail)
 	}
 }
+
+func TestDescribeToolUnknownUsesCommandDetail(t *testing.T) {
+	got := describeTool(LangEnglish, "Run", `{"command":"git diff --cached"}`)
+	if got.DisplayName != "Run" {
+		t.Fatalf("expected display name Run, got %q", got.DisplayName)
+	}
+	if got.Detail != "git diff --cached" {
+		t.Fatalf("expected command detail, got %q", got.Detail)
+	}
+}
+
+func TestDescribeToolUnknownUsesPromptDetail(t *testing.T) {
+	got := describeTool(LangEnglish, "Delegate", `{"prompt":"review the current changes"}`)
+	if got.DisplayName != "Delegate" {
+		t.Fatalf("expected display name Delegate, got %q", got.DisplayName)
+	}
+	if got.Detail != "review the current changes" {
+		t.Fatalf("expected prompt detail, got %q", got.Detail)
+	}
+}

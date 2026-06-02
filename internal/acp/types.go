@@ -518,8 +518,8 @@ type ToolCallUpdate struct {
 	Kind       ToolKind           `json:"kind,omitempty"`
 	Status     ToolCallStatus     `json:"status,omitempty"`
 	Content    *ToolCallContent   `json:"content,omitempty"`
-	RawInput   string             `json:"rawInput,omitempty"`
-	RawOutput  string             `json:"rawOutput,omitempty"`
+	RawInput   json.RawMessage    `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage    `json:"rawOutput,omitempty"`
 	Locations  []ToolCallLocation `json:"locations,omitempty"`
 }
 
@@ -629,16 +629,59 @@ type RequestPermissionResponse struct {
 }
 
 // RequestPermissionOutcome is a discriminated union.
-// We use a struct with an "outcome" discriminator field.
+// ACP encodes the selected variant as {"outcome":"selected","optionId":"..."}
+// rather than nesting the selected option in a child object. We keep the
+// internal SelectedOption helper but flatten it on the wire, while still
+// accepting the legacy nested form during unmarshal for compatibility.
 type RequestPermissionOutcome struct {
 	Outcome        string                     `json:"outcome"` // "cancelled", "selected", "rejected"
-	SelectedOption *SelectedPermissionOutcome `json:"selectedOption,omitempty"`
+	SelectedOption *SelectedPermissionOutcome `json:"-"`
 }
 
 // SelectedPermissionOutcome when user selected an option.
 type SelectedPermissionOutcome struct {
 	Meta     json.RawMessage    `json:"_meta,omitempty"`
 	OptionID PermissionOptionId `json:"optionId"`
+}
+
+func (o RequestPermissionOutcome) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Outcome  string             `json:"outcome"`
+		Meta     json.RawMessage    `json:"_meta,omitempty"`
+		OptionID PermissionOptionId `json:"optionId,omitempty"`
+	}
+	aux := wire{Outcome: o.Outcome}
+	if o.SelectedOption != nil {
+		aux.Meta = o.SelectedOption.Meta
+		aux.OptionID = o.SelectedOption.OptionID
+	}
+	return json.Marshal(aux)
+}
+
+func (o *RequestPermissionOutcome) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		Outcome        string                     `json:"outcome"`
+		Meta           json.RawMessage            `json:"_meta,omitempty"`
+		OptionID       PermissionOptionId         `json:"optionId,omitempty"`
+		SelectedOption *SelectedPermissionOutcome `json:"selectedOption,omitempty"`
+	}
+	var aux wire
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	o.Outcome = aux.Outcome
+	o.SelectedOption = nil
+	if aux.SelectedOption != nil {
+		o.SelectedOption = aux.SelectedOption
+		return nil
+	}
+	if aux.Outcome == "selected" && (aux.OptionID != "" || len(aux.Meta) > 0) {
+		o.SelectedOption = &SelectedPermissionOutcome{
+			Meta:     aux.Meta,
+			OptionID: aux.OptionID,
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ type Client struct {
 	url          string
 	headers      map[string]string
 	cmd          *exec.Cmd
+	procCancel   context.CancelFunc
 	stdin        io.WriteCloser
 	stdout       io.Reader
 	reader       *bufio.Reader // reused stdout reader
@@ -116,33 +117,40 @@ func (c *Client) Start(ctx context.Context) error {
 		return fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
 	}
 
-	c.cmd = exec.CommandContext(ctx, c.command, c.args...)
-	configureMCPCommandProcess(c.cmd)
+	procCtx, cancelProc := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(procCtx, c.command, c.args...)
+	configureMCPCommandProcess(cmd)
 	if len(c.env) > 0 {
-		c.cmd.Env = append(os.Environ(), flattenEnvMap(c.env)...)
+		cmd.Env = append(os.Environ(), flattenEnvMap(c.env)...)
 	}
 
-	stdin, err := c.cmd.StdinPipe()
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		cancelProc()
 		return fmt.Errorf("mcp[%s]: stdin pipe: %w", c.name, err)
 	}
-	stdout, err := c.cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancelProc()
 		return fmt.Errorf("mcp[%s]: stdout pipe: %w", c.name, err)
 	}
-	stderr, err := c.cmd.StderrPipe()
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		cancelProc()
 		return fmt.Errorf("mcp[%s]: stderr pipe: %w", c.name, err)
 	}
+	safego.Go("mcp.captureStderr", func() { c.captureStderr(stderr) })
 
+	if err := cmd.Start(); err != nil {
+		cancelProc()
+		return fmt.Errorf("mcp[%s]: starting server: %w", c.name, err)
+	}
+
+	c.cmd = cmd
+	c.procCancel = cancelProc
 	c.stdin = stdin
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
-	safego.Go("mcp.captureStderr", func() { c.captureStderr(stderr) })
-
-	if err := c.cmd.Start(); err != nil {
-		return fmt.Errorf("mcp[%s]: starting server: %w", c.name, err)
-	}
 
 	return nil
 }
@@ -252,6 +260,7 @@ func (c *Client) Close() error {
 	transport := c.transport
 	c.sessionID = ""
 	c.httpClient = nil
+	c.procCancel = nil
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
 	c.mu.Unlock()
@@ -275,14 +284,22 @@ func (c *Client) Close() error {
 
 func (c *Client) Abort() {
 	c.abortOnce.Do(func() {
-		if c.wsConn != nil {
-			_ = c.wsConn.Close()
+		wsConn := c.wsConn
+		stdin := c.stdin
+		cmd := c.cmd
+		procCancel := c.procCancel
+
+		if wsConn != nil {
+			_ = wsConn.Close()
 		}
-		if c.stdin != nil {
-			_ = c.stdin.Close()
+		if stdin != nil {
+			_ = stdin.Close()
 		}
-		if c.cmd != nil && c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
+		if procCancel != nil {
+			procCancel()
+		}
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
 		}
 	})
 }

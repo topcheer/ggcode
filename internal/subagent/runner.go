@@ -120,7 +120,15 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 
 	// Run the agentic loop, capturing output
 	var output strings.Builder
-	lastToolName := ""
+	type pendingToolMeta struct {
+		Name        string
+		RawArgs     string
+		DisplayName string
+		Detail      string
+	}
+	pendingTools := make(map[string]pendingToolMeta)
+	var unnamedTool pendingToolMeta
+	var hasUnnamedTool bool
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -150,23 +158,40 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		case provider.StreamEventToolCallDone:
 			// Flush accumulated text before recording tool call
 			flushText()
+			rawArgs := string(event.Tool.Arguments)
+			meta := pendingToolMeta{
+				Name:    event.Tool.Name,
+				RawArgs: rawArgs,
+			}
 			// Increment tool call count for this subagent
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
-				sa.setActivity("tool", event.Tool.Name, string(event.Tool.Arguments))
+				sa.setActivity("tool", meta.Name, meta.RawArgs)
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolCall,
-					ToolName: event.Tool.Name,
+					ToolName: meta.Name,
 					ToolID:   event.Tool.ID,
-					ToolArgs: string(event.Tool.Arguments),
+					ToolArgs: meta.RawArgs,
 				})
 			}
-			lastToolName = event.Tool.Name
 			cfg.Manager.Notify(cfg.SubAgentID)
-			cfg.Manager.NotifyToolCall(cfg.SubAgentID, event.Tool.ID, event.Tool.Name, string(event.Tool.Arguments), "")
+			cfg.Manager.NotifyToolCall(cfg.SubAgentID, event.Tool.ID, meta.Name, "", meta.RawArgs, "")
+			if event.Tool.ID != "" {
+				pendingTools[event.Tool.ID] = meta
+			} else {
+				unnamedTool = meta
+				hasUnnamedTool = true
+			}
 		case provider.StreamEventToolResult:
 			flushText()
-			if summary := subagentToolProgressSummary(lastToolName, event.Result); summary != "" {
+			meta, ok := pendingTools[event.Tool.ID]
+			if ok {
+				delete(pendingTools, event.Tool.ID)
+			} else if event.Tool.ID == "" && hasUnnamedTool {
+				meta = unnamedTool
+				hasUnnamedTool = false
+			}
+			if summary := subagentToolProgressSummary(meta.Name, event.Result); summary != "" {
 				cfg.Manager.UpdateProgress(cfg.SubAgentID, summary)
 			} else {
 				cfg.Manager.Notify(cfg.SubAgentID)
@@ -174,13 +199,14 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
-					ToolName: lastToolName,
+					ToolName: meta.Name,
 					ToolID:   event.Tool.ID,
+					ToolArgs: meta.RawArgs,
 					Result:   event.Result,
 					IsError:  event.IsError,
 				})
 			}
-			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, lastToolName, event.Result, event.IsError)
+			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, meta.Name, "", "", event.Result, event.IsError)
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))

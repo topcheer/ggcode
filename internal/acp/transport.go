@@ -28,8 +28,8 @@ type Transport struct {
 // NewTransport creates a new Transport reading from r and writing to w.
 func NewTransport(r io.Reader, w io.Writer) *Transport {
 	s := bufio.NewScanner(r)
-	// Allow large messages (up to 10MB)
-	s.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	// Copilot ACP can emit large single-line NDJSON payloads for tool results.
+	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	return &Transport{
 		Scanner: s,
 		Writer:  w,

@@ -921,7 +921,7 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.pushTunnelCancel()
 	m.pushSubAgentTunnelStreamText("sa-1", "text")
 	m.pushSubAgentTunnelToolCall("sa-1", "t1", "tool", "Tool", "{}", "")
-	m.pushSubAgentTunnelToolResult("sa-1", "t1", "tool", "result", false)
+	m.pushSubAgentTunnelToolResult("sa-1", "t1", "tool", "Tool", "", "result", false)
 	m.pushSubAgentTunnelEvent(&subagent.SubAgent{ID: "x", Status: subagent.StatusRunning})
 	m.pushSubAgentTunnelEvent(&subagent.SubAgent{ID: "x", Status: subagent.StatusCompleted, Result: "done"})
 	m.pushSubAgentTunnelEvent(&subagent.SubAgent{ID: "x", Status: subagent.StatusFailed})

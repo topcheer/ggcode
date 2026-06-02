@@ -387,13 +387,13 @@ type ClientManager struct {
 }
 
 // NewClientManager discovers and prepares (but does not start) ACP clients.
-func NewClientManager(workingDir string, onPermission func(...) (...), mcpConfigs []config.MCPServerConfig) *ClientManager {
+func NewClientManager(workingDir string, onPermission func(...) (...)) *ClientManager {
     mgr := &ClientManager{...}
 
     // Discover agents
     agents := Discover()
     for _, agent := range agents {
-        mgr.clients[agent.Def.Name] = NewClient(agent, workingDir, onPermission, mcpServersFromConfig(mcpConfigs))
+        mgr.clients[agent.Def.Name] = NewClient(agent, workingDir, onPermission, []MCPServer{})
     }
 
     return mgr
@@ -498,7 +498,7 @@ After existing tool registration (line ~462):
 
 ```go
 // Discover and register ACP agent clients
-acpMgr := acp.NewClientManager(workingDir, nil, mergedMCPServers) // nil = auto-approve permissions
+acpMgr := acp.NewClientManager(workingDir, nil) // nil = auto-approve permissions
 if len(acpMgr.Available()) > 0 {
     _ = registry.Register(tool.DelegateTool{Manager: acpMgr})
     debug.Log("startup", "discovered ACP agents: %v", acpMgr.Available())

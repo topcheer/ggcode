@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
@@ -68,6 +69,7 @@ type AgentBridge struct {
 	lastMetricDigestTurn int
 	metricCollector      *metrics.Collector
 	metricCancel         context.CancelFunc
+	acpClientMgr         *acpclient.ClientManager
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -457,20 +459,22 @@ func (b *AgentBridge) registerSubagentCallbacks() {
 	})
 
 	// Forward sub-agent tool calls/results to mobile.
-	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
+	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
 		if broker := b.currentTunnelBroker(); broker != nil {
 			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			summary := detail
-			if summary == "" {
-				summary = toolArgSummary(toolName, args)
+			if displayName == "" {
+				displayName = toolDisplayName(toolName, args)
 			}
-			broker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
+			if detail == "" {
+				detail = toolArgSummary(toolName, args)
+			}
+			broker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
 		}
 	})
-	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
+	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 		if broker := b.currentTunnelBroker(); broker != nil {
 			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
+			broker.PushSubagentToolResult(agentID, toolID, toolName, displayName, detail, result, isError)
 		}
 	})
 }
@@ -481,6 +485,14 @@ func (b *AgentBridge) setupAgent() error {
 	if b.agent != nil {
 		return nil
 	}
+
+	modeStr := b.cfg.DefaultMode
+	if modeStr == "" {
+		modeStr = "auto"
+	}
+	mode := permission.ParsePermissionMode(modeStr)
+	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+	b.permissionMode = mode
 
 	b.registry = tool.NewRegistry()
 
@@ -518,6 +530,27 @@ func (b *AgentBridge) setupAgent() error {
 	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
 	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
 	_ = b.registry.Register(saveMemoryTool)
+
+	if b.acpClientMgr != nil {
+		b.acpClientMgr.CloseAll()
+	}
+	b.acpClientMgr = acpclient.NewClientManager(b.workingDir, policy)
+	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
+		return b.requestToolApproval(ctx, toolName, input)
+	})
+	if len(b.acpClientMgr.Available()) > 0 {
+		_ = b.registry.Register(tool.DelegateTool{
+			Manager:           b.acpClientMgr,
+			SubAgentManagerFn: func() *subagent.Manager { return b.subAgentMgr },
+			WorkingDir:        b.workingDir,
+			WorkingDirFn: func() string {
+				if b.agent != nil {
+					return b.agent.WorkingDir()
+				}
+				return b.workingDir
+			},
+		})
+	}
 
 	// Sub-agent manager.
 	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
@@ -621,7 +654,7 @@ func (b *AgentBridge) setupAgent() error {
 				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 			case "teammate_tool_result":
-				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
 
 			case "teammate_text":
 				// Already handled above in throttle block if skipped
@@ -676,15 +709,7 @@ func (b *AgentBridge) setupAgent() error {
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
 	saveMemoryTool.SetAfterSave(b.refreshSystemPrompt)
 
-	// Permission policy — default to "auto" for desktop.
-	modeStr := b.cfg.DefaultMode
-	if modeStr == "" {
-		modeStr = "auto"
-	}
-	mode := permission.ParsePermissionMode(modeStr)
-	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 	b.agent.SetPermissionPolicy(policy)
-	b.permissionMode = mode
 	b.agent.SetUsageHandler(b.recordSessionUsage)
 
 	// Metric collector — async, non-blocking for agent.
@@ -697,80 +722,7 @@ func (b *AgentBridge) setupAgent() error {
 
 	// Approval handler — popup dialog for tool approval
 	b.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		if b.mainWindow == nil {
-			return permission.Deny
-		}
-		resp := make(chan permission.Decision, 1)
-		requestID := ""
-		b.setPendingApproval(requestID, toolName, resp)
-		// Push to mobile tunnel client
-		if broker := b.currentTunnelBroker(); broker != nil {
-			requestID = b.nextTunnelRequestID()
-			b.setPendingApproval(requestID, toolName, resp)
-			broker.PushApprovalRequest(requestID, toolName, input)
-			broker.PushStatus(tunnel.StatusBusy, "")
-			broker.PushActivity(b.CurrentTunnelActivity())
-		}
-		fyne.Do(func() {
-			var d dialog.Dialog
-			denyBtn := widget.NewButton(t("approval.deny"), func() {
-				b.clearPendingApproval(requestID)
-				b.pushTunnelApprovalResult(requestID, tunnel.DecisionDeny)
-				resp <- permission.Deny
-				d.Hide()
-			})
-			allowBtn := widget.NewButton(t("approval.allow"), func() {
-				b.clearPendingApproval(requestID)
-				b.pushTunnelApprovalResult(requestID, tunnel.DecisionAllow)
-				resp <- permission.Allow
-				d.Hide()
-			})
-			allowBtn.Importance = widget.HighImportance
-			alwaysBtn := widget.NewButton(t("approval.always_allow"), func() {
-				if b.agent != nil {
-					if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
-						p.SetOverride(toolName, permission.Allow)
-					}
-				}
-				b.clearPendingApproval(requestID)
-				b.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
-				resp <- permission.Allow
-				d.Hide()
-			})
-			alwaysBtn.Importance = widget.SuccessImportance
-
-			// Format tool arguments as readable key-value pairs
-			var displayArgs string
-			var raw map[string]interface{}
-			if json.Unmarshal([]byte(input), &raw) == nil {
-				for k, v := range raw {
-					displayArgs += fmt.Sprintf("  %s: %v\n", k, v)
-				}
-				displayArgs = strings.TrimSpace(displayArgs)
-			} else {
-				displayArgs = truncate(input, 800)
-			}
-			content := widget.NewLabel(fmt.Sprintf("Tool: %s\n\n%s", toolName, displayArgs))
-			content.Wrapping = fyne.TextWrapWord
-
-			d = dialog.NewCustomWithoutButtons("Tool Approval",
-				container.NewVBox(
-					content,
-					widget.NewSeparator(),
-					container.NewHBox(layout.NewSpacer(), denyBtn, allowBtn, alwaysBtn),
-				), b.mainWindow)
-			if b.attachApprovalDialog(requestID, d) {
-				d.Show()
-			}
-		})
-		select {
-		case d := <-resp:
-			b.clearPendingApproval(requestID)
-			return d
-		case <-ctx.Done():
-			b.hideDialog(b.clearPendingApproval(requestID))
-			return permission.Deny
-		}
+		return b.requestToolApproval(ctx, toolName, input)
 	})
 
 	// Ask user handler — popup dialog for questions
@@ -795,6 +747,81 @@ func (b *AgentBridge) setupAgent() error {
 func (b *AgentBridge) Send(userMsg string) error {
 	log.Printf("[agent-bridge] Send called: %q", userMsg)
 	return b.sendContent([]provider.ContentBlock{provider.TextBlock(userMsg)}, true)
+}
+
+func (b *AgentBridge) requestToolApproval(ctx context.Context, toolName string, input string) permission.Decision {
+	if b.mainWindow == nil {
+		return permission.Deny
+	}
+	resp := make(chan permission.Decision, 1)
+	requestID := ""
+	b.setPendingApproval(requestID, toolName, resp)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		requestID = b.nextTunnelRequestID()
+		b.setPendingApproval(requestID, toolName, resp)
+		broker.PushApprovalRequest(requestID, toolName, input)
+		broker.PushStatus(tunnel.StatusBusy, "")
+		broker.PushActivity(b.CurrentTunnelActivity())
+	}
+	fyne.Do(func() {
+		var d dialog.Dialog
+		denyBtn := widget.NewButton(t("approval.deny"), func() {
+			b.clearPendingApproval(requestID)
+			b.pushTunnelApprovalResult(requestID, tunnel.DecisionDeny)
+			resp <- permission.Deny
+			d.Hide()
+		})
+		allowBtn := widget.NewButton(t("approval.allow"), func() {
+			b.clearPendingApproval(requestID)
+			b.pushTunnelApprovalResult(requestID, tunnel.DecisionAllow)
+			resp <- permission.Allow
+			d.Hide()
+		})
+		allowBtn.Importance = widget.HighImportance
+		alwaysBtn := widget.NewButton(t("approval.always_allow"), func() {
+			if b.agent != nil {
+				if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+					p.SetOverride(toolName, permission.Allow)
+				}
+			}
+			b.clearPendingApproval(requestID)
+			b.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
+			resp <- permission.Allow
+			d.Hide()
+		})
+		alwaysBtn.Importance = widget.SuccessImportance
+
+		var displayArgs string
+		var raw map[string]interface{}
+		if json.Unmarshal([]byte(input), &raw) == nil {
+			for k, v := range raw {
+				displayArgs += fmt.Sprintf("  %s: %v\n", k, v)
+			}
+			displayArgs = strings.TrimSpace(displayArgs)
+		} else {
+			displayArgs = truncate(input, 800)
+		}
+		content := widget.NewLabel(fmt.Sprintf("Tool: %s\n\n%s", toolName, displayArgs))
+		content.Wrapping = fyne.TextWrapWord
+
+		d = dialog.NewCustomWithoutButtons("Tool Approval",
+			container.NewVBox(
+				content,
+				widget.NewSeparator(),
+				container.NewHBox(layout.NewSpacer(), denyBtn, allowBtn, alwaysBtn),
+			), b.mainWindow)
+		if b.attachApprovalDialog(requestID, d) {
+			d.Show()
+		}
+	})
+	select {
+	case d := <-resp:
+		b.clearPendingApproval(requestID)
+		return d
+	case <-ctx.Done():
+		b.hideDialog(b.clearPendingApproval(requestID))
+		return permission.Deny
+	}
 }
 
 func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
@@ -1092,6 +1119,9 @@ func (b *AgentBridge) Cancel() {
 
 func (b *AgentBridge) Close() {
 	b.Cancel()
+	if b.acpClientMgr != nil {
+		b.acpClientMgr.CloseAll()
+	}
 	if b.metricCancel != nil {
 		b.metricCancel()
 	}
@@ -1743,10 +1773,12 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 	events := make([]AgentEventEntry, 0)
 	for _, ev := range sa.Events() {
 		entry := AgentEventEntry{
-			Type:     agentEventTypeStr(ev.Type),
-			ToolName: ev.ToolName,
-			ToolID:   ev.ToolID,
-			ToolArgs: ev.ToolArgs,
+			Type:            agentEventTypeStr(ev.Type),
+			ToolName:        ev.ToolName,
+			ToolID:          ev.ToolID,
+			ToolArgs:        ev.ToolArgs,
+			ToolDisplayName: ev.ToolDisplayName,
+			ToolDetail:      ev.ToolDetail,
 		}
 		switch ev.Type {
 		case subagent.AgentEventToolResult:
@@ -1754,7 +1786,10 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 			entry.IsError = ev.IsError
 		case subagent.AgentEventToolCall:
 			// ToolCall has no Text field; use toolArgSummary as description.
-			entry.Content = toolArgSummary(ev.ToolName, ev.ToolArgs)
+			entry.Content = ev.ToolDetail
+			if entry.Content == "" {
+				entry.Content = toolArgSummary(ev.ToolName, ev.ToolArgs)
+			}
 		default:
 			entry.Content = ev.Text
 		}
@@ -2598,6 +2633,10 @@ func (b *AgentBridge) ResetAgent() {
 	b.mu.Lock()
 	b.agent = nil
 	b.mu.Unlock()
+	if b.acpClientMgr != nil {
+		b.acpClientMgr.CloseAll()
+		b.acpClientMgr = nil
+	}
 }
 
 // ResumeSession loads a session by ID and restores its messages into the agent.

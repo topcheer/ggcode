@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.56`](docs/releases/v1.3.56.md) |
+| Latest documented release | [`v1.3.57`](docs/releases/v1.3.57.md) |
 
 ## Build & Validation
 

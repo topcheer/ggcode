@@ -508,7 +508,7 @@ func TestToolCallUpdateJSON(t *testing.T) {
 		Title:      "read_file",
 		Kind:       "read",
 		Status:     "running",
-		RawInput:   `{"path":"/tmp/test.go"}`,
+		RawInput:   json.RawMessage(`{"path":"/tmp/test.go"}`),
 	}
 	data, err := json.Marshal(update)
 	if err != nil {
@@ -910,6 +910,9 @@ func TestRequestPermissionOutcomeJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+	if string(data) != `{"outcome":"selected","optionId":"allow"}` {
+		t.Fatalf("expected flat selected outcome JSON, got %s", string(data))
+	}
 	var decoded RequestPermissionOutcome
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -931,6 +934,15 @@ func TestRequestPermissionOutcomeJSON(t *testing.T) {
 	}
 	if decoded2.SelectedOption != nil {
 		t.Error("expected nil SelectedOption for cancelled outcome")
+	}
+
+	// Legacy nested form should still decode for compatibility.
+	var legacyDecoded RequestPermissionOutcome
+	if err := json.Unmarshal([]byte(`{"outcome":"selected","selectedOption":{"optionId":"allow"}}`), &legacyDecoded); err != nil {
+		t.Fatalf("unmarshal legacy selected outcome: %v", err)
+	}
+	if legacyDecoded.SelectedOption == nil || legacyDecoded.SelectedOption.OptionID != "allow" {
+		t.Fatal("expected legacy nested selectedOption to decode")
 	}
 }
 
@@ -1406,10 +1418,8 @@ func TestAskUserHandlerSingleChoice(t *testing.T) {
 	// Respond: user selected opt_a
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
 		"outcome": map[string]interface{}{
-			"outcome": "selected",
-			"selectedOption": map[string]interface{}{
-				"optionId": "opt_a",
-			},
+			"outcome":  "selected",
+			"optionId": "opt_a",
 		},
 	})
 
@@ -1490,10 +1500,8 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 	// User submits
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
 		"outcome": map[string]interface{}{
-			"outcome": "selected",
-			"selectedOption": map[string]interface{}{
-				"optionId": "submit",
-			},
+			"outcome":  "selected",
+			"optionId": "submit",
 		},
 	})
 

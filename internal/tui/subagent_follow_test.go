@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -227,6 +228,31 @@ func TestRefreshSlots_CompletedAgentExpired(t *testing.T) {
 
 	if len(f.slots) != 0 {
 		t.Errorf("expected 0 slots (expired), got %d", len(f.slots))
+	}
+}
+
+func TestBuildFollowListUnknownToolUsesCommandDetail(t *testing.T) {
+	list := chat.NewList(100, 20)
+	buildFollowList(followEventData{
+		ID:     "sa-1",
+		Name:   "OpenCode",
+		Task:   "Review current changes",
+		Status: "running",
+		Events: []followEvent{
+			{Type: followEventToolCall, ToolID: "tool-1", ToolName: "Run", ToolArgs: `{"command":"git diff --cached"}`},
+		},
+	}, list, chat.DefaultStyles())
+
+	if list.Len() != 2 {
+		t.Fatalf("expected header + tool item, got %d items", list.Len())
+	}
+	item := list.ItemAt(1)
+	paramsItem, ok := item.(interface{ RenderParams() string })
+	if !ok {
+		t.Fatalf("expected tool item with params, got %T", item)
+	}
+	if got := paramsItem.RenderParams(); got != "git diff --cached" {
+		t.Fatalf("expected command detail in follow item, got %q", got)
 	}
 }
 

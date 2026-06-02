@@ -498,6 +498,8 @@ class SubagentToolResultData {
   final String agentId;
   final String toolId;
   final String toolName;
+  final String displayName;
+  final String detail;
   final String result;
   final String summary;
   final String payload;
@@ -508,6 +510,8 @@ class SubagentToolResultData {
     required this.agentId,
     required this.toolId,
     required this.toolName,
+    this.displayName = '',
+    this.detail = '',
     required this.result,
     this.summary = '',
     this.payload = '',
@@ -520,6 +524,8 @@ class SubagentToolResultData {
         agentId: d['agent_id'] as String? ?? '',
         toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
+        displayName: d['display_name'] as String? ?? '',
+        detail: d['detail'] as String? ?? '',
         result: d['result'] as String? ?? '',
         summary: d['summary'] as String? ?? '',
         payload: d['payload'] as String? ?? '',

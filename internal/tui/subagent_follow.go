@@ -253,12 +253,15 @@ type followEventData struct {
 
 // followEvent is a unified event type for both sub-agent and teammate events.
 type followEvent struct {
-	Type     int // 0=text, 1=toolCall, 2=toolResult, 3=error
-	Text     string
-	ToolName string
-	ToolArgs string
-	Result   string
-	IsError  bool
+	Type            int // 0=text, 1=toolCall, 2=toolResult, 3=error
+	Text            string
+	ToolID          string
+	ToolName        string
+	ToolArgs        string
+	ToolDisplayName string
+	ToolDetail      string
+	Result          string
+	IsError         bool
 }
 
 const (
@@ -321,11 +324,20 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 		case followEventToolCall:
 			flushText(&textBuf)
 			toolCallCount[ev.ToolName]++
-			key := fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName])
+			key := ev.ToolID
+			if key == "" {
+				key = fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName])
+			}
 			toolCalls[key] = list.Len()
 			present := describeTool("en", ev.ToolName, ev.ToolArgs)
+			if ev.ToolDisplayName != "" {
+				present.DisplayName = ev.ToolDisplayName
+			}
+			if ev.ToolDetail != "" {
+				present.Detail = ev.ToolDetail
+			}
 			item := chat.NewToolItem(
-				fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName]),
+				key,
 				chat.ToolContext{
 					ToolName:    ev.ToolName,
 					DisplayName: present.DisplayName,
@@ -344,10 +356,12 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 			if ev.IsError {
 				status = chat.StatusError
 			}
-			// Match tool results to calls sequentially (read_file-1, read_file-2, ...)
-			// toolResultCount tracks how many results we've matched for each tool name.
-			toolResultCount[ev.ToolName]++
-			key := fmt.Sprintf("%s-%d", ev.ToolName, toolResultCount[ev.ToolName])
+			key := ev.ToolID
+			if key == "" {
+				// Match tool results to calls sequentially when no stable tool ID exists.
+				toolResultCount[ev.ToolName]++
+				key = fmt.Sprintf("%s-%d", ev.ToolName, toolResultCount[ev.ToolName])
+			}
 			if idx, ok := toolCalls[key]; ok {
 				existing := list.ItemAt(idx)
 				if setter, ok := existing.(interface{ SetResult(string, bool) }); ok {
@@ -385,12 +399,15 @@ func subagentSnapshotToFollowData(snap subagent.Snapshot) followEventData {
 			t = followEventError
 		}
 		events[i] = followEvent{
-			Type:     t,
-			Text:     ev.Text,
-			ToolName: ev.ToolName,
-			ToolArgs: ev.ToolArgs,
-			Result:   ev.Result,
-			IsError:  ev.IsError,
+			Type:            t,
+			Text:            ev.Text,
+			ToolID:          ev.ToolID,
+			ToolName:        ev.ToolName,
+			ToolArgs:        ev.ToolArgs,
+			ToolDisplayName: ev.ToolDisplayName,
+			ToolDetail:      ev.ToolDetail,
+			Result:          ev.Result,
+			IsError:         ev.IsError,
 		}
 	}
 	status := string(snap.Status)
@@ -422,6 +439,7 @@ func teammateSnapshotToFollowData(snap swarm.TeammateSnapshot) followEventData {
 		events[i] = followEvent{
 			Type:     t,
 			Text:     ev.Text,
+			ToolID:   ev.ToolID,
 			ToolName: ev.ToolName,
 			ToolArgs: ev.ToolArgs,
 			Result:   ev.Result,

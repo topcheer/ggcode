@@ -22,13 +22,15 @@ const (
 
 // AgentEvent is a single recorded event from a sub-agent's execution.
 type AgentEvent struct {
-	Type     AgentEventType
-	Text     string // AgentEventText / AgentEventError
-	ToolName string // AgentEventToolCall / AgentEventToolResult
-	ToolID   string // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
-	ToolArgs string // AgentEventToolCall
-	Result   string // AgentEventToolResult
-	IsError  bool   // AgentEventToolResult / AgentEventError
+	Type            AgentEventType
+	Text            string // AgentEventText / AgentEventError
+	ToolName        string // AgentEventToolCall / AgentEventToolResult
+	ToolID          string // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
+	ToolArgs        string // AgentEventToolCall / AgentEventToolResult
+	ToolDisplayName string // AgentEventToolCall / AgentEventToolResult
+	ToolDetail      string // AgentEventToolCall / AgentEventToolResult
+	Result          string // AgentEventToolResult
+	IsError         bool   // AgentEventToolResult / AgentEventError
 }
 
 const maxAgentEvents = 200
@@ -244,11 +246,11 @@ type Manager struct {
 	showOutput   bool
 	onUpdate     func(*SubAgent)
 	onComplete   func(*SubAgent)
-	onStreamText func(agentID, text string)                                   // called on each text chunk (no throttle)
-	onReasoning  func(agentID, text string)                                   // called on each reasoning chunk (no throttle)
-	onToolCall   func(agentID, toolID, toolName, args, detail string)         // called on tool call
-	onToolResult func(agentID, toolID, toolName, result string, isError bool) // called on tool result
-	lastNotify   time.Time                                                    // throttle: last time onUpdate was called
+	onStreamText func(agentID, text string)                                                        // called on each text chunk (no throttle)
+	onReasoning  func(agentID, text string)                                                        // called on each reasoning chunk (no throttle)
+	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
+	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
+	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
 	nextID       int
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
 	// per-call/per-submit ctx so that sub-agents survive the parent agent
@@ -558,33 +560,33 @@ func (m *Manager) SetOnReasoning(fn func(agentID, text string)) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) SetOnToolCall(fn func(agentID, toolID, toolName, args, detail string)) {
+func (m *Manager) SetOnToolCall(fn func(agentID, toolID, toolName, displayName, args, detail string)) {
 	m.mu.Lock()
 	m.onToolCall = fn
 	m.mu.Unlock()
 }
 
-func (m *Manager) SetOnToolResult(fn func(agentID, toolID, toolName, result string, isError bool)) {
+func (m *Manager) SetOnToolResult(fn func(agentID, toolID, toolName, displayName, detail, result string, isError bool)) {
 	m.mu.Lock()
 	m.onToolResult = fn
 	m.mu.Unlock()
 }
 
-func (m *Manager) NotifyToolCall(agentID, toolID, toolName, args, detail string) {
+func (m *Manager) NotifyToolCall(agentID, toolID, toolName, displayName, args, detail string) {
 	m.mu.Lock()
 	fn := m.onToolCall
 	m.mu.Unlock()
 	if fn != nil {
-		fn(agentID, toolID, toolName, args, detail)
+		fn(agentID, toolID, toolName, displayName, args, detail)
 	}
 }
 
-func (m *Manager) NotifyToolResult(agentID, toolID, toolName, result string, isError bool) {
+func (m *Manager) NotifyToolResult(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 	m.mu.Lock()
 	fn := m.onToolResult
 	m.mu.Unlock()
 	if fn != nil {
-		fn(agentID, toolID, toolName, result, isError)
+		fn(agentID, toolID, toolName, displayName, detail, result, isError)
 	}
 }
 

@@ -950,12 +950,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         if (msg.data != null) {
           final data = proto.SubagentToolResultData.fromJson(msg.data!);
-          _upsertSubagent(agentId: data.agentId);
+          final agent = _upsertSubagent(agentId: data.agentId);
           final chatNotifier = ref.read(chatProvider.notifier);
           chatNotifier.updateSubagentToolResult(
             agentId: data.agentId,
             toolId: data.toolId,
             toolName: data.toolName,
+            displayName: data.displayName,
+            detail: data.detail,
+            sourceName: agent.name,
+            sourceColor: agent.color,
             result: data.result,
             summary: data.summary,
             payload: data.payload,

@@ -9,6 +9,15 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
+func scheduleFollowGraceTick(hasTerminal bool) tea.Cmd {
+	if !hasTerminal {
+		return nil
+	}
+	return tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
+		return followGraceTickMsg{}
+	})
+}
+
 // handleSubAgentUpdateMsg handles the corresponding message case.
 func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" && m.subAgentMgr != nil {
@@ -59,12 +68,7 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 	if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
 		m.subAgentFollow.deactivate()
 	}
-	if m.subAgentFollow.hasTerminalSlots() {
-		return m, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
-			return followGraceTickMsg{}
-		})
-	}
-	return m, nil
+	return m, scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
 }
 
@@ -84,6 +88,10 @@ func (m Model) handleSubAgentTunnelReasoningMsg(msg subAgentTunnelReasoningMsg) 
 
 func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" {
+		displayName := msg.DisplayName
+		if displayName == "" {
+			displayName = toolCallDisplayName(msg.ToolName, msg.Args)
+		}
 		detail := msg.Detail
 		if detail == "" {
 			detail = describeTool(LangEnglish, msg.ToolName, msg.Args).Detail
@@ -92,7 +100,7 @@ func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (M
 			msg.AgentID,
 			msg.ToolID,
 			msg.ToolName,
-			toolCallDisplayName(msg.ToolName, msg.Args),
+			displayName,
 			msg.Args,
 			detail,
 		)
@@ -106,6 +114,8 @@ func (m Model) handleSubAgentTunnelToolResultMsg(msg subAgentTunnelToolResultMsg
 			msg.AgentID,
 			msg.ToolID,
 			msg.ToolName,
+			msg.DisplayName,
+			msg.Detail,
 			msg.Result,
 			msg.IsError,
 		)
@@ -128,22 +138,23 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	// Force immediate strip refresh on completion (status changed).
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
 	m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
+	graceCmd := scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
 	// Build prompt for the main agent.
 	var agentHint string
 	if msg.IsError {
-		agentHint = fmt.Sprintf("%s failed with an error. Do NOT spawn sub-agents. Investigate or retry directly.", msg.AgentName)
+		agentHint = fmt.Sprintf("%s failed with an error. Do NOT start another agent run yet. Investigate or retry directly.", msg.AgentName)
 	} else {
-		agentHint = fmt.Sprintf("%s has completed its task. Do NOT spawn sub-agents. Use wait_agent to review the result, then continue your work directly.", msg.AgentName)
+		agentHint = fmt.Sprintf("%s has completed its task. Do NOT start another agent run yet. Use wait_agent to review the result, then continue your work directly.", msg.AgentName)
 	}
 
 	if !m.loading {
 		// Agent is idle — start a new loop to process the notification.
-		return m, m.submitText(agentHint, true)
+		return m, tea.Batch(graceCmd, m.submitText(agentHint, true))
 	}
 	// Agent is busy — queue for processing after current run.
 	m.queuePendingSubmissionHidden(agentHint)
-	return m, nil
+	return m, graceCmd
 
 }
 
@@ -193,11 +204,6 @@ func (m Model) handleFollowGraceTickMsg(msg followGraceTickMsg) (Model, tea.Cmd)
 	}
 
 	// Continue ticking only while terminal slots still exist
-	if m.subAgentFollow.hasTerminalSlots() {
-		return m, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
-			return followGraceTickMsg{}
-		})
-	}
-	return m, nil
+	return m, scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
 }

@@ -762,3 +762,74 @@ func TestDescribeToolJSONRoundTrip(t *testing.T) {
 		t.Errorf("roundtrip mismatch: %q vs %q", decoded["title"], title)
 	}
 }
+
+func TestDescribeExternalToolCall(t *testing.T) {
+	t.Run("prefers descriptive external title", func(t *testing.T) {
+		present := DescribeExternalToolCall(
+			"tool",
+			"Viewing /repo/Makefile",
+			`{"filePath":"/repo/Makefile"}`,
+		)
+		if present.DisplayName != "Viewing /repo/Makefile" {
+			t.Fatalf("display = %q", present.DisplayName)
+		}
+		if present.Detail != "" {
+			t.Fatalf("detail = %q, want empty because title already includes it", present.Detail)
+		}
+	})
+
+	t.Run("ignores generic title", func(t *testing.T) {
+		present := DescribeExternalToolCall(
+			"bash",
+			"bash",
+			`{"command":"go test ./..."}`,
+		)
+		if present.DisplayName != "go test ./..." {
+			t.Fatalf("display = %q", present.DisplayName)
+		}
+		if present.Detail != "" {
+			t.Fatalf("detail = %q", present.Detail)
+		}
+	})
+}
+
+func TestDescribeToolResultExternalWrappers(t *testing.T) {
+	t.Run("copilot wrapper", func(t *testing.T) {
+		present, ok := DescribeToolResult(
+			"tool",
+			"",
+			`{"content":"Makefile","detailedContent":"all:\n\tgo test ./..."}`,
+			false,
+		)
+		if !ok {
+			t.Fatal("expected wrapper to be recognized")
+		}
+		if present.Summary != "Makefile" {
+			t.Fatalf("summary = %q", present.Summary)
+		}
+		if present.Payload != "all:\n\tgo test ./..." {
+			t.Fatalf("payload = %q", present.Payload)
+		}
+		if present.PayloadMode != "text" {
+			t.Fatalf("payload mode = %q", present.PayloadMode)
+		}
+	})
+
+	t.Run("opencode wrapper", func(t *testing.T) {
+		present, ok := DescribeToolResult(
+			"read",
+			"",
+			`{"output":"package main\nfunc main() {}\n","metadata":{"preview":"package main"}}`,
+			false,
+		)
+		if !ok {
+			t.Fatal("expected wrapper to be recognized")
+		}
+		if present.Summary != "package main" {
+			t.Fatalf("summary = %q", present.Summary)
+		}
+		if !strings.Contains(present.Payload, "func main") {
+			t.Fatalf("payload = %q", present.Payload)
+		}
+	})
+}

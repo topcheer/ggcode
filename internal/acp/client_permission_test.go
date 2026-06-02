@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -29,7 +28,7 @@ func TestPermissionRequestResponseUsesStableToolKeyAndPersistentAllow(t *testing
 		ToolCall: &ToolCallUpdate{
 			Kind:     ToolKindExecute,
 			Title:    "Run build",
-			RawInput: string(rawInput),
+			RawInput: rawInput,
 		},
 		Options: []PermissionOption{
 			{OptionID: "allow-once", Kind: PermissionOptionAllowOnce},
@@ -66,7 +65,7 @@ func TestPermissionRequestResponseSkipsApprovalWhenPolicyAlreadyAllows(t *testin
 	resp, err := client.permissionRequestResponse(context.Background(), RequestPermissionRequest{
 		ToolCall: &ToolCallUpdate{
 			Kind:     ToolKindExecute,
-			RawInput: string(rawInput),
+			RawInput: rawInput,
 		},
 		Options: []PermissionOption{
 			{OptionID: "allow-always", Kind: PermissionOptionAllowAlways},
@@ -82,6 +81,86 @@ func TestPermissionRequestResponseSkipsApprovalWhenPolicyAlreadyAllows(t *testin
 	}
 	if resp.Outcome.Outcome != "selected" || resp.Outcome.SelectedOption == nil || resp.Outcome.SelectedOption.OptionID != "allow-always" {
 		t.Fatalf("expected policy allow to select persistent allow option, got %+v", resp.Outcome)
+	}
+}
+
+func TestPermissionRequestResponseHonorsBypassModeWithoutApproval(t *testing.T) {
+	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{}, nil, permission.BypassMode)
+	client := NewClient(DiscoveredAgent{Def: AgentDef{Name: "copilot"}}, t.TempDir(), policy, nil)
+
+	approvalCalls := 0
+	client.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
+		approvalCalls++
+		return permission.Deny
+	})
+
+	rawInput := json.RawMessage(`{"command":"git --no-pager status --short"}`)
+	resp, err := client.permissionRequestResponse(context.Background(), RequestPermissionRequest{
+		ToolCall: &ToolCallUpdate{
+			Kind:     ToolKindExecute,
+			Title:    "Show status",
+			RawInput: rawInput,
+		},
+		Options: []PermissionOption{
+			{OptionID: "allow-always", Kind: PermissionOptionAllowAlways},
+			{OptionID: "allow-once", Kind: PermissionOptionAllowOnce},
+			{OptionID: "reject-once", Kind: PermissionOptionRejectOnce},
+		},
+	}, rawInput)
+	if err != nil {
+		t.Fatalf("permissionRequestResponse error: %v", err)
+	}
+	if approvalCalls != 0 {
+		t.Fatalf("expected bypass mode to skip approval, got %d approval calls", approvalCalls)
+	}
+	if resp.Outcome.Outcome != "selected" || resp.Outcome.SelectedOption == nil || resp.Outcome.SelectedOption.OptionID != "allow-always" {
+		t.Fatalf("expected bypass mode to select allow option, got %+v", resp.Outcome)
+	}
+}
+
+func TestRequestPermissionRequestUnmarshalAcceptsObjectRawInput(t *testing.T) {
+	var req RequestPermissionRequest
+	err := json.Unmarshal([]byte(`{
+		"sessionId":"session-1",
+		"toolCall":{
+			"title":"Show status",
+			"kind":"execute",
+			"rawInput":{"command":"git --no-pager status --short"}
+		},
+		"options":[{"optionId":"allow-once","kind":"allow_once"}]
+	}`), &req)
+	if err != nil {
+		t.Fatalf("unmarshal permission request: %v", err)
+	}
+	if req.ToolCall == nil {
+		t.Fatal("expected toolCall")
+	}
+	if string(req.ToolCall.RawInput) != `{"command":"git --no-pager status --short"}` {
+		t.Fatalf("expected rawInput object payload, got %s", string(req.ToolCall.RawInput))
+	}
+}
+
+func TestPermissionRequestResponseFallsBackToAllowOptionIDWithoutKind(t *testing.T) {
+	policy := permission.NewConfigPolicyWithMode(map[string]permission.Decision{}, nil, permission.BypassMode)
+	client := NewClient(DiscoveredAgent{Def: AgentDef{Name: "copilot"}}, t.TempDir(), policy, nil)
+
+	rawInput := json.RawMessage(`{"command":"git --no-pager status --short"}`)
+	resp, err := client.permissionRequestResponse(context.Background(), RequestPermissionRequest{
+		ToolCall: &ToolCallUpdate{
+			Kind:     ToolKindExecute,
+			Title:    "Show status",
+			RawInput: rawInput,
+		},
+		Options: []PermissionOption{
+			{OptionID: "allow"},
+			{OptionID: "reject"},
+		},
+	}, rawInput)
+	if err != nil {
+		t.Fatalf("permissionRequestResponse error: %v", err)
+	}
+	if resp.Outcome.Outcome != "selected" || resp.Outcome.SelectedOption == nil || resp.Outcome.SelectedOption.OptionID != "allow" {
+		t.Fatalf("expected optionId fallback to select allow, got %+v", resp.Outcome)
 	}
 }
 
@@ -205,91 +284,5 @@ func TestNewSessionSendsEmptyMCPServersArray(t *testing.T) {
 	}
 	if len(servers) != 0 {
 		t.Fatalf("expected empty mcpServers array, got %#v", servers)
-	}
-}
-
-func TestNewSessionSendsConfiguredMCPServers(t *testing.T) {
-	clientRead, serverWrite := io.Pipe()
-	serverRead, clientWrite := io.Pipe()
-	clientTransport := NewTransport(clientRead, clientWrite)
-	serverTransport := NewTransport(serverRead, serverWrite)
-
-	client := NewClient(DiscoveredAgent{Def: AgentDef{Name: "copilot"}}, "/workspace", nil, mcpServersFromConfig([]config.MCPServerConfig{
-		{
-			Name:    "repo-tools",
-			Command: "node",
-			Args:    []string{"repo-mcp.js"},
-			Env: map[string]string{
-				"API_TOKEN": "secret",
-			},
-		},
-		{
-			Name: "remote-http",
-			Type: "http",
-			URL:  "https://example.com/mcp",
-			Headers: map[string]string{
-				"Authorization": "Bearer token",
-			},
-		},
-	}))
-	client.transport = clientTransport
-	client.running = true
-
-	reqCh := make(chan JSONRPCRequest, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		req, err := serverTransport.ReadMessage()
-		if err != nil {
-			t.Errorf("server read message: %v", err)
-			return
-		}
-		reqCh <- *req
-		_ = serverTransport.WriteResponse(req.ID, NewSessionResponse{SessionID: "session-1"})
-	}()
-
-	go func() {
-		for {
-			_, resp, err := clientTransport.ReadAnyMessage()
-			if err != nil {
-				return
-			}
-			if resp != nil {
-				clientTransport.DeliverResponse(resp)
-			}
-		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.NewSession(ctx, "/workspace"); err != nil {
-		t.Fatalf("NewSession error: %v", err)
-	}
-	<-done
-
-	req := <-reqCh
-	if req.Method != "session/new" {
-		t.Fatalf("expected session/new request, got %q", req.Method)
-	}
-	var params struct {
-		MCPServers []MCPServer `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		t.Fatalf("unmarshal params: %v", err)
-	}
-	if len(params.MCPServers) != 2 {
-		t.Fatalf("expected 2 mcpServers, got %+v", params.MCPServers)
-	}
-	if params.MCPServers[0].Name != "repo-tools" || params.MCPServers[0].Type != "stdio" || params.MCPServers[0].Command != "node" {
-		t.Fatalf("unexpected stdio MCP payload: %+v", params.MCPServers[0])
-	}
-	if len(params.MCPServers[0].Env) != 1 || params.MCPServers[0].Env[0].Name != "API_TOKEN" {
-		t.Fatalf("unexpected stdio env passthrough: %+v", params.MCPServers[0].Env)
-	}
-	if params.MCPServers[1].Name != "remote-http" || params.MCPServers[1].Type != "http" || params.MCPServers[1].URL != "https://example.com/mcp" {
-		t.Fatalf("unexpected http MCP payload: %+v", params.MCPServers[1])
-	}
-	if len(params.MCPServers[1].Headers) != 1 || params.MCPServers[1].Headers[0].Name != "Authorization" {
-		t.Fatalf("unexpected http header passthrough: %+v", params.MCPServers[1].Headers)
 	}
 }

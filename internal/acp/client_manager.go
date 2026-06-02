@@ -3,7 +3,6 @@ package acp
 import (
 	"sync"
 
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 )
@@ -20,15 +19,16 @@ type ClientManager struct {
 	onApproval   ApprovalHandler
 }
 
-// NewClientManager discovers and prepares (but does not start) ACP clients.
-// Agent processes are lazily started on first use via Get().
-func NewClientManager(workingDir string, policy permission.PermissionPolicy, mcpConfigs []config.MCPServerConfig) *ClientManager {
+// NewClientManager discovers ACP agents and stores their shared startup config.
+// ACP delegates intentionally send an empty mcpServers array because MCP
+// passthrough is disabled for stability.
+func NewClientManager(workingDir string, policy permission.PermissionPolicy) *ClientManager {
 	mgr := &ClientManager{
 		clients:     make(map[string]*Client),
 		discoveries: make(map[string]DiscoveredAgent),
 		workingDir:  workingDir,
 		policy:      policy,
-		mcpServers:  mcpServersFromConfig(mcpConfigs),
+		mcpServers:  []MCPServer{},
 	}
 
 	agents := Discover()
@@ -100,4 +100,22 @@ func (m *ClientManager) CloseAll() {
 			debug.Log("acp-client", "error closing agent %q: %v", name, err)
 		}
 	}
+}
+
+func (m *ClientManager) newClient(name string) (*Client, error) {
+	m.mu.RLock()
+	discovery, ok := m.discoveries[name]
+	workingDir := m.workingDir
+	onPermission := m.onPermission
+	onApproval := m.onApproval
+	policy := m.policy
+	mcpServers := cloneMCPServers(m.mcpServers)
+	m.mu.RUnlock()
+	if !ok {
+		return nil, ErrAgentNotFound{name: name}
+	}
+	client := NewClient(discovery, workingDir, policy, mcpServers)
+	client.SetPermissionHandler(onPermission)
+	client.SetApprovalHandler(onApproval)
+	return client, nil
 }

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // ACPAgentRegistry is an interface for discovering and using ACP agents.
@@ -17,10 +20,90 @@ type ACPAgentRegistry interface {
 	Get(ctx context.Context, name string) (ACPAgentClient, error)
 }
 
+type ACPPromptEventType string
+
+const (
+	ACPPromptEventText       ACPPromptEventType = "text"
+	ACPPromptEventToolCall   ACPPromptEventType = "tool_call"
+	ACPPromptEventToolResult ACPPromptEventType = "tool_result"
+)
+
+type ACPPromptEvent struct {
+	Type      ACPPromptEventType
+	Text      string
+	ToolID    string
+	ToolName  string
+	ToolTitle string
+	ToolArgs  string
+	Result    string
+	IsError   bool
+}
+
+type pendingToolEventMeta struct {
+	DisplayName string
+	Detail      string
+	RawArgs     string
+}
+
+type pendingToolEventStore struct {
+	byID   map[string]pendingToolEventMeta
+	byName map[string][]pendingToolEventMeta
+}
+
+func newPendingToolEventStore() *pendingToolEventStore {
+	return &pendingToolEventStore{
+		byID:   make(map[string]pendingToolEventMeta),
+		byName: make(map[string][]pendingToolEventMeta),
+	}
+}
+
+func (s *pendingToolEventStore) put(toolID, toolName string, meta pendingToolEventMeta) {
+	if toolID != "" {
+		s.byID[toolID] = meta
+	}
+	toolName = strings.TrimSpace(toolName)
+	if toolName != "" {
+		s.byName[toolName] = append(s.byName[toolName], meta)
+	}
+}
+
+func (s *pendingToolEventStore) take(toolID, toolName string) (pendingToolEventMeta, bool) {
+	if toolID != "" {
+		meta, ok := s.byID[toolID]
+		if !ok {
+			return pendingToolEventMeta{}, false
+		}
+		delete(s.byID, toolID)
+		toolName = strings.TrimSpace(toolName)
+		if toolName != "" {
+			queue := s.byName[toolName]
+			for i, candidate := range queue {
+				if candidate == meta {
+					s.byName[toolName] = append(queue[:i], queue[i+1:]...)
+					if len(s.byName[toolName]) == 0 {
+						delete(s.byName, toolName)
+					}
+					break
+				}
+			}
+		}
+		return meta, true
+	}
+	toolName = strings.TrimSpace(toolName)
+	queue := s.byName[toolName]
+	if len(queue) != 1 {
+		return pendingToolEventMeta{}, false
+	}
+	delete(s.byName, toolName)
+	return queue[0], true
+}
+
 // ACPAgentClient is an interface for sending prompts to an ACP agent.
 // Implemented by acp.Client.
 type ACPAgentClient interface {
 	Prompt(ctx context.Context, prompt string) (*ACPPromptResult, error)
+	PromptStream(ctx context.Context, prompt string, onEvent func(ACPPromptEvent)) (*ACPPromptResult, error)
+	Close() error
 }
 
 // ACPPromptResult is the result from an ACP agent prompt execution.
@@ -40,9 +123,11 @@ type ACPToolCallSummary struct {
 // DelegateTool delegates a task to an external ACP agent.
 // The tool is only registered when at least one ACP agent is discovered.
 type DelegateTool struct {
-	Manager      ACPAgentRegistry
-	WorkingDir   string
-	WorkingDirFn func() string
+	Manager           ACPAgentRegistry
+	SubAgentManager   *subagent.Manager
+	SubAgentManagerFn func() *subagent.Manager
+	WorkingDir        string
+	WorkingDirFn      func() string
 }
 
 func (t DelegateTool) Name() string { return "delegate" }
@@ -94,6 +179,10 @@ func (t DelegateTool) Parameters() json.RawMessage {
 			"prompt": {
 				"type": "string",
 				"description": "The task description to send to the agent. Be specific and include all necessary context — the agent has access to the current working directory."
+			},
+			"description": {
+				"type": "string",
+				"description": "Optional short label for the live delegate panel"
 			}
 		},
 		"required": ["agent", "prompt"]
@@ -102,8 +191,9 @@ func (t DelegateTool) Parameters() json.RawMessage {
 
 func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var params struct {
-		Agent  string `json:"agent"`
-		Prompt string `json:"prompt"`
+		Agent       string `json:"agent"`
+		Prompt      string `json:"prompt"`
+		Description string `json:"description,omitempty"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return Result{}, fmt.Errorf("parsing delegate params: %w", err)
@@ -131,25 +221,186 @@ func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{Content: fmt.Sprintf("Agent %q is not available: %v", params.Agent, err), IsError: true}, nil
 	}
 
+	title, _, _ := t.Manager.AgentInfo(params.Agent)
+	if title == "" {
+		title = params.Agent
+	}
+
+	if mgr := t.subAgentManager(); mgr != nil {
+		return t.executeAsync(ctx, mgr, client, title, params), nil
+	}
+	defer client.Close()
+
 	result, err := client.Prompt(ctx, params.Prompt)
 	if err != nil {
 		return Result{Content: fmt.Sprintf("Agent %q error: %v", params.Agent, err), IsError: true}, nil
 	}
 
-	// Build result with agent attribution
-	title, _, _ := t.Manager.AgentInfo(params.Agent)
-	output := fmt.Sprintf("[Response from %s]\n\n%s", title, result.Text)
+	return Result{Content: formatDelegateOutput(title, result)}, nil
+}
 
+func (t DelegateTool) subAgentManager() *subagent.Manager {
+	if t.SubAgentManagerFn != nil {
+		return t.SubAgentManagerFn()
+	}
+	return t.SubAgentManager
+}
+
+func (t DelegateTool) executeAsync(
+	ctx context.Context,
+	mgr *subagent.Manager,
+	client ACPAgentClient,
+	title string,
+	params struct {
+		Agent       string `json:"agent"`
+		Prompt      string `json:"prompt"`
+		Description string `json:"description,omitempty"`
+	},
+) Result {
+	task := strings.TrimSpace(params.Description)
+	if task == "" {
+		task = strings.TrimSpace(params.Prompt)
+	}
+	id := mgr.Spawn(title, task, params.Prompt, nil, ctx)
+	mgr.Notify(id)
+
+	safego.Go("delegate-tool", func() {
+		defer client.Close()
+
+		runCtx, cancel := context.WithCancel(mgr.RootContext())
+		if !mgr.SetCancel(id, cancel) {
+			cancel()
+			return
+		}
+		mgr.UpdateActivity(id, "delegating", "", "")
+
+		var latestResult *ACPPromptResult
+		var streamedText strings.Builder
+		pendingTools := newPendingToolEventStore()
+		var textBuf strings.Builder
+		flushText := func() {
+			if textBuf.Len() == 0 {
+				return
+			}
+			if sa, ok := mgr.Get(id); ok {
+				sa.AppendEvent(subagent.AgentEvent{
+					Type: subagent.AgentEventText,
+					Text: textBuf.String(),
+				})
+			}
+			textBuf.Reset()
+		}
+
+		res, err := client.PromptStream(runCtx, params.Prompt, func(ev ACPPromptEvent) {
+			switch ev.Type {
+			case ACPPromptEventText:
+				streamedText.WriteString(ev.Text)
+				textBuf.WriteString(ev.Text)
+				mgr.NotifyStreamText(id, ev.Text)
+				if textBuf.Len() >= 800 {
+					flushText()
+					mgr.Notify(id)
+				}
+			case ACPPromptEventToolCall:
+				flushText()
+				present := DescribeExternalToolCall(ev.ToolName, ev.ToolTitle, ev.ToolArgs)
+				pendingTools.put(ev.ToolID, ev.ToolName, pendingToolEventMeta{
+					DisplayName: present.DisplayName,
+					Detail:      present.Detail,
+					RawArgs:     ev.ToolArgs,
+				})
+				if sa, ok := mgr.Get(id); ok {
+					sa.IncrementToolCalls()
+					sa.AppendEvent(subagent.AgentEvent{
+						Type:            subagent.AgentEventToolCall,
+						ToolID:          ev.ToolID,
+						ToolName:        ev.ToolName,
+						ToolArgs:        ev.ToolArgs,
+						ToolDisplayName: present.DisplayName,
+						ToolDetail:      present.Detail,
+					})
+				}
+				mgr.UpdateActivity(id, "tool", present.DisplayName, present.Detail)
+				mgr.Notify(id)
+				mgr.NotifyToolCall(id, ev.ToolID, ev.ToolName, present.DisplayName, ev.ToolArgs, present.Detail)
+			case ACPPromptEventToolResult:
+				flushText()
+				meta, _ := pendingTools.take(ev.ToolID, ev.ToolName)
+				if meta.DisplayName == "" && meta.Detail == "" && meta.RawArgs == "" {
+					present := DescribeExternalToolCall(ev.ToolName, ev.ToolTitle, ev.ToolArgs)
+					meta = pendingToolEventMeta{
+						DisplayName: present.DisplayName,
+						Detail:      present.Detail,
+						RawArgs:     ev.ToolArgs,
+					}
+				}
+				if sa, ok := mgr.Get(id); ok {
+					sa.AppendEvent(subagent.AgentEvent{
+						Type:            subagent.AgentEventToolResult,
+						ToolID:          ev.ToolID,
+						ToolName:        ev.ToolName,
+						ToolArgs:        meta.RawArgs,
+						ToolDisplayName: meta.DisplayName,
+						ToolDetail:      meta.Detail,
+						Result:          ev.Result,
+						IsError:         ev.IsError,
+					})
+				}
+				mgr.Notify(id)
+				mgr.NotifyToolResult(id, ev.ToolID, ev.ToolName, meta.DisplayName, meta.Detail, ev.Result, ev.IsError)
+			}
+		})
+		latestResult = res
+		flushText()
+		if err != nil {
+			if sa, ok := mgr.Get(id); ok {
+				sa.AppendEvent(subagent.AgentEvent{
+					Type:    subagent.AgentEventError,
+					Text:    err.Error(),
+					IsError: true,
+				})
+			}
+			mgr.Notify(id)
+			mgr.Complete(id, "", err)
+			return
+		}
+		if latestResult == nil {
+			latestResult = &ACPPromptResult{Text: streamedText.String()}
+		} else if strings.TrimSpace(latestResult.Text) == "" {
+			latestResult.Text = streamedText.String()
+		}
+		mgr.Complete(id, formatDelegateOutput(title, latestResult), nil)
+	})
+
+	return Result{Content: fmt.Sprintf(
+		"Started delegated agent %q as %s. Follow the live panel and use wait_agent with agent_id %q when you need the final result.",
+		title,
+		id,
+		id,
+	)}
+}
+
+func formatDelegateOutput(title string, result *ACPPromptResult) string {
+	if result == nil {
+		return fmt.Sprintf("[Response from %s]", title)
+	}
+	output := fmt.Sprintf("[Response from %s]\n\n%s", title, result.Text)
 	if len(result.ToolCalls) > 0 {
 		output += "\n\nTools used:"
 		for _, tc := range result.ToolCalls {
-			status := tc.Status
+			name := strings.TrimSpace(tc.Title)
+			if name == "" {
+				name = strings.TrimSpace(tc.Name)
+			}
+			if name == "" {
+				name = "tool"
+			}
+			status := strings.TrimSpace(tc.Status)
 			if status == "" {
 				status = "completed"
 			}
-			output += fmt.Sprintf("\n  - %s (%s)", tc.Title, status)
+			output += fmt.Sprintf("\n  - %s (%s)", name, status)
 		}
 	}
-
-	return Result{Content: output}, nil
+	return output
 }

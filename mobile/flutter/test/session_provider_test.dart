@@ -621,6 +621,34 @@ void main() {
   });
 
   test(
+      'ChatNotifier creates synthetic subagent tool result when call is missing',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.updateSubagentToolResult(
+      agentId: 'sa-1',
+      toolId: 'tool-1',
+      toolName: 'tool',
+      displayName: 'Viewing /repo/Makefile',
+      detail: '',
+      result:
+          '{"content":"Makefile","detailedContent":"all:\\n\\tgo test ./..."}',
+      summary: 'Makefile',
+      payload: 'all:\n\tgo test ./...',
+      payloadMode: 'text',
+      isError: false,
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolDisplayName, 'Viewing /repo/Makefile');
+    expect(message.toolResult, 'Makefile');
+    expect(message.toolPayload, contains('go test ./...'));
+    expect(message.toolCompleted, isTrue);
+  });
+
+  test(
       'ConnectionNotifier creates subagent state from tool activity without spawn',
       () {
     final container = ProviderContainer();
