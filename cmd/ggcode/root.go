@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/topcheer/ggcode/internal/a2a"
-	"github.com/topcheer/ggcode/internal/acp"
+	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -494,12 +494,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	})
 	trace.Mark("register skill tool")
 
+	var subMgr *subagent.Manager
+
 	// Discover and register ACP agent clients (delegate tool)
-	acpClientMgr := acp.NewClientManager(workingDir, policy, mergedMCPServers)
+	acpClientMgr := acpclient.NewClientManager(workingDir, policy)
 	if len(acpClientMgr.Available()) > 0 {
 		_ = registry.Register(tool.DelegateTool{
-			Manager:    acpClientMgr,
-			WorkingDir: workingDir,
+			Manager:           acpClientMgr,
+			SubAgentManagerFn: func() *subagent.Manager { return subMgr },
+			WorkingDir:        workingDir,
 			WorkingDirFn: func() string {
 				if ag != nil {
 					return ag.WorkingDir()
@@ -563,7 +566,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 
 	// Setup sub-agent manager
-	subMgr := subagent.NewManager(cfg.SubAgents)
+	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
 	trace.Mark("setup sub-agent manager")
 

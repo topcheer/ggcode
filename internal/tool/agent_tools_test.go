@@ -20,7 +20,7 @@ func TestListAgents_Empty(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	if !containsAny(result.Content, "No sub-agents") {
+	if !containsAny(result.Content, "No agent runs") {
 		t.Errorf("expected empty message, got: %s", result.Content)
 	}
 }

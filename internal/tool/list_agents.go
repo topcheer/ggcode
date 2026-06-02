@@ -20,7 +20,7 @@ type ListAgentsTool struct {
 func (t ListAgentsTool) Name() string { return "list_agents" }
 
 func (t ListAgentsTool) Description() string {
-	return "List all spawned sub-agents and their current status."
+	return "List all spawned agent runs and their current status."
 }
 
 func (t ListAgentsTool) Parameters() json.RawMessage {
@@ -40,11 +40,11 @@ func (t ListAgentsTool) Parameters() json.RawMessage {
 
 func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
-		return Result{IsError: true, Content: "list_agents: sub-agent manager not available"}, nil
+		return Result{IsError: true, Content: "list_agents: agent manager not available"}, nil
 	}
 	agents := t.Manager.List()
 	if len(agents) == 0 {
-		return Result{Content: "No sub-agents have been spawned."}, nil
+		return Result{Content: "No agent runs have been spawned."}, nil
 	}
 
 	// Sort by creation time
@@ -53,7 +53,7 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	})
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d sub-agent(s):\n\n", len(agents)))
+	sb.WriteString(fmt.Sprintf("%d agent run(s):\n\n", len(agents)))
 	for _, sa := range agents {
 		snap, ok := t.Manager.Snapshot(sa.ID)
 		if !ok {

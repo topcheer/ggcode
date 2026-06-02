@@ -378,6 +378,10 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     required String agentId,
     required String toolId,
     required String toolName,
+    String displayName = '',
+    String detail = '',
+    String sourceName = '',
+    String sourceColor = '',
     required String result,
     String summary = '',
     String payload = '',
@@ -420,6 +424,29 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             )
           else
             state[i],
+      ];
+    } else {
+      final resolvedName = displayName.isNotEmpty ? displayName : toolName;
+      state = [
+        ...state,
+        ChatMessage(
+          id: '$agentId-tool-result-${toolId.isNotEmpty ? toolId : _msgCounter++}',
+          sourceId: agentId,
+          sourceName: sourceName,
+          sourceColor: sourceColor,
+          toolId: toolId,
+          toolName: toolName,
+          toolDisplayName: displayName,
+          toolDetail: detail,
+          text: resolvedName,
+          toolResult: _resolvedToolSummary(toolName, result, summary, isError),
+          toolPayload:
+              _resolvedToolPayload(toolName, result, payload, payloadMode),
+          toolPayloadMode: payloadMode,
+          toolCompleted: true,
+          isToolError: isError,
+          time: DateTime.now(),
+        ),
       ];
     }
   }

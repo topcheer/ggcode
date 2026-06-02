@@ -32,7 +32,7 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 		textDone:          make(chan struct{}),
 		sendWaiters:       make(map[string]chan struct{}),
 		toolArgs:          make(map[string]string),
-		subagentToolArgs:  make(map[string]string),
+		subagentToolMeta:  make(map[string]subagentToolMeta),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
@@ -855,7 +855,8 @@ func TestBrokerPushSubagentToolResult(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	b.PushSubagentToolResult("agent-1", "t1", "search", "found 5", false)
+	b.PushSubagentToolCall("agent-1", "t1", "tool", "Viewing /repo/Makefile", `{"filePath":"/repo/Makefile"}`, "")
+	b.PushSubagentToolResult("agent-1", "t1", "tool", "", "", `{"content":"Makefile","detailedContent":"all:\n\tgo test ./..."}`, false)
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
@@ -863,6 +864,19 @@ func TestBrokerPushSubagentToolResult(t *testing.T) {
 	for _, m := range msgs {
 		if m.Type == EventSubagentToolResult {
 			found = true
+			var data SubagentToolResultData
+			if err := json.Unmarshal(m.Data, &data); err != nil {
+				t.Fatalf("unmarshal result: %v", err)
+			}
+			if data.DisplayName != "Viewing /repo/Makefile" {
+				t.Fatalf("display name = %q", data.DisplayName)
+			}
+			if data.Summary != "Makefile" {
+				t.Fatalf("summary = %q", data.Summary)
+			}
+			if data.PayloadMode != "text" {
+				t.Fatalf("payload mode = %q", data.PayloadMode)
+			}
 		}
 	}
 	if !found {

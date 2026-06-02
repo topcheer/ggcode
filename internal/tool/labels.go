@@ -177,6 +177,27 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	}
 }
 
+// DescribeExternalToolCall normalizes external/ACP tool calls into the shared
+// display model while preserving richer CLI-provided titles when they add real
+// information beyond the raw tool name.
+func DescribeExternalToolCall(toolName, toolTitle, rawArgs string) ToolPresentation {
+	base := DescribeTool(toolName, rawArgs)
+	title := compactSingleLineNoTruncate(strings.TrimSpace(toolTitle))
+	if title == "" || toolTitleLooksGeneric(toolName, title, base) {
+		return base
+	}
+	detail := base.Detail
+	if fileTarget := extractFileTarget(toolName, rawArgs); fileTarget != "" {
+		detail = fileTarget
+	} else if detail == "" {
+		detail = compactArgsPreview(rawArgs)
+	}
+	if detail != "" && strings.Contains(strings.ToLower(title), strings.ToLower(detail)) {
+		detail = ""
+	}
+	return toolPres(title, detail)
+}
+
 // FormatToolInline combines DisplayName and Detail into a single display string,
 // matching the TUI format: "Read /tmp/test.go" or "go test ./...".
 func FormatToolInline(name, detail string) string {
@@ -202,6 +223,20 @@ func prettifyToolName(name string) string {
 
 func toolPres(name, detail string) ToolPresentation {
 	return ToolPresentation{DisplayName: name, Detail: detail}
+}
+
+func toolTitleLooksGeneric(toolName, title string, base ToolPresentation) bool {
+	for _, candidate := range []string{
+		toolName,
+		prettifyToolName(toolName),
+		base.DisplayName,
+		FormatToolInline(base.DisplayName, base.Detail),
+	} {
+		if strings.EqualFold(strings.TrimSpace(candidate), title) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseToolArgs(raw string) map[string]any {
@@ -316,6 +351,10 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return describeCronDeleteResult(trimmed), true
 	case "cron_list":
 		return describeCronListResult(trimmed), true
+	}
+
+	if pres, ok := describeExternalWrappedResult(trimmed); ok {
+		return pres, true
 	}
 
 	if !isTaskTool(toolName) && toolName != "cron_create" && toolName != "cron_delete" && toolName != "cron_list" {
@@ -687,7 +726,7 @@ func StartCommandResultText(result string, isError bool) string {
 func extractFileTarget(toolName, rawArgs string) string {
 	// Try known file-path fields first
 	args := parseToolArgs(rawArgs)
-	for _, key := range []string{"file_path", "path", "directory", "file", "filename"} {
+	for _, key := range []string{"file_path", "filePath", "path", "directory", "file", "filename"} {
 		if v, ok := args[key].(string); ok && v != "" {
 			return displayFileTarget(v)
 		}
@@ -718,6 +757,78 @@ func compactArgsPreview(raw string) string {
 		return compactSingleLine(raw)
 	}
 	return compactSingleLine(string(b))
+}
+
+func describeExternalWrappedResult(trimmed string) (ToolResultPresentation, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return ToolResultPresentation{}, false
+	}
+	if pres, ok := describeCopilotWrappedResult(raw); ok {
+		return pres, true
+	}
+	if pres, ok := describeOpenCodeWrappedResult(raw); ok {
+		return pres, true
+	}
+	return ToolResultPresentation{}, false
+}
+
+func describeCopilotWrappedResult(raw map[string]any) (ToolResultPresentation, bool) {
+	content, _ := raw["content"].(string)
+	detailed, _ := raw["detailedContent"].(string)
+	content = strings.TrimSpace(content)
+	detailed = strings.TrimSpace(detailed)
+	if content == "" && detailed == "" {
+		return ToolResultPresentation{}, false
+	}
+	if detailed == "" && !onlyKnownKeys(raw, "content", "metadata") {
+		return ToolResultPresentation{}, false
+	}
+	if detailed != "" && !onlyKnownKeys(raw, "content", "detailedContent", "metadata") {
+		return ToolResultPresentation{}, false
+	}
+	return wrappedTextResult(firstNonEmpty(content, detailed), firstNonEmpty(detailed, content)), true
+}
+
+func describeOpenCodeWrappedResult(raw map[string]any) (ToolResultPresentation, bool) {
+	output, _ := raw["output"].(string)
+	output = strings.TrimSpace(output)
+	metadata, _ := raw["metadata"].(map[string]any)
+	preview := strings.TrimSpace(argStr(metadata, "preview"))
+	if output == "" && preview == "" {
+		return ToolResultPresentation{}, false
+	}
+	if preview == "" && !onlyKnownKeys(raw, "output", "metadata", "success", "status", "exitCode") {
+		return ToolResultPresentation{}, false
+	}
+	if preview != "" && !onlyKnownKeys(raw, "output", "metadata", "success", "status", "exitCode") {
+		return ToolResultPresentation{}, false
+	}
+	return wrappedTextResult(firstNonEmpty(preview, output), firstNonEmpty(output, preview)), true
+}
+
+func wrappedTextResult(summaryText, payloadText string) ToolResultPresentation {
+	summaryText = strings.TrimSpace(summaryText)
+	payloadText = strings.TrimSpace(payloadText)
+	pres := ToolResultPresentation{Summary: compactSingleLine(summaryText)}
+	if payloadText != "" && payloadText != summaryText {
+		pres.Payload = payloadText
+		pres.PayloadMode = "text"
+	}
+	return pres
+}
+
+func onlyKnownKeys(raw map[string]any, allowed ...string) bool {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+	for key := range raw {
+		if _, ok := allowedSet[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func compactSingleLine(s string) string {

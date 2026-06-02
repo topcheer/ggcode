@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
-	"github.com/topcheer/ggcode/internal/acp"
+	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -41,6 +41,7 @@ type REPL struct {
 	model               Model
 	agent               *agent.Agent
 	program             *tea.Program
+	programSend         func(tea.Msg)
 	planSwitcher        *replModeSwitcher
 	store               session.Store
 	resumeID            string
@@ -246,52 +247,45 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 
 	// Notify TUI on live updates and completion.
 	mgr.SetOnUpdate(func(sa *subagent.SubAgent) {
-		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
-		}
+		r.sendProgramMsgs(subAgentUpdateMsg{AgentID: sa.ID})
 	})
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
-		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
-			r.program.Send(subAgentDoneMsg{
+		r.sendProgramMsgs(
+			subAgentUpdateMsg{AgentID: sa.ID},
+			subAgentDoneMsg{
 				AgentID:   sa.ID,
 				AgentName: sa.Name,
 				IsError:   sa.Status == subagent.StatusFailed,
 				Kind:      "subagent",
-			})
-		}
+			},
+		)
 	})
 	mgr.SetOnStreamText(func(agentID, text string) {
-		if r.program != nil {
-			r.program.Send(subAgentTunnelStreamTextMsg{AgentID: agentID, Text: text})
-		}
+		r.sendProgramMsgs(subAgentTunnelStreamTextMsg{AgentID: agentID, Text: text})
 	})
 	mgr.SetOnReasoning(func(agentID, text string) {
-		if r.program != nil {
-			r.program.Send(subAgentTunnelReasoningMsg{AgentID: agentID, Text: text})
-		}
+		r.sendProgramMsgs(subAgentTunnelReasoningMsg{AgentID: agentID, Text: text})
 	})
-	mgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
-		if r.program != nil {
-			r.program.Send(subAgentTunnelToolCallMsg{
-				AgentID:  agentID,
-				ToolID:   toolID,
-				ToolName: toolName,
-				Args:     args,
-				Detail:   detail,
-			})
-		}
+	mgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
+		r.sendProgramMsgs(subAgentTunnelToolCallMsg{
+			AgentID:     agentID,
+			ToolID:      toolID,
+			ToolName:    toolName,
+			DisplayName: displayName,
+			Args:        args,
+			Detail:      detail,
+		})
 	})
-	mgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
-		if r.program != nil {
-			r.program.Send(subAgentTunnelToolResultMsg{
-				AgentID:  agentID,
-				ToolID:   toolID,
-				ToolName: toolName,
-				Result:   result,
-				IsError:  isError,
-			})
-		}
+	mgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
+		r.sendProgramMsgs(subAgentTunnelToolResultMsg{
+			AgentID:     agentID,
+			ToolID:      toolID,
+			ToolName:    toolName,
+			DisplayName: displayName,
+			Detail:      detail,
+			Result:      result,
+			IsError:     isError,
+		})
 	})
 }
 
@@ -343,7 +337,7 @@ func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 }
 
 // SetACPClientManager wires the ACP client manager for clean shutdown.
-func (r *REPL) SetACPClientManager(mgr *acp.ClientManager) {
+func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 	r.model.acpClientMgr = mgr
 	if mgr == nil {
 		return
@@ -394,31 +388,54 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	swarmTextThrottle := newTextThrottleMap(500 * time.Millisecond)
 
 	mgr.SetOnUpdate(func(ev swarm.Event) {
-		if r.program == nil {
+		if r.program == nil && r.programSend == nil {
 			return
 		}
-		r.program.Send(swarmTunnelEventMsg{Event: ev})
+		msgs := []tea.Msg{swarmTunnelEventMsg{Event: ev}}
 		switch ev.Type {
 		case "teammate_text":
 			// Throttle: at most one subAgentUpdateMsg per teammate per 500ms.
 			if !swarmTextThrottle.Allow(ev.TeammateID) {
+				r.sendProgramMsgs(msgs...)
 				return
 			}
-			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
+			msgs = append(msgs, subAgentUpdateMsg{AgentID: ev.TeammateID})
 		case "teammate_idle":
 			if ev.Result != "" {
-				r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
-				r.program.Send(subAgentDoneMsg{
-					AgentID:   ev.TeammateID,
-					AgentName: ev.TeammateName,
-					IsError:   ev.Error != nil,
-					Kind:      "teammate",
-				})
+				msgs = append(msgs,
+					subAgentUpdateMsg{AgentID: ev.TeammateID},
+					subAgentDoneMsg{
+						AgentID:   ev.TeammateID,
+						AgentName: ev.TeammateName,
+						IsError:   ev.Error != nil,
+						Kind:      "teammate",
+					},
+				)
 			}
 		case "teammate_spawned", "teammate_working", "teammate_shutdown",
 			"teammate_tool_call", "teammate_tool_result", "teammate_error":
 			// Status-change events: send immediately so strip updates promptly.
-			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
+			msgs = append(msgs, subAgentUpdateMsg{AgentID: ev.TeammateID})
+		}
+		r.sendProgramMsgs(msgs...)
+	})
+}
+
+func (r *REPL) sendProgramMsgs(msgs ...tea.Msg) {
+	if len(msgs) == 0 {
+		return
+	}
+	send := r.programSend
+	if send == nil {
+		if r.program == nil {
+			return
+		}
+		program := r.program
+		send = program.Send
+	}
+	safego.Go("tui.program.send", func() {
+		for _, msg := range msgs {
+			send(msg)
 		}
 	})
 }

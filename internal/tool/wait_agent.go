@@ -17,7 +17,7 @@ type WaitAgentTool struct {
 func (t WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t WaitAgentTool) Description() string {
-	return "Wait briefly for a spawned sub-agent, then return its current status snapshot. Completed agents include their result; running agents include phase and progress."
+	return "Wait briefly for a spawned agent run, then return its current status snapshot. Completed runs include their result; running runs include phase and progress."
 }
 
 func (t WaitAgentTool) Parameters() json.RawMessage {
@@ -26,7 +26,7 @@ func (t WaitAgentTool) Parameters() json.RawMessage {
 	"properties": {
 		"agent_id": {
 			"type": "string",
-			"description": "The ID of the sub-agent to wait for (returned by spawn_agent)"
+			"description": "The ID of the agent run to wait for (returned by spawn_agent or delegate)"
 		},
 		"wait_seconds": {
 			"type": "integer",
@@ -46,7 +46,7 @@ func (t WaitAgentTool) Parameters() json.RawMessage {
 
 func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
-		return Result{IsError: true, Content: "wait_agent: sub-agent manager not available"}, nil
+		return Result{IsError: true, Content: "wait_agent: agent manager not available"}, nil
 	}
 	var args struct {
 		AgentID     string `json:"agent_id"`

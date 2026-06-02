@@ -781,17 +781,17 @@ func TestManagerNotifyToolCall(t *testing.T) {
 
 	var receivedArgs []string
 	var mu sync.Mutex
-	mgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
+	mgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
 		mu.Lock()
-		receivedArgs = []string{agentID, toolID, toolName, args, detail}
+		receivedArgs = []string{agentID, toolID, toolName, displayName, args, detail}
 		mu.Unlock()
 	})
 
-	mgr.NotifyToolCall("sa-1", "tc-1", "read_file", `{"path":"/x"}`, "reading file")
+	mgr.NotifyToolCall("sa-1", "tc-1", "read_file", "Read", `{"path":"/x"}`, "reading file")
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(receivedArgs) != 5 || receivedArgs[0] != "sa-1" {
+	if len(receivedArgs) != 6 || receivedArgs[0] != "sa-1" {
 		t.Errorf("received args = %v", receivedArgs)
 	}
 }
@@ -801,20 +801,20 @@ func TestManagerNotifyToolResult(t *testing.T) {
 
 	var receivedArgs []interface{}
 	var mu sync.Mutex
-	mgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
+	mgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 		mu.Lock()
-		receivedArgs = []interface{}{agentID, toolID, toolName, result, isError}
+		receivedArgs = []interface{}{agentID, toolID, toolName, displayName, detail, result, isError}
 		mu.Unlock()
 	})
 
-	mgr.NotifyToolResult("sa-1", "tc-1", "read_file", "file contents", false)
+	mgr.NotifyToolResult("sa-1", "tc-1", "read_file", "Read", "/x", "file contents", false)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(receivedArgs) != 5 {
+	if len(receivedArgs) != 7 {
 		t.Errorf("received args = %v", receivedArgs)
 	}
-	if receivedArgs[4] != false {
+	if receivedArgs[6] != false {
 		t.Error("expected isError=false")
 	}
 }

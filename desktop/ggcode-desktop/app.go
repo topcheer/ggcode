@@ -552,7 +552,14 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 				if ev.ToolID != "" {
 					toolArgsByID[ev.ToolID] = ev.ToolArgs
 				}
-				detail := ev.Content
+				displayName := ev.ToolDisplayName
+				if displayName == "" {
+					displayName = toolDisplayName(ev.ToolName, ev.ToolArgs)
+				}
+				detail := ev.ToolDetail
+				if detail == "" {
+					detail = ev.Content
+				}
 				if detail == "" {
 					detail = toolArgSummary(ev.ToolName, ev.ToolArgs)
 				}
@@ -563,14 +570,18 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 						AgentID:     panel.ID,
 						ToolID:      ev.ToolID,
 						ToolName:    ev.ToolName,
-						DisplayName: toolDisplayName(ev.ToolName, ev.ToolArgs),
+						DisplayName: displayName,
 						Args:        ev.ToolArgs,
 						Detail:      detail,
 					},
 				))
 			case "tool_result":
 				flushText(false)
-				present, _ := tool.DescribeToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Content, ev.IsError)
+				rawArgs := ev.ToolArgs
+				if rawArgs == "" {
+					rawArgs = toolArgsByID[ev.ToolID]
+				}
+				present, _ := tool.DescribeToolResult(ev.ToolName, rawArgs, ev.Content, ev.IsError)
 				delete(toolArgsByID, ev.ToolID)
 				out = append(out, desktopSnapshotEvent(
 					tunnel.EventSubagentToolResult,
@@ -579,6 +590,8 @@ func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
 						AgentID:     panel.ID,
 						ToolID:      ev.ToolID,
 						ToolName:    ev.ToolName,
+						DisplayName: ev.ToolDisplayName,
+						Detail:      ev.ToolDetail,
 						Result:      ev.Content,
 						Summary:     present.Summary,
 						Payload:     present.Payload,

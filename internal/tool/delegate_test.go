@@ -5,12 +5,18 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // mockACPAgentRegistry implements ACPAgentRegistry for testing.
 type mockACPAgentRegistry struct {
-	agents    map[string]agentEntry
-	promptErr error
+	agents       map[string]agentEntry
+	promptErr    error
+	promptResult *ACPPromptResult
+	promptEvents []ACPPromptEvent
 }
 
 type agentEntry struct {
@@ -21,6 +27,8 @@ type agentEntry struct {
 type mockACPAgentClient struct {
 	result *ACPPromptResult
 	err    error
+	events []ACPPromptEvent
+	closed int
 }
 
 func (m *mockACPAgentRegistry) Available() []string {
@@ -46,13 +54,37 @@ func (m *mockACPAgentRegistry) Get(ctx context.Context, name string) (ACPAgentCl
 		return nil, errAgentNotFound{name: name}
 	}
 	return &mockACPAgentClient{
-		result: &ACPPromptResult{Text: "mock response from " + name, StopReason: "end_turn"},
+		result: defaultACPResult(m.promptResult, name),
 		err:    m.promptErr,
+		events: append([]ACPPromptEvent(nil), m.promptEvents...),
 	}, nil
+}
+
+func defaultACPResult(result *ACPPromptResult, name string) *ACPPromptResult {
+	if result != nil {
+		return result
+	}
+	return &ACPPromptResult{Text: "mock response from " + name, StopReason: "end_turn"}
 }
 
 func (m *mockACPAgentClient) Prompt(ctx context.Context, prompt string) (*ACPPromptResult, error) {
 	return m.result, m.err
+}
+
+func (m *mockACPAgentClient) PromptStream(
+	ctx context.Context,
+	prompt string,
+	onEvent func(ACPPromptEvent),
+) (*ACPPromptResult, error) {
+	for _, event := range m.events {
+		onEvent(event)
+	}
+	return m.result, m.err
+}
+
+func (m *mockACPAgentClient) Close() error {
+	m.closed++
+	return nil
 }
 
 // errAgentNotFound for test purposes.
@@ -146,6 +178,128 @@ func TestDelegateToolExecute(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "GitHub Copilot") {
 		t.Errorf("expected response to contain agent title, got: %s", result.Content)
+	}
+}
+
+func TestDelegateToolExecuteAsync(t *testing.T) {
+	mgr := &mockACPAgentRegistry{
+		agents: map[string]agentEntry{
+			"copilot": {"GitHub Copilot", "AI assistant"},
+		},
+		promptResult: &ACPPromptResult{
+			Text: "## Heading\n\nFinal markdown",
+			ToolCalls: []ACPToolCallSummary{
+				{Name: "Read file", Title: "Read file", Status: "completed"},
+			},
+		},
+		promptEvents: []ACPPromptEvent{
+			{Type: ACPPromptEventText, Text: "## Heading\n\n"},
+			{Type: ACPPromptEventToolCall, ToolID: "tool-1", ToolName: "Read file", ToolTitle: "Read file", ToolArgs: `{"path":"README.md"}`},
+			{Type: ACPPromptEventToolResult, ToolID: "tool-1", ToolName: "Read file", Result: "README contents"},
+			{Type: ACPPromptEventText, Text: "Final markdown"},
+		},
+	}
+	runMgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1})
+	defer runMgr.Shutdown()
+	tool := DelegateTool{Manager: mgr, SubAgentManager: runMgr}
+
+	input, _ := json.Marshal(map[string]string{
+		"agent":       "copilot",
+		"prompt":      "render markdown",
+		"description": "Checking markdown output",
+	})
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Started delegated agent") {
+		t.Fatalf("expected async start message, got %q", result.Content)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	agents := runMgr.List()
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent run, got %d", len(agents))
+	}
+	snap, err := subagent.WaitForSnapshot(ctx, runMgr, agents[0].ID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("wait failed: %v", err)
+	}
+	if snap.Status != subagent.StatusCompleted {
+		t.Fatalf("expected completed status, got %s", snap.Status)
+	}
+	if !strings.Contains(snap.Result, "## Heading") {
+		t.Fatalf("expected delegate output in result, got %q", snap.Result)
+	}
+	if len(snap.Events) < 3 {
+		t.Fatalf("expected streamed events to be recorded, got %d", len(snap.Events))
+	}
+	if snap.Events[1].ToolID != "tool-1" {
+		t.Fatalf("expected tool call id to be preserved, got %+v", snap.Events[1])
+	}
+}
+
+func TestDelegateToolExecuteAsyncUsesSelfContainedToolResultMetadata(t *testing.T) {
+	mgr := &mockACPAgentRegistry{
+		agents: map[string]agentEntry{
+			"copilot": {"GitHub Copilot", "AI assistant"},
+		},
+		promptResult: &ACPPromptResult{Text: "done"},
+		promptEvents: []ACPPromptEvent{
+			{
+				Type:      ACPPromptEventToolResult,
+				ToolID:    "tool-2",
+				ToolName:  "write_file",
+				ToolTitle: "Write /tmp/hello.txt",
+				ToolArgs:  `{"path":"/tmp/hello.txt","content":"hello"}`,
+				Result:    "completed",
+			},
+		},
+	}
+	runMgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1})
+	defer runMgr.Shutdown()
+	tool := DelegateTool{Manager: mgr, SubAgentManager: runMgr}
+
+	input, _ := json.Marshal(map[string]string{
+		"agent":       "copilot",
+		"prompt":      "write file",
+		"description": "Checking tool result metadata",
+	})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", result.Content)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	agents := runMgr.List()
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent run, got %d", len(agents))
+	}
+	snap, err := subagent.WaitForSnapshot(ctx, runMgr, agents[0].ID, 2*time.Second)
+	if err != nil {
+		t.Fatalf("wait failed: %v", err)
+	}
+	if len(snap.Events) == 0 {
+		t.Fatalf("expected tool result event to be recorded")
+	}
+	event := snap.Events[0]
+	if event.ToolDisplayName != "Write" {
+		t.Fatalf("expected self-contained tool title to be used, got %+v", event)
+	}
+	if event.ToolDetail != "/tmp/hello.txt" {
+		t.Fatalf("expected self-contained tool detail to be used, got %+v", event)
+	}
+	if event.ToolArgs != `{"path":"/tmp/hello.txt","content":"hello"}` {
+		t.Fatalf("expected self-contained tool args to be used, got %+v", event)
 	}
 }
 

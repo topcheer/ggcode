@@ -62,7 +62,7 @@ type Broker struct {
 
 	toolMu           sync.Mutex
 	toolArgs         map[string]string
-	subagentToolArgs map[string]string
+	subagentToolMeta map[string]subagentToolMeta
 
 	reasoningMu     sync.Mutex
 	activeReasoning map[string]string // msgID -> agentID (empty for main agent)
@@ -83,6 +83,12 @@ type Broker struct {
 	activeClientReplay     *pendingClientReplay
 	pendingClientReplay    *pendingClientReplay
 	clientProjectionSeeded atomic.Bool
+}
+
+type subagentToolMeta struct {
+	RawArgs     string
+	DisplayName string
+	Detail      string
 }
 
 type BrokerSnapshot struct {
@@ -117,7 +123,7 @@ func NewBroker(sess *Session) *Broker {
 		textDone:          make(chan struct{}),
 		sendWaiters:       make(map[string]chan struct{}),
 		toolArgs:          make(map[string]string),
-		subagentToolArgs:  make(map[string]string),
+		subagentToolMeta:  make(map[string]subagentToolMeta),
 		activeReasoning:   make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
@@ -462,7 +468,7 @@ func (b *Broker) SwitchSession(sessionID string) {
 	// (encryption token, WebSocket connection) is preserved.
 	b.toolMu.Lock()
 	b.toolArgs = make(map[string]string)
-	b.subagentToolArgs = make(map[string]string)
+	b.subagentToolMeta = make(map[string]subagentToolMeta)
 	b.toolMu.Unlock()
 
 	b.statusMu.Lock()
@@ -1123,10 +1129,14 @@ func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, ar
 		streamID = fmt.Sprintf("%s-tool", agentID)
 	}
 	b.toolMu.Lock()
-	if b.subagentToolArgs == nil {
-		b.subagentToolArgs = make(map[string]string)
+	if b.subagentToolMeta == nil {
+		b.subagentToolMeta = make(map[string]subagentToolMeta)
 	}
-	b.subagentToolArgs[fmt.Sprintf("%s:%s", agentID, streamID)] = args
+	b.subagentToolMeta[fmt.Sprintf("%s:%s", agentID, streamID)] = subagentToolMeta{
+		RawArgs:     args,
+		DisplayName: displayName,
+		Detail:      detail,
+	}
 	b.toolMu.Unlock()
 	b.enqueueWithStream(EventSubagentToolCall, streamID, SubagentToolCallData{
 		AgentID:     agentID,
@@ -1138,29 +1148,49 @@ func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, ar
 	})
 }
 
-func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string, isError bool) {
+func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 	b.waitProjectionSync()
 	streamID := toolID
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
 	}
-	rawArgs := ""
+	meta := subagentToolMeta{}
 	key := fmt.Sprintf("%s:%s", agentID, streamID)
 	b.toolMu.Lock()
-	rawArgs = b.subagentToolArgs[key]
-	delete(b.subagentToolArgs, key)
+	meta = b.subagentToolMeta[key]
+	delete(b.subagentToolMeta, key)
 	b.toolMu.Unlock()
-	payload := SubagentToolResultData{
-		AgentID: agentID, ToolID: toolID, ToolName: toolName, Result: result, IsError: isError,
+	if displayName == "" {
+		displayName = meta.DisplayName
 	}
-	if present, ok := toolpkg.DescribeToolResult(toolName, rawArgs, result, isError); ok {
+	if detail == "" {
+		detail = meta.Detail
+	}
+	payload := SubagentToolResultData{
+		AgentID:     agentID,
+		ToolID:      toolID,
+		ToolName:    toolName,
+		DisplayName: displayName,
+		Detail:      detail,
+		Result:      result,
+		IsError:     isError,
+	}
+	if present, ok := toolpkg.DescribeToolResult(toolName, meta.RawArgs, result, isError); ok {
 		payload.Summary = present.Summary
 		payload.Payload = present.Payload
 		payload.PayloadMode = present.PayloadMode
 	}
 	b.enqueueWithStream(EventSubagentToolResult, streamID, SubagentToolResultData{
-		AgentID: payload.AgentID, ToolID: payload.ToolID, ToolName: payload.ToolName, Result: payload.Result,
-		Summary: payload.Summary, Payload: payload.Payload, PayloadMode: payload.PayloadMode, IsError: payload.IsError,
+		AgentID:     payload.AgentID,
+		ToolID:      payload.ToolID,
+		ToolName:    payload.ToolName,
+		DisplayName: payload.DisplayName,
+		Detail:      payload.Detail,
+		Result:      payload.Result,
+		Summary:     payload.Summary,
+		Payload:     payload.Payload,
+		PayloadMode: payload.PayloadMode,
+		IsError:     payload.IsError,
 	})
 }
 

@@ -1,9 +1,11 @@
 module github.com/topcheer/ggcode/desktop
 
-go 1.26.1
+go 1.26.2
 
 require (
 	fyne.io/fyne/v2 v2.7.4
+	github.com/alecthomas/chroma/v2 v2.24.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/topcheer/ggcode v0.0.0-00010101000000-000000000000
 )
 
@@ -17,7 +19,6 @@ require (
 	fyne.io/systray v1.12.1 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/ImVexed/fasturl v0.0.0-20230304231329-4e41488060f3 // indirect
-	github.com/alecthomas/chroma/v2 v2.24.1 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.29.0 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
@@ -102,7 +103,6 @@ require (
 	github.com/rs/zerolog v1.35.0 // indirect
 	github.com/rymdport/portal v0.4.2 // indirect
 	github.com/sashabaranov/go-openai v1.41.2 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
@@ -110,6 +110,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/topcheer/ggcode-acp-go v0.1.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.59.0 // indirect

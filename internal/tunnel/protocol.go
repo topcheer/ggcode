@@ -335,6 +335,8 @@ type SubagentToolResultData struct {
 	AgentID     string `json:"agent_id"`
 	ToolID      string `json:"tool_id"`
 	ToolName    string `json:"tool_name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 	Result      string `json:"result"`
 	Summary     string `json:"summary,omitempty"`
 	Payload     string `json:"payload,omitempty"`

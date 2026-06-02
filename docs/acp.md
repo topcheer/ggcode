@@ -2,6 +2,9 @@
 
 ggcode supports the Agent Client Protocol (ACP), allowing it to be used as an AI coding agent in JetBrains IDEs, Zed, and other ACP-compatible editors.
 
+For the extracted standalone ACP client/runtime library and ggcode-side adapter boundary, see
+[docs/acp-go-integration.md](acp-go-integration.md).
+
 ## What is ACP?
 
 ACP is a standard protocol developed by JetBrains and Zed Industries for communication between IDEs (clients) and AI coding agents. It uses JSON-RPC 2.0 over stdio.

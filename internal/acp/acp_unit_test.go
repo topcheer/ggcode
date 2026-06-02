@@ -872,6 +872,9 @@ func TestPermissionOutcomeRoundTrip(t *testing.T) {
 	if decoded.SelectedOption == nil || decoded.SelectedOption.OptionID != "allow" {
 		t.Errorf("selected option mismatch")
 	}
+	if string(data) != `{"outcome":"selected","optionId":"allow"}` {
+		t.Fatalf("expected flat selected outcome JSON, got %s", string(data))
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -961,56 +964,6 @@ func TestNewSessionRequestMarshalIncludesEmptyMCPServers(t *testing.T) {
 	}
 	if string(data) != `{"cwd":"/home/user/project","mcpServers":[]}` {
 		t.Fatalf("expected empty mcpServers array, got %s", data)
-	}
-}
-
-func TestMCPServersFromConfig(t *testing.T) {
-	servers := mcpServersFromConfig([]config.MCPServerConfig{
-		{
-			Name:    "stdio-server",
-			Command: "node",
-			Args:    []string{"server.js"},
-			Env: map[string]string{
-				"Z_VAR": "z",
-				"A_VAR": "a",
-			},
-			Headers: map[string]string{
-				"X-Zeta":  "z",
-				"X-Alpha": "a",
-			},
-		},
-		{
-			Name: "remote-server",
-			Type: "sSe",
-			URL:  "https://example.com/sse",
-		},
-		{
-			Name:          "oauth-server",
-			Type:          "http",
-			URL:           "https://example.com/http",
-			OAuthClientID: "client-id",
-		},
-		{
-			Name: "ws-server",
-			Type: "websocket",
-			URL:  "wss://example.com/mcp",
-		},
-	})
-
-	if len(servers) != 2 {
-		t.Fatalf("expected 2 ACP MCP servers, got %d: %+v", len(servers), servers)
-	}
-	if servers[0].Name != "stdio-server" || servers[0].Type != "stdio" || servers[0].Command != "node" {
-		t.Fatalf("unexpected stdio server mapping: %+v", servers[0])
-	}
-	if len(servers[0].Env) != 2 || servers[0].Env[0].Name != "A_VAR" || servers[0].Env[1].Name != "Z_VAR" {
-		t.Fatalf("expected sorted env vars, got %+v", servers[0].Env)
-	}
-	if len(servers[0].Headers) != 2 || servers[0].Headers[0].Name != "X-Alpha" || servers[0].Headers[1].Name != "X-Zeta" {
-		t.Fatalf("expected sorted headers, got %+v", servers[0].Headers)
-	}
-	if servers[1].Name != "remote-server" || servers[1].Type != "sse" || servers[1].URL != "https://example.com/sse" {
-		t.Fatalf("unexpected remote server mapping: %+v", servers[1])
 	}
 }
 

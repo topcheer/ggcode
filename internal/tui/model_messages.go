@@ -128,19 +128,22 @@ type subAgentTunnelReasoningMsg struct {
 }
 
 type subAgentTunnelToolCallMsg struct {
-	AgentID  string
-	ToolID   string
-	ToolName string
-	Args     string
-	Detail   string
+	AgentID     string
+	ToolID      string
+	ToolName    string
+	DisplayName string
+	Args        string
+	Detail      string
 }
 
 type subAgentTunnelToolResultMsg struct {
-	AgentID  string
-	ToolID   string
-	ToolName string
-	Result   string
-	IsError  bool
+	AgentID     string
+	ToolID      string
+	ToolName    string
+	DisplayName string
+	Detail      string
+	Result      string
+	IsError     bool
 }
 
 type swarmTunnelEventMsg struct {

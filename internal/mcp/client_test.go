@@ -479,6 +479,33 @@ func TestCallToolCancelAbortsHungStdioServer(t *testing.T) {
 	}
 }
 
+func TestStartKeepsStdioProcessAliveAfterConnectContextCancel(t *testing.T) {
+	command := "sleep"
+	args := []string{"60"}
+	if runtime.GOOS == "windows" {
+		command = "powershell"
+		args = []string{"-NoProfile", "-Command", "Start-Sleep -Seconds 60"}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client := NewClient("stdio-lifecycle", command, args)
+	if err := client.Start(ctx); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	if client.cmd == nil || client.cmd.Process == nil {
+		t.Fatal("expected started stdio process")
+	}
+	if err := client.cmd.Process.Kill(); err != nil {
+		t.Fatalf("expected stdio process to still be alive after connect context cancellation, got %v", err)
+	}
+}
+
 func encodeStdioMessages(t *testing.T, messages ...interface{}) []byte {
 	t.Helper()
 	var out bytes.Buffer

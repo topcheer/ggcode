@@ -810,10 +810,10 @@ func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayNam
 }
 
 // pushSubAgentTunnelToolResult pushes a tool result from a sub-agent.
-func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, result string, isError bool) {
+func (m *Model) pushSubAgentTunnelToolResult(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushReasoningDone(subagentTunnelReasoningMsgID(agentID))
-		broker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
+		broker.PushSubagentToolResult(agentID, toolID, toolName, displayName, detail, result, isError)
 	}
 }
 
@@ -834,7 +834,7 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 		broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 	case "teammate_tool_result":
-		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
 
 	case "teammate_text":
 		msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
@@ -1411,7 +1411,14 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 			if ev.ToolID != "" {
 				toolArgsByID[ev.ToolID] = ev.ToolArgs
 			}
-			detail := describeTool(LangEnglish, ev.ToolName, ev.ToolArgs).Detail
+			displayName := ev.ToolDisplayName
+			if displayName == "" {
+				displayName = toolCallDisplayName(ev.ToolName, ev.ToolArgs)
+			}
+			detail := ev.ToolDetail
+			if detail == "" {
+				detail = describeTool(LangEnglish, ev.ToolName, ev.ToolArgs).Detail
+			}
 			out = append(out, snapshotEvent(
 				tunnel.EventSubagentToolCall,
 				agentID,
@@ -1419,7 +1426,7 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 					AgentID:     agentID,
 					ToolID:      ev.ToolID,
 					ToolName:    ev.ToolName,
-					DisplayName: toolCallDisplayName(ev.ToolName, ev.ToolArgs),
+					DisplayName: displayName,
 					Args:        ev.ToolArgs,
 					Detail:      detail,
 				},
@@ -1427,7 +1434,11 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 		case subagent.AgentEventToolResult:
 			flushReasoning(true)
 			flushText(false)
-			present, _ := toolpkg.DescribeToolResult(ev.ToolName, toolArgsByID[ev.ToolID], ev.Result, ev.IsError)
+			rawArgs := ev.ToolArgs
+			if rawArgs == "" {
+				rawArgs = toolArgsByID[ev.ToolID]
+			}
+			present, _ := toolpkg.DescribeToolResult(ev.ToolName, rawArgs, ev.Result, ev.IsError)
 			delete(toolArgsByID, ev.ToolID)
 			out = append(out, snapshotEvent(
 				tunnel.EventSubagentToolResult,
@@ -1436,6 +1447,8 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 					AgentID:     agentID,
 					ToolID:      ev.ToolID,
 					ToolName:    ev.ToolName,
+					DisplayName: ev.ToolDisplayName,
+					Detail:      ev.ToolDetail,
 					Result:      ev.Result,
 					Summary:     present.Summary,
 					Payload:     present.Payload,

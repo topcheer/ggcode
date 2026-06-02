@@ -450,14 +450,12 @@ func TestIntegrationPermissionApproved(t *testing.T) {
 		}
 		var r struct {
 			Outcome struct {
-				Outcome        string `json:"outcome"`
-				SelectedOption struct {
-					OptionID string `json:"optionId"`
-				} `json:"selectedOption"`
+				Outcome  string `json:"outcome"`
+				OptionID string `json:"optionId"`
 			} `json:"outcome"`
 		}
 		json.Unmarshal(result, &r)
-		done <- r.Outcome.Outcome == "selected" && r.Outcome.SelectedOption.OptionID == "allow"
+		done <- r.Outcome.Outcome == "selected" && r.Outcome.OptionID == "allow"
 	}()
 
 	// Wait for the permission request to appear in collector
@@ -468,7 +466,7 @@ func TestIntegrationPermissionApproved(t *testing.T) {
 
 	// Extract the request ID and respond
 	reqID := permReq["id"].(float64)
-	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","selectedOption":{"optionId":"allow"}}}}`, reqID)
+	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`, reqID)
 	pt.clientWrite.Write([]byte(respLine + "\n"))
 
 	select {
@@ -1014,7 +1012,7 @@ func TestIntegrationBidirectionalConcurrent(t *testing.T) {
 	}
 
 	reqID := permReq["id"].(float64)
-	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","selectedOption":{"optionId":"allow"}}}}`, reqID)
+	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","optionId":"allow"}}}`, reqID)
 	pt.clientWrite.Write([]byte(respLine + "\n"))
 
 	wg.Wait()
