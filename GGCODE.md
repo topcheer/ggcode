@@ -291,13 +291,15 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
   1. Create `docs/releases/vX.Y.Z.md`
   2. Bump `npm/package.json` → `"version": "X.Y.Z"`
   3. Bump `python/pyproject.toml` → `version = "X.Y.Z"`
-  4. Update `GGCODE.md` → latest documented release pointer
-  5. Update `docs/releases/README.md` → current release notes pointer
-  6. Run `make verify-ci` or equivalent
-  7. Commit: `release: vX.Y.Z`
-  8. Push `main`
-  9. Create and push tag `vX.Y.Z`
-  10. Monitor GitHub Actions until ALL workflows pass
+  4. Bump mobile: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` (updates 4 files: `.build-number`, `pubspec.yaml`, `build.gradle.kts`, `Info.plist`)
+  5. Update `GGCODE.md` → latest documented release pointer
+  6. Update `docs/releases/README.md` → current release notes pointer
+  7. Run `make verify-ci` or equivalent
+  8. Stage ALL changed files including mobile (4 files from step 4)
+  9. Commit: `release: vX.Y.Z`
+  10. Push `main`
+  11. Create and push tag `vX.Y.Z`
+  12. Monitor GitHub Actions until ALL workflows pass
 - **GoReleaser** (`.goreleaser.yaml`): Builds for linux/darwin/windows on amd64/arm64 with `CGO_ENABLED=0`. Produces tar.gz, zip (Windows), and packages (deb, rpm, apk, ipk, archlinux). SBOMs included.
 - **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
 - **npm** (`npm/`): Wrapper that installs the GitHub Release binary
