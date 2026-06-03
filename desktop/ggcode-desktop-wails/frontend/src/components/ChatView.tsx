@@ -96,6 +96,17 @@ interface ChatMessage {
   timestamp: number
 }
 
+// Agent panel: a sub-agent or teammate has its own tab with its own message stream
+interface AgentPanel {
+  id: string
+  name: string
+  kind: 'subagent' | 'teammate'
+  status: 'running' | 'completed' | 'failed' | 'idle'
+  task: string
+  messages: ChatMessage[]
+  reasoningBuf: string
+}
+
 // ── Event types (mirrors wailskit/chat.go emit()) ────────────────────────────
 
 interface StreamEvent {
@@ -148,12 +159,38 @@ function formatTokens(n: number): string {
 
 export function ChatView({ onShare, sessionId }: { onShare?: () => void; sessionId?: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
+  const [activeTab, setActiveTab] = useState<string>('main') // 'main' or agentID
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [statusBar, setStatusBar] = useState<StatusBarState>({
     vendor: '', model: '', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
   })
+
+  // Helper: update an agent panel's messages
+  const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
+    setAgentPanels(prev => {
+      const next = new Map(prev)
+      const panel = next.get(agentID)
+      if (panel) {
+        next.set(agentID, updater(panel))
+      }
+      return next
+    })
+  }, [])
+
+  // Helper: ensure agent panel exists, create if not
+  const ensureAgentPanel = useCallback((agentID: string, name: string, kind: 'subagent' | 'teammate') => {
+    setAgentPanels(prev => {
+      if (prev.has(agentID)) return prev
+      const next = new Map(prev)
+      next.set(agentID, { id: agentID, name, kind, status: 'running', task: '', messages: [], reasoningBuf: '' })
+      return next
+    })
+    // Auto-switch to new agent tab
+    setActiveTab(agentID)
+  }, [])
 
   // Reasoning buffer: accumulates during streaming, attached to next message
   const reasoningBuf = useRef('')
@@ -195,7 +232,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, thinking])
+  }, [messages, agentPanels, thinking])
 
   // Render mermaid diagrams — eagerly try on every message update.
   // Success: replace with SVG, mark data-done (no retry).
@@ -437,132 +474,112 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         }
 
         // ── Sub-agent events ──
+        // ── Sub-agent events → route to agent panel ──
         case 'subagent_text': {
           const p = parseJSON<{ agentID: string; content: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            // Find existing streaming sub-agent message
-            const idx = prev.findIndex(m => m.agentID === p.agentID && m.role === 'assistant' && m.streaming)
+          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          updateAgentPanel(p.agentID, panel => {
+            const msgs = [...panel.messages]
+            const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
             if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = { ...updated[idx], content: updated[idx].content + p.content }
-              return updated
+              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
+            } else {
+              msgs.push({ id: nextID(), role: 'assistant', content: p.content, streaming: true, timestamp: Date.now() })
             }
-            // Create new sub-agent assistant message
-            return [...prev, {
-              id: nextID(), role: 'assistant' as ChatRole, agentID: p.agentID,
-              content: p.content, streaming: true, timestamp: Date.now(),
-            }]
+            return { ...panel, messages: msgs }
           })
           break
         }
         case 'subagent_reasoning': {
-          // Sub-agent reasoning — append to a running reasoning buffer for this agent
-          // For simplicity, attach as reasoning text to next message from this agent
           const p = parseJSON<{ agentID: string; content: string }>(raw)
           if (!p || p.content === '__redacted_thinking__') break
-          // Store in a map-like ref — just accumulate into reasoningBuf with agent prefix
-          reasoningBuf.current += p.content
+          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          updateAgentPanel(p.agentID, panel => ({ ...panel, reasoningBuf: panel.reasoningBuf + p.content }))
           break
         }
         case 'subagent_tool_call': {
           const p = parseJSON<ToolCallPayload & { agentID: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            const updated = [...prev]
-            // Finalize current streaming sub-agent assistant message
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].agentID === p.agentID && updated[i].role === 'assistant' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false }
-                break
-              }
-            }
-            updated.push({
-              id: nextID(), role: 'tool' as ChatRole, agentID: p.agentID,
-              content: '', toolName: p.name, toolID: p.id, toolArgs: p.arguments,
+          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          updateAgentPanel(p.agentID, panel => {
+            const msgs = panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
+            const reasoning = panel.reasoningBuf
+            msgs.push({
+              id: nextID(), role: 'tool' as ChatRole, content: '',
+              toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
-              streaming: true, timestamp: Date.now(),
+              reasoning, streaming: true, timestamp: Date.now(),
             })
-            return updated
+            return { ...panel, messages: msgs, reasoningBuf: '' }
           })
           break
         }
         case 'subagent_tool_result': {
           const p = parseJSON<ToolResultPayload & { agentID: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
-            if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = { ...updated[idx], content: p.result, isError: p.isError, streaming: false }
-              return updated
-            }
-            return prev
+          updateAgentPanel(p.agentID, panel => {
+            const msgs = [...panel.messages]
+            const idx = msgs.findIndex(m => m.role === 'tool' && m.toolID === p.id)
+            if (idx >= 0) msgs[idx] = { ...msgs[idx], content: p.result, isError: p.isError, streaming: false }
+            return { ...panel, messages: msgs }
           })
           break
         }
 
-        // ── Swarm/teammate events ──
+        // ── Swarm/teammate events → route to agent panel ──
         case 'swarm_text': {
           const p = parseJSON<{ teammateID: string; teammateName: string; content: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            const idx = prev.findIndex(m => m.agentID === p.teammateID && m.role === 'assistant' && m.streaming)
+          ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
+          updateAgentPanel(p.teammateID, panel => {
+            const msgs = [...panel.messages]
+            const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
             if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = { ...updated[idx], content: updated[idx].content + p.content }
-              return updated
+              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
+            } else {
+              msgs.push({ id: nextID(), role: 'assistant', content: p.content, streaming: true, timestamp: Date.now() })
             }
-            return [...prev, {
-              id: nextID(), role: 'assistant' as ChatRole, agentID: p.teammateID,
-              teammateName: p.teammateName, content: p.content, streaming: true, timestamp: Date.now(),
-            }]
+            return { ...panel, messages: msgs }
           })
           break
         }
         case 'swarm_tool_call': {
           const p = parseJSON<ToolCallPayload & { teammateID: string; teammateName: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            const updated = [...prev]
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].agentID === p.teammateID && updated[i].role === 'assistant' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false }
-                break
-              }
-            }
-            updated.push({
-              id: nextID(), role: 'tool' as ChatRole, agentID: p.teammateID,
-              teammateName: p.teammateName, content: '',
+          ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
+          updateAgentPanel(p.teammateID, panel => {
+            const msgs = panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
+            const reasoning = panel.reasoningBuf
+            msgs.push({
+              id: nextID(), role: 'tool' as ChatRole, content: '',
               toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
-              streaming: true, timestamp: Date.now(),
+              teammateName: p.teammateName, reasoning, streaming: true, timestamp: Date.now(),
             })
-            return updated
+            return { ...panel, messages: msgs, reasoningBuf: '' }
           })
           break
         }
         case 'swarm_tool_result': {
           const p = parseJSON<ToolResultPayload & { teammateID: string; teammateName: string }>(raw)
           if (!p) break
-          setMessages(prev => {
-            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
-            if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = { ...updated[idx], content: p.result, isError: p.isError, streaming: false }
-              return updated
-            }
-            return prev
+          updateAgentPanel(p.teammateID, panel => {
+            const msgs = [...panel.messages]
+            const idx = msgs.findIndex(m => m.role === 'tool' && m.toolID === p.id)
+            if (idx >= 0) msgs[idx] = { ...msgs[idx], content: p.result, isError: p.isError, streaming: false }
+            return { ...panel, messages: msgs }
           })
           break
         }
         case 'swarm_spawned': {
           const p = parseJSON<{ teammateID: string; teammateName: string; teamID: string }>(raw)
           if (!p) break
+          ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
+          // Also show a system message in main chat
           setMessages(prev => [...prev, {
             id: nextID(), role: 'system' as ChatRole,
             content: `Teammate "${p.teammateName}" spawned`,
-            agentID: p.teammateID, teammateName: p.teammateName,
             timestamp: Date.now(),
           }])
           break
@@ -570,16 +587,11 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         case 'swarm_idle': {
           const p = parseJSON<{ teammateID: string; teammateName: string; content: string }>(raw)
           if (!p) break
-          // Finalize any streaming messages from this teammate
-          setMessages(prev => {
-            const updated = [...prev]
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].agentID === p.teammateID && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false }
-              }
-            }
-            return updated
-          })
+          updateAgentPanel(p.teammateID, panel => ({
+            ...panel,
+            status: p.content ? 'completed' : 'idle',
+            messages: panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m),
+          }))
           break
         }
       }
@@ -746,15 +758,63 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         )}
       </div>
 
-      {/* Messages */}
+      {/* Tab bar — main chat + agent panels */}
+      {agentPanels.size > 0 && (
+        <div style={{
+          display: 'flex', borderBottom: '1px solid var(--color-border)',
+          background: 'var(--color-surface)', overflowX: 'auto',
+        }}>
+          <TabButton label="Chat" active={activeTab === 'main'} onClick={() => setActiveTab('main')} />
+          {Array.from(agentPanels.values()).map(panel => (
+            <TabButton
+              key={panel.id}
+              label={`${panel.status === 'running' ? '● ' : panel.status === 'completed' ? '✓ ' : ''}${panel.name}`}
+              active={activeTab === panel.id}
+              onClick={() => setActiveTab(panel.id)}
+              color={panel.status === 'running' ? 'var(--color-warning)' : panel.status === 'completed' ? 'var(--color-success)' : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Messages — render active tab's content */}
       <div style={{
         flex: 1, overflowY: 'auto',
         padding: 'var(--spacing-lg)',
         display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)',
       }}>
-        {messages.map(msg => (
-          <MessageCard key={msg.id} msg={msg} />
-        ))}
+        {activeTab === 'main' ? (
+          // Main chat messages
+          <>
+            {messages.map(msg => (
+              <MessageCard key={msg.id} msg={msg} />
+            ))}
+          </>
+        ) : (
+          // Agent panel messages
+          (() => {
+            const panel = agentPanels.get(activeTab)
+            if (!panel) return null
+            return <>
+              {/* Agent header */}
+              <div style={{
+                padding: '8px 12px', borderRadius: 'var(--radius-md)',
+                background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                fontSize: 13, color: 'var(--text-secondary)',
+              }}>
+                <span style={{ fontWeight: 600, color: panel.status === 'running' ? 'var(--color-warning)' : 'var(--color-success)' }}>
+                  {panel.name}
+                </span>
+                <span style={{ marginLeft: 8, fontSize: 11 }}>
+                  {panel.status === 'running' ? '(working...)' : panel.status === 'completed' ? '(done)' : panel.status}
+                </span>
+              </div>
+              {panel.messages.map(msg => (
+                <MessageCard key={msg.id} msg={msg} />
+              ))}
+            </>
+          })()
+        )}
 
         {/* Thinking indicator (mirrors Fyne showThinking) */}
         {thinking && (
@@ -839,6 +899,22 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
 }
 
 // ── MessageCard ──────────────────────────────────────────────────────────────
+
+// ── Tab button component ──
+function TabButton({ label, active, onClick, color }: { label: string; active: boolean; onClick: () => void; color?: string }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: '6px 14px', border: 'none', cursor: 'pointer',
+      fontSize: 12, fontWeight: active ? 600 : 400,
+      color: active ? (color || 'var(--text-primary)') : 'var(--text-tertiary)',
+      background: active ? 'var(--color-card)' : 'transparent',
+      borderBottom: active ? '2px solid var(--color-primary)' : '2px solid transparent',
+      whiteSpace: 'nowrap' as const,
+    }}>
+      {label}
+    </button>
+  )
+}
 
 function MessageCard({ msg }: { msg: ChatMessage }) {
   switch (msg.role) {
