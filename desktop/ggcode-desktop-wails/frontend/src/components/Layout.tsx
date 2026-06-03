@@ -22,6 +22,7 @@ export function Layout() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
 
   // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
@@ -57,22 +58,28 @@ export function Layout() {
 
   // Listen for chat:stream events to update shared status
   useEffect(() => {
-    const off = EventsOn('chat:stream', (data: any) => {
-      if (!data) return
-      if (data.type === 'done') {
+    const off = EventsOn('chat:stream', (event: any) => {
+      if (!event) return
+      const { type, data } = event
+      // data is a JSON string from Go
+      let parsed: any = {}
+      if (data) {
+        try { parsed = JSON.parse(data) } catch { parsed = {} }
+      }
+      if (type === 'done') {
         setStatusBarData(prev => ({
           ...prev,
-          inputTokens: data.inputTokens ?? prev.inputTokens,
-          outputTokens: data.outputTokens ?? prev.outputTokens,
-          contextUsed: data.contextUsed ?? prev.contextUsed,
-          contextTotal: data.contextTotal ?? prev.contextTotal,
-          cacheHit: data.cacheHit ?? prev.cacheHit,
+          inputTokens: parsed.inputTokens ?? prev.inputTokens,
+          outputTokens: parsed.outputTokens ?? prev.outputTokens,
+          contextUsed: parsed.contextUsed ?? prev.contextUsed,
+          contextTotal: parsed.contextTotal ?? prev.contextTotal,
+          cacheHit: parsed.cacheHit ?? prev.cacheHit,
           status: 'Ready',
         }))
-      } else if (data.type === 'start') {
-        setStatusBarData(prev => ({ ...prev, status: 'Thinking...' }))
-      } else if (data.type === 'stream') {
+      } else if (type === 'text') {
         setStatusBarData(prev => ({ ...prev, status: 'Streaming' }))
+      } else if (type === 'error') {
+        setStatusBarData(prev => ({ ...prev, status: 'Error' }))
       }
     })
     return () => { if (typeof off === 'function') off() }
@@ -111,8 +118,11 @@ export function Layout() {
 
   return (
     <div style={{ position: 'relative', display: 'flex', width: '100%', height: '100%', flexDirection: 'column' }}>
-      {/* macOS titlebar drag region */}
-      <div className="titlebar-drag" style={{ flexShrink: 0 }} />
+      {/* macOS titlebar drag — covers the entire top edge */}
+      <div className="titlebar-drag" style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 36,
+        zIndex: 1000, pointerEvents: 'none',
+      }} />
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Nav Rail */}
@@ -120,11 +130,11 @@ export function Layout() {
 
         {/* Sidebar — only in chat view */}
         {sidebarOpen && view === 'chat' && (
-          <Sidebar onClose={() => setSidebarOpen(false)} />
+          <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} />
         )}
 
         {/* Main content */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative', paddingTop: 36 }}>
           {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
           {view === 'settings' && <SettingsPage onBack={backToChat} />}
           {view === 'im' && <IMManagement onBack={backToChat} />}
