@@ -155,12 +155,7 @@ mkdir -p "${DMG_STAGING}"
 cp -R "${APP_BUNDLE}" "${DMG_STAGING}/"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
-# Free disk space: remove .app bundle from WORK_DIR (now copied to staging).
-rm -rf "${APP_BUNDLE}"
-
 hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"
-
-# Free disk space: remove DMG staging after hdiutil.
 rm -rf "${DMG_STAGING}"
 
 # ── Notarize ───────────────────────────────────────────────
