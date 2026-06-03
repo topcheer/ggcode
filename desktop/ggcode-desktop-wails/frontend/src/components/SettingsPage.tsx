@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react'
 import { EndpointInfo } from '../types'
+import * as App from '../../wailsjs/go/main/App'
 
 interface ConfigSnapshot {
   vendor: string
@@ -15,22 +16,8 @@ interface Props {
   onBack: () => void
 }
 
-// Wails Go bindings
-declare global {
-  interface Window {
-    go: {
-      main: {
-        App: {
-          GetConfig: () => Promise<ConfigSnapshot>
-          GetVendors: () => Promise<string[]>
-          GetEndpoints: (vendor: string) => Promise<EndpointInfo[]>
-          GetModels: (vendor: string, endpoint: string) => Promise<string[]>
-          SaveConfig: (values: Record<string, string>) => Promise<void>
-        }
-      }
-    }
-  }
-}
+// Wails Go bindings via generated imports
+// (see ../../wailsjs/go/main/App.js)
 
 export function SettingsPage({ onBack }: Props) {
   const [cfg, setCfg] = useState<ConfigSnapshot>({
@@ -46,10 +33,10 @@ export function SettingsPage({ onBack }: Props) {
 
   // Load config
   useEffect(() => {
-    window.go.main.App.GetConfig()
+    App.GetConfig()
       .then(c => setCfg(c || { vendor: '', endpoint: '', model: '', defaultMode: 'code', language: 'en', extraPrompt: '' }))
       .catch(() => {})
-    window.go.main.App.GetVendors()
+    App.GetVendors()
       .then(v => setVendors(v || []))
       .catch(() => {})
   }, [])
@@ -57,7 +44,7 @@ export function SettingsPage({ onBack }: Props) {
   // Load endpoints when vendor changes
   useEffect(() => {
     if (cfg.vendor) {
-      window.go.main.App.GetEndpoints(cfg.vendor)
+      App.GetEndpoints(cfg.vendor)
         .then(eps => setEndpoints(eps || []))
         .catch(() => setEndpoints([]))
     }
@@ -66,7 +53,7 @@ export function SettingsPage({ onBack }: Props) {
   // Load models when endpoint changes
   useEffect(() => {
     if (cfg.vendor && cfg.endpoint) {
-      window.go.main.App.GetModels(cfg.vendor, cfg.endpoint)
+      App.GetModels(cfg.vendor, cfg.endpoint)
         .then(m => setModels(m || []))
         .catch(() => setModels([]))
     }
@@ -75,7 +62,7 @@ export function SettingsPage({ onBack }: Props) {
   const save = async () => {
     setSaving(true)
     try {
-      await window.go.main.App.SaveConfig({
+      await App.SaveConfig({
         vendor: cfg.vendor,
         endpoint: cfg.endpoint,
         model: cfg.model,
