@@ -57,13 +57,6 @@ html, body, #root {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  /* Make entire window draggable */
-  -webkit-app-region: drag;
-}
-
-/* All interactive elements opt out of drag */
-a, button, input, textarea, select, [role="button"], [data-interactive] {
-  -webkit-app-region: no-drag;
 }
 
 ::-webkit-scrollbar {
@@ -95,4 +88,15 @@ a {
 
 a:hover {
   text-decoration: underline;
+}
+
+/* macOS titlebar drag region */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.titlebar-drag button,
+.titlebar-drag input,
+.titlebar-drag a {
+  -webkit-app-region: no-drag;
 }
