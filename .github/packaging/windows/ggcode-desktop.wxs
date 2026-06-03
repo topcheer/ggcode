@@ -29,6 +29,8 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="DesktopFolder" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\\ggcode-desktop.exe" />
   </Fragment>
 
   <Fragment>
@@ -42,13 +44,15 @@
           Directory="DesktopFolder"
           Name="GGCode Desktop"
           WorkingDirectory="INSTALLFOLDER"
-          Target="[INSTALLFOLDER]ggcode-desktop.exe" />
+          Target="[INSTALLFOLDER]ggcode-desktop.exe"
+          Icon="AppIcon" />
         <Shortcut
           Id="ProgramMenuShortcut"
           Directory="ProgramMenuProductDir"
           Name="GGCode Desktop"
           WorkingDirectory="INSTALLFOLDER"
-          Target="[INSTALLFOLDER]ggcode-desktop.exe" />
+          Target="[INSTALLFOLDER]ggcode-desktop.exe"
+          Icon="AppIcon" />
         <RemoveFolder Id="RemoveProgramMenuProductDir" Directory="ProgramMenuProductDir" On="uninstall" />
         <RegistryValue
           Root="HKLM"
