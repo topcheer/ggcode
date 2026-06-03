@@ -66,6 +66,8 @@ build_desktop_binary() {
   CGO_ENABLED=1 GOOS=linux GOARCH="${GOARCH_VALUE}" \
     go build -tags goolm -ldflags "${LDFLAGS[*]}" -o "${output}" .
   popd >/dev/null
+  # Free disk space: clear Go build cache after compilation.
+  go clean -cache 2>/dev/null || true
 }
 
 prepare_linux_icon() {
