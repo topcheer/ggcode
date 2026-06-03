@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Plus } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { TopDragBar } from './TopDragBar'
 
 interface IMAdapter {
   id: string
@@ -125,9 +124,7 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TopDragBar />
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', height: '100%' }}>
       {/* Adapter nav */}
       <div style={{
         width: 200, background: 'var(--color-nav)',
@@ -235,7 +232,6 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
         {/* STT / Stream toggles */}
         <ToggleRow label="STT / TTS" value={active.sttEnabled} onChange={v => setActive(a => ({ ...a, sttEnabled: v }))} />
         <ToggleRow label="Stream Output" value={active.streamEnabled} onChange={v => setActive(a => ({ ...a, streamEnabled: v }))} />
-      </div>
       </div>
     </div>
   )
