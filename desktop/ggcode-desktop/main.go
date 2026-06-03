@@ -11,7 +11,7 @@ import (
 var iconBytes []byte
 
 func main() {
-	a := app.NewWithID("com.ggcode.desktop")
+	a := app.NewWithID("gg.ai.ggcode-desktop")
 
 	// Load config to determine theme
 	cfg := LoadDesktopConfig()
