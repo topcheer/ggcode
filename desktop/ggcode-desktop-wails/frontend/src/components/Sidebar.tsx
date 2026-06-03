@@ -39,6 +39,10 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
     let cancelled = false
     async function load() {
       try {
+        // Get workDir to display current workspace
+        const dir = await App.GetWorkDir() as string
+        console.log('[Sidebar] workDir:', dir)
+
         const result = await App.ListSessions()
         if (cancelled || !result) return
         // result is SessionInfo[] from Go
