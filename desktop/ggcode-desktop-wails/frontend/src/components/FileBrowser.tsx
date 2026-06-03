@@ -157,7 +157,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     async function load() {
       try {
         // Get working directory
-        const dir = await App.GetWorkDir()
+        const dir = await App.GetWorkingDir()
         if (cancelled) return
         if (dir) {
           const parts = dir.replace(/\\/g, '/').split('/')
