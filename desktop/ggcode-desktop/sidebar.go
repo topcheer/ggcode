@@ -59,25 +59,6 @@ func NewSidebar(app *App, bridge *AgentBridge, ui *UIState) *Sidebar {
 	return &Sidebar{app: app, bridge: bridge, ui: ui}
 }
 
-func (s *Sidebar) buildSessionUsageCard() fyne.CanvasObject {
-	left := widget.NewLabel(strings.Join([]string{
-		t("sidebar.session_usage_total"),
-		t("sidebar.session_usage_input"),
-		t("sidebar.session_usage_output"),
-		t("sidebar.session_usage_cache_read"),
-		t("sidebar.session_usage_cache_write"),
-		t("sidebar.session_usage_cache_hit"),
-	}, "\n"))
-	right := widget.NewLabelWithData(s.ui.SessionUsageValueLines)
-	right.Alignment = fyne.TextAlignTrailing
-	right.TextStyle = fyne.TextStyle{Monospace: true}
-	return widget.NewCard(
-		t("sidebar.session_usage_card"),
-		"",
-		compactPad(0, 0, 0, 0, container.NewHBox(left, layout.NewSpacer(), right)),
-	)
-}
-
 func (s *Sidebar) buildSessionMetricsCard() fyne.CanvasObject {
 	left := widget.NewLabel(strings.Join([]string{
 		t("sidebar.metric_turns"),
@@ -273,8 +254,6 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 		&widget.FormItem{Text: t("sidebar.mode_label"), Widget: s.modeSelect},
 	))
 
-	sessionUsageCard := s.buildSessionUsageCard()
-
 	// Session list.
 	s.loadSessions()
 	s.sessionList = widget.NewList(
@@ -327,7 +306,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	shareBtn.Importance = widget.LowImportance
 
 	bottomBar := container.NewHBox(newChatBtn, layout.NewSpacer(), shareBtn, settingsBtn)
-	topSection := container.NewVBox(infoCard, sessionUsageCard, container.NewPadded(sessionHeader))
+	topSection := container.NewVBox(infoCard, container.NewPadded(sessionHeader))
 	return container.NewBorder(topSection, bottomBar, nil, nil, s.sessionList)
 }
 

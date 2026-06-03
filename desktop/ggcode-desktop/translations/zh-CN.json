@@ -5,6 +5,7 @@
   "status.loading": "加载中...",
   "status.failed": "失败",
   "status.establishing_tunnel": "正在建立隧道...",
+  "status.loading_session": "加载会话中...",
   "app.welcome_title": "欢迎使用 ggcode",
   "app.title.welcome": "ggcode — 欢迎",
   "app.description": "AI 编程助手\n支持 IM 集成",
