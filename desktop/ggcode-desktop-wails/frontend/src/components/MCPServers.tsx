@@ -1,5 +1,6 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Plus } from 'lucide-react'
+import * as App from '../../wailsjs/go/main/App'
 
 interface MCPServer {
   name: string
@@ -8,7 +9,7 @@ interface MCPServer {
   tools: number
 }
 
-const mockServers: MCPServer[] = [
+const fallbackServers: MCPServer[] = [
   { name: 'pencil', cmd: 'npx @anthropic-ai/mcp-pencil', status: 'running', tools: 8 },
   { name: 'github', cmd: 'npx @anthropic-ai/mcp-github', status: 'running', tools: 52 },
   { name: 'web-reader', cmd: 'npx @anthropic-ai/mcp-reader', status: 'running', tools: 3 },
@@ -16,6 +17,41 @@ const mockServers: MCPServer[] = [
 ]
 
 export function MCPServers({ onBack }: { onBack: () => void }) {
+  const [servers, setServers] = useState<MCPServer[]>(fallbackServers)
+  const [loading, setLoading] = useState(true)
+
+  // Try to load real server data from backend
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        // Try calling GetConfig to extract MCP server list
+        const cfg = await App.GetConfig()
+        if (cancelled) return
+        // If config has MCP servers info, parse them
+        // For now, backend may not have a dedicated ListMCPServers call
+        // We check if config provides any server details
+        if (cfg && (cfg as any).mcpServers) {
+          const raw = (cfg as any).mcpServers as Array<Record<string, any>>
+          if (raw && raw.length > 0) {
+            setServers(raw.map(s => ({
+              name: s.name || s.cmd || 'unknown',
+              cmd: s.cmd || s.command || '',
+              status: (s.status === 'running' ? 'running' : 'stopped') as 'running' | 'stopped',
+              tools: s.tools ?? 0,
+            })))
+          }
+        }
+      } catch {
+        // Backend method not available yet, keep fallback
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
@@ -41,7 +77,10 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
 
       {/* Server list */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {mockServers.map(srv => (
+        {loading && (
+          <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>Loading servers...</span>
+        )}
+        {servers.map(srv => (
           <div key={srv.name} style={{
             padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
             background: 'var(--color-card)', display: 'flex', flexDirection: 'column', gap: 6,

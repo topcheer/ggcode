@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Search, Plus, X } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { Plus } from 'lucide-react'
+import * as App from '../../wailsjs/go/main/App'
 
 interface IMAdapter {
   id: string
@@ -13,7 +14,7 @@ interface IMAdapter {
   streamEnabled: boolean
 }
 
-const mockAdapters: IMAdapter[] = [
+const fallbackAdapters: IMAdapter[] = [
   {
     id: 'wecom', name: 'WeChat Work', icon: '🏢', enabled: true, connected: true,
     fields: [
@@ -68,12 +69,57 @@ const mockAdapters: IMAdapter[] = [
 ]
 
 export function IMManagement({ onBack }: { onBack: () => void }) {
-  const [adapters, setAdapters] = useState(mockAdapters)
+  const [adapters, setAdapters] = useState<IMAdapter[]>(fallbackAdapters)
   const [activeId, setActiveId] = useState('wecom')
+  const [saving, setSaving] = useState(false)
+
+  // Try to load real adapter data from backend
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        // Attempt to call backend for adapter list
+        // This method may not exist yet (backend-bindings teammate adding it)
+        const result = await (window as any).go?.main?.App?.GetIMAdapters?.()
+        if (cancelled || !result) return
+        const parsed = JSON.parse(result)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAdapters(parsed.map((a: any) => ({
+            id: a.id || a.name?.toLowerCase() || '',
+            name: a.name || a.id || '',
+            icon: a.icon || '💬',
+            enabled: a.enabled ?? false,
+            connected: a.connected ?? false,
+            fields: a.fields || [],
+            targets: a.targets || [],
+            sttEnabled: a.sttEnabled ?? false,
+            streamEnabled: a.streamEnabled ?? false,
+          })))
+        }
+      } catch {
+        // Method not available yet, keep fallback data
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
   const active = adapters.find(a => a.id === activeId)!
   const setActive = (updater: (a: IMAdapter) => IMAdapter) => {
     setAdapters(prev => prev.map(a => a.id === activeId ? updater(a) : a))
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      // Attempt to call backend to save adapter config
+      const payload = JSON.stringify(active)
+      await (window as any).go?.main?.App?.SaveIMAdapter?.(active.id, payload)
+    } catch {
+      // Method not available yet, save silently fails
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -140,13 +186,14 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
           </FieldRow>
         ))}
 
-        {/* Test connection */}
+        {/* Test connection + Save */}
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={{
+          <button onClick={handleSave} disabled={saving} style={{
             padding: '6px 14px', borderRadius: 'var(--radius-md)',
             border: '1px solid var(--color-primary)', background: 'transparent',
-            color: 'var(--color-info)', cursor: 'pointer', fontSize: 12,
-          }}>Test Connection</button>
+            color: 'var(--color-info)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 12,
+            opacity: saving ? 0.6 : 1,
+          }}>{saving ? 'Saving...' : 'Test Connection'}</button>
           {active.connected && (
             <span style={{ color: 'var(--color-success)', fontSize: 12, alignSelf: 'center' }}>
               ✓ Connected
