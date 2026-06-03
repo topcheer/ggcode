@@ -44,11 +44,12 @@ type App struct {
 	nativeTitlebar nativeTitlebarConfig
 
 	// IM runtime.
-	imManager     *im.Manager
-	imController  *im.AdapterController
-	imWindow      fyne.Window
-	imPairingWin  fyne.Window
-	metricsWindow fyne.Window
+	imManager        *im.Manager
+	imInstanceDetect *im.InstanceDetect
+	imController     *im.AdapterController
+	imWindow         fyne.Window
+	imPairingWin     fyne.Window
+	metricsWindow    fyne.Window
 
 	// Shared UI state for cross-goroutine updates.
 	ui *UIState
@@ -1661,6 +1662,24 @@ func (a *App) initIMRuntime() {
 	})
 
 	a.imManager = mgr
+
+	// Register this desktop instance for multi-instance detection.
+	// If TUI or another instance is already running on this workspace,
+	// auto-mute all IM adapters to avoid duplicate message processing.
+	if a.dc.WorkDir != "" {
+		detect, others, err := mgr.RegisterInstance(a.dc.WorkDir)
+		if err == nil {
+			a.imInstanceDetect = detect
+			if len(others) > 0 {
+				count, _ := mgr.MuteAll()
+				if count > 0 {
+					primary := others[0]
+					logf("im", "auto-muted %d channel(s), primary PID=%d started at %s",
+						count, primary.PID, primary.StartedAt.Format("15:04:05"))
+				}
+			}
+		}
+	}
 
 	// Start adapters bound to current workspace.
 	a.startIMAdapters()

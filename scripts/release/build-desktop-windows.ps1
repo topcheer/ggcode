@@ -40,21 +40,8 @@ Remove-Item -Recurse -Force $stageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
 Push-Location $DesktopDir
-  # Generate Windows resource file (icon + version info embedded in .exe)
-  $winresExe = Get-Command go-winres -ErrorAction SilentlyContinue
-  if (-not $winresExe) {
-    Write-Host "Installing go-winres..."
-    go install github.com/tc-hib/go-winres@latest
-    $winresExe = Join-Path ($env:GOPATH ?? (Join-Path $env:HOME "go")) "bin" "go-winres$(if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.exe' } else { '' })"
-  }
-  if (Test-Path $winresExe) {
-    Write-Host "Generating Windows resource (.syso)..."
-    & $winresExe simply --product-name "GGCode Desktop" --icon icon.png --arch amd64 --out winres 2>$null
-    Write-Host "Generated .syso files"
-  } else {
-    Write-Host "WARNING: go-winres not found, .exe will have no embedded icon"
-  }
-
+  # .syso resource files (icon + version metadata) are committed in the repo.
+  # They are automatically picked up by "go build" when compiling for Windows.
   $env:CGO_ENABLED = "1"
   $env:GOOS = "windows"
   $env:GOARCH = "amd64"
