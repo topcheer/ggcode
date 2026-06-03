@@ -1,6 +1,6 @@
 import React from 'react'
 
-export function StatusBar() {
+export function StatusBar({ onContextToggle }: { onContextToggle?: () => void }) {
   return (
     <div style={{
       height: 'var(--statusbar-height)',
@@ -22,6 +22,11 @@ export function StatusBar() {
       <span style={{ color: 'var(--text-secondary)' }}>out 4.1K</span>
       <span style={{ color: 'var(--color-success)' }}>cache 78%</span>
       <div style={{ flex: 1 }} />
+      <button onClick={onContextToggle} style={{
+        background: 'none', border: 'none',
+        color: 'var(--text-secondary)', cursor: 'pointer',
+        fontSize: 10, fontFamily: 'var(--font-mono)',
+      }}>⌘.</button>
       <span style={{ color: 'var(--color-success)' }}>● Ready</span>
     </div>
   )
