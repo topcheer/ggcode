@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
@@ -53,17 +54,17 @@ type App struct {
 	ui *UIState
 
 	// UI components.
-	content       *fyne.Container
-	statusBar     *widget.Label
-	titleBarLabel *widget.Label
-	titleBarSizer *canvas.Rectangle
-	split         *container.Split
-	chatViewObj   fyne.CanvasObject
-	chatViewRef   *ChatView
-	sidebarObj    fyne.CanvasObject
-	sidebarRef    *Sidebar
-	sidebarHidden bool
-	filePreview   *FilePreview // currently shown file preview, or nil
+	content        *fyne.Container
+	titleBarLabel  *widget.Label
+	titleBarSizer  *canvas.Rectangle
+	split          *container.Split
+	chatViewObj    fyne.CanvasObject
+	chatViewRef    *ChatView
+	sidebarObj     fyne.CanvasObject
+	sidebarRef     *Sidebar
+	sidebarHidden  bool
+	sessionLoading bool         // true while resuming a session (prevents double-click)
+	filePreview    *FilePreview // currently shown file preview, or nil
 
 	// Agent state.
 	agentBridge *AgentBridge
@@ -187,17 +188,81 @@ func (a *App) Run() {
 // ── UI construction ──────────────────────────────────
 
 func (a *App) buildUI() {
-	// Status bar — updated directly by pollRefresh.
-	a.statusBar = widget.NewLabel(t("status.ready"))
-	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
-	a.ui.SetStatusLabel(a.statusBar)
+	// ── Compact status bar ──
+	microStyle := fyne.TextStyle{Monospace: true}
+	microSize := float32(10)
+	dimColor := color.RGBA{R: 107, G: 114, B: 128, A: 255}
+	sepColor := color.RGBA{R: 58, G: 63, B: 78, A: 255}
+	accentColor := color.RGBA{R: 126, G: 184, B: 218, A: 255}
+	brightColor := color.RGBA{R: 201, G: 209, B: 217, A: 255}
+	greenColor := color.RGBA{R: 74, G: 222, B: 128, A: 255}
+
+	// Helper: small colored text bound to a String binding.
+	boundText := func(b binding.String, clr color.Color, size float32) *canvas.Text {
+		t := canvas.NewText("", clr)
+		t.TextSize = size
+		t.TextStyle = microStyle
+		b.AddListener(binding.NewDataListener(func() {
+			v, _ := b.Get()
+			fyne.Do(func() { t.Text = v; t.Refresh() })
+		}))
+		return t
+	}
+	staticText := func(s string, clr color.Color, size float32) *canvas.Text {
+		t := canvas.NewText(s, clr)
+		t.TextSize = size
+		t.TextStyle = microStyle
+		return t
+	}
+
+	// Vendor tag badge.
+	vendorText := boundText(a.ui.StatusBarVendor, accentColor, microSize)
+	vendorBg := newThemeBlendStrokeRect(theme.ColorNameInputBackground, theme.ColorNameOverlayBackground, 0.08, theme.ColorNameSeparator, theme.ColorNamePrimary, 0.12)
+	vendorBg.CornerRadius = 4
+	vendorBg.StrokeWidth = 0
+	vendorBadge := container.NewStack(vendorBg, container.New(layout.NewCustomPaddedLayout(1, 1, 4, 4), vendorText))
+
+	// Context usage.
+	ctxLabel := staticText("ctx", dimColor, 9)
+	ctxValue := boundText(a.ui.StatusBarContext, brightColor, microSize)
+
+	// Token metrics.
+	inputLabel := staticText("in", accentColor, 8)
+	inputValue := boundText(a.ui.StatusBarInput, accentColor, microSize)
+	outputLabel := staticText("out", brightColor, 8)
+	outputValue := boundText(a.ui.StatusBarOutput, brightColor, microSize)
+	cacheLabel := staticText("cache", greenColor, 8)
+	cacheValue := boundText(a.ui.StatusBarCacheHit, greenColor, microSize)
+
+	// Status text (right-aligned).
+	statusText := boundText(a.ui.StatusBarStatus, greenColor, microSize)
+
+	// Separators.
+	sep1 := staticText("|", sepColor, microSize)
+	sep2 := staticText("|", sepColor, microSize)
+
+	// Assemble bar.
+	barContent := container.New(layout.NewCustomPaddedLayout(4, 4, 10, 10),
+		container.NewHBox(
+			vendorBadge,
+			sep1,
+			ctxLabel,
+			ctxValue,
+			sep2,
+			inputLabel,
+			inputValue,
+			outputLabel,
+			outputValue,
+			cacheLabel,
+			cacheValue,
+			layout.NewSpacer(),
+			statusText,
+		),
+	)
 
 	statusChrome := newThemeBlendStrokeRect(theme.ColorNameInputBackground, theme.ColorNameOverlayBackground, 0.08, theme.ColorNameSeparator, theme.ColorNamePrimary, 0.12)
-	statusChrome.CornerRadius = 10
-	statusBox := container.NewStack(statusChrome, compactPad(4, 4, 10, 10, container.NewHBox(
-		a.statusBar,
-		layout.NewSpacer(),
-	)))
+	statusChrome.CornerRadius = 8
+	statusBox := container.NewStack(statusChrome, barContent)
 
 	a.content = container.NewStack(widget.NewLabel(""))
 	topChrome := a.buildTopChrome()
@@ -1073,36 +1138,77 @@ func (a *App) showOnboard() {
 func (a *App) resumeSession(id string) {
 	defer safeRecover("resumeSession")
 
-	// Cancel current work if busy.
-	if a.agentBridge != nil {
-		a.agentBridge.Cancel()
+	// Prevent double-clicks while loading.
+	if a.sessionLoading {
+		return
 	}
+	a.sessionLoading = true
 
-	// Load session and restore messages into agent.
-	if a.agentBridge != nil {
-		if err := a.agentBridge.ResumeSession(id); err != nil {
-			a.showError(t("error.resume_session", err))
-			return
+	// Clear current chat and show loading indicator immediately.
+	if a.chatViewRef != nil {
+		a.chatViewRef.vbox.Objects = nil
+		a.chatViewRef.msgWidgets = nil
+		a.chatViewRef.toolWidgets = make(map[string]*toolWidgetRef)
+		a.chatViewRef.streamW = nil
+		a.chatViewRef.hideThinking()
+		a.chatViewRef.showSessionLoading()
+	}
+	// Update status bar via binding.
+	_ = a.ui.StatusBarStatus.Set(t("status.loading_session"))
+
+	// Run the heavy work in a goroutine so the UI stays responsive.
+	go func() {
+		defer func() {
+			a.sessionLoading = false
+			safeRecover("resumeSession-goroutine")
+		}()
+
+		// Cancel current work if busy.
+		if a.agentBridge != nil {
+			a.agentBridge.Cancel()
 		}
-	}
 
-	// Rebuild chat view from session messages.
-	if a.chatViewRef != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-		a.chatViewRef.rebuildFromMessages(a.agentBridge.CurrentSession().Messages)
-	}
+		// Load session and restore messages into agent.
+		if a.agentBridge != nil {
+			if err := a.agentBridge.ResumeSession(id); err != nil {
+				fyne.Do(func() {
+					if a.chatViewRef != nil {
+						a.chatViewRef.hideSessionLoading()
+					}
+					a.showError(t("error.resume_session", err))
+				})
+				return
+			}
+		}
 
-	// Push updated session info + history to mobile client
-	if broker := a.currentTunnelBroker(); broker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-		broker.SwitchSession(a.agentBridge.CurrentSession().ID)
-		a.agentBridge.ResetCurrentSessionTunnelLedger()
-		broker.SendSnapshot(a.tunnelSnapshot())
-	}
+		// Rebuild chat view from session messages (must run on UI thread).
+		fyne.Do(func() {
+			if a.chatViewRef != nil {
+				a.chatViewRef.hideSessionLoading()
+			}
+			if a.chatViewRef != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+				a.chatViewRef.rebuildFromMessages(a.agentBridge.CurrentSession().Messages)
+			}
 
-	// Refresh sidebar.
-	if a.sidebarRef != nil {
-		a.sidebarRef.loadSessions()
-		a.sidebarRef.sessionList.Refresh()
-	}
+			// Update status bar.
+			_ = a.ui.StatusBarStatus.Set(t("status.ready"))
+		})
+
+		// Push updated session info + history to mobile client.
+		if broker := a.currentTunnelBroker(); broker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+			broker.SwitchSession(a.agentBridge.CurrentSession().ID)
+			a.agentBridge.ResetCurrentSessionTunnelLedger()
+			broker.SendSnapshot(a.tunnelSnapshot())
+		}
+
+		// Refresh sidebar.
+		if a.sidebarRef != nil {
+			fyne.Do(func() {
+				a.sidebarRef.loadSessions()
+				a.sidebarRef.sessionList.Refresh()
+			})
+		}
+	}()
 }
 
 func (a *App) newSession() {
@@ -1234,6 +1340,7 @@ func (a *App) startChat() {
 	}
 
 	a.ui.SetModelInfo(resolved.Model, humanizeTokens(resolved.ContextWindow))
+	_ = a.ui.StatusBarVendor.Set(fmt.Sprintf("%s/%s", resolved.VendorID, resolved.Model))
 	a.ui.SetStatus(fmt.Sprintf("%s/%s | context %s",
 		resolved.VendorID, resolved.Model, humanizeTokens(resolved.ContextWindow)))
 	a.setTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(a.dc.WorkDir), resolved.Model))

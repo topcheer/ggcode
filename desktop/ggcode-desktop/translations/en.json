@@ -5,6 +5,7 @@
   "status.loading": "Loading...",
   "status.failed": "Failed",
   "status.establishing_tunnel": "Establishing tunnel...",
+  "status.loading_session": "Loading session...",
   "app.welcome_title": "Welcome to ggcode",
   "app.title.welcome": "ggcode — Welcome",
   "app.description": "AI-powered coding assistant\nwith IM integration",

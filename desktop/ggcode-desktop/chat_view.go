@@ -334,6 +334,7 @@ type ChatView struct {
 	toolWidgets map[string]*toolWidgetRef
 	streamW     *markdownx.MarkdownWidget
 	thinkingW   fyne.CanvasObject // pulsing "thinking..." indicator
+	loadingW    fyne.CanvasObject // "loading session..." overlay
 	reasoningW  *widget.Accordion // collapsible reasoning panel
 	reasoningMD *markdownx.MarkdownWidget
 
@@ -434,7 +435,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 
 	inputSection := container.NewVBox(cv.imageBar, inputBar)
 
-	cv.vbox = container.NewVBox()
+	cv.vbox = container.New(layout.NewCustomPaddedVBoxLayout(4))
 	cv.scroll = container.NewVScroll(cv.vbox)
 
 	mainTab := container.NewTabItem("Main", compactPad(4, 0, 0, 0, cv.scroll))
@@ -640,6 +641,49 @@ func (cv *ChatView) hideThinking() {
 	cv.vbox.Refresh()
 }
 
+// showSessionLoading displays a "Loading session..." indicator with animated dots.
+// Called before resuming a session to give the user visual feedback.
+func (cv *ChatView) showSessionLoading() {
+	cv.hideSessionLoading()
+	label := widget.NewLabel(t("status.loading_session"))
+	label.TextStyle = fyne.TextStyle{Italic: true}
+	label.Alignment = fyne.TextAlignCenter
+	row := cv.messageRow("SYSTEM", theme.ViewRefreshIcon(), theme.ColorNamePrimary, label)
+	cv.loadingW = row
+	cv.vbox.Add(row)
+	cv.vbox.Refresh()
+	cv.scroll.ScrollToBottom()
+
+	// Animate dots.
+	dots := []string{".", "..", "..."}
+	go func() {
+		i := 0
+		for cv.loadingW != nil {
+			time.Sleep(500 * time.Millisecond)
+			if cv.loadingW == nil {
+				return
+			}
+			i = (i + 1) % 3
+			text := strings.TrimSuffix(t("status.loading_session"), ".") + dots[i]
+			fyne.Do(func() {
+				if cv.loadingW != nil {
+					label.SetText(text)
+				}
+			})
+		}
+	}()
+}
+
+// hideSessionLoading removes the "Loading session..." indicator.
+func (cv *ChatView) hideSessionLoading() {
+	if cv.loadingW == nil {
+		return
+	}
+	cv.vbox.Remove(cv.loadingW)
+	cv.loadingW = nil
+	cv.vbox.Refresh()
+}
+
 // onReasoningChunk accumulates reasoning text into a collapsible panel.
 func (cv *ChatView) onReasoningChunk(text string) {
 	// Filter out Anthropic redacted thinking blocks.
@@ -691,11 +735,11 @@ func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
 	// Update icon.
 	if isError {
 		if ref.icon != nil {
-			ref.icon.SetResource(theme.CancelIcon())
+			ref.icon.SetResource(theme.NewErrorThemedResource(theme.CancelIcon()))
 		}
 	} else {
 		if ref.icon != nil {
-			ref.icon.SetResource(theme.ConfirmIcon())
+			ref.icon.SetResource(theme.NewSuccessThemedResource(theme.ConfirmIcon()))
 		}
 	}
 	if ref.icon != nil {
@@ -713,7 +757,7 @@ func (cv *ChatView) onStreamDone() {
 	for _, ref := range cv.toolWidgets {
 		if !ref.hasResult {
 			if ref.icon != nil {
-				ref.icon.SetResource(theme.CancelIcon())
+				ref.icon.SetResource(theme.NewErrorThemedResource(theme.CancelIcon()))
 				ref.icon.Refresh()
 			}
 		}
@@ -893,7 +937,7 @@ func (cv *ChatView) renderMessage(msg *ChatMessage) fyne.CanvasObject {
 func (cv *ChatView) renderUser(msg *ChatMessage) fyne.CanvasObject {
 	rt := widget.NewRichTextFromMarkdown(msg.Content)
 	rt.Wrapping = fyne.TextWrapWord
-	return cv.messageRow("USER", theme.AccountIcon(), theme.ColorNamePrimary, rt)
+	return cv.messageRow("USER", theme.AccountIcon(), theme.ColorNamePrimary, compactRichText(rt))
 }
 
 func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
@@ -1077,9 +1121,9 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	if len(sections) > 0 {
 		body := []fyne.CanvasObject{header}
 		body = append(body, sections...)
-		return cv.iconRow(toolIcon(msg), container.NewVBox(body...))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), body...))
 	}
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 }
 
 // newCodeBlock wraps text in a markdown code block.
@@ -1096,12 +1140,12 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 
 	formatted := cv.formatToolResult(msg.ToolName, msg.Content, msg.IsError)
 	if formatted == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 	var resultBlock fyne.CanvasObject
 	if toolResultUsesMarkdown(msg.ToolName) {
@@ -1109,7 +1153,7 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 	} else {
 		resultBlock = newCodeBlock(truncateRunes(formatted, 2000, "..."))
 	}
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // renderFileTool: header + line count / edit summary + result in accordion.
@@ -1121,13 +1165,13 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 	resultBlock := newMD("```\n" + result + "\n```")
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Content", resultBlock)))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Content", resultBlock)))
 }
 
 // renderGitTool: header + result in accordion (for git_diff, git_log, git_status).
@@ -1139,7 +1183,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 
 	result := truncateRunes(cv.formatToolResult(msg.ToolName, msg.Content, msg.IsError), 2000, "...")
@@ -1149,7 +1193,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	} else {
 		resultBlock = newCodeBlock(result)
 	}
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // renderGenericTool: header + result in accordion (no raw JSON).
@@ -1161,25 +1205,25 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 	if sections := cv.structuredToolResultSections(msg.ToolName, msg.ToolRaw, msg.Content, msg.IsError); len(sections) > 0 {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(append([]fyne.CanvasObject{header}, sections...)...))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), append([]fyne.CanvasObject{header}, sections...)...))
 	}
 
 	result := cv.formatToolResult(msg.ToolName, truncateRunes(msg.Content, 2000, "..."), msg.IsError)
 	if result == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 	// Wrap raw JSON in code block for readability
 	trimmed := strings.TrimSpace(result)
 	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
 		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
 		resultBlock := newMD("```json\n" + result + "\n```")
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Result", resultBlock)))
 	}
 	resultBlock := newMD("```\n" + result + "\n```")
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Result", resultBlock)))
 }
 
 func (cv *ChatView) structuredToolResultSections(toolName, rawArgs, result string, isError bool) []fyne.CanvasObject {
@@ -1279,12 +1323,12 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+		return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header))
 	}
 
 	result := truncateRunes(msg.Content, 2000, "...")
 	resultBlock := newCodeBlock(result)
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	return cv.iconRow(toolIcon(msg), container.New(layout.NewCustomPaddedVBoxLayout(1), header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1297,27 +1341,27 @@ func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.
 
 func (cv *ChatView) messageRow(tag string, icon fyne.Resource, tone fyne.ThemeColorName, content fyne.CanvasObject) fyne.CanvasObject {
 	ic := widget.NewIcon(icon)
-	ic.Resize(fyne.NewSize(16, 16))
+	ic.Resize(fyne.NewSize(12, 12))
 	badgeBg := newThemeBlendStrokeRect(theme.ColorNameInputBackground, tone, 0.18, theme.ColorNameSeparator, tone, 0.35)
 	badgeBg.StrokeWidth = 1
-	badgeBg.CornerRadius = 10
-	badgeBg.SetMinSize(fyne.NewSize(30, 30))
+	badgeBg.CornerRadius = 8
+	badgeBg.SetMinSize(fyne.NewSize(22, 22))
 	badge := container.NewStack(badgeBg, container.NewCenter(ic))
 
 	var bodyObjects []fyne.CanvasObject
 	if tag != "" {
-		bodyObjects = append(bodyObjects, compactPad(0, 4, 0, 0, timelineTag(tag, tone)))
+		bodyObjects = append(bodyObjects, compactPad(0, 0, 0, 0, timelineTag(tag, tone)))
 	}
 	bodyObjects = append(bodyObjects, content)
-	body := container.NewVBox(bodyObjects...)
+	body := container.New(layout.NewCustomPaddedVBoxLayout(1), bodyObjects...)
 
 	accent := newThemeColorRect(tone)
 	accent.CornerRadius = 0
 	accent.SetMinSize(fyne.NewSize(accentStripeWidth, 0))
 
 	panel := messageSurfaceRect(tone, accentStripeWidth)
-	frame := container.NewStack(panel, container.NewBorder(nil, nil, accent, nil, compactPad(8, 8, 14, 12, body)))
-	left := container.NewVBox(compactPad(6, 0, 0, 8, badge))
+	frame := container.NewStack(panel, container.NewBorder(nil, nil, accent, nil, compactPad(5, 5, 10, 8, body)))
+	left := container.NewVBox(compactPad(4, 0, 0, 6, badge))
 	return compactPad(2, 2, 0, 0, container.NewBorder(nil, nil, left, nil, frame))
 }
 
@@ -1414,13 +1458,19 @@ func containsLeftSquareRightRounded(px, py, width, height, radius float64) bool 
 
 func timelineTag(text string, tone fyne.ThemeColorName) *canvas.Text {
 	tag := canvas.NewText(strings.ToUpper(text), blendThemeColors(theme.ColorNamePlaceHolder, tone, 0.24))
-	tag.TextSize = theme.Size(theme.SizeNameCaptionText)
+	tag.TextSize = 9
 	tag.TextStyle = fyne.TextStyle{Bold: true}
 	return tag
 }
 
 func compactPad(top, bottom, left, right float32, obj fyne.CanvasObject) fyne.CanvasObject {
 	return container.New(layout.NewCustomPaddedLayout(top, bottom, left, right), obj)
+}
+
+// compactRichText wraps a RichText with negative vertical padding to offset
+// Fyne's InnerPadding (8px top+bottom) that inflates every RichText line height.
+func compactRichText(rt *widget.RichText) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(-6, -6, 0, 0), rt)
 }
 
 func blendThemeColors(base, overlay fyne.ThemeColorName, alpha float64) color.Color {
@@ -1508,7 +1558,7 @@ func newCollapsibleSection(label string, content fyne.CanvasObject) fyne.CanvasO
 		if open {
 			btn.SetIcon(theme.MoveDownIcon())
 			detailBox.Objects = []fyne.CanvasObject{
-				newTappableCollapseArea(compactPad(0, 6, 18, 0, content), func() {
+				newTappableCollapseArea(compactPad(0, 2, 18, 0, content), func() {
 					toggle(false)
 				}),
 			}
@@ -1521,7 +1571,7 @@ func newCollapsibleSection(label string, content fyne.CanvasObject) fyne.CanvasO
 	}
 	btn.OnTapped = func() { toggle(!open) }
 	toggle(false)
-	return container.NewVBox(btn, detailBox)
+	return container.New(layout.NewCustomPaddedVBoxLayout(1), btn, detailBox)
 }
 
 func raw(msg *ChatMessage) string {
@@ -1544,12 +1594,12 @@ func firstCommentLine(cmd string) string {
 
 func toolIcon(msg *ChatMessage) fyne.Resource {
 	if msg.Content == "" {
-		return theme.MediaRecordIcon()
+		return theme.NewWarningThemedResource(theme.MediaRecordIcon())
 	}
 	if msg.IsError {
-		return theme.CancelIcon()
+		return theme.NewErrorThemedResource(theme.CancelIcon())
 	}
-	return theme.ConfirmIcon()
+	return theme.NewSuccessThemedResource(theme.ConfirmIcon())
 }
 
 func prettifyToolName(name string) string {
@@ -1735,11 +1785,11 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 				ref.hasResult = true
 				if ev.IsError {
 					if ref.icon != nil {
-						ref.icon.SetResource(theme.CancelIcon())
+						ref.icon.SetResource(theme.NewErrorThemedResource(theme.CancelIcon()))
 					}
 				} else {
 					if ref.icon != nil {
-						ref.icon.SetResource(theme.ConfirmIcon())
+						ref.icon.SetResource(theme.NewSuccessThemedResource(theme.ConfirmIcon()))
 					}
 				}
 				if ref.icon != nil {
@@ -1754,7 +1804,7 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			st.reasoningMD = nil
 			t := canvas.NewText(ev.Content, theme.ErrorColor())
 			t.TextSize = theme.TextSize()
-			st.vbox.Add(cv.iconRow(theme.CancelIcon(), t))
+			st.vbox.Add(cv.iconRow(theme.NewErrorThemedResource(theme.CancelIcon()), t))
 
 		case "reasoning":
 			st.textMD = nil

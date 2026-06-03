@@ -58,6 +58,14 @@ type UIState struct {
 	SessionMetricsValueLines binding.String
 	SessionMetricTurnsLines  binding.String
 
+	// Compact status bar bindings.
+	StatusBarVendor   binding.String
+	StatusBarContext  binding.String
+	StatusBarInput    binding.String
+	StatusBarOutput   binding.String
+	StatusBarCacheHit binding.String
+	StatusBarStatus   binding.String
+
 	AgentWorking atomic.Bool // true while agent is busy
 
 	// Event callback: ChatView registers this to receive precise UI events.
@@ -112,6 +120,18 @@ func NewUIState() *UIState {
 	s.SessionUsageValueLines = binding.NewString()
 	s.SessionMetricsValueLines = binding.NewString()
 	s.SessionMetricTurnsLines = binding.NewString()
+	s.StatusBarVendor = binding.NewString()
+	s.StatusBarContext = binding.NewString()
+	s.StatusBarInput = binding.NewString()
+	s.StatusBarOutput = binding.NewString()
+	s.StatusBarCacheHit = binding.NewString()
+	s.StatusBarStatus = binding.NewString()
+	_ = s.StatusBarVendor.Set("")
+	_ = s.StatusBarContext.Set("")
+	_ = s.StatusBarInput.Set("0")
+	_ = s.StatusBarOutput.Set("0")
+	_ = s.StatusBarCacheHit.Set("0%")
+	_ = s.StatusBarStatus.Set("ready")
 	_ = s.StatusText.Set("Ready")
 	_ = s.ModelName.Set("")
 	_ = s.TokenUsage.Set("")
@@ -132,6 +152,7 @@ func NewUIState() *UIState {
 // SetStatus updates the status bar binding. Safe from any goroutine.
 func (u *UIState) SetStatus(text string) {
 	_ = u.StatusText.Set(text)
+	_ = u.StatusBarStatus.Set(text)
 }
 
 // SetStatusDirect updates the status label directly. Must be called on UI thread only.
@@ -173,6 +194,11 @@ func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
 	_ = u.SessionUsageCacheWrite.Set(cacheWrite)
 	_ = u.SessionUsageCacheHit.Set(cacheHit)
 	_ = u.SessionUsageValueLines.Set(strings.Join([]string{total, input, output, cacheRead, cacheWrite, cacheHit}, "\n"))
+
+	// Update compact status bar bindings.
+	_ = u.StatusBarInput.Set(input)
+	_ = u.StatusBarOutput.Set(output)
+	_ = u.StatusBarCacheHit.Set(cacheHit)
 }
 
 func (u *UIState) SetSessionMetrics(events []metrics.MetricEvent) {

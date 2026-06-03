@@ -47,7 +47,7 @@ func renderBlock(b *mdBlock) fyne.CanvasObject {
 func renderHeading(b *mdBlock) fyne.CanvasObject {
 	rt := widget.NewRichText(headingSegments(b.content, b.level)...)
 	rt.Wrapping = fyne.TextWrapWord
-	return padded(6, 2, 0, 0, rt)
+	return padded(2, 0, 0, 0, compactRichText(rt))
 }
 
 // ── Paragraph ──────────────────────────────────────
@@ -59,7 +59,7 @@ func renderParagraph(b *mdBlock) fyne.CanvasObject {
 	// Fallback: plain text
 	rt := widget.NewRichText(&widget.ParagraphSegment{Texts: []widget.RichTextSegment{normalSeg(b.content)}})
 	rt.Wrapping = fyne.TextWrapWord
-	return padded(2, 2, 0, 0, rt)
+	return compactRichText(rt)
 }
 
 func renderInlineRuns(runs []inlineRun) fyne.CanvasObject {
@@ -88,7 +88,7 @@ func renderInlineRuns(runs []inlineRun) fyne.CanvasObject {
 	}
 	rt := widget.NewRichText(&widget.ParagraphSegment{Texts: segs})
 	rt.Wrapping = fyne.TextWrapWord
-	return padded(2, 2, 0, 0, rt)
+	return compactRichText(rt)
 }
 
 // ── Code Block ─────────────────────────────────────
@@ -114,8 +114,8 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 	bg := canvas.NewRectangle(codeBlockBackgroundColor())
 	bg.SetMinSize(fyne.NewSize(0, 0))
 
-	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), rt))
-	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
+	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(3, 3, 6, 6), rt))
+	return container.New(layout.NewCustomPaddedLayout(2, 2, 0, 0), inner)
 }
 
 // ── List ───────────────────────────────────────────
@@ -147,10 +147,10 @@ func renderListWithIndent(b *mdBlock, indentLevel int) fyne.CanvasObject {
 			rowChildren = append(rowChildren, renderListWithIndent(item.children, indentLevel+1))
 		}
 
-		items = append(items, container.NewVBox(rowChildren...))
+		items = append(items, container.New(layout.NewCustomPaddedVBoxLayout(1), rowChildren...))
 	}
-	inner := container.NewVBox(items...)
-	return container.New(layout.NewCustomPaddedLayout(2, 2, indent+16, 0), inner)
+	inner := container.New(layout.NewCustomPaddedVBoxLayout(1), items...)
+	return container.New(layout.NewCustomPaddedLayout(1, 1, indent+16, 0), inner)
 }
 
 // ── Blockquote ─────────────────────────────────────
@@ -166,9 +166,9 @@ func renderBlockquote(b *mdBlock) fyne.CanvasObject {
 
 	bg := canvas.NewRectangle(quoteBackgroundColor())
 
-	content := container.NewVBox(children...)
+	content := container.New(layout.NewCustomPaddedVBoxLayout(1), children...)
 	inner := container.NewStack(bg, container.NewBorder(nil, nil, bar, nil, content))
-	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
+	return container.New(layout.NewCustomPaddedLayout(2, 2, 0, 0), inner)
 }
 
 // ── Table ──────────────────────────────────────────
@@ -204,9 +204,9 @@ func renderTableBlock(b *mdBlock) fyne.CanvasObject {
 			label.Wrapping = fyne.TextWrapWord
 			if ri%2 == 1 {
 				bg := canvas.NewRectangle(tableAlternateBackgroundColor())
-				cells = append(cells, container.NewStack(bg, container.NewPadded(label)))
+				cells = append(cells, container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(2, 2, 4, 4), label)))
 			} else {
-				cells = append(cells, container.NewPadded(label))
+				cells = append(cells, container.New(layout.NewCustomPaddedLayout(2, 2, 4, 4), label))
 			}
 		}
 	}
@@ -214,7 +214,7 @@ func renderTableBlock(b *mdBlock) fyne.CanvasObject {
 	grid := container.NewGridWithColumns(numCols)
 	grid.Objects = cells
 	grid.Refresh()
-	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), grid)
+	return container.New(layout.NewCustomPaddedLayout(2, 2, 0, 0), grid)
 }
 
 func cellText(col int, row []string) string {
@@ -236,6 +236,12 @@ func renderHR() fyne.CanvasObject {
 
 func padded(top, bottom, left, right float32, obj fyne.CanvasObject) fyne.CanvasObject {
 	return container.New(layout.NewCustomPaddedLayout(top, bottom, left, right), obj)
+}
+
+// compactRichText wraps a RichText in a container with negative vertical
+// padding to offset Fyne's InnerPadding (8px top+bottom per segment).
+func compactRichText(rt *widget.RichText) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(-4, -4, 0, 0), rt)
 }
 
 // ── Mermaid Diagram ────────────────────────────────────
@@ -278,7 +284,7 @@ func renderMermaidBlock(b *mdBlock) fyne.CanvasObject {
 		})
 	}()
 
-	return padded(6, 6, 0, 0, wrapper)
+	return padded(3, 3, 0, 0, wrapper)
 }
 
 // fetchMermaidPNG tries kroki.io first, then mermaid.ink as fallback.
