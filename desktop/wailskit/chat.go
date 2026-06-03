@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -40,6 +41,9 @@ type ChatBridge struct {
 	cronScheduler *cron.Scheduler
 	subAgentMgr   *subagent.Manager
 	swarmMgr      *swarm.Manager
+
+	// IM outbound push — same as Fyne agentBridge.Emitter
+	Emitter *im.IMEmitter
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)

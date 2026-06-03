@@ -5,6 +5,8 @@ import (
 	"sort"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 // IMAdapterInfo is a frontend-friendly representation of an IM adapter config.
@@ -17,6 +19,8 @@ type IMAdapterInfo struct {
 	Args      []string               `json:"args,omitempty"`
 	Extra     map[string]interface{} `json:"extra,omitempty"`
 	Targets   []string               `json:"targets,omitempty"`
+	Workspace string                 `json:"workspace,omitempty"` // bound workspace path
+	IsCurrent bool                   `json:"isCurrent"`           // bound to current workspace
 }
 
 // IMPlatformMeta describes a supported IM platform for the frontend.
@@ -53,8 +57,9 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 	}
 }
 
-// ListIMAdapters returns all configured IM adapters.
-func ListIMAdapters() ([]IMAdapterInfo, error) {
+// ListIMAdapters returns all configured IM adapters with workspace binding info.
+// imManager may be nil (no runtime bindings available).
+func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() []im.ChannelBinding }) ([]IMAdapterInfo, error) {
 	cfg, err := config.Load("")
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
@@ -63,8 +68,23 @@ func ListIMAdapters() ([]IMAdapterInfo, error) {
 		return nil, nil
 	}
 
+	normalizedWS := session.NormalizeWorkspacePath(workingDir)
+
+	// Collect workspace bindings from imManager if available
+	boundWorkspaces := make(map[string]string) // adapterName → workspace
+	if imMgr != nil {
+		for _, b := range imMgr.AllPersistedBindings() {
+			if b.Adapter != "" {
+				boundWorkspaces[b.Adapter] = b.Workspace
+			}
+		}
+	}
+
 	var result []IMAdapterInfo
 	for name, acfg := range cfg.IM.Adapters {
+		ws := boundWorkspaces[name]
+		isCurrent := ws != "" && (ws == workingDir || ws == normalizedWS)
+
 		result = append(result, IMAdapterInfo{
 			Name:      name,
 			Enabled:   acfg.Enabled,
@@ -73,6 +93,8 @@ func ListIMAdapters() ([]IMAdapterInfo, error) {
 			Command:   acfg.Command,
 			Args:      acfg.Args,
 			Extra:     acfg.Extra,
+			Workspace: ws,
+			IsCurrent: isCurrent,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
