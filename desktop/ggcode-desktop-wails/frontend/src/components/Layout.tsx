@@ -14,6 +14,12 @@ import { StatusBar } from './StatusBar'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
+const dragBarStyle: React.CSSProperties = {
+  height: 'var(--titlebar-height)',
+  flexShrink: 0,
+  WebkitAppRegion: 'drag',
+} as React.CSSProperties
+
 export function Layout() {
   const [view, setView] = useState<ViewMode>('chat')
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -61,7 +67,6 @@ export function Layout() {
     const off = EventsOn('chat:stream', (event: any) => {
       if (!event) return
       const { type, data } = event
-      // data is a JSON string from Go
       let parsed: any = {}
       if (data) {
         try { parsed = JSON.parse(data) } catch { parsed = {} }
@@ -88,22 +93,18 @@ export function Layout() {
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Cmd+K → Command Palette
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
         setCmdPaletteOpen(prev => !prev)
       }
-      // Cmd+. → Context Panel
       if ((e.metaKey || e.ctrlKey) && e.key === '.') {
         e.preventDefault()
         setContextPanelOpen(prev => !prev)
       }
-      // Cmd+B → Sidebar
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault()
         setSidebarOpen(prev => !prev)
       }
-      // Escape → close overlays
       if (e.key === 'Escape') {
         setCmdPaletteOpen(false)
         setShareDialogOpen(false)
@@ -117,17 +118,18 @@ export function Layout() {
   const backToChat = () => setView('chat')
 
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+      {/* Titlebar drag region */}
+      <div className="titlebar-drag" style={dragBarStyle} />
+
+      {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        {/* Nav Rail */}
         <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
 
-        {/* Sidebar — only in chat view */}
         {sidebarOpen && view === 'chat' && (
           <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} />
         )}
 
-        {/* Main content */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
           {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
           {view === 'settings' && <SettingsPage onBack={backToChat} />}
@@ -136,7 +138,6 @@ export function Layout() {
           {view === 'mcp' && <MCPServers onBack={backToChat} />}
         </div>
 
-        {/* Context Panel — right drawer */}
         {contextPanelOpen && view === 'chat' && (
           <ContextPanel
             onClose={() => setContextPanelOpen(false)}
@@ -145,7 +146,7 @@ export function Layout() {
         )}
       </div>
 
-      {/* Status bar */}
+      {/* Status bar at bottom */}
       <StatusBar
         onContextToggle={() => setContextPanelOpen(prev => !prev)}
         data={statusBarData}
