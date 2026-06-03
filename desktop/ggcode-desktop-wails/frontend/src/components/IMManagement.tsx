@@ -80,22 +80,19 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
       try {
         // Attempt to call backend for adapter list
         // This method may not exist yet (backend-bindings teammate adding it)
-        const result = await (window as any).go?.main?.App?.ListIMAdapters?.()
-        if (cancelled || !result) return
-        const parsed = JSON.parse(result)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setAdapters(parsed.map((a: any) => ({
-            id: a.id || a.name?.toLowerCase() || '',
-            name: a.name || a.id || '',
-            icon: a.icon || '💬',
-            enabled: a.enabled ?? false,
-            connected: a.connected ?? false,
-            fields: a.fields || [],
-            targets: a.targets || [],
-            sttEnabled: a.sttEnabled ?? false,
-            streamEnabled: a.streamEnabled ?? false,
-          })))
-        }
+        const result = await App.ListIMAdapters()
+        if (cancelled || !result || !Array.isArray(result) || result.length === 0) return
+        setAdapters(result.map((a: any) => ({
+          id: a.name?.toLowerCase() || a.platform || '',
+          name: a.name || a.platform || '',
+          icon: iconForPlatform(a.platform || ''),
+          enabled: a.enabled ?? false,
+          connected: false,
+          fields: Object.entries(a.extra || {}).map(([k, v]) => ({ label: k, value: String(v) })),
+          targets: [],
+          sttEnabled: false,
+          streamEnabled: false,
+        })))
       } catch {
         // Method not available yet, keep fallback data
       }
@@ -113,8 +110,12 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
     setSaving(true)
     try {
       // Attempt to call backend to save adapter config
-      const payload = JSON.stringify(active)
-      await (window as any).go?.main?.App?.SaveIMAdapter?.(active.id, payload)
+      const payload: Record<string, string> = {
+        platform: active.name,
+        enabled: String(active.enabled),
+      }
+      active.fields.forEach(f => { payload[f.label] = f.value })
+      await App.SaveIMAdapter(active.id, payload)
     } catch {
       // Method not available yet, save silently fails
     } finally {
@@ -285,4 +286,13 @@ const inputStyle: React.CSSProperties = {
 const backBtnStyle: React.CSSProperties = {
   background: 'none', border: 'none', color: 'var(--text-secondary)',
   cursor: 'pointer', display: 'flex', alignItems: 'center',
+}
+
+function iconForPlatform(platform: string): string {
+  const icons: Record<string, string> = {
+    wecom: '🏢', dingtalk: '🔔', feishu: '🐦', qq: '🐧',
+    discord: '🎮', telegram: '✈', whatsapp: '📱', twitch: '📺',
+    slack: '💼', irc: '📡',
+  }
+  return icons[platform.toLowerCase()] || '💬'
 }

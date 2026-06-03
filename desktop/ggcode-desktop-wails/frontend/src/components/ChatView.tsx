@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
+import * as App from '../../wailsjs/go/main/App'
 
 // ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
@@ -272,7 +273,7 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
     async function load() {
       try {
         // GetModelInfo is exposed on the Go App struct but may not be in generated bindings
-        const info = await (window as any).go.main.App.GetModelInfo() as Record<string, any> | null
+        const info = await App.GetModelInfo() as Record<string, any> | null
         if (info) {
           setStatusBar(s => ({
             ...s,
@@ -311,7 +312,7 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
     try {
       // Call Go backend SendMessage
-      await (window as any).go.main.App.SendMessage(text)
+      await App.SendMessage(text)
     } catch (err: any) {
       // Error handling (mirrors Fyne onSend error path)
       setIsStreaming(false)
@@ -330,7 +331,7 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
   const handleCancel = useCallback(() => {
     try {
-      (window as any).go.main.App.CancelMessage()
+      App.CancelMessage()
     } catch { /* ignore */ }
   }, [])
 
