@@ -308,6 +308,49 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 
+	// Forward swarm events to frontend
+	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
+		if b.OnStreamEvent == nil {
+			return
+		}
+		switch ev.Type {
+		case "teammate_text":
+			raw, _ := json.Marshal(map[string]string{
+				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+				"teamID": ev.TeamID, "content": ev.Result,
+			})
+			b.OnStreamEvent("swarm_text", raw)
+		case "teammate_tool_call":
+			pres := tool.DescribeTool(ev.CurrentTool, ev.ToolArgs)
+			raw, _ := json.Marshal(map[string]string{
+				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+				"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
+				"arguments": ev.ToolArgs, "displayName": pres.DisplayName, "detail": pres.Detail,
+			})
+			b.OnStreamEvent("swarm_tool_call", raw)
+		case "teammate_tool_result":
+			pres := tool.DescribeTool(ev.CurrentTool, "")
+			raw, _ := json.Marshal(map[string]interface{}{
+				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+				"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
+				"displayName": pres.DisplayName, "detail": pres.Detail,
+				"result": ev.Result, "isError": ev.IsError,
+			})
+			b.OnStreamEvent("swarm_tool_result", raw)
+		case "teammate_spawned":
+			raw, _ := json.Marshal(map[string]string{
+				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
+			})
+			b.OnStreamEvent("swarm_spawned", raw)
+		case "teammate_idle":
+			raw, _ := json.Marshal(map[string]string{
+				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
+				"content": ev.Result,
+			})
+			b.OnStreamEvent("swarm_idle", raw)
+		}
+	})
+
 	// Create agent
 	a := agent.NewAgent(p, b.registry, "", 100)
 	a.SetPermissionPolicy(policy)
