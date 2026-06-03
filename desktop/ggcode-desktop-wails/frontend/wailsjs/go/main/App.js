@@ -86,8 +86,16 @@ export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
 }
 
+export function LoadSession(arg1) {
+  return window['go']['main']['App']['LoadSession'](arg1);
+}
+
 export function NeedsOnboard() {
   return window['go']['main']['App']['NeedsOnboard']();
+}
+
+export function NewSession() {
+  return window['go']['main']['App']['NewSession']();
 }
 
 export function ReadFileContent(arg1) {

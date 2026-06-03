@@ -55,3 +55,26 @@ func DeleteSession(id string) error {
 	}
 	return store.Delete(id)
 }
+
+// NewSession clears the current session so next chat creates a fresh one.
+// The chat bridge must be set via SetChatBridge before calling.
+var activeChatBridge *ChatBridge
+
+// SetChatBridge stores the active chat bridge for session management.
+func SetChatBridge(cb *ChatBridge) {
+	activeChatBridge = cb
+}
+
+func NewSession() error {
+	if activeChatBridge != nil {
+		activeChatBridge.ClearCurrentSession()
+	}
+	return nil
+}
+
+func LoadSession(id string) error {
+	if activeChatBridge == nil {
+		return fmt.Errorf("no active chat bridge")
+	}
+	return activeChatBridge.LoadSession(id)
+}

@@ -117,6 +117,28 @@ func (b *ChatBridge) Cancel() {
 	}
 }
 
+// ClearCurrentSession resets the current session so next chat creates a fresh one.
+func (b *ChatBridge) ClearCurrentSession() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.currentSes = nil
+}
+
+// LoadSession loads an existing session by ID.
+func (b *ChatBridge) LoadSession(id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sessionStore == nil {
+		return fmt.Errorf("no session store")
+	}
+	ses, err := b.sessionStore.Load(id)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
+	}
+	b.currentSes = ses
+	return nil
+}
+
 // ensureSession creates a new session if none exists (mirrors Fyne bridge).
 func (b *ChatBridge) ensureSession() error {
 	if b.currentSes != nil {
