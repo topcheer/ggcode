@@ -60,6 +60,8 @@ export function RemoveMCPServer(arg1:string):Promise<void>;
 
 export function SaveAPIKey(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function SaveDefaultMode(arg1:string):Promise<void>;
+
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SelectDirectory():Promise<string>;

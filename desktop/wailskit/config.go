@@ -285,6 +285,17 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	return cfg.Save()
 }
 
+// SaveDefaultMode saves the default permission mode.
+func SaveDefaultMode(mode string) error {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil
+	}
+	return cfg.SaveDefaultModePreference(mode)
+}
+
 // ─── Vendor/Endpoint/Model Helpers ────────────────────────
 
 // VendorPresets returns vendor preset info for onboarding.
