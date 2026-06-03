@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Plus } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { TopDragBar } from './TopDragBar'
 
 interface MCPServer {
   name: string
@@ -56,9 +55,8 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', height: '100%',
-      padding: '0 32px var(--spacing-xl) 32px', gap: 'var(--spacing-md)',
+      padding: 'var(--spacing-xl) 32px', gap: 'var(--spacing-md)',
     }}>
-      <TopDragBar />
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button onClick={onBack} style={{

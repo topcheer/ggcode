@@ -2,7 +2,22 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
-import { TopDragBar } from './TopDragBar'
+import { marked } from 'marked'
+import mermaid from 'mermaid'
+
+// Configure mermaid
+mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+
+// Custom marked renderer: render mermaid code blocks into SVG
+const renderer = new marked.Renderer()
+renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
+  if (lang === 'mermaid') {
+    const id = 'mermaid-' + Math.random().toString(36).slice(2, 10)
+    return `<div class="mermaid-container" data-mermaid-id="${id}" data-mermaid-source="${encodeURIComponent(text)}"></div>`
+  }
+  return `<pre><code class="language-${lang || ''}">${text}</code></pre>`
+}
+marked.setOptions({ gfm: true, breaks: true, renderer })
 
 // ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
@@ -14,6 +29,7 @@ interface ChatMessage {
   content: string
   toolName?: string
   toolID?: string
+  toolArgs?: string
   toolDesc?: string
   isError?: boolean
   streaming?: boolean
@@ -28,8 +44,8 @@ interface StreamEvent {
 }
 
 interface TextPayload { content: string }
-interface ToolCallPayload { id: string; name: string }
-interface ToolResultPayload { name: string; result: string; isError: boolean }
+interface ToolCallPayload { id: string; name: string; arguments?: string }
+interface ToolResultPayload { id?: string; name: string; result: string; isError: boolean }
 interface DonePayload { inputTokens?: number; outputTokens?: number }
 interface ErrorPayload { message: string }
 interface ReasoningPayload { content: string }
@@ -95,6 +111,24 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, thinking, reasoningText])
 
+  // Render mermaid diagrams after messages update
+  useEffect(() => {
+    const containers = document.querySelectorAll('.mermaid-container:not([data-rendered])')
+    containers.forEach(async (el) => {
+      const source = decodeURIComponent(el.getAttribute('data-mermaid-source') || '')
+      const id = el.getAttribute('data-mermaid-id') || 'mermaid'
+      if (!source) return
+      try {
+        const { svg } = await mermaid.render(id, source)
+        el.innerHTML = svg
+        el.setAttribute('data-rendered', 'true')
+      } catch (e) {
+        el.innerHTML = `<pre style="color: var(--color-error)">${e}</pre>`
+        el.setAttribute('data-rendered', 'true')
+      }
+    })
+  }, [messages])
+
   // ── Event stream handler (follows Fyne chat_view.go handleEvent) ────────
 
   useEffect(() => {
@@ -158,16 +192,15 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           break
         }
 
-        // ── tool_call_done: tool call finished, awaiting result ──
+        // ── tool_call_done: tool call finished, store arguments ──
         case 'tool_call_done': {
           const p = parseJSON<ToolCallPayload>(raw)
           if (!p) break
-          // Update the matching tool message to show it's done executing
           setMessages(prev => {
             const idx = prev.findIndex(m => m.toolID === p.id && m.role === 'tool')
             if (idx >= 0) {
               const updated = [...prev]
-              updated[idx] = { ...updated[idx], streaming: false }
+              updated[idx] = { ...updated[idx], streaming: false, toolArgs: p.arguments }
               return updated
             }
             return prev
@@ -175,15 +208,16 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           break
         }
 
-        // ── tool_result: update tool card with result (mirrors EventToolResultUpdate) ──
+        // ── tool_result: update tool card with result ──
         case 'tool_result': {
           const p = parseJSON<ToolResultPayload>(raw)
           if (!p) break
-          // wailskit tool_result has no ID; match by tool name from pending queue
           setMessages(prev => {
-            // Find the last tool message matching this name that has no result yet
+            // Match by tool call ID first, then fallback to name
             for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].role === 'tool' && prev[i].toolName === p.name && prev[i].content === '') {
+              if (prev[i].role === 'tool' &&
+                  ((p.id && prev[i].toolID === p.id) || (prev[i].toolName === p.name)) &&
+                  prev[i].content === '') {
                 const updated = [...prev]
                 updated[i] = {
                   ...updated[i],
@@ -365,9 +399,6 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Titlebar drag spacer — aligns with NavRail traffic light area */}
-      <TopDragBar />
-
       {/* Top bar */}
       <div style={{
         height: 'var(--topbar-height)',
@@ -575,18 +606,12 @@ function MessageCard({ msg }: { msg: ChatMessage }) {
 
 function UserMessage({ msg }: { msg: ChatMessage }) {
   return (
-    <div>
-      <div style={{
-        fontSize: 11, fontWeight: 600, marginBottom: 4,
-        color: 'var(--color-info)',
-      }}>
-        You
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
       <div style={{
         padding: 'var(--spacing-sm) var(--spacing-md)',
         borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-card)',
-        color: 'var(--text-primary)',
+        background: 'var(--color-primary)',
+        color: '#fff',
         lineHeight: 1.6,
       }}>
         {msg.content}
@@ -597,7 +622,7 @@ function UserMessage({ msg }: { msg: ChatMessage }) {
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
   return (
-    <div>
+    <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
       <div style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
         color: 'var(--color-success)',
@@ -605,19 +630,20 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
       }}>
         Assistant
         {msg.streaming && (
-          <span style={{
-            display: 'inline-block', width: 5, height: 5, borderRadius: '50%',
-            background: 'var(--color-success)',
-            animation: 'pulse 1.5s ease-in-out infinite',
-          }} />
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
+            writing...
+          </span>
         )}
       </div>
       <div style={{
-        color: 'var(--text-secondary)',
+        padding: 'var(--spacing-sm) var(--spacing-md)',
+        borderRadius: 'var(--radius-lg)',
+        background: 'var(--color-card)',
+        color: 'var(--text-primary)',
         lineHeight: 1.6,
-        whiteSpace: 'pre-wrap',
+        fontSize: 14,
       }}>
-        {msg.content}
+        <div className="markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '...') as string }} />
         {msg.streaming && (
           <span style={{
             display: 'inline-block', width: 2, height: 14,
@@ -631,56 +657,110 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   )
 }
 
-function ToolMessage({ msg }: { msg: ChatMessage }) {
-  const hasResult = msg.content !== ''
-  const isSuccess = hasResult && !msg.isError
-  const statusIcon = msg.streaming ? '\u25B6'       // ▶ running
-    : isSuccess ? '\u2713'                           // ✓ success
-    : msg.isError ? '\u2717'                         // ✗ error
-    : '\u25CB'                                       // ○ pending
+// toolArgSummary extracts a short human-readable summary from tool arguments.
+function toolArgSummary(toolName: string, rawArgs: string): string {
+  try {
+    const args = JSON.parse(rawArgs)
+    switch (toolName) {
+      case 'read_file': case 'write_file': case 'edit_file': case 'multi_edit_file':
+        return args.path || args.file_path || ''
+      case 'run_command': case 'start_command':
+        return (args.command || '').slice(0, 80)
+      case 'search_files': case 'grep':
+        return args.pattern || args.query || ''
+      case 'glob': case 'find':
+        return args.pattern || ''
+      case 'web_search': case 'web_fetch':
+        return args.query || args.url || ''
+      case 'git_commit':
+        return args.message ? `"${(args.message as string).slice(0, 50)}"` : ''
+      case 'git_diff': case 'git_show': case 'git_log':
+        return args.revision || args.file || ''
+      case 'save_memory':
+        return args.key || ''
+      case 'task_create': case 'swarm_task_create':
+        return args.subject || ''
+      default: {
+        if (args.path) return args.path
+        if (args.query) return args.query
+        if (args.pattern) return args.pattern
+        if (args.command) return (args.command as string).slice(0, 60)
+        if (args.url) return args.url
+        return ''
+      }
+    }
+  } catch {
+    return ''
+  }
+}
 
-  const statusColor = msg.streaming ? 'var(--color-warning)'
-    : isSuccess ? 'var(--color-success)'
-    : msg.isError ? 'var(--color-error)'
-    : 'var(--text-tertiary)'
+// toolDisplayName returns a friendly display name for a tool.
+function toolDisplayName(toolName: string): string {
+  const names: Record<string, string> = {
+    read_file: 'Read File', write_file: 'Write File', edit_file: 'Edit File', multi_edit_file: 'Multi Edit',
+    run_command: 'Run Command', start_command: 'Start Command', search_files: 'Search', grep: 'Grep',
+    glob: 'Find Files', web_search: 'Web Search', web_fetch: 'Fetch URL', git_commit: 'Git Commit',
+    git_diff: 'Git Diff', git_show: 'Git Show', git_log: 'Git Log', git_add: 'Git Add',
+    git_status: 'Git Status', git_blame: 'Git Blame', git_branch_list: 'Git Branch', git_stash: 'Git Stash',
+    save_memory: 'Save Memory', task_create: 'Create Task', task_update: 'Update Task', task_list: 'List Tasks',
+    lsp_definition: 'Go to Def', lsp_references: 'Find Refs', lsp_hover: 'Hover Info',
+    lsp_diagnostics: 'Diagnostics', lsp_rename: 'Rename', delegate: 'Delegate', spawn_agent: 'Spawn Agent',
+    ask_user: 'Ask User',
+  }
+  return names[toolName] || toolName
+}
+
+function ToolMessage({ msg }: { msg: ChatMessage }) {
+  const [expanded, setExpanded] = useState(false)
+  const summary = msg.toolArgs ? toolArgSummary(msg.toolName || '', msg.toolArgs) : ''
+  const displayName = toolDisplayName(msg.toolName || '')
 
   return (
-    <div style={{
-      marginTop: 'var(--spacing-sm)',
-      padding: 'var(--spacing-sm) var(--spacing-md)',
-      borderRadius: 'var(--radius-md)',
-      background: '#0C2D6B',
-      border: '1px solid var(--color-primary)',
-      display: 'flex', flexDirection: 'column', gap: 4,
-      fontSize: 12,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ color: statusColor, fontWeight: 700, fontSize: 13 }}>
-          {statusIcon}
+    <div style={{ alignSelf: 'flex-start', maxWidth: '75%', marginTop: 4, marginBottom: 4 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '6px 10px',
+        borderRadius: 'var(--radius-md)',
+        background: msg.isError ? 'rgba(220, 38, 38, 0.12)' : 'rgba(59, 130, 246, 0.12)',
+        border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(59, 130, 246, 0.3)'}`,
+        fontSize: 12,
+        cursor: msg.content ? 'pointer' : 'default',
+        userSelect: 'none',
+      }} onClick={() => msg.content && setExpanded(!expanded)}>
+        {msg.streaming ? (
+          <span style={{ color: 'var(--color-warning)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>●</span>
+        ) : msg.isError ? (
+          <span style={{ color: '#ef4444', fontSize: 12 }}>✕</span>
+        ) : (
+          <span style={{ color: 'var(--color-success)', fontSize: 12 }}>✓</span>
+        )}
+        <span style={{ fontWeight: 600, color: msg.isError ? '#f87171' : 'var(--color-info)' }}>
+          {displayName}
         </span>
-        <span style={{
-          fontFamily: 'var(--font-mono)', fontWeight: 600,
-          color: 'var(--color-info)',
-        }}>
-          {msg.toolName}
-        </span>
-        {msg.streaming && (
+        {summary && (
           <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: 10,
-            color: 'var(--color-warning)',
+            color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 11,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300,
           }}>
-            running...
+            {summary}
           </span>
         )}
+        {msg.streaming && (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>running...</span>
+        )}
+        {msg.content && !msg.streaming && (
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>{expanded ? '▲' : '▼'}</span>
+        )}
       </div>
-      {hasResult && (
+      {expanded && msg.content && (
         <div style={{
-          fontFamily: 'var(--font-mono)', fontSize: 11,
-          color: msg.isError ? 'var(--color-error)' : 'var(--text-secondary)',
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap',
-          maxHeight: 120, overflowY: 'auto',
-          paddingLeft: 20,
+          marginTop: 4, padding: '8px 10px',
+          borderRadius: 'var(--radius-md)',
+          background: msg.isError ? 'rgba(220, 38, 38, 0.06)' : 'rgba(59, 130, 246, 0.06)',
+          border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.15)' : 'rgba(59, 130, 246, 0.15)'}`,
+          maxHeight: 240, overflowY: 'auto',
+          fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
         }}>
           {msg.content}
         </div>

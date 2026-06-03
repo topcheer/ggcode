@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { ChevronRight, ChevronDown, File, Folder, FileCode, FileJson, Settings } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { TopDragBar } from './TopDragBar'
 
 interface FileNode {
   name: string
@@ -210,9 +209,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   }, [])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TopDragBar />
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', height: '100%' }}>
       {/* File tree */}
       <div style={{
         width: 240, background: 'var(--color-nav)',
@@ -284,7 +281,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             </div>
           ))}
         </div>
-      </div>
       </div>
     </div>
   )

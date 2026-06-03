@@ -277,8 +277,9 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	case provider.StreamEventToolCallDone:
 		eventType = "tool_call_done"
 		data = map[string]interface{}{
-			"id":   ev.Tool.ID,
-			"name": ev.Tool.Name,
+			"id":        ev.Tool.ID,
+			"name":      ev.Tool.Name,
+			"arguments": string(ev.Tool.Arguments),
 		}
 
 	case provider.StreamEventToolResult:
@@ -288,6 +289,7 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			resultPreview = resultPreview[:500] + "..."
 		}
 		data = map[string]interface{}{
+			"id":      ev.Tool.ID,
 			"name":    ev.Tool.Name,
 			"result":  resultPreview,
 			"isError": ev.IsError,

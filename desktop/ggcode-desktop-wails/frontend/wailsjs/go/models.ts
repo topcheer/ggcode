@@ -1,29 +1,5 @@
 export namespace wailskit {
 	
-	export class ConfigSnapshot {
-	    vendor: string;
-	    endpoint: string;
-	    model: string;
-	    defaultMode: string;
-	    language: string;
-	    extraPrompt: string;
-	    needsSetup: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ConfigSnapshot(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.vendor = source["vendor"];
-	        this.endpoint = source["endpoint"];
-	        this.model = source["model"];
-	        this.defaultMode = source["defaultMode"];
-	        this.language = source["language"];
-	        this.extraPrompt = source["extraPrompt"];
-	        this.needsSetup = source["needsSetup"];
-	    }
-	}
 	export class EndpointInfo {
 	    key: string;
 	    displayName: string;
@@ -54,6 +30,80 @@ export namespace wailskit {
 	        this.displayName = source["displayName"];
 	        this.models = source["models"];
 	        this.defaultEndpoint = source["defaultEndpoint"];
+	    }
+	}
+	export class FullConfig {
+	    vendor: string;
+	    endpoint: string;
+	    model: string;
+	    apiKeySet: boolean;
+	    language: string;
+	    extraPrompt: string;
+	    defaultMode: string;
+	    maxIterations: number;
+	    probeContext: boolean;
+	    impersonatePreset: string;
+	    impersonateCustomVersion: string;
+	    impersonateCustomHeaders: Record<string, string>;
+	    subAgentMaxConcurrent: number;
+	    subAgentTimeout: string;
+	    subAgentShowOutput: boolean;
+	    swarmMaxTeammates: number;
+	    swarmTimeout: string;
+	    swarmInboxSize: number;
+	    a2aDisabled: boolean;
+	    a2aPort: number;
+	    a2aHost: string;
+	    a2aApiKey: string;
+	    a2aLanDiscovery: boolean;
+	    harnessAutoRun: string;
+	    harnessAutoInit: boolean;
+	    streamEncoder: string;
+	    streamFPS: number;
+	    knightEnabled: boolean;
+	    knightTrustLevel: string;
+	    sidebarVisible?: boolean;
+	    workDir: string;
+	    needsSetup: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FullConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendor = source["vendor"];
+	        this.endpoint = source["endpoint"];
+	        this.model = source["model"];
+	        this.apiKeySet = source["apiKeySet"];
+	        this.language = source["language"];
+	        this.extraPrompt = source["extraPrompt"];
+	        this.defaultMode = source["defaultMode"];
+	        this.maxIterations = source["maxIterations"];
+	        this.probeContext = source["probeContext"];
+	        this.impersonatePreset = source["impersonatePreset"];
+	        this.impersonateCustomVersion = source["impersonateCustomVersion"];
+	        this.impersonateCustomHeaders = source["impersonateCustomHeaders"];
+	        this.subAgentMaxConcurrent = source["subAgentMaxConcurrent"];
+	        this.subAgentTimeout = source["subAgentTimeout"];
+	        this.subAgentShowOutput = source["subAgentShowOutput"];
+	        this.swarmMaxTeammates = source["swarmMaxTeammates"];
+	        this.swarmTimeout = source["swarmTimeout"];
+	        this.swarmInboxSize = source["swarmInboxSize"];
+	        this.a2aDisabled = source["a2aDisabled"];
+	        this.a2aPort = source["a2aPort"];
+	        this.a2aHost = source["a2aHost"];
+	        this.a2aApiKey = source["a2aApiKey"];
+	        this.a2aLanDiscovery = source["a2aLanDiscovery"];
+	        this.harnessAutoRun = source["harnessAutoRun"];
+	        this.harnessAutoInit = source["harnessAutoInit"];
+	        this.streamEncoder = source["streamEncoder"];
+	        this.streamFPS = source["streamFPS"];
+	        this.knightEnabled = source["knightEnabled"];
+	        this.knightTrustLevel = source["knightTrustLevel"];
+	        this.sidebarVisible = source["sidebarVisible"];
+	        this.workDir = source["workDir"];
+	        this.needsSetup = source["needsSetup"];
 	    }
 	}
 	export class IMAdapterInfo {

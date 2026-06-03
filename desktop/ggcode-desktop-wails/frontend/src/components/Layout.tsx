@@ -12,6 +12,7 @@ import { CommandPalette } from './CommandPalette'
 import { ShareDialog, AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
 import { Onboarding } from './Onboarding'
+import { TopDragBar } from './TopDragBar'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
@@ -132,6 +133,9 @@ export function Layout() {
         }} />
       ) : (
         <>
+          {/* Global titlebar drag — spans entire width */}
+          <TopDragBar />
+
           {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />

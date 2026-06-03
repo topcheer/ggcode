@@ -10,7 +10,7 @@ export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string)
 
 export function DeleteSession(arg1:string):Promise<void>;
 
-export function GetConfig():Promise<wailskit.ConfigSnapshot>;
+export function GetConfig():Promise<wailskit.FullConfig>;
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
@@ -46,7 +46,7 @@ export function RemoveIMAdapter(arg1:string):Promise<void>;
 
 export function RemoveMCPServer(arg1:string):Promise<void>;
 
-export function SaveConfig(arg1:Record<string, string>):Promise<void>;
+export function SaveAPIKey(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
 
@@ -59,3 +59,5 @@ export function SendMessage(arg1:string):Promise<void>;
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function TestIMConnection(arg1:string):Promise<void>;
+
+export function UpdateConfig(arg1:Record<string, any>):Promise<void>;

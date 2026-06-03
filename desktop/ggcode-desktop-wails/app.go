@@ -104,7 +104,7 @@ func (a *App) InitWorkspace(dir string) error {
 
 // CompleteOnboard saves vendor/endpoint/model/apiKey and finishes onboarding.
 func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
-	if err := wailskit.SaveConfig(map[string]string{
+	if err := wailskit.UpdateConfig(map[string]interface{}{
 		"vendor":   vendor,
 		"endpoint": endpoint,
 		"model":    model,
@@ -154,8 +154,13 @@ func (a *App) GetModelInfo() map[string]interface{} {
 // ─── Config ───────────────────────────────────────────────
 
 // GetConfig returns the current config.
-func (a *App) GetConfig() (*wailskit.ConfigSnapshot, error) {
-	return wailskit.GetConfig()
+func (a *App) GetConfig() (*wailskit.FullConfig, error) {
+	return wailskit.GetFullConfig()
+}
+
+// UpdateConfig applies config values and saves.
+func (a *App) UpdateConfig(values map[string]interface{}) error {
+	return wailskit.UpdateConfig(values)
 }
 
 // GetVendors returns available vendor names.
@@ -173,9 +178,9 @@ func (a *App) GetModels(vendor, endpoint string) []string {
 	return wailskit.ModelsForEndpoint(vendor, endpoint)
 }
 
-// SaveConfig saves config values from the frontend.
-func (a *App) SaveConfig(values map[string]string) error {
-	return wailskit.SaveConfig(values)
+// SaveAPIKey saves an API key for a vendor/endpoint.
+func (a *App) SaveAPIKey(vendor, endpoint, apiKey string) error {
+	return wailskit.SaveAPIKey(vendor, endpoint, apiKey)
 }
 
 // ─── Sessions ─────────────────────────────────────────────
