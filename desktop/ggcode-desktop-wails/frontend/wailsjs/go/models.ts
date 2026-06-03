@@ -114,6 +114,7 @@ export namespace wailskit {
 	    command: string;
 	    args?: string[];
 	    extra?: Record<string, any>;
+	    targets?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new IMAdapterInfo(source);
@@ -128,7 +129,62 @@ export namespace wailskit {
 	        this.command = source["command"];
 	        this.args = source["args"];
 	        this.extra = source["extra"];
+	        this.targets = source["targets"];
 	    }
+	}
+	export class IMPlatformField {
+	    key: string;
+	    label: string;
+	    placeholder: string;
+	    secret?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new IMPlatformField(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.placeholder = source["placeholder"];
+	        this.secret = source["secret"];
+	    }
+	}
+	export class IMPlatformMeta {
+	    id: string;
+	    displayName: string;
+	    fields: IMPlatformField[];
+	    qrAuth: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new IMPlatformMeta(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.displayName = source["displayName"];
+	        this.fields = this.convertValues(source["fields"], IMPlatformField);
+	        this.qrAuth = source["qrAuth"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ImpersonationPresetInfo {
 	    id: string;

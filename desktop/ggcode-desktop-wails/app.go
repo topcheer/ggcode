@@ -263,6 +263,11 @@ func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
 	return wailskit.ListIMAdapters()
 }
 
+// GetIMPlatformRegistry returns the list of supported IM platforms.
+func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
+	return wailskit.GetIMPlatformRegistry()
+}
+
 // SaveIMAdapter saves an IM adapter configuration.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	return wailskit.SaveIMAdapter(name, values)

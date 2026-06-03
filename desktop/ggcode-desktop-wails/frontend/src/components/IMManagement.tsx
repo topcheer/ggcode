@@ -1,298 +1,366 @@
 import React, { useState, useEffect } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Trash2, Power, PowerOff } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 
-interface IMAdapter {
-  id: string
+// ── Types matching Go structs ──
+
+interface IMAdapterInfo {
   name: string
-  icon: string
   enabled: boolean
-  connected: boolean
-  fields: { label: string; value: string; secret?: boolean }[]
+  platform: string
+  transport: string
+  command: string
+  extra: Record<string, string>
   targets: string[]
-  sttEnabled: boolean
-  streamEnabled: boolean
 }
 
-const fallbackAdapters: IMAdapter[] = [
-  {
-    id: 'wecom', name: 'WeChat Work', icon: '🏢', enabled: true, connected: true,
-    fields: [
-      { label: 'Corp ID', value: 'ww1234567890abcdef' },
-      { label: 'Agent ID', value: '1000002' },
-      { label: 'Secret', value: 'sk-xxxxxxxxxxxxxxxx', secret: true },
-      { label: 'Token URL', value: 'qyapi.weixin.qq.com' },
-    ],
-    targets: ['Dev Team Group', 'Alerts Channel'],
-    sttEnabled: false, streamEnabled: true,
-  },
-  {
-    id: 'dingtalk', name: 'DingTalk', icon: '🔔', enabled: false, connected: false,
-    fields: [
-      { label: 'App Key', value: '' },
-      { label: 'App Secret', value: '', secret: true },
-    ],
-    targets: [],
-    sttEnabled: false, streamEnabled: false,
-  },
-  {
-    id: 'feishu', name: 'Feishu', icon: '🐦', enabled: false, connected: false,
-    fields: [{ label: 'App ID', value: '' }, { label: 'App Secret', value: '', secret: true }],
-    targets: [], sttEnabled: false, streamEnabled: false,
-  },
-  {
-    id: 'qq', name: 'QQ', icon: '🐧', enabled: true, connected: true,
-    fields: [{ label: 'App ID', value: '102012345' }, { label: 'Token', value: 'xxxx', secret: true }],
-    targets: ['Dev Group'],
-    sttEnabled: false, streamEnabled: true,
-  },
-  {
-    id: 'discord', name: 'Discord', icon: '🎮', enabled: false, connected: false,
-    fields: [{ label: 'Bot Token', value: '', secret: true }],
-    targets: [], sttEnabled: false, streamEnabled: false,
-  },
-  {
-    id: 'telegram', name: 'Telegram', icon: '✈', enabled: false, connected: false,
-    fields: [{ label: 'Bot Token', value: '', secret: true }],
-    targets: [], sttEnabled: false, streamEnabled: false,
-  },
-  {
-    id: 'whatsapp', name: 'WhatsApp', icon: '📱', enabled: false, connected: false,
-    fields: [{ label: 'Phone', value: '' }, { label: 'API Key', value: '', secret: true }],
-    targets: [], sttEnabled: false, streamEnabled: false,
-  },
-  {
-    id: 'twitch', name: 'Twitch', icon: '📺', enabled: false, connected: false,
-    fields: [{ label: 'Channel', value: '' }, { label: 'OAuth', value: '', secret: true }],
-    targets: [], sttEnabled: false, streamEnabled: false,
-  },
-]
+interface IMPlatformField {
+  key: string
+  label: string
+  placeholder: string
+  secret?: boolean
+}
 
-export function IMManagement({ onBack }: { onBack: () => void }) {
-  const [adapters, setAdapters] = useState<IMAdapter[]>(fallbackAdapters)
-  const [activeId, setActiveId] = useState('wecom')
-  const [saving, setSaving] = useState(false)
+interface IMPlatformMeta {
+  id: string
+  displayName: string
+  fields: IMPlatformField[]
+  qrAuth: boolean
+}
 
-  // Try to load real adapter data from backend
+// ── Component ──
+
+export function IMManagement() {
+  const [adapters, setAdapters] = useState<IMAdapterInfo[]>([])
+  const [platforms, setPlatforms] = useState<IMPlatformMeta[]>([])
+  const [showAdd, setShowAdd] = useState(false)
+  const [editAdapter, setEditAdapter] = useState<string | null>(null)
+  const [editFields, setEditFields] = useState<Record<string, string>>({})
+  const [error, setError] = useState('')
+
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        // Attempt to call backend for adapter list
-        // This method may not exist yet (backend-bindings teammate adding it)
-        const result = await App.ListIMAdapters()
-        if (cancelled || !result || !Array.isArray(result) || result.length === 0) return
-        setAdapters(result.map((a: any) => ({
-          id: a.name?.toLowerCase() || a.platform || '',
-          name: a.name || a.platform || '',
-          icon: iconForPlatform(a.platform || ''),
-          enabled: a.enabled ?? false,
-          connected: false,
-          fields: Object.entries(a.extra || {}).map(([k, v]) => ({ label: k, value: String(v) })),
-          targets: [],
-          sttEnabled: false,
-          streamEnabled: false,
-        })))
-      } catch {
-        // Method not available yet, keep fallback data
-      }
-    }
-    load()
-    return () => { cancelled = true }
+    loadData()
   }, [])
 
-  const active = adapters.find(a => a.id === activeId)!
-  const setActive = (updater: (a: IMAdapter) => IMAdapter) => {
-    setAdapters(prev => prev.map(a => a.id === activeId ? updater(a) : a))
-  }
-
-  const handleSave = async () => {
-    setSaving(true)
+  async function loadData() {
     try {
-      // Attempt to call backend to save adapter config
-      const payload: Record<string, string> = {
-        platform: active.name,
-        enabled: String(active.enabled),
-      }
-      active.fields.forEach(f => { payload[f.label] = f.value })
-      await App.SaveIMAdapter(active.id, payload)
-    } catch {
-      // Method not available yet, save silently fails
-    } finally {
-      setSaving(false)
+      const [adaptersResult, platformsResult] = await Promise.all([
+        App.ListIMAdapters() as Promise<IMAdapterInfo[]>,
+        App.GetIMPlatformRegistry() as Promise<IMPlatformMeta[]>,
+      ])
+      setAdapters(adaptersResult || [])
+      setPlatforms(platformsResult || [])
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load IM config')
     }
   }
 
-  return (
-    <div style={{ display: 'flex', height: '100%' }}>
-      {/* Adapter nav */}
-      <div style={{
-        width: 200, background: 'var(--color-nav)',
-        padding: 'var(--spacing-lg) 0',
-        display: 'flex', flexDirection: 'column', gap: 2,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 var(--spacing-lg) var(--spacing-md)' }}>
-          <button onClick={onBack} style={backBtnStyle}><BackArrow /></button>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>IM Adapters</span>
-        </div>
-        {adapters.map(a => (
-          <button key={a.id} onClick={() => setActiveId(a.id)} style={{
-            padding: 'var(--spacing-sm) var(--spacing-lg)',
-            background: a.id === activeId ? 'var(--color-card)' : 'transparent',
-            border: 'none', textAlign: 'left', cursor: 'pointer',
-            display: 'flex', gap: 8, alignItems: 'center',
-          }}>
-            <span style={{ fontSize: 14 }}>{a.icon}</span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{
-                fontSize: 12, fontWeight: a.id === activeId ? 500 : 400,
-                color: a.id === activeId ? 'var(--text-primary)' : 'var(--text-secondary)',
-              }}>{a.name}</span>
-              {a.enabled && (
-                <span style={{
-                  fontSize: 10,
-                  color: a.connected ? 'var(--color-success)' : 'var(--color-error)',
-                }}>{a.connected ? '● Connected' : '○ Disconnected'}</span>
-              )}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* Adapter config */}
-      <div style={{
-        flex: 1, padding: 'var(--spacing-xl) 32px',
-        display: 'flex', flexDirection: 'column', gap: 16,
-        overflowY: 'auto',
-      }}>
-        <h2 style={{ fontSize: 18, fontWeight: 600 }}>{active.icon} {active.name}</h2>
-
-        {/* Enabled toggle */}
-        <ToggleRow label="Enabled" value={active.enabled} onChange={v => setActive(a => ({ ...a, enabled: v }))} />
-
-        {/* Config fields */}
-        {active.fields.map((f, i) => (
-          <FieldRow key={i} label={f.label}>
-            <input
-              type={f.secret ? 'password' : 'text'}
-              value={f.value}
-              onChange={e => {
-                const newFields = [...active.fields]
-                newFields[i] = { ...f, value: e.target.value }
-                setActive(a => ({ ...a, fields: newFields }))
-              }}
-              placeholder={f.secret ? '••••••••' : `Enter ${f.label}...`}
-              style={inputStyle}
-            />
-          </FieldRow>
-        ))}
-
-        {/* Test connection + Save */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={handleSave} disabled={saving} style={{
-            padding: '6px 14px', borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-primary)', background: 'transparent',
-            color: 'var(--color-info)', cursor: saving ? 'not-allowed' : 'pointer', fontSize: 12,
-            opacity: saving ? 0.6 : 1,
-          }}>{saving ? 'Saving...' : 'Test Connection'}</button>
-          {active.connected && (
-            <span style={{ color: 'var(--color-success)', fontSize: 12, alignSelf: 'center' }}>
-              ✓ Connected
-            </span>
-          )}
-        </div>
-
-        {/* Targets */}
-        <h3 style={{ fontSize: 14, fontWeight: 600, marginTop: 8 }}>Targets</h3>
-        {active.targets.map((t, i) => (
-          <div key={i} style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: 'var(--spacing-sm) var(--spacing-md)',
-            borderRadius: 'var(--radius-md)', background: 'var(--color-bg)',
-          }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-info)' }}>#</span>
-            <span style={{ fontSize: 12 }}>{t}</span>
-            <div style={{ flex: 1 }} />
-            <button onClick={() => setActive(a => ({ ...a, targets: a.targets.filter((_, j) => j !== i) }))}
-              style={{ background: 'none', border: 'none', color: 'var(--color-error)', cursor: 'pointer', fontSize: 11 }}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <button onClick={() => setActive(a => ({ ...a, targets: [...a.targets, 'New target'] }))}
-          style={{
-            padding: 'var(--spacing-sm) var(--spacing-md)', borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)', background: 'transparent',
-            color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12,
-            display: 'flex', gap: 8, alignItems: 'center',
-          }}>
-          <Plus size={14} /> Add target
-        </button>
-
-        {/* STT / Stream toggles */}
-        <ToggleRow label="STT / TTS" value={active.sttEnabled} onChange={v => setActive(a => ({ ...a, sttEnabled: v }))} />
-        <ToggleRow label="Stream Output" value={active.streamEnabled} onChange={v => setActive(a => ({ ...a, streamEnabled: v }))} />
-      </div>
-    </div>
-  )
-}
-
-function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>{label}</span>
-      <div style={{ flex: 1 }} />
-      <button onClick={() => onChange(!value)} style={{
-        width: 40, height: 22, borderRadius: 11,
-        background: value ? 'var(--color-success)' : 'var(--color-surface)',
-        border: 'none', cursor: 'pointer', position: 'relative',
-        transition: 'background 0.15s',
-      }}>
-        <div style={{
-          width: 18, height: 18, borderRadius: 9,
-          background: '#fff', position: 'absolute', top: 2,
-          left: value ? 20 : 2,
-          transition: 'left 0.15s',
-        }} />
-      </button>
-    </div>
-  )
-}
-
-function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-      <span style={{ width: 100, color: 'var(--text-secondary)', fontSize: 13, flexShrink: 0 }}>{label}</span>
-      <div style={{ flex: 1 }}>{children}</div>
-    </div>
-  )
-}
-
-function BackArrow() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M10 3L5 8L10 13" />
-    </svg>
-  )
-}
-
-const inputStyle: React.CSSProperties = {
-  width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
-  background: 'var(--color-card)', border: '1px solid var(--color-border)',
-  color: 'var(--text-primary)', outline: 'none', fontSize: 12,
-  fontFamily: 'var(--font-mono)',
-}
-
-const backBtnStyle: React.CSSProperties = {
-  background: 'none', border: 'none', color: 'var(--text-secondary)',
-  cursor: 'pointer', display: 'flex', alignItems: 'center',
-}
-
-function iconForPlatform(platform: string): string {
-  const icons: Record<string, string> = {
-    wecom: '🏢', dingtalk: '🔔', feishu: '🐦', qq: '🐧',
-    discord: '🎮', telegram: '✈', whatsapp: '📱', twitch: '📺',
-    slack: '💼', irc: '📡',
+  // Find platform meta by ID
+  function getPlatform(id: string): IMPlatformMeta | undefined {
+    return platforms.find(p => p.id === id)
   }
-  return icons[platform.toLowerCase()] || '💬'
+
+  // ── Add adapter dialog ──
+  if (showAdd) {
+    return <AddAdapterDialog
+      platforms={platforms}
+      onAdd={async (name, platform, fields) => {
+        try {
+          const values: Record<string, string> = { platform, ...fields }
+          await App.SaveIMAdapter(name, values)
+          setShowAdd(false)
+          loadData()
+        } catch (e: any) {
+          setError(e?.message || 'Failed to save adapter')
+        }
+      }}
+      onCancel={() => setShowAdd(false)}
+      error={error}
+    />
+  }
+
+  // ── Edit adapter ──
+  if (editAdapter) {
+    const adapter = adapters.find(a => a.name === editAdapter)
+    const platform = adapter ? getPlatform(adapter.platform) : undefined
+    return <EditAdapterDialog
+      adapter={adapter!}
+      platform={platform}
+      fields={editFields}
+      setFields={setEditFields}
+      onSave={async () => {
+        try {
+          const values: Record<string, string> = { platform: adapter!.platform, ...editFields }
+          await App.SaveIMAdapter(adapter!.name, values)
+          setEditAdapter(null)
+          setEditFields({})
+          loadData()
+        } catch (e: any) {
+          setError(e?.message || 'Failed to save')
+        }
+      }}
+      onCancel={() => { setEditAdapter(null); setEditFields({}) }}
+      error={error}
+    />
+  }
+
+  return (
+    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>IM Adapters</h3>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => { setShowAdd(true); setError('') }} style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 14px', borderRadius: 'var(--radius-md)',
+          background: 'var(--color-primary)', color: '#fff',
+          border: 'none', cursor: 'pointer', fontSize: 13,
+        }}>
+          <Plus size={14} /> Add Adapter
+        </button>
+      </div>
+
+      {error && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error}</div>}
+
+      {/* Adapter list */}
+      {adapters.length === 0 ? (
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 40 }}>
+          No IM adapters configured. Click "Add Adapter" to get started.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {adapters.map(adapter => {
+            const platform = getPlatform(adapter.platform)
+            return (
+              <div key={adapter.name} style={{
+                padding: '12px 16px', borderRadius: 'var(--radius-md)',
+                background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                display: 'flex', alignItems: 'center', gap: 12,
+                opacity: adapter.enabled ? 1 : 0.6,
+              }}>
+                {/* Status dot */}
+                <div style={{
+                  width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                  background: adapter.enabled ? 'var(--color-success)' : 'var(--color-border)',
+                }} />
+
+                {/* Info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
+                    {adapter.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {platform?.displayName || adapter.platform}
+                    {adapter.targets?.length > 0 && ` · ${adapter.targets.length} target(s)`}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <button onClick={async () => {
+                  try {
+                    await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled)
+                    loadData()
+                  } catch {}
+                }} style={{
+                  padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                  border: 'none', cursor: 'pointer',
+                  background: adapter.enabled ? 'var(--color-warning)' : 'var(--color-success)',
+                  color: '#fff', fontSize: 11,
+                  display: 'flex', alignItems: 'center', gap: 4,
+                }}>
+                  {adapter.enabled ? <><PowerOff size={12} /> Disable</> : <><Power size={12} /> Enable</>}
+                </button>
+
+                <button onClick={() => {
+                  const fields: Record<string, string> = {}
+                  if (adapter.extra) {
+                    for (const [k, v] of Object.entries(adapter.extra)) {
+                      fields[k] = String(v)
+                    }
+                  }
+                  setEditFields(fields)
+                  setEditAdapter(adapter.name)
+                  setError('')
+                }} style={{
+                  padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--color-border)', cursor: 'pointer',
+                  background: 'var(--color-surface)', color: 'var(--text-secondary)',
+                  fontSize: 11,
+                }}>
+                  Edit
+                </button>
+
+                <button onClick={async () => {
+                  if (!confirm(`Remove adapter "${adapter.name}"?`)) return
+                  try {
+                    await App.RemoveIMAdapter(adapter.name)
+                    loadData()
+                  } catch {}
+                }} style={{
+                  padding: '4px 6px', borderRadius: 'var(--radius-sm)',
+                  border: 'none', cursor: 'pointer',
+                  background: 'transparent', color: 'var(--color-error)',
+                }}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Add Adapter Dialog ──
+
+function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
+  platforms: IMPlatformMeta[]
+  onAdd: (name: string, platform: string, fields: Record<string, string>) => void
+  onCancel: () => void
+  error: string
+}) {
+  const [selectedPlatform, setSelectedPlatform] = useState('')
+  const [adapterName, setAdapterName] = useState('')
+  const [fields, setFields] = useState<Record<string, string>>({})
+  const [localError, setLocalError] = useState('')
+
+  const platform = platforms.find(p => p.id === selectedPlatform)
+
+  function handleAdd() {
+    if (!selectedPlatform) { setLocalError('Select a platform'); return }
+    if (!adapterName.trim()) { setLocalError('Enter an adapter name'); return }
+    if (platform && !platform.qrAuth) {
+      for (const f of platform.fields) {
+        if (!fields[f.key]?.trim()) { setLocalError(`${f.label} is required`); return }
+      }
+    }
+    onAdd(adapterName.trim(), selectedPlatform, fields)
+  }
+
+  return (
+    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+      <h3 style={{ margin: 0 }}>Add IM Adapter</h3>
+
+      {(error || localError) && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error || localError}</div>}
+
+      {/* Platform select */}
+      <label style={{ display: 'block' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Platform</span>
+        <select value={selectedPlatform} onChange={e => { setSelectedPlatform(e.target.value); setFields({}); setLocalError('') }} style={{
+          width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
+          background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+          color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+        }}>
+          <option value="">Select platform...</option>
+          {platforms.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
+        </select>
+      </label>
+
+      {/* Adapter name */}
+      <label style={{ display: 'block' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Adapter Name</span>
+        <input value={adapterName} onChange={e => setAdapterName(e.target.value)} placeholder="e.g. dingtalk-alerts, telegram-dev" style={{
+          width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
+          background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+          color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+        }} />
+      </label>
+
+      {/* Platform fields */}
+      {platform?.qrAuth && (
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 12, fontStyle: 'italic' }}>
+          This platform uses QR code authentication. Save to start the pairing process.
+        </div>
+      )}
+      {platform?.fields.map(f => (
+        <label key={f.key} style={{ display: 'block' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{f.label}</span>
+          <input
+            type={f.secret ? 'password' : 'text'}
+            value={fields[f.key] || ''}
+            onChange={e => setFields(prev => ({ ...prev, [f.key]: e.target.value }))}
+            placeholder={f.placeholder}
+            style={{
+              width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
+              background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+              color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+            }}
+          />
+        </label>
+      ))}
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <button onClick={onCancel} style={{
+          flex: 1, height: 36, borderRadius: 'var(--radius-md)',
+          background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+          color: 'var(--text-secondary)', cursor: 'pointer',
+        }}>Cancel</button>
+        <button onClick={handleAdd} style={{
+          flex: 2, height: 36, borderRadius: 'var(--radius-md)',
+          background: 'var(--color-primary)', color: '#fff',
+          border: 'none', cursor: 'pointer', fontWeight: 600,
+        }}>Add Adapter</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Edit Adapter Dialog ──
+
+function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCancel, error }: {
+  adapter: IMAdapterInfo
+  platform?: IMPlatformMeta
+  fields: Record<string, string>
+  setFields: (f: Record<string, string>) => void
+  onSave: () => void
+  onCancel: () => void
+  error: string
+}) {
+  return (
+    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+      <h3 style={{ margin: 0 }}>Edit: {adapter.name}</h3>
+      <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+        {platform?.displayName || adapter.platform}
+      </div>
+
+      {error && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error}</div>}
+
+      {platform?.fields.map(f => (
+        <label key={f.key} style={{ display: 'block' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{f.label}</span>
+          <input
+            type={f.secret ? 'password' : 'text'}
+            value={fields[f.key] || ''}
+            onChange={e => setFields({ ...fields, [f.key]: e.target.value })}
+            placeholder={f.placeholder}
+            style={{
+              width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
+              background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+              color: 'var(--text-primary)', fontSize: 13, outline: 'none',
+            }}
+          />
+        </label>
+      ))}
+
+      {!platform?.fields?.length && !platform?.qrAuth && (
+        <div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+          No configurable fields for this adapter.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <button onClick={onCancel} style={{
+          flex: 1, height: 36, borderRadius: 'var(--radius-md)',
+          background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+          color: 'var(--text-secondary)', cursor: 'pointer',
+        }}>Cancel</button>
+        <button onClick={onSave} style={{
+          flex: 2, height: 36, borderRadius: 'var(--radius-md)',
+          background: 'var(--color-primary)', color: '#fff',
+          border: 'none', cursor: 'pointer', fontWeight: 600,
+        }}>Save</button>
+      </div>
+    </div>
+  )
 }
