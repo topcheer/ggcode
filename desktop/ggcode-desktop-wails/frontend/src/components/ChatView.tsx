@@ -3,21 +3,77 @@ import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 import { marked } from 'marked'
-import mermaid from 'mermaid'
 
-// Configure mermaid
-mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+// Configure marked — no special mermaid handling, we split manually.
+marked.setOptions({ gfm: true, breaks: true })
 
-// Custom marked renderer: render mermaid code blocks into SVG
-const renderer = new marked.Renderer()
-renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
-  if (lang === 'mermaid') {
-    const id = 'mermaid-' + Math.random().toString(36).slice(2, 10)
-    return `<div class="mermaid-container" data-mermaid-id="${id}" data-mermaid-source="${encodeURIComponent(text)}"></div>`
+// Split content into segments: plain markdown, mermaid blocks, and svg blocks.
+// During streaming, an unclosed block is held back until completed.
+function splitContent(content: string): { type: 'markdown' | 'mermaid' | 'svg'; text: string }[] {
+  const segments: { type: 'markdown' | 'mermaid' | 'svg'; text: string }[] = []
+  let i = 0
+  while (i < content.length) {
+    // Look for the next code fence
+    const fenceMatch = content.slice(i).match(/```(mermaid|svg)\n?/)
+    if (!fenceMatch) {
+      const rest = content.slice(i)
+      if (rest) segments.push({ type: 'markdown', text: rest })
+      break
+    }
+    const lang = fenceMatch[1] as 'mermaid' | 'svg'
+    const absStart = i + fenceMatch.index!
+
+    // Plain markdown before this fence
+    const before = content.slice(i, absStart)
+    if (before) segments.push({ type: 'markdown', text: before })
+
+    // Find the opening newline after ```mermaid/svg
+    const afterOpen = absStart + fenceMatch[0].length
+    // Look for closing ```
+    const closeFence = content.indexOf('\n```', afterOpen)
+    if (closeFence === -1) {
+      // Unclosed block — hold back, don't show
+      break
+    }
+    const blockSrc = content.slice(afterOpen, closeFence)
+    segments.push({ type: lang, text: blockSrc })
+    i = closeFence + 4 // skip past \n```
   }
-  return `<pre><code class="language-${lang || ''}">${text}</code></pre>`
+  return segments
 }
-marked.setOptions({ gfm: true, breaks: true, renderer })
+
+// Safe markdown render with error protection
+function safeMarkdown(text: string): string {
+  if (!text) return ''
+  try {
+    return marked.parse(text) as string
+  } catch {
+    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+}
+
+// Render message content: split into markdown + mermaid segments
+function MessageContent({ content }: { content: string }) {
+  const segments = splitContent(content)
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === 'markdown') {
+          return <div key={i} className="markdown-body" dangerouslySetInnerHTML={{ __html: safeMarkdown(seg.text) }} />
+        }
+        if (seg.type === 'svg') {
+          return <div key={i} className="svg-rendered" dangerouslySetInnerHTML={{ __html: seg.text }} />
+        }
+        // Mermaid block — will be rendered by useEffect
+        return (
+          <pre key={i} className="mermaid-src">
+            <code className="language-mermaid">{seg.text}</code>
+          </pre>
+        )
+      })}
+    </>
+  )
+}
 
 // ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
@@ -30,7 +86,10 @@ interface ChatMessage {
   toolName?: string
   toolID?: string
   toolArgs?: string
-  toolDesc?: string
+  toolDisplayName?: string
+  toolDetail?: string
+  agentID?: string
+  reasoning?: string
   isError?: boolean
   streaming?: boolean
   timestamp: number
@@ -39,12 +98,13 @@ interface ChatMessage {
 // ── Event types (mirrors wailskit/chat.go emit()) ────────────────────────────
 
 interface StreamEvent {
-  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning'
+  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'run_done'
+    | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result'
   data: string // JSON-encoded payload
 }
 
 interface TextPayload { content: string }
-interface ToolCallPayload { id: string; name: string; arguments?: string }
+interface ToolCallPayload { id: string; name: string; arguments?: string; displayName?: string; detail?: string }
 interface ToolResultPayload { id?: string; name: string; result: string; isError: boolean }
 interface DonePayload { inputTokens?: number; outputTokens?: number }
 interface ErrorPayload { message: string }
@@ -93,12 +153,8 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
     vendor: '', model: '', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
   })
 
-  // Reasoning state
-  const [reasoningText, setReasoningText] = useState('')
-  const [reasoningOpen, setReasoningOpen] = useState(false)
-
-  // Track pending tool calls for matching results (tool_result has no ID in wailskit)
-  const pendingToolIDs = useRef<string[]>([])
+  // Reasoning buffer: accumulates during streaming, attached to next message
+  const reasoningBuf = useRef('')
 
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
@@ -109,31 +165,70 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, thinking, reasoningText])
+  }, [messages, thinking])
 
-  // Render mermaid diagrams after messages update
+  // Render mermaid diagrams — eagerly try on every message update.
+  // Success: replace with SVG, mark data-done (no retry).
+  // Failure (incomplete syntax): mark data-fail, will retry on next chunk.
+  // Failure (permanent): mark data-done, leave as code block.
   useEffect(() => {
-    const containers = document.querySelectorAll('.mermaid-container:not([data-rendered])')
-    containers.forEach(async (el) => {
-      const source = decodeURIComponent(el.getAttribute('data-mermaid-source') || '')
-      const id = el.getAttribute('data-mermaid-id') || 'mermaid'
-      if (!source) return
-      try {
-        const { svg } = await mermaid.render(id, source)
-        el.innerHTML = svg
-        el.setAttribute('data-rendered', 'true')
-      } catch (e) {
-        el.innerHTML = `<pre style="color: var(--color-error)">${e}</pre>`
-        el.setAttribute('data-rendered', 'true')
+    const blocks = document.querySelectorAll('.mermaid-src:not([data-done])')
+    if (blocks.length === 0) return
+    let cancelled = false;
+    (async () => {
+      const mermaid = (await import('mermaid')).default
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+      for (const block of Array.from(blocks)) {
+        if (cancelled) break
+        const code = block.querySelector('code')
+        const src = code?.textContent || ''
+        if (!src.trim()) continue
+        try {
+          const id = `mermaid-svg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+          const { svg } = await mermaid.render(id, src)
+          // Success — replace with SVG, never retry
+          block.setAttribute('data-done', '1')
+          const wrapper = document.createElement('div')
+          wrapper.className = 'mermaid-rendered'
+          wrapper.innerHTML = svg
+          block.replaceWith(wrapper)
+        } catch (e: any) {
+          const msg = String(e?.message || e || '')
+          // If it looks like a syntax error from incomplete input, allow retry
+          if (msg.includes('Parse error') || msg.includes('Lexical error') || msg.includes('unexpected')) {
+            block.setAttribute('data-fail', '1')
+          } else {
+            // Permanent error — stop retrying
+            block.setAttribute('data-done', '1')
+          }
+        }
       }
-    })
+    })()
+    return () => { cancelled = true }
   }, [messages])
 
   // ── Event stream handler (follows Fyne chat_view.go handleEvent) ────────
 
   useEffect(() => {
-    const off = EventsOn('chat:stream', (_evt: StreamEvent) => {
-      const evt = _evt
+    const off = EventsOn('chat:stream', (...args: any[]) => {
+      // Wails v2 EventsEmit may pass data as a single object or as (type, data) args
+      let normalizedEvt: StreamEvent | null = null
+
+      if (args.length === 1 && args[0]?.type) {
+        normalizedEvt = args[0]
+      } else if (args.length >= 2 && typeof args[0] === 'string') {
+        normalizedEvt = { type: args[0] as StreamEvent['type'], data: args[1] }
+      }
+
+      if (!normalizedEvt?.type) {
+        console.warn('[ChatView] unknown event format, args:', args.length, JSON.stringify(args[0])?.slice(0, 200))
+        return
+      }
+
+      handleStreamEvent(normalizedEvt)
+    })
+
+    function handleStreamEvent(evt: StreamEvent) {
       const raw = evt.data
 
       switch (evt.type) {
@@ -159,10 +254,13 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
               return updated
             }
             // First chunk: create new streaming assistant message
+            const reasoning = reasoningBuf.current
+            reasoningBuf.current = '' // clear for next round
             const newMsg: ChatMessage = {
               id: nextID(),
               role: 'assistant',
               content: p.content,
+              reasoning,
               streaming: true,
               timestamp: Date.now(),
             }
@@ -172,35 +270,57 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           break
         }
 
-        // ── tool_call_chunk: tool call started (mirrors creating a running tool card) ──
-        case 'tool_call_chunk': {
-          const p = parseJSON<ToolCallPayload>(raw)
-          if (!p) break
-          setThinking(false)
-          pendingToolIDs.current.push(p.id)
-
-          // Add a tool message in "running" state
-          setMessages(prev => [...prev, {
-            id: nextID(),
-            role: 'tool',
-            content: '',
-            toolName: p.name,
-            toolID: p.id,
-            streaming: true,
-            timestamp: Date.now(),
-          }])
-          break
-        }
-
-        // ── tool_call_done: tool call finished, store arguments ──
+        // ── tool_call_done: finalize current assistant text, create a "running" tool card ──
+        // Mirrors Fyne: FinalizeStreaming() then AppendChat(tool msg)
         case 'tool_call_done': {
           const p = parseJSON<ToolCallPayload>(raw)
           if (!p) break
+          setThinking(false)
+          const reasoning = reasoningBuf.current
+          reasoningBuf.current = ''
+
           setMessages(prev => {
-            const idx = prev.findIndex(m => m.toolID === p.id && m.role === 'tool')
+            const updated = [...prev]
+            // Finalize current streaming assistant message (mirrors FinalizeStreaming)
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'assistant' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false }
+                break
+              }
+            }
+            // Add tool card in "running" state
+            updated.push({
+              id: nextID(),
+              role: 'tool' as ChatRole,
+              content: '',
+              toolName: p.name,
+              toolID: p.id,
+              toolArgs: p.arguments,
+              toolDisplayName: p.displayName,
+              toolDetail: p.detail,
+              reasoning,
+              streaming: true,
+              timestamp: Date.now(),
+            })
+            return updated
+          })
+          break
+        }
+
+        // ── tool_result: tool execution finished, fill result ──
+        case 'tool_result': {
+          const p = parseJSON<ToolResultPayload>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
             if (idx >= 0) {
               const updated = [...prev]
-              updated[idx] = { ...updated[idx], streaming: false, toolArgs: p.arguments }
+              updated[idx] = {
+                ...updated[idx],
+                content: p.result,
+                isError: p.isError,
+                streaming: false,
+              }
               return updated
             }
             return prev
@@ -208,56 +328,40 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           break
         }
 
-        // ── tool_result: update tool card with result ──
-        case 'tool_result': {
-          const p = parseJSON<ToolResultPayload>(raw)
-          if (!p) break
-          setMessages(prev => {
-            // Match by tool call ID first, then fallback to name
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].role === 'tool' &&
-                  ((p.id && prev[i].toolID === p.id) || (prev[i].toolName === p.name)) &&
-                  prev[i].content === '') {
-                const updated = [...prev]
-                updated[i] = {
-                  ...updated[i],
-                  content: p.result,
-                  isError: p.isError,
-                  streaming: false,
-                }
-                return updated
-              }
-            }
-            return prev
-          })
-          break
-        }
-
-        // ── done: stream finished (mirrors EventStreamDone / FinalizeStreaming) ──
+        // ── done: one LLM turn finished (NOT the entire run!) ──
+        // Mirrors Fyne: FinalizeStreaming() + update usage
+        // The agent may loop (text → tool → text → ...) so don't set idle here.
         case 'done': {
           const p = parseJSON<DonePayload>(raw)
-          setIsStreaming(false)
           setThinking(false)
 
-          // Finalize streaming: mark all streaming messages as done
-          setMessages(prev => prev.map(m =>
-            m.streaming ? { ...m, streaming: false } : m
-          ))
-          streamingMsgID.current = null
+          // Finalize any streaming assistant message
+          setMessages(prev => {
+            const updated = [...prev]
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'assistant' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false }
+                break
+              }
+            }
+            // Cancel any tool messages still running (no result received)
+            for (let i = 0; i < updated.length; i++) {
+              if (updated[i].role === 'tool' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false, content: 'cancelled', isError: true }
+              }
+            }
+            return updated
+          })
 
-          // Update token usage
+          // Update token usage (cumulative across turns)
           if (p && (p.inputTokens || p.outputTokens)) {
             setStatusBar(s => ({
               ...s,
-              inputTokens: p.inputTokens ?? s.inputTokens,
-              outputTokens: p.outputTokens ?? s.outputTokens,
-              status: 'ready',
+              inputTokens: (s.inputTokens || 0) + (p.inputTokens || 0),
+              outputTokens: (s.outputTokens || 0) + (p.outputTokens || 0),
+              status: 'working',
             }))
-          } else {
-            setStatusBar(s => ({ ...s, status: 'ready' }))
           }
-          // Refocus input
-          inputRef.current?.focus()
           break
         }
 
@@ -283,19 +387,92 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           break
         }
 
-        // ── reasoning: accumulate reasoning text (mirrors EventReasoning) ──
+        // ── run_done: entire agent run finished ──
+        // This is when we actually set idle (mirrors Fyne post-RunStreamWithContent)
+        case 'run_done': {
+          setIsStreaming(false)
+          setThinking(false)
+          setStatusBar(s => ({ ...s, status: 'ready' }))
+          inputRef.current?.focus()
+          break
+        }
+
+        // ── reasoning: accumulate into buffer, will attach to next message ──
         case 'reasoning': {
           const p = parseJSON<ReasoningPayload>(raw)
           if (!p) break
-          // Filter out Anthropic redacted thinking blocks
           if (p.content === '__redacted_thinking__') break
-          setThinking(false)
-          setReasoningOpen(true)
-          setReasoningText(prev => prev + p.content)
+          reasoningBuf.current += p.content
+          break
+        }
+
+        // ── Sub-agent events ──
+        case 'subagent_text': {
+          const p = parseJSON<{ agentID: string; content: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            // Find existing streaming sub-agent message
+            const idx = prev.findIndex(m => m.agentID === p.agentID && m.role === 'assistant' && m.streaming)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = { ...updated[idx], content: updated[idx].content + p.content }
+              return updated
+            }
+            // Create new sub-agent assistant message
+            return [...prev, {
+              id: nextID(), role: 'assistant' as ChatRole, agentID: p.agentID,
+              content: p.content, streaming: true, timestamp: Date.now(),
+            }]
+          })
+          break
+        }
+        case 'subagent_reasoning': {
+          // Sub-agent reasoning — append to a running reasoning buffer for this agent
+          // For simplicity, attach as reasoning text to next message from this agent
+          const p = parseJSON<{ agentID: string; content: string }>(raw)
+          if (!p || p.content === '__redacted_thinking__') break
+          // Store in a map-like ref — just accumulate into reasoningBuf with agent prefix
+          reasoningBuf.current += p.content
+          break
+        }
+        case 'subagent_tool_call': {
+          const p = parseJSON<ToolCallPayload & { agentID: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const updated = [...prev]
+            // Finalize current streaming sub-agent assistant message
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].agentID === p.agentID && updated[i].role === 'assistant' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false }
+                break
+              }
+            }
+            updated.push({
+              id: nextID(), role: 'tool' as ChatRole, agentID: p.agentID,
+              content: '', toolName: p.name, toolID: p.id, toolArgs: p.arguments,
+              toolDisplayName: p.displayName, toolDetail: p.detail,
+              streaming: true, timestamp: Date.now(),
+            })
+            return updated
+          })
+          break
+        }
+        case 'subagent_tool_result': {
+          const p = parseJSON<ToolResultPayload & { agentID: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = { ...updated[idx], content: p.result, isError: p.isError, streaming: false }
+              return updated
+            }
+            return prev
+          })
           break
         }
       }
-    })
+    } // end handleStreamEvent
 
     return () => {
       if (typeof off === 'function') off()
@@ -341,9 +518,8 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
     setInput('')
     setIsStreaming(true)
     setThinking(true)
-    setReasoningText('')
-    setReasoningOpen(false)
-    setStatusBar(s => ({ ...s, status: 'thinking' }))
+    reasoningBuf.current = ''
+    setStatusBar(s => ({ ...s, status: 'working' }))
 
     try {
       // Call Go backend SendMessage
@@ -388,7 +564,7 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
   // ── Status bar label ──────────────────────────────────────────────────────
 
-  const statusLabel = statusBar.status === 'thinking' ? 'Thinking...'
+  const statusLabel = statusBar.status === 'working' ? (thinking ? 'Thinking...' : 'Working...')
     : statusBar.status === 'error' ? 'Error'
     : isStreaming ? 'Working...'
     : 'Ready'
@@ -490,43 +666,6 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
           </div>
         )}
 
-        {/* Reasoning panel (mirrors Fyne onReasoningChunk accordion) */}
-        {reasoningText && (
-          <div style={{
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)',
-            overflow: 'hidden',
-            alignSelf: 'flex-start',
-            maxWidth: '85%',
-          }}>
-            <button
-              onClick={() => setReasoningOpen(!reasoningOpen)}
-              style={{
-                width: '100%', padding: '6px 12px',
-                background: 'var(--color-card)',
-                border: 'none', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 6,
-                color: 'var(--text-secondary)', fontSize: 12, fontWeight: 500,
-              }}
-            >
-              {reasoningOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              Reasoning
-            </button>
-            {reasoningOpen && (
-              <div style={{
-                padding: '8px 12px',
-                background: 'var(--color-surface)',
-                color: 'var(--text-secondary)',
-                fontSize: 13, lineHeight: 1.6,
-                textAlign: 'left',
-                maxHeight: 300, overflowY: 'auto',
-              }}>
-                <div className="markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(reasoningText) as string }} />
-              </div>
-            )}
-          </div>
-        )}
-
         <div ref={messagesEndRef} />
       </div>
 
@@ -607,6 +746,42 @@ function MessageCard({ msg }: { msg: ChatMessage }) {
   }
 }
 
+// ── Reasoning block (collapsible, shown before the message it belongs to) ──
+
+function ReasoningBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{
+      borderRadius: 'var(--radius-md)',
+      border: '1px solid var(--color-border)',
+      overflow: 'hidden',
+      marginBottom: 4,
+    }}>
+      <button onClick={() => setOpen(!open)} style={{
+        width: '100%', padding: '4px 10px',
+        background: 'transparent', border: 'none', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: 4,
+        color: 'var(--text-tertiary)', fontSize: 11,
+      }}>
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Reasoning
+      </button>
+      {open && (
+        <div style={{
+          padding: '6px 10px',
+          background: 'rgba(0,0,0,0.15)',
+          color: 'var(--text-secondary)',
+          fontSize: 12, lineHeight: 1.5,
+          textAlign: 'left',
+          maxHeight: 200, overflowY: 'auto',
+        }}>
+          <div className="markdown-body" style={{ fontSize: 12 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(text) }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function UserMessage({ msg }: { msg: ChatMessage }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
@@ -624,14 +799,16 @@ function UserMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
+  const isSubAgent = !!msg.agentID
   return (
     <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
+      {msg.reasoning && <ReasoningBlock text={msg.reasoning} />}
       <div style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
-        color: 'var(--color-success)',
+        color: isSubAgent ? 'var(--color-info)' : 'var(--color-success)',
         display: 'flex', alignItems: 'center', gap: 6,
       }}>
-        Assistant
+        {isSubAgent ? `Agent: ${msg.agentID}` : 'Assistant'}
         {msg.streaming && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
             writing...
@@ -647,7 +824,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         fontSize: 14,
         textAlign: 'left',
       }}>
-        <div className="markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '...') as string }} />
+        <MessageContent content={msg.content || '...'} />
         {msg.streaming && (
           <span style={{
             display: 'inline-block', width: 2, height: 14,
@@ -661,110 +838,79 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   )
 }
 
-// toolArgSummary extracts a short human-readable summary from tool arguments.
-function toolArgSummary(toolName: string, rawArgs: string): string {
-  try {
-    const args = JSON.parse(rawArgs)
-    switch (toolName) {
-      case 'read_file': case 'write_file': case 'edit_file': case 'multi_edit_file':
-        return args.path || args.file_path || ''
-      case 'run_command': case 'start_command':
-        return (args.command || '').slice(0, 80)
-      case 'search_files': case 'grep':
-        return args.pattern || args.query || ''
-      case 'glob': case 'find':
-        return args.pattern || ''
-      case 'web_search': case 'web_fetch':
-        return args.query || args.url || ''
-      case 'git_commit':
-        return args.message ? `"${(args.message as string).slice(0, 50)}"` : ''
-      case 'git_diff': case 'git_show': case 'git_log':
-        return args.revision || args.file || ''
-      case 'save_memory':
-        return args.key || ''
-      case 'task_create': case 'swarm_task_create':
-        return args.subject || ''
-      default: {
-        if (args.path) return args.path
-        if (args.query) return args.query
-        if (args.pattern) return args.pattern
-        if (args.command) return (args.command as string).slice(0, 60)
-        if (args.url) return args.url
-        return ''
-      }
-    }
-  } catch {
-    return ''
-  }
-}
-
-// toolDisplayName returns a friendly display name for a tool.
-function toolDisplayName(toolName: string): string {
-  const names: Record<string, string> = {
-    read_file: 'Read File', write_file: 'Write File', edit_file: 'Edit File', multi_edit_file: 'Multi Edit',
-    run_command: 'Run Command', start_command: 'Start Command', search_files: 'Search', grep: 'Grep',
-    glob: 'Find Files', web_search: 'Web Search', web_fetch: 'Fetch URL', git_commit: 'Git Commit',
-    git_diff: 'Git Diff', git_show: 'Git Show', git_log: 'Git Log', git_add: 'Git Add',
-    git_status: 'Git Status', git_blame: 'Git Blame', git_branch_list: 'Git Branch', git_stash: 'Git Stash',
-    save_memory: 'Save Memory', task_create: 'Create Task', task_update: 'Update Task', task_list: 'List Tasks',
-    lsp_definition: 'Go to Def', lsp_references: 'Find Refs', lsp_hover: 'Hover Info',
-    lsp_diagnostics: 'Diagnostics', lsp_rename: 'Rename', delegate: 'Delegate', spawn_agent: 'Spawn Agent',
-    ask_user: 'Ask User',
-  }
-  return names[toolName] || toolName
-}
-
 function ToolMessage({ msg }: { msg: ChatMessage }) {
   const [expanded, setExpanded] = useState(false)
-  const summary = msg.toolArgs ? toolArgSummary(msg.toolName || '', msg.toolArgs) : ''
-  const displayName = toolDisplayName(msg.toolName || '')
+  // Use displayName from Go backend (tool.DescribeTool), fallback to prettified name
+  const title = msg.toolDisplayName || msg.toolName?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Tool'
+  const detail = msg.toolDetail || ''
 
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '75%', marginTop: 4, marginBottom: 4 }}>
+      {msg.reasoning && <ReasoningBlock text={msg.reasoning} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 10px',
         borderRadius: 'var(--radius-md)',
-        background: msg.isError ? 'rgba(220, 38, 38, 0.12)' : 'rgba(59, 130, 246, 0.12)',
-        border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(59, 130, 246, 0.3)'}`,
+        background: msg.isError ? 'rgba(220, 38, 38, 0.12)' : 'rgba(59, 130, 246, 0.08)',
+        border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.25)' : 'rgba(59, 130, 246, 0.2)'}`,
         fontSize: 12,
         cursor: msg.content ? 'pointer' : 'default',
         userSelect: 'none',
       }} onClick={() => msg.content && setExpanded(!expanded)}>
+        {/* Status icon */}
         {msg.streaming ? (
-          <span style={{ color: 'var(--color-warning)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>●</span>
+          <span style={{ color: 'var(--color-warning)', fontSize: 10 }}>●</span>
         ) : msg.isError ? (
           <span style={{ color: '#ef4444', fontSize: 12 }}>✕</span>
         ) : (
           <span style={{ color: 'var(--color-success)', fontSize: 12 }}>✓</span>
         )}
-        <span style={{ fontWeight: 600, color: msg.isError ? '#f87171' : 'var(--color-info)' }}>
-          {displayName}
+
+        {/* Title from Go's tool.DescribeTool */}
+        <span style={{
+          fontWeight: 600,
+          color: msg.isError ? '#f87171' : 'var(--color-info)',
+        }}>
+          {title}
         </span>
-        {summary && (
+
+        {/* Detail (file path, command, search query, etc.) */}
+        {detail && (
           <span style={{
-            color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: 11,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300,
+            color: 'var(--text-tertiary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+            maxWidth: 300,
           }}>
-            {summary}
+            {detail}
           </span>
         )}
+
         {msg.streaming && (
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>running...</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
+            running...
+          </span>
         )}
+
         {msg.content && !msg.streaming && (
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>{expanded ? '▲' : '▼'}</span>
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
+            {expanded ? '▲' : '▼'}
+          </span>
         )}
       </div>
+
+      {/* Expandable result */}
       {expanded && msg.content && (
         <div style={{
           marginTop: 4, padding: '8px 10px',
           borderRadius: 'var(--radius-md)',
-          background: msg.isError ? 'rgba(220, 38, 38, 0.06)' : 'rgba(59, 130, 246, 0.06)',
-          border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.15)' : 'rgba(59, 130, 246, 0.15)'}`,
+          background: msg.isError ? 'rgba(220, 38, 38, 0.06)' : 'rgba(59, 130, 246, 0.04)',
+          border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.15)' : 'rgba(59, 130, 246, 0.12)'}`,
           maxHeight: 240, overflowY: 'auto',
           fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
           whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
+          textAlign: 'left',
         }}>
           {msg.content}
         </div>

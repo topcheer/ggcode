@@ -94,6 +94,16 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	})
 	// Save session after each message (mirrors Fyne bridge)
 	b.saveSession()
+
+	// Signal run complete (the entire agent run, not just one turn)
+	if b.OnStreamEvent != nil {
+		raw, _ := json.Marshal(map[string]interface{}{"error": ""})
+		if err != nil {
+			raw, _ = json.Marshal(map[string]interface{}{"error": err.Error()})
+		}
+		b.OnStreamEvent("run_done", raw)
+	}
+
 	return err
 }
 
@@ -227,6 +237,53 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
 	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
 
+	// Forward sub-agent events to frontend
+	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
+		if b.OnStreamEvent == nil {
+			return
+		}
+		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "content": text})
+		b.OnStreamEvent("subagent_text", raw)
+	})
+	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
+		if b.OnStreamEvent == nil {
+			return
+		}
+		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "content": text})
+		b.OnStreamEvent("subagent_reasoning", raw)
+	})
+	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
+		if b.OnStreamEvent == nil {
+			return
+		}
+		if displayName == "" {
+			pres := tool.DescribeTool(toolName, args)
+			displayName = pres.DisplayName
+			detail = pres.Detail
+		}
+		raw, _ := json.Marshal(map[string]string{
+			"agentID": agentID, "id": toolID, "name": toolName,
+			"displayName": displayName, "arguments": args, "detail": detail,
+		})
+		b.OnStreamEvent("subagent_tool_call", raw)
+	})
+	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
+		if b.OnStreamEvent == nil {
+			return
+		}
+		if displayName == "" {
+			pres := tool.DescribeTool(toolName, "")
+			displayName = pres.DisplayName
+			detail = pres.Detail
+		}
+		raw, _ := json.Marshal(map[string]interface{}{
+			"agentID": agentID, "id": toolID, "name": toolName,
+			"displayName": displayName, "detail": detail,
+			"result": result, "isError": isError,
+		})
+		b.OnStreamEvent("subagent_tool_result", raw)
+	})
+
 	// Swarm manager
 	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
@@ -275,11 +332,14 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		}
 
 	case provider.StreamEventToolCallDone:
+		pres := tool.DescribeTool(ev.Tool.Name, string(ev.Tool.Arguments))
 		eventType = "tool_call_done"
 		data = map[string]interface{}{
-			"id":        ev.Tool.ID,
-			"name":      ev.Tool.Name,
-			"arguments": string(ev.Tool.Arguments),
+			"id":          ev.Tool.ID,
+			"name":        ev.Tool.Name,
+			"arguments":   string(ev.Tool.Arguments),
+			"displayName": pres.DisplayName,
+			"detail":      pres.Detail,
 		}
 
 	case provider.StreamEventToolResult:
