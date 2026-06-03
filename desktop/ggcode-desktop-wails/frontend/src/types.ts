@@ -39,8 +39,8 @@ export interface ToolCall {
 }
 
 export interface EndpointInfo {
-  name: string
-  id: string
+  key: string
+  displayName: string
 }
 
 export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp"

@@ -1,42 +1,95 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react'
-import { ConfigData, EndpointInfo } from '../types'
+import { EndpointInfo } from '../types'
+
+interface ConfigSnapshot {
+  vendor: string
+  endpoint: string
+  model: string
+  defaultMode: string
+  language: string
+  extraPrompt: string
+}
 
 interface Props {
   onBack: () => void
 }
 
+// Wails Go bindings
+declare global {
+  interface Window {
+    go: {
+      main: {
+        App: {
+          GetConfig: () => Promise<ConfigSnapshot>
+          GetVendors: () => Promise<string[]>
+          GetEndpoints: (vendor: string) => Promise<EndpointInfo[]>
+          GetModels: (vendor: string, endpoint: string) => Promise<string[]>
+          SaveConfig: (values: Record<string, string>) => Promise<void>
+        }
+      }
+    }
+  }
+}
+
 export function SettingsPage({ onBack }: Props) {
-  const [cfg, setCfg] = useState<ConfigData>({
-    vendor: '', endpoint: '', model: '', mode: 'code', language: 'en', theme: 'dark',
+  const [cfg, setCfg] = useState<ConfigSnapshot>({
+    vendor: '', endpoint: '', model: '', defaultMode: 'code', language: 'en', extraPrompt: '',
   })
   const [vendors, setVendors] = useState<string[]>([])
   const [endpoints, setEndpoints] = useState<EndpointInfo[]>([])
   const [models, setModels] = useState<string[]>([])
   const [showKey, setShowKey] = useState(false)
   const [activeNav, setActiveNav] = useState('Provider')
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
 
+  // Load config
   useEffect(() => {
-    // Load config and vendors from Go backend
-    // @ts-ignore
-    window.go.main.App.GetConfig().then((c: ConfigData) => setCfg(c))
-    // @ts-ignore
-    window.go.main.App.GetVendors().then((v: string[]) => setVendors(v || []))
+    window.go.main.App.GetConfig()
+      .then(c => setCfg(c || { vendor: '', endpoint: '', model: '', defaultMode: 'code', language: 'en', extraPrompt: '' }))
+      .catch(() => {})
+    window.go.main.App.GetVendors()
+      .then(v => setVendors(v || []))
+      .catch(() => {})
   }, [])
 
+  // Load endpoints when vendor changes
   useEffect(() => {
     if (cfg.vendor) {
-      // @ts-ignore
-      window.go.main.App.GetEndpoints(cfg.vendor).then((eps: EndpointInfo[]) => setEndpoints(eps || []))
+      window.go.main.App.GetEndpoints(cfg.vendor)
+        .then(eps => setEndpoints(eps || []))
+        .catch(() => setEndpoints([]))
     }
   }, [cfg.vendor])
 
+  // Load models when endpoint changes
   useEffect(() => {
     if (cfg.vendor && cfg.endpoint) {
-      // @ts-ignore
-      window.go.main.App.GetModels(cfg.vendor, cfg.endpoint).then((m: string[]) => setModels(m || []))
+      window.go.main.App.GetModels(cfg.vendor, cfg.endpoint)
+        .then(m => setModels(m || []))
+        .catch(() => setModels([]))
     }
   }, [cfg.vendor, cfg.endpoint])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await window.go.main.App.SaveConfig({
+        vendor: cfg.vendor,
+        endpoint: cfg.endpoint,
+        model: cfg.model,
+        defaultMode: cfg.defaultMode,
+        language: cfg.language,
+        extraPrompt: cfg.extraPrompt,
+      })
+      setDirty(false)
+    } catch (e) {
+      console.error('Save failed:', e)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const navItems = ['Provider', 'Permissions', 'Appearance', 'Language', 'MCP Servers', 'Advanced']
 
@@ -48,17 +101,8 @@ export function SettingsPage({ onBack }: Props) {
         padding: 'var(--spacing-lg) 0',
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '0 var(--spacing-lg) var(--spacing-md)',
-        }}>
-          <button onClick={onBack} style={{
-            background: 'none', border: 'none',
-            color: 'var(--text-secondary)', cursor: 'pointer',
-            display: 'flex', alignItems: 'center',
-          }}>
-            <ArrowLeft size={16} />
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 var(--spacing-lg) var(--spacing-md)' }}>
+          <button onClick={onBack} style={backBtnStyle}><BackArrow /></button>
           <span style={{ fontWeight: 600, fontSize: 14 }}>Settings</span>
         </div>
         {navItems.map(item => (
@@ -87,29 +131,28 @@ export function SettingsPage({ onBack }: Props) {
       }}>
         <h2 style={{ fontSize: 18, fontWeight: 600 }}>Provider & Model</h2>
 
-        {/* Vendor */}
         <FieldRow label="Vendor">
           <select
             value={cfg.vendor}
-            onChange={e => setCfg(c => ({ ...c, vendor: e.target.value }))}
+            onChange={e => { setCfg(c => ({ ...c, vendor: e.target.value })); setDirty(true) }}
             style={selectStyle}
           >
+            <option value="">Select vendor...</option>
             {vendors.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </FieldRow>
 
-        {/* Endpoint */}
         <FieldRow label="Endpoint">
           <select
             value={cfg.endpoint}
-            onChange={e => setCfg(c => ({ ...c, endpoint: e.target.value }))}
+            onChange={e => { setCfg(c => ({ ...c, endpoint: e.target.value })); setDirty(true) }}
             style={selectStyle}
           >
-            {endpoints.map(ep => <option key={ep.id} value={ep.id}>{ep.name}</option>)}
+            <option value="">Select endpoint...</option>
+            {endpoints.map(ep => <option key={ep.key} value={ep.key}>{ep.displayName || ep.key}</option>)}
           </select>
         </FieldRow>
 
-        {/* API Key */}
         <FieldRow label="API Key">
           <div style={{ display: 'flex', gap: 8, flex: 1 }}>
             <input
@@ -123,34 +166,35 @@ export function SettingsPage({ onBack }: Props) {
           </div>
         </FieldRow>
 
-        {/* Model */}
         <FieldRow label="Model">
           <select
             value={cfg.model}
-            onChange={e => setCfg(c => ({ ...c, model: e.target.value }))}
+            onChange={e => { setCfg(c => ({ ...c, model: e.target.value })); setDirty(true) }}
             style={selectStyle}
           >
+            <option value="">Select model...</option>
             {models.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         </FieldRow>
 
-        {/* Extra Prompt */}
         <FieldRow label="Extra Prompt">
           <textarea
+            value={cfg.extraPrompt}
+            onChange={e => { setCfg(c => ({ ...c, extraPrompt: e.target.value })); setDirty(true) }}
             style={{ ...inputStyle, flex: 1, minHeight: 60, resize: 'vertical' }}
             placeholder="Always respond concisely..."
           />
         </FieldRow>
 
-        {/* Default Mode */}
         <FieldRow label="Default Mode">
           <div style={{ display: 'flex', gap: 6 }}>
-            {['Code', 'Agent'].map(m => (
-              <button key={m} style={{
+            {['code', 'agent'].map(m => (
+              <button key={m} onClick={() => { setCfg(c => ({ ...c, defaultMode: m })); setDirty(true) }} style={{
                 padding: '4px 12px', borderRadius: 'var(--radius-sm)',
-                background: cfg.mode === m.toLowerCase() ? 'var(--color-primary)' : 'var(--color-surface)',
-                color: cfg.mode === m.toLowerCase() ? '#fff' : 'var(--text-secondary)',
+                background: cfg.defaultMode === m ? 'var(--color-primary)' : 'var(--color-surface)',
+                color: cfg.defaultMode === m ? '#fff' : 'var(--text-secondary)',
                 border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 500,
+                textTransform: 'capitalize',
               }}>
                 {m}
               </button>
@@ -160,7 +204,6 @@ export function SettingsPage({ onBack }: Props) {
 
         <div style={{ flex: 1 }} />
 
-        {/* Buttons */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={onBack} style={{
             padding: '8px 20px', borderRadius: 'var(--radius-md)',
@@ -170,13 +213,18 @@ export function SettingsPage({ onBack }: Props) {
           }}>
             Cancel
           </button>
-          <button style={{
-            padding: '8px 20px', borderRadius: 'var(--radius-md)',
-            background: 'var(--color-primary)',
-            color: '#fff', border: 'none', cursor: 'pointer',
-            fontSize: 13, fontWeight: 500,
-          }}>
-            Save Changes
+          <button
+            onClick={save}
+            disabled={!dirty || saving}
+            style={{
+              padding: '8px 20px', borderRadius: 'var(--radius-md)',
+              background: dirty ? 'var(--color-primary)' : 'var(--color-surface)',
+              color: dirty ? '#fff' : 'var(--text-tertiary)',
+              border: 'none', cursor: dirty ? 'pointer' : 'default',
+              fontSize: 13, fontWeight: 500, opacity: saving ? 0.7 : 1,
+            }}
+          >
+            {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
       </div>
@@ -201,10 +249,7 @@ const inputStyle: React.CSSProperties = {
 }
 
 const selectStyle: React.CSSProperties = {
-  ...inputStyle,
-  width: '100%',
-  appearance: 'none',
-  cursor: 'pointer',
+  ...inputStyle, width: '100%', appearance: 'none', cursor: 'pointer',
 }
 
 const iconBtnStyle: React.CSSProperties = {
@@ -212,4 +257,17 @@ const iconBtnStyle: React.CSSProperties = {
   background: 'var(--color-surface)', border: 'none',
   color: 'var(--text-secondary)', cursor: 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
+}
+
+function BackArrow() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M10 3L5 8L10 13" />
+    </svg>
+  )
+}
+
+const backBtnStyle: React.CSSProperties = {
+  background: 'none', border: 'none', color: 'var(--text-secondary)',
+  cursor: 'pointer', display: 'flex', alignItems: 'center',
 }
