@@ -64,6 +64,7 @@ func (a *App) initWorkspace(dir string) {
 		})
 	}
 	a.chat = chat
+	wailskit.SetChatBridge(chat)
 }
 
 // shutdown is called when the app is closing.
@@ -213,6 +214,22 @@ func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
 // DeleteSession removes a session by ID.
 func (a *App) DeleteSession(id string) error {
 	return wailskit.DeleteSession(id)
+}
+
+// NewSession creates a fresh session, cancelling any current work.
+func (a *App) NewSession() error {
+	if a.chat != nil {
+		a.chat.Cancel()
+	}
+	return wailskit.NewSession()
+}
+
+// LoadSession loads an existing session by ID.
+func (a *App) LoadSession(id string) error {
+	if a.chat != nil {
+		a.chat.Cancel()
+	}
+	return wailskit.LoadSession(id)
 }
 
 // ─── Workspace ────────────────────────────────────────────

@@ -72,6 +72,20 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
     } catch {}
   }
 
+  const handleNew = async () => {
+    try {
+      await App.NewSession()
+      onSessionSelect?.('')
+    } catch {}
+  }
+
+  const handleSelect = async (id: string) => {
+    try {
+      await App.LoadSession(id)
+      onSessionSelect?.(id)
+    } catch {}
+  }
+
   return (
     <div style={{
       width: 'var(--sidebar-width)',
@@ -92,7 +106,7 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
           Sessions
         </span>
         <div style={{ flex: 1 }} />
-        <button style={{
+        <button onClick={handleNew} style={{
           padding: '3px 8px', borderRadius: 'var(--radius-sm)',
           background: 'var(--color-primary)',
           color: '#fff', border: 'none', cursor: 'pointer',
@@ -140,7 +154,7 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
         {filtered.map(s => (
           <div
             key={s.id}
-            onClick={() => onSessionSelect?.(s.id)}
+            onClick={() => handleSelect(s.id)}
             style={{
               padding: 'var(--spacing-sm) var(--spacing-md)',
               background: s.id === activeSessionId ? 'var(--color-card)' : 'transparent',
