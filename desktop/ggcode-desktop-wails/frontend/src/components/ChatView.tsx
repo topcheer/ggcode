@@ -89,6 +89,7 @@ interface ChatMessage {
   toolDisplayName?: string
   toolDetail?: string
   agentID?: string
+  teammateName?: string
   reasoning?: string
   isError?: boolean
   streaming?: boolean
@@ -100,6 +101,7 @@ interface ChatMessage {
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'run_done'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result'
+    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle'
   data: string // JSON-encoded payload
 }
 
@@ -468,6 +470,87 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
               return updated
             }
             return prev
+          })
+          break
+        }
+
+        // ── Swarm/teammate events ──
+        case 'swarm_text': {
+          const p = parseJSON<{ teammateID: string; teammateName: string; content: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const idx = prev.findIndex(m => m.agentID === p.teammateID && m.role === 'assistant' && m.streaming)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = { ...updated[idx], content: updated[idx].content + p.content }
+              return updated
+            }
+            return [...prev, {
+              id: nextID(), role: 'assistant' as ChatRole, agentID: p.teammateID,
+              teammateName: p.teammateName, content: p.content, streaming: true, timestamp: Date.now(),
+            }]
+          })
+          break
+        }
+        case 'swarm_tool_call': {
+          const p = parseJSON<ToolCallPayload & { teammateID: string; teammateName: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const updated = [...prev]
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].agentID === p.teammateID && updated[i].role === 'assistant' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false }
+                break
+              }
+            }
+            updated.push({
+              id: nextID(), role: 'tool' as ChatRole, agentID: p.teammateID,
+              teammateName: p.teammateName, content: '',
+              toolName: p.name, toolID: p.id, toolArgs: p.arguments,
+              toolDisplayName: p.displayName, toolDetail: p.detail,
+              streaming: true, timestamp: Date.now(),
+            })
+            return updated
+          })
+          break
+        }
+        case 'swarm_tool_result': {
+          const p = parseJSON<ToolResultPayload & { teammateID: string; teammateName: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
+            if (idx >= 0) {
+              const updated = [...prev]
+              updated[idx] = { ...updated[idx], content: p.result, isError: p.isError, streaming: false }
+              return updated
+            }
+            return prev
+          })
+          break
+        }
+        case 'swarm_spawned': {
+          const p = parseJSON<{ teammateID: string; teammateName: string; teamID: string }>(raw)
+          if (!p) break
+          setMessages(prev => [...prev, {
+            id: nextID(), role: 'system' as ChatRole,
+            content: `Teammate "${p.teammateName}" spawned`,
+            agentID: p.teammateID, teammateName: p.teammateName,
+            timestamp: Date.now(),
+          }])
+          break
+        }
+        case 'swarm_idle': {
+          const p = parseJSON<{ teammateID: string; teammateName: string; content: string }>(raw)
+          if (!p) break
+          // Finalize any streaming messages from this teammate
+          setMessages(prev => {
+            const updated = [...prev]
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].agentID === p.teammateID && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false }
+              }
+            }
+            return updated
           })
           break
         }
