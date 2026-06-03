@@ -54,7 +54,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions
+          df -h /
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
       - name: Install GoReleaser
@@ -108,7 +112,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -141,7 +149,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Install WiX Toolset
         shell: pwsh
         run: |
@@ -180,7 +188,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -238,7 +250,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Install GCC (MinGW)
         shell: pwsh
         run: choco install mingw --yes
@@ -281,7 +293,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Install Fyne dependencies
         shell: bash
         run: |
@@ -320,7 +332,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Install Fyne dependencies
         shell: bash
         run: |

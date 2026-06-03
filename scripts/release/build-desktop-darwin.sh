@@ -58,6 +58,10 @@ echo "  Creating universal binary..."
 lipo -create -output "${WORK_DIR}/${APP_NAME}" "${WORK_DIR}/${APP_NAME}-amd64" "${WORK_DIR}/${APP_NAME}-arm64"
 chmod 0755 "${WORK_DIR}/${APP_NAME}"
 
+# Free disk space: remove per-architecture binaries and Go build cache.
+rm -f "${WORK_DIR}/${APP_NAME}-amd64" "${WORK_DIR}/${APP_NAME}-arm64"
+go clean -cache 2>/dev/null || true
+
 echo "  Creating .app bundle..."
 APP_BUNDLE="${WORK_DIR}/${APP_NAME}.app"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
@@ -151,7 +155,13 @@ mkdir -p "${DMG_STAGING}"
 cp -R "${APP_BUNDLE}" "${DMG_STAGING}/"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
+# Free disk space: remove .app bundle from WORK_DIR (now copied to staging).
+rm -rf "${APP_BUNDLE}"
+
 hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"
+
+# Free disk space: remove DMG staging after hdiutil.
+rm -rf "${DMG_STAGING}"
 
 # ── Notarize ───────────────────────────────────────────────
 if [[ "${DO_NOTARIZE}" == "true" ]]; then
@@ -167,7 +177,11 @@ if [[ "${DO_NOTARIZE}" == "true" ]]; then
 
   # Re-create DMG with stapled ticket
   rm -f "${DMG_PATH}"
+  mkdir -p "${DMG_STAGING}"
+  cp -R "${APP_BUNDLE}" "${DMG_STAGING}/"
+  ln -s /Applications "${DMG_STAGING}/Applications"
   hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"
+  rm -rf "${DMG_STAGING}"
   echo "  Notarization + Staple OK"
 else
   echo "  Skipping notarization (no API key)"
