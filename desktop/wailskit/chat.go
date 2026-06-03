@@ -129,7 +129,11 @@ func (b *ChatBridge) LoadSession(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.sessionStore == nil {
-		return fmt.Errorf("no session store")
+		store, err := session.NewDefaultStore()
+		if err != nil {
+			return fmt.Errorf("init session store: %w", err)
+		}
+		b.sessionStore = store
 	}
 	ses, err := b.sessionStore.Load(id)
 	if err != nil {

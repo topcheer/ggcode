@@ -2,6 +2,7 @@ package wailskit
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/session"
@@ -30,11 +31,25 @@ func ListSessions(workingDir string) ([]SessionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
-	var result []SessionInfo
+
+	// Normalize workspace for comparison (resolve symlinks, clean path).
+	normalizedWS := session.NormalizeWorkspacePath(workingDir)
+
+	// Filter to only show sessions matching the current workspace.
+	var filtered []*session.Session
 	for _, s := range sessions {
-		if workingDir != "" && s.Workspace != workingDir {
-			continue
+		if s.Workspace == workingDir || s.Workspace == normalizedWS {
+			filtered = append(filtered, s)
 		}
+	}
+
+	// Sort by UpdatedAt descending (most recent first).
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+
+	result := make([]SessionInfo, 0, len(filtered))
+	for _, s := range filtered {
 		result = append(result, SessionInfo{
 			ID:        s.ID,
 			Title:     s.Title,
