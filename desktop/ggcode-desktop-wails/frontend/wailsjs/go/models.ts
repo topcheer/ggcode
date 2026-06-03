@@ -130,6 +130,24 @@ export namespace wailskit {
 	        this.extra = source["extra"];
 	    }
 	}
+	export class ImpersonationPresetInfo {
+	    id: string;
+	    displayName: string;
+	    defaultVersion: string;
+	    extraHeaders?: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImpersonationPresetInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.displayName = source["displayName"];
+	        this.defaultVersion = source["defaultVersion"];
+	        this.extraHeaders = source["extraHeaders"];
+	    }
+	}
 	export class MCPServerInfo {
 	    name: string;
 	    type?: string;
@@ -176,6 +194,24 @@ export namespace wailskit {
 	        this.model = source["model"];
 	        this.msgCount = source["msgCount"];
 	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class TestEndpointResult {
+	    ok: boolean;
+	    message: string;
+	    models?: string[];
+	    modelCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestEndpointResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.message = source["message"];
+	        this.models = source["models"];
+	        this.modelCount = source["modelCount"];
 	    }
 	}
 	export class VendorPresetInfo {

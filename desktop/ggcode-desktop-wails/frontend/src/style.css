@@ -30,6 +30,7 @@ body {
     font-size: 14px;
     line-height: 1.6;
     word-wrap: break-word;
+    text-align: left;
 }
 .markdown-body p {
     margin: 0.4em 0;
