@@ -25,7 +25,7 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '12px 0',
+      padding: '48px 0 12px 0',
       gap: 4,
       flexShrink: 0,
     }}>

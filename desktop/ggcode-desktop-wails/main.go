@@ -39,7 +39,7 @@ func main() {
 				FullSizeContent:            true,
 				UseToolbar:                 false,
 			},
-			WebviewIsTransparent: true,
+			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 		},
 		Windows: &windows.Options{

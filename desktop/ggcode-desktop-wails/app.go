@@ -101,6 +101,18 @@ func (a *App) SaveConfig(values map[string]string) error {
 	return wailskit.SaveConfig(values)
 }
 
+// ─── Sessions ─────────────────────────────────────────────
+
+// ListSessions returns all sessions sorted by UpdatedAt desc.
+func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
+	return wailskit.ListSessions()
+}
+
+// DeleteSession removes a session by ID.
+func (a *App) DeleteSession(id string) error {
+	return wailskit.DeleteSession(id)
+}
+
 // ─── IM Adapters ──────────────────────────────────────────
 
 // ListIMAdapters returns all configured IM adapters.
