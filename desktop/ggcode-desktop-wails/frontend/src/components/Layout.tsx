@@ -11,6 +11,7 @@ import { ContextPanel } from './ContextPanel'
 import { CommandPalette } from './CommandPalette'
 import { ShareDialog, AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
+import { Onboarding } from './Onboarding'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
@@ -23,6 +24,7 @@ export function Layout() {
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
+  const [needsOnboard, setNeedsOnboard] = useState(false)
 
   // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
@@ -43,11 +45,14 @@ export function Layout() {
       try {
         const cfg = await App.GetConfig()
         if (cancelled) return
-        setStatusBarData(prev => ({
-          ...prev,
-          vendor: cfg.vendor || prev.vendor,
-          model: cfg.model || prev.model,
-        }))
+        setNeedsOnboard(cfg.needsSetup || false)
+        if (!cfg.needsSetup) {
+          setStatusBarData(prev => ({
+            ...prev,
+            vendor: cfg.vendor || prev.vendor,
+            model: cfg.model || prev.model,
+          }))
+        }
       } catch {
         // Config not available yet
       }
@@ -113,35 +118,51 @@ export function Layout() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
-      {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
+      {/* Onboarding flow */}
+      {needsOnboard ? (
+        <Onboarding onComplete={() => {
+          setNeedsOnboard(false)
+          App.GetConfig().then(cfg => {
+            setStatusBarData(prev => ({
+              ...prev,
+              vendor: cfg.vendor || prev.vendor,
+              model: cfg.model || prev.model,
+            }))
+          }).catch(() => {})
+        }} />
+      ) : (
+        <>
+          {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
+          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+            <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
 
-        {sidebarOpen && view === 'chat' && (
-          <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} />
-        )}
+            {sidebarOpen && view === 'chat' && (
+              <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} />
+            )}
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-          {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
-          {view === 'settings' && <SettingsPage onBack={backToChat} />}
-          {view === 'im' && <IMManagement onBack={backToChat} />}
-          {view === 'files' && <FileBrowser onBack={backToChat} />}
-          {view === 'mcp' && <MCPServers onBack={backToChat} />}
-        </div>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
+              {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
+              {view === 'settings' && <SettingsPage onBack={backToChat} />}
+              {view === 'im' && <IMManagement onBack={backToChat} />}
+              {view === 'files' && <FileBrowser onBack={backToChat} />}
+              {view === 'mcp' && <MCPServers onBack={backToChat} />}
+            </div>
 
-        {contextPanelOpen && view === 'chat' && (
-          <ContextPanel
-            onClose={() => setContextPanelOpen(false)}
-            statusBarData={statusBarData}
+            {contextPanelOpen && view === 'chat' && (
+              <ContextPanel
+                onClose={() => setContextPanelOpen(false)}
+                statusBarData={statusBarData}
+              />
+            )}
+          </div>
+
+          {/* Status bar at bottom */}
+          <StatusBar
+            onContextToggle={() => setContextPanelOpen(prev => !prev)}
+            data={statusBarData}
           />
-        )}
-      </div>
-
-      {/* Status bar at bottom */}
-      <StatusBar
-        onContextToggle={() => setContextPanelOpen(prev => !prev)}
-        data={statusBarData}
-      />
+        </>
+      )}
 
       {/* Overlay dialogs */}
       {cmdPaletteOpen && <CommandPalette onClose={() => setCmdPaletteOpen(false)} />}

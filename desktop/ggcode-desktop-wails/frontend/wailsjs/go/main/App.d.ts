@@ -6,6 +6,8 @@ export function AddMCPServer(arg1:Record<string, string>):Promise<void>;
 
 export function CancelMessage():Promise<void>;
 
+export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+
 export function DeleteSession(arg1:string):Promise<void>;
 
 export function GetConfig():Promise<wailskit.ConfigSnapshot>;
@@ -18,13 +20,15 @@ export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function GetPlatform():Promise<string>;
 
+export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
+
 export function GetVendors():Promise<Array<string>>;
 
 export function GetVersion():Promise<string>;
 
-export function GetWorkingDir():Promise<string>;
+export function GetWorkDir():Promise<string>;
 
-export function ListDirectory(arg1:string,arg2:boolean):Promise<Array<wailskit.FileInfo>>;
+export function InitWorkspace(arg1:string):Promise<void>;
 
 export function ListFiles(arg1:string):Promise<Array<Record<string, any>>>;
 
@@ -33,6 +37,8 @@ export function ListIMAdapters():Promise<Array<wailskit.IMAdapterInfo>>;
 export function ListMCPServers():Promise<Array<wailskit.MCPServerInfo>>;
 
 export function ListSessions():Promise<Array<wailskit.SessionInfo>>;
+
+export function NeedsOnboard():Promise<boolean>;
 
 export function ReadFileContent(arg1:string):Promise<string>;
 
@@ -45,6 +51,8 @@ export function SaveConfig(arg1:Record<string, string>):Promise<void>;
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SelectDirectory():Promise<string>;
+
+export function SelectWorkspace():Promise<string>;
 
 export function SendMessage(arg1:string):Promise<void>;
 
