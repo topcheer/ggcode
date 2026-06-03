@@ -118,6 +118,10 @@ export function SaveAPIKey(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAPIKey'](arg1, arg2, arg3);
 }
 
+export function SaveDefaultMode(arg1) {
+  return window['go']['main']['App']['SaveDefaultMode'](arg1);
+}
+
 export function SaveIMAdapter(arg1, arg2) {
   return window['go']['main']['App']['SaveIMAdapter'](arg1, arg2);
 }

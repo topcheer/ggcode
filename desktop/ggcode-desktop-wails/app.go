@@ -244,6 +244,11 @@ func (a *App) GetWorkDir() string {
 	return a.workDir
 }
 
+// SaveDefaultMode saves the default permission mode.
+func (a *App) SaveDefaultMode(mode string) error {
+	return wailskit.SaveDefaultMode(mode)
+}
+
 // SelectDirectory opens a native directory picker.
 func (a *App) SelectDirectory() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{

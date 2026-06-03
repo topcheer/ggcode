@@ -6,6 +6,13 @@ interface Props {
   onComplete: () => void
 }
 
+const MODES = [
+  { id: 'supervised', label: 'Supervised', desc: 'Review and approve every tool call before execution', color: '#eab308' },
+  { id: 'auto', label: 'Auto', desc: 'Auto-approve read-only tools, confirm destructive operations', color: '#22c55e' },
+  { id: 'bypass', label: 'Bypass', desc: 'Auto-approve all tools, no confirmation needed', color: '#ef4444' },
+  { id: 'autopilot', label: 'Autopilot', desc: 'Fully autonomous — agent runs without any confirmation', color: '#a855f7' },
+]
+
 interface VendorPreset {
   id: string
   displayName: string
@@ -20,7 +27,7 @@ interface EndpointPreset {
 }
 
 export function Onboarding({ onComplete }: Props) {
-  const [step, setStep] = useState<'workspace' | 'setup'>('workspace')
+  const [step, setStep] = useState<'workspace' | 'setup' | 'mode'>('workspace')
   const [workDir, setWorkDir] = useState('')
 
   // Onboard form state
@@ -29,6 +36,7 @@ export function Onboarding({ onComplete }: Props) {
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
+  const [selectedMode, setSelectedMode] = useState('supervised')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -68,6 +76,8 @@ export function Onboarding({ onComplete }: Props) {
     setError('')
     try {
       await App.CompleteOnboard(selectedVendor, selectedEndpoint, selectedModel, apiKey)
+      // Save permission mode
+      try { await App.SaveDefaultMode(selectedMode) } catch {}
       onComplete()
     } catch (e: any) {
       setError(e?.message || 'Failed to save config')
@@ -106,6 +116,59 @@ export function Onboarding({ onComplete }: Props) {
   }
 
   // ─── Step 2: API Setup ───
+  // ─── Step 2.5: Permission Mode ───
+  if (step === 'mode') {
+    return (
+      <div style={{
+        flex: 1, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 20,
+      }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          Choose Permission Mode
+        </h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0, maxWidth: 400, textAlign: 'center' }}>
+          How much control do you want over tool execution?
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 420 }}>
+          {MODES.map(m => (
+            <button key={m.id} onClick={() => setSelectedMode(m.id)} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 12,
+              padding: '14px 16px', borderRadius: 'var(--radius-md)',
+              border: `2px solid ${selectedMode === m.id ? m.color : 'var(--color-border)'}`,
+              background: selectedMode === m.id ? `${m.color}15` : 'var(--color-card)',
+              cursor: 'pointer', textAlign: 'left',
+            }}>
+              <div style={{
+                width: 12, height: 12, borderRadius: '50%',
+                background: m.color, marginTop: 2, flexShrink: 0,
+                outline: selectedMode === m.id ? '2px solid var(--text-primary)' : 'none',
+                outlineOffset: 2,
+              }} />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{m.label}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{m.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 12, width: 420 }}>
+          <button onClick={() => setStep('setup')} style={{
+            flex: 1, height: 40, borderRadius: 'var(--radius-md)',
+            background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+            color: 'var(--text-secondary)', fontSize: 14, cursor: 'pointer',
+          }}>Back</button>
+          <button onClick={handleSubmit} disabled={saving} style={{
+            flex: 2, height: 40, borderRadius: 'var(--radius-md)',
+            background: saving ? 'var(--color-border)' : 'var(--color-primary)',
+            color: '#fff', fontSize: 14, fontWeight: 600,
+            border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
+          }}>{saving ? 'Saving...' : 'Start Using GGCode'}</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ─── Step 2: Setup (Vendor/Endpoint/API Key/Model) ───
   return (
     <div style={{
       flex: 1, display: 'flex', flexDirection: 'column',
@@ -181,9 +244,9 @@ export function Onboarding({ onComplete }: Props) {
           <div style={{ color: 'var(--color-error)', fontSize: 12, marginBottom: 12 }}>{error}</div>
         )}
 
-        {/* Submit */}
+        {/* Submit → go to mode selection */}
         <button
-          onClick={handleSubmit}
+          onClick={() => setStep('mode')}
           disabled={saving || !selectedVendor || !selectedEndpoint || !apiKey || !selectedModel}
           style={{
             width: '100%', padding: '10px 0', borderRadius: 'var(--radius-md)',
@@ -194,8 +257,8 @@ export function Onboarding({ onComplete }: Props) {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           }}
         >
-          {saving ? 'Saving...' : 'Start Coding'}
-          {!saving && <ChevronRight size={16} />}
+          Next
+          <ChevronRight size={16} />
         </button>
       </div>
     </div>
