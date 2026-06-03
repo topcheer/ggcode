@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react'
 import { EndpointInfo } from '../types'
 import * as App from '../../wailsjs/go/main/App'
+import { TopDragBar } from './TopDragBar'
 
 interface ConfigSnapshot {
   vendor: string
@@ -81,7 +82,9 @@ export function SettingsPage({ onBack }: Props) {
   const navItems = ['Provider', 'Permissions', 'Appearance', 'Language', 'MCP Servers', 'Advanced']
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <TopDragBar />
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       {/* Settings nav */}
       <div style={{
         width: 200, background: 'var(--color-nav)',
@@ -214,6 +217,7 @@ export function SettingsPage({ onBack }: Props) {
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
+      </div>
       </div>
     </div>
   )

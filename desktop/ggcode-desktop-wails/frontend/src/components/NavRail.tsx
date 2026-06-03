@@ -25,10 +25,16 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '12px 0',
+      padding: '0',
       gap: 4,
       flexShrink: 0,
     }}>
+      {/* Draggable spacer for macOS traffic lights area */}
+      <div style={{
+        height: 36, width: '100%',
+        '--wails-draggable': 'drag',
+      } as React.CSSProperties} />
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '8px 0' }}>
       {/* Logo */}
       <button onClick={onAbout} style={{
         width: 32, height: 32, borderRadius: 8,
@@ -68,8 +74,10 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
         background: '#6E40C9',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: '#fff', fontSize: 12, fontWeight: 600,
-      }}>
+        '--wails-draggable': 'no-drag',
+      } as React.CSSProperties}>
         <User size={16} />
+      </div>
       </div>
     </div>
   )

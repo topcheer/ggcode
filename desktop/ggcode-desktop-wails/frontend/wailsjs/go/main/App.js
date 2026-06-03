@@ -10,6 +10,10 @@ export function CancelMessage() {
   return window['go']['main']['App']['CancelMessage']();
 }
 
+export function CompleteOnboard(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CompleteOnboard'](arg1, arg2, arg3, arg4);
+}
+
 export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
@@ -34,6 +38,10 @@ export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
 }
 
+export function GetVendorPresets() {
+  return window['go']['main']['App']['GetVendorPresets']();
+}
+
 export function GetVendors() {
   return window['go']['main']['App']['GetVendors']();
 }
@@ -42,12 +50,12 @@ export function GetVersion() {
   return window['go']['main']['App']['GetVersion']();
 }
 
-export function GetWorkingDir() {
-  return window['go']['main']['App']['GetWorkingDir']();
+export function GetWorkDir() {
+  return window['go']['main']['App']['GetWorkDir']();
 }
 
-export function ListDirectory(arg1, arg2) {
-  return window['go']['main']['App']['ListDirectory'](arg1, arg2);
+export function InitWorkspace(arg1) {
+  return window['go']['main']['App']['InitWorkspace'](arg1);
 }
 
 export function ListFiles(arg1) {
@@ -64,6 +72,10 @@ export function ListMCPServers() {
 
 export function ListSessions() {
   return window['go']['main']['App']['ListSessions']();
+}
+
+export function NeedsOnboard() {
+  return window['go']['main']['App']['NeedsOnboard']();
 }
 
 export function ReadFileContent(arg1) {
@@ -88,6 +100,10 @@ export function SaveIMAdapter(arg1, arg2) {
 
 export function SelectDirectory() {
   return window['go']['main']['App']['SelectDirectory']();
+}
+
+export function SelectWorkspace() {
+  return window['go']['main']['App']['SelectWorkspace']();
 }
 
 export function SendMessage(arg1) {

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
+import { TopDragBar } from './TopDragBar'
 
 // ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
@@ -364,6 +365,9 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Titlebar drag spacer — aligns with NavRail traffic light area */}
+      <TopDragBar />
+
       {/* Top bar */}
       <div style={{
         height: 'var(--topbar-height)',

@@ -17,18 +17,21 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // ChatBridge manages the full agent chat loop for the Wails frontend,
-// mirroring the Fyne desktop's AgentBridge tool registration.
+// mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
-	cfg        *config.Config
-	agent      *agent.Agent
-	registry   *tool.Registry
-	workingDir string
+	cfg          *config.Config
+	agent        *agent.Agent
+	registry     *tool.Registry
+	workingDir   string
+	sessionStore session.Store
+	currentSes   *session.Session
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -42,10 +45,10 @@ type ChatBridge struct {
 	OnStreamEvent func(eventType string, data json.RawMessage)
 }
 
-// NewChatBridge creates a new chat bridge.
+// NewChatBridge creates a new chat bridge using the global config.
 func NewChatBridge() (*ChatBridge, error) {
-	cfg, err := config.Load("")
-	if err != nil {
+	cfg := GetGlobalConfig()
+	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	wd, _ := os.Getwd()
@@ -78,12 +81,20 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 		}
 	}
 
-	return b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
+	// Ensure we have a session (mirrors Fyne bridge.ensureSession)
+	if err := b.ensureSession(); err != nil {
+		return fmt.Errorf("ensure session: %w", err)
+	}
+
+	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
 		if b.OnStreamEvent == nil {
 			return
 		}
 		b.emit(ev)
 	})
+	// Save session after each message (mirrors Fyne bridge)
+	b.saveSession()
+	return err
 }
 
 // Cancel stops the current agent run.
@@ -94,6 +105,51 @@ func (b *ChatBridge) Cancel() {
 		b.cancel()
 		b.cancel = nil
 	}
+}
+
+// ensureSession creates a new session if none exists (mirrors Fyne bridge).
+func (b *ChatBridge) ensureSession() error {
+	if b.currentSes != nil {
+		return nil
+	}
+	if b.sessionStore == nil {
+		store, err := session.NewDefaultStore()
+		if err != nil {
+			return fmt.Errorf("create session store: %w", err)
+		}
+		b.sessionStore = store
+	}
+	vendor, endpoint, model := "", "", ""
+	if b.cfg != nil {
+		vendor = b.cfg.Vendor
+		endpoint = b.cfg.Endpoint
+		model = b.cfg.Model
+	}
+	ses := session.NewSession(vendor, endpoint, model)
+	ses.Workspace = b.workingDir
+	if err := b.sessionStore.Save(ses); err != nil {
+		return fmt.Errorf("save new session: %w", err)
+	}
+	b.currentSes = ses
+	return nil
+}
+
+// saveSession persists the current session (mirrors Fyne bridge).
+func (b *ChatBridge) saveSession() {
+	if b.currentSes == nil || b.sessionStore == nil {
+		return
+	}
+	_ = b.sessionStore.Save(b.currentSes)
+}
+
+// CurrentSessionID returns the current session ID.
+func (b *ChatBridge) CurrentSessionID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.currentSes == nil {
+		return ""
+	}
+	return b.currentSes.ID
 }
 
 // initAgent sets up provider, tools, and agent — full parity with Fyne bridge.
@@ -241,9 +297,17 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		eventType = "done"
 		usageData := map[string]interface{}{}
 		if ev.Usage != nil {
+			cacheTotal := ev.Usage.CacheRead + ev.Usage.CacheWrite + ev.Usage.InputTokens
+			cacheHit := 0
+			if cacheTotal > 0 && ev.Usage.CacheRead > 0 {
+				cacheHit = ev.Usage.CacheRead * 100 / cacheTotal
+			}
 			usageData = map[string]interface{}{
-				"inputTokens":  ev.Usage.InputTokens,
+				"inputTokens":  ev.Usage.InputTokens + ev.Usage.CacheRead,
 				"outputTokens": ev.Usage.OutputTokens,
+				"cacheRead":    ev.Usage.CacheRead,
+				"cacheWrite":   ev.Usage.CacheWrite,
+				"cacheHit":     cacheHit,
 			}
 		}
 		data = usageData
