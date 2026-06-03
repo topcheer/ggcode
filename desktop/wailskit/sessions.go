@@ -18,8 +18,9 @@ type SessionInfo struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
-// ListSessions returns all sessions sorted by UpdatedAt descending.
-func ListSessions() ([]SessionInfo, error) {
+// ListSessions returns sessions for the given workspace, sorted by UpdatedAt descending.
+// If workingDir is empty, returns all sessions.
+func ListSessions(workingDir string) ([]SessionInfo, error) {
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return nil, fmt.Errorf("open session store: %w", err)
@@ -30,6 +31,9 @@ func ListSessions() ([]SessionInfo, error) {
 	}
 	var result []SessionInfo
 	for _, s := range sessions {
+		if workingDir != "" && s.Workspace != workingDir {
+			continue
+		}
 		result = append(result, SessionInfo{
 			ID:        s.ID,
 			Title:     s.Title,

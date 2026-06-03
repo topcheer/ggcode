@@ -103,9 +103,9 @@ func (a *App) SaveConfig(values map[string]string) error {
 
 // ─── Sessions ─────────────────────────────────────────────
 
-// ListSessions returns all sessions sorted by UpdatedAt desc.
+// ListSessions returns sessions for the current workspace.
 func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
-	return wailskit.ListSessions()
+	return wailskit.ListSessions(a.workDir)
 }
 
 // DeleteSession removes a session by ID.
