@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
-	"path/filepath"
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -12,6 +12,7 @@ import (
 // App is the main application struct for the Wails desktop app.
 type App struct {
 	ctx     context.Context
+	chat    *wailskit.ChatBridge
 	workDir string
 }
 
@@ -24,10 +25,54 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.workDir, _ = os.Getwd()
+
+	// Initialize chat bridge
+	chat, err := wailskit.NewChatBridge()
+	if err != nil {
+		println("Warning: chat bridge init error:", err.Error())
+	} else {
+		// Wire up streaming events to frontend
+		chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
+			runtime.EventsEmit(a.ctx, "chat:stream", map[string]interface{}{
+				"type": eventType,
+				"data": string(data),
+			})
+		}
+		a.chat = chat
+	}
 }
 
 // shutdown is called when the app is closing.
-func (a *App) shutdown(_ context.Context) {}
+func (a *App) shutdown(_ context.Context) {
+	if a.chat != nil {
+		a.chat.Cancel()
+	}
+}
+
+// ─── Chat ─────────────────────────────────────────────────
+
+// SendMessage sends a user message to the agent.
+func (a *App) SendMessage(userMsg string) error {
+	if a.chat == nil {
+		return nil
+	}
+	return a.chat.SendMessage(userMsg)
+}
+
+// CancelMessage cancels the current agent run.
+func (a *App) CancelMessage() {
+	if a.chat != nil {
+		a.chat.Cancel()
+	}
+}
+
+// GetModelInfo returns current model info for the status bar.
+func (a *App) GetModelInfo() map[string]interface{} {
+	if a.chat == nil {
+		return nil
+	}
+	return a.chat.GetModelInfo()
+}
 
 // ─── Config ───────────────────────────────────────────────
 
@@ -56,12 +101,69 @@ func (a *App) SaveConfig(values map[string]string) error {
 	return wailskit.SaveConfig(values)
 }
 
-// ─── Workspace ────────────────────────────────────────────
+// ─── IM Adapters ──────────────────────────────────────────
 
-// GetWorkDir returns the current working directory.
-func (a *App) GetWorkDir() string {
+// ListIMAdapters returns all configured IM adapters.
+func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
+	return wailskit.ListIMAdapters()
+}
+
+// SaveIMAdapter creates or updates an IM adapter configuration.
+func (a *App) SaveIMAdapter(name string, cfg map[string]string) error {
+	return wailskit.SaveIMAdapter(name, cfg)
+}
+
+// RemoveIMAdapter removes an IM adapter by name.
+func (a *App) RemoveIMAdapter(name string) error {
+	return wailskit.RemoveIMAdapter(name)
+}
+
+// SetIMAdapterEnabled toggles the enabled state of an IM adapter.
+func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
+	return wailskit.SetIMAdapterEnabled(name, enabled)
+}
+
+// TestIMConnection validates an IM adapter configuration.
+func (a *App) TestIMConnection(name string) error {
+	return wailskit.TestIMConnection(name)
+}
+
+// ─── MCP Servers ──────────────────────────────────────────
+
+// ListMCPServers returns all configured MCP servers.
+func (a *App) ListMCPServers() ([]wailskit.MCPServerInfo, error) {
+	return wailskit.ListMCPServers()
+}
+
+// AddMCPServer adds a new MCP server configuration.
+func (a *App) AddMCPServer(cfg map[string]string) error {
+	return wailskit.AddMCPServer(cfg)
+}
+
+// RemoveMCPServer removes an MCP server by name.
+func (a *App) RemoveMCPServer(name string) error {
+	return wailskit.RemoveMCPServer(name)
+}
+
+// ─── Files ────────────────────────────────────────────────
+
+// ListDirectory returns file entries in the given directory.
+// If recursive is true, it walks subdirectories.
+func (a *App) ListDirectory(dir string, recursive bool) ([]wailskit.FileInfo, error) {
+	return wailskit.ListDirectory(dir, recursive)
+}
+
+// ReadFileContent reads a text file and returns its content.
+func (a *App) ReadFileContent(path string) (string, error) {
+	return wailskit.ReadFileContent(path)
+}
+
+// GetWorkingDir returns the current working directory.
+func (a *App) GetWorkingDir() string {
 	return a.workDir
 }
+
+// ─── Workspace ────────────────────────────────────────────
 
 // SelectDirectory opens a native directory picker.
 func (a *App) SelectDirectory() (string, error) {
@@ -83,36 +185,20 @@ func (a *App) GetPlatform() string {
 }
 
 // ListFiles returns files in the given directory (1 level deep).
+// Deprecated: Use ListDirectory instead for richer file info.
 func (a *App) ListFiles(dir string) []map[string]interface{} {
-	entries, err := os.ReadDir(dir)
+	entries, err := wailskit.ListDirectory(dir, false)
 	if err != nil {
 		return nil
 	}
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0, len(entries))
 	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
 		result = append(result, map[string]interface{}{
-			"name":     e.Name(),
-			"isDir":    e.IsDir(),
-			"size":     info.Size(),
-			"modified": info.ModTime().Unix(),
+			"name":     e.Name,
+			"isDir":    e.IsDir,
+			"size":     e.Size,
+			"modified": e.Modified,
 		})
 	}
 	return result
-}
-
-// ReadFileContent reads a text file and returns its content.
-func (a *App) ReadFileContent(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }

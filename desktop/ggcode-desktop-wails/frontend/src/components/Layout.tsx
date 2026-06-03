@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ViewMode } from '../types'
+import { ViewMode, StatusBarData } from '../types'
 import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
@@ -11,6 +11,8 @@ import { ContextPanel } from './ContextPanel'
 import { CommandPalette } from './CommandPalette'
 import { ShareDialog, AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
+import * as App from '../../wailsjs/go/main/App'
 
 export function Layout() {
   const [view, setView] = useState<ViewMode>('chat')
@@ -20,6 +22,61 @@ export function Layout() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
+
+  // Shared status bar data
+  const [statusBarData, setStatusBarData] = useState<StatusBarData>({
+    vendor: '...',
+    model: '...',
+    contextUsed: 0,
+    contextTotal: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheHit: 0,
+    status: 'Ready',
+  })
+
+  // Load initial config for shared state
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const cfg = await App.GetConfig()
+        if (cancelled) return
+        setStatusBarData(prev => ({
+          ...prev,
+          vendor: cfg.vendor || prev.vendor,
+          model: cfg.model || prev.model,
+        }))
+      } catch {
+        // Config not available yet
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  // Listen for chat:stream events to update shared status
+  useEffect(() => {
+    const off = EventsOn('chat:stream', (data: any) => {
+      if (!data) return
+      if (data.type === 'done') {
+        setStatusBarData(prev => ({
+          ...prev,
+          inputTokens: data.inputTokens ?? prev.inputTokens,
+          outputTokens: data.outputTokens ?? prev.outputTokens,
+          contextUsed: data.contextUsed ?? prev.contextUsed,
+          contextTotal: data.contextTotal ?? prev.contextTotal,
+          cacheHit: data.cacheHit ?? prev.cacheHit,
+          status: 'Ready',
+        }))
+      } else if (data.type === 'start') {
+        setStatusBarData(prev => ({ ...prev, status: 'Thinking...' }))
+      } else if (data.type === 'stream') {
+        setStatusBarData(prev => ({ ...prev, status: 'Streaming' }))
+      }
+    })
+    return () => { if (typeof off === 'function') off() }
+  }, [])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -77,12 +134,18 @@ export function Layout() {
 
         {/* Context Panel — right drawer */}
         {contextPanelOpen && view === 'chat' && (
-          <ContextPanel onClose={() => setContextPanelOpen(false)} />
+          <ContextPanel
+            onClose={() => setContextPanelOpen(false)}
+            statusBarData={statusBarData}
+          />
         )}
       </div>
 
       {/* Status bar */}
-      <StatusBar onContextToggle={() => setContextPanelOpen(prev => !prev)} />
+      <StatusBar
+        onContextToggle={() => setContextPanelOpen(prev => !prev)}
+        data={statusBarData}
+      />
 
       {/* Overlay dialogs */}
       {cmdPaletteOpen && <CommandPalette onClose={() => setCmdPaletteOpen(false)} />}

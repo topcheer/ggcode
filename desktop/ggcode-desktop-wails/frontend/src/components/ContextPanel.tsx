@@ -1,26 +1,58 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
+import * as App from '../../wailsjs/go/main/App'
+import type { StatusBarData } from '../types'
 
-export function ContextPanel({ onClose }: { onClose: () => void }) {
-  const usagePercent = 6
-  const ctxTotal = 204.8
-  const ctxUsed = 12.4
+interface ContextPanelProps {
+  onClose: () => void
+  statusBarData?: StatusBarData
+}
 
-  const tokens = [
-    { label: 'Input', value: '8,247', color: 'var(--color-info)' },
-    { label: 'Output', value: '4,128', color: 'var(--text-primary)' },
-    { label: 'Cache Read', value: '2,041', color: 'var(--color-success)' },
-    { label: 'Cache Write', value: '986', color: 'var(--color-warning)' },
-    { label: 'Cache Hit', value: '78%', color: 'var(--color-success)' },
-  ]
-
-  const modes = ['Yolo', 'Auto', 'Plan', 'Default']
-  const activeMode = 'Auto'
-
-  const files = [
+export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
+  const [activeMode, setActiveMode] = useState('auto')
+  const [files, setFiles] = useState<string[]>([
     'internal/middleware/auth.go',
     'internal/config/config.go',
     'cmd/server/main.go',
+  ])
+
+  const usagePercent = statusBarData?.contextTotal
+    ? Math.round((statusBarData.contextUsed / statusBarData.contextTotal) * 100)
+    : 6
+  const ctxTotal = statusBarData?.contextTotal
+    ? (statusBarData.contextTotal / 1000).toFixed(1)
+    : '204.8'
+  const ctxUsed = statusBarData?.contextUsed
+    ? (statusBarData.contextUsed / 1000).toFixed(1)
+    : '12.4'
+
+  const tokens = [
+    { label: 'Input', value: statusBarData?.inputTokens?.toLocaleString() ?? '0', color: 'var(--color-info)' },
+    { label: 'Output', value: statusBarData?.outputTokens?.toLocaleString() ?? '0', color: 'var(--text-primary)' },
+    { label: 'Cache Read', value: '—', color: 'var(--color-success)' },
+    { label: 'Cache Write', value: '—', color: 'var(--color-warning)' },
+    { label: 'Cache Hit', value: statusBarData?.cacheHit ? `${statusBarData.cacheHit}%` : '—', color: 'var(--color-success)' },
   ]
+
+  const modes = ['Yolo', 'Auto', 'Plan', 'Default']
+
+  // Load config for permission mode
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const cfg = await App.GetConfig()
+        if (cancelled) return
+        if (cfg.defaultMode) setActiveMode(cfg.defaultMode)
+      } catch {
+        // fallback to default
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  const modelLabel = statusBarData?.model ?? '...'
+  const vendorLabel = statusBarData?.vendor ?? '...'
 
   return (
     <div style={{
@@ -47,10 +79,10 @@ export function ContextPanel({ onClose }: { onClose: () => void }) {
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 4,
       }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--color-info)' }}>
-          glm-5.1
+          {modelLabel}
         </span>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-          Z.ai • {ctxTotal}K context
+          {vendorLabel} • {ctxTotal}K context
         </span>
       </div>
 
@@ -88,12 +120,12 @@ export function ContextPanel({ onClose }: { onClose: () => void }) {
         <span style={{ fontSize: 12, fontWeight: 500 }}>Permission Mode</span>
         <div style={{ display: 'flex', gap: 6 }}>
           {modes.map(m => (
-            <button key={m} style={{
+            <button key={m} onClick={() => setActiveMode(m.toLowerCase())} style={{
               padding: '4px 10px', borderRadius: 'var(--radius-sm)',
-              background: m === activeMode ? 'var(--color-primary)' : 'var(--color-surface)',
-              color: m === activeMode ? '#fff' : 'var(--text-secondary)',
+              background: m.toLowerCase() === activeMode ? 'var(--color-primary)' : 'var(--color-surface)',
+              color: m.toLowerCase() === activeMode ? '#fff' : 'var(--text-secondary)',
               border: 'none', cursor: 'pointer', fontSize: 11,
-              fontWeight: m === activeMode ? 500 : 400,
+              fontWeight: m.toLowerCase() === activeMode ? 500 : 400,
             }}>{m}</button>
           ))}
         </div>
