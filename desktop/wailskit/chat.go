@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -44,6 +45,14 @@ type ChatBridge struct {
 
 	// IM outbound push — same as Fyne agentBridge.Emitter
 	Emitter *im.IMEmitter
+
+	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
+	imRound struct {
+		Text          strings.Builder
+		ToolCalls     int
+		ToolSuccesses int
+		ToolFailures  int
+	}
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
@@ -396,6 +405,7 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	case provider.StreamEventText:
 		eventType = "text"
 		data = map[string]string{"content": ev.Text}
+		b.imRound.Text.WriteString(ev.Text)
 
 	case provider.StreamEventToolCallChunk:
 		eventType = "tool_call_chunk"
@@ -407,6 +417,10 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	case provider.StreamEventToolCallDone:
 		pres := tool.DescribeTool(ev.Tool.Name, string(ev.Tool.Arguments))
 		eventType = "tool_call_done"
+		b.imRound.ToolCalls++
+		if b.Emitter != nil {
+			b.Emitter.TriggerTyping()
+		}
 		data = map[string]interface{}{
 			"id":          ev.Tool.ID,
 			"name":        ev.Tool.Name,
@@ -427,9 +441,43 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			"result":  resultPreview,
 			"isError": ev.IsError,
 		}
+		if ev.IsError {
+			b.imRound.ToolFailures++
+		} else {
+			b.imRound.ToolSuccesses++
+		}
+		// Emit tool result event to IM
+		if b.Emitter != nil {
+			content := ev.Result
+			if len([]rune(content)) > 2000 {
+				content = string([]rune(content)[:2000]) + "\n...(truncated)"
+			}
+			b.Emitter.EmitEvent(im.OutboundEvent{
+				Kind: im.OutboundEventToolResult,
+				ToolRes: &im.ToolResultInfo{
+					ToolName: ev.Tool.Name,
+					Args:     string(ev.Tool.Arguments),
+					Result:   content,
+					IsError:  ev.IsError,
+				},
+			})
+			b.Emitter.TriggerTyping()
+		}
 
 	case provider.StreamEventDone:
 		eventType = "done"
+		// Emit round summary to IM (mirrors Fyne agentBridge)
+		if b.Emitter != nil {
+			text := strings.TrimSpace(b.imRound.Text.String())
+			if text != "" || b.imRound.ToolCalls > 0 {
+				b.Emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
+			}
+		}
+		// Reset round accumulator
+		b.imRound.Text.Reset()
+		b.imRound.ToolCalls = 0
+		b.imRound.ToolSuccesses = 0
+		b.imRound.ToolFailures = 0
 		usageData := map[string]interface{}{}
 		if ev.Usage != nil {
 			cacheTotal := ev.Usage.CacheRead + ev.Usage.CacheWrite + ev.Usage.InputTokens
