@@ -1,19 +1,22 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, User } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, User, Radio, Server } from 'lucide-react'
 import { ViewMode } from '../types'
 
 interface Props {
   view: ViewMode
   onViewChange: (v: ViewMode) => void
+  onAbout: () => void
 }
 
-const navItems: { id: ViewMode; icon: React.ReactNode }[] = [
-  { id: 'chat', icon: <MessageSquare size={18} /> },
-  { id: 'files', icon: <FolderOpen size={18} /> },
-  { id: 'settings', icon: <Settings size={18} /> },
+const navItems: { id: ViewMode; icon: React.ReactNode; tooltip: string }[] = [
+  { id: 'chat', icon: <MessageSquare size={18} />, tooltip: 'Chat (⌘1)' },
+  { id: 'files', icon: <FolderOpen size={18} />, tooltip: 'Files (⌘2)' },
+  { id: 'im', icon: <Radio size={18} />, tooltip: 'IM Adapters' },
+  { id: 'mcp', icon: <Server size={18} />, tooltip: 'MCP Servers' },
+  { id: 'settings', icon: <Settings size={18} />, tooltip: 'Settings (⌘,)' },
 ]
 
-export function NavRail({ view, onViewChange }: Props) {
+export function NavRail({ view, onViewChange, onAbout }: Props) {
   return (
     <div style={{
       width: 'var(--nav-rail-width)',
@@ -27,21 +30,22 @@ export function NavRail({ view, onViewChange }: Props) {
       flexShrink: 0,
     }}>
       {/* Logo */}
-      <div style={{
+      <button onClick={onAbout} style={{
         width: 32, height: 32, borderRadius: 8,
         background: 'var(--color-primary)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: '#fff', fontWeight: 700, fontSize: 14,
-        marginBottom: 8,
+        marginBottom: 8, border: 'none', cursor: 'pointer',
       }}>
         G
-      </div>
+      </button>
 
       {/* Nav items */}
       {navItems.map(item => (
         <button
           key={item.id}
           onClick={() => onViewChange(item.id)}
+          title={item.tooltip}
           style={{
             width: 36, height: 36, borderRadius: 6,
             display: 'flex', alignItems: 'center', justifyContent: 'center',

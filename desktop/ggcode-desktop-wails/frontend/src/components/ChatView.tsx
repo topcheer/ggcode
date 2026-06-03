@@ -27,7 +27,7 @@ const mockMessages: ChatMsg[] = [
   },
 ]
 
-export function ChatView() {
+export function ChatView({ onShare }: { onShare?: () => void }) {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
