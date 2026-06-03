@@ -145,7 +145,7 @@ export function Layout() {
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-              {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
+              {view === 'chat' && <ChatView sessionId={activeSessionId} onShare={() => setShareDialogOpen(true)} />}
               {view === 'settings' && <SettingsPage onBack={backToChat} />}
               {view === 'im' && <IMManagement onBack={backToChat} />}
               {view === 'files' && <FileBrowser onBack={backToChat} />}

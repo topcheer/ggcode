@@ -146,7 +146,7 @@ function formatTokens(n: number): string {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ChatView({ onShare }: { onShare?: () => void }) {
+export function ChatView({ onShare, sessionId }: { onShare?: () => void; sessionId?: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -157,6 +157,34 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
 
   // Reasoning buffer: accumulates during streaming, attached to next message
   const reasoningBuf = useRef('')
+
+  // Load session history when sessionId changes
+  useEffect(() => {
+    if (!sessionId) {
+      setMessages([])
+      return
+    }
+    App.GetSessionHistory().then((history: any[]) => {
+      if (!history || history.length === 0) {
+        setMessages([])
+        return
+      }
+      const loaded: ChatMessage[] = history.map((h: any) => ({
+        id: nextID(),
+        role: (h.role || 'assistant') as ChatRole,
+        content: h.content || '',
+        toolName: h.toolName,
+        toolID: h.toolID,
+        toolArgs: h.toolArgs,
+        toolDisplayName: h.toolDisplayName,
+        toolDetail: h.toolDetail,
+        isError: h.isError,
+        streaming: false,
+        timestamp: Date.now(),
+      }))
+      setMessages(loaded)
+    }).catch(() => {})
+  }, [sessionId])
 
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
