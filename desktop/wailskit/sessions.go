@@ -97,10 +97,16 @@ func GetSessionHistory() ([]SessionMessage, error) {
 	globalMu.RLock()
 	chat := activeChatBridge
 	globalMu.RUnlock()
-	if chat == nil || chat.currentSes == nil {
+	if chat == nil {
 		return nil, nil
 	}
-	msgs := chat.currentSes.Messages
+	chat.mu.Lock()
+	ses := chat.currentSes
+	chat.mu.Unlock()
+	if ses == nil {
+		return nil, nil
+	}
+	msgs := ses.Messages
 	result := make([]SessionMessage, 0, len(msgs))
 	for _, m := range msgs {
 		for _, block := range m.Content {
