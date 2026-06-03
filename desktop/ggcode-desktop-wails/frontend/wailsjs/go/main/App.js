@@ -34,6 +34,10 @@ export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
 }
 
+export function GetIMPlatformRegistry() {
+  return window['go']['main']['App']['GetIMPlatformRegistry']();
+}
+
 export function GetImpersonationPresets() {
   return window['go']['main']['App']['GetImpersonationPresets']();
 }

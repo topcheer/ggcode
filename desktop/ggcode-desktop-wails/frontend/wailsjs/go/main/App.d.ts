@@ -18,6 +18,8 @@ export function GetConfig():Promise<wailskit.FullConfig>;
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
+export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
+
 export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPresetInfo>>;
 
 export function GetModelInfo():Promise<Record<string, any>>;
