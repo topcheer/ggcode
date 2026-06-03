@@ -183,6 +183,26 @@ func (a *App) SaveAPIKey(vendor, endpoint, apiKey string) error {
 	return wailskit.SaveAPIKey(vendor, endpoint, apiKey)
 }
 
+// GetImpersonationPresets returns real presets from provider.
+func (a *App) GetImpersonationPresets() []wailskit.ImpersonationPresetInfo {
+	return wailskit.GetImpersonationPresets()
+}
+
+// ApplyImpersonation applies an impersonation preset.
+func (a *App) ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
+	return wailskit.ApplyImpersonation(presetID, version, customHeaders)
+}
+
+// TestEndpointConnection tests an endpoint by listing models.
+func (a *App) TestEndpointConnection(protocol, baseURL, apiKey string) (*wailskit.TestEndpointResult, error) {
+	return wailskit.TestEndpointConnection(protocol, baseURL, apiKey)
+}
+
+// AddCustomEndpoint adds a new custom endpoint to a vendor.
+func (a *App) AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
+	return wailskit.AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey)
+}
+
 // ─── Sessions ─────────────────────────────────────────────
 
 // ListSessions returns sessions for the current workspace.

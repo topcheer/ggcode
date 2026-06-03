@@ -496,6 +496,8 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
             borderRadius: 'var(--radius-md)',
             border: '1px solid var(--color-border)',
             overflow: 'hidden',
+            alignSelf: 'flex-start',
+            maxWidth: '85%',
           }}>
             <button
               onClick={() => setReasoningOpen(!reasoningOpen)}
@@ -515,10 +517,11 @@ export function ChatView({ onShare }: { onShare?: () => void }) {
                 padding: '8px 12px',
                 background: 'var(--color-surface)',
                 color: 'var(--text-secondary)',
-                fontSize: 12, lineHeight: 1.6,
-                whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto',
+                fontSize: 13, lineHeight: 1.6,
+                textAlign: 'left',
+                maxHeight: 300, overflowY: 'auto',
               }}>
-                {reasoningText}
+                <div className="markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(reasoningText) as string }} />
               </div>
             )}
           </div>
@@ -642,6 +645,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         color: 'var(--text-primary)',
         lineHeight: 1.6,
         fontSize: 14,
+        textAlign: 'left',
       }}>
         <div className="markdown-body" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '...') as string }} />
         {msg.streaming && (

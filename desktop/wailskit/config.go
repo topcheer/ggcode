@@ -4,6 +4,8 @@
 package wailskit
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/stream"
 )
 
@@ -371,9 +374,119 @@ func ModelsForEndpoint(vendor, endpointKey string) []string {
 	return ep.Models
 }
 
+// ─── Impersonation ──────────────────────────────────────
+
+// ImpersonationPresetInfo describes an impersonation preset for the frontend.
+type ImpersonationPresetInfo struct {
+	ID             string            `json:"id"`
+	DisplayName    string            `json:"displayName"`
+	DefaultVersion string            `json:"defaultVersion"`
+	ExtraHeaders   map[string]string `json:"extraHeaders,omitempty"`
+}
+
+// GetImpersonationPresets returns the real presets from provider.DefaultImpersonationPresets().
+func GetImpersonationPresets() []ImpersonationPresetInfo {
+	presets := provider.DefaultImpersonationPresets()
+	result := make([]ImpersonationPresetInfo, len(presets))
+	for i, p := range presets {
+		result[i] = ImpersonationPresetInfo{
+			ID:             p.ID,
+			DisplayName:    p.DisplayName,
+			DefaultVersion: p.DefaultVersion,
+			ExtraHeaders:   p.ExtraHeaders,
+		}
+	}
+	return result
+}
+
+// ApplyImpersonation applies an impersonation preset and persists to config.
+func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil
+	}
+
+	var preset *provider.ImpersonationPreset
+	if presetID != "none" && presetID != "" {
+		for _, p := range provider.DefaultImpersonationPresets() {
+			if p.ID == presetID {
+				preset = &p
+				break
+			}
+		}
+	}
+
+	provider.SetActiveImpersonation(preset, version, customHeaders)
+
+	cfg.Impersonation = config.ImpersonationConfig{
+		Preset:        presetID,
+		CustomVersion: version,
+		CustomHeaders: customHeaders,
+	}
+	return cfg.Save()
+}
+
 // Ensure unused imports are referenced.
 var (
 	_ = time.Duration(0)
 	_ = hooks.HookConfig{}
 	_ = stream.StreamConfig{}
 )
+
+// ─── Custom Endpoint ───────────────────────────────────
+
+// TestEndpointResult is the result of testing an endpoint connection.
+type TestEndpointResult struct {
+	OK         bool     `json:"ok"`
+	Message    string   `json:"message"`
+	Models     []string `json:"models,omitempty"`
+	ModelCount int      `json:"modelCount"`
+}
+
+// TestEndpointConnection tests an endpoint by fetching its model list.
+func TestEndpointConnection(protocol, baseURL, apiKey string) (*TestEndpointResult, error) {
+	tmpResolved := &config.ResolvedEndpoint{
+		Protocol: protocol,
+		BaseURL:  baseURL,
+	}
+	if apiKey != "" {
+		tmpResolved.APIKey = apiKey
+	}
+	models, err := provider.DiscoverModels(context.Background(), tmpResolved)
+	if err != nil {
+		return &TestEndpointResult{OK: false, Message: "Connection failed: " + err.Error()}, nil
+	}
+	return &TestEndpointResult{
+		OK:         true,
+		Message:    fmt.Sprintf("Found %d models", len(models)),
+		Models:     models,
+		ModelCount: len(models),
+	}, nil
+}
+
+// AddCustomEndpoint adds a new endpoint to a vendor in the config and saves.
+func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil
+	}
+
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
+		cfg.Vendors[vendor] = vc
+	}
+
+	vc.Endpoints[name] = config.EndpointConfig{
+		DisplayName: name,
+		Protocol:    protocol,
+		BaseURL:     baseURL,
+		APIKey:      apiKey,
+	}
+	cfg.Vendors[vendor] = vc
+	return cfg.Save()
+}
