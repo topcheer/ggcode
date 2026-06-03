@@ -38,7 +38,6 @@
   --sidebar-width: 280px;
   --topbar-height: 48px;
   --statusbar-height: 28px;
-  --titlebar-height: 36px;
 }
 
 * {
@@ -88,15 +87,4 @@ a {
 
 a:hover {
   text-decoration: underline;
-}
-
-/* macOS titlebar drag region */
-.titlebar-drag {
-  -webkit-app-region: drag;
-}
-
-.titlebar-drag button,
-.titlebar-drag input,
-.titlebar-drag a {
-  -webkit-app-region: no-drag;
 }

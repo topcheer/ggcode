@@ -14,12 +14,6 @@ import { StatusBar } from './StatusBar'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
-const dragBarStyle: React.CSSProperties = {
-  height: 'var(--titlebar-height)',
-  flexShrink: 0,
-  WebkitAppRegion: 'drag',
-} as React.CSSProperties
-
 export function Layout() {
   const [view, setView] = useState<ViewMode>('chat')
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -119,9 +113,6 @@ export function Layout() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
-      {/* Titlebar drag region */}
-      <div className="titlebar-drag" style={dragBarStyle} />
-
       {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />

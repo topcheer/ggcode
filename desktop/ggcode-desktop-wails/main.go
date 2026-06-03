@@ -36,7 +36,7 @@ func main() {
 				TitlebarAppearsTransparent: true,
 				HideTitle:                  true,
 				HideTitleBar:               false,
-				FullSizeContent:            true,
+				FullSizeContent:            false,
 				UseToolbar:                 false,
 			},
 			WebviewIsTransparent: false,
