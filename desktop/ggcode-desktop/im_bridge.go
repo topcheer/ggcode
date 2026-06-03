@@ -153,6 +153,11 @@ func (a *App) stopIMAdapters() {
 		a.imController.Stop()
 		a.imController = nil
 	}
+	// Unregister this instance so other processes can become primary.
+	if a.imInstanceDetect != nil {
+		a.imInstanceDetect.Unregister()
+		a.imInstanceDetect = nil
+	}
 }
 
 // ─── WeChat QR Code Authentication ───
