@@ -232,6 +232,11 @@ func (a *App) LoadSession(id string) error {
 	return wailskit.LoadSession(id)
 }
 
+// GetSessionHistory returns messages from the current session.
+func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
+	return wailskit.GetSessionHistory()
+}
+
 // ─── Workspace ────────────────────────────────────────────
 
 // GetWorkDir returns the current working directory.

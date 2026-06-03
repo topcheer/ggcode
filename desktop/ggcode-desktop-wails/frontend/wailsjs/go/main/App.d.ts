@@ -26,6 +26,8 @@ export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function GetPlatform():Promise<string>;
 
+export function GetSessionHistory():Promise<Array<wailskit.SessionMessage>>;
+
 export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
 
 export function GetVendors():Promise<Array<string>>;

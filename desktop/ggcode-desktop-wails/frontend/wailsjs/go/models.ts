@@ -196,6 +196,32 @@ export namespace wailskit {
 	        this.updatedAt = source["updatedAt"];
 	    }
 	}
+	export class SessionMessage {
+	    role: string;
+	    content: string;
+	    toolName?: string;
+	    toolID?: string;
+	    toolArgs?: string;
+	    toolDisplayName?: string;
+	    toolDetail?: string;
+	    isError?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	        this.toolName = source["toolName"];
+	        this.toolID = source["toolID"];
+	        this.toolArgs = source["toolArgs"];
+	        this.toolDisplayName = source["toolDisplayName"];
+	        this.toolDetail = source["toolDetail"];
+	        this.isError = source["isError"];
+	    }
+	}
 	export class TestEndpointResult {
 	    ok: boolean;
 	    message: string;

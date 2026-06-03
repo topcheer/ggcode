@@ -50,6 +50,10 @@ export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
 }
 
+export function GetSessionHistory() {
+  return window['go']['main']['App']['GetSessionHistory']();
+}
+
 export function GetVendorPresets() {
   return window['go']['main']['App']['GetVendorPresets']();
 }
