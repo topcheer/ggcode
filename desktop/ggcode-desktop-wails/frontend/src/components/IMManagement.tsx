@@ -80,7 +80,7 @@ export function IMManagement({ onBack }: { onBack: () => void }) {
       try {
         // Attempt to call backend for adapter list
         // This method may not exist yet (backend-bindings teammate adding it)
-        const result = await (window as any).go?.main?.App?.GetIMAdapters?.()
+        const result = await (window as any).go?.main?.App?.ListIMAdapters?.()
         if (cancelled || !result) return
         const parsed = JSON.parse(result)
         if (Array.isArray(parsed) && parsed.length > 0) {
