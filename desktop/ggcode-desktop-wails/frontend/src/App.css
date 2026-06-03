@@ -38,6 +38,7 @@
   --sidebar-width: 280px;
   --topbar-height: 48px;
   --statusbar-height: 28px;
+  --titlebar-height: 36px;
 }
 
 * {
@@ -56,6 +57,13 @@ html, body, #root {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  /* Make entire window draggable */
+  -webkit-app-region: drag;
+}
+
+/* All interactive elements opt out of drag */
+a, button, input, textarea, select, [role="button"], [data-interactive] {
+  -webkit-app-region: no-drag;
 }
 
 ::-webkit-scrollbar {
@@ -87,15 +95,4 @@ a {
 
 a:hover {
   text-decoration: underline;
-}
-
-/* Drag region for macOS */
-.titlebar-drag {
-  -webkit-app-region: drag;
-  height: 36px;
-}
-
-.titlebar-drag button,
-.titlebar-drag input {
-  -webkit-app-region: no-drag;
 }

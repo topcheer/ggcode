@@ -117,13 +117,7 @@ export function Layout() {
   const backToChat = () => setView('chat')
 
   return (
-    <div style={{ position: 'relative', display: 'flex', width: '100%', height: '100%', flexDirection: 'column' }}>
-      {/* macOS titlebar drag — covers the entire top edge */}
-      <div className="titlebar-drag" style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 36,
-        zIndex: 1000, pointerEvents: 'none',
-      }} />
-
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Nav Rail */}
         <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
@@ -134,7 +128,7 @@ export function Layout() {
         )}
 
         {/* Main content */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative', paddingTop: 36 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
           {view === 'chat' && <ChatView onShare={() => setShareDialogOpen(true)} />}
           {view === 'settings' && <SettingsPage onBack={backToChat} />}
           {view === 'im' && <IMManagement onBack={backToChat} />}
