@@ -3,19 +3,26 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
+	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the main application struct for the Wails desktop app.
 type App struct {
-	ctx     context.Context
-	chat    *wailskit.ChatBridge
-	workDir string
-	dc      *wailskit.DesktopConfig
+	ctx              context.Context
+	chat             *wailskit.ChatBridge
+	workDir          string
+	dc               *wailskit.DesktopConfig
+	imManager        *im.Manager
+	imController     *im.AdapterController
+	imInstanceDetect *im.InstanceDetect
 }
 
 // NewApp creates a new App application struct.
@@ -65,12 +72,18 @@ func (a *App) initWorkspace(dir string) {
 	}
 	a.chat = chat
 	wailskit.SetChatBridge(chat)
+
+	// Initialize IM runtime (same as Fyne's initIMRuntime)
+	a.initIMRuntime()
 }
 
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
 	if a.chat != nil {
 		a.chat.Cancel()
+	}
+	if a.imController != nil {
+		a.imController.Stop()
 	}
 }
 
@@ -256,33 +269,6 @@ func (a *App) SelectDirectory() (string, error) {
 	})
 }
 
-// ─── IM Adapters ─────────────────────────────────────────
-
-// ListIMAdapters returns all configured IM adapters.
-func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
-	return wailskit.ListIMAdapters()
-}
-
-// GetIMPlatformRegistry returns the list of supported IM platforms.
-func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
-	return wailskit.GetIMPlatformRegistry()
-}
-
-// SaveIMAdapter saves an IM adapter configuration.
-func (a *App) SaveIMAdapter(name string, values map[string]string) error {
-	return wailskit.SaveIMAdapter(name, values)
-}
-
-// RemoveIMAdapter removes an IM adapter.
-func (a *App) RemoveIMAdapter(name string) error {
-	return wailskit.RemoveIMAdapter(name)
-}
-
-// SetIMAdapterEnabled enables or disables an IM adapter.
-func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
-	return wailskit.SetIMAdapterEnabled(name, enabled)
-}
-
 // TestIMConnection tests the connection for an IM adapter.
 func (a *App) TestIMConnection(name string) error {
 	return wailskit.TestIMConnection(name)
@@ -350,4 +336,205 @@ func (a *App) ReadFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────
+
+// wailsIMBridge implements im.Bridge, routing inbound IM messages to the Wails agent.
+type wailsIMBridge struct {
+	app *App
+}
+
+func (b *wailsIMBridge) SubmitInboundMessage(ctx context.Context, msg im.InboundMessage) error {
+	if b.app == nil || b.app.chat == nil {
+		return fmt.Errorf("app not available")
+	}
+	text := buildInboundText(msg)
+	if text == "" {
+		return nil
+	}
+	// Run in background — Wails doesn't need UI thread dispatch like Fyne
+	safego.Run("im-inbound", func() {
+		_ = b.app.chat.SendMessage(text)
+	})
+	return nil
+}
+
+func buildInboundText(msg im.InboundMessage) string {
+	blocks := msg.ProviderContent()
+	if len(blocks) == 0 {
+		return strings.TrimSpace(msg.Text)
+	}
+	var parts []string
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, "\n")
+	}
+	return strings.TrimSpace(msg.Text)
+}
+
+// initIMRuntime initializes the IM manager once at app startup.
+// Direct port of Fyne's App.initIMRuntime().
+func (a *App) initIMRuntime() {
+	if a.imManager != nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("initIMRuntime panic: %v\n", r)
+		}
+	}()
+
+	mgr := im.NewManager()
+
+	bindingsPath, err := im.DefaultBindingsPath()
+	if err != nil {
+		return
+	}
+	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
+	if err != nil {
+		return
+	}
+	if err := mgr.SetBindingStore(bindingStore); err != nil {
+		return
+	}
+
+	pairingPath, err := im.DefaultPairingStatePath()
+	if err != nil {
+		return
+	}
+	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
+	if err != nil {
+		return
+	}
+	if err := mgr.SetPairingStore(pairingStore); err != nil {
+		return
+	}
+
+	workDir := ""
+	if a.dc != nil {
+		workDir = a.dc.WorkDir
+	}
+	mgr.BindSession(im.SessionBinding{Workspace: workDir})
+
+	cfg, _ := wailskit.LoadConfigForWorkspace(workDir)
+	if cfg != nil && cfg.IM.Adapters != nil {
+		adapters := make(map[string]bool)
+		for name, acfg := range cfg.IM.Adapters {
+			adapters[name] = acfg.Enabled
+		}
+		mgr.ApplyAdapterConfig(adapters)
+	}
+
+	// Pairing UI via frontend event
+	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
+		if snap.PendingPairing != nil {
+			ch := snap.PendingPairing
+			runtime.EventsEmit(a.ctx, "im:pairing", map[string]string{
+				"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code,
+			})
+		}
+	})
+
+	a.imManager = mgr
+
+	// Multi-instance detection — auto-mute if another instance is primary
+	if workDir != "" {
+		detect, others, err := mgr.RegisterInstance(workDir)
+		if err == nil && detect != nil {
+			a.imInstanceDetect = detect
+			if len(others) > 0 {
+				count, _ := mgr.MuteAll()
+				if count > 0 {
+					fmt.Printf("im: auto-muted %d channel(s), another instance is primary\n", count)
+				}
+			}
+		}
+	}
+
+	// Start adapters bound to current workspace
+	a.startIMAdapters()
+
+	// Bind IM emitter to chat bridge for outbound push
+	if a.chat != nil {
+		lang := ""
+		if cfg != nil {
+			lang = cfg.Language
+		}
+		a.chat.Emitter = im.NewIMEmitter(mgr, lang, workDir)
+	}
+}
+
+// startIMAdapters starts all enabled adapters bound to the current workspace.
+func (a *App) startIMAdapters() {
+	if a.imManager == nil {
+		return
+	}
+	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+	if cfg == nil || !cfg.IM.Enabled {
+		return
+	}
+
+	a.imManager.SetBridge(&wailsIMBridge{app: a})
+
+	controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, a.imManager)
+	if err != nil {
+		fmt.Printf("IM adapter start error: %v\n", err)
+		return
+	}
+	a.imController = controller
+}
+
+// stopIMAdapters stops all running IM adapters.
+func (a *App) stopIMAdapters() {
+	if a.imController != nil {
+		a.imController.Stop()
+		a.imController = nil
+	}
+	if a.imInstanceDetect != nil {
+		a.imInstanceDetect.Unregister()
+		a.imInstanceDetect = nil
+	}
+}
+
+// ─── IM Frontend API ──────────────────────────────────────────────────
+
+// ListIMAdapters returns all configured IM adapters with binding info.
+func (a *App) ListIMAdapters() ([]wailskit.IMAdapterInfo, error) {
+	return wailskit.ListIMAdapters(a.workDir, a.imManager)
+}
+
+// GetIMPlatformRegistry returns supported IM platforms.
+func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
+	return wailskit.GetIMPlatformRegistry()
+}
+
+// SaveIMAdapter creates or updates an IM adapter.
+func (a *App) SaveIMAdapter(name string, values map[string]string) error {
+	return wailskit.SaveIMAdapter(name, values)
+}
+
+// RemoveIMAdapter removes an IM adapter by name.
+func (a *App) RemoveIMAdapter(name string) error {
+	return wailskit.RemoveIMAdapter(name)
+}
+
+// SetIMAdapterEnabled enables or disables an IM adapter.
+func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
+	return wailskit.SetIMAdapterEnabled(name, enabled)
+}
+
+// MuteIMAdapter mutes or unmutes an adapter channel.
+func (a *App) MuteIMAdapter(name string, muted bool) error {
+	if a.imManager == nil {
+		return fmt.Errorf("IM not initialized")
+	}
+	if muted {
+		return a.imManager.MuteBinding(name)
+	}
+	return a.imManager.UnmuteBinding(name)
 }
