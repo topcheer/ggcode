@@ -214,6 +214,26 @@ func (b *ChatBridge) Cancel() {
 	b.cancelled = true
 	b.mu.Unlock()
 
+	// Close any pending approval/ask_user dialogs by sending deny/cancel
+	// to their channels. This unblocks RequestApproval/RequestAskUser so
+	// the agent loop can exit cleanly.
+	b.pendingMu.Lock()
+	for id, ch := range b.pendingApprovals {
+		ch <- permission.Deny
+		delete(b.pendingApprovals, id)
+	}
+	for id, ch := range b.pendingAskUsers {
+		ch <- tool.AskUserResponse{Status: tool.AskUserStatusCancelled}
+		delete(b.pendingAskUsers, id)
+	}
+	b.pendingMu.Unlock()
+
+	// Notify frontend to close dialogs
+	if b.OnStreamEvent != nil {
+		b.OnStreamEvent("approval:cancel", json.RawMessage(`{}`))
+		b.OnStreamEvent("ask_user:cancel", json.RawMessage(`{}`))
+	}
+
 	// Push cancelled status to mobile (mirrors Fyne line 1108-1115)
 	if broker := b.currentTunnelBroker(); broker != nil {
 		b.flushTunnelTextStream(broker, false)
