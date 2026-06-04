@@ -281,7 +281,15 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 	if cfg == nil {
 		return nil
 	}
-	cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, true)
+
+	// Determine scope: if the vendor has multiple endpoints (gateway type),
+	// save to endpoint scope; otherwise vendor scope.
+	vendorScoped := true
+	if vc, ok := cfg.Vendors[vendor]; ok && len(vc.Endpoints) > 1 {
+		vendorScoped = false
+	}
+
+	cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, vendorScoped)
 	return cfg.Save()
 }
 
@@ -567,6 +575,14 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	cfg := globalCfg
 	globalMu.RUnlock()
 
+	// Auto-resolve API key if not provided explicitly
+	if apiKey == "" && cfg != nil {
+		resolved, err := cfg.ResolveEndpoint(vendor, endpoint)
+		if err == nil && resolved.APIKey != "" {
+			apiKey = resolved.APIKey
+		}
+	}
+
 	protocol := "openai"
 	if cfg != nil {
 		if vc, ok := cfg.Vendors[vendor]; ok {
@@ -614,23 +630,39 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	if cfg == nil {
 		return nil
 	}
-	vc, ok := cfg.Vendors[vendor]
-	if !ok {
-		return nil
+
+	// Use ResolveEndpoint to get the full resolution chain (endpoint→vendor→env→keys.env)
+	resolved, err := cfg.ResolveEndpoint(vendor, endpoint)
+	if err != nil {
+		// Fallback to raw endpoint config if resolve fails
+		vc, ok := cfg.Vendors[vendor]
+		if !ok {
+			return nil
+		}
+		ep, ok := vc.Endpoints[endpoint]
+		if !ok {
+			return nil
+		}
+		return &EndpointDetails{
+			DisplayName:  ep.DisplayName,
+			Protocol:     ep.Protocol,
+			BaseURL:      ep.BaseURL,
+			APIKeySet:    false,
+			APIKeyMasked: "",
+			DefaultModel: ep.DefaultModel,
+			Models:       ep.Models,
+		}
 	}
-	ep, ok := vc.Endpoints[endpoint]
-	if !ok {
-		return nil
-	}
+
 	return &EndpointDetails{
-		DisplayName:    ep.DisplayName,
-		Protocol:       ep.Protocol,
-		BaseURL:        ep.BaseURL,
-		APIKeySet:      ep.APIKey != "",
-		APIKeyMasked:   maskAPIKey(ep.APIKey),
-		DefaultModel:   ep.DefaultModel,
-		Models:         ep.Models,
-		ContextWindow:  ep.ContextWindow,
-		SupportsVision: ep.SupportsVision != nil && *ep.SupportsVision,
+		DisplayName:    resolved.EndpointName,
+		Protocol:       resolved.Protocol,
+		BaseURL:        resolved.BaseURL,
+		APIKeySet:      resolved.APIKey != "",
+		APIKeyMasked:   maskAPIKey(resolved.APIKey),
+		DefaultModel:   resolved.Model,
+		Models:         resolved.Models,
+		ContextWindow:  resolved.ContextWindow,
+		SupportsVision: resolved.SupportsVision,
 	}
 }
