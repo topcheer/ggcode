@@ -41,7 +41,8 @@ type ChatBridge struct {
 	currentSes   *session.Session
 
 	mu     sync.Mutex
-	cancel context.CancelFunc
+	cancel    context.CancelFunc
+	cancelled bool
 
 	// Subsystems
 	cronScheduler *cron.Scheduler
@@ -108,6 +109,7 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
+	b.cancelled = false
 	b.mu.Unlock()
 
 	defer func() {
@@ -168,12 +170,21 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 }
 
 // Cancel stops the current agent run.
+// Mirrors Fyne AgentBridge.Cancel exactly.
 func (b *ChatBridge) Cancel() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.cancel != nil {
 		b.cancel()
 		b.cancel = nil
+	}
+	b.cancelled = true
+	b.mu.Unlock()
+
+	// Push cancelled status to mobile (mirrors Fyne line 1108-1115)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		b.flushTunnelTextStream(broker, false)
+		broker.PushStatus(tunnel.StatusIdle, "cancelled")
+		broker.PushActivity("")
 	}
 }
 
@@ -329,6 +340,16 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
 	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
 	_ = b.registry.Register(saveMemoryTool)
+	// When save_memory saves, rebuild system prompt so agent sees new memory
+	// (mirrors Fyne setupAgent line 710)
+	saveMemoryTool.SetAfterSave(func() {
+		newPrompt := buildWailsSystemPrompt(b.workingDir, autoMem, projectAutoMem)
+		b.mu.Lock()
+		if b.agent != nil {
+			b.agent.UpdateSystemPrompt(newPrompt)
+		}
+		b.mu.Unlock()
+	})
 
 	// ACP client manager (mirrors Fyne setupAgent)
 	if b.acpClientMgr != nil {
@@ -438,51 +459,93 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 
-	// Forward swarm events to frontend
+	// Forward swarm events to frontend AND mobile tunnel (mirrors Fyne line 605-698)
 	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
-		if b.OnStreamEvent == nil {
-			return
+		// Push to frontend
+		if b.OnStreamEvent != nil {
+			switch ev.Type {
+			case "teammate_text":
+				raw, _ := json.Marshal(map[string]string{
+					"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+					"teamID": ev.TeamID, "content": ev.Result,
+				})
+				b.OnStreamEvent("swarm_text", raw)
+			case "teammate_tool_call":
+				pres := tool.DescribeTool(ev.CurrentTool, ev.ToolArgs)
+				raw, _ := json.Marshal(map[string]string{
+					"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+					"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
+					"arguments": ev.ToolArgs, "displayName": pres.DisplayName, "detail": pres.Detail,
+				})
+				b.OnStreamEvent("swarm_tool_call", raw)
+			case "teammate_tool_result":
+				pres := tool.DescribeTool(ev.CurrentTool, "")
+				raw, _ := json.Marshal(map[string]interface{}{
+					"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
+					"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
+					"displayName": pres.DisplayName, "detail": pres.Detail,
+					"result": ev.Result, "isError": ev.IsError,
+				})
+				b.OnStreamEvent("swarm_tool_result", raw)
+			case "teammate_spawned":
+				raw, _ := json.Marshal(map[string]string{
+					"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
+				})
+				b.OnStreamEvent("swarm_spawned", raw)
+			case "teammate_idle":
+				raw, _ := json.Marshal(map[string]string{
+					"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
+					"content": ev.Result,
+				})
+				b.OnStreamEvent("swarm_idle", raw)
+			}
 		}
-		switch ev.Type {
-		case "teammate_text":
-			raw, _ := json.Marshal(map[string]string{
-				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
-				"teamID": ev.TeamID, "content": ev.Result,
-			})
-			b.OnStreamEvent("swarm_text", raw)
-		case "teammate_tool_call":
-			pres := tool.DescribeTool(ev.CurrentTool, ev.ToolArgs)
-			raw, _ := json.Marshal(map[string]string{
-				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
-				"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
-				"arguments": ev.ToolArgs, "displayName": pres.DisplayName, "detail": pres.Detail,
-			})
-			b.OnStreamEvent("swarm_tool_call", raw)
-		case "teammate_tool_result":
-			pres := tool.DescribeTool(ev.CurrentTool, "")
-			raw, _ := json.Marshal(map[string]interface{}{
-				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName,
-				"teamID": ev.TeamID, "id": ev.ToolID, "name": ev.CurrentTool,
-				"displayName": pres.DisplayName, "detail": pres.Detail,
-				"result": ev.Result, "isError": ev.IsError,
-			})
-			b.OnStreamEvent("swarm_tool_result", raw)
-		case "teammate_spawned":
-			raw, _ := json.Marshal(map[string]string{
-				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
-			})
-			b.OnStreamEvent("swarm_spawned", raw)
-		case "teammate_idle":
-			raw, _ := json.Marshal(map[string]string{
-				"teammateID": ev.TeammateID, "teammateName": ev.TeammateName, "teamID": ev.TeamID,
-				"content": ev.Result,
-			})
-			b.OnStreamEvent("swarm_idle", raw)
+
+		// Push to mobile tunnel (mirrors Fyne line 648-698)
+		if broker := b.currentTunnelBroker(); broker != nil {
+			switch ev.Type {
+			case "teammate_tool_call":
+				displayName := ""
+				detail := ""
+				pres := tool.DescribeTool(ev.CurrentTool, ev.ToolArgs)
+				displayName = pres.DisplayName
+				detail = pres.Detail
+				broker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, displayName, ev.ToolArgs, detail)
+				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
+			case "teammate_tool_result":
+				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
+			case "teammate_text":
+				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+				broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+			case "teammate_spawned":
+				broker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", "", ev.TeamID)
+			case "teammate_working":
+				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
+			case "teammate_idle":
+				if ev.Result != "" {
+					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+					broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
+				}
+				success := ev.Error == nil
+				summary := ev.Result
+				if ev.Error != nil {
+					summary = ev.Error.Error()
+				}
+				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
+			case "teammate_shutdown":
+				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
+			case "teammate_error":
+				errMsg := ""
+				if ev.Error != nil {
+					errMsg = ev.Error.Error()
+				}
+				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, errMsg, false)
+			}
 		}
 	})
 
 	// Create agent — mirror Fyne setupAgent exactly
-	systemPrompt := buildWailsSystemPrompt(b.workingDir)
+	systemPrompt := buildWailsSystemPrompt(b.workingDir, autoMem, projectAutoMem)
 	maxIter := b.cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 200
@@ -549,6 +612,7 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.imRound.Text.WriteString(ev.Text)
 		// Push to mobile via tunnel
 		if broker := b.currentTunnelBroker(); broker != nil {
+			b.markTunnelMainStreamActive()
 			broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 			broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
 		}
@@ -567,8 +631,9 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		if b.Emitter != nil {
 			b.Emitter.TriggerTyping()
 		}
-		// Push to mobile via tunnel
+		// Push to mobile via tunnel (mirrors Fyne: flush text before tool call)
 		if broker := b.currentTunnelBroker(); broker != nil {
+			b.flushTunnelTextStream(broker, true)
 			args := string(ev.Tool.Arguments)
 			if len([]rune(args)) > 2000 {
 				args = string([]rune(args)[:2000])
@@ -617,8 +682,9 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			})
 			b.Emitter.TriggerTyping()
 		}
-		// Push to mobile via tunnel
+		// Push to mobile via tunnel (mirrors Fyne: reasoning done before tool result)
 		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
 			broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
 		}
 
@@ -637,10 +703,11 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.imRound.ToolSuccesses = 0
 		b.imRound.ToolFailures = 0
 		b.resetTunnelRoundState()
-		// Push idle status to mobile
+		// Mirror TUI/Fyne: only close text stream + rotate msgID on Done.
+		// Do NOT push idle/clear-activity here — that happens when the
+		// entire agent run finishes (in SendMessage after RunStream returns).
 		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushTextDone(b.ensureTunnelMsgID(broker))
-			broker.PushStatus(tunnel.StatusIdle, "")
+			b.flushTunnelTextStream(broker, true)
 		}
 		usageData := map[string]interface{}{}
 		if ev.Usage != nil {
@@ -666,6 +733,11 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			errMsg = ev.Error.Error()
 		}
 		data = map[string]string{"message": errMsg}
+		// Push to mobile via tunnel (mirrors Fyne)
+		if broker := b.currentTunnelBroker(); broker != nil {
+			b.flushTunnelTextStream(broker, true)
+			broker.PushError(errMsg)
+		}
 
 	case provider.StreamEventReasoning:
 		eventType = "reasoning"
@@ -1416,21 +1488,36 @@ func buildWailsAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string
 
 // buildWailsSystemPrompt builds the system prompt for the agent.
 // Mirrors Fyne buildSystemPrompt exactly.
-func buildWailsSystemPrompt(workingDir string) string {
+// buildWailsSystemPrompt builds the system prompt for the agent.
+// Mirrors Fyne buildSystemPrompt exactly — includes auto-memory content.
+func buildWailsSystemPrompt(workingDir string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
 	hostname, _ := os.Hostname()
 	cwd := workingDir
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	var sb strings.Builder
-	sb.WriteString("You are an AI coding assistant running in GGCode.\n")
-	sb.WriteString(fmt.Sprintf("Current working directory: %s\n", cwd))
-	if hostname != "" {
-		sb.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	prompt := fmt.Sprintf(`You are ggcode, an AI coding assistant running as a desktop application.
+
+## Environment
+- OS: %s
+- Working directory: %s
+
+## Instructions
+- Be precise, concise, and proactive.
+- Prefer small, reversible changes over broad rewrites.
+- Read before you edit, and inspect results before claiming success.
+`, hostname, cwd)
+	if projectAutoMem != nil {
+		if projectContent, _, _ := projectAutoMem.LoadAll(); projectContent != "" {
+			prompt += "\n\n## Auto Memory (Project)\n" + projectContent
+		}
 	}
-	sb.WriteString("Always prefer small, reversible changes over broad rewrites.\n")
-	sb.WriteString("Read before you edit, and inspect results before claiming success.\n")
-	return sb.String()
+	if globalAutoMem != nil {
+		if globalContent, _, _ := globalAutoMem.LoadAll(); globalContent != "" {
+			prompt += "\n\n## Auto Memory (Global)\n" + globalContent
+		}
+	}
+	return prompt
 }
 
 // ─── Session Usage Tracking ──────────────────────────────────────────
