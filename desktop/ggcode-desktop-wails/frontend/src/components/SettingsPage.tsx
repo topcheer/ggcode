@@ -153,8 +153,8 @@ export function SettingsPage({ onBack }: Props) {
     setModelsLoading(true)
     setModelsError('')
     try {
-      // Backend auto-resolves API key via config resolve chain
-      const ms = await App.FetchModels(currentVendor, currentEndpoint, '', '') as string[]
+      // Pass user-entered API key if available, otherwise backend auto-resolves from config
+      const ms = await App.FetchModels(currentVendor, currentEndpoint, apiKey, '') as string[]
       if (ms && ms.length > 0) {
         setModels(ms)
         setModelsSource('dynamic')
@@ -166,7 +166,7 @@ export function SettingsPage({ onBack }: Props) {
     } finally {
       setModelsLoading(false)
     }
-  }, [currentVendor, currentEndpoint])
+  }, [currentVendor, currentEndpoint, apiKey])
 
   const save = useCallback(async () => {
     setSaving(true)
