@@ -30,6 +30,10 @@ export function FetchModels(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['FetchModels'](arg1, arg2, arg3, arg4);
 }
 
+export function GetAvailableModels() {
+  return window['go']['main']['App']['GetAvailableModels']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -188,6 +192,10 @@ export function StartShare() {
 
 export function StopShare() {
   return window['go']['main']['App']['StopShare']();
+}
+
+export function SwitchModel(arg1) {
+  return window['go']['main']['App']['SwitchModel'](arg1);
 }
 
 export function TestEndpointConnection(arg1, arg2, arg3) {

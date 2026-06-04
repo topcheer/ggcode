@@ -17,6 +17,8 @@ export function DeleteSession(arg1:string):Promise<void>;
 
 export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
 
+export function GetAvailableModels():Promise<Array<string>>;
+
 export function GetConfig():Promise<wailskit.FullConfig>;
 
 export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
@@ -96,6 +98,8 @@ export function SetPermissionMode(arg1:string):Promise<void>;
 export function StartShare():Promise<main.ShareInfo>;
 
 export function StopShare():Promise<void>;
+
+export function SwitchModel(arg1:string):Promise<void>;
 
 export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Promise<wailskit.TestEndpointResult>;
 

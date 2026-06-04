@@ -2030,11 +2030,25 @@ func (b *ChatBridge) GetAvailableModels() []string {
 	resolved := b.resolved
 	cfg := b.cfg
 	b.mu.Unlock()
+
+	// Try resolved endpoint first
 	if resolved != nil && len(resolved.Models) > 0 {
 		return resolved.Models
 	}
-	if cfg != nil && cfg.Model != "" {
-		return []string{cfg.Model}
+
+	// Fallback: look up from config vendors
+	if cfg != nil {
+		if vc, ok := cfg.Vendors[cfg.Vendor]; ok {
+			if ep, ok := vc.Endpoints[cfg.Endpoint]; ok {
+				if len(ep.Models) > 0 {
+					return ep.Models
+				}
+			}
+		}
+		// Last resort: just current model
+		if cfg.Model != "" {
+			return []string{cfg.Model}
+		}
 	}
 	return nil
 }

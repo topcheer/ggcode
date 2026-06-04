@@ -699,7 +699,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
   const openModelPicker = async () => {
     try {
       const models = await App.GetAvailableModels()
-      if (models && models.length > 1) {
+      if (models && models.length > 0) {
         setAvailableModels(models)
         setModelPickerOpen(true)
       }
