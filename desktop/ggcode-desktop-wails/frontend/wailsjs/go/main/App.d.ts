@@ -96,3 +96,7 @@ export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Prom
 export function TestIMConnection(arg1:string):Promise<void>;
 
 export function UpdateConfig(arg1:Record<string, any>):Promise<void>;
+
+export function RespondApproval(arg1:string,arg2:string):Promise<void>;
+
+export function RespondAskUser(arg1:string,arg2:string):Promise<void>;

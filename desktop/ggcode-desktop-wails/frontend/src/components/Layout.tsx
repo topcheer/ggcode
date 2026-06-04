@@ -14,7 +14,9 @@ import { AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
 import { Onboarding } from './Onboarding'
 import { TopDragBar } from './TopDragBar'
-import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { ApprovalDialog, ApprovalRequest } from './ApprovalDialog'
+import { AskUserDialog, AskUserRequest } from './AskUserDialog'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
 export function Layout() {
@@ -25,6 +27,8 @@ export function Layout() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
+  const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
+  const [askUserRequest, setAskUserRequest] = useState<AskUserRequest | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [needsOnboard, setNeedsOnboard] = useState(false)
 
@@ -89,6 +93,20 @@ export function Layout() {
       }
     })
     return () => { if (typeof off === 'function') off() }
+  }, [])
+
+  // Listen for approval and ask_user events from Go backend
+  useEffect(() => {
+    EventsOn('approval:request', (data: any) => {
+      setApprovalRequest(data as ApprovalRequest)
+    })
+    EventsOn('ask_user:request', (data: any) => {
+      setAskUserRequest(data as AskUserRequest)
+    })
+    return () => {
+      EventsOff('approval:request')
+      EventsOff('ask_user:request')
+    }
   }, [])
 
   // Keyboard shortcuts
@@ -174,6 +192,8 @@ export function Layout() {
       {shareDialogOpen && <RealShareDialog onClose={() => setShareDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
       {updateNotifOpen && <UpdateNotification onClose={() => setUpdateNotifOpen(false)} />}
+      {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
+      {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
     </div>
   )
 }

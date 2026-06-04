@@ -60,6 +60,11 @@ type ChatBridge struct {
 	tunnelMsgID    string
 	tunnelReasonID string
 
+	// Pending approval/ask_user requests from agent
+	pendingMu        sync.Mutex
+	pendingApprovals map[string]chan permission.Decision
+	pendingAskUsers  map[string]chan tool.AskUserResponse
+
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
 }
@@ -72,8 +77,10 @@ func NewChatBridge() (*ChatBridge, error) {
 	}
 	wd, _ := os.Getwd()
 	return &ChatBridge{
-		cfg:        cfg,
-		workingDir: wd,
+		cfg:              cfg,
+		workingDir:       wd,
+		pendingApprovals: make(map[string]chan permission.Decision),
+		pendingAskUsers:  make(map[string]chan tool.AskUserResponse),
 	}, nil
 }
 
@@ -410,6 +417,29 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	// Create agent
 	a := agent.NewAgent(p, b.registry, "", 100)
 	a.SetPermissionPolicy(policy)
+
+	// Wire approval handler
+	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
+		requestID := ""
+		if broker := b.currentTunnelBroker(); broker != nil {
+			requestID = broker.NextMessageID()
+		}
+		return b.RequestApproval(ctx, requestID, toolName, input)
+	})
+
+	// Wire ask_user handler
+	if askTool, ok := b.registry.Get("ask_user"); ok {
+		if aut, ok := askTool.(*tool.AskUserTool); ok {
+			aut.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+				requestID := ""
+				if broker := b.currentTunnelBroker(); broker != nil {
+					requestID = broker.NextMessageID()
+				}
+				return b.RequestAskUser(ctx, requestID, req)
+			})
+		}
+	}
+
 	b.agent = a
 	return nil
 }
@@ -627,4 +657,344 @@ func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
 func (b *ChatBridge) resetTunnelRoundState() {
 	b.tunnelMsgID = ""
 	b.tunnelReasonID = ""
+}
+
+// ─── Approval / AskUser ────────────────────────────────────────────
+
+// RequestApproval blocks until the user (desktop or mobile) responds to an
+// approval request.  It stores a pending channel, pushes the request to a
+// connected tunnel broker, and emits an event so the Wails frontend can show
+// an approval dialog.
+func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, input string) permission.Decision {
+	ch := make(chan permission.Decision, 1)
+
+	b.pendingMu.Lock()
+	b.pendingApprovals[requestID] = ch
+	b.pendingMu.Unlock()
+
+	// Push to mobile via tunnel
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushApprovalRequest(requestID, toolName, input)
+		broker.PushStatus(tunnel.StatusWaiting, "")
+	}
+
+	// Emit to Wails frontend
+	if b.OnStreamEvent != nil {
+		raw, _ := json.Marshal(map[string]string{
+			"requestID": requestID,
+			"toolName":  toolName,
+			"input":     input,
+		})
+		b.OnStreamEvent("approval:request", raw)
+	}
+
+	select {
+	case d := <-ch:
+		return d
+	case <-ctx.Done():
+		b.pendingMu.Lock()
+		delete(b.pendingApprovals, requestID)
+		b.pendingMu.Unlock()
+		return permission.Deny
+	}
+}
+
+// RequestAskUser blocks until the user (desktop or mobile) responds to a
+// structured questionnaire.  It mirrors the Fyne handleAskUser flow.
+func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+	if len(req.Questions) == 0 {
+		return tool.AskUserResponse{Status: tool.AskUserStatusSubmitted}, nil
+	}
+
+	ch := make(chan tool.AskUserResponse, 1)
+
+	b.pendingMu.Lock()
+	b.pendingAskUsers[requestID] = ch
+	b.pendingMu.Unlock()
+
+	// Push to mobile via tunnel
+	if broker := b.currentTunnelBroker(); broker != nil {
+		questions := buildWailsTunnelAskUserQuestions(req)
+		broker.PushAskUserRequest(requestID, req.Title, questions)
+		broker.PushStatus(tunnel.StatusWaiting, "")
+	}
+
+	// Emit to Wails frontend
+	if b.OnStreamEvent != nil {
+		payload := map[string]interface{}{
+			"requestID": requestID,
+			"title":     req.Title,
+			"questions": req.Questions,
+		}
+		raw, _ := json.Marshal(payload)
+		b.OnStreamEvent("ask_user:request", raw)
+	}
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-ctx.Done():
+		b.pendingMu.Lock()
+		delete(b.pendingAskUsers, requestID)
+		b.pendingMu.Unlock()
+		return tool.AskUserResponse{Status: tool.AskUserStatusCancelled}, ctx.Err()
+	}
+}
+
+// RespondApproval delivers a desktop-originated approval decision to the
+// waiting channel.  decision is "allow", "deny", or "always_allow".
+func (b *ChatBridge) RespondApproval(requestID, decision string) {
+	b.pendingMu.Lock()
+	ch, ok := b.pendingApprovals[requestID]
+	if ok {
+		delete(b.pendingApprovals, requestID)
+	}
+	b.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+
+	var d permission.Decision
+	switch decision {
+	case "allow":
+		d = permission.Allow
+	case "always_allow", "always":
+		d = permission.Allow
+	default:
+		d = permission.Deny
+	}
+
+	// Always-allow: persist override on the agent's permission policy
+	if (decision == "always_allow" || decision == "always") && b.agent != nil {
+		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+			// We don't have toolName here; the caller (app.go) handles override
+			_ = p
+		}
+	}
+
+	// Push result to mobile
+	if broker := b.currentTunnelBroker(); broker != nil && requestID != "" {
+		broker.PushApprovalResult(requestID, decision)
+		broker.PushStatus(tunnel.StatusBusy, "")
+	}
+
+	select {
+	case ch <- d:
+	default:
+	}
+}
+
+// RespondAskUser delivers a desktop-originated ask_user response to the
+// waiting channel.
+func (b *ChatBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
+	b.pendingMu.Lock()
+	ch, ok := b.pendingAskUsers[requestID]
+	if ok {
+		delete(b.pendingAskUsers, requestID)
+	}
+	b.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+
+	// Push response to mobile
+	if broker := b.currentTunnelBroker(); broker != nil && requestID != "" {
+		answers := make([]tunnel.AskUserAnswer, len(response.Answers))
+		for i, answer := range response.Answers {
+			answers[i] = tunnel.AskUserAnswer{
+				QuestionID:   answer.ID,
+				ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
+				FreeformText: answer.FreeformText,
+			}
+		}
+		broker.PushAskUserResponse(requestID, response.Status, answers)
+		broker.PushStatus(tunnel.StatusBusy, "")
+	}
+
+	select {
+	case ch <- response:
+	default:
+	}
+}
+
+// HandleMobileApprovalResponse processes an approval response received from
+// the mobile client via the tunnel.
+func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
+	b.pendingMu.Lock()
+	ch, ok := b.pendingApprovals[data.ID]
+	if ok {
+		delete(b.pendingApprovals, data.ID)
+	}
+	b.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+
+	decision := permission.Deny
+	switch data.Decision {
+	case tunnel.DecisionAllow:
+		decision = permission.Allow
+	case tunnel.DecisionAlwaysAllow, "always":
+		decision = permission.Allow
+	default:
+		decision = permission.Deny
+	}
+
+	// Push result to mobile (for relay persistence)
+	if broker := b.currentTunnelBroker(); broker != nil && data.ID != "" {
+		broker.PushApprovalResult(data.ID, data.Decision)
+		broker.PushStatus(tunnel.StatusBusy, "")
+	}
+
+	select {
+	case ch <- decision:
+	default:
+	}
+}
+
+// HandleMobileAskUserResponse processes an ask_user response received from
+// the mobile client via the tunnel.
+func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData, req tool.AskUserRequest) {
+	b.pendingMu.Lock()
+	ch, ok := b.pendingAskUsers[data.ID]
+	if ok {
+		delete(b.pendingAskUsers, data.ID)
+	}
+	b.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+
+	response := buildWailsAskUserResponseFromTunnel(req, data.Status, data.Answers)
+
+	// Push response to mobile (for relay persistence)
+	if broker := b.currentTunnelBroker(); broker != nil && data.ID != "" {
+		answers := make([]tunnel.AskUserAnswer, len(response.Answers))
+		for i, answer := range response.Answers {
+			answers[i] = tunnel.AskUserAnswer{
+				QuestionID:   answer.ID,
+				ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
+				FreeformText: answer.FreeformText,
+			}
+		}
+		broker.PushAskUserResponse(data.ID, response.Status, answers)
+		broker.PushStatus(tunnel.StatusBusy, "")
+	}
+
+	select {
+	case ch <- response:
+	default:
+	}
+}
+
+// CurrentAskUserRequest returns the pending ask_user request for the given ID,
+// or nil if none exists.  Used by HandleMobileAskUserResponse to reconstruct
+// the full response with completion metadata.
+func (b *ChatBridge) CurrentAskUserRequest(requestID string) tool.AskUserRequest {
+	// We don't store the request separately — but HandleMobileAskUserResponse
+	// takes it as a parameter from app.go which stores the current ask state.
+	return tool.AskUserRequest{}
+}
+
+// SetApprovalOverride persists a tool-level permission override.
+func (b *ChatBridge) SetApprovalOverride(toolName string) {
+	if b.agent != nil {
+		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+			p.SetOverride(toolName, permission.Allow)
+		}
+	}
+}
+
+// ─── Tunnel AskUser conversion helpers ─────────────────────────────
+
+func buildWailsTunnelAskUserQuestions(req tool.AskUserRequest) []tunnel.AskUserQuestion {
+	questions := make([]tunnel.AskUserQuestion, len(req.Questions))
+	for i, q := range req.Questions {
+		choices := make([]tunnel.AskUserChoice, len(q.Choices))
+		for j, c := range q.Choices {
+			choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
+		}
+		questions[i] = tunnel.AskUserQuestion{
+			ID:            q.ID,
+			Prompt:        q.Prompt,
+			Kind:          q.Kind,
+			Choices:       choices,
+			AllowFreeform: q.AllowFreeform,
+			Placeholder:   q.Placeholder,
+		}
+	}
+	return questions
+}
+
+func buildWailsAskUserResponseFromTunnel(req tool.AskUserRequest, status string, answers []tunnel.AskUserAnswer) tool.AskUserResponse {
+	normalizedStatus := strings.TrimSpace(status)
+	if normalizedStatus == "" {
+		normalizedStatus = tool.AskUserStatusSubmitted
+	}
+	answerByQuestion := make(map[string]tunnel.AskUserAnswer, len(answers))
+	for _, answer := range answers {
+		answerByQuestion[answer.QuestionID] = answer
+	}
+	out := tool.AskUserResponse{
+		Status:        normalizedStatus,
+		Title:         req.Title,
+		QuestionCount: len(req.Questions),
+		Answers:       make([]tool.AskUserAnswer, 0, len(req.Questions)),
+	}
+	for _, question := range req.Questions {
+		raw := answerByQuestion[question.ID]
+		answer := buildWailsAskUserAnswer(question, raw.ChoiceIDs, raw.FreeformText)
+		if answer.Answered {
+			out.AnsweredCount++
+		}
+		out.Answers = append(out.Answers, answer)
+	}
+	return out
+}
+
+func buildWailsAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string, freeform string) tool.AskUserAnswer {
+	selectedSet := make(map[string]struct{}, len(selectedIDs))
+	for _, id := range selectedIDs {
+		selectedSet[id] = struct{}{}
+	}
+	orderedIDs := make([]string, 0, len(selectedSet))
+	orderedLabels := make([]string, 0, len(selectedSet))
+	for _, choice := range question.Choices {
+		if _, ok := selectedSet[choice.ID]; ok {
+			orderedIDs = append(orderedIDs, choice.ID)
+			orderedLabels = append(orderedLabels, choice.Label)
+		}
+	}
+	freeform = strings.TrimSpace(freeform)
+	answerMode := tool.AskUserAnswerModeNone
+	completionStatus := tool.AskUserCompletionUnanswered
+	switch {
+	case len(orderedIDs) == 0 && freeform == "":
+		answerMode = tool.AskUserAnswerModeNone
+		completionStatus = tool.AskUserCompletionUnanswered
+	case len(orderedIDs) == 0 && freeform != "":
+		answerMode = tool.AskUserAnswerModeFreeformOnly
+		if question.Kind == tool.AskUserKindText {
+			completionStatus = tool.AskUserCompletionAnswered
+		} else {
+			completionStatus = tool.AskUserCompletionPartial
+		}
+	case len(orderedIDs) > 0 && freeform == "":
+		answerMode = tool.AskUserAnswerModeSelectionOnly
+		completionStatus = tool.AskUserCompletionAnswered
+	default:
+		answerMode = tool.AskUserAnswerModeSelectionAndFreeform
+		completionStatus = tool.AskUserCompletionAnswered
+	}
+	return tool.AskUserAnswer{
+		ID:                question.ID,
+		Title:             question.Title,
+		Kind:              question.Kind,
+		CompletionStatus:  completionStatus,
+		AnswerMode:        answerMode,
+		Answered:          completionStatus == tool.AskUserCompletionAnswered,
+		SelectedChoiceIDs: orderedIDs,
+		SelectedChoices:   orderedLabels,
+		FreeformText:      freeform,
+	}
 }
