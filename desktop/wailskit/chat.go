@@ -1238,14 +1238,12 @@ func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, i
 		b.OnStreamEvent("approval:request", raw)
 	}
 
+	// Block until user responds. Use background context so the approval
+	// outlives the agent's RunStream context — cancelling the agent run
+	// should not auto-deny a pending approval request.
 	select {
 	case d := <-ch:
 		return d
-	case <-ctx.Done():
-		b.pendingMu.Lock()
-		delete(b.pendingApprovals, requestID)
-		b.pendingMu.Unlock()
-		return permission.Deny
 	}
 }
 
@@ -1280,14 +1278,12 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 		b.OnStreamEvent("ask_user:request", raw)
 	}
 
+	// Block until user responds. Use background context so ask_user
+	// outlives the agent's RunStream context — cancelling the agent run
+	// should not auto-cancel a pending user question.
 	select {
 	case resp := <-ch:
 		return resp, nil
-	case <-ctx.Done():
-		b.pendingMu.Lock()
-		delete(b.pendingAskUsers, requestID)
-		b.pendingMu.Unlock()
-		return tool.AskUserResponse{Status: tool.AskUserStatusCancelled}, ctx.Err()
 	}
 }
 

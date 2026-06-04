@@ -57,6 +57,15 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 // Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
 	debug.Log("permission", "Check: tool=%s input=%s", toolName, truncateStr(string(input), 200))
+
+	// Interactive/communication tools are always auto-approved regardless of mode.
+	// ask_user: the tool itself IS the user interaction — requiring approval would be circular.
+	// save_memory: writing project memory is always safe and expected.
+	switch toolName {
+	case "ask_user", "save_memory":
+		return Allow, nil
+	}
+
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
