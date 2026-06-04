@@ -2,6 +2,7 @@ package wailskit
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -43,13 +44,14 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 }
 
 // AddMCPServer adds a new MCP server configuration.
-// The cfg map may contain:
+// The values map may contain:
 //   - "name" (required): server name
-//   - "type": "stdio" or "sse" (default: "stdio")
+//   - "type": "stdio", "http", "ws" (default: "stdio")
 //   - "command": executable command (for stdio type)
-//   - "url": server URL (for sse/streamable type)
-//   - "args_*": positional arguments (keys like "args_0", "args_1")
-//   - "env_*": environment variables (keys like "env_KEY=VALUE")
+//   - "args": space-separated arguments (for stdio type)
+//   - "url": server URL (for http/ws type)
+//   - "headers_*": HTTP headers (keys like "headers_Authorization")
+//   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
 	cfg, err := config.Load("")
 	if err != nil {
@@ -73,6 +75,11 @@ func AddMCPServer(values map[string]string) error {
 		URL:     values["url"],
 	}
 
+	// Parse args from space-separated string
+	if argsStr := values["args"]; argsStr != "" {
+		serverCfg.Args = strings.Fields(argsStr)
+	}
+
 	// Parse env_ prefixed keys into env map
 	env := make(map[string]string)
 	for k, v := range values {
@@ -82,6 +89,17 @@ func AddMCPServer(values map[string]string) error {
 	}
 	if len(env) > 0 {
 		serverCfg.Env = env
+	}
+
+	// Parse headers_ prefixed keys into headers map
+	headers := make(map[string]string)
+	for k, v := range values {
+		if len(k) > 8 && k[:8] == "headers_" {
+			headers[k[8:]] = v
+		}
+	}
+	if len(headers) > 0 {
+		serverCfg.Headers = headers
 	}
 
 	cfg.UpsertMCPServer(serverCfg)
