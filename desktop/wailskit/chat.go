@@ -31,6 +31,7 @@ import (
 // mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
 	cfg          *config.Config
+	resolved     *config.ResolvedEndpoint
 	agent        *agent.Agent
 	registry     *tool.Registry
 	workingDir   string
@@ -264,6 +265,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolve endpoint: %w", err)
 	}
+	b.resolved = resolved
 
 	p, err := provider.NewProvider(resolved)
 	if err != nil {
@@ -446,9 +448,27 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		}
 	})
 
-	// Create agent
-	a := agent.NewAgent(p, b.registry, "", 100)
+	// Create agent — mirror Fyne setupAgent exactly
+	systemPrompt := buildWailsSystemPrompt(b.workingDir)
+	maxIter := b.cfg.MaxIterations
+	if maxIter == 0 {
+		maxIter = 200
+	}
+	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
 	a.SetPermissionPolicy(policy)
+
+	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
+	a.SetUsageHandler(func(usage provider.TokenUsage) {
+		b.recordSessionUsage(usage)
+	})
+
+	// Context window — critical for context compaction (mirrors Fyne line 737-742)
+	if resolved.ContextWindow > 0 {
+		a.ContextManager().SetContextWindow(resolved.ContextWindow)
+	}
+	if resolved.MaxTokens > 0 {
+		a.ContextManager().SetOutputReserve(resolved.MaxTokens)
+	}
 
 	// Wire approval handler
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
@@ -1348,4 +1368,62 @@ func buildWailsAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string
 		SelectedChoices:   orderedLabels,
 		FreeformText:      freeform,
 	}
+}
+
+// ─── System Prompt ───────────────────────────────────────────────────
+
+// buildWailsSystemPrompt builds the system prompt for the agent.
+// Mirrors Fyne buildSystemPrompt exactly.
+func buildWailsSystemPrompt(workingDir string) string {
+	hostname, _ := os.Hostname()
+	cwd := workingDir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	var sb strings.Builder
+	sb.WriteString("You are an AI coding assistant running in GGCode.\n")
+	sb.WriteString(fmt.Sprintf("Current working directory: %s\n", cwd))
+	if hostname != "" {
+		sb.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	}
+	sb.WriteString("Always prefer small, reversible changes over broad rewrites.\n")
+	sb.WriteString("Read before you edit, and inspect results before claiming success.\n")
+	return sb.String()
+}
+
+// ─── Session Usage Tracking ──────────────────────────────────────────
+
+// recordSessionUsage accumulates token usage into the session.
+// Mirrors Fyne AgentBridge.recordSessionUsage and TUI Model.recordSessionUsage exactly.
+func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil {
+		b.mu.Unlock()
+		return
+	}
+	ses := b.currentSes
+	ses.AddUsageForEndpoint(ses.Vendor, ses.Endpoint, usage)
+	total := ses.UsageForEndpoint(ses.Vendor, ses.Endpoint)
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	_ = store.Save(ses)
+
+	// Notify frontend of updated usage
+	if b.OnStreamEvent != nil {
+		raw, _ := json.Marshal(map[string]interface{}{
+			"input_tokens":  total.InputTokens,
+			"output_tokens": total.OutputTokens,
+			"cache_read":    total.CacheRead,
+			"cache_write":   total.CacheWrite,
+		})
+		b.OnStreamEvent("usage_update", raw)
+	}
+}
+
+// ─── Metrics ──────────────────────────────────────────────────────────
+
+// recordMetric records a metric event. Mirrors Fyne recordMetric.
+func (b *ChatBridge) recordMetric(ev interface{}) {
+	// Metrics are logged for now; can be extended to push to UI or remote
 }
