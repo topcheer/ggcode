@@ -142,6 +142,14 @@ export function RemoveMCPServer(arg1) {
   return window['go']['main']['App']['RemoveMCPServer'](arg1);
 }
 
+export function RespondApproval(arg1, arg2) {
+  return window['go']['main']['App']['RespondApproval'](arg1, arg2);
+}
+
+export function RespondAskUser(arg1, arg2) {
+  return window['go']['main']['App']['RespondAskUser'](arg1, arg2);
+}
+
 export function SaveAPIKey(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAPIKey'](arg1, arg2, arg3);
 }
@@ -188,12 +196,4 @@ export function TestIMConnection(arg1) {
 
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
-}
-
-export function RespondApproval(arg1, arg2) {
-  return window['go']['main']['App']['RespondApproval'](arg1, arg2);
-}
-
-export function RespondAskUser(arg1, arg2) {
-  return window['go']['main']['App']['RespondAskUser'](arg1, arg2);
 }

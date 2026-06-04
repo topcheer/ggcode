@@ -72,9 +72,12 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
     setLoading(true)
     setError('')
     try {
+      console.log('[MCP] Calling ListMCPServers...')
       const list = await App.ListMCPServers() as MCPServerConfig[]
+      console.log('[MCP] Result:', list)
       setServers(list || [])
     } catch (e: any) {
+      console.error('[MCP] Error:', e)
       setError(e?.message || 'Failed to load MCP servers')
     } finally {
       setLoading(false)
@@ -147,7 +150,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--color-bg)', overflow: 'auto', minHeight: 0 }}>
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
