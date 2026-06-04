@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -732,39 +733,5 @@ func encodeQRBase64(pngData []byte) string {
 	if len(pngData) == 0 {
 		return ""
 	}
-	return "data:image/png;base64," + encodeBase64(pngData)
-}
-
-func encodeBase64(data []byte) string {
-	return jsonEscapelessBase64(data)
-}
-
-// jsonEscapelessBase64 is a simple base64 encoder.
-func jsonEscapelessBase64(data []byte) string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	var result []byte
-	for i := 0; i < len(data); i += 3 {
-		b0, b1, b2 := byte(0), byte(0), byte(0)
-		remaining := len(data) - i
-		b0 = data[i]
-		if remaining > 1 {
-			b1 = data[i+1]
-		}
-		if remaining > 2 {
-			b2 = data[i+2]
-		}
-		result = append(result, charset[b0>>2])
-		result = append(result, charset[(b0&0x03)<<4|(b1>>4)])
-		if remaining > 1 {
-			result = append(result, charset[(b1&0x0F)<<2|(b2>>6)])
-		} else {
-			result = append(result, '=')
-		}
-		if remaining > 2 {
-			result = append(result, charset[b2&0x3F])
-		} else {
-			result = append(result, '=')
-		}
-	}
-	return string(result)
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData)
 }
