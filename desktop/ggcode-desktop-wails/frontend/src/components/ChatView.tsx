@@ -694,8 +694,6 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     : isStreaming ? 'Working...'
     : 'Ready'
 
-  const vendorModel = [statusBar.vendor, statusBar.model].filter(Boolean).join('/') || 'No model'
-
   const modeOptions = ['supervised', 'plan', 'auto', 'bypass', 'autopilot'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
@@ -718,17 +716,6 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         borderBottom: '1px solid var(--color-border)',
         flexShrink: 0,
       }}>
-        {/* Vendor badge */}
-        <span style={{
-          padding: '2px 8px', borderRadius: 'var(--radius-sm)',
-          background: 'var(--color-primary)',
-          color: '#fff', fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 500,
-        }}>
-          {vendorModel}
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
-          {statusLabel}
-        </span>
         {/* Mode switcher — click to cycle supervised → plan → auto → bypass → autopilot */}
         <button
           onClick={cycleMode}
@@ -752,6 +739,9 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         >
           {statusBar.mode}
         </button>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+          {statusLabel}
+        </span>
         <div style={{ flex: 1 }} />
 
         {/* Context pill */}
