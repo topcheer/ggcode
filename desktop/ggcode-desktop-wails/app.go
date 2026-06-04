@@ -79,11 +79,9 @@ func (a *App) initWorkspace(dir string) {
 
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
+	a.stopIMAdapters()
 	if a.chat != nil {
 		a.chat.Cancel()
-	}
-	if a.imController != nil {
-		a.imController.Stop()
 	}
 }
 
@@ -430,14 +428,22 @@ func (a *App) initIMRuntime() {
 		mgr.ApplyAdapterConfig(adapters)
 	}
 
-	// Pairing UI via frontend event
+	// IM status updates via frontend events
 	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
+		// Pairing code dialog
 		if snap.PendingPairing != nil {
 			ch := snap.PendingPairing
 			runtime.EventsEmit(a.ctx, "im:pairing", map[string]string{
 				"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code,
 			})
+		} else {
+			// Pairing complete — dismiss dialog
+			runtime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
 		}
+		// Adapter status snapshot for IM management page
+		runtime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
+			"adapters": len(snap.Adapters),
+		})
 	})
 
 	a.imManager = mgr
