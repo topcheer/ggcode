@@ -128,6 +128,7 @@ interface ReasoningPayload { content: string }
 interface StatusBarState {
   vendor: string
   model: string
+  mode: string
   inputTokens: number
   outputTokens: number
   contextWindow: number
@@ -165,7 +166,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [statusBar, setStatusBar] = useState<StatusBarState>({
-    vendor: '', model: '', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
+    vendor: '', model: '', mode: 'auto', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
   })
 
   // Helper: update an agent panel's messages
@@ -614,6 +615,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
             ...s,
             vendor: info.vendor ?? '',
             model: info.model ?? '',
+            mode: info.mode ?? s.mode,
             contextWindow: info.contextWindow ?? 0,
           }))
         }
@@ -694,6 +696,16 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
 
   const vendorModel = [statusBar.vendor, statusBar.model].filter(Boolean).join('/') || 'No model'
 
+  const modeOptions = ['auto', 'normal', 'plan', 'yolo'] as const
+  const cycleMode = async () => {
+    const idx = modeOptions.indexOf(statusBar.mode as any)
+    const next = modeOptions[(idx + 1) % modeOptions.length]
+    try {
+      await (window as any).SetPermissionMode(next)
+      setStatusBar(s => ({ ...s, mode: next }))
+    } catch {}
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -717,6 +729,27 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
           {statusLabel}
         </span>
+        {/* Mode switcher — click to cycle auto → normal → plan → yolo */}
+        <button
+          onClick={cycleMode}
+          title={`Permission mode: ${statusBar.mode}. Click to switch.`}
+          style={{
+            padding: '2px 10px', borderRadius: 'var(--radius-sm)',
+            background: statusBar.mode === 'yolo'
+              ? 'var(--color-error)'
+              : statusBar.mode === 'plan'
+              ? 'var(--color-primary)'
+              : 'var(--color-card)',
+            color: statusBar.mode === 'yolo' ? '#fff'
+              : statusBar.mode === 'plan' ? '#fff'
+              : 'var(--text-secondary)',
+            border: '1px solid var(--color-border)',
+            fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600,
+            cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 0.5,
+          }}
+        >
+          {statusBar.mode}
+        </button>
         <div style={{ flex: 1 }} />
 
         {/* Context pill */}

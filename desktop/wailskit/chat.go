@@ -29,6 +29,12 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
+// pendingMessage holds a user message queued while the agent is busy.
+type pendingMessage struct {
+	Text   string
+	Hidden bool
+}
+
 // ChatBridge manages the full agent chat loop for the Wails frontend,
 // mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
@@ -39,10 +45,14 @@ type ChatBridge struct {
 	workingDir   string
 	sessionStore session.Store
 	currentSes   *session.Session
+	permissionMode permission.PermissionMode
 
 	mu     sync.Mutex
 	cancel    context.CancelFunc
 	cancelled bool
+
+	// Pending messages (mirrors Fyne pendingMsgs)
+	pendingMsgs []pendingMessage
 
 	// Subsystems
 	cronScheduler *cron.Scheduler
@@ -53,6 +63,8 @@ type ChatBridge struct {
 	// Metrics
 	metricCancel    context.CancelFunc
 	metricCollector *metrics.Collector
+	usageTurnIndex  int
+	lastMetricDigestTurn int
 
 	// Sub-agent tunnel tracking
 	spawnedSet map[string]bool
@@ -70,6 +82,7 @@ type ChatBridge struct {
 
 	// Mobile tunnel broker for outbound push
 	tunnelBroker           *tunnel.Broker
+	tunnelProjectionBroker *tunnel.Broker // offline broker for event recording before Share
 	tunnelMsgID            string
 	tunnelMsgNeedsFinalize bool
 	tunnelProjectionBroken bool
@@ -101,21 +114,41 @@ func NewChatBridge() (*ChatBridge, error) {
 }
 
 // SendMessage sends a user message and streams events to the frontend.
+// If agent is already running, queues the message for processing after the current turn.
 func (b *ChatBridge) SendMessage(userMsg string) error {
 	b.mu.Lock()
 	if b.cancel != nil {
+		// Agent is busy — queue the message (mirrors Fyne QueueMessage)
+		b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: userMsg})
 		b.mu.Unlock()
-		return fmt.Errorf("agent is already running")
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"message": "Message queued"})
+			b.OnStreamEvent("message_queued", raw)
+		}
+		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.cancelled = false
+	b.usageTurnIndex++
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
 		b.cancel = nil
 		b.mu.Unlock()
+
+		// Process queued messages (mirrors Fyne line 906-919)
+		if pending, ok := b.drainPending(); ok {
+			if pending.Hidden {
+				_ = b.SendHiddenText(pending.Text)
+			} else {
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushSystemMessage("Processing queued message...")
+				}
+				_ = b.SendMessage(pending.Text)
+			}
+		}
 	}()
 
 	if b.agent == nil {
@@ -299,6 +332,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		modeStr = "auto"
 	}
 	mode := permission.ParsePermissionMode(modeStr)
+	b.permissionMode = mode
 	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 
 	// Impersonation
@@ -597,7 +631,13 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	}
 
 	b.agent = a
+	// Set interruption handler — agent checks for pending messages during compact etc.
+	// (mirrors Fyne line 836-839)
+	a.SetInterruptionHandler(func() string {
+		return b.drainPendingInterrupt()
+	})
 	b.EnsureSession() // mirrors Fyne setupAgent line 743
+	b.bindTunnelProjectionSession() // record events even before Share (mirrors Fyne line 303)
 	return nil
 }
 
@@ -765,12 +805,14 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 		return map[string]interface{}{
 			"vendor": b.cfg.Vendor,
 			"model":  b.cfg.Model,
+			"mode":   b.GetPermissionMode(),
 		}
 	}
 	return map[string]interface{}{
 		"vendor":        b.cfg.Vendor,
 		"model":         b.cfg.Model,
 		"contextWindow": resolved.ContextWindow,
+		"mode":          b.GetPermissionMode(),
 	}
 }
 
@@ -849,6 +891,10 @@ func (b *ChatBridge) DetachTunnelBroker() {
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Mirrors Fyne: projection broker takes priority (works before Share)
+	if b.tunnelProjectionBroker != nil {
+		return b.tunnelProjectionBroker
+	}
 	return b.tunnelBroker
 }
 
@@ -869,6 +915,16 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 	if currentSes == nil {
 		return
 	}
+
+	// Use offline projection broker (mirrors Fyne ensureTunnelProjectionBroker)
+	// This works even before Share — events are recorded for later replay.
+	b.mu.Lock()
+	if b.tunnelProjectionBroker == nil {
+		b.tunnelProjectionBroker = tunnel.NewBroker(nil)
+	}
+	broker := b.tunnelProjectionBroker
+	b.mu.Unlock()
+
 	if b.projectionStore == nil {
 		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
 			b.projectionStore = store
@@ -876,10 +932,6 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 	}
 
 	var authorityEpoch uint64 = 1
-	broker := b.currentTunnelBroker()
-	if broker == nil {
-		return
-	}
 
 	if b.projectionStore != nil {
 		if epoch, err := b.projectionStore.AuthorityEpoch(currentSes.ID); err == nil {
@@ -897,6 +949,7 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 		}
 	}
 
+	b.tunnelProjectionBroken = false
 	broker.SwitchSession(currentSes.ID)
 	broker.SetAuthorityEpoch(authorityEpoch)
 	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
@@ -1532,11 +1585,26 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
 	}
 	ses := b.currentSes
 	ses.AddUsageForEndpoint(ses.Vendor, ses.Endpoint, usage)
+	ses.UpdatedAt = time.Now()
 	total := ses.UsageForEndpoint(ses.Vendor, ses.Endpoint)
 	store := b.sessionStore
+	turnIdx := b.usageTurnIndex
+	entry := session.UsageEntry{
+		Timestamp: time.Now(),
+		TurnIndex: turnIdx,
+		Model:     ses.Model,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
+		Usage:     usage,
+	}
 	b.mu.Unlock()
 
-	_ = store.Save(ses)
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMetaToDisk(ses)
+		_ = jsonlStore.AppendUsageEntry(ses, entry)
+	} else {
+		_ = store.Save(ses)
+	}
 
 	// Notify frontend of updated usage
 	if b.OnStreamEvent != nil {
@@ -1623,4 +1691,106 @@ func (b *ChatBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
 		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
 		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 	}
+}
+
+// ─── Permission Mode ──────────────────────────────────────────────────
+
+// GetPermissionMode returns the current permission mode string.
+func (b *ChatBridge) GetPermissionMode() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.permissionMode.String()
+}
+
+// SetPermissionMode updates the agent permission mode at runtime.
+// Mirrors Fyne AgentBridge.SetPermissionMode exactly.
+func (b *ChatBridge) SetPermissionMode(modeStr string) {
+	mode := permission.ParsePermissionMode(modeStr)
+	b.mu.Lock()
+	b.permissionMode = mode
+	agent := b.agent
+	b.mu.Unlock()
+	if agent != nil {
+		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+		agent.SetPermissionPolicy(policy)
+	}
+}
+
+// ─── Pending Messages ────────────────────────────────────────────────
+
+// QueueMessage stores a user message to be sent after the current agent turn.
+func (b *ChatBridge) QueueMessage(msg string) {
+	b.mu.Lock()
+	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg})
+	b.mu.Unlock()
+}
+
+// QueueHiddenMessage stores a hidden message (mirrors Fyne).
+func (b *ChatBridge) QueueHiddenMessage(msg string) {
+	b.mu.Lock()
+	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg, Hidden: true})
+	b.mu.Unlock()
+}
+
+func (b *ChatBridge) drainPending() (pendingMessage, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pendingMsgs) == 0 {
+		return pendingMessage{}, false
+	}
+	msg := b.pendingMsgs[0]
+	b.pendingMsgs = b.pendingMsgs[1:]
+	return msg, true
+}
+
+func (b *ChatBridge) drainPendingInterrupt() string {
+	pending, ok := b.drainPending()
+	if !ok {
+		return ""
+	}
+	if !pending.Hidden {
+		// Persist visible user message
+		b.mu.Lock()
+		if b.currentSes != nil {
+			msg := provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(pending.Text)}}
+			b.currentSes.Messages = append(b.currentSes.Messages, msg)
+			b.currentSes.UpdatedAt = time.Now()
+			if b.sessionStore != nil {
+				_ = b.sessionStore.Save(b.currentSes)
+			}
+		}
+		b.mu.Unlock()
+	}
+	return strings.TrimSpace(pending.Text)
+}
+
+// SendHiddenText sends a hidden message to the agent without UI display.
+func (b *ChatBridge) SendHiddenText(text string) error {
+	b.mu.Lock()
+	if b.cancel != nil {
+		b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: text, Hidden: true})
+		b.mu.Unlock()
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
+	b.cancelled = false
+	b.usageTurnIndex++
+	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		b.cancel = nil
+		b.mu.Unlock()
+	}()
+
+	if b.agent == nil {
+		if err := b.initAgent(ctx); err != nil {
+			return fmt.Errorf("init agent: %w", err)
+		}
+	}
+
+	return b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
+		b.emit(ev)
+	})
 }
