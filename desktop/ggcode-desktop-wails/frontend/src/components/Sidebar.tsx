@@ -144,7 +144,7 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
       </div>
 
       {/* Session list */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0', textAlign: 'left' }}>
         {loading && (
           <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
             Loading...
@@ -166,12 +166,15 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
               cursor: 'pointer',
               display: 'flex',
               flexDirection: 'column',
+              alignItems: 'flex-start',
+              width: '100%',
+              boxSizing: 'border-box',
               gap: 2,
               transition: 'background 0.1s',
               position: 'relative',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
               <span style={{
                 fontSize: 13, fontWeight: s.id === activeSessionId ? 500 : 400,
                 color: s.id === activeSessionId ? 'var(--text-primary)' : 'var(--text-secondary)',
