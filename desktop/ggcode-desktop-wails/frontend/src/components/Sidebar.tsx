@@ -110,16 +110,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
         <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
           Sessions
         </span>
-        <div style={{ flex: 1 }} />
-        <button onClick={handleNew} style={{
-          padding: '3px 8px', borderRadius: 'var(--radius-sm)',
-          background: 'var(--color-primary)',
-          color: '#fff', border: 'none', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 11, fontWeight: 500,
-        }}>
-          <Plus size={12} /> New
-        </button>
       </div>
 
       {/* Search */}

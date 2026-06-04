@@ -15,7 +15,11 @@ export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string)
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
+
 export function GetConfig():Promise<wailskit.FullConfig>;
+
+export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
@@ -24,8 +28,6 @@ export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
 export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPresetInfo>>;
 
 export function GetModelInfo():Promise<Record<string, any>>;
-
-export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
 export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
 
@@ -38,8 +40,6 @@ export function GetSessionHistory():Promise<Array<wailskit.SessionMessage>>;
 export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
 
 export function GetVendors():Promise<Array<string>>;
-
-export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
 
 export function GetVersion():Promise<string>;
 
@@ -65,6 +65,8 @@ export function NeedsOnboard():Promise<boolean>;
 
 export function NewSession():Promise<void>;
 
+export function ReadFileAsBase64(arg1:string):Promise<main.FileBinaryData>;
+
 export function ReadFileContent(arg1:string):Promise<string>;
 
 export function RemoveIMAdapter(arg1:string):Promise<void>;
@@ -84,8 +86,6 @@ export function SelectWorkspace():Promise<string>;
 export function SendMessage(arg1:string):Promise<void>;
 
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
-
-export function ReadFileAsBase64(arg1:string):Promise<main.FileBinaryData>;
 
 export function StartShare():Promise<main.ShareInfo>;
 

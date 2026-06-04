@@ -1,5 +1,19 @@
 export namespace main {
 	
+	export class FileBinaryData {
+	    mimeType: string;
+	    data: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileBinaryData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mimeType = source["mimeType"];
+	        this.data = source["data"];
+	    }
+	}
 	export class ShareInfo {
 	    connectURL: string;
 	    qrCodeBase64: string;
@@ -19,6 +33,34 @@ export namespace main {
 
 export namespace wailskit {
 	
+	export class EndpointDetails {
+	    displayName: string;
+	    protocol: string;
+	    baseUrl: string;
+	    apiKeySet: boolean;
+	    apiKeyMasked: string;
+	    defaultModel: string;
+	    models: string[];
+	    contextWindow: number;
+	    supportsVision: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EndpointDetails(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.displayName = source["displayName"];
+	        this.protocol = source["protocol"];
+	        this.baseUrl = source["baseUrl"];
+	        this.apiKeySet = source["apiKeySet"];
+	        this.apiKeyMasked = source["apiKeyMasked"];
+	        this.defaultModel = source["defaultModel"];
+	        this.models = source["models"];
+	        this.contextWindow = source["contextWindow"];
+	        this.supportsVision = source["supportsVision"];
+	    }
+	}
 	export class EndpointInfo {
 	    key: string;
 	    displayName: string;
@@ -249,6 +291,40 @@ export namespace wailskit {
 	        this.env = source["env"];
 	        this.url = source["url"];
 	        this.headers = source["headers"];
+	    }
+	}
+	export class ResolvedEndpointInfo {
+	    vendorId: string;
+	    vendorName: string;
+	    endpointId: string;
+	    endpointName: string;
+	    protocol: string;
+	    baseUrl: string;
+	    apiKeySet: boolean;
+	    apiKeyMasked: string;
+	    model: string;
+	    models: string[];
+	    contextWindow: number;
+	    supportsVision: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResolvedEndpointInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendorId = source["vendorId"];
+	        this.vendorName = source["vendorName"];
+	        this.endpointId = source["endpointId"];
+	        this.endpointName = source["endpointName"];
+	        this.protocol = source["protocol"];
+	        this.baseUrl = source["baseUrl"];
+	        this.apiKeySet = source["apiKeySet"];
+	        this.apiKeyMasked = source["apiKeyMasked"];
+	        this.model = source["model"];
+	        this.models = source["models"];
+	        this.contextWindow = source["contextWindow"];
+	        this.supportsVision = source["supportsVision"];
 	    }
 	}
 	export class SessionInfo {
