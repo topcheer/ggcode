@@ -333,12 +333,13 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const activeExt = activeFile.split('.').pop()?.toLowerCase() || ''
 
   return (
-    <div style={{ display: 'flex', height: '100%' }}>
+    <div style={{ display: 'flex', height: '100%', textAlign: 'left' }}>
       {/* File tree */}
       <div style={{
         width: 240, background: 'var(--color-nav)',
         display: 'flex', flexDirection: 'column',
         borderRight: '1px solid var(--color-border)',
+        textAlign: 'left', alignItems: 'stretch',
       }}>
         <div style={{
           padding: '8px 12px',
@@ -350,7 +351,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
           <Folder size={14} style={{ color: 'var(--color-primary)' }} />
           {workDirName}/
         </div>
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflowY: 'auto', textAlign: 'left' }}>
           {loading && (
             <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>
               Loading files...
