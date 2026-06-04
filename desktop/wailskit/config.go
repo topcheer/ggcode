@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -575,14 +576,6 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	cfg := globalCfg
 	globalMu.RUnlock()
 
-	// Auto-resolve API key if not provided explicitly
-	if apiKey == "" && cfg != nil {
-		resolved, err := cfg.ResolveEndpoint(vendor, endpoint)
-		if err == nil && resolved.APIKey != "" {
-			apiKey = resolved.APIKey
-		}
-	}
-
 	protocol := "openai"
 	if cfg != nil {
 		if vc, ok := cfg.Vendors[vendor]; ok {
@@ -591,6 +584,11 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 				if baseURL == "" {
 					baseURL = ep.BaseURL
 				}
+			}
+
+			// Auto-resolve API key if not provided: endpoint → vendor → env
+			if apiKey == "" {
+				apiKey = resolveAPIKey(cfg, vendor, endpoint)
 			}
 		}
 	}
@@ -607,6 +605,25 @@ func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string,
 	defer cancel()
 
 	return provider.DiscoverModels(ctx, tmpResolved)
+}
+
+// resolveAPIKey mimics the resolve chain: endpoint key → vendor key → expand env vars.
+// This avoids calling ResolveEndpoint which requires a model.
+func resolveAPIKey(cfg *config.Config, vendor, endpoint string) string {
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		return ""
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return ""
+	}
+	// endpoint key first, then vendor key
+	key := strings.TrimSpace(ep.APIKey)
+	if key == "" {
+		key = strings.TrimSpace(vc.APIKey)
+	}
+	return config.ExpandEnv(key)
 }
 
 // EndpointDetails provides detailed info about a configured endpoint.
@@ -630,39 +647,27 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 	if cfg == nil {
 		return nil
 	}
-
-	// Use ResolveEndpoint to get the full resolution chain (endpoint→vendor→env→keys.env)
-	resolved, err := cfg.ResolveEndpoint(vendor, endpoint)
-	if err != nil {
-		// Fallback to raw endpoint config if resolve fails
-		vc, ok := cfg.Vendors[vendor]
-		if !ok {
-			return nil
-		}
-		ep, ok := vc.Endpoints[endpoint]
-		if !ok {
-			return nil
-		}
-		return &EndpointDetails{
-			DisplayName:  ep.DisplayName,
-			Protocol:     ep.Protocol,
-			BaseURL:      ep.BaseURL,
-			APIKeySet:    false,
-			APIKeyMasked: "",
-			DefaultModel: ep.DefaultModel,
-			Models:       ep.Models,
-		}
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		return nil
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return nil
 	}
 
+	// Resolve API key: endpoint → vendor → env vars (same chain as runtime)
+	apiKey := resolveAPIKey(cfg, vendor, endpoint)
+
 	return &EndpointDetails{
-		DisplayName:    resolved.EndpointName,
-		Protocol:       resolved.Protocol,
-		BaseURL:        resolved.BaseURL,
-		APIKeySet:      resolved.APIKey != "",
-		APIKeyMasked:   maskAPIKey(resolved.APIKey),
-		DefaultModel:   resolved.Model,
-		Models:         resolved.Models,
-		ContextWindow:  resolved.ContextWindow,
-		SupportsVision: resolved.SupportsVision,
+		DisplayName:    ep.DisplayName,
+		Protocol:       ep.Protocol,
+		BaseURL:        ep.BaseURL,
+		APIKeySet:      apiKey != "",
+		APIKeyMasked:   maskAPIKey(apiKey),
+		DefaultModel:   ep.DefaultModel,
+		Models:         ep.Models,
+		ContextWindow:  ep.ContextWindow,
+		SupportsVision: ep.SupportsVision != nil && *ep.SupportsVision,
 	}
 }
