@@ -9,7 +9,8 @@ import { FileBrowser } from './FileBrowser'
 import { MCPServers } from './MCPServers'
 import { ContextPanel } from './ContextPanel'
 import { CommandPalette } from './CommandPalette'
-import { ShareDialog, AboutDialog, UpdateNotification } from './Dialogs'
+import RealShareDialog from './ShareDialog'
+import { AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
 import { Onboarding } from './Onboarding'
 import { TopDragBar } from './TopDragBar'
@@ -170,7 +171,7 @@ export function Layout() {
 
       {/* Overlay dialogs */}
       {cmdPaletteOpen && <CommandPalette onClose={() => setCmdPaletteOpen(false)} />}
-      {shareDialogOpen && <ShareDialog onClose={() => setShareDialogOpen(false)} />}
+      {shareDialogOpen && <RealShareDialog onClose={() => setShareDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
       {updateNotifOpen && <UpdateNotification onClose={() => setUpdateNotifOpen(false)} />}
     </div>
