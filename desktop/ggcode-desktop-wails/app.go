@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -31,6 +32,11 @@ type App struct {
 	tunnelMu      sync.RWMutex
 	tunnelSession *tunnel.Session
 	tunnelBroker  *tunnel.Broker
+
+	// Current ask_user request (for mobile response mapping)
+	askUserMu     sync.Mutex
+	askUserReq    tool.AskUserRequest
+	hasAskUserReq bool
 }
 
 // NewApp creates a new App application struct.
@@ -417,6 +423,44 @@ func mimeTypeFromExt(path string) string {
 	}
 }
 
+// ─── Approval & AskUser ────────────────────────────────────────
+// Approval/AskUser handling is delegated to wailskit.ChatBridge.
+// See chat.go for the full implementation.
+
+// RespondApproval is called from the frontend when the user responds to an approval request.
+func (a *App) RespondApproval(requestID string, decision string) {
+	if a.chat != nil {
+		a.chat.RespondApproval(requestID, decision)
+	}
+}
+
+// RespondAskUser is called from the frontend when the user responds to an ask_user request.
+func (a *App) RespondAskUser(requestID string, answersJSON string) {
+	if a.chat == nil {
+		return
+	}
+
+	var answers []tool.AskUserAnswer
+	if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+		return
+	}
+
+	answeredCount := 0
+	for _, ans := range answers {
+		if ans.Answered {
+			answeredCount++
+		}
+	}
+
+	response := tool.AskUserResponse{
+		Status:        tool.AskUserStatusSubmitted,
+		QuestionCount: len(answers),
+		AnsweredCount: answeredCount,
+		Answers:       answers,
+	}
+	a.chat.RespondAskUser(requestID, response)
+}
+
 // ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────
 
 // wailsIMBridge implements im.Bridge, routing inbound IM messages to the Wails agent.
@@ -763,8 +807,22 @@ func (a *App) onTunnelCommand(cmd tunnel.GatewayMessage, broker *tunnel.Broker) 
 		})
 
 	case tunnel.CmdApprovalResponse:
-		// Approval handling — forward to chat bridge if needed
-		// Currently Wails uses auto mode, but future approval UI will use this
+		var data tunnel.ApprovalResponseData
+		if err := json.Unmarshal(cmd.Data, &data); err == nil {
+			if a.chat != nil {
+				a.chat.HandleMobileApprovalResponse(data)
+			}
+		}
+
+	case tunnel.CmdAskUserResponse:
+		var data tunnel.AskUserResponseData
+		if err := json.Unmarshal(cmd.Data, &data); err == nil {
+			if a.chat != nil {
+				req := a.currentAskUserRequest()
+				a.chat.HandleMobileAskUserResponse(data, req)
+				a.clearAskUserRequest()
+			}
+		}
 
 	case tunnel.CmdInterrupt:
 		if a.chat != nil {
@@ -799,6 +857,31 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	}
 	snapshot.Status = a.chat.CurrentTunnelStatus()
 	return snapshot
+}
+
+// ─── AskUser request state for mobile response mapping ─────────────
+
+// currentAskUserRequest returns the stored ask_user request for mobile response mapping.
+func (a *App) currentAskUserRequest() tool.AskUserRequest {
+	a.askUserMu.Lock()
+	defer a.askUserMu.Unlock()
+	return a.askUserReq
+}
+
+// clearAskUserRequest clears the stored ask_user request after processing.
+func (a *App) clearAskUserRequest() {
+	a.askUserMu.Lock()
+	defer a.askUserMu.Unlock()
+	a.hasAskUserReq = false
+	a.askUserReq = tool.AskUserRequest{}
+}
+
+// storeAskUserRequest stores the current ask_user request for later mobile response mapping.
+func (a *App) storeAskUserRequest(req tool.AskUserRequest) {
+	a.askUserMu.Lock()
+	defer a.askUserMu.Unlock()
+	a.askUserReq = req
+	a.hasAskUserReq = true
 }
 
 func encodeQRBase64(pngData []byte) string {
