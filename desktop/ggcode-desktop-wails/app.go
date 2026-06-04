@@ -185,6 +185,22 @@ func (a *App) SetPermissionMode(mode string) {
 	}
 }
 
+// SwitchModel changes the active model at runtime.
+func (a *App) SwitchModel(model string) error {
+	if a.chat != nil {
+		return a.chat.SwitchModel(model)
+	}
+	return fmt.Errorf("chat not initialized")
+}
+
+// GetAvailableModels returns models available for current endpoint.
+func (a *App) GetAvailableModels() []string {
+	if a.chat != nil {
+		return a.chat.GetAvailableModels()
+	}
+	return nil
+}
+
 // ─── Config ───────────────────────────────────────────────
 
 // GetConfig returns the current config.

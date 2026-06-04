@@ -1905,9 +1905,16 @@ func (b *ChatBridge) ResetAgent() {
 // SwitchModel hot-swaps the model at runtime (mirrors Fyne SwitchModel).
 func (b *ChatBridge) SwitchModel(model string) error {
 	if model == "" || b.cfg == nil {
-		return fmt.Errorf("invalid model or config")
+		return fmt.Errorf("model is empty or config is nil")
 	}
-	b.cfg.Model = model
+
+	// Update config with the new model selection (mirrors Fyne line 2934-2937)
+	if err := b.cfg.SetActiveSelection(b.cfg.Vendor, b.cfg.Endpoint, model); err != nil {
+		return fmt.Errorf("set active selection: %w", err)
+	}
+	_ = b.cfg.Save()
+
+	// Re-resolve endpoint (picks up new context window, etc.)
 	resolved, err := b.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		return fmt.Errorf("resolve endpoint: %w", err)
@@ -2015,4 +2022,19 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	return b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
 		b.emit(ev)
 	})
+}
+
+// GetAvailableModels returns the list of models available for the current endpoint.
+func (b *ChatBridge) GetAvailableModels() []string {
+	b.mu.Lock()
+	resolved := b.resolved
+	cfg := b.cfg
+	b.mu.Unlock()
+	if resolved != nil && len(resolved.Models) > 0 {
+		return resolved.Models
+	}
+	if cfg != nil && cfg.Model != "" {
+		return []string{cfg.Model}
+	}
+	return nil
 }
