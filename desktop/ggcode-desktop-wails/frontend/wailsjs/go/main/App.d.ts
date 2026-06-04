@@ -50,6 +50,8 @@ export function ListSessions():Promise<Array<wailskit.SessionInfo>>;
 
 export function LoadSession(arg1:string):Promise<void>;
 
+export function MuteIMAdapter(arg1:string,arg2:boolean):Promise<void>;
+
 export function NeedsOnboard():Promise<boolean>;
 
 export function NewSession():Promise<void>;

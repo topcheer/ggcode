@@ -98,6 +98,10 @@ export function LoadSession(arg1) {
   return window['go']['main']['App']['LoadSession'](arg1);
 }
 
+export function MuteIMAdapter(arg1, arg2) {
+  return window['go']['main']['App']['MuteIMAdapter'](arg1, arg2);
+}
+
 export function NeedsOnboard() {
   return window['go']['main']['App']['NeedsOnboard']();
 }

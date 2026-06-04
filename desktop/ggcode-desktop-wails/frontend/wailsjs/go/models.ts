@@ -115,6 +115,8 @@ export namespace wailskit {
 	    args?: string[];
 	    extra?: Record<string, any>;
 	    targets?: string[];
+	    workspace?: string;
+	    isCurrent: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new IMAdapterInfo(source);
@@ -130,6 +132,8 @@ export namespace wailskit {
 	        this.args = source["args"];
 	        this.extra = source["extra"];
 	        this.targets = source["targets"];
+	        this.workspace = source["workspace"];
+	        this.isCurrent = source["isCurrent"];
 	    }
 	}
 	export class IMPlatformField {

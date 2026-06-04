@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // ChatBridge manages the full agent chat loop for the Wails frontend,
@@ -53,6 +54,11 @@ type ChatBridge struct {
 		ToolSuccesses int
 		ToolFailures  int
 	}
+
+	// Mobile tunnel broker for outbound push
+	tunnelBroker   *tunnel.Broker
+	tunnelMsgID    string
+	tunnelReasonID string
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
@@ -97,6 +103,17 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	// Ensure we have a session (mirrors Fyne bridge.ensureSession)
 	if err := b.ensureSession(); err != nil {
 		return fmt.Errorf("ensure session: %w", err)
+	}
+
+	// Notify mobile client: user message + busy status
+	if broker := b.currentTunnelBroker(); broker != nil {
+		msgID := broker.NextMessageID()
+		broker.PushUserMessageData(tunnel.MessageData{
+			Text:      userMsg,
+			MessageID: msgID,
+		})
+		broker.PushStatus(tunnel.StatusBusy, "")
+		b.resetTunnelRoundState()
 	}
 
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
@@ -406,6 +423,11 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		eventType = "text"
 		data = map[string]string{"content": ev.Text}
 		b.imRound.Text.WriteString(ev.Text)
+		// Push to mobile via tunnel
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
+			broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
+		}
 
 	case provider.StreamEventToolCallChunk:
 		eventType = "tool_call_chunk"
@@ -420,6 +442,14 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.imRound.ToolCalls++
 		if b.Emitter != nil {
 			b.Emitter.TriggerTyping()
+		}
+		// Push to mobile via tunnel
+		if broker := b.currentTunnelBroker(); broker != nil {
+			args := string(ev.Tool.Arguments)
+			if len([]rune(args)) > 2000 {
+				args = string([]rune(args)[:2000])
+			}
+			broker.PushToolCall(ev.Tool.ID, ev.Tool.Name, pres.DisplayName, args, pres.Detail)
 		}
 		data = map[string]interface{}{
 			"id":          ev.Tool.ID,
@@ -463,6 +493,10 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			})
 			b.Emitter.TriggerTyping()
 		}
+		// Push to mobile via tunnel
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
+		}
 
 	case provider.StreamEventDone:
 		eventType = "done"
@@ -478,6 +512,12 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.imRound.ToolCalls = 0
 		b.imRound.ToolSuccesses = 0
 		b.imRound.ToolFailures = 0
+		b.resetTunnelRoundState()
+		// Push idle status to mobile
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushTextDone(b.ensureTunnelMsgID(broker))
+			broker.PushStatus(tunnel.StatusIdle, "")
+		}
 		usageData := map[string]interface{}{}
 		if ev.Usage != nil {
 			cacheTotal := ev.Usage.CacheRead + ev.Usage.CacheWrite + ev.Usage.InputTokens
@@ -506,6 +546,10 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	case provider.StreamEventReasoning:
 		eventType = "reasoning"
 		data = map[string]string{"content": ev.Text}
+		// Push to mobile via tunnel
+		if broker := b.currentTunnelBroker(); broker != nil {
+			broker.PushReasoning(b.tunnelReasoningMsgID(broker), ev.Text)
+		}
 
 	default:
 		return
@@ -532,4 +576,55 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 		"model":         b.cfg.Model,
 		"contextWindow": resolved.ContextWindow,
 	}
+}
+
+// ─── Tunnel Broker Integration ──────────────────────────────────────
+
+// AttachTunnelBroker connects the broker for outbound event push to mobile.
+func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tunnelBroker = broker
+}
+
+// DetachTunnelBroker disconnects the broker.
+func (b *ChatBridge) DetachTunnelBroker() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tunnelBroker = nil
+}
+
+func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tunnelBroker
+}
+
+// CurrentTunnelStatus returns the current agent status for tunnel snapshots.
+func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {
+	if b.cancel != nil {
+		return tunnel.StatusData{Status: tunnel.StatusBusy}
+	}
+	return tunnel.StatusData{Status: tunnel.StatusIdle}
+}
+
+// ensureTunnelMsgID returns a stable message ID for the current agent turn.
+func (b *ChatBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
+	if b.tunnelMsgID == "" {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	return b.tunnelMsgID
+}
+
+func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
+	if b.tunnelReasonID == "" {
+		b.tunnelReasonID = broker.NextMessageID()
+	}
+	return b.tunnelReasonID
+}
+
+// resetTunnelRoundState resets per-turn tunnel state.
+func (b *ChatBridge) resetTunnelRoundState() {
+	b.tunnelMsgID = ""
+	b.tunnelReasonID = ""
 }
