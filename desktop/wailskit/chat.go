@@ -534,6 +534,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	}
 
 	b.agent = a
+	b.EnsureSession() // mirrors Fyne setupAgent line 743
 	return nil
 }
 
