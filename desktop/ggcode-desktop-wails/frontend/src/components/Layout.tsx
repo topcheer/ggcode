@@ -67,6 +67,21 @@ export function Layout() {
     return () => { cancelled = true }
   }, [])
 
+  // Refresh status bar when config changes (e.g. after settings save)
+  useEffect(() => {
+    const refreshConfig = () => {
+      App.GetConfig().then(cfg => {
+        setStatusBarData(prev => ({
+          ...prev,
+          vendor: cfg.vendor || prev.vendor,
+          model: cfg.model || prev.model,
+        }))
+      }).catch(() => {})
+    }
+    EventsOn('config:updated', refreshConfig)
+    return () => { EventsOff('config:updated') }
+  }, [])
+
   // Listen for chat:stream events to update shared status
   useEffect(() => {
     const off = EventsOn('chat:stream', (event: any) => {
