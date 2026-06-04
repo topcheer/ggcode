@@ -168,6 +168,8 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
   const [statusBar, setStatusBar] = useState<StatusBarState>({
     vendor: '', model: '', mode: 'auto', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
   })
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
 
   // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
@@ -694,6 +696,30 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     : isStreaming ? 'Working...'
     : 'Ready'
 
+  const openModelPicker = async () => {
+    try {
+      const models = await App.GetAvailableModels()
+      if (models && models.length > 1) {
+        setAvailableModels(models)
+        setModelPickerOpen(true)
+      }
+    } catch {}
+  }
+  const selectModel = async (model: string) => {
+    setModelPickerOpen(false)
+    try {
+      await App.SwitchModel(model)
+      setStatusBar(s => ({ ...s, model }))
+    } catch {}
+  }
+  // Close model picker on outside click
+  useEffect(() => {
+    if (!modelPickerOpen) return
+    const handler = (e: MouseEvent) => { setModelPickerOpen(false) }
+    document.addEventListener('click', handler)
+    return () => document.removeEventListener('click', handler)
+  }, [modelPickerOpen])
+  const shortModel = statusBar.model.split('/').pop() || statusBar.model
   const modeOptions = ['supervised', 'plan', 'auto', 'bypass', 'autopilot'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
@@ -743,6 +769,46 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
           {statusLabel}
         </span>
         <div style={{ flex: 1 }} />
+
+        {/* Model picker */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); openModelPicker() }}
+            title={`Current model: ${statusBar.model}. Click to switch.`}
+            style={{
+              padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-card)', border: '1px solid var(--color-border)',
+              fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+            }}
+          >
+            {shortModel || 'No model'}
+            <ChevronDown size={10} />
+          </button>
+          {modelPickerOpen && (
+            <div style={{
+              position: 'absolute', right: 0, top: '100%', marginTop: 4,
+              background: 'var(--color-card)', border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              minWidth: 200, maxHeight: 240, overflow: 'auto', zIndex: 100,
+            }}>
+              {availableModels.map(m => {
+                const short = m.split('/').pop() || m
+                const active = m === statusBar.model
+                return (
+                  <button key={m} onClick={() => selectModel(m)} style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '6px 12px', border: 'none', background: active ? 'var(--color-primary)' : 'transparent',
+                    color: active ? '#fff' : 'var(--text-primary)',
+                    fontFamily: 'var(--font-mono)', fontSize: 11, cursor: 'pointer',
+                  }}>
+                    {short}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
 
         {/* Context pill */}
         {statusBar.contextWindow > 0 && (
