@@ -1721,10 +1721,15 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	b.mu.Lock()
 	b.permissionMode = mode
 	agent := b.agent
+	cfg := b.cfg
 	b.mu.Unlock()
 	if agent != nil {
 		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 		agent.SetPermissionPolicy(policy)
+	}
+	// Persist to config file (mirrors TUI/Fyne SaveDefaultModePreference)
+	if cfg != nil {
+		_ = cfg.SaveDefaultModePreference(modeStr)
 	}
 }
 
