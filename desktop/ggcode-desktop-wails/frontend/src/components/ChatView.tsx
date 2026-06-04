@@ -401,6 +401,8 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         // ── done: one LLM turn finished (NOT the entire run!) ──
         // Mirrors Fyne: FinalizeStreaming() + update usage
         // The agent may loop (text → tool → text → ...) so don't set idle here.
+        // Do NOT cancel streaming tools here — they may be waiting for
+        // approval/ask_user response. Tool streaming ends when tool_result arrives.
         case 'done': {
           const p = parseJSON<DonePayload>(raw)
           setThinking(false)
@@ -412,12 +414,6 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
               if (updated[i].role === 'assistant' && updated[i].streaming) {
                 updated[i] = { ...updated[i], streaming: false }
                 break
-              }
-            }
-            // Cancel any tool messages still running (no result received)
-            for (let i = 0; i < updated.length; i++) {
-              if (updated[i].role === 'tool' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false, content: 'cancelled', isError: true }
               }
             }
             return updated
@@ -462,6 +458,16 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         case 'run_done': {
           setIsStreaming(false)
           setThinking(false)
+          // Finalize any tool calls still streaming (no result received = cancelled by agent)
+          setMessages(prev => {
+            const updated = [...prev]
+            for (let i = 0; i < updated.length; i++) {
+              if (updated[i].role === 'tool' && updated[i].streaming) {
+                updated[i] = { ...updated[i], streaming: false, content: 'cancelled', isError: true }
+              }
+            }
+            return updated
+          })
           setStatusBar(s => ({ ...s, status: 'ready' }))
           inputRef.current?.focus()
           break

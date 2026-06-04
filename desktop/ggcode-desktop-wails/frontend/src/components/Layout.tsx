@@ -118,9 +118,18 @@ export function Layout() {
     EventsOn('ask_user:request', (data: any) => {
       setAskUserRequest(data as AskUserRequest)
     })
+    // Cancel events close any open dialogs
+    EventsOn('approval:cancel', () => {
+      setApprovalRequest(null)
+    })
+    EventsOn('ask_user:cancel', () => {
+      setAskUserRequest(null)
+    })
     return () => {
       EventsOff('approval:request')
       EventsOff('ask_user:request')
+      EventsOff('approval:cancel')
+      EventsOff('ask_user:cancel')
     }
   }, [])
 

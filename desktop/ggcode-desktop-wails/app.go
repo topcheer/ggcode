@@ -84,7 +84,8 @@ func (a *App) initWorkspace(dir string) {
 			"data": string(data),
 		})
 		// Emit interactive events as standalone events for Layout-level dialogs
-		if eventType == "ask_user:request" || eventType == "approval:request" {
+		if eventType == "ask_user:request" || eventType == "approval:request" ||
+			eventType == "ask_user:cancel" || eventType == "approval:cancel" {
 			var parsed interface{}
 			if err := json.Unmarshal(data, &parsed); err == nil {
 				runtime.EventsEmit(a.ctx, eventType, parsed)
