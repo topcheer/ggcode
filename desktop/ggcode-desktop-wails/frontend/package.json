@@ -10,11 +10,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "highlight.js": "^11.11.1",
     "lucide-react": "^1.17.0",
     "marked": "^18.0.4",
     "mermaid": "^11.15.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.16",
