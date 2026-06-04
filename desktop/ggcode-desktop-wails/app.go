@@ -83,6 +83,13 @@ func (a *App) initWorkspace(dir string) {
 			"type": eventType,
 			"data": string(data),
 		})
+		// Emit interactive events as standalone events for Layout-level dialogs
+		if eventType == "ask_user:request" || eventType == "approval:request" {
+			var parsed interface{}
+			if err := json.Unmarshal(data, &parsed); err == nil {
+				runtime.EventsEmit(a.ctx, eventType, parsed)
+			}
+		}
 	}
 	a.chat = chat
 	wailskit.SetChatBridge(chat)
