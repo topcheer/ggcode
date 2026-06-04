@@ -56,8 +56,19 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		)))
 	case "run_command", "bash", "powershell", "start_command":
 		cmd := firstNonEmpty(argStr(args, "command"), argStr(args, "cmd"))
+		desc := argStr(args, "description")
 		if cmd != "" {
-			return toolPres(compactSingleLineNoTruncate(cmd), "")
+			// Title priority: description param > first-line comment > command preview
+			title := ""
+			if desc != "" {
+				title = desc
+			} else {
+				title = extractFirstLineComment(cmd)
+			}
+			if title == "" {
+				title = compactSingleLineNoTruncate(cmd)
+			}
+			return toolPres(title, "")
 		}
 		return toolPres("Run", "")
 	case "write_command_input":
@@ -223,6 +234,17 @@ func prettifyToolName(name string) string {
 
 func toolPres(name, detail string) ToolPresentation {
 	return ToolPresentation{DisplayName: name, Detail: detail}
+}
+
+// extractFirstLineComment returns the first line's # comment text from a shell command.
+// e.g. "# Run tests\ncd foo && make test" → "Run tests"
+func extractFirstLineComment(cmd string) string {
+	lines := strings.SplitN(cmd, "\n", 2)
+	first := strings.TrimSpace(lines[0])
+	if strings.HasPrefix(first, "# ") {
+		return strings.TrimSpace(strings.TrimPrefix(first, "# "))
+	}
+	return ""
 }
 
 func toolTitleLooksGeneric(toolName, title string, base ToolPresentation) bool {
