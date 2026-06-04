@@ -106,9 +106,14 @@ func NewChatBridge() (*ChatBridge, error) {
 		cfg = config.DefaultConfig()
 	}
 	wd, _ := os.Getwd()
+	modeStr := cfg.DefaultMode
+	if modeStr == "" {
+		modeStr = "auto"
+	}
 	return &ChatBridge{
 		cfg:              cfg,
 		workingDir:       wd,
+		permissionMode:   permission.ParsePermissionMode(modeStr),
 		pendingApprovals: make(map[string]chan permission.Decision),
 		pendingAskUsers:  make(map[string]chan tool.AskUserResponse),
 	}, nil
