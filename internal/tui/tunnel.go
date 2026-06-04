@@ -39,6 +39,10 @@ type tunnelRefreshMsg struct {
 	err        error
 }
 
+type tunnelShareBootstrapMsg struct {
+	generation uint64
+}
+
 // tunnelStopMsg is sent when the tunnel has stopped.
 type tunnelStopMsg struct{}
 
@@ -286,11 +290,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.broker.BindSession(m.session.ID)
 		msg.broker.SetAuthorityEpoch(m.currentSessionTunnelAuthorityEpoch())
 	}
-	m.seedTunnelRelayRoomAtShareStart()
+	msg.broker.BeginProjectionSync()
 
 	// Fresh share rooms must contain canonical bootstrap history before older
 	// relay/mobile combinations attach, otherwise the client can stall waiting for
-	// session_info and later live events can reuse stale event ids.
+	// session_info and later live events can reuse stale event ids. Do the heavy
+	// seeding work in the background so the QR overlay can render immediately,
+	// while projection sync keeps live events/client replay from racing ahead.
 	subtitle := "Scan with GGCode Mobile to connect"
 	if msg.info.CompatibilityNotice != "" {
 		subtitle += " - " + msg.info.CompatibilityNotice
@@ -302,7 +308,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.ConnectURL,
 	)
 
-	return m, nil
+	return m, m.bootstrapTunnelShare(msg.generation, msg.broker)
 }
 
 func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd) {
@@ -1536,16 +1542,29 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	_, _ = m.publishTunnelSnapshotForCurrentSessionWithReport(reset)
 }
 
-func (m *Model) seedTunnelRelayRoomAtShareStart() {
-	if m.tunnelBroker == nil {
+func (m *Model) bootstrapTunnelShare(generation uint64, broker *tunnel.Broker) tea.Cmd {
+	return func() tea.Msg {
+		if broker != nil {
+			defer broker.EndProjectionSync()
+		}
+		if broker == nil || !m.isCurrentTunnelGeneration(generation) {
+			return tunnelShareBootstrapMsg{generation: generation}
+		}
+		m.seedTunnelRelayRoomAtShareStart(broker)
+		return tunnelShareBootstrapMsg{generation: generation}
+	}
+}
+
+func (m *Model) seedTunnelRelayRoomAtShareStart(broker *tunnel.Broker) {
+	if broker == nil {
 		return
 	}
 	if m.session != nil && m.session.ID != "" {
-		m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+		broker.AnnounceActiveSession(m.session.ID)
 	}
 	m.prepareCurrentSessionTunnelLedger()
 	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
-		m.tunnelBroker.ReplayEvents(events, false)
+		broker.ReplayEvents(events, false)
 		return
 	}
 	snapshot := m.tunnelSnapshot()
@@ -1553,7 +1572,7 @@ func (m *Model) seedTunnelRelayRoomAtShareStart() {
 		m.tunnelProjectionBroker.SendSnapshot(snapshot)
 		return
 	}
-	m.tunnelBroker.SendSnapshot(snapshot)
+	broker.SendSnapshot(snapshot)
 }
 
 func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tunnel.BrokerSnapshot, bool) {

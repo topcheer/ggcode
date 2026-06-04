@@ -1691,7 +1691,7 @@ func TestHandleTunnelStartMsg_EagerlySeedsSessionInfoForFreshShare(t *testing.T)
 		ConnectURL: "wss://test.local/ws?role=client&token=test",
 		QRCode:     "QR",
 	}
-	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+	got, cmd := m.handleTunnelStartMsg(tunnelStartMsg{
 		info:    info,
 		session: tunnelSession,
 		broker:  broker,
@@ -1704,6 +1704,13 @@ func TestHandleTunnelStartMsg_EagerlySeedsSessionInfoForFreshShare(t *testing.T)
 	if updated.tunnelBroker.SessionID() != ses.ID {
 		t.Fatalf("expected broker session id to bind immediately, got %q want %q", updated.tunnelBroker.SessionID(), ses.ID)
 	}
+	if cmd == nil {
+		t.Fatal("expected share start to schedule background bootstrap")
+	}
+	if replay := updated.currentSessionTunnelReplayEvents(); len(replay) != 0 {
+		t.Fatalf("expected canonical replay to seed after background bootstrap, got %d events before cmd runs", len(replay))
+	}
+	_ = cmd()
 	replay := updated.currentSessionTunnelReplayEvents()
 	if len(replay) == 0 {
 		t.Fatal("expected fresh share start to seed canonical tunnel replay")
@@ -1725,7 +1732,7 @@ func TestHandleTunnelStartMsg_LiveEventsContinueAfterShareStartBootstrap(t *test
 	defer broker.Stop()
 	defer tunnelSession.Stop()
 
-	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+	got, cmd := m.handleTunnelStartMsg(tunnelStartMsg{
 		info: &tunnel.SessionInfo{
 			ConnectURL: "wss://test.local/ws?role=client&token=test",
 			QRCode:     "QR",
@@ -1734,6 +1741,10 @@ func TestHandleTunnelStartMsg_LiveEventsContinueAfterShareStartBootstrap(t *test
 		broker:  broker,
 	})
 	updated := got.(*Model)
+	if cmd == nil {
+		t.Fatal("expected share start to schedule background bootstrap")
+	}
+	_ = cmd()
 
 	replayBefore := updated.currentSessionTunnelReplayEvents()
 	if len(replayBefore) == 0 {
@@ -1806,7 +1817,7 @@ func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(
 	defer broker.Stop()
 	defer tunnelSession.Stop()
 
-	got, _ := m.handleTunnelStartMsg(tunnelStartMsg{
+	got, cmd := m.handleTunnelStartMsg(tunnelStartMsg{
 		info: &tunnel.SessionInfo{
 			ConnectURL: "wss://test.local/ws?role=client&token=test",
 			QRCode:     "QR",
@@ -1815,6 +1826,10 @@ func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(
 		broker:  broker,
 	})
 	updated := got.(*Model)
+	if cmd == nil {
+		t.Fatal("expected share start to schedule background bootstrap")
+	}
+	_ = cmd()
 
 	if updated.session.TunnelEventsComplete {
 		t.Fatal("expected stale canonical replay ledger to be downgraded on share start")
