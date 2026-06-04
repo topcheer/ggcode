@@ -160,16 +160,21 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
 
         {/* Download links */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-          <a href="https://testflight.apple.com/join/your-link" target="_blank" style={{
+          <a href="https://testflight.apple.com/join/J34wVD6p" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, color: 'var(--color-info)',
             textDecoration: 'none',
-          }}><ExternalLink size={12} /> iOS TestFlight</a>
-          <a href="https://play.google.com/store/apps/details?id=your.app" target="_blank" style={{
+          }}><ExternalLink size={12} /> iOS (TestFlight)</a>
+          <a href="https://play.google.com/apps/testing/gg.ai.ggcode.mobile" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, color: 'var(--color-info)',
             textDecoration: 'none',
-          }}><ExternalLink size={12} /> Google Play</a>
+          }}><ExternalLink size={12} /> Android</a>
+          <a href="https://discord.gg/F2v4mJmfG" target="_blank" rel="noopener noreferrer" style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 11, color: 'var(--color-info)',
+            textDecoration: 'none',
+          }}><ExternalLink size={12} /> Discord</a>
         </div>
 
         {/* Stop sharing */}
