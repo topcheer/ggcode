@@ -110,13 +110,17 @@ export function IMManagement() {
 
   async function loadData() {
     try {
+      console.log('[IM] Calling ListIMAdapters + GetIMPlatformRegistry...')
       const [adaptersResult, platformsResult] = await Promise.all([
         App.ListIMAdapters() as Promise<IMAdapterInfo[]>,
         App.GetIMPlatformRegistry() as Promise<IMPlatformMeta[]>,
       ])
+      console.log('[IM] Adapters:', adaptersResult)
+      console.log('[IM] Platforms:', platformsResult)
       setAdapters(adaptersResult || [])
       setPlatforms(platformsResult || [])
     } catch (e: any) {
+      console.error('[IM] Error:', e)
       setError(e?.message || 'Failed to load IM config')
     }
   }
@@ -171,7 +175,7 @@ export function IMManagement() {
   }
 
   return (
-    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, flex: 1, overflow: 'auto', minHeight: 0 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>IM Adapters</h3>
