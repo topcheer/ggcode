@@ -178,6 +178,10 @@ export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
 
+export function SetPermissionMode(arg1) {
+  return window['go']['main']['App']['SetPermissionMode'](arg1);
+}
+
 export function StartShare() {
   return window['go']['main']['App']['StartShare']();
 }

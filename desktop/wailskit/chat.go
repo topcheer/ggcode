@@ -50,6 +50,7 @@ type ChatBridge struct {
 	mu     sync.Mutex
 	cancel    context.CancelFunc
 	cancelled bool
+	startTime time.Time
 
 	// Pending messages (mirrors Fyne pendingMsgs)
 	pendingMsgs []pendingMessage
@@ -226,6 +227,13 @@ func (b *ChatBridge) ClearCurrentSession() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.currentSes = nil
+	b.usageTurnIndex = 0
+	b.lastMetricDigestTurn = 0
+	b.tunnelMsgID = ""
+	b.tunnelMsgNeedsFinalize = false
+	if b.tunnelProjectionBroker != nil {
+		b.tunnelProjectionBroker.ResetSession()
+	}
 }
 
 // LoadSession loads an existing session by ID.
@@ -244,6 +252,10 @@ func (b *ChatBridge) LoadSession(id string) error {
 		return fmt.Errorf("load session: %w", err)
 	}
 	b.currentSes = ses
+	b.usageTurnIndex = session.LastTurnIndex(ses)
+	b.lastMetricDigestTurn = b.usageTurnIndex
+	// Rebind projection session for the loaded session
+	b.bindTunnelProjectionSession()
 	return nil
 }
 
@@ -1791,6 +1803,211 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	}
 
 	return b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
+		b.emit(ev)
+	})
+}
+
+// ─── Agent Lifecycle ──────────────────────────────────────────────────
+
+// Close cleans up all resources (mirrors Fyne AgentBridge.Close).
+func (b *ChatBridge) Close() {
+	b.mu.Lock()
+	if b.metricCancel != nil {
+		b.metricCancel()
+	}
+	if b.acpClientMgr != nil {
+		b.acpClientMgr.CloseAll()
+	}
+	b.mu.Unlock()
+}
+
+// IsWorking returns true if the agent is currently running.
+func (b *ChatBridge) IsWorking() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cancel != nil
+}
+
+// Elapsed returns time since the current agent run started.
+func (b *ChatBridge) Elapsed() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cancel == nil {
+		return 0
+	}
+	return time.Since(b.startTime)
+}
+
+// ContextWindow returns the current context window size.
+func (b *ChatBridge) ContextWindow() int {
+	b.mu.Lock()
+	agent := b.agent
+	resolved := b.resolved
+	b.mu.Unlock()
+	if agent != nil {
+		return agent.ContextManager().ContextWindow()
+	}
+	if resolved != nil {
+		return resolved.ContextWindow
+	}
+	return 0
+}
+
+// TokenCount returns the current token usage.
+func (b *ChatBridge) TokenCount() int {
+	b.mu.Lock()
+	agent := b.agent
+	b.mu.Unlock()
+	if agent == nil {
+		return 0
+	}
+	return agent.ContextManager().TokenCount()
+}
+
+// CurrentSession returns the current session.
+func (b *ChatBridge) CurrentSession() *session.Session {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.currentSes
+}
+
+// SessionStore returns the session store.
+func (b *ChatBridge) SessionStore() session.Store {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.sessionStore
+}
+
+// Resolved returns the resolved endpoint.
+func (b *ChatBridge) Resolved() *config.ResolvedEndpoint {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.resolved
+}
+
+// ResetAgent destroys the current agent, forcing a rebuild on next message.
+func (b *ChatBridge) ResetAgent() {
+	b.mu.Lock()
+	b.agent = nil
+	if b.metricCancel != nil {
+		b.metricCancel()
+	}
+	b.metricCollector = nil
+	b.metricCancel = nil
+	b.mu.Unlock()
+}
+
+// SwitchModel hot-swaps the model at runtime (mirrors Fyne SwitchModel).
+func (b *ChatBridge) SwitchModel(model string) error {
+	if model == "" || b.cfg == nil {
+		return fmt.Errorf("invalid model or config")
+	}
+	b.cfg.Model = model
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return fmt.Errorf("resolve endpoint: %w", err)
+	}
+	b.mu.Lock()
+	b.resolved = resolved
+	b.mu.Unlock()
+
+	prov, err := provider.NewProvider(resolved)
+	if err != nil {
+		return fmt.Errorf("create provider: %w", err)
+	}
+
+	b.mu.Lock()
+	a := b.agent
+	b.mu.Unlock()
+
+	if a != nil {
+		a.SetProvider(prov)
+		if resolved.ContextWindow > 0 {
+			a.ContextManager().SetContextWindow(resolved.ContextWindow)
+		}
+		if resolved.MaxTokens > 0 {
+			a.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		}
+	}
+	return nil
+}
+
+// PushErrorToMobile pushes an error message to mobile via tunnel.
+func (b *ChatBridge) PushErrorToMobile(msg string) {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushError(msg)
+	}
+}
+
+// PushSystemMessageToMobile pushes a system message to mobile via tunnel.
+func (b *ChatBridge) PushSystemMessageToMobile(msg string) {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushSystemMessage(msg)
+	}
+}
+
+// PushUserMessageToMobile pushes a user message to mobile via tunnel.
+func (b *ChatBridge) PushUserMessageToMobile(msg string) {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushUserMessage(msg)
+	}
+}
+
+// ResumeSession loads a session and re-initializes the agent for it.
+func (b *ChatBridge) ResumeSession(id string) error {
+	if err := b.initAgent(context.Background()); err != nil {
+		return err
+	}
+	if err := b.LoadSession(id); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SendContent sends multimodal content to the agent.
+func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
+	b.mu.Lock()
+	if b.cancel != nil {
+		b.mu.Unlock()
+		return fmt.Errorf("agent is already running")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
+	b.cancelled = false
+	b.usageTurnIndex++
+	b.startTime = time.Now()
+	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		b.cancel = nil
+		b.mu.Unlock()
+
+		if pending, ok := b.drainPending(); ok {
+			if pending.Hidden {
+				_ = b.SendHiddenText(pending.Text)
+			} else {
+				_ = b.SendMessage(pending.Text)
+			}
+		}
+	}()
+
+	if b.agent == nil {
+		if err := b.initAgent(ctx); err != nil {
+			return fmt.Errorf("init agent: %w", err)
+		}
+	}
+
+	if b.currentSes != nil {
+		msg := provider.Message{Role: "user", Content: content}
+		b.currentSes.Messages = append(b.currentSes.Messages, msg)
+		b.currentSes.UpdatedAt = time.Now()
+		if b.sessionStore != nil {
+			_ = b.sessionStore.Save(b.currentSes)
+		}
+	}
+
+	return b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
 		b.emit(ev)
 	})
 }
