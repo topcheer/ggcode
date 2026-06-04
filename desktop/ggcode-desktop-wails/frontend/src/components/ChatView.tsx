@@ -701,7 +701,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     const idx = modeOptions.indexOf(statusBar.mode as any)
     const next = modeOptions[(idx + 1) % modeOptions.length]
     try {
-      await (window as any).SetPermissionMode(next)
+      await App.SetPermissionMode(next)
       setStatusBar(s => ({ ...s, mode: next }))
     } catch {}
   }
