@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -23,6 +26,10 @@ type App struct {
 	imManager        *im.Manager
 	imController     *im.AdapterController
 	imInstanceDetect *im.InstanceDetect
+	// Mobile tunnel
+	tunnelMu      sync.RWMutex
+	tunnelSession *tunnel.Session
+	tunnelBroker  *tunnel.Broker
 }
 
 // NewApp creates a new App application struct.
@@ -79,6 +86,7 @@ func (a *App) initWorkspace(dir string) {
 
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
+	a.stopShare()
 	a.stopIMAdapters()
 	if a.chat != nil {
 		a.chat.Cancel()
@@ -543,4 +551,220 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 		return a.imManager.MuteBinding(name)
 	}
 	return a.imManager.UnmuteBinding(name)
+}
+
+// ─── Tunnel / Share ──────────────────────────────────────────────────
+
+// ShareInfo is returned to the frontend with connection details.
+type ShareInfo struct {
+	ConnectURL   string `json:"connectURL"`
+	QRCodeBase64 string `json:"qrCodeBase64"`
+}
+
+func (a *App) currentTunnelSession() *tunnel.Session {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelSession
+}
+
+func (a *App) currentTunnelBroker() *tunnel.Broker {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelBroker
+}
+
+func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	a.tunnelSession = sess
+	a.tunnelBroker = broker
+}
+
+func (a *App) clearTunnelState() {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	a.tunnelSession = nil
+	a.tunnelBroker = nil
+}
+
+// IsSharing returns whether a tunnel is active.
+func (a *App) IsSharing() bool {
+	return a.currentTunnelSession() != nil
+}
+
+// StartShare starts a tunnel session and returns connection info for the frontend.
+func (a *App) StartShare() (*ShareInfo, error) {
+	// If already sharing, refresh the invite
+	if sess := a.currentTunnelSession(); sess != nil {
+		info, err := sess.RefreshInvite(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("refresh invite: %w", err)
+		}
+		return &ShareInfo{
+			ConnectURL:   info.ConnectURL,
+			QRCodeBase64: encodeQRBase64(info.QRCodePNG),
+		}, nil
+	}
+
+	// Start new tunnel session
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("desktop-wails", a.GetVersion()))
+	info, err := sess.Start(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("start tunnel: %w", err)
+	}
+
+	broker := tunnel.NewBroker(sess)
+
+	// Handle inbound commands from mobile client
+	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+		a.onTunnelCommand(cmd, broker)
+	})
+
+	// Notify frontend when mobile client connects
+	sess.OnConnected(func(info tunnel.RelayConnectedState) {
+		runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
+			"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
+		})
+	})
+
+	a.setTunnelState(sess, broker)
+
+	// Attach broker to chat bridge for outbound push
+	if a.chat != nil {
+		a.chat.AttachTunnelBroker(broker)
+
+		if current := a.chat.CurrentSessionID(); current != "" {
+			broker.SwitchSession(current)
+		}
+		broker.SendSnapshot(a.tunnelSnapshot())
+		broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+			return a.tunnelSnapshot()
+		})
+	}
+
+	return &ShareInfo{
+		ConnectURL:   info.ConnectURL,
+		QRCodeBase64: encodeQRBase64(info.QRCodePNG),
+	}, nil
+}
+
+// StopShare stops the active tunnel session.
+func (a *App) StopShare() {
+	a.stopShare()
+	runtime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
+}
+
+func (a *App) stopShare() {
+	broker := a.currentTunnelBroker()
+	sess := a.currentTunnelSession()
+	if a.chat != nil {
+		a.chat.DetachTunnelBroker()
+	}
+	if broker != nil {
+		broker.StopSharingGracefully(2 * time.Second)
+	} else if sess != nil {
+		sess.DestroyGracefully(2 * time.Second)
+	}
+	a.clearTunnelState()
+}
+
+// onTunnelCommand routes inbound mobile commands to the appropriate handler.
+func (a *App) onTunnelCommand(cmd tunnel.GatewayMessage, broker *tunnel.Broker) {
+	switch cmd.Type {
+	case "user_text", "message":
+		var data tunnel.MessageData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			return
+		}
+		text := strings.TrimSpace(data.Text)
+		if text == "" {
+			return
+		}
+		// Acknowledge to mobile
+		broker.PushServerAck(tunnel.NormalizeClientMessageID(data.MessageID))
+		// Forward to agent
+		safego.Run("tunnel-inbound", func() {
+			if a.chat != nil {
+				_ = a.chat.SendMessage(text)
+			}
+		})
+
+	case tunnel.CmdApprovalResponse:
+		// Approval handling — forward to chat bridge if needed
+		// Currently Wails uses auto mode, but future approval UI will use this
+
+	case tunnel.CmdInterrupt:
+		if a.chat != nil {
+			a.chat.Cancel()
+		}
+
+	case tunnel.CmdLanguageChange:
+		var data tunnel.LanguageChangeData
+		if err := json.Unmarshal(cmd.Data, &data); err == nil && data.Language != "" {
+			cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+			if cfg != nil {
+				_ = cfg.SaveLanguagePreference(data.Language)
+			}
+		}
+
+	case tunnel.CmdThemeChange:
+		// Theme not yet supported in Wails desktop
+	}
+}
+
+// tunnelSnapshot builds a complete snapshot for the mobile client.
+func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
+	snapshot := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{
+			Workspace: a.workDir,
+			Version:   a.GetVersion(),
+		},
+	}
+	if a.chat == nil {
+		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
+		return snapshot
+	}
+	snapshot.Status = a.chat.CurrentTunnelStatus()
+	return snapshot
+}
+
+func encodeQRBase64(pngData []byte) string {
+	if len(pngData) == 0 {
+		return ""
+	}
+	return "data:image/png;base64," + encodeBase64(pngData)
+}
+
+func encodeBase64(data []byte) string {
+	return jsonEscapelessBase64(data)
+}
+
+// jsonEscapelessBase64 is a simple base64 encoder.
+func jsonEscapelessBase64(data []byte) string {
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	var result []byte
+	for i := 0; i < len(data); i += 3 {
+		b0, b1, b2 := byte(0), byte(0), byte(0)
+		remaining := len(data) - i
+		b0 = data[i]
+		if remaining > 1 {
+			b1 = data[i+1]
+		}
+		if remaining > 2 {
+			b2 = data[i+2]
+		}
+		result = append(result, charset[b0>>2])
+		result = append(result, charset[(b0&0x03)<<4|(b1>>4)])
+		if remaining > 1 {
+			result = append(result, charset[(b1&0x0F)<<2|(b2>>6)])
+		} else {
+			result = append(result, '=')
+		}
+		if remaining > 2 {
+			result = append(result, charset[b2&0x3F])
+		} else {
+			result = append(result, '=')
+		}
+	}
+	return string(result)
 }
