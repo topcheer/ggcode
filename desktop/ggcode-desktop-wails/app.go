@@ -747,26 +747,20 @@ func (a *App) StartShare() (*ShareInfo, error) {
 
 	a.setTunnelState(sess, broker)
 
-	// Mirror TUI's tunnel start sequence:
-	// 1. EnsureSession → create session if needed
-	// 2. SwitchSession → set current session ID (sends ActiveSession to relay)
-	// 3. SetSnapshotProvider → register so handleRelayConnected can push snapshot on mobile connect
-	// 4. AttachTunnelBroker → wire agent output to mobile push
-	// NOTE: Do NOT call SendSnapshot here — it sets clientProjectionSeeded=true,
-	// which causes handleRelayConnected to skip pushing data when mobile connects.
-	// handleRelayConnected will automatically push SessionInfo + snapshot when mobile joins.
+	// Ensure session exists before attaching broker
 	if a.chat != nil {
 		a.chat.EnsureSession()
-
-		snapshot := a.tunnelSnapshot()
-		if current := a.chat.CurrentSessionID(); current != "" {
-			broker.SwitchSession(current)
-		}
-		broker.SendSnapshot(snapshot)
 	}
+
+	// Set snapshot provider for handleRelayConnected callback
 	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 		return a.tunnelSnapshot()
 	})
+
+	// AttachTunnelBroker does everything: bindTunnelProjectionSession,
+	// SwitchSession, SendSnapshot, SetReplayProvider, BindSession,
+	// SetAuthorityEpoch, AnnounceActiveSession, SendSessionInfo,
+	// PushStatus, PushActivity — mirrors Fyne exactly.
 	if a.chat != nil {
 		a.chat.AttachTunnelBroker(broker)
 	}

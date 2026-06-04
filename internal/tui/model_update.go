@@ -426,7 +426,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleTunnelRefreshMsg(msg)
 
 	case tunnelShareBootstrapMsg:
-		return m, nil
+		return m.handleTunnelShareBootstrapMsg(msg)
 
 	case tunnelStopMsg:
 		m.chatWriteSystem(nextSystemID(), m.t("tunnel.stopped"))

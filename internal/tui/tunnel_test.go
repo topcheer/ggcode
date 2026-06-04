@@ -1710,7 +1710,13 @@ func TestHandleTunnelStartMsg_EagerlySeedsSessionInfoForFreshShare(t *testing.T)
 	if replay := updated.currentSessionTunnelReplayEvents(); len(replay) != 0 {
 		t.Fatalf("expected canonical replay to seed after background bootstrap, got %d events before cmd runs", len(replay))
 	}
-	_ = cmd()
+	msgAny := cmd()
+	msg, ok := msgAny.(tunnelShareBootstrapMsg)
+	if !ok {
+		t.Fatalf("expected tunnelShareBootstrapMsg, got %T", msgAny)
+	}
+	got, _ = updated.handleTunnelShareBootstrapMsg(msg)
+	updated = got.(*Model)
 	replay := updated.currentSessionTunnelReplayEvents()
 	if len(replay) == 0 {
 		t.Fatal("expected fresh share start to seed canonical tunnel replay")
@@ -1744,11 +1750,29 @@ func TestHandleTunnelStartMsg_LiveEventsContinueAfterShareStartBootstrap(t *test
 	if cmd == nil {
 		t.Fatal("expected share start to schedule background bootstrap")
 	}
-	_ = cmd()
+	updated.chatWriteUser(nextChatID(), "during share bootstrap")
+	updated.pushTunnelUserMessage("during share bootstrap")
+	msgAny := cmd()
+	msg, ok := msgAny.(tunnelShareBootstrapMsg)
+	if !ok {
+		t.Fatalf("expected tunnelShareBootstrapMsg, got %T", msgAny)
+	}
+	got, _ = updated.handleTunnelShareBootstrapMsg(msg)
+	updated = got.(*Model)
 
 	replayBefore := updated.currentSessionTunnelReplayEvents()
 	if len(replayBefore) == 0 {
 		t.Fatal("expected canonical replay after share start")
+	}
+	foundBufferedUser := false
+	for _, ev := range replayBefore {
+		if ev.Type == tunnel.EventUserMessage && strings.Contains(string(ev.Data), "during share bootstrap") {
+			foundBufferedUser = true
+			break
+		}
+	}
+	if !foundBufferedUser {
+		t.Fatal("expected live user event during bootstrap to survive share startup replay")
 	}
 	lastBefore := replayBefore[len(replayBefore)-1].EventID
 
@@ -1829,7 +1853,13 @@ func TestHandleTunnelStartMsg_RevalidatesResumedReplayLedgerBeforeClientConnect(
 	if cmd == nil {
 		t.Fatal("expected share start to schedule background bootstrap")
 	}
-	_ = cmd()
+	msgAny := cmd()
+	msg, ok := msgAny.(tunnelShareBootstrapMsg)
+	if !ok {
+		t.Fatalf("expected tunnelShareBootstrapMsg, got %T", msgAny)
+	}
+	got, _ = updated.handleTunnelShareBootstrapMsg(msg)
+	updated = got.(*Model)
 
 	if updated.session.TunnelEventsComplete {
 		t.Fatal("expected stale canonical replay ledger to be downgraded on share start")
