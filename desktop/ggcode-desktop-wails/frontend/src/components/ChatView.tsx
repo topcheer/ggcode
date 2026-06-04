@@ -696,7 +696,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
 
   const vendorModel = [statusBar.vendor, statusBar.model].filter(Boolean).join('/') || 'No model'
 
-  const modeOptions = ['auto', 'normal', 'plan', 'yolo'] as const
+  const modeOptions = ['supervised', 'plan', 'auto', 'bypass', 'autopilot'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
     const next = modeOptions[(idx + 1) % modeOptions.length]
@@ -729,19 +729,21 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
           {statusLabel}
         </span>
-        {/* Mode switcher — click to cycle auto → normal → plan → yolo */}
+        {/* Mode switcher — click to cycle supervised → plan → auto → bypass → autopilot */}
         <button
           onClick={cycleMode}
           title={`Permission mode: ${statusBar.mode}. Click to switch.`}
           style={{
             padding: '2px 10px', borderRadius: 'var(--radius-sm)',
-            background: statusBar.mode === 'yolo'
+            background: statusBar.mode === 'autopilot'
               ? 'var(--color-error)'
+              : statusBar.mode === 'bypass'
+              ? 'var(--color-warning)'
               : statusBar.mode === 'plan'
               ? 'var(--color-primary)'
               : 'var(--color-card)',
-            color: statusBar.mode === 'yolo' ? '#fff'
-              : statusBar.mode === 'plan' ? '#fff'
+            color: ['autopilot', 'bypass', 'plan'].includes(statusBar.mode)
+              ? '#fff'
               : 'var(--text-secondary)',
             border: '1px solid var(--color-border)',
             fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600,
