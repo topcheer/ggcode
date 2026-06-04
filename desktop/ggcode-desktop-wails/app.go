@@ -204,6 +204,21 @@ func (a *App) SaveAPIKey(vendor, endpoint, apiKey string) error {
 	return wailskit.SaveAPIKey(vendor, endpoint, apiKey)
 }
 
+// GetResolvedEndpoint returns the currently resolved active endpoint info.
+func (a *App) GetResolvedEndpoint() (*wailskit.ResolvedEndpointInfo, error) {
+	return wailskit.GetResolvedEndpoint()
+}
+
+// FetchModels dynamically discovers models from an API endpoint.
+func (a *App) FetchModels(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
+	return wailskit.FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL)
+}
+
+// GetEndpointDetails returns details for a specific vendor endpoint.
+func (a *App) GetEndpointDetails(vendor, endpoint string) *wailskit.EndpointDetails {
+	return wailskit.GetEndpointDetails(vendor, endpoint)
+}
+
 // GetImpersonationPresets returns real presets from provider.
 func (a *App) GetImpersonationPresets() []wailskit.ImpersonationPresetInfo {
 	return wailskit.GetImpersonationPresets()

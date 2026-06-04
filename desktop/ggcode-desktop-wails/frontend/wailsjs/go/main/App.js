@@ -30,6 +30,10 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetEndpointDetails(arg1, arg2) {
+  return window['go']['main']['App']['GetEndpointDetails'](arg1, arg2);
+}
+
 export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
 }
@@ -48,6 +52,14 @@ export function GetModelInfo() {
 
 export function GetModels(arg1, arg2) {
   return window['go']['main']['App']['GetModels'](arg1, arg2);
+}
+
+export function GetResolvedEndpoint() {
+  return window['go']['main']['App']['GetResolvedEndpoint']();
+}
+
+export function FetchModels(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['FetchModels'](arg1, arg2, arg3, arg4);
 }
 
 export function GetPlatform() {

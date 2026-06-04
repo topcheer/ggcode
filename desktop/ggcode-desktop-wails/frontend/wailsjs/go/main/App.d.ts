@@ -25,15 +25,21 @@ export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPr
 
 export function GetModelInfo():Promise<Record<string, any>>;
 
+export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
+
 export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function GetPlatform():Promise<string>;
+
+export function GetResolvedEndpoint():Promise<wailskit.ResolvedEndpointInfo>;
 
 export function GetSessionHistory():Promise<Array<wailskit.SessionMessage>>;
 
 export function GetVendorPresets():Promise<Array<wailskit.VendorPresetInfo>>;
 
 export function GetVendors():Promise<Array<string>>;
+
+export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
 
 export function GetVersion():Promise<string>;
 

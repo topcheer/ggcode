@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Eye, EyeOff, Plus, Zap } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 
 interface Props {
@@ -23,12 +23,24 @@ export function SettingsPage({ onBack }: Props) {
   const [currentVendor, setCurrentVendor] = useState('')
   const [currentEndpoint, setCurrentEndpoint] = useState('')
   const [currentModel, setCurrentModel] = useState('')
+
+  // Resolved endpoint info
+  const [resolvedBaseURL, setResolvedBaseURL] = useState('')
+  const [resolvedProtocol, setResolvedProtocol] = useState('')
   const [apiKeySet, setApiKeySet] = useState(false)
+  const [apiKeyMasked, setApiKeyMasked] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
+
+  // Model refresh
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelsSource, setModelsSource] = useState<'static' | 'dynamic' | 'error'>('static')
+  const [modelsError, setModelsError] = useState('')
+
   const [language, setLanguage] = useState('en')
   const [defaultMode, setDefaultMode] = useState('supervised')
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   // Impersonation state
   const [presets, setPresets] = useState<ImpersonationPreset[]>([])
@@ -40,28 +52,46 @@ export function SettingsPage({ onBack }: Props) {
     let cancelled = false
     async function load() {
       try {
+        // Load resolved endpoint info (includes masked API key, base URL, model)
+        const resolved = await App.GetResolvedEndpoint() as any
+        if (cancelled) return
+        if (resolved) {
+          setCurrentVendor(resolved.vendorId || '')
+          setCurrentEndpoint(resolved.endpointId || '')
+          setCurrentModel(resolved.model || '')
+          setResolvedBaseURL(resolved.baseUrl || '')
+          setResolvedProtocol(resolved.protocol || '')
+          setApiKeySet(resolved.apiKeySet || false)
+          setApiKeyMasked(resolved.apiKeyMasked || '')
+          // Use models from resolved if available
+          if (resolved.models && resolved.models.length > 0) {
+            setModels(resolved.models)
+          }
+        }
+
+        // Load general config for language, mode, impersonation
         const cfg = await App.GetConfig() as any
         if (cancelled) return
-        setCurrentVendor(cfg.vendor || '')
-        setCurrentEndpoint(cfg.endpoint || '')
-        setCurrentModel(cfg.model || '')
-        setApiKeySet(cfg.apiKeySet || false)
         setLanguage(cfg.language || 'en')
         setDefaultMode(cfg.defaultMode || 'supervised')
         setSelectedPreset(cfg.impersonatePreset || 'none')
         setImpVersion(cfg.impersonateCustomVersion || '')
 
+        // Vendor list
         const v = await App.GetVendors()
         if (cancelled) return
         setVendors(v as string[])
 
-        if (cfg.vendor) {
-          const eps = await App.GetEndpoints(cfg.vendor)
+        // Endpoints for current vendor
+        if (resolved?.vendorId) {
+          const eps = await App.GetEndpoints(resolved.vendorId)
           if (cancelled) return
           setEndpoints((eps as any[]) || [])
         }
-        if (cfg.vendor && cfg.endpoint) {
-          const ms = await App.GetModels(cfg.vendor, cfg.endpoint)
+
+        // If no models from resolved, load static list
+        if ((!resolved?.models || resolved.models.length === 0) && resolved?.vendorId && resolved?.endpointId) {
+          const ms = await App.GetModels(resolved.vendorId, resolved.endpointId)
           if (cancelled) return
           setModels((ms as string[]) || [])
         }
@@ -79,20 +109,67 @@ export function SettingsPage({ onBack }: Props) {
     setCurrentVendor(vendor)
     setCurrentEndpoint('')
     setCurrentModel('')
+    setResolvedBaseURL('')
+    setApiKeySet(false)
+    setApiKeyMasked('')
+    setModels([])
+    setModelsSource('static')
     const eps = await App.GetEndpoints(vendor) as any[]
     setEndpoints(eps || [])
-    setModels([])
   }, [])
 
   const handleEndpointChange = useCallback(async (endpoint: string) => {
     setCurrentEndpoint(endpoint)
     setCurrentModel('')
-    const ms = await App.GetModels(currentVendor, endpoint) as string[]
-    setModels(ms || [])
+    setModelsSource('static')
+    setModelsError('')
+
+    // Get endpoint details (base URL, masked API key, models)
+    try {
+      const details = await App.GetEndpointDetails(currentVendor, endpoint) as any
+      if (details) {
+        setResolvedBaseURL(details.baseUrl || '')
+        setResolvedProtocol(details.protocol || '')
+        setApiKeySet(details.apiKeySet || false)
+        setApiKeyMasked(details.apiKeyMasked || '')
+        if (details.models && details.models.length > 0) {
+          setModels(details.models)
+        }
+      }
+    } catch {}
+
+    // Also load static models as fallback
+    try {
+      const ms = await App.GetModels(currentVendor, endpoint) as string[]
+      if (ms && ms.length > 0) {
+        setModels(prev => prev.length > 0 ? prev : ms)
+      }
+    } catch {}
   }, [currentVendor])
+
+  // Refresh models dynamically from API
+  const handleRefreshModels = useCallback(async () => {
+    if (!currentVendor || !currentEndpoint) return
+    setModelsLoading(true)
+    setModelsError('')
+    try {
+      const ms = await App.FetchModels(currentVendor, currentEndpoint, '', '') as string[]
+      if (ms && ms.length > 0) {
+        setModels(ms)
+        setModelsSource('dynamic')
+      } else {
+        setModelsError('No models found')
+      }
+    } catch (e: any) {
+      setModelsError(e?.message || 'Failed to fetch models')
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [currentVendor, currentEndpoint])
 
   const save = useCallback(async () => {
     setSaving(true)
+    setSaved(false)
     try {
       await App.UpdateConfig({
         vendor: currentVendor,
@@ -106,6 +183,8 @@ export function SettingsPage({ onBack }: Props) {
         setApiKey('')
         setApiKeySet(true)
       }
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
     } catch (e) {
       console.error('Save failed:', e)
     } finally {
@@ -157,39 +236,91 @@ export function SettingsPage({ onBack }: Props) {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', maxWidth: 560 }}>
-        {/* ── Provider Tab ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px', maxWidth: 600 }}>
+        {/* Provider Tab */}
         {tab === 'provider' && (
           <>
             <h3 style={sectionTitle}>LLM Provider</h3>
+
             <FieldRow label="Vendor">
               <select value={currentVendor} onChange={e => handleVendorChange(e.target.value)} style={selectStyle}>
                 <option value="">Choose vendor...</option>
                 {vendors.map(v => <option key={v} value={v}>{v}</option>)}
               </select>
             </FieldRow>
+
             <FieldRow label="Endpoint">
               <select value={currentEndpoint} onChange={e => handleEndpointChange(e.target.value)} style={selectStyle}>
                 <option value="">Choose endpoint...</option>
                 {endpoints.map(ep => <option key={ep.key} value={ep.key}>{ep.displayName || ep.key}</option>)}
               </select>
             </FieldRow>
-            <FieldRow label="Model">
-              <select value={currentModel} onChange={e => setCurrentModel(e.target.value)} style={selectStyle}>
-                <option value="">Choose model...</option>
-                {models.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-            </FieldRow>
+
+            {/* Resolved info: Base URL + Protocol */}
+            {resolvedBaseURL && (
+              <FieldRow label="Base URL">
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{
+                    fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
+                    background: 'var(--color-bg)', padding: '6px 10px', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--color-border)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>{resolvedBaseURL}</span>
+                  <span style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(59,130,246,0.15)', color: 'var(--color-info)',
+                  }}>{resolvedProtocol}</span>
+                </div>
+              </FieldRow>
+            )}
+
+            {/* API Key: show masked + edit */}
             <FieldRow label="API Key">
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input type={showKey ? 'text' : 'password'} value={apiKey}
-                  onChange={e => setApiKey(e.target.value)}
-                  placeholder={apiKeySet ? '(saved) Enter new key to change' : 'Enter API key...'}
-                  style={{ ...inputStyle, flex: 1 }} />
-                <button onClick={() => setShowKey(p => !p)} style={iconBtnStyle}>
-                  {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+              <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
+                {apiKeySet && !apiKey && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--color-success)',
+                  }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 4, background: 'var(--color-success)',
+                      display: 'inline-block',
+                    }} />
+                    <span>Configured: {apiKeyMasked}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <input type={showKey ? 'text' : 'password'} value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    placeholder={apiKeySet ? 'Enter new key to change...' : 'Enter API key...'}
+                    style={{ ...inputStyle, flex: 1 }} />
+                  <button onClick={() => setShowKey(p => !p)} style={iconBtnStyle}>
+                    {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+            </FieldRow>
+
+            {/* Model selection with refresh */}
+            <FieldRow label="Model">
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <select value={currentModel} onChange={e => setCurrentModel(e.target.value)}
+                  style={{ ...selectStyle, flex: 1 }}>
+                  <option value="">Choose model...</option>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <button onClick={handleRefreshModels} disabled={modelsLoading || !currentVendor || !currentEndpoint}
+                  title="Refresh models from API" style={iconBtnStyle}>
+                  <RefreshCw size={14} className={modelsLoading ? 'spin' : ''} />
                 </button>
               </div>
+              {modelsSource === 'dynamic' && (
+                <span style={{ fontSize: 10, color: 'var(--color-success)', marginTop: 2, display: 'block' }}>
+                  {models.length} models loaded from API
+                </span>
+              )}
+              {modelsError && (
+                <span style={{ fontSize: 10, color: '#f87171', marginTop: 2, display: 'block' }}>{modelsError}</span>
+              )}
             </FieldRow>
 
             <h3 style={{ ...sectionTitle, marginTop: 24 }}>Behavior</h3>
@@ -208,13 +339,14 @@ export function SettingsPage({ onBack }: Props) {
               </select>
             </FieldRow>
 
-            <button onClick={save} disabled={saving} style={primaryBtnStyle}>
-              {saving ? 'Saving...' : 'Save'}
+            <button onClick={save} disabled={saving || !currentVendor || !currentEndpoint}
+              style={{ ...primaryBtnStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {saved ? <><Check size={14} /> Saved</> : saving ? 'Saving...' : 'Save & Apply'}
             </button>
           </>
         )}
 
-        {/* ── Impersonation Tab ── */}
+        {/* Impersonation Tab */}
         {tab === 'impersonation' && (
           <>
             <h3 style={sectionTitle}>Impersonation</h3>
@@ -225,11 +357,8 @@ export function SettingsPage({ onBack }: Props) {
               <select value={selectedPreset} onChange={e => {
                 const id = e.target.value
                 setSelectedPreset(id)
-                // Auto-fill version from preset default
                 const p = presets.find(p => p.id === id)
-                if (p && p.defaultVersion) {
-                  setImpVersion(p.defaultVersion)
-                }
+                if (p && p.defaultVersion) setImpVersion(p.defaultVersion)
               }} style={selectStyle}>
                 {presets.map(p => (
                   <option key={p.id} value={p.id}>{p.displayName}</option>
@@ -253,28 +382,31 @@ export function SettingsPage({ onBack }: Props) {
                 </FieldRow>
               )
             })()}
-
             <button onClick={applyImpersonation} disabled={saving} style={primaryBtnStyle}>
               {saving ? 'Applying...' : 'Apply'}
             </button>
           </>
         )}
 
-        {/* ── Add Endpoint Tab ── */}
+        {/* Add Endpoint Tab */}
         {tab === 'addEndpoint' && (
           <AddEndpointForm vendors={vendors} currentVendor={currentVendor} onDone={() => {
-            // Refresh endpoints after adding
             handleVendorChange(currentVendor)
             setTab('provider')
           }} />
         )}
       </div>
+
+      {/* CSS for spinning refresh icon */}
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg) } }
+        .spin { animation: spin 1s linear infinite; }
+      `}</style>
     </div>
   )
 }
 
-// ── Add Endpoint Form (mirrors Fyne's showAddEndpointDialog) ──
-
+// Add Endpoint Form
 function AddEndpointForm({ vendors, currentVendor, onDone }: {
   vendors: string[], currentVendor: string, onDone: () => void
 }) {
@@ -290,7 +422,6 @@ function AddEndpointForm({ vendors, currentVendor, onDone }: {
     if (!baseURL) { setStatus('Base URL required'); return }
     setStatus('Testing...')
     try {
-      // Use Go backend to test connection
       const result = await App.TestEndpointConnection(protocol, baseURL, epApiKey) as any
       setStatus(result.message || `Found ${result.modelCount || 0} models`)
     } catch (e: any) {
@@ -351,8 +482,7 @@ function AddEndpointForm({ vendors, currentVendor, onDone }: {
   )
 }
 
-// ── Shared Components ──
-
+// Shared Components
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', marginBottom: 16 }}>

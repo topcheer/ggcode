@@ -501,3 +501,136 @@ func AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) error {
 	cfg.Vendors[vendor] = vc
 	return cfg.Save()
 }
+
+// ─── Resolved Endpoint Info ─────────────────────────────
+
+// ResolvedEndpointInfo provides the current resolved LLM endpoint details for the frontend.
+type ResolvedEndpointInfo struct {
+	VendorID       string   `json:"vendorId"`
+	VendorName     string   `json:"vendorName"`
+	EndpointID     string   `json:"endpointId"`
+	EndpointName   string   `json:"endpointName"`
+	Protocol       string   `json:"protocol"`
+	BaseURL        string   `json:"baseUrl"`
+	APIKeySet      bool     `json:"apiKeySet"`
+	APIKeyMasked   string   `json:"apiKeyMasked"`
+	Model          string   `json:"model"`
+	Models         []string `json:"models"`
+	ContextWindow  int      `json:"contextWindow"`
+	SupportsVision bool     `json:"supportsVision"`
+}
+
+// GetResolvedEndpoint returns the currently resolved active endpoint info.
+func GetResolvedEndpoint() (*ResolvedEndpointInfo, error) {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil, fmt.Errorf("config not loaded")
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return nil, err
+	}
+
+	return &ResolvedEndpointInfo{
+		VendorID:       resolved.VendorID,
+		VendorName:     resolved.VendorName,
+		EndpointID:     resolved.EndpointID,
+		EndpointName:   resolved.EndpointName,
+		Protocol:       resolved.Protocol,
+		BaseURL:        resolved.BaseURL,
+		APIKeySet:      resolved.APIKey != "",
+		APIKeyMasked:   maskAPIKey(resolved.APIKey),
+		Model:          resolved.Model,
+		Models:         resolved.Models,
+		ContextWindow:  resolved.ContextWindow,
+		SupportsVision: resolved.SupportsVision,
+	}, nil
+}
+
+// maskAPIKey returns a masked version of the API key for display.
+func maskAPIKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 8 {
+		return "***"
+	}
+	return key[:3] + "***" + key[len(key)-3:]
+}
+
+// FetchModelsForEndpoint dynamically discovers models from an API endpoint.
+func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+
+	protocol := "openai"
+	if cfg != nil {
+		if vc, ok := cfg.Vendors[vendor]; ok {
+			if ep, ok := vc.Endpoints[endpoint]; ok {
+				protocol = ep.Protocol
+				if baseURL == "" {
+					baseURL = ep.BaseURL
+				}
+			}
+		}
+	}
+
+	tmpResolved := &config.ResolvedEndpoint{
+		VendorID:   vendor,
+		EndpointID: endpoint,
+		Protocol:   protocol,
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return provider.DiscoverModels(ctx, tmpResolved)
+}
+
+// EndpointDetails provides detailed info about a configured endpoint.
+type EndpointDetails struct {
+	DisplayName    string   `json:"displayName"`
+	Protocol       string   `json:"protocol"`
+	BaseURL        string   `json:"baseUrl"`
+	APIKeySet      bool     `json:"apiKeySet"`
+	APIKeyMasked   string   `json:"apiKeyMasked"`
+	DefaultModel   string   `json:"defaultModel"`
+	Models         []string `json:"models"`
+	ContextWindow  int      `json:"contextWindow"`
+	SupportsVision bool     `json:"supportsVision"`
+}
+
+// GetEndpointDetails returns details for a specific vendor endpoint.
+func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil
+	}
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		return nil
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return nil
+	}
+	return &EndpointDetails{
+		DisplayName:    ep.DisplayName,
+		Protocol:       ep.Protocol,
+		BaseURL:        ep.BaseURL,
+		APIKeySet:      ep.APIKey != "",
+		APIKeyMasked:   maskAPIKey(ep.APIKey),
+		DefaultModel:   ep.DefaultModel,
+		Models:         ep.Models,
+		ContextWindow:  ep.ContextWindow,
+		SupportsVision: ep.SupportsVision != nil && *ep.SupportsVision,
+	}
+}
