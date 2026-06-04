@@ -319,7 +319,8 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	// Memory tools
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
-	_ = b.registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
+	_ = b.registry.Register(saveMemoryTool)
 
 	// ACP client manager (mirrors Fyne setupAgent)
 	if b.acpClientMgr != nil {
