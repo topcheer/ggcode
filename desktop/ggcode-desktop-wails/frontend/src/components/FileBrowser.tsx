@@ -1,18 +1,28 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ChevronRight, ChevronDown, File, Folder, FileCode, FileJson,
   Settings, FileText, Image, FileTerminal, X
 } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import hljs from 'highlight.js'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import mermaid from 'mermaid'
+
+// highlight.js dark theme CSS
+import 'highlight.js/styles/github-dark-dimmed.css'
 
 interface FileNode {
   name: string
-  path: string // full path from workdir root
+  path: string
   isDir: boolean
   size: number
   expanded?: boolean
   children?: FileNode[]
 }
+
+// ─── File type detection ─────────────────────────────────
 
 function getFileIcon(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() || ''
@@ -23,7 +33,9 @@ function getFileIcon(name: string) {
     case 'py': return <FileCode size={14} style={{ color: '#3572A5' }} />
     case 'rs': return <FileCode size={14} style={{ color: '#DEA584' }} />
     case 'json': case 'yaml': case 'yml': case 'toml': return <FileJson size={14} style={{ color: '#F85149' }} />
-    case 'md': case 'txt': case 'rst': return <FileText size={14} style={{ color: '#58A6FF' }} />
+    case 'md': return <FileText size={14} style={{ color: '#58A6FF' }} />
+    case 'html': case 'htm': return <FileCode size={14} style={{ color: '#E34C26' }} />
+    case 'css': return <FileCode size={14} style={{ color: '#563D7C' }} />
     case 'png': case 'jpg': case 'jpeg': case 'gif': case 'svg': case 'webp':
       return <Image size={14} style={{ color: '#A371F7' }} />
     case 'sh': case 'bash': case 'zsh': return <FileTerminal size={14} style={{ color: '#D29922' }} />
@@ -42,7 +54,7 @@ function formatSize(bytes: number): string {
 
 function isImageFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || ''
-  return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)
+  return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'avif', 'tiff', 'tif'].includes(ext)
 }
 
 function isBinaryFile(name: string): boolean {
@@ -65,8 +77,45 @@ function isMediaFile(name: string): boolean {
   return ['mp4', 'webm', 'mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)
 }
 
+function isMarkdownFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['md', 'markdown', 'mdx'].includes(ext)
+}
+
+function isHTMLFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['html', 'htm', 'xhtml'].includes(ext)
+}
+
 function isTooLarge(size: number): boolean {
-  return size > 2 * 1024 * 1024 // 2MB
+  return size > 2 * 1024 * 1024
+}
+
+// Map file extension to highlight.js language name
+function extToHljsLang(name: string): string | undefined {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  const map: Record<string, string> = {
+    go: 'go', ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    py: 'python', rs: 'rust', java: 'java', kt: 'kotlin', swift: 'swift',
+    rb: 'ruby', cpp: 'cpp', cc: 'cpp', c: 'c', h: 'c', hpp: 'cpp',
+    cs: 'csharp', scala: 'scala', r: 'r', lua: 'lua', perl: 'perl', pl: 'perl',
+    php: 'php', sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash',
+    yaml: 'yaml', yml: 'yaml', toml: 'ini', json: 'json', xml: 'xml',
+    html: 'xml', htm: 'xml', css: 'css', scss: 'scss', less: 'less',
+    dockerfile: 'dockerfile', makefile: 'makefile',
+    md: 'markdown', markdown: 'markdown',
+    diff: 'diff', patch: 'diff',
+    graphql: 'graphql', gql: 'graphql',
+    proto: 'protobuf', tf: 'hcl',
+  }
+  if (map[ext]) return map[ext]
+  // Special filenames
+  const base = name.toLowerCase()
+  if (base === 'makefile') return 'makefile'
+  if (base === 'dockerfile') return 'dockerfile'
+  if (base === 'jenkinsfile') return 'groovy'
+  if (base === 'vagrantfile') return 'ruby'
+  return undefined
 }
 
 function buildTreeFromBackend(entries: Array<Record<string, any>>, parentPath: string): FileNode[] {
@@ -79,6 +128,8 @@ function buildTreeFromBackend(entries: Array<Record<string, any>>, parentPath: s
     children: e.isDir ? [] : undefined,
   }))
 }
+
+// ─── File Tree Item ───────────────────────────────────────
 
 function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
   node: FileNode, depth: number, activeFile: string,
@@ -140,61 +191,206 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
   )
 }
 
-// Syntax highlighting by file extension
-function highlightLine(line: string, ext: string): { color: string; bold?: boolean } {
-  const trimmed = line.trimStart()
-  if (!trimmed) return { color: 'var(--text-secondary)' }
+// ─── Mermaid Renderer ─────────────────────────────────────
 
-  // Comments
-  if (trimmed.startsWith('//') || trimmed.startsWith('#') && !['sh', 'bash', 'zsh', 'yaml', 'yml', 'toml'].includes(ext))
-    return { color: 'var(--text-tertiary)' }
-  if (['sh', 'bash', 'zsh'].includes(ext) && trimmed.startsWith('#'))
-    return { color: 'var(--text-tertiary)' }
-  if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/'))
-    return { color: 'var(--text-tertiary)' }
-  if (['yaml', 'yml', 'toml'].includes(ext) && trimmed.startsWith('#'))
-    return { color: 'var(--text-tertiary)' }
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  securityLevel: 'loose',
+})
 
-  // Go keywords
-  if (ext === 'go') {
-    if (/^(func |type |var |const |package |import |return |if |for |switch |case |default |else |defer |go |range |select |struct |interface |map\[|chan )/.test(trimmed))
-      return { color: '#D2A8FF' }
-    if (/^(true|false|nil|break|continue|fallthrough|goto)/.test(trimmed))
-      return { color: '#79C0FF' }
-    if (trimmed.includes('"') || trimmed.includes('`'))
-      return { color: '#A5D6FF' }
+let mermaidCounter = 0
+
+function MermaidBlock({ chart }: { chart: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [svg, setSvg] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const id = `mermaid-${++mermaidCounter}`
+    mermaid.render(id, chart).then(({ svg: resultSvg }) => {
+      if (!cancelled) setSvg(resultSvg)
+    }).catch((err: any) => {
+      if (!cancelled) setError(err?.message || 'Mermaid render error')
+    })
+    return () => { cancelled = true }
+  }, [chart])
+
+  if (error) {
+    return <pre style={{ color: '#f87171', fontSize: 12, padding: 12, background: 'rgba(220,38,38,0.1)', borderRadius: 6 }}>{error}</pre>
   }
-
-  // TS/JS keywords
-  if (['ts', 'tsx', 'js', 'jsx'].includes(ext)) {
-    if (/^(export |import |const |let |var |function |class |interface |type |enum |return |if |for |while |switch |case |default |else |async |await |try |catch |throw |new |from )/.test(trimmed))
-      return { color: '#D2A8FF' }
-    if (/^(true|false|null|undefined|this|super)/.test(trimmed))
-      return { color: '#79C0FF' }
-    if (trimmed.includes("'") || trimmed.includes('"') || trimmed.includes('`'))
-      return { color: '#A5D6FF' }
-  }
-
-  // Python keywords
-  if (ext === 'py') {
-    if (/^(def |class |import |from |return |if |for |while |with |try |except |finally |elif |else |async |await |yield |raise |pass |break |continue|lambda |global |nonlocal )/.test(trimmed))
-      return { color: '#D2A8FF' }
-    if (/^(True|False|None)/.test(trimmed))
-      return { color: '#79C0FF' }
-  }
-
-  // YAML/TOML keys
-  if (['yaml', 'yml', 'toml'].includes(ext)) {
-    if (/^\S+:/.test(trimmed) || /^\[/.test(trimmed))
-      return { color: '#D2A8FF' }
-  }
-
-  // Makefile
-  if (ext === '' && trimmed.includes(':=')) return { color: '#D2A8FF' }
-  if (ext === '' && trimmed.startsWith('$(')) return { color: '#A5D6FF' }
-
-  return { color: 'var(--text-secondary)' }
+  if (!svg) return <div style={{ padding: 12, color: 'var(--text-tertiary)', fontSize: 12 }}>Rendering diagram...</div>
+  return (
+    <div ref={ref} style={{ padding: 12, overflow: 'auto', textAlign: 'center' }}
+      dangerouslySetInnerHTML={{ __html: svg }} />
+  )
 }
+
+// ─── Source Code Preview (highlight.js) ───────────────────
+
+function CodePreview({ code, fileName }: { code: string; fileName: string }) {
+  const lang = extToHljsLang(fileName)
+  const lines = code.split('\n')
+
+  // Try to highlight whole block at once for accuracy
+  let highlighted = ''
+  if (lang) {
+    try {
+      highlighted = hljs.highlight(code, { language: lang }).value
+    } catch {}
+  }
+  if (!highlighted) {
+    try {
+      highlighted = hljs.highlightAuto(code).value
+    } catch {}
+  }
+
+  const highlightedLines = highlighted ? highlighted.split('\n') : lines
+
+  return (
+    <div style={{
+      padding: '12px 0',
+      fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7,
+    }}>
+      {highlightedLines.map((line, i) => (
+        <div key={i} style={{ display: 'flex' }}
+          onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        >
+          <span style={{
+            width: 48, textAlign: 'right', color: 'var(--text-tertiary)',
+            userSelect: 'none', paddingRight: 16, flexShrink: 0, fontSize: 11,
+          }}>{i + 1}</span>
+          {highlighted ? (
+            <pre style={{
+              margin: 0, padding: 0,
+              color: 'var(--text-secondary)',
+              whiteSpace: 'pre', overflow: 'visible',
+            }} dangerouslySetInnerHTML={{ __html: line || ' ' }} />
+          ) : (
+            <pre style={{
+              margin: 0, padding: 0,
+              color: 'var(--text-secondary)',
+              whiteSpace: 'pre', overflow: 'visible',
+            }}>{lines[i] || ' '}</pre>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Markdown Preview ─────────────────────────────────────
+
+function MarkdownPreview({ content, workDir }: { content: string; workDir: string }) {
+  return (
+    <div style={{
+      padding: '20px 32px',
+      color: 'var(--text-primary)',
+      lineHeight: 1.7,
+      fontSize: 14,
+      maxWidth: 900,
+    }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw]}
+        components={{
+          // Mermaid code blocks
+          code({ className, children, ...props }) {
+            const match = /language-mermaid/.exec(className || '')
+            const text = String(children).replace(/\n$/, '')
+            if (match) {
+              return <MermaidBlock chart={text} />
+            }
+            // Inline code
+            if (!className) {
+              return <code style={{
+                background: 'var(--color-card)', padding: '2px 6px',
+                borderRadius: 3, fontSize: 12, fontFamily: 'var(--font-mono)',
+                color: 'var(--color-info)',
+              }} {...props}>{children}</code>
+            }
+            // Fenced code blocks with syntax highlighting
+            const langMatch = /language-(\w+)/.exec(className || '')
+            const lang = langMatch ? langMatch[1] : undefined
+            let html = text
+            if (lang) {
+              try { html = hljs.highlight(text, { language: lang }).value } catch {}
+            }
+            return (
+              <pre style={{
+                background: '#161b22', padding: 16, borderRadius: 8,
+                overflow: 'auto', margin: '12px 0',
+              }}>
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                  dangerouslySetInnerHTML={{ __html: html }} />
+              </pre>
+            )
+          },
+          // SVG images rendered inline
+          img({ src, alt, ...props }) {
+            if (src?.endsWith('.svg') || src?.startsWith('data:image/svg')) {
+              return <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 4 }} {...props} />
+            }
+            return <img src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 4 }} {...props} />
+          },
+          // Style tables
+          table({ children }) {
+            return <table style={{
+              borderCollapse: 'collapse', width: '100%', margin: '12px 0',
+            }}>{children}</table>
+          },
+          th({ children }) {
+            return <th style={{
+              border: '1px solid var(--color-border)', padding: '6px 12px',
+              background: 'var(--color-card)', fontWeight: 600, fontSize: 13,
+              textAlign: 'left',
+            }}>{children}</th>
+          },
+          td({ children }) {
+            return <td style={{
+              border: '1px solid var(--color-border)', padding: '6px 12px', fontSize: 13,
+            }}>{children}</td>
+          },
+          // Headings
+          h1({ children }) { return <h1 style={{ fontSize: 24, fontWeight: 700, borderBottom: '1px solid var(--color-border)', paddingBottom: 8, marginTop: 24 }}>{children}</h1> },
+          h2({ children }) { return <h2 style={{ fontSize: 20, fontWeight: 600, borderBottom: '1px solid var(--color-border)', paddingBottom: 6, marginTop: 20 }}>{children}</h2> },
+          h3({ children }) { return <h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 16 }}>{children}</h3> },
+          // Links
+          a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-info)', textDecoration: 'none' }}>{children}</a> },
+          // Blockquote
+          blockquote({ children }) { return <blockquote style={{ borderLeft: '3px solid var(--color-primary)', paddingLeft: 12, color: 'var(--text-secondary)', margin: '8px 0' }}>{children}</blockquote> },
+          // Lists
+          ul({ children }) { return <ul style={{ paddingLeft: 20 }}>{children}</ul> },
+          ol({ children }) { return <ol style={{ paddingLeft: 20 }}>{children}</ol> },
+          // Horizontal rule
+          hr() { return <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '16px 0' }} /> },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+// ─── HTML Preview ─────────────────────────────────────────
+
+function HTMLPreview({ content }: { content: string }) {
+  return (
+    <iframe
+      srcDoc={content}
+      sandbox="allow-same-origin"
+      style={{
+        width: '100%', height: '100%', border: 'none',
+        background: '#fff',
+      }}
+      title="HTML Preview"
+    />
+  )
+}
+
+// ─── Main Component ───────────────────────────────────────
 
 export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [activeFile, setActiveFile] = useState('')
@@ -204,7 +400,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [workDir, setWorkDir] = useState('')
   const [workDirName, setWorkDirName] = useState('')
   const [loading, setLoading] = useState(true)
-  const [fileType, setFileType] = useState<'text' | 'image' | 'pdf' | 'media' | 'office' | 'binary' | 'too-large'>('text')
+  const [fileType, setFileType] = useState<'text' | 'markdown' | 'html' | 'image' | 'pdf' | 'media' | 'office' | 'binary' | 'too-large'>('text')
   const [imageSrc, setImageSrc] = useState('')
   const [mediaSrc, setMediaSrc] = useState('')
 
@@ -222,12 +418,10 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
         const entries = await App.ListFiles(dir)
         if (cancelled) return
         if (Array.isArray(entries) && entries.length > 0) {
-          // Filter hidden files/dirs
           const filtered = entries.filter((e: any) => !e.name.startsWith('.'))
           setTree(buildTreeFromBackend(filtered, dir))
         }
       } catch {
-        // Backend not ready
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -252,19 +446,14 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const loadFileContent = useCallback(async (filePath: string) => {
     const name = filePath.split('/').pop() || ''
 
-    // Binary (exe, dll, zip, etc.)
     if (isBinaryFile(name)) {
       setFileType('binary'); setCode(''); setImageSrc(''); setMediaSrc('')
       return
     }
-
-    // Office docs — can't render inline
     if (isOfficeFile(name)) {
       setFileType('office'); setCode(''); setImageSrc(''); setMediaSrc('')
       return
     }
-
-    // Image — load as base64
     if (isImageFile(name)) {
       try {
         const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
@@ -276,8 +465,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       }
       return
     }
-
-    // PDF — load as base64
     if (isPDFFile(name)) {
       try {
         const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
@@ -289,8 +476,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       }
       return
     }
-
-    // Media (video/audio) — load as base64
     if (isMediaFile(name)) {
       try {
         const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
@@ -303,12 +488,16 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       return
     }
 
-    // Text files
+    // Text-based files (code, markdown, html, etc.)
     try {
       const content = await App.ReadFileContent(filePath) as string
       if (content !== undefined && content !== null) {
         if (isTooLarge(content.length)) {
           setFileType('too-large'); setCode('')
+        } else if (isMarkdownFile(name)) {
+          setFileType('markdown'); setCode(content)
+        } else if (isHTMLFile(name)) {
+          setFileType('html'); setCode(content)
         } else {
           setFileType('text'); setCode(content)
         }
@@ -330,7 +519,9 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     await loadFileContent(path)
   }
 
-  const activeExt = activeFile.split('.').pop()?.toLowerCase() || ''
+  const clearPreview = () => {
+    setActiveFile(''); setCode(''); setImageSrc(''); setMediaSrc('')
+  }
 
   return (
     <div style={{ display: 'flex', height: '100%', textAlign: 'left' }}>
@@ -369,7 +560,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      {/* Code preview */}
+      {/* Preview area */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {/* Tab bar */}
         <div style={{
@@ -401,10 +592,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
                     if (remaining.length > 0) {
                       handleTabSelect(remaining[remaining.length - 1])
                     } else {
-                      setActiveFile('')
-                      setCode('')
-                      setImageSrc('')
-                      setMediaSrc('')
+                      clearPreview()
                     }
                   }
                 }} style={{
@@ -445,15 +633,13 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
 
           {/* PDF preview */}
           {activeFile && fileType === 'pdf' && imageSrc && (
-            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <iframe src={imageSrc}
-                style={{ flex: 1, border: 'none', width: '100%' }}
-                title={activeFile.split('/').pop()}
-              />
-            </div>
+            <iframe src={imageSrc}
+              style={{ width: '100%', height: '100%', border: 'none' }}
+              title={activeFile.split('/').pop()}
+            />
           )}
 
-          {/* Media preview (video/audio) */}
+          {/* Media preview */}
           {activeFile && fileType === 'media' && mediaSrc && (
             <div style={{
               height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -465,6 +651,21 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
                 <audio src={mediaSrc} controls style={{ width: '100%', maxWidth: 500 }} />
               )}
             </div>
+          )}
+
+          {/* Markdown preview */}
+          {activeFile && fileType === 'markdown' && code && (
+            <MarkdownPreview content={code} workDir={workDir} />
+          )}
+
+          {/* HTML preview */}
+          {activeFile && fileType === 'html' && code && (
+            <HTMLPreview content={code} />
+          )}
+
+          {/* Source code preview (highlight.js) */}
+          {activeFile && fileType === 'text' && code && (
+            <CodePreview code={code} fileName={activeFile.split('/').pop() || ''} />
           )}
 
           {/* Office document notice */}
@@ -501,38 +702,6 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               <FileText size={32} />
               <span style={{ fontSize: 13 }}>File too large to preview (&gt;2MB)</span>
               <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
-            </div>
-          )}
-
-          {/* Code/text preview */}
-          {activeFile && fileType === 'text' && (
-            <div style={{
-              padding: '12px 0',
-              fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7,
-            }}>
-              {code.split('\n').map((line, i) => {
-                const hl = highlightLine(line, activeExt)
-                return (
-                  <div key={i} style={{
-                    display: 'flex',
-                    background: 'transparent',
-                  }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                  >
-                    <span style={{
-                      width: 48, textAlign: 'right', color: 'var(--text-tertiary)',
-                      userSelect: 'none', paddingRight: 16, flexShrink: 0, fontSize: 11,
-                    }}>{i + 1}</span>
-                    <pre style={{
-                      margin: 0, padding: 0,
-                      color: hl.color,
-                      fontWeight: hl.bold ? 600 : 400,
-                      whiteSpace: 'pre', overflow: 'visible',
-                    }}>{line || ' '}</pre>
-                  </div>
-                )
-              })}
             </div>
           )}
         </div>
