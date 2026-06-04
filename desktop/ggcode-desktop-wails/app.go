@@ -850,8 +850,17 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		SessionInfo: tunnel.SessionInfoData{
 			Workspace: a.workDir,
 			Version:   a.GetVersion(),
+			Language:  a.dc.Language,
 		},
 	}
+
+	// Populate model/provider from config
+	if cfg, err := wailskit.LoadConfigForWorkspace(a.workDir); err == nil {
+		snapshot.SessionInfo.Provider = cfg.Vendor
+		snapshot.SessionInfo.Model = cfg.Model
+		snapshot.SessionInfo.Mode = cfg.DefaultMode
+	}
+
 	if a.chat == nil {
 		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle}
 		return snapshot
