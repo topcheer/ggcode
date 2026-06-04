@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/im"
@@ -44,6 +45,7 @@ type ChatBridge struct {
 	// Subsystems
 	cronScheduler *cron.Scheduler
 	subAgentMgr   *subagent.Manager
+	acpClientMgr  *acpclient.ClientManager
 	swarmMgr      *swarm.Manager
 
 	// IM outbound push — same as Fyne agentBridge.Emitter
@@ -318,6 +320,28 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
 	_ = b.registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+
+	// ACP client manager (mirrors Fyne setupAgent)
+	if b.acpClientMgr != nil {
+		b.acpClientMgr.CloseAll()
+	}
+	b.acpClientMgr = acpclient.NewClientManager(b.workingDir, policy)
+	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
+		return b.RequestApproval(ctx, "", toolName, input)
+	})
+	if len(b.acpClientMgr.Available()) > 0 {
+		_ = b.registry.Register(tool.DelegateTool{
+			Manager:           b.acpClientMgr,
+			SubAgentManagerFn: func() *subagent.Manager { return b.subAgentMgr },
+			WorkingDir:        b.workingDir,
+			WorkingDirFn: func() string {
+				if b.agent != nil {
+					return b.agent.WorkingDir()
+				}
+				return b.workingDir
+			},
+		})
+	}
 
 	// Sub-agent manager
 	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
