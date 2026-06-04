@@ -91,6 +91,8 @@ export function SendMessage(arg1:string):Promise<void>;
 
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
+export function SetPermissionMode(arg1:string):Promise<void>;
+
 export function StartShare():Promise<main.ShareInfo>;
 
 export function StopShare():Promise<void>;
