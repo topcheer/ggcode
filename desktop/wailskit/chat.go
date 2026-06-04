@@ -225,6 +225,26 @@ func (b *ChatBridge) CurrentSessionID() string {
 	return b.currentSes.ID
 }
 
+// EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
+func (b *ChatBridge) EnsureSession() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.currentSes != nil {
+		return
+	}
+	vendor, endpoint, model := "", "", ""
+	if b.cfg != nil {
+		vendor = b.cfg.Vendor
+		endpoint = b.cfg.Endpoint
+		model = b.cfg.Model
+	}
+	ses := session.NewSession(vendor, endpoint, model)
+	if b.sessionStore != nil {
+		_ = b.sessionStore.Save(ses)
+	}
+	b.currentSes = ses
+}
+
 // initAgent sets up provider, tools, and agent — full parity with Fyne bridge.
 func (b *ChatBridge) initAgent(ctx context.Context) error {
 	// Resolve provider
