@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -47,6 +48,13 @@ type ChatBridge struct {
 	subAgentMgr   *subagent.Manager
 	acpClientMgr  *acpclient.ClientManager
 	swarmMgr      *swarm.Manager
+
+	// Metrics
+	metricCancel    context.CancelFunc
+	metricCollector *metrics.Collector
+
+	// Sub-agent tunnel tracking
+	spawnedSet map[string]bool
 
 	// IM outbound push — same as Fyne agentBridge.Emitter
 	Emitter *im.IMEmitter
@@ -486,6 +494,14 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	a.SetUsageHandler(func(usage provider.TokenUsage) {
 		b.recordSessionUsage(usage)
 	})
+
+	// Metric collector — async, non-blocking (mirrors Fyne line 715-721)
+	collectorCtx, collectorCancel := context.WithCancel(context.Background())
+	b.metricCancel = collectorCancel
+	b.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
+		b.recordMetric(ev)
+	})
+	a.SetMetricHandler(b.metricCollector.Emit)
 
 	// Context window — critical for context compaction (mirrors Fyne line 737-742)
 	if resolved.ContextWindow > 0 {
@@ -1451,4 +1467,72 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
 // recordMetric records a metric event. Mirrors Fyne recordMetric.
 func (b *ChatBridge) recordMetric(ev interface{}) {
 	// Metrics are logged for now; can be extended to push to UI or remote
+}
+
+// ─── Sub-agent tunnel helpers ────────────────────────────────────────
+
+func tunnelSubagentTextID(agentID string) string {
+	return fmt.Sprintf("sa-%s", agentID)
+}
+
+func tunnelSubagentReasoningID(agentID string) string {
+	return fmt.Sprintf("sa-%s-reasoning", agentID)
+}
+
+func (b *ChatBridge) markTunnelSubagentSpawned(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.spawnedSet == nil {
+		b.spawnedSet = make(map[string]bool)
+	}
+	if b.spawnedSet[id] {
+		return false
+	}
+	b.spawnedSet[id] = true
+	return true
+}
+
+func (b *ChatBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
+	if sa == nil {
+		return
+	}
+	broker := b.currentTunnelBroker()
+	if broker == nil {
+		return
+	}
+
+	pushSpawn := func() {
+		if b.markTunnelSubagentSpawned(sa.ID) {
+			broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
+		}
+	}
+
+	switch sa.Status {
+	case subagent.StatusRunning:
+		pushSpawn()
+		broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
+
+	case subagent.StatusCompleted:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		if sa.Result != "" {
+			msgID := tunnelSubagentTextID(sa.ID)
+			broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
+		}
+		broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
+
+	case subagent.StatusFailed:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		errMsg := ""
+		if sa.Error != nil {
+			errMsg = sa.Error.Error()
+		}
+		broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
+
+	case subagent.StatusCancelled:
+		pushSpawn()
+		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
+		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
+	}
 }
