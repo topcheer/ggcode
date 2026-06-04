@@ -389,7 +389,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	// When save_memory saves, rebuild system prompt so agent sees new memory
 	// (mirrors Fyne setupAgent line 710)
 	saveMemoryTool.SetAfterSave(func() {
-		newPrompt := buildWailsSystemPrompt(b.workingDir, autoMem, projectAutoMem)
+		newPrompt := buildWailsSystemPrompt(b.workingDir, b.permissionMode, autoMem, projectAutoMem)
 		b.mu.Lock()
 		if b.agent != nil {
 			b.agent.UpdateSystemPrompt(newPrompt)
@@ -591,7 +591,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	})
 
 	// Create agent — mirror Fyne setupAgent exactly
-	systemPrompt := buildWailsSystemPrompt(b.workingDir, autoMem, projectAutoMem)
+	systemPrompt := buildWailsSystemPrompt(b.workingDir, b.permissionMode, autoMem, projectAutoMem)
 	maxIter := b.cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 200
@@ -1555,7 +1555,7 @@ func buildWailsAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string
 // Mirrors Fyne buildSystemPrompt exactly.
 // buildWailsSystemPrompt builds the system prompt for the agent.
 // Mirrors Fyne buildSystemPrompt exactly — includes auto-memory content.
-func buildWailsSystemPrompt(workingDir string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
+func buildWailsSystemPrompt(workingDir string, mode permission.PermissionMode, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
 	hostname, _ := os.Hostname()
 	cwd := workingDir
 	if cwd == "" {
@@ -1572,6 +1572,22 @@ func buildWailsSystemPrompt(workingDir string, globalAutoMem, projectAutoMem *me
 - Prefer small, reversible changes over broad rewrites.
 - Read before you edit, and inspect results before claiming success.
 `, hostname, cwd)
+
+	// Mode-specific instruction: overrides stale autopilot messages in context
+	prompt += "\n## Current Permission Mode\n"
+	switch mode {
+	case permission.AutopilotMode:
+		prompt += "Autopilot mode is active. You may proceed autonomously without waiting for user confirmation. When you need user input, use the ask_user tool.\n"
+	case permission.BypassMode:
+		prompt += "Bypass mode is active. Most tool calls are auto-approved. Only critical operations require approval.\n"
+	case permission.PlanMode:
+		prompt += "Plan mode is active. You are in read-only exploration mode. Do NOT write files or execute commands unless explicitly approved.\n"
+	case permission.AutoMode:
+		prompt += "Auto mode is active. Safe operations are auto-approved, dangerous ones require user approval.\n"
+	default: // SupervisedMode
+		prompt += "Supervised mode is active. Tool calls require explicit user approval.\n"
+	}
+
 	if projectAutoMem != nil {
 		if projectContent, _, _ := projectAutoMem.LoadAll(); projectContent != "" {
 			prompt += "\n\n## Auto Memory (Project)\n" + projectContent
@@ -1726,6 +1742,9 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	if agent != nil {
 		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 		agent.SetPermissionPolicy(policy)
+		// Update system prompt to include current mode, overriding any stale
+		// autopilot continue instructions that may still be in context.
+		b.refreshSystemPrompt()
 	}
 	// Persist to config file (mirrors TUI/Fyne SaveDefaultModePreference)
 	if cfg != nil {
@@ -2051,4 +2070,24 @@ func (b *ChatBridge) GetAvailableModels() []string {
 		}
 	}
 	return nil
+}
+
+// refreshSystemPrompt rebuilds and updates the agent's system prompt.
+func (b *ChatBridge) refreshSystemPrompt() {
+	var autoMem, projectAutoMem *memory.AutoMemory
+	if am := memory.NewAutoMemory(); am != nil {
+		autoMem = am
+	}
+	if pam := memory.NewProjectAutoMemory(b.workingDir); pam != nil {
+		projectAutoMem = pam
+	}
+	b.mu.Lock()
+	mode := b.permissionMode
+	b.mu.Unlock()
+	newPrompt := buildWailsSystemPrompt(b.workingDir, mode, autoMem, projectAutoMem)
+	b.mu.Lock()
+	if b.agent != nil {
+		b.agent.UpdateSystemPrompt(newPrompt)
+	}
+	b.mu.Unlock()
 }
