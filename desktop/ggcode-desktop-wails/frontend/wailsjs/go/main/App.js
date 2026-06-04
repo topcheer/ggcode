@@ -26,6 +26,10 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function FetchModels(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['FetchModels'](arg1, arg2, arg3, arg4);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
@@ -54,16 +58,12 @@ export function GetModels(arg1, arg2) {
   return window['go']['main']['App']['GetModels'](arg1, arg2);
 }
 
-export function GetResolvedEndpoint() {
-  return window['go']['main']['App']['GetResolvedEndpoint']();
-}
-
-export function FetchModels(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['FetchModels'](arg1, arg2, arg3, arg4);
-}
-
 export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
+}
+
+export function GetResolvedEndpoint() {
+  return window['go']['main']['App']['GetResolvedEndpoint']();
 }
 
 export function GetSessionHistory() {
@@ -126,6 +126,10 @@ export function NewSession() {
   return window['go']['main']['App']['NewSession']();
 }
 
+export function ReadFileAsBase64(arg1) {
+  return window['go']['main']['App']['ReadFileAsBase64'](arg1);
+}
+
 export function ReadFileContent(arg1) {
   return window['go']['main']['App']['ReadFileContent'](arg1);
 }
@@ -164,10 +168,6 @@ export function SendMessage(arg1) {
 
 export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
-}
-
-export function ReadFileAsBase64(arg1) {
-  return window['go']['main']['App']['ReadFileAsBase64'](arg1);
 }
 
 export function StartShare() {
