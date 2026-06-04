@@ -447,20 +447,22 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         Edit
       </button>
 
-      <button onClick={async () => {
-        try {
-          await App.MuteIMAdapter(adapter.name, !adapter.muted)
-          onReload()
-        } catch {}
-      }} style={{
-        padding: '4px 8px', borderRadius: 'var(--radius-sm)',
-        border: 'none', cursor: 'pointer', fontSize: 11,
-        background: adapter.muted ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
-        color: adapter.muted ? 'var(--color-success)' : '#D29922',
-        display: 'flex', alignItems: 'center', gap: 3,
-      }}>
-        {adapter.muted ? <><Volume2 size={11} /> Unmute</> : <><VolumeX size={11} /> Mute</>}
-      </button>
+      {adapter.workspace && (
+        <button onClick={async () => {
+          try {
+            await App.MuteIMAdapter(adapter.name, !adapter.muted)
+            onReload()
+          } catch {}
+        }} style={{
+          padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+          border: 'none', cursor: 'pointer', fontSize: 11,
+          background: adapter.muted ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
+          color: adapter.muted ? 'var(--color-success)' : '#D29922',
+          display: 'flex', alignItems: 'center', gap: 3,
+        }}>
+          {adapter.muted ? <><Volume2 size={11} /> Unmute</> : <><VolumeX size={11} /> Mute</>}
+        </button>
+      )}
 
       <button onClick={async () => {
         if (!confirm(`Remove adapter "${adapter.name}"?`)) return

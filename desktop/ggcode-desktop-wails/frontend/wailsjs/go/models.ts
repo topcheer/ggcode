@@ -170,6 +170,7 @@ export namespace wailskit {
 	export class IMAdapterInfo {
 	    name: string;
 	    enabled: boolean;
+	    muted: boolean;
 	    platform: string;
 	    transport: string;
 	    command: string;
@@ -187,6 +188,7 @@ export namespace wailskit {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
+	        this.muted = source["muted"];
 	        this.platform = source["platform"];
 	        this.transport = source["transport"];
 	        this.command = source["command"];
