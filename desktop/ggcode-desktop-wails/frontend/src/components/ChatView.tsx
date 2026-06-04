@@ -1027,12 +1027,26 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 
 function ToolMessage({ msg }: { msg: ChatMessage }) {
   const [expanded, setExpanded] = useState(false)
-  // Use displayName from Go backend (tool.DescribeTool), fallback to prettified name
-  const title = msg.toolDisplayName || msg.toolName?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Tool'
+
+  const isCommandTool = ['run_command', 'start_command', 'bash', 'powershell'].includes(msg.toolName || '')
+
+  // Title: displayName from Go's DescribeTool (now uses description/first-line comment for commands)
+  // Append prettified tool name in parens
+  const prettifiedName = msg.toolName?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Tool'
+  const displayName = msg.toolDisplayName || ''
   const detail = msg.toolDetail || ''
 
+  // For command tools: title = displayName, content = detail (the full command)
+  // For other tools: title = displayName || prettifiedName, detail shown inline
+  const title = isCommandTool
+    ? (displayName ? `${displayName}` : prettifiedName)
+    : (displayName || prettifiedName)
+
+  const showCommandBlock = isCommandTool && detail && expanded
+  const commandContent = detail // Go's DescribeTool now returns command as Detail
+
   return (
-    <div style={{ alignSelf: 'flex-start', maxWidth: '75%', marginTop: 4, marginBottom: 4 }}>
+    <div style={{ alignSelf: 'flex-start', maxWidth: '80%', marginTop: 4, marginBottom: 4, width: '100%' }}>
       {msg.reasoning && <ReasoningBlock text={msg.reasoning} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
@@ -1041,9 +1055,9 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
         background: msg.isError ? 'rgba(220, 38, 38, 0.12)' : 'rgba(59, 130, 246, 0.08)',
         border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.25)' : 'rgba(59, 130, 246, 0.2)'}`,
         fontSize: 12,
-        cursor: msg.content ? 'pointer' : 'default',
+        cursor: (msg.content || commandContent) ? 'pointer' : 'default',
         userSelect: 'none',
-      }} onClick={() => msg.content && setExpanded(!expanded)}>
+      }} onClick={() => (msg.content || commandContent) && setExpanded(!expanded)}>
         {/* Status icon */}
         {msg.streaming ? (
           <span style={{ color: 'var(--color-warning)', fontSize: 10 }}>●</span>
@@ -1053,7 +1067,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           <span style={{ color: 'var(--color-success)', fontSize: 12 }}>✓</span>
         )}
 
-        {/* Title from Go's tool.DescribeTool */}
+        {/* Title */}
         <span style={{
           fontWeight: 600,
           color: msg.isError ? '#f87171' : 'var(--color-info)',
@@ -1061,8 +1075,15 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           {title}
         </span>
 
-        {/* Detail (file path, command, search query, etc.) */}
-        {detail && (
+        {/* Prettified tool name in parens for command tools */}
+        {isCommandTool && displayName && (
+          <span style={{ color: 'var(--text-tertiary)', fontSize: 10, fontStyle: 'italic' }}>
+            ({prettifiedName})
+          </span>
+        )}
+
+        {/* Inline detail for non-command tools */}
+        {!isCommandTool && detail && (
           <span style={{
             color: 'var(--text-tertiary)',
             fontFamily: 'var(--font-mono)',
@@ -1074,33 +1095,80 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           </span>
         )}
 
+        {/* Command preview for non-expanded command tools */}
+        {isCommandTool && !expanded && commandContent && (
+          <span style={{
+            color: 'var(--text-tertiary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+            maxWidth: 250,
+          }}>
+            {commandContent.split('\n')[0]}
+          </span>
+        )}
+
         {msg.streaming && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
             running...
           </span>
         )}
 
-        {msg.content && !msg.streaming && (
+        {(msg.content || commandContent) && !msg.streaming && (
           <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
             {expanded ? '▲' : '▼'}
           </span>
         )}
       </div>
 
-      {/* Expandable result */}
-      {expanded && msg.content && (
-        <div style={{
-          marginTop: 4, padding: '8px 10px',
-          borderRadius: 'var(--radius-md)',
-          background: msg.isError ? 'rgba(220, 38, 38, 0.06)' : 'rgba(59, 130, 246, 0.04)',
-          border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.15)' : 'rgba(59, 130, 246, 0.12)'}`,
-          maxHeight: 240, overflowY: 'auto',
-          fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
-          textAlign: 'left',
-        }}>
-          {msg.content}
-        </div>
+      {/* Expanded content */}
+      {expanded && (
+        <>
+          {/* Command code block (for command tools) */}
+          {showCommandBlock && (
+            <div style={{
+              marginTop: 4,
+              borderRadius: 'var(--radius-md)',
+              background: '#1e1e2e',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                padding: '4px 10px',
+                background: 'rgba(255,255,255,0.05)',
+                fontSize: 10,
+                color: 'rgba(255,255,255,0.5)',
+                fontFamily: 'var(--font-mono)',
+              }}>
+                {prettifiedName}
+              </div>
+              <pre style={{
+                margin: 0, padding: '8px 10px',
+                fontFamily: 'var(--font-mono)', fontSize: 12,
+                color: '#cdd6f4',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
+              }}>
+                {commandContent}
+              </pre>
+            </div>
+          )}
+
+          {/* Result (terminal style) */}
+          {msg.content && (
+            <div style={{
+              marginTop: 4, padding: '8px 10px',
+              borderRadius: 'var(--radius-md)',
+              background: msg.isError ? '#2d1b1b' : '#0d1117',
+              border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(255,255,255,0.1)'}`,
+              maxHeight: 300, overflowY: 'auto',
+              fontFamily: 'var(--font-mono)', fontSize: 12,
+              color: msg.isError ? '#f87171' : '#8b949e',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
+              textAlign: 'left',
+            }}>
+              {msg.content}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

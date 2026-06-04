@@ -114,6 +114,20 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "go test ./...",
 		},
 		{
+			name: "run_command with description", toolName: "run_command",
+			rawArgs:     `{"command":"go test ./...","description":"Run tests"}`,
+			wantName:    "Run tests",
+			wantDetail:  "",
+			wantDisplay: "Run tests",
+		},
+		{
+			name: "run_command with first-line comment", toolName: "run_command",
+			rawArgs:     "{\"command\":\"# Build project\\ngo build ./...\"}",
+			wantName:    "Build project",
+			wantDetail:  "",
+			wantDisplay: "Build project",
+		},
+		{
 			name: "run_command long command", toolName: "run_command",
 			rawArgs:     `{"command":"go build -o /usr/local/bin/my-very-long-binary-name ./cmd/my-app"}`,
 			wantName:    "go build -o /usr/local/bin/my-very-long-binary-name ./cmd/my-app",
