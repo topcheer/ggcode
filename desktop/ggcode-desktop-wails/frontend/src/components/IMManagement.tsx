@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import type { JSX } from 'react'
-import { Plus, Trash2, Power, PowerOff } from 'lucide-react'
+import { Plus, Trash2, Power, PowerOff, Volume2, VolumeX } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 
 // ── Types matching Go structs ──
@@ -8,6 +8,7 @@ import * as App from '../../wailsjs/go/main/App'
 interface IMAdapterInfo {
   name: string
   enabled: boolean
+  muted: boolean
   platform: string
   transport: string
   command: string
@@ -444,6 +445,21 @@ function AdapterRow({ adapter, onReload, onEdit }: {
         background: 'var(--color-surface)', color: 'var(--text-secondary)', fontSize: 11,
       }}>
         Edit
+      </button>
+
+      <button onClick={async () => {
+        try {
+          await App.MuteIMAdapter(adapter.name, !adapter.muted)
+          onReload()
+        } catch {}
+      }} style={{
+        padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+        border: 'none', cursor: 'pointer', fontSize: 11,
+        background: adapter.muted ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
+        color: adapter.muted ? 'var(--color-success)' : '#D29922',
+        display: 'flex', alignItems: 'center', gap: 3,
+      }}>
+        {adapter.muted ? <><Volume2 size={11} /> Unmute</> : <><VolumeX size={11} /> Mute</>}
       </button>
 
       <button onClick={async () => {

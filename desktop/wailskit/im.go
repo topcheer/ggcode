@@ -13,6 +13,7 @@ import (
 type IMAdapterInfo struct {
 	Name      string                 `json:"name"`
 	Enabled   bool                   `json:"enabled"`
+	Muted     bool                   `json:"muted"`
 	Platform  string                 `json:"platform"`
 	Transport string                 `json:"transport"`
 	Command   string                 `json:"command"`
@@ -80,6 +81,15 @@ func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() [
 		}
 	}
 
+	// Build a muted lookup from runtime bindings
+	var mutedAdapters map[string]bool
+	if imMgr != nil {
+		mutedAdapters = make(map[string]bool)
+		for _, b := range imMgr.AllPersistedBindings() {
+			mutedAdapters[b.Adapter] = b.Muted
+		}
+	}
+
 	var result []IMAdapterInfo
 	for name, acfg := range cfg.IM.Adapters {
 		ws := boundWorkspaces[name]
@@ -88,6 +98,7 @@ func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() [
 		result = append(result, IMAdapterInfo{
 			Name:      name,
 			Enabled:   acfg.Enabled,
+			Muted:     mutedAdapters != nil && mutedAdapters[name],
 			Platform:  acfg.Platform,
 			Transport: acfg.Transport,
 			Command:   acfg.Command,
