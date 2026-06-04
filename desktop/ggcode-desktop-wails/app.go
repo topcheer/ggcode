@@ -178,6 +178,13 @@ func (a *App) GetModelInfo() map[string]interface{} {
 	return a.chat.GetModelInfo()
 }
 
+// SetPermissionMode changes the agent permission mode at runtime.
+func (a *App) SetPermissionMode(mode string) {
+	if a.chat != nil {
+		a.chat.SetPermissionMode(mode)
+	}
+}
+
 // ─── Config ───────────────────────────────────────────────
 
 // GetConfig returns the current config.
