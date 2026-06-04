@@ -153,6 +153,7 @@ export function SettingsPage({ onBack }: Props) {
     setModelsLoading(true)
     setModelsError('')
     try {
+      // Backend auto-resolves API key via config resolve chain
       const ms = await App.FetchModels(currentVendor, currentEndpoint, '', '') as string[]
       if (ms && ms.length > 0) {
         setModels(ms)
