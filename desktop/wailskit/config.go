@@ -571,40 +571,82 @@ func maskAPIKey(key string) string {
 }
 
 // FetchModelsForEndpoint dynamically discovers models from an API endpoint.
+// If the target endpoint fails, tries other endpoints with the same BaseURL
+// within the same vendor. Only reports error if ALL same-domain endpoints fail.
 func FetchModelsForEndpoint(vendor, endpoint, apiKey, baseURL string) ([]string, error) {
 	globalMu.RLock()
 	cfg := globalCfg
 	globalMu.RUnlock()
 
-	protocol := "openai"
-	if cfg != nil {
-		if vc, ok := cfg.Vendors[vendor]; ok {
-			if ep, ok := vc.Endpoints[endpoint]; ok {
-				protocol = ep.Protocol
-				if baseURL == "" {
-					baseURL = ep.BaseURL
-				}
-			}
-
-			// Auto-resolve API key if not provided: endpoint → vendor → env
-			if apiKey == "" {
-				apiKey = resolveAPIKey(cfg, vendor, endpoint)
-			}
-		}
+	if cfg == nil {
+		return nil, fmt.Errorf("config not loaded")
 	}
 
-	tmpResolved := &config.ResolvedEndpoint{
-		VendorID:   vendor,
-		EndpointID: endpoint,
-		Protocol:   protocol,
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		return nil, fmt.Errorf("vendor %q not found", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return nil, fmt.Errorf("endpoint %q not found", endpoint)
+	}
+
+	protocol := ep.Protocol
+	if baseURL == "" {
+		baseURL = ep.BaseURL
+	}
+
+	// Auto-resolve API key if not provided
+	if apiKey == "" {
+		apiKey = resolveAPIKey(cfg, vendor, endpoint)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return provider.DiscoverModels(ctx, tmpResolved)
+	// Try the requested endpoint first
+	tmpResolved := &config.ResolvedEndpoint{
+		VendorID: vendor, EndpointID: endpoint,
+		Protocol: protocol, BaseURL: baseURL, APIKey: apiKey,
+	}
+	models, err := provider.DiscoverModels(ctx, tmpResolved)
+	if err == nil && len(models) > 0 {
+		return models, nil
+	}
+
+	// Failed — try other endpoints with the same BaseURL (same domain)
+	var errs []string
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("%s: %v", endpoint, err))
+	}
+	for epName, epCfg := range vc.Endpoints {
+		if epName == endpoint {
+			continue
+		}
+		if epCfg.BaseURL != baseURL {
+			continue
+		}
+		epKey := resolveAPIKey(cfg, vendor, epName)
+		if epKey == "" {
+			continue
+		}
+		epResolved := &config.ResolvedEndpoint{
+			VendorID: vendor, EndpointID: epName,
+			Protocol: epCfg.Protocol, BaseURL: epCfg.BaseURL, APIKey: epKey,
+		}
+		epModels, epErr := provider.DiscoverModels(ctx, epResolved)
+		if epErr == nil && len(epModels) > 0 {
+			return epModels, nil
+		}
+		if epErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", epName, epErr))
+		}
+	}
+
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("no models found for %s", baseURL)
+	}
+	return nil, fmt.Errorf("all endpoints for %s failed: %s", baseURL, strings.Join(errs, "; "))
 }
 
 // resolveAPIKey mimics the resolve chain: endpoint key → vendor key → expand env vars.
