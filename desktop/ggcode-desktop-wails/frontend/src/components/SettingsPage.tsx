@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { EventsEmit } from '../../wailsjs/runtime/runtime'
 
 interface Props {
   onBack: () => void
@@ -185,6 +186,7 @@ export function SettingsPage({ onBack }: Props) {
         setApiKeySet(true)
       }
       setSaved(true)
+      EventsEmit('config:updated')
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
       console.error('Save failed:', e)
