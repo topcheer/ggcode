@@ -1,3 +1,22 @@
+export namespace main {
+	
+	export class ShareInfo {
+	    connectURL: string;
+	    qrCodeBase64: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ShareInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connectURL = source["connectURL"];
+	        this.qrCodeBase64 = source["qrCodeBase64"];
+	    }
+	}
+
+}
+
 export namespace wailskit {
 	
 	export class EndpointInfo {

@@ -78,6 +78,10 @@ export function InitWorkspace(arg1) {
   return window['go']['main']['App']['InitWorkspace'](arg1);
 }
 
+export function IsSharing() {
+  return window['go']['main']['App']['IsSharing']();
+}
+
 export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }
@@ -150,6 +154,14 @@ export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
 
+export function StartShare() {
+  return window['go']['main']['App']['StartShare']();
+}
+
+export function StopShare() {
+  return window['go']['main']['App']['StopShare']();
+}
+
 export function TestEndpointConnection(arg1, arg2, arg3) {
   return window['go']['main']['App']['TestEndpointConnection'](arg1, arg2, arg3);
 }
@@ -160,16 +172,4 @@ export function TestIMConnection(arg1) {
 
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
-}
-
-export function StartShare() {
-  return window['go']['main']['App']['StartShare']();
-}
-
-export function StopShare() {
-  return window['go']['main']['App']['StopShare']();
-}
-
-export function IsSharing() {
-  return window['go']['main']['App']['IsSharing']();
 }
