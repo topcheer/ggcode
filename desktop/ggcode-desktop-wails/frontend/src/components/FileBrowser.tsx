@@ -1,91 +1,63 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ChevronRight, ChevronDown, File, Folder, FileCode, FileJson, Settings } from 'lucide-react'
+import {
+  ChevronRight, ChevronDown, File, Folder, FileCode, FileJson,
+  Settings, FileText, Image, FileTerminal, X
+} from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 
 interface FileNode {
   name: string
+  path: string // full path from workdir root
   isDir: boolean
   size: number
   expanded?: boolean
   children?: FileNode[]
 }
 
-const fallbackTree: FileNode[] = [
-  {
-    name: 'cmd', isDir: true, size: 0, children: [
-      { name: 'root.go', isDir: false, size: 1200 },
-    ]
-  },
-  {
-    name: 'internal', isDir: true, size: 0, expanded: true, children: [
-      { name: 'config', isDir: true, size: 0, children: [
-        { name: 'config.go', isDir: false, size: 13200 },
-        { name: 'config_test.go', isDir: false, size: 3400 },
-      ]},
-      { name: 'middleware', isDir: true, size: 0, children: [
-        { name: 'auth.go', isDir: false, size: 4200 },
-        { name: 'cors.go', isDir: false, size: 1800 },
-      ]},
-      { name: 'tui', isDir: true, size: 0, children: [
-        { name: 'model.go', isDir: false, size: 8900 },
-        { name: 'view.go', isDir: false, size: 5600 },
-      ]},
-      { name: 'server.go', isDir: false, size: 3200 },
-    ]
-  },
-  {
-    name: 'desktop', isDir: true, size: 0, children: [
-      { name: 'ggcode-desktop', isDir: true, size: 0, children: [] },
-      { name: 'ggcode-desktop-wails', isDir: true, size: 0, children: [] },
-    ]
-  },
-  { name: 'go.mod', isDir: false, size: 1200 },
-  { name: 'go.sum', isDir: false, size: 42000 },
-  { name: 'Makefile', isDir: false, size: 2400 },
-  { name: 'README.md', isDir: false, size: 8900 },
-]
-
-const fallbackCode = `package middleware
-
-import (
-\t"net/http"
-\t"strings"
-)
-
-// AuthMiddleware validates JWT tokens
-type AuthMiddleware struct {
-\tsecret  []byte
-\trevoker *TokenRevoker
-}
-
-func (m *AuthMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-\ttoken := extractBearer(r)
-\tif token == "" {
-\t\thttp.Error(w, "unauthorized", http.StatusUnauthorized)
-\t\treturn
-\t}
-\tclaims, err := m.validate(token)
-\tif err != nil {
-\t\thttp.Error(w, "forbidden", http.StatusForbidden)
-\t\treturn
-\t}
-\tr.Header.Set("X-User-ID", claims.Subject)
-}
-`
-
 function getFileIcon(name: string) {
-  if (name.endsWith('.go')) return <FileCode size={14} style={{ color: '#00ADD8' }} />
-  if (name.endsWith('.json') || name.endsWith('.yaml') || name.endsWith('.yml'))
-    return <FileJson size={14} style={{ color: '#F85149' }} />
-  if (name.endsWith('.md')) return <File size={14} style={{ color: '#58A6FF' }} />
-  if (name === 'Makefile' || name.endsWith('.sh')) return <Settings size={14} style={{ color: '#D29922' }} />
-  return <File size={14} style={{ color: 'var(--text-tertiary)' }} />
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  switch (ext) {
+    case 'go': return <FileCode size={14} style={{ color: '#00ADD8' }} />
+    case 'ts': case 'tsx': return <FileCode size={14} style={{ color: '#3178C6' }} />
+    case 'js': case 'jsx': return <FileCode size={14} style={{ color: '#F7DF1E' }} />
+    case 'py': return <FileCode size={14} style={{ color: '#3572A5' }} />
+    case 'rs': return <FileCode size={14} style={{ color: '#DEA584' }} />
+    case 'json': case 'yaml': case 'yml': case 'toml': return <FileJson size={14} style={{ color: '#F85149' }} />
+    case 'md': case 'txt': case 'rst': return <FileText size={14} style={{ color: '#58A6FF' }} />
+    case 'png': case 'jpg': case 'jpeg': case 'gif': case 'svg': case 'webp':
+      return <Image size={14} style={{ color: '#A371F7' }} />
+    case 'sh': case 'bash': case 'zsh': return <FileTerminal size={14} style={{ color: '#D29922' }} />
+    default:
+      if (name === 'Makefile' || name === 'Dockerfile' || name === 'LICENSE')
+        return <Settings size={14} style={{ color: '#D29922' }} />
+      return <File size={14} style={{ color: 'var(--text-tertiary)' }} />
+  }
 }
 
-// Convert backend ListFiles response (array of {name, isDir, size, ...}) to FileNode tree
-function buildTreeFromBackend(entries: Array<Record<string, any>>): FileNode[] {
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function isImageFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)
+}
+
+function isBinaryFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'o', 'a', 'wasm', 'pdf', 'zip', 'tar', 'gz', 'bz2'].includes(ext)
+}
+
+function isTooLarge(size: number): boolean {
+  return size > 2 * 1024 * 1024 // 2MB
+}
+
+function buildTreeFromBackend(entries: Array<Record<string, any>>, parentPath: string): FileNode[] {
   return entries.map(e => ({
     name: e.name || '',
+    path: parentPath ? `${parentPath}/${e.name}` : e.name,
     isDir: !!e.isDir,
     size: e.size || 0,
     expanded: false,
@@ -99,17 +71,16 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
   onLoadDir: (path: string, node: FileNode) => void,
 }) {
   const [expanded, setExpanded] = useState(node.expanded ?? false)
-  const path = node.name
 
   const handleClick = () => {
     if (node.isDir) {
       const next = !expanded
       setExpanded(next)
       if (next && (!node.children || node.children.length === 0)) {
-        onLoadDir(path, node)
+        onLoadDir(node.path, node)
       }
     } else {
-      onSelect(path)
+      onSelect(node.path)
     }
   }
 
@@ -119,10 +90,13 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
         onClick={handleClick}
         style={{
           display: 'flex', alignItems: 'center', gap: 4,
-          padding: '4px 12px', cursor: 'pointer',
-          background: activeFile === path ? 'var(--color-card)' : 'transparent',
+          padding: '3px 12px', cursor: 'pointer',
+          background: activeFile === node.path ? 'var(--color-card)' : 'transparent',
           paddingLeft: 12 + depth * 16,
+          borderRadius: 2,
         }}
+        onMouseEnter={e => { if (activeFile !== node.path) e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+        onMouseLeave={e => { if (activeFile !== node.path) e.currentTarget.style.background = 'transparent' }}
       >
         {node.isDir ? (
           expanded ? <ChevronDown size={12} style={{ color: 'var(--text-tertiary)' }} /> :
@@ -133,46 +107,111 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
         {node.isDir ? <Folder size={14} style={{ color: '#D29922' }} /> : getFileIcon(node.name)}
         <span style={{
           fontFamily: 'var(--font-mono)', fontSize: 12,
-          color: activeFile === path ? 'var(--text-primary)' : 'var(--text-secondary)',
+          color: activeFile === node.path ? 'var(--text-primary)' : 'var(--text-secondary)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          flex: 1,
         }}>{node.name}</span>
+        {!node.isDir && node.size > 0 && (
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+            {formatSize(node.size)}
+          </span>
+        )}
       </div>
       {node.isDir && expanded && node.children?.map((child, i) => (
-        <FileTreeItem key={i} node={child} depth={depth + 1} activeFile={activeFile} onSelect={onSelect} onLoadDir={onLoadDir} />
+        <FileTreeItem key={child.path || i} node={child} depth={depth + 1}
+          activeFile={activeFile} onSelect={onSelect} onLoadDir={onLoadDir} />
       ))}
     </>
   )
 }
 
+// Syntax highlighting by file extension
+function highlightLine(line: string, ext: string): { color: string; bold?: boolean } {
+  const trimmed = line.trimStart()
+  if (!trimmed) return { color: 'var(--text-secondary)' }
+
+  // Comments
+  if (trimmed.startsWith('//') || trimmed.startsWith('#') && !['sh', 'bash', 'zsh', 'yaml', 'yml', 'toml'].includes(ext))
+    return { color: 'var(--text-tertiary)' }
+  if (['sh', 'bash', 'zsh'].includes(ext) && trimmed.startsWith('#'))
+    return { color: 'var(--text-tertiary)' }
+  if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/'))
+    return { color: 'var(--text-tertiary)' }
+  if (['yaml', 'yml', 'toml'].includes(ext) && trimmed.startsWith('#'))
+    return { color: 'var(--text-tertiary)' }
+
+  // Go keywords
+  if (ext === 'go') {
+    if (/^(func |type |var |const |package |import |return |if |for |switch |case |default |else |defer |go |range |select |struct |interface |map\[|chan )/.test(trimmed))
+      return { color: '#D2A8FF' }
+    if (/^(true|false|nil|break|continue|fallthrough|goto)/.test(trimmed))
+      return { color: '#79C0FF' }
+    if (trimmed.includes('"') || trimmed.includes('`'))
+      return { color: '#A5D6FF' }
+  }
+
+  // TS/JS keywords
+  if (['ts', 'tsx', 'js', 'jsx'].includes(ext)) {
+    if (/^(export |import |const |let |var |function |class |interface |type |enum |return |if |for |while |switch |case |default |else |async |await |try |catch |throw |new |from )/.test(trimmed))
+      return { color: '#D2A8FF' }
+    if (/^(true|false|null|undefined|this|super)/.test(trimmed))
+      return { color: '#79C0FF' }
+    if (trimmed.includes("'") || trimmed.includes('"') || trimmed.includes('`'))
+      return { color: '#A5D6FF' }
+  }
+
+  // Python keywords
+  if (ext === 'py') {
+    if (/^(def |class |import |from |return |if |for |while |with |try |except |finally |elif |else |async |await |yield |raise |pass |break |continue|lambda |global |nonlocal )/.test(trimmed))
+      return { color: '#D2A8FF' }
+    if (/^(True|False|None)/.test(trimmed))
+      return { color: '#79C0FF' }
+  }
+
+  // YAML/TOML keys
+  if (['yaml', 'yml', 'toml'].includes(ext)) {
+    if (/^\S+:/.test(trimmed) || /^\[/.test(trimmed))
+      return { color: '#D2A8FF' }
+  }
+
+  // Makefile
+  if (ext === '' && trimmed.includes(':=')) return { color: '#D2A8FF' }
+  if (ext === '' && trimmed.startsWith('$(')) return { color: '#A5D6FF' }
+
+  return { color: 'var(--text-secondary)' }
+}
+
 export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [activeFile, setActiveFile] = useState('')
   const [openTabs, setOpenTabs] = useState<string[]>([])
-  const [tree, setTree] = useState<FileNode[]>(fallbackTree)
-  const [code, setCode] = useState(fallbackCode)
-  const [workDir, setWorkDir] = useState('my-project')
+  const [tree, setTree] = useState<FileNode[]>([])
+  const [code, setCode] = useState('')
+  const [workDir, setWorkDir] = useState('')
+  const [workDirName, setWorkDirName] = useState('')
   const [loading, setLoading] = useState(true)
+  const [fileType, setFileType] = useState<'text' | 'image' | 'binary' | 'too-large'>('text')
+  const [imageSrc, setImageSrc] = useState('')
 
   // Load workdir and initial file listing
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        // Get working directory
-        const dir = await App.GetWorkDir()
-        if (cancelled) return
-        if (dir) {
-          const parts = dir.replace(/\\/g, '/').split('/')
-          setWorkDir(parts[parts.length - 1] || dir)
+        const dir = await App.GetWorkDir() as string
+        if (cancelled || !dir) return
+        setWorkDir(dir)
+        const parts = dir.replace(/\\/g, '/').split('/')
+        setWorkDirName(parts[parts.length - 1] || dir)
 
-          // Load top-level file listing
-          const entries = await App.ListFiles(dir)
-          if (cancelled) return
-          if (Array.isArray(entries) && entries.length > 0) {
-            const built = buildTreeFromBackend(entries)
-            setTree(built)
-          }
+        const entries = await App.ListFiles(dir)
+        if (cancelled) return
+        if (Array.isArray(entries) && entries.length > 0) {
+          // Filter hidden files/dirs
+          const filtered = entries.filter((e: any) => !e.name.startsWith('.'))
+          setTree(buildTreeFromBackend(filtered, dir))
         }
       } catch {
-        // Backend not ready, keep fallback
+        // Backend not ready
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -186,27 +225,67 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     try {
       const entries = await App.ListFiles(dirPath)
       if (Array.isArray(entries) && entries.length > 0) {
-        const children = buildTreeFromBackend(entries)
+        const filtered = entries.filter((e: any) => !e.name.startsWith('.'))
+        const children = buildTreeFromBackend(filtered, dirPath)
         setTree(prev => updateChildren(prev, dirPath, children))
       }
-    } catch {
-      // Directory listing failed, leave empty
-    }
+    } catch {}
   }, [])
 
   // Load file content when selected
   const handleSelectFile = useCallback(async (filePath: string) => {
     setActiveFile(filePath)
     setOpenTabs(prev => prev.includes(filePath) ? prev : [...prev, filePath])
+
+    const name = filePath.split('/').pop() || ''
+    if (isBinaryFile(name)) {
+      setFileType('binary')
+      setCode('')
+      setImageSrc('')
+      return
+    }
+    if (isImageFile(name)) {
+      setFileType('image')
+      setImageSrc(`file://${filePath}`)
+      setCode('')
+      return
+    }
     try {
-      const content = await App.ReadFileContent(filePath)
+      const content = await App.ReadFileContent(filePath) as string
       if (content !== undefined && content !== null) {
-        setCode(content)
+        if (isTooLarge(content.length)) {
+          setFileType('too-large')
+          setCode('')
+        } else {
+          setFileType('text')
+          setCode(content)
+        }
       }
     } catch {
-      // File read failed, keep previous content
+      setFileType('text')
+      setCode('// Unable to read file')
     }
   }, [])
+
+  const handleTabSelect = async (path: string) => {
+    setActiveFile(path)
+    const name = path.split('/').pop() || ''
+    if (isBinaryFile(name)) {
+      setFileType('binary'); setCode(''); setImageSrc(''); return
+    }
+    if (isImageFile(name)) {
+      setFileType('image'); setImageSrc(`file://${path}`); setCode(''); return
+    }
+    try {
+      const content = await App.ReadFileContent(path) as string
+      if (content !== undefined && content !== null) {
+        if (isTooLarge(content.length)) { setFileType('too-large'); setCode('') }
+        else { setFileType('text'); setCode(content) }
+      }
+    } catch {}
+  }
+
+  const activeExt = activeFile.split('.').pop()?.toLowerCase() || ''
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
@@ -214,13 +293,17 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
       <div style={{
         width: 240, background: 'var(--color-nav)',
         display: 'flex', flexDirection: 'column',
+        borderRight: '1px solid var(--color-border)',
       }}>
         <div style={{
-          padding: '4px 12px 8px 12px',
+          padding: '8px 12px',
           fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
           color: 'var(--text-primary)',
+          borderBottom: '1px solid var(--color-border)',
+          display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          {workDir}/
+          <Folder size={14} style={{ color: 'var(--color-primary)' }} />
+          {workDirName}/
         </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {loading && (
@@ -228,8 +311,14 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               Loading files...
             </div>
           )}
-          {tree.map((node, i) => (
-            <FileTreeItem key={i} node={node} depth={0} activeFile={activeFile} onSelect={handleSelectFile} onLoadDir={handleLoadDir} />
+          {!loading && tree.length === 0 && (
+            <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+              Empty directory
+            </div>
+          )}
+          {tree.map(node => (
+            <FileTreeItem key={node.path} node={node} depth={0}
+              activeFile={activeFile} onSelect={handleSelectFile} onLoadDir={handleLoadDir} />
           ))}
         </div>
       </div>
@@ -240,46 +329,123 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
         <div style={{
           height: 36, background: 'var(--color-nav)',
           display: 'flex', alignItems: 'center',
+          borderBottom: '1px solid var(--color-border)',
+          overflowX: 'auto',
         }}>
           {openTabs.map(tab => {
-            const tabName = tab.includes('/') ? tab.split('/').pop()! : tab
+            const tabName = tab.split('/').pop()!
             return (
-              <div key={tab} onClick={() => setActiveFile(tab)} style={{
-                height: '100%', padding: '0 16px',
+              <div key={tab} onClick={() => handleTabSelect(tab)} style={{
+                height: '100%', padding: '0 12px',
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: activeFile === tab ? 'var(--color-bg)' : 'transparent',
                 borderRight: '1px solid var(--color-border)',
-                cursor: 'pointer',
+                cursor: 'pointer', flexShrink: 0,
               }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-primary)' }}>{tabName}</span>
-                <button onClick={e => { e.stopPropagation(); setOpenTabs(prev => prev.filter(t => t !== tab)) }}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 10 }}>
-                  ✕
+                {getFileIcon(tabName)}
+                <span style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 12,
+                  color: activeFile === tab ? 'var(--text-primary)' : 'var(--text-secondary)',
+                }}>{tabName}</span>
+                <button onClick={e => {
+                  e.stopPropagation()
+                  setOpenTabs(prev => prev.filter(t => t !== tab))
+                  if (activeFile === tab) {
+                    const remaining = openTabs.filter(t => t !== tab)
+                    if (remaining.length > 0) handleTabSelect(remaining[remaining.length - 1])
+                    else setActiveFile('')
+                  }
+                }} style={{
+                  background: 'none', border: 'none', color: 'var(--text-tertiary)',
+                  cursor: 'pointer', fontSize: 10, padding: 2, lineHeight: 1,
+                }}>
+                  <X size={10} />
                 </button>
               </div>
             )
           })}
         </div>
 
-        {/* Code */}
-        <div style={{
-          flex: 1, padding: 'var(--spacing-md) var(--spacing-lg)',
-          overflow: 'auto', background: 'var(--color-bg)',
-          fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.8,
-        }}>
-          {code.split('\n').map((line, i) => (
-            <div key={i} style={{ display: 'flex' }}>
-              <span style={{
-                width: 32, textAlign: 'right', color: 'var(--text-tertiary)',
-                userSelect: 'none', paddingRight: 12, flexShrink: 0,
-              }}>{i + 1}</span>
-              <span style={{ color: line.startsWith('//') ? 'var(--text-tertiary)' :
-                line.startsWith('func ') || line.startsWith('type ') || line.startsWith('import') ? '#D2A8FF' :
-                  line.includes('"') ? '#A5D6FF' :
-                    'var(--text-secondary)'
-              }}>{line}</span>
+        {/* Content area */}
+        <div style={{ flex: 1, overflow: 'auto', background: 'var(--color-bg)' }}>
+          {/* Empty state */}
+          {!activeFile && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--text-tertiary)', fontSize: 13,
+            }}>
+              Select a file to preview
             </div>
-          ))}
+          )}
+
+          {/* Image preview */}
+          {activeFile && fileType === 'image' && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 24, overflow: 'auto',
+            }}>
+              <img src={imageSrc} alt={activeFile.split('/').pop()}
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 4 }}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
+            </div>
+          )}
+
+          {/* Binary file notice */}
+          {activeFile && fileType === 'binary' && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
+            }}>
+              <File size={32} />
+              <span style={{ fontSize: 13 }}>Binary file</span>
+              <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
+            </div>
+          )}
+
+          {/* Too large notice */}
+          {activeFile && fileType === 'too-large' && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
+            }}>
+              <FileText size={32} />
+              <span style={{ fontSize: 13 }}>File too large to preview (&gt;2MB)</span>
+              <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
+            </div>
+          )}
+
+          {/* Code/text preview */}
+          {activeFile && fileType === 'text' && (
+            <div style={{
+              padding: '12px 0',
+              fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7,
+            }}>
+              {code.split('\n').map((line, i) => {
+                const hl = highlightLine(line, activeExt)
+                return (
+                  <div key={i} style={{
+                    display: 'flex',
+                    background: 'transparent',
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span style={{
+                      width: 48, textAlign: 'right', color: 'var(--text-tertiary)',
+                      userSelect: 'none', paddingRight: 16, flexShrink: 0, fontSize: 11,
+                    }}>{i + 1}</span>
+                    <pre style={{
+                      margin: 0, padding: 0,
+                      color: hl.color,
+                      fontWeight: hl.bold ? 600 : 400,
+                      whiteSpace: 'pre', overflow: 'visible',
+                    }}>{line || ' '}</pre>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -289,7 +455,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
 // Helper: recursively update children of a directory in the tree
 function updateChildren(nodes: FileNode[], dirPath: string, newChildren: FileNode[]): FileNode[] {
   return nodes.map(n => {
-    if (n.name === dirPath && n.isDir) {
+    if (n.path === dirPath && n.isDir) {
       return { ...n, children: newChildren }
     }
     if (n.children) {
