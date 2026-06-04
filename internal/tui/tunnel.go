@@ -146,6 +146,7 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 }
 
 func (m *Model) nextTunnelGeneration() uint64 {
+	m.cancelTunnelShareBootstrapCapture()
 	m.tunnelGeneration++
 	return m.tunnelGeneration
 }
@@ -157,6 +158,7 @@ func (m *Model) isCurrentTunnelGeneration(generation uint64) bool {
 func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	sess := m.tunnelSession
 	broker := m.tunnelBroker
+	m.cancelTunnelShareBootstrapCapture()
 	if broker != nil {
 		broker.OnCommand(nil)
 		broker.OnRelayConnected(nil)
@@ -178,6 +180,54 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.tunnelSpawned = nil
 	m.tunnelStarting = false
 	return sess, broker
+}
+
+func (m *Model) ensureTunnelShareBootstrapState() *tunnelShareBootstrapState {
+	if m.tunnelShareBootstrap == nil {
+		m.tunnelShareBootstrap = &tunnelShareBootstrapState{}
+	}
+	return m.tunnelShareBootstrap
+}
+
+func (m *Model) beginTunnelShareBootstrapCapture(generation uint64) {
+	state := m.ensureTunnelShareBootstrapState()
+	state.mu.Lock()
+	state.generation = generation
+	state.active = true
+	state.pending = nil
+	state.mu.Unlock()
+}
+
+func (m *Model) finishTunnelShareBootstrapCapture(generation uint64) []tunnel.GatewayMessage {
+	state := m.ensureTunnelShareBootstrapState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.active || state.generation != generation {
+		return nil
+	}
+	pending := append([]tunnel.GatewayMessage(nil), state.pending...)
+	state.active = false
+	state.pending = nil
+	return pending
+}
+
+func (m *Model) cancelTunnelShareBootstrapCapture() {
+	state := m.ensureTunnelShareBootstrapState()
+	state.mu.Lock()
+	state.active = false
+	state.pending = nil
+	state.mu.Unlock()
+}
+
+func (m *Model) captureTunnelShareBootstrapEvent(ev tunnel.GatewayMessage) bool {
+	state := m.ensureTunnelShareBootstrapState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.active {
+		return false
+	}
+	state.pending = append(state.pending, ev)
+	return true
 }
 
 func stopDetachedTunnelGracefully(sess *tunnel.Session, broker *tunnel.Broker, timeout time.Duration) {
@@ -290,13 +340,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.broker.BindSession(m.session.ID)
 		msg.broker.SetAuthorityEpoch(m.currentSessionTunnelAuthorityEpoch())
 	}
-	msg.broker.BeginProjectionSync()
+	m.beginTunnelShareBootstrapCapture(msg.generation)
 
 	// Fresh share rooms must contain canonical bootstrap history before older
 	// relay/mobile combinations attach, otherwise the client can stall waiting for
-	// session_info and later live events can reuse stale event ids. Do the heavy
-	// seeding work in the background so the QR overlay can render immediately,
-	// while projection sync keeps live events/client replay from racing ahead.
+	// session_info and later live events can reuse stale event ids. Keep canonical
+	// event recording on the projection path, but delay mirroring to the share
+	// broker until background bootstrap finishes so Update stays responsive.
 	subtitle := "Scan with GGCode Mobile to connect"
 	if msg.info.CompatibilityNotice != "" {
 		subtitle += " - " + msg.info.CompatibilityNotice
@@ -308,7 +358,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.ConnectURL,
 	)
 
-	return m, m.bootstrapTunnelShare(msg.generation, msg.broker)
+	return m, m.bootstrapTunnelShare(msg.generation)
 }
 
 func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd) {
@@ -611,6 +661,9 @@ func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
 		}
 	}
 	m.recordTunnelEvent(ev)
+	if m.captureTunnelShareBootstrapEvent(ev) {
+		return
+	}
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.PublishRecordedEvent(ev)
 	}
@@ -1542,37 +1595,74 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	_, _ = m.publishTunnelSnapshotForCurrentSessionWithReport(reset)
 }
 
-func (m *Model) bootstrapTunnelShare(generation uint64, broker *tunnel.Broker) tea.Cmd {
+func (m *Model) bootstrapTunnelShare(generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		if broker != nil {
-			defer broker.EndProjectionSync()
-		}
-		if broker == nil || !m.isCurrentTunnelGeneration(generation) {
+		if !m.isCurrentTunnelGeneration(generation) {
 			return tunnelShareBootstrapMsg{generation: generation}
 		}
-		m.seedTunnelRelayRoomAtShareStart(broker)
+		m.prepareCurrentSessionTunnelLedger()
+		if broker := m.tunnelProjectionBroker; broker != nil {
+			events := m.currentSessionTunnelReplayEvents()
+			if len(events) == 0 {
+				broker.SendSnapshot(m.tunnelSnapshot())
+			} else {
+				m.ensureProjectionBootstrap(broker, events)
+			}
+		}
 		return tunnelShareBootstrapMsg{generation: generation}
 	}
 }
 
-func (m *Model) seedTunnelRelayRoomAtShareStart(broker *tunnel.Broker) {
-	if broker == nil {
-		return
+func (m *Model) handleTunnelShareBootstrapMsg(msg tunnelShareBootstrapMsg) (tea.Model, tea.Cmd) {
+	if !m.isCurrentTunnelGeneration(msg.generation) {
+		return m, nil
+	}
+	if m.tunnelBroker == nil {
+		m.cancelTunnelShareBootstrapCapture()
+		return m, nil
+	}
+
+	epoch := m.currentSessionTunnelAuthorityEpoch()
+	if epoch != 0 {
+		m.tunnelBroker.SetAuthorityEpoch(epoch)
+	}
+
+	seen := make(map[string]struct{})
+	replayed := false
+	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
+		m.tunnelBroker.ReplayEvents(events, false)
+		replayed = true
+		for _, ev := range events {
+			if ev.EventID != "" {
+				seen[ev.EventID] = struct{}{}
+			}
+		}
+	}
+
+	pending := m.finishTunnelShareBootstrapCapture(msg.generation)
+	if len(seen) > 0 {
+		filtered := pending[:0]
+		for _, ev := range pending {
+			if ev.EventID != "" {
+				if _, ok := seen[ev.EventID]; ok {
+					continue
+				}
+			}
+			filtered = append(filtered, ev)
+		}
+		pending = filtered
+	}
+	if len(pending) > 0 {
+		m.tunnelBroker.ReplayEvents(pending, false)
+		replayed = true
+	}
+	if !replayed {
+		m.tunnelBroker.SendSnapshot(m.tunnelSnapshot())
 	}
 	if m.session != nil && m.session.ID != "" {
-		broker.AnnounceActiveSession(m.session.ID)
+		m.tunnelBroker.AnnounceActiveSession(m.session.ID)
 	}
-	m.prepareCurrentSessionTunnelLedger()
-	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
-		broker.ReplayEvents(events, false)
-		return
-	}
-	snapshot := m.tunnelSnapshot()
-	if m.tunnelProjectionBroker != nil {
-		m.tunnelProjectionBroker.SendSnapshot(snapshot)
-		return
-	}
-	broker.SendSnapshot(snapshot)
+	return m, nil
 }
 
 func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tunnel.BrokerSnapshot, bool) {

@@ -269,6 +269,7 @@ type Model struct {
 	tunnelMsgID               string
 	tunnelMsgNeedsFinalize    bool
 	tunnelMainStream          *tunnelMainStreamState
+	tunnelShareBootstrap      *tunnelShareBootstrapState
 	tunnelPendingApprovalID   string
 	tunnelPendingAskUserID    string
 	tunnelUserMessageOverride *tunnel.MessageData
@@ -314,6 +315,13 @@ type tunnelMainStreamState struct {
 	mu            sync.Mutex
 	msgID         string
 	needsFinalize bool
+}
+
+type tunnelShareBootstrapState struct {
+	mu         sync.Mutex
+	generation uint64
+	active     bool
+	pending    []tunnel.GatewayMessage
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -476,6 +484,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		imRuntimeState:       &imRuntimeState{},
 		a2aEventState:        &a2aEventBufferState{},
 		tunnelMainStream:     &tunnelMainStreamState{},
+		tunnelShareBootstrap: &tunnelShareBootstrapState{},
 		streamViewState:      &streamViewStateData{},
 		terminalTitleWriter:  newTerminalTitleWriter(),
 	}

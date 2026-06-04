@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
@@ -56,9 +57,12 @@ type ChatBridge struct {
 	}
 
 	// Mobile tunnel broker for outbound push
-	tunnelBroker   *tunnel.Broker
-	tunnelMsgID    string
-	tunnelReasonID string
+	tunnelBroker           *tunnel.Broker
+	tunnelMsgID            string
+	tunnelMsgNeedsFinalize bool
+	tunnelProjectionBroken bool
+	projectionStore        *tunnel.ProjectionStore
+	shareTunnelBroker      *tunnel.Broker
 
 	// Pending approval/ask_user requests from agent
 	pendingMu        sync.Mutex
@@ -131,6 +135,14 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	})
 	// Save session after each message (mirrors Fyne bridge)
 	b.saveSession()
+
+	// Mirror TUI handleDoneMsg: always push idle + clear activity
+	// when the entire agent run finishes (success or error).
+	if broker := b.currentTunnelBroker(); broker != nil {
+		b.flushTunnelTextStream(broker, false)
+		broker.PushStatus(tunnel.StatusIdle, "")
+		broker.PushActivity("")
+	}
 
 	// Signal run complete (the entire agent run, not just one turn)
 	if b.OnStreamEvent != nil {
@@ -628,16 +640,72 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 	}
 }
 
+
 // ─── Tunnel Broker Integration ──────────────────────────────────────
+// Full parity with Fyne AgentBridge tunnel logic.
 
 // AttachTunnelBroker connects the broker for outbound event push to mobile.
+// Mirrors Fyne AgentBridge.AttachTunnelBroker exactly.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
+	var (
+		working    bool
+		cfg        *config.Config
+		currentSes *session.Session
+	)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.tunnelBroker = broker
+	working = b.cancel != nil
+	cfg = b.cfg
+	currentSes = b.currentSes
+	if working && broker != nil && b.tunnelMsgID == "" {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	b.mu.Unlock()
+
+	if broker == nil {
+		return
+	}
+
+	b.bindTunnelProjectionSession()
+
+	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+		return b.CurrentSessionTunnelEvents()
+	})
+	broker.SetEventRecorder(nil)
+
+	if currentSes != nil && currentSes.ID != "" {
+		broker.BindSession(currentSes.ID)
+		broker.SetAuthorityEpoch(b.currentSessionTunnelAuthorityEpoch())
+		broker.AnnounceActiveSession(currentSes.ID)
+	}
+
+	if !working {
+		return
+	}
+
+	if cfg != nil {
+		resolved, _ := cfg.ResolveActiveEndpoint()
+		model := ""
+		vendorName := ""
+		if resolved != nil {
+			model = resolved.Model
+			vendorName = resolved.VendorName
+		}
+		broker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: b.workingDir,
+			Model:     model,
+			Provider:  vendorName,
+			Mode:      cfg.DefaultMode,
+		})
+	}
+
+	status := b.CurrentTunnelStatus()
+	if status.Status != "" {
+		broker.PushStatus(status.Status, status.Message)
+	}
+	broker.PushActivity(b.CurrentTunnelActivity())
 }
 
-// DetachTunnelBroker disconnects the broker.
 func (b *ChatBridge) DetachTunnelBroker() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -650,7 +718,111 @@ func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
 	return b.tunnelBroker
 }
 
-// CurrentTunnelStatus returns the current agent status for tunnel snapshots.
+func (b *ChatBridge) currentShareTunnelBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.shareTunnelBroker
+}
+
+func (b *ChatBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
+	return b.currentTunnelBroker()
+}
+
+func (b *ChatBridge) bindTunnelProjectionSession() {
+	b.mu.Lock()
+	currentSes := b.currentSes
+	b.mu.Unlock()
+	if currentSes == nil {
+		return
+	}
+	if b.projectionStore == nil {
+		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
+			b.projectionStore = store
+		}
+	}
+
+	var authorityEpoch uint64 = 1
+	broker := b.currentTunnelBroker()
+	if broker == nil {
+		return
+	}
+
+	if b.projectionStore != nil {
+		if epoch, err := b.projectionStore.AuthorityEpoch(currentSes.ID); err == nil {
+			authorityEpoch = epoch
+		}
+		var replay []tunnel.GatewayMessage
+		if r, err := b.projectionStore.ReplayEvents(currentSes.ID); err == nil {
+			replay = r
+		}
+		if len(replay) == 0 {
+			replay = b.hydrateProjectionReplayFromSessionLedger(currentSes, replay)
+		}
+		if len(replay) > 0 {
+			broker.PrimeEventIDs(replay)
+		}
+	}
+
+	broker.SwitchSession(currentSes.ID)
+	broker.SetAuthorityEpoch(authorityEpoch)
+	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		b.recordProjectionEvent(ev)
+	})
+
+	b.mu.Lock()
+	if b.tunnelMsgID == "" {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	b.mu.Unlock()
+}
+
+func (b *ChatBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
+	b.mu.Lock()
+	store := b.projectionStore
+	b.mu.Unlock()
+	if store != nil {
+		if err := store.Append(msg); err != nil {
+			b.mu.Lock()
+			b.tunnelProjectionBroken = true
+			b.mu.Unlock()
+			log.Printf("[wails-chat] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
+			b.RecordTunnelEvent(msg)
+			return
+		}
+	}
+	b.RecordTunnelEvent(msg)
+	if broker := b.currentShareTunnelBroker(); broker != nil {
+		broker.PublishRecordedEvent(msg)
+	}
+}
+
+func (b *ChatBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {
+	if msg.EventID == "" || msg.Type == tunnel.EventSnapshotReset {
+		return
+	}
+	b.mu.Lock()
+	if b.currentSes == nil || b.sessionStore == nil {
+		b.mu.Unlock()
+		return
+	}
+	record := session.TunnelEvent{
+		EventID:  msg.EventID,
+		StreamID: msg.StreamID,
+		Type:     msg.Type,
+		Data:     append([]byte(nil), msg.Data...),
+	}
+	b.currentSes.TunnelEvents = append(b.currentSes.TunnelEvents, record)
+	ses := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
+	} else {
+		_ = store.Save(ses)
+	}
+}
+
 func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {
 	if b.cancel != nil {
 		return tunnel.StatusData{Status: tunnel.StatusBusy}
@@ -658,29 +830,188 @@ func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {
 	return tunnel.StatusData{Status: tunnel.StatusIdle}
 }
 
-// ensureTunnelMsgID returns a stable message ID for the current agent turn.
+func (b *ChatBridge) CurrentTunnelActivity() string {
+	b.pendingMu.Lock()
+	defer b.pendingMu.Unlock()
+	switch {
+	case len(b.pendingApprovals) > 0:
+		return "approval"
+	case len(b.pendingAskUsers) > 0:
+		return "ask_user"
+	case b.cancel != nil:
+		return "processing"
+	default:
+		return ""
+	}
+}
+
 func (b *ChatBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
-	if b.tunnelMsgID == "" {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelMsgID == "" && broker != nil {
 		b.tunnelMsgID = broker.NextMessageID()
 	}
 	return b.tunnelMsgID
 }
 
-func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
-	if b.tunnelReasonID == "" {
-		b.tunnelReasonID = broker.NextMessageID()
+func (b *ChatBridge) rotateTunnelMsgID(broker *tunnel.Broker) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if broker == nil {
+		b.tunnelMsgID = ""
+		return
 	}
-	return b.tunnelReasonID
+	b.tunnelMsgID = broker.NextMessageID()
 }
 
-// resetTunnelRoundState resets per-turn tunnel state.
+func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
+	msgID := b.ensureTunnelMsgID(broker)
+	if msgID == "" {
+		return ""
+	}
+	return msgID + "-reasoning"
+}
+
+func (b *ChatBridge) markTunnelMainStreamActive() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelMsgID != "" {
+		b.tunnelMsgNeedsFinalize = true
+	}
+}
+
+func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {
+	if broker == nil {
+		return
+	}
+	b.mu.Lock()
+	if !force && !b.tunnelMsgNeedsFinalize {
+		b.mu.Unlock()
+		return
+	}
+	b.mu.Unlock()
+	broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
+	msgID := b.ensureTunnelMsgID(broker)
+	broker.PushTextDone(msgID)
+	b.rotateTunnelMsgID(broker)
+	b.mu.Lock()
+	b.tunnelMsgNeedsFinalize = false
+	b.mu.Unlock()
+}
+
 func (b *ChatBridge) resetTunnelRoundState() {
-	b.tunnelMsgID = ""
-	b.tunnelReasonID = ""
+	b.mu.Lock()
+	b.tunnelMsgNeedsFinalize = false
+	b.mu.Unlock()
 }
 
-// ─── Approval / AskUser ────────────────────────────────────────────
+func (b *ChatBridge) currentSessionTunnelAuthorityEpoch() uint64 {
+	b.mu.Lock()
+	store := b.projectionStore
+	ses := b.currentSes
+	b.mu.Unlock()
+	if store == nil || ses == nil {
+		return 1
+	}
+	if epoch, err := store.AuthorityEpoch(ses.ID); err == nil {
+		return epoch
+	}
+	return 1
+}
 
+func (b *ChatBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
+	b.mu.Lock()
+	store := b.projectionStore
+	ses := b.currentSes
+	b.mu.Unlock()
+	if store == nil || ses == nil {
+		return nil
+	}
+	events, err := store.ReplayEvents(ses.ID)
+	if err != nil {
+		return nil
+	}
+	return events
+}
+
+func (b *ChatBridge) hydrateProjectionReplayFromSessionLedger(currentSes *session.Session, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
+	if currentSes == nil || len(currentSes.TunnelEvents) == 0 {
+		return replay
+	}
+	for _, te := range currentSes.TunnelEvents {
+		replay = append(replay, tunnel.GatewayMessage{
+			EventID:   te.EventID,
+			StreamID:  te.StreamID,
+			Type:      te.Type,
+			Data:      te.Data,
+			SessionID: currentSes.ID,
+		})
+	}
+	return replay
+}
+
+func (b *ChatBridge) pushTunnelSessionInfo(broker *tunnel.Broker) {
+	b.mu.Lock()
+	cfg := b.cfg
+	ses := b.currentSes
+	b.mu.Unlock()
+	if broker == nil || cfg == nil || ses == nil {
+		return
+	}
+	resolved, _ := cfg.ResolveActiveEndpoint()
+	model := ""
+	vendorName := ""
+	if resolved != nil {
+		model = resolved.Model
+		vendorName = resolved.VendorName
+	}
+	broker.SendSessionInfo(tunnel.SessionInfoData{
+		Workspace: b.workingDir,
+		Model:     model,
+		Provider:  vendorName,
+		Mode:      cfg.DefaultMode,
+	})
+}
+
+func (b *ChatBridge) pushTunnelApprovalResult(id, decision string) {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushApprovalResult(id, decision)
+	}
+}
+
+func (b *ChatBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
+	if broker := b.currentTunnelBroker(); broker != nil {
+		var answers []tunnel.AskUserAnswer
+		for _, a := range response.Answers {
+			answers = append(answers, tunnel.AskUserAnswer{
+				QuestionID:   a.ID,
+				ChoiceIDs:    a.SelectedChoiceIDs,
+				FreeformText: a.FreeformText,
+			})
+		}
+		broker.PushAskUserResponse(id, "", answers)
+	}
+}
+
+func (b *ChatBridge) nextTunnelRequestID() string {
+	return fmt.Sprintf("req-%d", time.Now().UnixNano())
+}
+
+func (b *ChatBridge) ResetCurrentSessionTunnelLedger() {
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.projectionStore
+	b.mu.Unlock()
+	if ses == nil || store == nil {
+		return
+	}
+	_ = store.DeleteSession(ses.ID)
+}
+
+func (b *ChatBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
+	// TODO: implement when HistoryEntry fields are needed
+	return nil
+}
 // RequestApproval blocks until the user (desktop or mobile) responds to an
 // approval request.  It stores a pending channel, pushes the request to a
 // connected tunnel broker, and emits an event so the Wails frontend can show
