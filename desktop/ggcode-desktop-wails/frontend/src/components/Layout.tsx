@@ -141,7 +141,7 @@ export function Layout() {
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
 
             {sidebarOpen && view === 'chat' && (
-              <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} />
+              <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} />
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
