@@ -60,7 +60,7 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 // ListIMAdapters returns all configured IM adapters with workspace binding info.
 // imManager may be nil (no runtime bindings available).
 func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() []im.ChannelBinding }) ([]IMAdapterInfo, error) {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -107,7 +107,7 @@ func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() [
 //   - "command": command for stdio transport
 //   - other keys are stored in the adapter's Extra map
 func SaveIMAdapter(name string, values map[string]string) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -161,7 +161,7 @@ func SaveIMAdapter(name string, values map[string]string) error {
 
 // RemoveIMAdapter removes an IM adapter by name.
 func RemoveIMAdapter(name string) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -170,7 +170,7 @@ func RemoveIMAdapter(name string) error {
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.
 func SetIMAdapterEnabled(name string, enabled bool) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -181,7 +181,7 @@ func SetIMAdapterEnabled(name string, enabled bool) error {
 // It performs a basic connectivity check by verifying the config has
 // the minimum required fields for the given platform.
 func TestIMConnection(name string) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

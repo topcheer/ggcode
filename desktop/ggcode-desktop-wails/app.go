@@ -737,8 +737,9 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		a.onTunnelCommand(cmd, broker)
 	})
 
-	// Notify frontend when mobile client connects
-	sess.OnConnected(func(info tunnel.RelayConnectedState) {
+	// Notify frontend when mobile client connects (via broker.OnRelayConnected —
+	// does NOT override broker's internal handleRelayConnected)
+	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
 		runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
 			"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
 		})
