@@ -749,12 +749,19 @@ func (a *App) StartShare() (*ShareInfo, error) {
 
 	// Attach broker to chat bridge for outbound push
 	if a.chat != nil {
+		a.chat.EnsureSession()
 		a.chat.AttachTunnelBroker(broker)
 
 		if current := a.chat.CurrentSessionID(); current != "" {
 			broker.SwitchSession(current)
 		}
 		broker.SendSnapshot(a.tunnelSnapshot())
+		broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+			return a.tunnelSnapshot()
+		})
+	} else {
+		// No active session yet — still set snapshot provider so mobile
+		// gets SessionInfo when it connects
 		broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 			return a.tunnelSnapshot()
 		})
