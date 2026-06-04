@@ -20,7 +20,7 @@ type MCPServerInfo struct {
 
 // ListMCPServers returns all configured MCP servers.
 func ListMCPServers() ([]MCPServerInfo, error) {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -53,7 +53,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 //   - "headers_*": HTTP headers (keys like "headers_Authorization")
 //   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -108,7 +108,7 @@ func AddMCPServer(values map[string]string) error {
 
 // RemoveMCPServer removes an MCP server by name.
 func RemoveMCPServer(name string) error {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
