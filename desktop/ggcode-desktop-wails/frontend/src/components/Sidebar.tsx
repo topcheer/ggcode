@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Search, Trash2 } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2 } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 
 interface Props {
   onClose: () => void
   onSessionSelect?: (id: string) => void
+  onShare?: () => void
   activeSessionId?: string
 }
 
@@ -30,7 +31,7 @@ function relativeTime(dateStr: string): string {
   return d.toLocaleDateString()
 }
 
-export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
+export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: Props) {
   const [search, setSearch] = useState('')
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -210,6 +211,29 @@ export function Sidebar({ onClose, onSessionSelect, activeSessionId }: Props) {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Bottom bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center',
+        padding: 'var(--spacing-xs) var(--spacing-sm)',
+        borderTop: '1px solid var(--color-border)',
+      }}>
+        <button onClick={handleNew} style={{
+          padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+          background: 'var(--color-primary)', color: '#fff',
+          border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: 4,
+        }}><Plus size={14} /> New</button>
+        <div style={{ flex: 1 }} />
+        {onShare && (
+          <button onClick={onShare} title="Share with mobile" style={{
+            padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+            background: 'transparent', color: 'var(--text-secondary)',
+            border: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center',
+          }}><Smartphone size={16} /></button>
+        )}
       </div>
     </div>
   )

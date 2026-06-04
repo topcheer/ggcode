@@ -161,3 +161,15 @@ export function TestIMConnection(arg1) {
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
 }
+
+export function StartShare() {
+  return window['go']['main']['App']['StartShare']();
+}
+
+export function StopShare() {
+  return window['go']['main']['App']['StopShare']();
+}
+
+export function IsSharing() {
+  return window['go']['main']['App']['IsSharing']();
+}

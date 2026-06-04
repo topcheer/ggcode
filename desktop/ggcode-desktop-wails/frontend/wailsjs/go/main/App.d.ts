@@ -81,3 +81,10 @@ export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Prom
 export function TestIMConnection(arg1:string):Promise<void>;
 
 export function UpdateConfig(arg1:Record<string, any>):Promise<void>;
+
+export function StartShare():Promise<main.ShareInfo>;
+
+export function StopShare():Promise<void>;
+
+export function IsSharing():Promise<boolean>;
+
