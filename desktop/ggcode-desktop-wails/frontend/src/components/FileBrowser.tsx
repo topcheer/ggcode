@@ -47,7 +47,22 @@ function isImageFile(name: string): boolean {
 
 function isBinaryFile(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || ''
-  return ['exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'o', 'a', 'wasm', 'pdf', 'zip', 'tar', 'gz', 'bz2'].includes(ext)
+  return ['exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'o', 'a', 'wasm', 'zip', 'tar', 'gz', 'bz2', '7z', 'rar'].includes(ext)
+}
+
+function isPDFFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ext === 'pdf'
+}
+
+function isOfficeFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt', 'odt', 'ods', 'odp'].includes(ext)
+}
+
+function isMediaFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase() || ''
+  return ['mp4', 'webm', 'mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)
 }
 
 function isTooLarge(size: number): boolean {
@@ -189,8 +204,9 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [workDir, setWorkDir] = useState('')
   const [workDirName, setWorkDirName] = useState('')
   const [loading, setLoading] = useState(true)
-  const [fileType, setFileType] = useState<'text' | 'image' | 'binary' | 'too-large'>('text')
+  const [fileType, setFileType] = useState<'text' | 'image' | 'pdf' | 'media' | 'office' | 'binary' | 'too-large'>('text')
   const [imageSrc, setImageSrc] = useState('')
+  const [mediaSrc, setMediaSrc] = useState('')
 
   // Load workdir and initial file listing
   useEffect(() => {
@@ -233,32 +249,68 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   }, [])
 
   // Load file content when selected
-  const handleSelectFile = useCallback(async (filePath: string) => {
-    setActiveFile(filePath)
-    setOpenTabs(prev => prev.includes(filePath) ? prev : [...prev, filePath])
-
+  const loadFileContent = useCallback(async (filePath: string) => {
     const name = filePath.split('/').pop() || ''
+
+    // Binary (exe, dll, zip, etc.)
     if (isBinaryFile(name)) {
-      setFileType('binary')
-      setCode('')
-      setImageSrc('')
+      setFileType('binary'); setCode(''); setImageSrc(''); setMediaSrc('')
       return
     }
+
+    // Office docs — can't render inline
+    if (isOfficeFile(name)) {
+      setFileType('office'); setCode(''); setImageSrc(''); setMediaSrc('')
+      return
+    }
+
+    // Image — load as base64
     if (isImageFile(name)) {
-      setFileType('image')
-      setImageSrc(`file://${filePath}`)
-      setCode('')
+      try {
+        const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
+        setFileType('image')
+        setImageSrc(`data:${result.mimeType};base64,${result.data}`)
+        setCode(''); setMediaSrc('')
+      } catch {
+        setFileType('binary'); setImageSrc(''); setCode('')
+      }
       return
     }
+
+    // PDF — load as base64
+    if (isPDFFile(name)) {
+      try {
+        const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
+        setFileType('pdf')
+        setImageSrc(`data:${result.mimeType};base64,${result.data}`)
+        setCode(''); setMediaSrc('')
+      } catch {
+        setFileType('binary'); setImageSrc(''); setCode('')
+      }
+      return
+    }
+
+    // Media (video/audio) — load as base64
+    if (isMediaFile(name)) {
+      try {
+        const result = await App.ReadFileAsBase64(filePath) as { mimeType: string; data: string }
+        setFileType('media')
+        setMediaSrc(`data:${result.mimeType};base64,${result.data}`)
+        setCode(''); setImageSrc('')
+      } catch {
+        setFileType('binary'); setMediaSrc(''); setCode('')
+      }
+      return
+    }
+
+    // Text files
     try {
       const content = await App.ReadFileContent(filePath) as string
       if (content !== undefined && content !== null) {
         if (isTooLarge(content.length)) {
-          setFileType('too-large')
-          setCode('')
+          setFileType('too-large'); setCode('')
         } else {
-          setFileType('text')
-          setCode(content)
+          setFileType('text'); setCode(content)
         }
       }
     } catch {
@@ -267,22 +319,15 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
     }
   }, [])
 
+  const handleSelectFile = useCallback(async (filePath: string) => {
+    setActiveFile(filePath)
+    setOpenTabs(prev => prev.includes(filePath) ? prev : [...prev, filePath])
+    await loadFileContent(filePath)
+  }, [loadFileContent])
+
   const handleTabSelect = async (path: string) => {
     setActiveFile(path)
-    const name = path.split('/').pop() || ''
-    if (isBinaryFile(name)) {
-      setFileType('binary'); setCode(''); setImageSrc(''); return
-    }
-    if (isImageFile(name)) {
-      setFileType('image'); setImageSrc(`file://${path}`); setCode(''); return
-    }
-    try {
-      const content = await App.ReadFileContent(path) as string
-      if (content !== undefined && content !== null) {
-        if (isTooLarge(content.length)) { setFileType('too-large'); setCode('') }
-        else { setFileType('text'); setCode(content) }
-      }
-    } catch {}
+    await loadFileContent(path)
   }
 
   const activeExt = activeFile.split('.').pop()?.toLowerCase() || ''
@@ -349,11 +394,17 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
                 }}>{tabName}</span>
                 <button onClick={e => {
                   e.stopPropagation()
-                  setOpenTabs(prev => prev.filter(t => t !== tab))
+                  const remaining = openTabs.filter(t => t !== tab)
+                  setOpenTabs(remaining)
                   if (activeFile === tab) {
-                    const remaining = openTabs.filter(t => t !== tab)
-                    if (remaining.length > 0) handleTabSelect(remaining[remaining.length - 1])
-                    else setActiveFile('')
+                    if (remaining.length > 0) {
+                      handleTabSelect(remaining[remaining.length - 1])
+                    } else {
+                      setActiveFile('')
+                      setCode('')
+                      setImageSrc('')
+                      setMediaSrc('')
+                    }
                   }
                 }} style={{
                   background: 'none', border: 'none', color: 'var(--text-tertiary)',
@@ -388,6 +439,43 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
                 style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 4 }}
                 onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
               />
+            </div>
+          )}
+
+          {/* PDF preview */}
+          {activeFile && fileType === 'pdf' && imageSrc && (
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <iframe src={imageSrc}
+                style={{ flex: 1, border: 'none', width: '100%' }}
+                title={activeFile.split('/').pop()}
+              />
+            </div>
+          )}
+
+          {/* Media preview (video/audio) */}
+          {activeFile && fileType === 'media' && mediaSrc && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 24,
+            }}>
+              {mediaSrc.startsWith('data:video') ? (
+                <video src={mediaSrc} controls style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 4 }} />
+              ) : (
+                <audio src={mediaSrc} controls style={{ width: '100%', maxWidth: 500 }} />
+              )}
+            </div>
+          )}
+
+          {/* Office document notice */}
+          {activeFile && fileType === 'office' && (
+            <div style={{
+              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
+            }}>
+              <FileText size={32} />
+              <span style={{ fontSize: 13 }}>Office document</span>
+              <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
+              <span style={{ fontSize: 11 }}>Open with external application to view</span>
             </div>
           )}
 

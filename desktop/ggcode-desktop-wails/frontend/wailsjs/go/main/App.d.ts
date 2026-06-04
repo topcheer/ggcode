@@ -79,6 +79,8 @@ export function SendMessage(arg1:string):Promise<void>;
 
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
+export function ReadFileAsBase64(arg1:string):Promise<main.FileBinaryData>;
+
 export function StartShare():Promise<main.ShareInfo>;
 
 export function StopShare():Promise<void>;
