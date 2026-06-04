@@ -9,15 +9,8 @@ interface MCPServer {
   tools: number
 }
 
-const fallbackServers: MCPServer[] = [
-  { name: 'pencil', cmd: 'npx @anthropic-ai/mcp-pencil', status: 'running', tools: 8 },
-  { name: 'github', cmd: 'npx @anthropic-ai/mcp-github', status: 'running', tools: 52 },
-  { name: 'web-reader', cmd: 'npx @anthropic-ai/mcp-reader', status: 'running', tools: 3 },
-  { name: 'filesystem', cmd: 'npx @anthropic-ai/mcp-fs', status: 'stopped', tools: 5 },
-]
-
 export function MCPServers({ onBack }: { onBack: () => void }) {
-  const [servers, setServers] = useState<MCPServer[]>(fallbackServers)
+  const [servers, setServers] = useState<MCPServer[]>([])
   const [loading, setLoading] = useState(true)
 
   // Try to load real server data from backend
