@@ -345,6 +345,63 @@ func (a *App) ReadFileContent(path string) (string, error) {
 	return string(data), nil
 }
 
+// FileBinaryData holds base64-encoded file content with its MIME type.
+type FileBinaryData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"` // base64 encoded
+}
+
+// ReadFileAsBase64 reads a binary file (image, PDF, etc.) and returns base64 data.
+func (a *App) ReadFileAsBase64(path string) (*FileBinaryData, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, err
+	}
+	mime := mimeTypeFromExt(abs)
+	return &FileBinaryData{
+		MimeType: mime,
+		Data:     base64.StdEncoding.EncodeToString(data),
+	}, nil
+}
+
+func mimeTypeFromExt(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
+	case ".bmp":
+		return "image/bmp"
+	case ".pdf":
+		return "application/pdf"
+	case ".mp4":
+		return "video/mp4"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	case ".webm":
+		return "video/webm"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 // ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────
 
 // wailsIMBridge implements im.Bridge, routing inbound IM messages to the Wails agent.

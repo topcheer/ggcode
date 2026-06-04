@@ -154,6 +154,10 @@ export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
 
+export function ReadFileAsBase64(arg1) {
+  return window['go']['main']['App']['ReadFileAsBase64'](arg1);
+}
+
 export function StartShare() {
   return window['go']['main']['App']['StartShare']();
 }
