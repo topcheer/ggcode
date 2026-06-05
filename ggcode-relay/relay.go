@@ -1523,12 +1523,21 @@ func main() {
 	defer store.Close()
 
 	h := newHub(store)
+	catalogManager, err := newModelCatalogManager(store)
+	if err != nil {
+		log.Fatalf("open model catalog manager: %v", err)
+	}
 	adminToken := strings.TrimSpace(os.Getenv(relayAdminTokenEnv))
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	catalogManager.start(bgCtx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/share/session", h.handleShareSession)
 	mux.HandleFunc("/share/session/refresh", h.handleRefreshShareSession)
 	mux.HandleFunc("/ws", h.handleWS)
+	mux.HandleFunc("/model-catalog/resolve", newModelCatalogResolveHandler(catalogManager))
+	mux.HandleFunc("/model-catalog/status", newModelCatalogStatusHandler(catalogManager))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(200)
 	})
@@ -1573,6 +1582,7 @@ func main() {
 	select {
 	case sig := <-sigCh:
 		log.Printf("[relay] shutting down after signal %s", sig)
+		bgCancel()
 		h.notifyRelayRestarting()
 		ctx, cancel := context.WithTimeout(context.Background(), relayShutdownTimeout)
 		defer cancel()
@@ -1583,6 +1593,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case err := <-errCh:
+		bgCancel()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
