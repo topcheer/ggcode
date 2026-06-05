@@ -114,6 +114,30 @@ CREATE TABLE IF NOT EXISTS relay_client_cursors (
   updated_at TIMESTAMP NOT NULL,
   PRIMARY KEY (room_token_hash, client_id)
 );
+
+CREATE TABLE IF NOT EXISTS relay_model_catalog_sync_state (
+  source_ref TEXT PRIMARY KEY,
+  source_sha TEXT NOT NULL DEFAULT '',
+  last_attempt_at TIMESTAMP,
+  last_success_at TIMESTAMP,
+  last_error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS relay_model_catalog_entries (
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  provider_name TEXT NOT NULL DEFAULT '',
+  provider_type TEXT NOT NULL DEFAULT '',
+  context_window INTEGER NOT NULL DEFAULT 0,
+  default_max_tokens INTEGER NOT NULL DEFAULT 0,
+  source_file TEXT NOT NULL DEFAULT '',
+  source_sha TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_model_catalog_model
+  ON relay_model_catalog_entries(model_id);
 `
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -401,13 +425,179 @@ func hashToken(token string) string {
 }
 
 func (s *relayStore) nukeAll() error {
-	tables := []string{"relay_events", "relay_sessions", "relay_rooms", "relay_global_events", "relay_global_sessions", "relay_client_cursors"}
+	tables := []string{
+		"relay_events",
+		"relay_sessions",
+		"relay_rooms",
+		"relay_global_events",
+		"relay_global_sessions",
+		"relay_client_cursors",
+		"relay_model_catalog_entries",
+		"relay_model_catalog_sync_state",
+	}
 	for _, t := range tables {
 		if _, err := s.db.Exec("DELETE FROM " + t); err != nil {
 			return fmt.Errorf("delete %s: %w", t, err)
 		}
 	}
 	return nil
+}
+
+func (s *relayStore) loadModelCatalog() (modelCatalogSyncState, []modelCatalogEntry, error) {
+	if s == nil {
+		return modelCatalogSyncState{SourceRef: modelCatalogSourceRef}, nil, nil
+	}
+	state := modelCatalogSyncState{SourceRef: modelCatalogSourceRef}
+	var lastAttempt sql.NullTime
+	var lastSuccess sql.NullTime
+	if err := s.db.QueryRow(
+		`SELECT source_sha, last_attempt_at, last_success_at, last_error
+		   FROM relay_model_catalog_sync_state
+		  WHERE source_ref = ?`,
+		modelCatalogSourceRef,
+	).Scan(&state.SourceSHA, &lastAttempt, &lastSuccess, &state.LastError); err != nil && err != sql.ErrNoRows {
+		return modelCatalogSyncState{}, nil, fmt.Errorf("load model catalog state: %w", err)
+	}
+	if lastAttempt.Valid {
+		state.LastAttemptAt = lastAttempt.Time.UTC()
+	}
+	if lastSuccess.Valid {
+		state.LastSuccessAt = lastSuccess.Time.UTC()
+	}
+
+	rows, err := s.db.Query(
+		`SELECT provider_id, model_id, provider_name, provider_type, context_window, default_max_tokens, source_file, source_sha, updated_at
+		   FROM relay_model_catalog_entries
+		  ORDER BY provider_id, model_id`,
+	)
+	if err != nil {
+		return modelCatalogSyncState{}, nil, fmt.Errorf("load model catalog entries: %w", err)
+	}
+	defer rows.Close()
+	entries := make([]modelCatalogEntry, 0)
+	for rows.Next() {
+		var entry modelCatalogEntry
+		if err := rows.Scan(
+			&entry.ProviderID,
+			&entry.ModelID,
+			&entry.ProviderName,
+			&entry.ProviderType,
+			&entry.ContextWindow,
+			&entry.MaxOutputTokens,
+			&entry.SourceFile,
+			&entry.SourceSHA,
+			&entry.UpdatedAt,
+		); err != nil {
+			return modelCatalogSyncState{}, nil, fmt.Errorf("scan model catalog entry: %w", err)
+		}
+		entry.UpdatedAt = entry.UpdatedAt.UTC()
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return modelCatalogSyncState{}, nil, fmt.Errorf("iterate model catalog entries: %w", err)
+	}
+	state.RowCount = len(entries)
+	return state, entries, nil
+}
+
+func (s *relayStore) upsertModelCatalogState(state modelCatalogSyncState) error {
+	if s == nil {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO relay_model_catalog_sync_state(source_ref, source_sha, last_attempt_at, last_success_at, last_error)
+		 VALUES(?, ?, ?, ?, ?)
+		 ON CONFLICT(source_ref) DO UPDATE SET
+		   source_sha = CASE
+		     WHEN excluded.source_sha != '' THEN excluded.source_sha
+		     ELSE relay_model_catalog_sync_state.source_sha
+		   END,
+		   last_attempt_at = excluded.last_attempt_at,
+		   last_success_at = CASE
+		     WHEN excluded.last_success_at IS NOT NULL THEN excluded.last_success_at
+		     ELSE relay_model_catalog_sync_state.last_success_at
+		   END,
+		   last_error = excluded.last_error`,
+		firstNonEmptyString(state.SourceRef, modelCatalogSourceRef),
+		strings.TrimSpace(state.SourceSHA),
+		nullableTime(state.LastAttemptAt),
+		nullableTime(state.LastSuccessAt),
+		strings.TrimSpace(state.LastError),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert model catalog state: %w", err)
+	}
+	return nil
+}
+
+func (s *relayStore) replaceModelCatalog(state modelCatalogSyncState, entries []modelCatalogEntry) error {
+	if s == nil {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin model catalog tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err = tx.Exec(`DELETE FROM relay_model_catalog_entries`); err != nil {
+		return fmt.Errorf("clear model catalog entries: %w", err)
+	}
+	for _, entry := range entries {
+		if _, err = tx.Exec(
+			`INSERT INTO relay_model_catalog_entries(provider_id, model_id, provider_name, provider_type, context_window, default_max_tokens, source_file, source_sha, updated_at)
+			 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			strings.TrimSpace(entry.ProviderID),
+			strings.TrimSpace(entry.ModelID),
+			strings.TrimSpace(entry.ProviderName),
+			strings.TrimSpace(entry.ProviderType),
+			entry.ContextWindow,
+			entry.MaxOutputTokens,
+			strings.TrimSpace(entry.SourceFile),
+			strings.TrimSpace(entry.SourceSHA),
+			entry.UpdatedAt.UTC(),
+		); err != nil {
+			return fmt.Errorf("insert model catalog entry %s/%s: %w", entry.ProviderID, entry.ModelID, err)
+		}
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO relay_model_catalog_sync_state(source_ref, source_sha, last_attempt_at, last_success_at, last_error)
+		 VALUES(?, ?, ?, ?, '')
+		 ON CONFLICT(source_ref) DO UPDATE SET
+		   source_sha = excluded.source_sha,
+		   last_attempt_at = excluded.last_attempt_at,
+		   last_success_at = excluded.last_success_at,
+		   last_error = ''`,
+		firstNonEmptyString(state.SourceRef, modelCatalogSourceRef),
+		strings.TrimSpace(state.SourceSHA),
+		nullableTime(state.LastAttemptAt),
+		nullableTime(state.LastSuccessAt),
+	); err != nil {
+		return fmt.Errorf("upsert model catalog sync state: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit model catalog tx: %w", err)
+	}
+	return nil
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // loadClientCursor loads the last ACK'd event ID for a client in a room.
