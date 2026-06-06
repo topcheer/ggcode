@@ -1063,6 +1063,13 @@ func redactIMAdapter(ad config.IMAdapterConfig) config.IMAdapterConfig {
 
 // reloadProvider rebuilds the provider from current config and applies it
 // to the running agent. Called after vendor/endpoint/model/api_key changes.
+//
+// Shared logic (all entry points):
+//   - ResolveCurrentSelection → ApplyProviderToAgent (provider hot-swap)
+//   - StartAsyncRelayModelLimitRefresh (background context window refresh)
+//
+// UI-specific logic is handled by the uiNotify callback (TUI: session sync,
+// status bar refresh; Desktop: frontend state update).
 func (a *configAccess) reloadProvider() {
 	if a.agentInst == nil {
 		debug.Log("config", "no agent set, skipping provider reload")
@@ -1076,6 +1083,7 @@ func (a *configAccess) reloadProvider() {
 	}
 
 	ApplyProviderToAgent(a.agentInst, prov, resolved)
+	StartAsyncRelayModelLimitRefresh(a.cfg, resolved, a.agentInst, nil)
 	debug.Log("config", "provider reloaded: %s/%s/%s", resolved.VendorID, resolved.EndpointID, resolved.Model)
 
 	if a.uiNotify != nil {
