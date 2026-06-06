@@ -174,6 +174,11 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.closeQROverlay()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
+
+	// Detach online broker from unified TunnelHost
+	if m.tunnelHost != nil {
+		m.tunnelHost.DetachOnlineBroker()
+	}
 	m.resetTunnelMainStream()
 	m.tunnelPendingApprovalID = ""
 	m.tunnelPendingAskUserID = ""
@@ -298,6 +303,11 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	m.bindTunnelProjectionSession()
 	m.tunnelSession = msg.session
 	m.tunnelBroker = msg.broker
+
+	// Attach online broker to unified TunnelHost
+	if m.tunnelHost != nil {
+		m.tunnelHost.AttachOnlineBroker(msg.broker)
+	}
 	if m.currentTunnelMsgID() == "" && m.tunnelProjectionBroker != nil {
 		m.setTunnelMainStream(m.tunnelProjectionBroker.NextMessageID(), false)
 	}
@@ -508,6 +518,14 @@ func (m *Model) bindTunnelProjectionSession() {
 	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
 		return
 	}
+
+	// Use unified TunnelHost if available
+	if m.tunnelHost != nil {
+		m.tunnelHost.BindSession(m.session, m.sessionStore)
+		return
+	}
+
+	// Legacy fallback
 	broker := m.ensureTunnelProjectionBroker()
 	store := m.tunnelProjectionStore
 	var replay []tunnel.GatewayMessage
@@ -609,6 +627,13 @@ func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
 // pushTunnelEvent pushes a provider stream event to the mobile client.
 // Called from the agent stream callback in submit.go. Nil-safe.
 func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
+	// Use unified TunnelHost if available
+	if m.tunnelHost != nil {
+		m.tunnelHost.PushStreamEvent(ev)
+		return
+	}
+
+	// Legacy fallback
 	broker := m.tunnelEventBroker()
 	if broker == nil {
 		return
@@ -668,6 +693,21 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 
 // pushTunnelUserMessage echoes a locally-typed user message to the mobile client.
 func (m *Model) pushTunnelUserMessage(text string) {
+	if m.tunnelHost != nil {
+		if m.tunnelUserMessageOverride != nil {
+			override := *m.tunnelUserMessageOverride
+			if override.Text == "" {
+				override.Text = text
+			}
+			m.tunnelUserMessageOverride = nil
+			m.tunnelHost.PushUserMessageData(override)
+			return
+		}
+		m.tunnelHost.PushUserMessage(text)
+		return
+	}
+
+	// Legacy fallback
 	if broker := m.tunnelEventBroker(); broker != nil {
 		if m.tunnelUserMessageOverride != nil {
 			override := *m.tunnelUserMessageOverride
@@ -707,12 +747,20 @@ func (m *Model) pushTunnelToolResult(toolID, toolName, result string, isError bo
 
 // pushTunnelStatus sends a main-agent status update to the mobile client.
 func (m *Model) pushTunnelStatus(status, message string) {
+	if m.tunnelHost != nil {
+		m.tunnelHost.PushStatus(status, message)
+		return
+	}
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushStatus(status, message)
 	}
 }
 
 func (m *Model) pushTunnelActivity(activity string) {
+	if m.tunnelHost != nil {
+		m.tunnelHost.PushActivity(activity)
+		return
+	}
 	if broker := m.tunnelEventBroker(); broker != nil {
 		broker.PushActivity(strings.TrimSpace(activity))
 	}

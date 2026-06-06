@@ -373,6 +373,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 	defer bridge.Close()
+
+	// Bind tunnel host to session for projection recording
+	core.Tunnel.BindSession(ses, store)
+
 	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 
 	// Wire checkpoint handler — persist compacted state after summarize
@@ -422,7 +426,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				Provider:  resolved.VendorName,
 				Mode:      mode.String(),
 				Version:   version.Version,
-			})
+			}, core.Tunnel)
 			bridge.SetRunStateHook(shareController.HandleRunState)
 			bridge.SetUserMessageHook(shareController.HandleUserMessage)
 			unsubscribeTunnel := bridge.Subscribe(shareController.HandleStreamEvent)
@@ -1231,6 +1235,7 @@ type daemonTunnelShareController struct {
 	broker      daemonTunnelBroker
 	bridge      *im.DaemonBridge
 	sessionInfo tunnel.SessionInfoData
+	tunnelHost  *agentruntime.TunnelHost
 
 	mu            sync.Mutex
 	currentMsgID  string
@@ -1241,7 +1246,7 @@ type daemonTunnelShareController struct {
 	userOverride  *tunnel.MessageData
 }
 
-func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.DaemonBridge, sessionInfo tunnel.SessionInfoData) *daemonTunnelShareController {
+func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.DaemonBridge, sessionInfo tunnel.SessionInfoData, tunnelHost *agentruntime.TunnelHost) *daemonTunnelShareController {
 	status := tunnel.StatusData{Status: tunnel.StatusIdle}
 	if bridge != nil && bridge.HasActiveRun() {
 		status.Status = tunnel.StatusBusy
@@ -1251,6 +1256,7 @@ func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.Daemon
 		bridge:      bridge,
 		sessionInfo: sessionInfo,
 		status:      status,
+		tunnelHost:  tunnelHost,
 	}
 }
 
@@ -1258,6 +1264,12 @@ func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, targe
 	if c == nil || broker == nil || target == nil {
 		return
 	}
+
+	// Attach online broker to unified TunnelHost so PushStreamEvent forwards events
+	if c.tunnelHost != nil {
+		c.tunnelHost.AttachOnlineBroker(broker)
+	}
+
 	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
 		c.HandleCommand(target, cmd)
 	})
@@ -1271,20 +1283,31 @@ func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, targe
 		sessionID = ses.ID
 	}
 	if sessionID != "" {
-		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
-			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
-				events, err := agentruntime.ProjectionReplay(store, sessionID)
-				if err != nil {
-					return nil
-				}
-				return events
-			})
-			broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-				_ = agentruntime.AppendProjectionEvent(store, ev)
-			})
-			if epoch, events, err := agentruntime.PrepareProjectionReplay(store, ses); err == nil {
-				broker.SetAuthorityEpoch(epoch)
+		// Use TunnelHost's projection store for replay if available
+		if c.tunnelHost != nil {
+			if events := c.tunnelHost.TunnelEvents(); events != nil {
 				replay = events
+				broker.SetAuthorityEpoch(c.tunnelHost.AuthorityEpoch())
+			}
+			// Recording is handled by TunnelHost's BindSession event recorder,
+			// forwarded to online broker via AttachOnlineBroker above.
+		} else {
+			// Legacy fallback: create local projection store
+			if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
+				broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+					events, err := agentruntime.ProjectionReplay(store, sessionID)
+					if err != nil {
+						return nil
+					}
+					return events
+				})
+				broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+					_ = agentruntime.AppendProjectionEvent(store, ev)
+				})
+				if epoch, events, err := agentruntime.PrepareProjectionReplay(store, ses); err == nil {
+					broker.SetAuthorityEpoch(epoch)
+					replay = events
+				}
 			}
 		}
 	}
@@ -1359,20 +1382,38 @@ func (c *daemonTunnelShareController) HandleCommand(target daemonTunnelCommandTa
 }
 
 func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent) {
-	if c == nil || c.broker == nil {
+	if c == nil {
+		return
+	}
+
+	// Daemon-specific: update run state for status push
+	switch ev.Type {
+	case provider.StreamEventText, provider.StreamEventReasoning,
+		provider.StreamEventToolCallDone, provider.StreamEventToolResult,
+		provider.StreamEventSystem:
+		c.HandleRunState(true)
+	case provider.StreamEventDone, provider.StreamEventError:
+		c.HandleRunState(false)
+	}
+
+	// Delegate stream push to unified TunnelHost
+	if c.tunnelHost != nil {
+		c.tunnelHost.PushStreamEvent(ev)
+		return
+	}
+
+	// Legacy fallback (when no TunnelHost available)
+	if c.broker == nil {
 		return
 	}
 	switch ev.Type {
 	case provider.StreamEventText:
-		c.HandleRunState(true)
 		c.handleText(ev.Text)
 	case provider.StreamEventReasoning:
-		c.HandleRunState(true)
 		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
 			c.handleReasoning(chunk)
 		}
 	case provider.StreamEventToolCallDone:
-		c.HandleRunState(true)
 		c.rolloverMainStream(true)
 		name := strings.TrimSpace(ev.Tool.Name)
 		if name == "" {
@@ -1381,7 +1422,6 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 		present := tool.DescribeTool(name, string(ev.Tool.Arguments))
 		c.broker.PushToolCall(ev.Tool.ID, name, daemonToolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), present.Detail)
 	case provider.StreamEventToolResult:
-		c.HandleRunState(true)
 		c.rolloverMainStream(false)
 		content := ev.Result
 		if len([]rune(content)) > 2000 {
@@ -1389,17 +1429,14 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 		}
 		c.broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 	case provider.StreamEventSystem:
-		c.HandleRunState(true)
 		c.rolloverMainStream(true)
 	case provider.StreamEventDone:
 		c.rolloverMainStream(true)
-		c.HandleRunState(false)
 	case provider.StreamEventError:
 		c.rolloverMainStream(true)
 		if ev.Error != nil {
 			c.broker.PushError(provider.UserFacingError(ev.Error))
 		}
-		c.HandleRunState(false)
 	}
 }
 

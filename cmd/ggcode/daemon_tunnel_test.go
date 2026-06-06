@@ -83,7 +83,7 @@ func (t *fakeDaemonTunnelTarget) InterruptActiveRun() bool {
 
 func TestDaemonTunnelShareControllerKeepsStableMainStream(t *testing.T) {
 	broker := &fakeDaemonTunnelBroker{}
-	controller := newDaemonTunnelShareController(broker, nil, tunnel.SessionInfoData{})
+	controller := newDaemonTunnelShareController(broker, nil, tunnel.SessionInfoData{}, nil)
 
 	controller.HandleRunState(true)
 	controller.HandleStreamEvent(provider.StreamEvent{Type: provider.StreamEventReasoning, Text: "thinking"})
@@ -122,7 +122,7 @@ func TestDaemonTunnelShareControllerKeepsStableMainStream(t *testing.T) {
 
 func TestDaemonTunnelShareControllerHandlesInboundUserMessage(t *testing.T) {
 	broker := &fakeDaemonTunnelBroker{}
-	controller := newDaemonTunnelShareController(broker, nil, tunnel.SessionInfoData{})
+	controller := newDaemonTunnelShareController(broker, nil, tunnel.SessionInfoData{}, nil)
 	target := &fakeDaemonTunnelTarget{controller: controller}
 
 	payload, err := json.Marshal(tunnel.MessageData{
