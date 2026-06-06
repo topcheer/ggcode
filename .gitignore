@@ -39,12 +39,6 @@ ggcode-*.log
 scripts/sync-model-caps.go
 
 # Desktop app
-desktop/ggcode-desktop/frontend/node_modules/
-desktop/ggcode-desktop/frontend/dist/
-desktop/ggcode-desktop/frontend/bindings/
-desktop/ggcode-desktop/build/
-desktop/ggcode-desktop/ggcode.app/
-desktop/ggcode-desktop/desktop
 mobile/builds/
 mobile/flutter/build/
 mobile/flutter/ios/Runner.xcworkspace/xcuserdata/
