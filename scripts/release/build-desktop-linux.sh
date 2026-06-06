@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build ggcode-desktop for Linux, plus AppImage, .deb, and .rpm release assets.
+# Build GGCode Desktop (Wails) for Linux, plus AppImage, .deb, and .rpm release assets.
 set -euo pipefail
 
 VERSION="${1:?usage: build-desktop-linux.sh <version> <output-dir>}"
 OUTPUT_DIR="${2:?usage: build-desktop-linux.sh <version> <output-dir>}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DESKTOP_DIR="${ROOT_DIR}/desktop/ggcode-desktop"
+WAILS_DIR="${ROOT_DIR}/desktop/ggcode-desktop-wails"
 PACKAGING_DIR="${ROOT_DIR}/.github/packaging/linux"
 PACKAGE_VERSION="${VERSION#v}"
 COMMIT="${GGCODE_COMMIT:-}"
@@ -16,7 +16,20 @@ mkdir -p "${OUTPUT_DIR}"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
-ICON_PATH="${DESKTOP_DIR}/icon.png"
+
+# Install Wails CLI if not present
+ensure_wails() {
+  if command -v wails >/dev/null 2>&1; then
+    return
+  fi
+  echo "Installing Wails CLI..."
+  go install github.com/wailsapp/wails/v2/cmd/wails@latest
+}
+
+# Update wails.json product version
+update_wails_version() {
+  sed -i "s/\"productVersion\": \".*\"/\"productVersion\": \"${PACKAGE_VERSION}\"/" "${WAILS_DIR}/wails.json"
+}
 
 detect_arch() {
   case "${TARGET_ARCH:-$(uname -m)}" in
@@ -60,24 +73,27 @@ download_appimage_tool() {
   printf '%s\n' "${dest}"
 }
 
-build_desktop_binary() {
+build_wails_binary() {
   local output="$1"
-  pushd "${DESKTOP_DIR}" >/dev/null
+  pushd "${WAILS_DIR}" >/dev/null
   CGO_ENABLED=1 GOOS=linux GOARCH="${GOARCH_VALUE}" \
-    go build -tags goolm -ldflags "${LDFLAGS[*]}" -o "${output}" .
+    wails build -tags goolm \
+    -ldflags "-s -w -X github.com/topcheer/ggcode/internal/version.Version=${VERSION} -X github.com/topcheer/ggcode/internal/version.Commit=${COMMIT} -X github.com/topcheer/ggcode/internal/version.Date=${BUILD_DATE}" \
+    -platform "linux/${GOARCH_VALUE}" \
+    -o "${output}" \
+    -clean -skipbindings
   popd >/dev/null
-  # Free disk space: clear Go build cache after compilation.
   go clean -cache 2>/dev/null || true
 }
 
 prepare_linux_icon() {
   local icon_output="${WORK_DIR}/ggcode-desktop-512.png"
-  if [[ ! -f "${ICON_PATH}" ]]; then
-    echo "desktop icon not found: ${ICON_PATH}" >&2
+  local icon_path="${WAILS_DIR}/build/appicon.png"
+  if [[ ! -f "${icon_path}" ]]; then
+    echo "desktop icon not found: ${icon_path}" >&2
     exit 1
   fi
-
-  convert "${ICON_PATH}" -resize 512x512 "${icon_output}"
+  convert "${icon_path}" -resize 512x512 "${icon_output}"
   printf '%s\n' "${icon_output}"
 }
 
@@ -176,24 +192,20 @@ build_appimage() {
 }
 
 detect_arch
+ensure_wails
 ensure_nfpm
+update_wails_version
 
 LINUXDEPLOY_BIN="$(download_appimage_tool "linuxdeploy" "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${APPIMAGE_ARCH}.AppImage")"
 APPIMAGETOOL_BIN="$(download_appimage_tool "appimagetool" "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-${APPIMAGE_ARCH}.AppImage")"
 
-LDFLAGS=(
-  -s -w
-  "-X" "github.com/topcheer/ggcode/internal/version.Version=${VERSION}"
-  "-X" "github.com/topcheer/ggcode/internal/version.Commit=${COMMIT}"
-  "-X" "github.com/topcheer/ggcode/internal/version.Date=${BUILD_DATE}"
-  "-X" "main.Version=${VERSION}"
-)
-
-echo "=== Building ggcode-desktop for Linux (${PACKAGE_ARCH}) ==="
+echo "=== Building GGCode Desktop (Wails) for Linux (${PACKAGE_ARCH}) ==="
 
 RAW_BINARY="${WORK_DIR}/ggcode-desktop"
 PACKAGED_ICON="$(prepare_linux_icon)"
-build_desktop_binary "${RAW_BINARY}"
+build_wails_binary "ggcode-desktop"
+# Wails outputs to build/bin/ggcode-desktop — move to work dir
+cp "${WAILS_DIR}/build/bin/ggcode-desktop" "${RAW_BINARY}"
 chmod 0755 "${RAW_BINARY}"
 
 cp "${RAW_BINARY}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_linux_${PACKAGE_ARCH}"

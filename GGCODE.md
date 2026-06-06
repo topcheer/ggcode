@@ -21,6 +21,7 @@ Without it, builds fail due to missing libolm C headers (mautrix crypto dependen
 
 ```bash
 make build          # go build -tags goolm -o bin/ggcode ./cmd/ggcode
+make build-desktop-wails  # wails build -tags goolm (Wails desktop app)
 make test           # go test -tags goolm ./...
 make lint           # go vet -tags goolm ./...
 make install        # go install -tags goolm github.com/topcheer/ggcode/cmd/ggcode

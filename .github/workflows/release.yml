@@ -189,10 +189,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
           df -h /
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -251,6 +256,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Install GCC (MinGW)
         shell: pwsh
         run: choco install mingw --yes
@@ -260,6 +268,9 @@ jobs:
           dotnet tool install --global wix --version 4.0.5
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
           wix --version
+      - name: Install Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Capture build date
         shell: pwsh
         run: |
@@ -294,11 +305,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install Fyne dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install build dependencies
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev patchelf squashfs-tools desktop-file-utils
+          sudo apt-get install -y imagemagick libgtk-3-dev libwebkit2gtk-4.1-dev patchelf squashfs-tools desktop-file-utils
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -333,11 +349,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install Fyne dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install build dependencies
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y imagemagick libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev patchelf squashfs-tools desktop-file-utils
+          sudo apt-get install -y imagemagick libgtk-3-dev libwebkit2gtk-4.1-dev patchelf squashfs-tools desktop-file-utils
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
