@@ -536,6 +536,9 @@ func (b *AgentBridge) setupAgent() error {
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
 	core.SetConfigAgent(b.agent)
+	core.SetConfigUINotify(func() {
+		b.onConfigProviderChanged()
+	})
 	saveMemoryTool.SetAfterSave(b.refreshSystemPrompt)
 
 	b.agent.SetPermissionPolicy(policy)
@@ -2375,6 +2378,28 @@ func (b *AgentBridge) SwitchModel(model string) error {
 	})
 
 	return nil
+}
+
+// onConfigProviderChanged syncs Desktop bridge state after the config tool
+// changes vendor/endpoint/model/api_key. Updates b.prov, b.resolved, and
+// b.currentSes so the sidebar and status bar reflect the new selection.
+func (b *AgentBridge) onConfigProviderChanged() {
+	if b.cfg == nil {
+		return
+	}
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		debug.Log("config", "desktop bridge: failed to resolve after config change: %v", err)
+		return
+	}
+	b.mu.Lock()
+	b.resolved = resolved
+	if b.currentSes != nil {
+		b.currentSes.Vendor = b.cfg.Vendor
+		b.currentSes.Endpoint = b.cfg.Endpoint
+		b.currentSes.Model = resolved.Model
+	}
+	b.mu.Unlock()
 }
 
 func (b *AgentBridge) nextTunnelRequestID() string {
