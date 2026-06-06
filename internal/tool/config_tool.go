@@ -39,6 +39,10 @@ func (t ConfigTool) Description() string {
 		"Key patterns for model management: " +
 		"'vendors.<name>.endpoints.<ep>.models' (static list), " +
 		"'vendors.<name>.endpoints.<ep>.discover_models' (live API discovery). " +
+		"Config is saved in two scopes: 'global' (shared config, written to the config file the app was loaded from) " +
+		"and 'instance' (per-workspace config in ~/.ggcode/instances/{hash}/). " +
+		"Use 'scope' key to read or switch the current save scope (e.g. set scope=instance to save per-project). " +
+		"Instance scope is ideal for project-specific vendor/endpoint/model overrides. " +
 		"Provider-affecting changes (vendor/endpoint/model/api_key) are probed before committing. " +
 		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML. " +
 		"Use list=true to discover all keys."
@@ -49,7 +53,7 @@ func (t ConfigTool) Parameters() json.RawMessage {
 		"properties": {
 			"setting": {
 				"type": "string",
-				"description": "Config key in dot-notation. Common keys: 'vendor', 'endpoint', 'model', 'api_key', 'language', 'default_mode', 'max_iterations', 'scope'. Vendor/endpoint info: 'vendors.<name>', 'vendors.<name>.endpoints.<ep>'. Model lists: 'vendors.<name>.endpoints.<ep>.models' (configured), 'vendors.<name>.endpoints.<ep>.discover_models' (live API query). MCP: 'mcp_servers', 'mcp_servers.<name>'. IM: 'im.output_mode', 'im.adapters.<name>'. A2A: 'a2a.host', 'a2a.auth.api_key'. Knight: 'knight.enabled'. Use list=true to see all."
+				"description": "Config key in dot-notation. Common keys: 'vendor', 'endpoint', 'model', 'api_key', 'language', 'default_mode', 'max_iterations', 'scope'. Scope control: read 'scope' to see current save target, set 'scope' to 'global' or 'instance' to switch. Vendor/endpoint info: 'vendors.<name>', 'vendors.<name>.endpoints.<ep>'. Model lists: 'vendors.<name>.endpoints.<ep>.models' (configured), 'vendors.<name>.endpoints.<ep>.discover_models' (live API query). MCP: 'mcp_servers', 'mcp_servers.<name>'. IM: 'im.output_mode', 'im.adapters.<name>'. A2A: 'a2a.host', 'a2a.auth.api_key'. Knight: 'knight.enabled'. Use list=true to see all."
 			},
 			"value": {
 				"type": "string",
