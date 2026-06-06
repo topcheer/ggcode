@@ -69,6 +69,12 @@ func (a *configAccess) Get(key string) (string, error) {
 	case strings.HasPrefix(key, "vendors."):
 		return a.getVendorPath(strings.TrimPrefix(key, "vendors."))
 
+	// --- Model Discovery ---
+	case strings.HasSuffix(key, ".discover_models"):
+		return a.discoverModels(key)
+	case strings.HasSuffix(key, ".models") && strings.HasPrefix(key, "vendors."):
+		return a.getEndpointModels(key)
+
 	// --- MCP Servers ---
 	case key == "mcp_servers":
 		return a.listMCPServers()
@@ -559,6 +565,9 @@ func (a *configAccess) getVendorPath(path string) (string, error) {
 			}
 			if ep.ContextWindow > 0 {
 				summary["context_window"] = ep.ContextWindow
+			}
+			if len(ep.Models) > 0 {
+				summary["models"] = ep.Models
 			}
 			b, _ := json.Marshal(summary)
 			return string(b), nil
@@ -1055,4 +1064,67 @@ func (a *configAccess) setHarnessConfig(key, value string) error {
 	}
 	harnessPath := filepath.Join(dir, "harness.yaml")
 	return os.WriteFile(harnessPath, []byte(value), 0644)
+}
+
+// ============================================================================
+// Model Discovery
+// ============================================================================
+
+// getEndpointModels returns the statically configured model list for an endpoint.
+// Key format: vendors.<name>.endpoints.<ep>.models
+func (a *configAccess) getEndpointModels(key string) (string, error) {
+	// Parse: vendors.<vendor>.endpoints.<ep>.models
+	parts := strings.SplitN(strings.TrimPrefix(key, "vendors."), ".", 3)
+	if len(parts) < 3 || parts[1] != "endpoints" {
+		return "", fmt.Errorf("invalid key format, expected vendors.<name>.endpoints.<ep>.models")
+	}
+	vendor := parts[0]
+	epName := strings.TrimSuffix(parts[2], ".models")
+	vc, ok := a.cfg.Vendors[vendor]
+	if !ok {
+		return "", fmt.Errorf("vendor %q not found", vendor)
+	}
+	ep, ok := vc.Endpoints[epName]
+	if !ok {
+		return "", fmt.Errorf("endpoint %q not found under vendor %q", epName, vendor)
+	}
+	if len(ep.Models) == 0 {
+		return "(no models configured for this endpoint)", nil
+	}
+	b, _ := json.Marshal(ep.Models)
+	return string(b), nil
+}
+
+// discoverModels calls the provider API to discover available models for an endpoint.
+// Key format: vendors.<name>.endpoints.<ep>.discover_models
+func (a *configAccess) discoverModels(key string) (string, error) {
+	// Parse: vendors.<vendor>.endpoints.<ep>.discover_models
+	path := strings.TrimSuffix(key, ".discover_models")
+	vendorEpPath := strings.TrimPrefix(path, "vendors.")
+	parts := strings.SplitN(vendorEpPath, ".", 3)
+	if len(parts) < 3 || parts[1] != "endpoints" {
+		return "", fmt.Errorf("invalid key format, expected vendors.<name>.endpoints.<ep>.discover_models")
+	}
+	vendor := parts[0]
+	epName := parts[2]
+
+	resolved, err := a.cfg.ResolveEndpoint(vendor, epName)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve endpoint %s/%s: %w", vendor, epName, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	models, err := provider.DiscoverModels(ctx, resolved)
+	if err != nil {
+		return "", fmt.Errorf("model discovery failed for %s/%s: %w", vendor, epName, err)
+	}
+
+	if len(models) == 0 {
+		return "(no models discovered)", nil
+	}
+
+	b, _ := json.MarshalIndent(models, "", "  ")
+	return string(b), nil
 }
