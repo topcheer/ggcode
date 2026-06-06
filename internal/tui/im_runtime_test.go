@@ -11,6 +11,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -561,11 +562,85 @@ func TestRemoteInboundAnswerAdvancesQuestionnaireAndEmitsNextQuestion(t *testing
 	}
 }
 
+func TestRemoteInboundSlashCommandWinsOverPendingQuestionnaire(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.SetConfig(config.DefaultConfig())
+	imMgr := im.NewManager()
+	if err := imMgr.SetBindingStore(im.NewMemoryBindingStore()); err != nil {
+		t.Fatalf("SetBindingStore returned error: %v", err)
+	}
+	sink := &testIMSink{name: "qq"}
+	imMgr.RegisterSink(sink)
+	m.SetIMManager(imMgr)
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore returned error: %v", err)
+	}
+	ses := session.NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	m.SetSession(ses, store)
+	if _, err := imMgr.BindChannel(im.ChannelBinding{
+		Platform:  im.PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	respCh := make(chan tool.AskUserResponse, 1)
+	req := tool.AskUserRequest{
+		Title: "补充信息",
+		Questions: []tool.AskUserQuestion{{
+			ID:     "scope",
+			Title:  "Review 范围",
+			Prompt: "请问你想 review 哪部分代码？",
+			Kind:   tool.AskUserKindSingle,
+			Choices: []tool.AskUserChoice{
+				{ID: "latest", Label: "最新一次提交"},
+				{ID: "recent", Label: "最近 3 次提交"},
+			},
+		}},
+	}
+	m.pendingQuestionnaire = newQuestionnaireState(req, respCh, m.currentLanguage())
+
+	updated, cmd := m.Update(remoteInboundMsg{
+		Message: im.InboundMessage{
+			Text: "/help",
+			Envelope: im.Envelope{
+				Adapter:   "qq",
+				Platform:  im.PlatformQQ,
+				ChannelID: "group-1",
+			},
+		},
+		Response: make(chan error, 1),
+	})
+	m = updated.(Model)
+	if cmd != nil {
+		_ = cmd()
+	}
+	if m.pendingQuestionnaire == nil {
+		t.Fatal("expected questionnaire to remain pending after slash command")
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && len(sink.snapshot()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	events := sink.snapshot()
+	if len(events) == 0 {
+		t.Fatal("expected /help to emit an IM response")
+	}
+	if !strings.Contains(events[len(events)-1].Text, "/help") {
+		t.Fatalf("expected help text, got %#v", events[len(events)-1])
+	}
+}
+
 func TestToolOnlyRoundsDoNotProduceIMSummary(t *testing.T) {
 	round := agentIMRoundState{
-		ToolCalls:     3,
-		ToolSuccesses: 2,
-		ToolFailures:  1,
+		IMRoundState: agentruntime.IMRoundState{
+			ToolCalls:     3,
+			ToolSuccesses: 2,
+			ToolFailures:  1,
+		},
 	}
 
 	if round.HasVisibleOutput() {

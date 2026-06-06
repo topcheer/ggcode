@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type OpenAICompatible struct {
@@ -28,7 +30,7 @@ func NewOpenAICompatible(baseURL, apiKey, model, provider string) *OpenAICompati
 		apiKey:     strings.TrimSpace(apiKey),
 		model:      strings.TrimSpace(model),
 		provider:   strings.TrimSpace(provider),
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: util.NewInsecureAwareClient(60 * time.Second),
 	}
 }
 

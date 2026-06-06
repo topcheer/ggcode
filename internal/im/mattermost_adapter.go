@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -103,7 +104,7 @@ func newMattermostAdapter(name string, _ config.IMConfig, adapterCfg config.IMAd
 		freeChannels:   freeChannels,
 		replyMode:      replyMode,
 		allowedUsers:   allowedUsers,
-		conn:           &http.Client{Timeout: mattermostRequestTimeout},
+		conn:           util.NewInsecureAwareClient(mattermostRequestTimeout),
 		seen:           make(map[string]time.Time),
 	}, nil
 }
@@ -386,13 +387,8 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		}
 		if pairingResult.Consumed {
 			_ = a.sendText(ctx, channelID, threadID, pairingResult.ReplyText)
-			if pairingResult.Bound && pairingResult.PreviousBinding != nil {
-				if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-					Kind: OutboundEventText,
-					Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
-				}); err != nil {
-					debug.Log("mattermost", "adapter=%s notify previous: %v", a.name, err)
-				}
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				debug.Log("mattermost", "adapter=%s notify previous: %v", a.name, err)
 			}
 			return
 		}

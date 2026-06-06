@@ -86,7 +86,7 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	req.Header.Set("User-Agent", "ggcode/1.0 (web search tool)")
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := util.NewInsecureAwareClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("search request failed: %v", err)}, nil

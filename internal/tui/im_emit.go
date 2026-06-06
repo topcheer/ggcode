@@ -233,45 +233,24 @@ func (m *Model) emitIMApproval(toolName, input string) {
 	if m.imEmitter == nil {
 		return
 	}
-	lang := m.currentLanguage()
-	detail := formatToolInline(toolName, input)
-	var msg string
-	if lang == LangZhCN {
-		msg = fmt.Sprintf("🔒 需要审批: %s\n\n回复 y 允许 · a 总是允许 · n 拒绝", detail)
-	} else {
-		msg = fmt.Sprintf("🔒 Approval required: %s\n\nReply y allow · a always allow · n deny", detail)
-	}
-	m.imEmitter.EmitText(msg)
+	m.imEmitter.EmitText(im.FormatApprovalRequest(m.imToolLanguage(), toolName, input))
 }
 
 func (m *Model) emitIMApprovalResult(toolName string, decision string) {
 	if m.imEmitter == nil {
 		return
 	}
-	lang := m.currentLanguage()
-	detail := formatToolInline(toolName, "")
-	var msg string
-	if lang == LangZhCN {
-		switch decision {
-		case "allow":
-			msg = fmt.Sprintf("✅ 已允许: %s", detail)
-		case "always":
-			msg = fmt.Sprintf("✅ 已总是允许: %s", detail)
-		case "deny":
-			msg = fmt.Sprintf("❌ 已拒绝: %s", detail)
-		}
-	} else {
-		switch decision {
-		case "allow":
-			msg = fmt.Sprintf("✅ Allowed: %s", detail)
-		case "always":
-			msg = fmt.Sprintf("✅ Always allowed: %s", detail)
-		case "deny":
-			msg = fmt.Sprintf("❌ Denied: %s", detail)
-		}
-	}
-	if msg != "" {
+	if msg := im.FormatApprovalResult(m.imToolLanguage(), toolName, decision); msg != "" {
 		m.imEmitter.EmitText(msg)
+	}
+}
+
+func (m *Model) imToolLanguage() im.ToolLanguage {
+	switch m.currentLanguage() {
+	case LangZhCN:
+		return im.ToolLangZhCN
+	default:
+		return im.ToolLangEn
 	}
 }
 

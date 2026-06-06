@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/update"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -37,6 +39,21 @@ type App struct {
 	askUserMu     sync.Mutex
 	askUserReq    tool.AskUserRequest
 	hasAskUserReq bool
+
+	streamEvents chan uiEvent
+	streamOnce   sync.Once
+	streamMu     sync.Mutex
+	streamQueue  []StreamEventEnvelope
+}
+
+type uiEvent struct {
+	name    string
+	payload interface{}
+}
+
+type StreamEventEnvelope struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
 }
 
 // NewApp creates a new App application struct.
@@ -47,6 +64,7 @@ func NewApp() *App {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.startEventLoop()
 
 	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
@@ -62,7 +80,34 @@ func (a *App) startup(ctx context.Context) {
 	a.initWorkspace(a.workDir)
 }
 
+func (a *App) startEventLoop() {
+	a.streamOnce.Do(func() {
+		a.streamEvents = make(chan uiEvent, 4096)
+		safego.Go("wails-event-loop", func() {
+			for ev := range a.streamEvents {
+				if a.ctx == nil {
+					continue
+				}
+				runtime.EventsEmit(a.ctx, ev.name, ev.payload)
+			}
+		})
+	})
+}
+
+func (a *App) enqueueUIEvent(name string, payload interface{}) {
+	if a.streamEvents == nil {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, name, payload)
+		}
+		return
+	}
+	a.streamEvents <- uiEvent{name: name, payload: payload}
+}
+
 func (a *App) initWorkspace(dir string) {
+	if dir == "" {
+		return
+	}
 	cfg, err := wailskit.LoadConfigForWorkspace(dir)
 	if err != nil {
 		cfg = nil
@@ -79,24 +124,78 @@ func (a *App) initWorkspace(dir string) {
 		return
 	}
 	chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
-		runtime.EventsEmit(a.ctx, "chat:stream", map[string]interface{}{
-			"type": eventType,
-			"data": string(data),
-		})
-		// Emit interactive events as standalone events for Layout-level dialogs
-		if eventType == "ask_user:request" || eventType == "approval:request" ||
-			eventType == "ask_user:cancel" || eventType == "approval:cancel" {
-			var parsed interface{}
-			if err := json.Unmarshal(data, &parsed); err == nil {
-				runtime.EventsEmit(a.ctx, eventType, parsed)
-			}
-		}
+		a.emitStreamEvent(eventType, data)
 	}
 	a.chat = chat
 	wailskit.SetChatBridge(chat)
 
 	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
+
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
+			"workDir": dir,
+		})
+		runtime.EventsEmit(a.ctx, "config:updated", nil)
+	}
+}
+
+func (a *App) DrainStreamEvents() []StreamEventEnvelope {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
+	if len(a.streamQueue) == 0 {
+		return nil
+	}
+	out := make([]StreamEventEnvelope, len(a.streamQueue))
+	copy(out, a.streamQueue)
+	a.streamQueue = a.streamQueue[:0]
+	return out
+}
+
+func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
+	if a.ctx == nil {
+		return
+	}
+	envelope := StreamEventEnvelope{
+		Type: eventType,
+		Data: string(data),
+	}
+	a.streamMu.Lock()
+	a.streamQueue = append(a.streamQueue, envelope)
+	a.streamMu.Unlock()
+	a.enqueueUIEvent("chat:stream", map[string]interface{}{
+		"type": envelope.Type,
+		"data": envelope.Data,
+	})
+	// Emit interactive events as standalone events for Layout-level dialogs.
+	if eventType == "ask_user:request" || eventType == "approval:request" ||
+		eventType == "ask_user:cancel" || eventType == "approval:cancel" {
+		var parsed interface{}
+		if err := json.Unmarshal(data, &parsed); err == nil {
+			a.enqueueUIEvent(eventType, parsed)
+		}
+	}
+}
+
+func (a *App) switchWorkspace(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil
+	}
+	a.stopShare()
+	a.stopIMAdapters()
+	if a.chat != nil {
+		a.chat.Cancel()
+		a.chat.Close()
+		a.chat = nil
+		wailskit.SetChatBridge(nil)
+	}
+	a.workDir = dir
+	if err := os.Chdir(dir); err != nil {
+		return err
+	}
+	a.initWorkspace(dir)
+	return nil
 }
 
 // shutdown is called when the app is closing.
@@ -123,18 +222,15 @@ func (a *App) SelectWorkspace() (string, error) {
 	if err != nil || dir == "" {
 		return "", err
 	}
-	_ = os.Chdir(dir)
-	a.workDir = dir
-	a.initWorkspace(dir)
+	if err := a.switchWorkspace(dir); err != nil {
+		return "", err
+	}
 	return dir, nil
 }
 
 // InitWorkspace initializes the workspace at the given directory.
 func (a *App) InitWorkspace(dir string) error {
-	_ = os.Chdir(dir)
-	a.workDir = dir
-	a.initWorkspace(dir)
-	return nil
+	return a.switchWorkspace(dir)
 }
 
 // CompleteOnboard saves vendor/endpoint/model/apiKey and finishes onboarding.
@@ -168,7 +264,14 @@ func (a *App) SendMessage(userMsg string) error {
 	if a.chat == nil {
 		return nil
 	}
-	return a.chat.SendMessage(userMsg)
+	text := userMsg
+	safego.Go("wails-send-message", func() {
+		if err := a.chat.SendMessage(text); err != nil {
+			raw, _ := json.Marshal(map[string]string{"message": err.Error()})
+			a.emitStreamEvent("error", raw)
+		}
+	})
+	return nil
 }
 
 // CancelMessage cancels the current agent run.
@@ -184,6 +287,14 @@ func (a *App) GetModelInfo() map[string]interface{} {
 		return nil
 	}
 	return a.chat.GetModelInfo()
+}
+
+// IsWorking reports whether the agent loop is currently running.
+func (a *App) IsWorking() bool {
+	if a.chat == nil {
+		return false
+	}
+	return a.chat.IsWorking()
 }
 
 // SetPermissionMode changes the agent permission mode at runtime.
@@ -292,21 +403,26 @@ func (a *App) DeleteSession(id string) error {
 func (a *App) NewSession() error {
 	if a.chat != nil {
 		a.chat.Cancel()
+		a.chat.ClearCurrentSession()
 	}
-	return wailskit.NewSession()
+	return nil
 }
 
 // LoadSession loads an existing session by ID.
 func (a *App) LoadSession(id string) error {
 	if a.chat != nil {
 		a.chat.Cancel()
+		return a.chat.LoadSession(id)
 	}
-	return wailskit.LoadSession(id)
+	return fmt.Errorf("chat not initialized")
 }
 
 // GetSessionHistory returns messages from the current session.
 func (a *App) GetSessionHistory() ([]wailskit.SessionMessage, error) {
-	return wailskit.GetSessionHistory()
+	if a.chat == nil {
+		return nil, nil
+	}
+	return a.chat.CurrentSessionHistory(), nil
 }
 
 // ─── Workspace ────────────────────────────────────────────
@@ -340,6 +456,14 @@ func (a *App) ListMCPServers() ([]wailskit.MCPServerInfo, error) {
 	return wailskit.ListMCPServers()
 }
 
+func (a *App) SetMCPServerEnabled(name string, enabled bool) bool {
+	return wailskit.SetMCPServerEnabled(name, enabled)
+}
+
+func (a *App) ReconnectMCPServer(name string) bool {
+	return wailskit.ReconnectMCPServer(name)
+}
+
 // AddMCPServer adds a new MCP server.
 func (a *App) AddMCPServer(values map[string]string) error {
 	return wailskit.AddMCPServer(values)
@@ -355,6 +479,24 @@ func (a *App) RemoveMCPServer(name string) error {
 // GetVersion returns the application version.
 func (a *App) GetVersion() string {
 	return "1.3.60"
+}
+
+// CheckForUpdates checks GitHub for the latest release.
+func (a *App) CheckForUpdates() (map[string]interface{}, error) {
+	svc := update.NewService(a.GetVersion(), "", "", "")
+	result, err := svc.Check(a.ctx)
+	if err != nil {
+		return map[string]interface{}{
+			"current_version": a.GetVersion(),
+			"error":           err.Error(),
+		}, nil
+	}
+	return map[string]interface{}{
+		"current_version": result.CurrentVersion,
+		"latest_version":  result.LatestVersion,
+		"has_update":      result.HasUpdate,
+		"checked_at":      result.CheckedAt.Format(time.RFC3339),
+	}, nil
 }
 
 // GetPlatform returns the current platform.
@@ -494,43 +636,6 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 
 // ─── IM Runtime (mirrors Fyne's initIMRuntime / im_bridge.go) ──────────
 
-// wailsIMBridge implements im.Bridge, routing inbound IM messages to the Wails agent.
-type wailsIMBridge struct {
-	app *App
-}
-
-func (b *wailsIMBridge) SubmitInboundMessage(ctx context.Context, msg im.InboundMessage) error {
-	if b.app == nil || b.app.chat == nil {
-		return fmt.Errorf("app not available")
-	}
-	text := buildInboundText(msg)
-	if text == "" {
-		return nil
-	}
-	// Run in background — Wails doesn't need UI thread dispatch like Fyne
-	safego.Run("im-inbound", func() {
-		_ = b.app.chat.SendMessage(text)
-	})
-	return nil
-}
-
-func buildInboundText(msg im.InboundMessage) string {
-	blocks := msg.ProviderContent()
-	if len(blocks) == 0 {
-		return strings.TrimSpace(msg.Text)
-	}
-	var parts []string
-	for _, block := range blocks {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			parts = append(parts, strings.TrimSpace(block.Text))
-		}
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "\n")
-	}
-	return strings.TrimSpace(msg.Text)
-}
-
 // initIMRuntime initializes the IM manager once at app startup.
 // Direct port of Fyne's App.initIMRuntime().
 func (a *App) initIMRuntime() {
@@ -543,79 +648,46 @@ func (a *App) initIMRuntime() {
 		}
 	}()
 
-	mgr := im.NewManager()
-
-	bindingsPath, err := im.DefaultBindingsPath()
-	if err != nil {
-		return
-	}
-	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-	if err != nil {
-		return
-	}
-	if err := mgr.SetBindingStore(bindingStore); err != nil {
-		return
-	}
-
-	pairingPath, err := im.DefaultPairingStatePath()
-	if err != nil {
-		return
-	}
-	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-	if err != nil {
-		return
-	}
-	if err := mgr.SetPairingStore(pairingStore); err != nil {
-		return
-	}
-
 	workDir := ""
 	if a.dc != nil {
 		workDir = a.dc.WorkDir
 	}
-	mgr.BindSession(im.SessionBinding{Workspace: workDir})
-
+	adapters := make(map[string]bool)
 	cfg, _ := wailskit.LoadConfigForWorkspace(workDir)
 	if cfg != nil && cfg.IM.Adapters != nil {
-		adapters := make(map[string]bool)
 		for name, acfg := range cfg.IM.Adapters {
 			adapters[name] = acfg.Enabled
 		}
-		mgr.ApplyAdapterConfig(adapters)
+	}
+	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
+		Workspace:        workDir,
+		EnabledAdapters:  adapters,
+		RegisterInstance: workDir != "",
+		OnUpdate: func(snap im.StatusSnapshot) {
+			// Pairing code dialog
+			if snap.PendingPairing != nil {
+				ch := snap.PendingPairing
+				runtime.EventsEmit(a.ctx, "im:pairing", map[string]string{
+					"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code, "kind": string(ch.Kind),
+				})
+			} else {
+				// Pairing complete — dismiss dialog
+				runtime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
+			}
+			// Adapter status snapshot for IM management page
+			runtime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
+				"adapters": len(snap.Adapters),
+			})
+		},
+	})
+	if err != nil {
+		return
 	}
 
-	// IM status updates via frontend events
-	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
-		// Pairing code dialog
-		if snap.PendingPairing != nil {
-			ch := snap.PendingPairing
-			runtime.EventsEmit(a.ctx, "im:pairing", map[string]string{
-				"adapter": ch.Adapter, "platform": string(ch.Platform), "code": ch.Code,
-			})
-		} else {
-			// Pairing complete — dismiss dialog
-			runtime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
-		}
-		// Adapter status snapshot for IM management page
-		runtime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
-			"adapters": len(snap.Adapters),
-		})
-	})
-
-	a.imManager = mgr
-
-	// Multi-instance detection — auto-mute if another instance is primary
-	if workDir != "" {
-		detect, others, err := mgr.RegisterInstance(workDir)
-		if err == nil && detect != nil {
-			a.imInstanceDetect = detect
-			if len(others) > 0 {
-				count, _ := mgr.MuteAll()
-				if count > 0 {
-					fmt.Printf("im: auto-muted %d channel(s), another instance is primary\n", count)
-				}
-			}
-		}
+	a.imManager = runtimeInit.Manager
+	a.imInstanceDetect = runtimeInit.InstanceDetect
+	if len(runtimeInit.OtherInstances) > 0 {
+		fmt.Printf("im: auto-muted IM channels, another instance is primary\n")
 	}
 
 	// Start adapters bound to current workspace
@@ -627,7 +699,7 @@ func (a *App) initIMRuntime() {
 		if cfg != nil {
 			lang = cfg.Language
 		}
-		a.chat.Emitter = im.NewIMEmitter(mgr, lang, workDir)
+		a.chat.Emitter = im.NewIMEmitter(a.imManager, lang, workDir)
 	}
 }
 
@@ -641,7 +713,41 @@ func (a *App) startIMAdapters() {
 		return
 	}
 
-	a.imManager.SetBridge(&wailsIMBridge{app: a})
+	a.imManager.SetBridge(&im.InteractiveTextBridge{
+		Submit: func(_ context.Context, text string) error {
+			if a == nil || a.chat == nil {
+				return fmt.Errorf("app not available")
+			}
+			safego.Run("im-inbound", func() {
+				_ = a.chat.SendMessage(text)
+			})
+			return nil
+		},
+		CurrentApproval: func() (string, string, bool) {
+			if a == nil || a.chat == nil {
+				return "", "", false
+			}
+			return a.chat.PendingApprovalRequest()
+		},
+		ResolveApproval: func(requestID, decision string) {
+			if a == nil || a.chat == nil {
+				return
+			}
+			a.chat.RespondApproval(requestID, decision)
+		},
+		CurrentAskUser: func() (string, tool.AskUserRequest, bool) {
+			if a == nil || a.chat == nil {
+				return "", tool.AskUserRequest{}, false
+			}
+			return a.chat.PendingAskUserRequest()
+		},
+		ResolveAskUser: func(requestID string, response tool.AskUserResponse) {
+			if a == nil || a.chat == nil {
+				return
+			}
+			a.chat.RespondAskUser(requestID, response)
+		},
+	})
 
 	controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, a.imManager)
 	if err != nil {
@@ -699,6 +805,21 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 		return a.imManager.MuteBinding(name)
 	}
 	return a.imManager.UnmuteBinding(name)
+}
+
+// BindIMAdapter binds an adapter to the current workspace.
+func (a *App) BindIMAdapter(name string) error {
+	return wailskit.BindIMAdapter(name, a.workDir, a.imManager)
+}
+
+// RebindIMAdapter re-binds an adapter to the current workspace.
+func (a *App) RebindIMAdapter(name string) error {
+	return wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
+}
+
+// UnbindIMAdapter removes all bindings for an adapter.
+func (a *App) UnbindIMAdapter(name string) error {
+	return wailskit.UnbindIMAdapter(name, a.imManager)
 }
 
 // ─── Tunnel / Share ──────────────────────────────────────────────────
@@ -763,11 +884,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 
 	broker := tunnel.NewBroker(sess)
 
-	// Handle inbound commands from mobile client
-	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-		a.onTunnelCommand(cmd, broker)
-	})
-
 	// Notify frontend when mobile client connects (via broker.OnRelayConnected —
 	// does NOT override broker's internal handleRelayConnected)
 	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
@@ -778,22 +894,21 @@ func (a *App) StartShare() (*ShareInfo, error) {
 
 	a.setTunnelState(sess, broker)
 
-	// Ensure session exists before attaching broker
 	if a.chat != nil {
-		a.chat.EnsureSession()
-	}
-
-	// Set snapshot provider for handleRelayConnected callback
-	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
-		return a.tunnelSnapshot()
-	})
-
-	// AttachTunnelBroker does everything: bindTunnelProjectionSession,
-	// SwitchSession, SendSnapshot, SetReplayProvider, BindSession,
-	// SetAuthorityEpoch, AnnounceActiveSession, SendSessionInfo,
-	// PushStatus, PushActivity — mirrors Fyne exactly.
-	if a.chat != nil {
-		a.chat.AttachTunnelBroker(broker)
+		a.chat.BindShareCommands(broker, func(language string) {
+			cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+			if cfg != nil {
+				_ = cfg.SaveLanguagePreference(language)
+			}
+		}, a.currentAskUserRequest, a.clearAskUserRequest)
+		a.chat.PrepareShareBroker(broker, func() tunnel.BrokerSnapshot {
+			return a.tunnelSnapshot()
+		})
+	} else {
+		// Set snapshot provider for handleRelayConnected callback
+		broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+			return a.tunnelSnapshot()
+		})
 	}
 
 	return &ShareInfo{
@@ -814,72 +929,11 @@ func (a *App) stopShare() {
 	if a.chat != nil {
 		a.chat.DetachTunnelBroker()
 	}
-	if broker != nil {
-		broker.StopSharingGracefully(2 * time.Second)
-	} else if sess != nil {
-		sess.DestroyGracefully(2 * time.Second)
-	}
+	agentruntime.StopSharedTunnelGracefully(sess, broker, 2*time.Second)
 	a.clearTunnelState()
 }
 
 // onTunnelCommand routes inbound mobile commands to the appropriate handler.
-func (a *App) onTunnelCommand(cmd tunnel.GatewayMessage, broker *tunnel.Broker) {
-	switch cmd.Type {
-	case "user_text", "message":
-		var data tunnel.MessageData
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
-			return
-		}
-		text := strings.TrimSpace(data.Text)
-		if text == "" {
-			return
-		}
-		// Acknowledge to mobile
-		broker.PushServerAck(tunnel.NormalizeClientMessageID(data.MessageID))
-		// Forward to agent
-		safego.Run("tunnel-inbound", func() {
-			if a.chat != nil {
-				_ = a.chat.SendMessage(text)
-			}
-		})
-
-	case tunnel.CmdApprovalResponse:
-		var data tunnel.ApprovalResponseData
-		if err := json.Unmarshal(cmd.Data, &data); err == nil {
-			if a.chat != nil {
-				a.chat.HandleMobileApprovalResponse(data)
-			}
-		}
-
-	case tunnel.CmdAskUserResponse:
-		var data tunnel.AskUserResponseData
-		if err := json.Unmarshal(cmd.Data, &data); err == nil {
-			if a.chat != nil {
-				req := a.currentAskUserRequest()
-				a.chat.HandleMobileAskUserResponse(data, req)
-				a.clearAskUserRequest()
-			}
-		}
-
-	case tunnel.CmdInterrupt:
-		if a.chat != nil {
-			a.chat.Cancel()
-		}
-
-	case tunnel.CmdLanguageChange:
-		var data tunnel.LanguageChangeData
-		if err := json.Unmarshal(cmd.Data, &data); err == nil && data.Language != "" {
-			cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
-			if cfg != nil {
-				_ = cfg.SaveLanguagePreference(data.Language)
-			}
-		}
-
-	case tunnel.CmdThemeChange:
-		// Theme not yet supported in Wails desktop
-	}
-}
-
 // tunnelSnapshot builds a complete snapshot for the mobile client.
 func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 	snapshot := tunnel.BrokerSnapshot{

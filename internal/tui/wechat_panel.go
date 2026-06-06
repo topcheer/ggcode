@@ -230,7 +230,7 @@ func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("AuthorizationType", "ilink_bot_token")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := util.NewInsecureAwareClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

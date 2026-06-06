@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -377,68 +378,31 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("resolve knight provider")
 
-	// Setup permission policy
-	allowedDirs := cfg.ExpandAllowedDirs(".")
-
-	// Convert config tool permissions to policy rules
-	rules := make(map[string]permission.Decision)
-	for tool, perm := range cfg.ToolPerms {
-		switch config.ToolPermission(perm) {
-		case "allow":
-			rules[tool] = permission.Allow
-		case "deny":
-			rules[tool] = permission.Deny
-		default:
-			rules[tool] = permission.Ask
-		}
-	}
+	workingDir, _ := os.Getwd()
+	trace.Mark("working directory")
+	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := permission.ParsePermissionMode(cfg.DefaultMode)
 	if bypass {
 		mode = permission.BypassMode
 	}
-	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 	trace.Mark("permission policy")
 
 	var ag *agent.Agent // declared early so closures can capture it
 
-	// Setup tools (after policy so sandbox checks can be wired)
-	workingDir, _ := os.Getwd()
-	trace.Mark("working directory")
-
-	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
+	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err != nil {
 		return err
 	}
-	trace.Mark("register built-in tools")
-
-	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
-	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
-	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-	trace.Mark("merge mcp servers")
-
-	// Load plugins
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(cfg.Plugins)
-	if err := pluginMgr.RegisterTools(registry); err != nil {
-		return err
-	}
-	trace.Mark("load plugins")
-
-	autoMem := memory.NewAutoMemory()
-	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
-	_ = registry.Register(saveMemoryTool)
-	trace.Mark("init auto memory")
-
-	_, autoFiles, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
-	trace.Mark("load interactive startup assets")
-
-	commandMgr.SetExtraProviders(func() []*commands.Command {
-		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
-	})
-	trace.Mark("wire command providers")
+	registry := core.Registry
+	mcpMgr := core.MCPManager
+	pluginMgr := core.PluginManager
+	autoMem := core.AutoMemory
+	projectAutoMem := core.ProjectAutoMem
+	saveMemoryTool := core.SaveMemoryTool
+	startupAssets := core.StartupAssets
+	autoFiles := startupAssets.AutoFiles
+	commandMgr := startupAssets.CommandManager
+	trace.Mark("build interactive runtime core")
 
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
@@ -460,38 +424,31 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		return a, nil
 	}
-	_ = registry.Register(tool.SkillTool{
-		Skills:       commandMgr,
-		Runtime:      mcpMgr,
-		Provider:     prov,
-		Tools:        registry,
-		AgentFactory: skillAgentFactory,
-		WorkingDir:   workingDir,
-		OnUsage: func(usage provider.TokenUsage) {
-			if skillUsageHandler != nil {
-				skillUsageHandler(usage)
-			}
-		},
-		OnSkillUsed: func(ref string) {
-			if knightAgent != nil {
-				knightAgent.RecordSkillUse(ref)
-			}
-		},
-		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
-			if knightAgent == nil {
-				return
-			}
-			if event.Err != nil || event.Result.IsError {
-				knightAgent.RecordSkillEffectiveness(event.Ref, 1)
-				return
-			}
-			if event.Mode == tool.SkillExecutionModeFork {
-				knightAgent.RecordSkillEffectiveness(event.Ref, 4)
-				return
-			}
-			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
-		},
+	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, func(usage provider.TokenUsage) {
+		if skillUsageHandler != nil {
+			skillUsageHandler(usage)
+		}
 	})
+	skillTool.OnSkillUsed = func(ref string) {
+		if knightAgent != nil {
+			knightAgent.RecordSkillUse(ref)
+		}
+	}
+	skillTool.OnSkillCompleted = func(event tool.SkillExecutionEvent) {
+		if knightAgent == nil {
+			return
+		}
+		if event.Err != nil || event.Result.IsError {
+			knightAgent.RecordSkillEffectiveness(event.Ref, 1)
+			return
+		}
+		if event.Mode == tool.SkillExecutionModeFork {
+			knightAgent.RecordSkillEffectiveness(event.Ref, 4)
+			return
+		}
+		knightAgent.RecordSkillEffectiveness(event.Ref, 3)
+	}
+	_ = registry.Register(skillTool)
 	trace.Mark("register skill tool")
 
 	var subMgr *subagent.Manager
@@ -527,33 +484,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	trace.Mark("collect tool names")
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-		// Collect user-facing slash shortcuts separately from the full skill registry.
-		userSlashCmds := commandMgr.UserSlashCommands()
-		customCmdNames := make([]string, 0, len(userSlashCmds))
-		for name := range userSlashCmds {
-			customCmdNames = append(customCmdNames, name)
-		}
-
-		// Build enhanced system prompt with runtime context
-		prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
-		skillsPrompt, promptSkillRefs := buildSkillsSystemPromptWithPromptRefs(commandMgr.List())
-		if skillsPrompt != "" {
-			prompt += "\n\n## Skills\n" + skillsPrompt
-		}
-		if mode == permission.AutopilotMode {
-			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-		}
-		// Reload auto memory from disk on every rebuild so runtime saves
-		// are visible after compaction.
-		if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
-			prompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
-		}
-		if projectAutoMem != nil {
-			if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
-				prompt += "\n\n## Auto Memory (Project)\n" + projContent
-			}
-		}
-		return prompt, promptSkillRefs
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
@@ -598,12 +529,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			debug.Log("root", "Knight scenario record failed: %v", scenarioErr)
 		}
 	})
-	if resolved.ContextWindow > 0 {
-		ag.ContextManager().SetContextWindow(resolved.ContextWindow)
-	}
-	if resolved.MaxTokens > 0 {
-		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
-	}
+	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
@@ -691,35 +618,18 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	var imMgr *im.Manager
 	{
-		imMgr = im.NewManager()
-		bindingsPath, err := im.DefaultBindingsPath()
-		if err != nil {
-			return fmt.Errorf("resolving IM bindings path: %w", err)
-		}
-		bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-		if err != nil {
-			return fmt.Errorf("creating IM binding store: %w", err)
-		}
-		if err := imMgr.SetBindingStore(bindingStore); err != nil {
-			return fmt.Errorf("loading IM bindings: %w", err)
-		}
-		pairingPath, err := im.DefaultPairingStatePath()
-		if err != nil {
-			return fmt.Errorf("resolving IM pairing state path: %w", err)
-		}
-		pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-		if err != nil {
-			return fmt.Errorf("creating IM pairing store: %w", err)
-		}
-		if err := imMgr.SetPairingStore(pairingStore); err != nil {
-			return fmt.Errorf("loading IM pairing state: %w", err)
-		}
-		imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
 		adapters := make(map[string]bool)
 		for name, acfg := range cfg.IM.Adapters {
 			adapters[name] = acfg.Enabled
 		}
-		imMgr.ApplyAdapterConfig(adapters)
+		runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
+			Workspace:       workingDir,
+			EnabledAdapters: adapters,
+		})
+		if err != nil {
+			return fmt.Errorf("initializing IM runtime: %w", err)
+		}
+		imMgr = runtimeInit.Manager
 		if knightAgent != nil {
 			knightAgent.SetEmitter(im.NewIMEmitter(imMgr, cfg.Language, workingDir))
 		}

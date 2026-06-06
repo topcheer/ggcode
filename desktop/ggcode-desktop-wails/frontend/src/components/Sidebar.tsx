@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react'
 import { Plus, Search, Smartphone, Trash2 } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 interface Props {
   onClose: () => void
   onSessionSelect?: (id: string) => void
   onShare?: () => void
   activeSessionId?: string
+  workspace?: string
 }
 
 interface SessionItem {
@@ -18,20 +20,21 @@ interface SessionItem {
   msgCount: number
 }
 
-function relativeTime(dateStr: string): string {
+function relativeTime(dateStr: string, t: (key: any, params?: Record<string, string | number>) => string): string {
   if (!dateStr) return ''
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
   const now = Date.now()
   const diff = now - d.getTime()
-  if (diff < 60000) return 'just now'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`
+  if (diff < 60000) return t('sidebar.time.justNow')
+  if (diff < 3600000) return t('sidebar.time.minutesAgo', { n: Math.floor(diff / 60000) })
+  if (diff < 86400000) return t('sidebar.time.hoursAgo', { n: Math.floor(diff / 3600000) })
+  if (diff < 604800000) return t('sidebar.time.yesterday')
   return d.toLocaleDateString()
 }
 
-export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: Props) {
+export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace }: Props) {
+  const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -49,7 +52,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
         // result is SessionInfo[] from Go
         setSessions((result as any[]).map((s: any) => ({
           id: s.ID || s.id || '',
-          title: s.Title || s.title || 'Untitled',
+          title: s.Title || s.title || t('sidebar.untitled'),
           updatedAt: s.UpdatedAt || s.updatedAt || '',
           workspace: s.Workspace || s.workspace || '',
           model: s.Model || s.model || '',
@@ -63,7 +66,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [workspace, t])
 
   const filtered = sessions.filter(s =>
     s.title.toLowerCase().includes(search.toLowerCase())
@@ -125,7 +128,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search sessions..."
+          placeholder={t('sidebar.search')}
           style={{
             flex: 1, border: 'none', background: 'transparent',
             color: 'var(--text-primary)', outline: 'none',
@@ -138,7 +141,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0', textAlign: 'left' }}>
         {loading && (
           <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
-            Loading...
+            {t('sidebar.loading')}
           </div>
         )}
         {!loading && filtered.length === 0 && (
@@ -172,7 +175,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 flex: 1,
               }}>
-                {s.title || 'Untitled'}
+                {s.title || t('sidebar.untitled')}
               </span>
               <button
                 onClick={e => handleDelete(e, s.id)}
@@ -191,7 +194,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId }: 
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {relativeTime(s.updatedAt)}
+                {relativeTime(s.updatedAt, t)}
               </span>
               {s.msgCount > 0 && (
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>

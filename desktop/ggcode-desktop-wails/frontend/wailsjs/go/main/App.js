@@ -14,8 +14,20 @@ export function ApplyImpersonation(arg1, arg2, arg3) {
   return window['go']['main']['App']['ApplyImpersonation'](arg1, arg2, arg3);
 }
 
+export function BindIMAdapter(arg1) {
+  return window['go']['main']['App']['BindIMAdapter'](arg1);
+}
+
+export function RebindIMAdapter(arg1) {
+  return window['go']['main']['App']['RebindIMAdapter'](arg1);
+}
+
 export function CancelMessage() {
   return window['go']['main']['App']['CancelMessage']();
+}
+
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
 }
 
 export function CompleteOnboard(arg1, arg2, arg3, arg4) {
@@ -24,6 +36,10 @@ export function CompleteOnboard(arg1, arg2, arg3, arg4) {
 
 export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
+}
+
+export function DrainStreamEvents() {
+  return window['go']['main']['App']['DrainStreamEvents']();
 }
 
 export function FetchModels(arg1, arg2, arg3, arg4) {
@@ -98,6 +114,10 @@ export function IsSharing() {
   return window['go']['main']['App']['IsSharing']();
 }
 
+export function IsWorking() {
+  return window['go']['main']['App']['IsWorking']();
+}
+
 export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }
@@ -136,6 +156,10 @@ export function ReadFileAsBase64(arg1) {
 
 export function ReadFileContent(arg1) {
   return window['go']['main']['App']['ReadFileContent'](arg1);
+}
+
+export function ReconnectMCPServer(arg1) {
+  return window['go']['main']['App']['ReconnectMCPServer'](arg1);
 }
 
 export function RemoveIMAdapter(arg1) {
@@ -182,6 +206,10 @@ export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
 
+export function SetMCPServerEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
+}
+
 export function SetPermissionMode(arg1) {
   return window['go']['main']['App']['SetPermissionMode'](arg1);
 }
@@ -204,6 +232,10 @@ export function TestEndpointConnection(arg1, arg2, arg3) {
 
 export function TestIMConnection(arg1) {
   return window['go']['main']['App']['TestIMConnection'](arg1);
+}
+
+export function UnbindIMAdapter(arg1) {
+  return window['go']['main']['App']['UnbindIMAdapter'](arg1);
 }
 
 export function UpdateConfig(arg1) {

@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Session represents a single conversation session.
@@ -108,9 +109,13 @@ type JSONLStore struct {
 	// O_APPEND writers can interleave inside a single JSONL line (>4KB writes
 	// are not atomic) and the index load/modify/save races silently lose
 	// updates from the loser. See locks.md S3.
-	mu         sync.Mutex
-	indexDirty bool // set when updateIndex fails; triggers repair on next loadIndex
+	mu                 sync.Mutex
+	indexDirty         bool // set when updateIndex fails; triggers a later reconciliation pass
+	maintenanceRunning bool
+	lastMaintenance    time.Time
 }
+
+const sessionMaintenanceInterval = 30 * time.Second
 
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
 func NewJSONLStore(dir string) (*JSONLStore, error) {
@@ -151,36 +156,9 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	}
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
-		// Corrupt index — trigger repair by returning empty so List()
-		// falls through to repairIndex().
+		// Corrupt index — keep List fast and let a later reconciliation pass rebuild it.
 		s.indexDirty = true
 		return nil, nil
-	}
-	// If index was marked dirty, run repair to catch any missed sessions.
-	if s.indexDirty {
-		s.indexDirty = false
-		entries, _ := os.ReadDir(s.dir)
-		jsonlCount := 0
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".jsonl") {
-				jsonlCount++
-			}
-		}
-		if jsonlCount > len(idx) {
-			// There are JSONL files not in the index — rebuild.
-			// This is safe because loadIndex is always called under s.mu.
-			// repairIndex writes the merged index to disk; reload it
-			// so callers get the repaired data instead of stale idx.
-			if _, err := s.repairIndex(idx); err == nil {
-				data2, err2 := os.ReadFile(s.indexPath())
-				if err2 == nil {
-					var repaired []indexEntry
-					if json.Unmarshal(data2, &repaired) == nil {
-						idx = repaired
-					}
-				}
-			}
-		}
 	}
 	return idx, nil
 }
@@ -545,15 +523,16 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		return nil, err
 	}
 
-	changed, err := s.repairIndex(idx)
-	if err != nil {
-		return nil, err
-	}
-	if changed {
-		// Reload repaired index
-		idx, err = s.loadIndex()
+	if len(idx) == 0 {
+		changed, err := s.repairIndex(idx)
 		if err != nil {
 			return nil, err
+		}
+		if changed {
+			idx, err = s.loadIndex()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -561,30 +540,7 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
-
-	// Remove entries for sessions with no user interaction (empty sessions).
-	// This catches orphaned files from crashes or forced exits.
-	// We already hold mu, so call loadSession (no lock) directly.
-	cleaned := false
-	var validIdx []indexEntry
-	for _, e := range idx {
-		ses, loadErr := s.loadSession(e.ID)
-		if loadErr != nil {
-			os.Remove(s.sessionPath(e.ID))
-			cleaned = true
-			continue
-		}
-		if !ses.HasUserInteraction() {
-			os.Remove(s.sessionPath(e.ID))
-			cleaned = true
-			continue
-		}
-		validIdx = append(validIdx, e)
-	}
-	if cleaned {
-		s.saveIndex(validIdx)
-		idx = validIdx
-	}
+	s.scheduleMaintenanceLocked()
 
 	result := make([]*Session, 0, len(idx))
 	for _, e := range idx {
@@ -600,6 +556,73 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		})
 	}
 	return result, nil
+}
+
+func (s *JSONLStore) scheduleMaintenanceLocked() {
+	if s.maintenanceRunning {
+		return
+	}
+	if !s.indexDirty && !s.lastMaintenance.IsZero() && time.Since(s.lastMaintenance) < sessionMaintenanceInterval {
+		return
+	}
+
+	s.maintenanceRunning = true
+	go s.runMaintenance()
+}
+
+func (s *JSONLStore) runMaintenance() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() {
+		s.lastMaintenance = time.Now()
+		s.maintenanceRunning = false
+	}()
+
+	idx, err := s.loadIndex()
+	if err != nil {
+		return
+	}
+	changed, err := s.repairIndex(idx)
+	if err != nil {
+		return
+	}
+	if changed {
+		idx, err = s.loadIndex()
+		if err != nil {
+			return
+		}
+	}
+
+	validIdx, cleaned := s.pruneInvalidIndexEntries(idx)
+	if !cleaned {
+		s.indexDirty = false
+		return
+	}
+	if err := s.saveIndex(validIdx); err != nil {
+		s.indexDirty = true
+		return
+	}
+	s.indexDirty = false
+}
+
+func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, bool) {
+	cleaned := false
+	validIdx := make([]indexEntry, 0, len(idx))
+	for _, e := range idx {
+		ses, loadErr := s.loadSession(e.ID)
+		if loadErr != nil {
+			_ = os.Remove(s.sessionPath(e.ID))
+			cleaned = true
+			continue
+		}
+		if !ses.HasUserInteraction() {
+			_ = os.Remove(s.sessionPath(e.ID))
+			cleaned = true
+			continue
+		}
+		validIdx = append(validIdx, e)
+	}
+	return validIdx, cleaned
 }
 
 // repairIndex scans the sessions directory and reconciles with the index.
@@ -620,7 +643,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		diskIDs[id] = true
 	}
 
-	changed := false
+	changed := s.indexDirty
 	newIdx := make([]indexEntry, 0, len(idx))
 
 	for _, e := range idx {
@@ -644,7 +667,11 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if !found {
 			ses, loadErr := s.loadSession(id)
 			if loadErr == nil {
-				newIdx = append(newIdx, sessionToIndexEntry(ses))
+				if ses.HasUserInteraction() {
+					newIdx = append(newIdx, sessionToIndexEntry(ses))
+				} else {
+					_ = os.Remove(s.sessionPath(id))
+				}
 				changed = true
 			}
 		}
@@ -654,6 +681,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if err := s.saveIndex(newIdx); err != nil {
 			return false, err
 		}
+		s.indexDirty = false
 	}
 	return changed, nil
 }
@@ -773,11 +801,7 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 			if m.Role == "user" {
 				for _, b := range m.Content {
 					if b.Type == "text" && b.Text != "" {
-						if len(b.Text) > 60 {
-							ses.Title = b.Text[:57] + "..."
-						} else {
-							ses.Title = b.Text
-						}
+						ses.Title = util.Truncate(b.Text, 60)
 						break
 					}
 				}

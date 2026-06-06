@@ -593,7 +593,7 @@ func TestParseDaemonApprovalReply(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, ok := parseDaemonApprovalReply(tt.input)
+			got, ok := ParseApprovalReply(tt.input)
 			if ok != tt.ok {
 				t.Errorf("ok = %v, want %v", ok, tt.ok)
 			}
@@ -691,19 +691,49 @@ func TestDaemonApproval_DenyReply(t *testing.T) {
 }
 
 func TestDaemonApproval_InvalidReplyIgnored(t *testing.T) {
-	// Test parseDaemonApprovalReply directly — invalid text returns false
-	_, ok := parseDaemonApprovalReply("hello")
+	// Test ParseApprovalReply directly — invalid text returns false
+	_, ok := ParseApprovalReply("hello")
 	if ok {
 		t.Error("should not parse 'hello' as approval reply")
 	}
 
-	_, ok = parseDaemonApprovalReply("")
+	_, ok = ParseApprovalReply("")
 	if ok {
 		t.Error("should not parse empty as approval reply")
 	}
 
-	_, ok = parseDaemonApprovalReply("maybe")
+	_, ok = ParseApprovalReply("maybe")
 	if ok {
 		t.Error("should not parse 'maybe' as approval reply")
+	}
+}
+
+func TestDaemonSlashCommandWinsOverPendingApproval(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	ch := make(chan permission.Decision, 1)
+	bridge.mu.Lock()
+	bridge.pendingApproval = ch
+	bridge.mu.Unlock()
+
+	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Text:     "/help",
+		Envelope: Envelope{Adapter: "test", Platform: PlatformQQ},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case decision := <-ch:
+		t.Fatalf("expected slash command not to resolve approval, got %v", decision)
+	default:
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if bridge.pendingApproval == nil {
+		t.Fatal("expected pending approval to remain after slash command")
 	}
 }

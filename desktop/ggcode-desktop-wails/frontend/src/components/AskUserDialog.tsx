@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { HelpCircle, X, Send } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 export interface AskUserChoice {
   id: string
@@ -33,6 +34,7 @@ interface AskUserDialogProps {
 }
 
 export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
+  const { t } = useTranslation()
   const [responding, setResponding] = useState(false)
 
   // Initialize answer state for each question
@@ -154,7 +156,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <HelpCircle size={20} style={{ color: 'var(--color-primary)', flexShrink: 0 }} />
             <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>
-              {request.title || 'Question'}
+              {request.title || t('askUser.title')}
             </span>
           </div>
           <button onClick={handleCancel} style={{
@@ -272,7 +274,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
               opacity: responding ? 0.5 : 1,
             }}
           >
-            Cancel
+            {t('im.cancel')}
           </button>
           <button
             onClick={handleSubmit}
@@ -287,7 +289,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
               opacity: responding ? 0.5 : 1,
             }}
           >
-            <Send size={14} /> Submit
+            <Send size={14} /> {t('askUser.submit')}
           </button>
         </div>
       </div>

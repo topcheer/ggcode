@@ -1,37 +1,39 @@
 import React, { useState } from 'react'
 import { Search } from 'lucide-react'
+import { useTranslation, type TranslationKey } from '../i18n'
 
 interface CommandItem {
-  name: string
+  nameKey: TranslationKey
   shortcut?: string
-  category: string
+  categoryKey: TranslationKey
 }
 
 const commands: CommandItem[] = [
-  { name: 'New Session', shortcut: '⌘N', category: 'Session' },
-  { name: 'Search Sessions', shortcut: '⌘⇧F', category: 'Session' },
-  { name: 'Clear History', category: 'Session' },
-  { name: 'Compact Context', category: 'Chat' },
-  { name: 'Undo Last', shortcut: '⌘Z', category: 'Chat' },
-  { name: 'Share Session', shortcut: '⌘⇧S', category: 'Chat' },
-  { name: 'Toggle Context Panel', shortcut: '⌘.', category: 'Chat' },
-  { name: 'Toggle Theme', shortcut: '⌘⇧T', category: 'Settings' },
-  { name: 'Open Settings', shortcut: '⌘,', category: 'Settings' },
-  { name: 'Switch Model', category: 'Settings' },
-  { name: 'Toggle Sidebar', shortcut: '⌘B', category: 'Navigation' },
-  { name: 'Previous Session', shortcut: '⌘↑', category: 'Navigation' },
-  { name: 'Next Session', shortcut: '⌘↓', category: 'Navigation' },
+  { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session' },
+  { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session' },
+  { nameKey: 'cmd.clearHistory', categoryKey: 'cmd.cat.session' },
+  { nameKey: 'cmd.compactContext', categoryKey: 'cmd.cat.chat' },
+  { nameKey: 'cmd.undoLast', shortcut: '⌘Z', categoryKey: 'cmd.cat.chat' },
+  { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat' },
+  { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat' },
+  { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings' },
+  { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings' },
+  { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings' },
+  { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation' },
+  { nameKey: 'cmd.prevSession', shortcut: '⌘↑', categoryKey: 'cmd.cat.navigation' },
+  { nameKey: 'cmd.nextSession', shortcut: '⌘↓', categoryKey: 'cmd.cat.navigation' },
 ]
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [query, setQuery] = useState('')
 
   const filtered = commands.filter(c =>
-    c.name.toLowerCase().includes(query.toLowerCase()) ||
-    c.category.toLowerCase().includes(query.toLowerCase())
+    t(c.nameKey).toLowerCase().includes(query.toLowerCase()) ||
+    t(c.categoryKey).toLowerCase().includes(query.toLowerCase())
   )
 
-  const categories = [...new Set(filtered.map(c => c.category))]
+  const categories = [...new Set(filtered.map(c => c.categoryKey))]
 
   return (
     <div style={{
@@ -54,7 +56,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Type a command..."
+          placeholder={t('cmd.placeholder')}
           autoFocus
           style={{
             flex: 1, border: 'none', background: 'transparent',
@@ -69,13 +71,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
       {/* Commands */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-sm) 0', background: 'var(--color-bg)' }}>
-        {categories.map(cat => (
-          <div key={cat}>
+        {categories.map(catKey => (
+          <div key={catKey}>
             <div style={{ padding: '8px var(--spacing-lg) 4px', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)' }}>
-              {cat}
+              {t(catKey)}
             </div>
-            {filtered.filter(c => c.category === cat).map((cmd, i) => (
-              <div key={cmd.name} style={{
+            {filtered.filter(c => c.categoryKey === catKey).map((cmd, i) => (
+              <div key={cmd.nameKey} style={{
                 display: 'flex', alignItems: 'center',
                 padding: '6px var(--spacing-lg)',
                 background: i === 0 && !query ? 'var(--color-card)' : 'transparent',
@@ -84,7 +86,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                 <span style={{
                   fontSize: 13,
                   color: (i === 0 && !query) ? 'var(--text-primary)' : 'var(--text-secondary)',
-                }}>{cmd.name}</span>
+                }}>{t(cmd.nameKey)}</span>
                 <div style={{ flex: 1 }} />
                 {cmd.shortcut && (
                   <span style={{

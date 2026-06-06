@@ -210,3 +210,36 @@ func TestIMConnection(name string) error {
 	// The frontend should start the adapter and observe state changes.
 	return nil
 }
+
+// BindIMAdapter binds an adapter to the current workspace.
+// imMgr may be nil (adapter will be bound but won't be active until manager is initialized).
+func BindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
+	if imMgr == nil {
+		// Adapter will be bound but not yet active; will take effect on next startup
+		return fmt.Errorf("IM manager not initialized")
+	}
+
+	workspace := session.NormalizeWorkspacePath(workingDir)
+	return imMgr.BindAdapterToWorkspace(name, workspace)
+}
+
+// RebindIMAdapter re-binds an adapter to the current workspace,
+// replacing any existing binding to another workspace.
+// imMgr may be nil (adapter will be rebound but won't be active until manager is initialized).
+func RebindIMAdapter(name, workingDir string, imMgr interface{ BindAdapterToWorkspace(string, string) error }) error {
+	if imMgr == nil {
+		// Adapter will be rebound but not yet active; will take effect on next startup
+		return fmt.Errorf("IM manager not initialized")
+	}
+
+	workspace := session.NormalizeWorkspacePath(workingDir)
+	return imMgr.BindAdapterToWorkspace(name, workspace)
+}
+
+// UnbindIMAdapter removes all bindings for an adapter.
+func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }) error {
+	if imMgr == nil {
+		return fmt.Errorf("IM manager not initialized")
+	}
+	return imMgr.UnbindAdapter(name)
+}

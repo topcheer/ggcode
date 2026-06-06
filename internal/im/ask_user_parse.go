@@ -83,11 +83,51 @@ func SplitNonEmptyLines(text string) []string {
 	return lines
 }
 
+func BuildAskUserAnswer(question toolpkg.AskUserQuestion, selected map[string]struct{}, freeform string) toolpkg.AskUserAnswer {
+	selectedIDs := sortedKeys(selected)
+	answer := toolpkg.AskUserAnswer{
+		ID:                question.ID,
+		Title:             question.Title,
+		Kind:              question.Kind,
+		CompletionStatus:  toolpkg.AskUserCompletionUnanswered,
+		AnswerMode:        toolpkg.AskUserAnswerModeNone,
+		Answered:          false,
+		SelectedChoiceIDs: selectedIDs,
+		SelectedChoices:   labelsForIDs(question.Choices, selected),
+		FreeformText:      freeform,
+	}
+
+	switch {
+	case len(selectedIDs) == 0 && freeform == "":
+		answer.AnswerMode = toolpkg.AskUserAnswerModeNone
+		answer.CompletionStatus = toolpkg.AskUserCompletionUnanswered
+	case len(selectedIDs) == 0 && freeform != "":
+		answer.AnswerMode = toolpkg.AskUserAnswerModeFreeformOnly
+		if question.Kind == toolpkg.AskUserKindText {
+			answer.CompletionStatus = toolpkg.AskUserCompletionAnswered
+		} else {
+			answer.CompletionStatus = toolpkg.AskUserCompletionPartial
+		}
+	case len(selectedIDs) > 0 && freeform == "":
+		answer.AnswerMode = toolpkg.AskUserAnswerModeSelectionOnly
+		answer.CompletionStatus = toolpkg.AskUserCompletionAnswered
+	default:
+		answer.AnswerMode = toolpkg.AskUserAnswerModeSelectionAndFreeform
+		answer.CompletionStatus = toolpkg.AskUserCompletionAnswered
+	}
+	answer.Answered = answer.CompletionStatus == toolpkg.AskUserCompletionAnswered
+	return answer
+}
+
 // BuildAskUserResponse builds an AskUserResponse from parsed per-question answers.
 // This is the shared implementation used by daemon (and can be used by TUI).
 func BuildAskUserResponse(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer) toolpkg.AskUserResponse {
+	return BuildAskUserResponseWithStatus(req, parsed, toolpkg.AskUserStatusSubmitted)
+}
+
+func BuildAskUserResponseWithStatus(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer, status string) toolpkg.AskUserResponse {
 	resp := toolpkg.AskUserResponse{
-		Status:        toolpkg.AskUserStatusSubmitted,
+		Status:        status,
 		Title:         req.Title,
 		QuestionCount: len(req.Questions),
 		AnsweredCount: 0,
@@ -106,28 +146,114 @@ func BuildAskUserResponse(req toolpkg.AskUserRequest, parsed []ParsedQuestionAns
 
 		if i < len(parsed) && parsed[i].Error == nil {
 			p := parsed[i]
-			answer.Answered = true
-			answer.CompletionStatus = toolpkg.AskUserCompletionAnswered
-			answer.SelectedChoiceIDs = sortedKeys(p.Selected)
-			answer.SelectedChoices = labelsForIDs(q.Choices, p.Selected)
-
-			if len(p.Selected) > 0 && p.Freeform != "" {
-				answer.AnswerMode = toolpkg.AskUserAnswerModeSelectionAndFreeform
-				answer.FreeformText = p.Freeform
-			} else if len(p.Selected) > 0 {
-				answer.AnswerMode = toolpkg.AskUserAnswerModeSelectionOnly
-			} else if p.Freeform != "" || q.Kind == toolpkg.AskUserKindText {
-				answer.AnswerMode = toolpkg.AskUserAnswerModeFreeformOnly
-				answer.FreeformText = p.Freeform
+			answer = BuildAskUserAnswer(q, p.Selected, p.Freeform)
+			if answer.Answered {
+				resp.AnsweredCount++
 			}
-
-			resp.AnsweredCount++
 		}
 
 		resp.Answers = append(resp.Answers, answer)
 	}
 
 	return resp
+}
+
+func AnsweredCount(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer) int {
+	count := 0
+	for i, q := range req.Questions {
+		if i < len(parsed) && BuildAskUserAnswer(q, parsed[i].Selected, parsed[i].Freeform).Answered {
+			count++
+		}
+	}
+	return count
+}
+
+func FirstUnansweredQuestionIndex(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer) int {
+	for i, q := range req.Questions {
+		if i >= len(parsed) || !BuildAskUserAnswer(q, parsed[i].Selected, parsed[i].Freeform).Answered {
+			return i
+		}
+	}
+	return -1
+}
+
+func ApplyRemoteQuestionnaireAnswer(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer, raw string) ([]ParsedQuestionAnswer, bool, int, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return nil, false, -1, fmt.Errorf("empty answer")
+	}
+	if len(parsed) < len(req.Questions) {
+		next := make([]ParsedQuestionAnswer, len(req.Questions))
+		copy(next, parsed)
+		for i := len(parsed); i < len(req.Questions); i++ {
+			next[i] = ParsedQuestionAnswer{QuestionIndex: i}
+		}
+		parsed = next
+	} else {
+		next := make([]ParsedQuestionAnswer, len(parsed))
+		copy(next, parsed)
+		parsed = next
+	}
+
+	unansweredCount := 0
+	firstUnanswered := FirstUnansweredQuestionIndex(req, parsed)
+	for i, q := range req.Questions {
+		if !BuildAskUserAnswer(q, parsed[i].Selected, parsed[i].Freeform).Answered {
+			unansweredCount++
+		}
+	}
+
+	if unansweredCount > 1 {
+		rawLines := SplitNonEmptyLines(text)
+		if len(rawLines) > 1 && len(rawLines) <= unansweredCount {
+			applied := 0
+			qi := firstUnanswered
+			for _, line := range rawLines {
+				for qi < len(req.Questions) {
+					if !BuildAskUserAnswer(req.Questions[qi], parsed[qi].Selected, parsed[qi].Freeform).Answered {
+						break
+					}
+					qi++
+				}
+				if qi >= len(req.Questions) {
+					break
+				}
+				selected, freeform, err := ParseRemoteQuestionnaireAnswer(line, req.Questions[qi])
+				if err != nil {
+					break
+				}
+				if selected != nil {
+					parsed[qi].Selected = selected
+				}
+				if freeform != "" || req.Questions[qi].Kind == toolpkg.AskUserKindText || req.Questions[qi].AllowFreeform {
+					parsed[qi].Freeform = freeform
+				}
+				applied++
+				qi++
+			}
+			if applied > 0 {
+				nextIdx := FirstUnansweredQuestionIndex(req, parsed)
+				return parsed, nextIdx < 0, nextIdx, nil
+			}
+		}
+	}
+
+	idx := firstUnanswered
+	if idx < 0 {
+		return parsed, true, -1, fmt.Errorf("no active question")
+	}
+	selected, freeform, err := ParseRemoteQuestionnaireAnswer(text, req.Questions[idx])
+	if err != nil {
+		return parsed, false, idx, err
+	}
+	if selected != nil {
+		parsed[idx].Selected = selected
+	}
+	if freeform != "" || req.Questions[idx].Kind == toolpkg.AskUserKindText || req.Questions[idx].AllowFreeform {
+		parsed[idx].Freeform = freeform
+	}
+	nextIdx := FirstUnansweredQuestionIndex(req, parsed)
+	return parsed, nextIdx < 0, nextIdx, nil
 }
 
 // --- internal helpers ---

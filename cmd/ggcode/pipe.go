@@ -10,17 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
-	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
-	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -66,98 +63,51 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	// Setup tools (after policy so sandbox checks can be wired)
 	var ag *agent.Agent
-	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
-		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
+	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "building runtime core: %v\n", err)
 		return 1
 	}
-	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
-	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
-	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-
-	// Load plugins
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(cfg.Plugins)
+	registry := core.Registry
+	mcpMgr := core.MCPManager
 	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer mcpCancel()
 	for _, warning := range mcpMgr.ConnectAll(mcpCtx) {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 	defer mcpMgr.Close()
-	if err := pluginMgr.RegisterTools(registry); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: plugin registration failed: %v\n", err)
-	}
 
 	// Load project memory documents.
 	projectMem, projectMemFiles, _ := memory.LoadProjectMemory(workingDir)
 
-	// Load auto memory
-	autoMem := memory.NewAutoMemory()
-	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
-	_ = registry.Register(saveMemoryTool)
-	commandMgr := commands.NewManager(workingDir)
-	commandMgr.SetExtraProviders(func() []*commands.Command {
-		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
-	})
+	autoMem := core.AutoMemory
+	projectAutoMem := core.ProjectAutoMem
+	saveMemoryTool := core.SaveMemoryTool
+	commandMgr := core.CommandManager
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	_ = registry.Register(tool.SkillTool{
-		Skills:       commandMgr,
-		Runtime:      mcpMgr,
-		Provider:     prov,
-		Tools:        registry,
-		AgentFactory: skillAgentFactory,
-		WorkingDir:   workingDir,
-		OnUsage:      nil,
+	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil))
+	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
+		return permission.Deny
 	})
-	acpClientMgr := acpclient.NewClientManager(workingDir, policy)
 	if len(acpClientMgr.Available()) > 0 {
-		acpClientMgr.SetApprovalHandler(func(_ context.Context, _ string, _ string) permission.Decision {
-			return permission.Deny
-		})
-		_ = registry.Register(tool.DelegateTool{
-			Manager:    acpClientMgr,
-			WorkingDir: workingDir,
-			WorkingDirFn: func() string {
-				if ag != nil {
-					return ag.WorkingDir()
-				}
-				return workingDir
-			},
+		agentruntime.RegisterDelegateTool(registry, acpClientMgr, nil, workingDir, func() string {
+			if ag != nil {
+				return ag.WorkingDir()
+			}
+			return workingDir
 		})
 		defer acpClientMgr.CloseAll()
 	}
 
 	buildCurrentSystemPrompt := func() string {
 		gitStatus := detectGitStatus(workingDir)
-		userSlashCmds := commandMgr.UserSlashCommands()
-		customCmdNames := make([]string, 0, len(userSlashCmds))
-		for name := range userSlashCmds {
-			customCmdNames = append(customCmdNames, name)
-		}
-		systemPrompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, registryToolNames(registry), gitStatus, customCmdNames)
-		if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
-			systemPrompt += "\n\n## Skills\n" + skillsPrompt
-		}
-		if mode == permission.AutopilotMode {
-			systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-		}
+		systemPrompt := agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus)
 		if projectMem != "" {
 			systemPrompt += "\n\n## Project Memory\n" + projectMem
-		}
-		if projectAutoMem != nil {
-			if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
-				systemPrompt += "\n\n## Auto Memory (Project)\n" + projContent
-			}
-		}
-		if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
-			systemPrompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
 		}
 		return systemPrompt
 	}
@@ -167,13 +117,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	ag.SetProjectMemoryFiles(projectMemFiles)
-	if resolved.ContextWindow > 0 {
-		ag.ContextManager().SetContextWindow(resolved.ContextWindow)
-	}
+	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
-	if resolved.MaxTokens > 0 {
-		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
-	}
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)

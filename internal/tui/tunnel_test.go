@@ -1254,6 +1254,59 @@ func TestPushTunnelEventReasoningFinalizesBeforeText(t *testing.T) {
 	}
 }
 
+func TestPushSwarmTunnelEventReasoningFinalizesBeforeToolCall(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+
+	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_reasoning", TeammateID: "tm-1", Result: "thinking"})
+	m.pushSwarmTunnelEvent(swarm.Event{Type: "teammate_tool_call", TeammateID: "tm-1", ToolID: "tool-1", CurrentTool: "bash", ToolArgs: `{"command":"pwd"}`})
+
+	if len(m.session.TunnelEvents) < 3 {
+		t.Fatalf("expected reasoning, reasoning_done, and tool_call events, got %d", len(m.session.TunnelEvents))
+	}
+	if got := m.session.TunnelEvents[0].Type; got != tunnel.EventSubagentReasoning {
+		t.Fatalf("expected first event %q, got %q", tunnel.EventSubagentReasoning, got)
+	}
+	if got := m.session.TunnelEvents[1].Type; got != tunnel.EventSubagentReasoningDone {
+		t.Fatalf("expected second event %q, got %q", tunnel.EventSubagentReasoningDone, got)
+	}
+	if got := m.session.TunnelEvents[2].Type; got != tunnel.EventSubagentToolCall {
+		t.Fatalf("expected third event %q, got %q", tunnel.EventSubagentToolCall, got)
+	}
+}
+
+func TestTunnelSnapshotEventsFromTeammatePreservesReasoning(t *testing.T) {
+	events := tunnelSnapshotEventsFromTeammate(swarm.TeammateSnapshot{
+		ID:     "tm-1",
+		Name:   "coder",
+		Color:  "#4CAF50",
+		Status: swarm.TeammateWorking,
+		Events: []swarm.TeammateEvent{
+			{Type: swarm.TeammateEventReasoning, Text: "thinking"},
+			{Type: swarm.TeammateEventText, Text: "done"},
+		},
+	}, "team-1")
+
+	var reasoningIdx = -1
+	var reasoningDoneIdx = -1
+	var textIdx = -1
+	for i, ev := range events {
+		switch ev.Type {
+		case tunnel.EventSubagentReasoning:
+			reasoningIdx = i
+		case tunnel.EventSubagentReasoningDone:
+			reasoningDoneIdx = i
+		case tunnel.EventSubagentText:
+			textIdx = i
+		}
+	}
+	if reasoningIdx < 0 || reasoningDoneIdx < 0 || textIdx < 0 {
+		t.Fatalf("expected reasoning, reasoning_done, and text snapshot events, got %+v", events)
+	}
+	if !(reasoningIdx < reasoningDoneIdx && reasoningDoneIdx < textIdx) {
+		t.Fatalf("expected reasoning before reasoning_done before text, got reasoning=%d reasoning_done=%d text=%d", reasoningIdx, reasoningDoneIdx, textIdx)
+	}
+}
+
 func TestHandleAgentDoneMsgFinalizesOpenTunnelStream(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 	m.activeAgentRunID = 1

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi } from 'lucide-react'
+import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi, RefreshCw, Power } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 type TransportType = 'stdio' | 'http' | 'ws'
 
@@ -12,6 +13,10 @@ interface MCPServerConfig {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  status?: string
+  error?: string
+  disabled?: boolean
+  connected?: boolean
 }
 
 const TRANSPORTS: { value: TransportType; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -53,6 +58,7 @@ function transportTextColor(type?: string) {
 }
 
 export function MCPServers({ onBack }: { onBack: () => void }) {
+  const { t: tr } = useTranslation()
   const [servers, setServers] = useState<MCPServerConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -138,6 +144,20 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
     } catch {}
   }
 
+  const handleToggleEnabled = async (name: string, enabled: boolean) => {
+    try {
+      await App.SetMCPServerEnabled(name, enabled)
+      await loadServers()
+    } catch {}
+  }
+
+  const handleReconnect = async (name: string) => {
+    try {
+      await App.ReconnectMCPServer(name)
+      await loadServers()
+    } catch {}
+  }
+
   const inputStyle: React.CSSProperties = {
     padding: '5px 8px', borderRadius: 'var(--radius-sm)',
     background: 'var(--color-bg)', border: '1px solid var(--color-border)',
@@ -162,7 +182,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           color: 'var(--text-secondary)', display: 'flex', alignItems: 'center',
         }}><ChevronLeft size={18} /></button>
         <Server size={16} style={{ color: 'var(--color-primary)' }} />
-        <span style={{ fontWeight: 600, fontSize: 14 }}>MCP Servers</span>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{tr('mcp.title')}</span>
         <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{servers.length} configured</span>
         <div style={{ flex: 1 }} />
         <button onClick={() => setShowAdd(!showAdd)} style={{
@@ -170,7 +190,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           background: 'var(--color-primary)', color: '#fff',
           border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
           display: 'flex', alignItems: 'center', gap: 4,
-        }}><Plus size={14} /> Add</button>
+        }}><Plus size={14} /> {tr('mcp.add')}</button>
       </div>
 
       {/* Add form */}
@@ -248,7 +268,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
               padding: '4px 10px', borderRadius: 'var(--radius-sm)',
               background: 'var(--color-primary)', border: 'none',
               color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-            }}>Add Server</button>
+            }}>{tr('mcp.add')} Server</button>
           </div>
         </div>
       )}
@@ -266,7 +286,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
         )}
         {!loading && servers.length === 0 && (
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
-            No MCP servers configured. Click "Add" to add one.
+            No MCP servers configured. Click "{tr('mcp.add')}" to add one.
           </div>
         )}
 
@@ -291,6 +311,12 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     background: transportColor(t), color: transportTextColor(t),
                     fontWeight: 500,
                   }}>{transportLabel(t)}</span>
+                  <span style={{
+                    fontSize: 10, padding: '1px 6px', borderRadius: 'var(--radius-sm)',
+                    background: server.disabled ? 'rgba(148,163,184,0.15)' : server.connected ? 'rgba(63,185,80,0.15)' : server.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(234,179,8,0.15)',
+                    color: server.disabled ? '#94a3b8' : server.connected ? '#3FB950' : server.status === 'failed' ? '#ef4444' : '#eab308',
+                    fontWeight: 500,
+                  }}>{server.disabled ? 'disabled' : (server.status || 'unknown')}</span>
                 </div>
                 {/* Transport-specific details */}
                 {t === 'stdio' ? (
@@ -328,11 +354,24 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     </span>
                   </div>
                 )}
+                {server.error && !server.disabled && (
+                  <div style={{ marginTop: 4, fontSize: 10, color: '#f87171' }}>{server.error}</div>
+                )}
               </div>
-              <button onClick={() => handleRemove(server.name)} title="Remove" style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                color: 'var(--text-tertiary)', padding: 4, flexShrink: 0,
-              }}><Trash2 size={14} /></button>
+              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                <button onClick={() => handleToggleEnabled(server.name, !!server.disabled)} title={server.disabled ? 'Enable' : 'Disable'} style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: server.disabled ? '#3FB950' : 'var(--text-tertiary)', padding: 4,
+                }}><Power size={14} /></button>
+                <button onClick={() => handleReconnect(server.name)} title="Reconnect" style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-tertiary)', padding: 4,
+                }}><RefreshCw size={14} /></button>
+                <button onClick={() => handleRemove(server.name)} title="Remove" style={{
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-tertiary)', padding: 4,
+                }}><Trash2 size={14} /></button>
+              </div>
             </div>
           )
         })}

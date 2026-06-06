@@ -253,46 +253,10 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m *Model) ensurePCReady() error {
 	// Ensure IM Manager is initialized
 	if m.imManager == nil {
-		if m.config == nil {
-			return errors.New("config not available")
-		}
-		m.config.IM.Enabled = true
-		if err := m.saveConfig(); err != nil {
+		if err := m.ensureCurrentWorkspaceIMManager("config not available", "", true); err != nil {
 			return fmt.Errorf("enable IM: %w", err)
 		}
-		bindingsPath, err := im.DefaultBindingsPath()
-		if err != nil {
-			return fmt.Errorf("resolving IM bindings path: %w", err)
-		}
-		bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-		if err != nil {
-			return fmt.Errorf("creating IM binding store: %w", err)
-		}
-		imMgr := im.NewManager()
-		if err := imMgr.SetBindingStore(bindingStore); err != nil {
-			return fmt.Errorf("loading IM bindings: %w", err)
-		}
-		pairingPath, err := im.DefaultPairingStatePath()
-		if err != nil {
-			return fmt.Errorf("resolving IM pairing state path: %w", err)
-		}
-		pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-		if err != nil {
-			return fmt.Errorf("creating IM pairing store: %w", err)
-		}
-		if err := imMgr.SetPairingStore(pairingStore); err != nil {
-			return fmt.Errorf("loading IM pairing state: %w", err)
-		}
-		imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
-		if m.config != nil {
-			adapters := make(map[string]bool)
-			for n, acfg := range m.config.IM.Adapters {
-				adapters[n] = acfg.Enabled
-			}
-			imMgr.ApplyAdapterConfig(adapters)
-		}
-		imMgr.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))
-		m.SetIMManager(imMgr)
+		m.imManager.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))
 	}
 
 	// Ensure PC adapter is started

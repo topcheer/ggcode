@@ -549,6 +549,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _setAgentActivity(data.activity);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'user_message':
@@ -670,6 +671,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           chatNotifier.finalizeStreaming(msgId);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'reasoning_done':
@@ -807,6 +809,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           }
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_spawn':
@@ -826,6 +829,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           );
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_text':
@@ -842,6 +846,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           chatNotifier.handleSubagentText(data);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_reasoning':
@@ -858,6 +863,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           chatNotifier.handleSubagentReasoning(data);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_reasoning_done':
@@ -871,6 +877,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           chatNotifier.finalizeReasoning(reasoningId);
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_status':
@@ -886,6 +893,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           );
         }
         _markEventApplied(msg);
+        _markProjectionAuthoritative();
         break;
 
       case 'subagent_complete':

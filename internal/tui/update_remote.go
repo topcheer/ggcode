@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -15,45 +16,65 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	// Track the originating adapter for per-channel echo suppression.
 	m.remoteInboundAdapter = msg.Message.Envelope.Adapter
 	prompt := buildRemoteInboundPrompt(msg.Message)
+	route := im.RouteInboundText(prompt, m.pendingApproval != nil, m.pendingQuestionnaire != nil)
 
-	// Handle IM approval reply: y/a/n for pending tool permission
-	if m.pendingApproval != nil {
-		text := strings.TrimSpace(prompt)
-		if text != "" {
-			decision, ok := parseApprovalReply(text)
-			if ok {
-				toolName := m.pendingApproval.ToolName
-				decisionStr := "deny"
-				var cmd tea.Cmd
-				if decision == permission.Allow && isApprovalAlwaysReply(text) {
-					cmd = m.handleApprovalAllowAlways()
-					decisionStr = "always"
+	if route.Kind == im.InboundRouteSlash {
+		if response, handled := m.ExecuteRemoteSlashCommand(route.Text); handled {
+			// Handle /restart: send IM confirmation first, then quit after delay.
+			if response == "RESTART" || response == "RESTART:DEBUG" {
+				if response == "RESTART:DEBUG" {
+					m.emitIMText("\U0001f504 Restarting ggcode with debug mode enabled...")
 				} else {
-					if decision == permission.Allow {
-						decisionStr = "allow"
-					}
-					cmd = m.handleApproval(decision)
+					m.emitIMText("\U0001f504 Restarting ggcode...")
 				}
 				if msg.Response != nil {
 					msg.Response <- nil
 				}
-				// Send result confirmation back to IM
-				if m.approvalNotifiedIM {
-					m.emitIMApprovalResult(toolName, decisionStr)
-				}
-				return m, cmd
+				return m, m.scheduleRemoteRestart()
 			}
-		}
-	}
-
-	if m.pendingQuestionnaire != nil {
-		if strings.TrimSpace(prompt) == "" {
+			// Handle /muteself: send warning first, then mute after delay.
+			if strings.HasPrefix(response, "MUTES:") {
+				adapter := strings.TrimPrefix(response, "MUTES:")
+				m.emitIMText(im.DefaultMuteSelfWarning(adapter))
+				if msg.Response != nil {
+					msg.Response <- nil
+				}
+				return m, m.scheduleMuteSelf(adapter)
+			}
+			if strings.TrimSpace(response) != "" {
+				m.emitIMText(response)
+			}
 			if msg.Response != nil {
-				msg.Response <- fmt.Errorf("empty remote message")
+				msg.Response <- nil
 			}
 			return m, nil
 		}
-		completed, err := m.pendingQuestionnaire.applyRemoteAnswer(prompt, m.currentLanguage())
+	}
+
+	if route.Kind == im.InboundRouteApproval {
+		toolName := m.pendingApproval.ToolName
+		decisionStr := "deny"
+		var cmd tea.Cmd
+		if route.Decision == permission.Allow && route.AlwaysAllow {
+			cmd = m.handleApprovalAllowAlways()
+			decisionStr = "always"
+		} else {
+			if route.Decision == permission.Allow {
+				decisionStr = "allow"
+			}
+			cmd = m.handleApproval(route.Decision)
+		}
+		if msg.Response != nil {
+			msg.Response <- nil
+		}
+		if m.approvalNotifiedIM {
+			m.emitIMApprovalResult(toolName, decisionStr)
+		}
+		return m, cmd
+	}
+
+	if route.Kind == im.InboundRouteAskUser {
+		completed, err := m.pendingQuestionnaire.applyRemoteAnswer(route.Text, m.currentLanguage())
 		if msg.Response != nil {
 			msg.Response <- nil
 		}
@@ -80,37 +101,8 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 		}
 		return m, nil
 	}
-	if response, handled := m.ExecuteRemoteSlashCommand(prompt); handled {
-		// Handle /restart: send IM confirmation first, then quit after delay.
-		if response == "RESTART" || response == "RESTART:DEBUG" {
-			if response == "RESTART:DEBUG" {
-				m.emitIMText("\U0001f504 Restarting ggcode with debug mode enabled...")
-			} else {
-				m.emitIMText("\U0001f504 Restarting ggcode...")
-			}
-			if msg.Response != nil {
-				msg.Response <- nil
-			}
-			return m, m.scheduleRemoteRestart()
-		}
-		// Handle /muteself: send warning first, then mute after delay.
-		if strings.HasPrefix(response, "MUTES:") {
-			adapter := strings.TrimPrefix(response, "MUTES:")
-			m.emitIMText("\U0001f507 Muting this adapter... You will stop receiving replies. Use /restart from another adapter to recover.")
-			if msg.Response != nil {
-				msg.Response <- nil
-			}
-			return m, m.scheduleMuteSelf(adapter)
-		}
-		if strings.TrimSpace(response) != "" {
-			m.emitIMText(response)
-		}
-		if msg.Response != nil {
-			msg.Response <- nil
-		}
-		return m, nil
-	}
-	if strings.TrimSpace(prompt) == "" {
+
+	if route.Kind == im.InboundRouteEmpty {
 		if msg.Response != nil {
 			msg.Response <- fmt.Errorf("empty remote message")
 		}

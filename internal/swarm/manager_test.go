@@ -660,6 +660,15 @@ func TestBuildTeammateSystemPrompt_WithWorkingDir(t *testing.T) {
 	if !containsSubstr(prompt, "Working directory:") {
 		t.Error("expected 'Working directory:' label in prompt")
 	}
+	if !containsSubstr(prompt, "shared task board as the source of truth") {
+		t.Error("expected prompt to mention shared task board coordination")
+	}
+	if !containsSubstr(prompt, "do not re-claim it from the board first") {
+		t.Error("expected prompt to distinguish direct assignment from board claiming")
+	}
+	if !containsSubstr(prompt, "avoid repetitive back-and-forth or message loops") {
+		t.Error("expected prompt to discourage message loops")
+	}
 }
 
 func TestBuildTeammateSystemPrompt_NoWorkingDir(t *testing.T) {

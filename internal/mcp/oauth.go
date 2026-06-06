@@ -94,14 +94,121 @@ func NewOAuthHandler(serverName, serverURL string, store *auth.Store) *OAuthHand
 	return &OAuthHandler{
 		serverName: serverName,
 		serverURL:  serverURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: util.NewInsecureAwareClient(10 * time.Second),
 		store:      store,
 	}
 }
 
-// providerID returns the storage key for this server's tokens.
-func (h *OAuthHandler) providerID() string {
+func (h *OAuthHandler) legacyProviderID() string {
 	return "mcp:" + h.serverName
+}
+
+func (h *OAuthHandler) providerID() string {
+	if canonical := h.canonicalProviderID(); canonical != "" {
+		return canonical
+	}
+	return h.legacyProviderID()
+}
+
+func (h *OAuthHandler) canonicalProviderID() string {
+	issuer := h.canonicalIssuer()
+	resource := h.canonicalResource()
+	if issuer == "" || resource == "" {
+		return ""
+	}
+	return "mcp-shared:" + issuer + "|" + resource
+}
+
+func (h *OAuthHandler) canonicalIssuer() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.state == nil || h.state.authorizationServerMeta == nil {
+		return ""
+	}
+	return normalizeOAuthIdentity(h.state.authorizationServerMeta.Issuer)
+}
+
+func (h *OAuthHandler) canonicalResource() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.state != nil && h.state.protectedResourceMeta != nil {
+		if resource := normalizeOAuthIdentity(h.state.protectedResourceMeta.Resource); resource != "" {
+			return resource
+		}
+	}
+	return normalizeOAuthIdentity(h.serverURL)
+}
+
+func (h *OAuthHandler) providerIDCandidates() []string {
+	out := make([]string, 0, 2)
+	if canonical := h.canonicalProviderID(); canonical != "" {
+		out = append(out, canonical)
+	}
+	legacy := h.legacyProviderID()
+	if legacy != "" {
+		out = append(out, legacy)
+	}
+	return out
+}
+
+func normalizeOAuthIdentity(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return strings.ToLower(raw)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Fragment = ""
+	u.RawQuery = ""
+	if u.Path == "/" {
+		u.Path = ""
+	}
+	return strings.TrimSuffix(u.String(), "/")
+}
+
+func (h *OAuthHandler) loadStoredInfo() (*auth.Info, string, error) {
+	for _, key := range h.providerIDCandidates() {
+		info, err := h.store.Load(key)
+		if err != nil || info == nil {
+			if err != nil {
+				return nil, "", err
+			}
+			continue
+		}
+		return info, key, nil
+	}
+	return nil, "", nil
+}
+
+func (h *OAuthHandler) hydrateStateFromInfo(info *auth.Info) {
+	if info == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.state == nil {
+		h.state = &oauthState{}
+	}
+	if h.state.clientRegistration == nil && strings.TrimSpace(info.OAuthClientID) != "" {
+		h.state.clientRegistration = &ClientRegistration{
+			ClientID:     strings.TrimSpace(info.OAuthClientID),
+			ClientSecret: strings.TrimSpace(info.OAuthSecret),
+		}
+	}
+	if h.state.protectedResourceMeta == nil && strings.TrimSpace(info.OAuthResource) != "" {
+		h.state.protectedResourceMeta = &ProtectedResourceMetadata{
+			Resource: strings.TrimSpace(info.OAuthResource),
+		}
+	}
+	if h.state.authorizationServerMeta == nil && strings.TrimSpace(info.OAuthIssuer) != "" {
+		h.state.authorizationServerMeta = &AuthorizationServerMetadata{
+			Issuer: strings.TrimSpace(info.OAuthIssuer),
+		}
+	}
 }
 
 // GetAccessToken returns a valid access token, refreshing if needed.
@@ -113,11 +220,17 @@ func (h *OAuthHandler) providerID() string {
 // the token has a few minutes left (the 5-minute IsExpired() buffer caused
 // tokens to be discarded too early, requiring re-auth every time).
 func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
-	info, err := h.store.Load(h.providerID())
+	info, sourceKey, err := h.loadStoredInfo()
 	if err != nil || info == nil {
 		return "", nil
 	}
+	h.hydrateStateFromInfo(info)
 	if !info.IsExpired() {
+		if canonical := h.canonicalProviderID(); canonical != "" && canonical != sourceKey {
+			copy := *info
+			copy.ProviderID = canonical
+			_ = h.store.Save(&copy)
+		}
 		return info.AccessToken, nil
 	}
 	// Token is near-expiry or expired. Try refresh if we have a refresh token.
@@ -190,16 +303,10 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 		return nil, fmt.Errorf("token refresh returned empty access_token")
 	}
 
-	info := &auth.Info{
-		ProviderID:   h.providerID(),
-		Type:         "oauth",
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		ExpiresAt:    tokenExpiry(tokenResp.ExpiresIn),
-	}
+	info := h.buildAuthInfo(&tokenResp)
 	if info.RefreshToken == "" {
 		// Preserve existing refresh token if server didn't return a new one
-		old, _ := h.store.Load(h.providerID())
+		old, _, _ := h.loadStoredInfo()
 		if old != nil && old.RefreshToken != "" {
 			info.RefreshToken = old.RefreshToken
 		}
@@ -642,18 +749,34 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 
 // SaveToken persists the token response to the auth store.
 func (h *OAuthHandler) SaveToken(tokenResp *TokenResponse) error {
+	info := h.buildAuthInfo(tokenResp)
+	return h.store.Save(info)
+}
+
+func (h *OAuthHandler) buildAuthInfo(tokenResp *TokenResponse) *auth.Info {
 	expiresIn := tokenResp.ExpiresIn
 	if expiresIn <= 0 {
 		expiresIn = 3600
 	}
-	info := &auth.Info{
-		ProviderID:   h.providerID(),
-		Type:         "oauth",
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		ExpiresAt:    tokenExpiry(expiresIn),
+	h.mu.Lock()
+	clientID := ""
+	clientSecret := ""
+	if h.state != nil && h.state.clientRegistration != nil {
+		clientID = h.state.clientRegistration.ClientID
+		clientSecret = h.state.clientRegistration.ClientSecret
 	}
-	return h.store.Save(info)
+	h.mu.Unlock()
+	return &auth.Info{
+		ProviderID:    h.providerID(),
+		Type:          "oauth",
+		AccessToken:   tokenResp.AccessToken,
+		RefreshToken:  tokenResp.RefreshToken,
+		OAuthIssuer:   h.canonicalIssuer(),
+		OAuthResource: h.canonicalResource(),
+		OAuthClientID: strings.TrimSpace(clientID),
+		OAuthSecret:   strings.TrimSpace(clientSecret),
+		ExpiresAt:     tokenExpiry(expiresIn),
+	}
 }
 
 // OAuthRequiredError signals that OAuth authentication is needed.

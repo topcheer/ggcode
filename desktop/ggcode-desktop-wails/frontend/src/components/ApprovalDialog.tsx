@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { ShieldAlert, XCircle, CheckCircle2, ShieldCheck } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 export interface ApprovalRequest {
   requestId: string
@@ -23,6 +24,7 @@ function formatInput(input: string): string {
 }
 
 export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
+  const { t } = useTranslation()
   const [responding, setResponding] = useState(false)
 
   const handleRespond = async (decision: 'deny' | 'allow' | 'always_allow') => {
@@ -64,7 +66,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
         }}>
           <ShieldAlert size={20} style={{ color: 'var(--color-warning)', flexShrink: 0 }} />
           <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>
-            Tool Approval Required
+            {t('approval.title')}
           </span>
         </div>
 
@@ -114,7 +116,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
               opacity: responding ? 0.5 : 1,
             }}
           >
-            <XCircle size={15} /> Deny
+            <XCircle size={15} /> {t('approval.deny')}
           </button>
           <button
             onClick={() => handleRespond('allow')}
@@ -129,7 +131,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
               opacity: responding ? 0.5 : 1,
             }}
           >
-            <CheckCircle2 size={15} /> Allow
+            <CheckCircle2 size={15} /> {t('approval.allow')}
           </button>
           <button
             onClick={() => handleRespond('always_allow')}
@@ -144,7 +146,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
               opacity: responding ? 0.5 : 1,
             }}
           >
-            <ShieldCheck size={15} /> Always Allow
+            <ShieldCheck size={15} /> {t('approval.alwaysAllow')}
           </button>
         </div>
       </div>

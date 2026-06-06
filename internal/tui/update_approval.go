@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -27,8 +28,10 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	// Push to mobile tunnel client
 	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingApprovalID = m.nextTunnelRequestID()
-		broker.PushApprovalRequest(m.tunnelPendingApprovalID, msg.ToolName, msg.Input)
-		broker.PushStatus(tunnel.StatusBusy, "")
+		agentruntime.PushTunnelApprovalRequest(broker, m.tunnelPendingApprovalID, msg.ToolName, msg.Input, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 	}
 	return m, nil
 
@@ -76,23 +79,10 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 	// Push to mobile tunnel client
 	if broker := m.tunnelEventBroker(); broker != nil {
 		m.tunnelPendingAskUserID = m.nextTunnelRequestID()
-		questions := make([]tunnel.AskUserQuestion, len(msg.Request.Questions))
-		for i, q := range msg.Request.Questions {
-			choices := make([]tunnel.AskUserChoice, len(q.Choices))
-			for j, c := range q.Choices {
-				choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
-			}
-			questions[i] = tunnel.AskUserQuestion{
-				ID:            q.ID,
-				Prompt:        q.Prompt,
-				Kind:          string(q.Kind),
-				Choices:       choices,
-				AllowFreeform: q.AllowFreeform,
-				Placeholder:   q.Placeholder,
-			}
-		}
-		broker.PushAskUserRequest(m.tunnelPendingAskUserID, msg.Request.Title, questions)
-		broker.PushStatus(tunnel.StatusBusy, "")
+		agentruntime.PushTunnelAskUserRequest(broker, m.tunnelPendingAskUserID, msg.Request, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusBusy,
+		})
 	}
 	return m, nil
 

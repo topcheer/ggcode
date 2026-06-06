@@ -396,13 +396,8 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	}
 	if pairingResult.Consumed {
 		_ = a.sendMarkdownViaWebhook(ctx, callbackData.SessionWebhook, pairingResult.ReplyText, callbackData.RobotCode)
-		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
-			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
-			}); err != nil {
-				debug.Log("dingtalk", "adapter=%s notify previous: %v", a.name, err)
-			}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			debug.Log("dingtalk", "adapter=%s notify previous: %v", a.name, err)
 		}
 		return
 	}

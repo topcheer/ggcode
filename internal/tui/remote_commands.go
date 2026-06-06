@@ -7,38 +7,64 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/topcheer/ggcode/internal/im"
 )
 
 func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
-	parts := strings.Fields(strings.TrimSpace(text))
-	if len(parts) == 0 || !strings.HasPrefix(parts[0], "/") {
-		return "", false
+	if result := im.ExecuteExtendedIMSlashCommand(im.ExtendedIMSlashOptions{
+		Manager:     m.imManager,
+		SelfAdapter: m.remoteInboundAdapter,
+		Text:        text,
+		HelpExtraLines: []string{
+			"/restart [debug] - Restart ggcode (add 'debug' to enable GGCODE_DEBUG=1)",
+			"/provider [vendor] [endpoint] - Show or switch LLM provider",
+			"/model [name] - Show or switch model",
+			"/stream start|stop|status|config - Control live streaming",
+			"/config - Show current provider, model and endpoint configuration",
+		},
+		OnRestart: func(debug bool) (string, error) {
+			if debug {
+				return m.executeRemoteRestartCommand([]string{"/restart", "debug"}), nil
+			}
+			return m.executeRemoteRestartCommand([]string{"/restart"}), nil
+		},
+		OnProvider: func(vendor, endpoint string) (string, error) {
+			parts := []string{"/provider"}
+			if vendor != "" {
+				parts = append(parts, vendor)
+			}
+			if endpoint != "" {
+				parts = append(parts, endpoint)
+			}
+			return m.executeRemoteProviderCommand(parts), nil
+		},
+		OnModel: func(model string) (string, error) {
+			parts := []string{"/model"}
+			if model != "" {
+				parts = append(parts, model)
+			}
+			return m.executeRemoteModelCommand(parts), nil
+		},
+		OnConfig: func() (string, error) {
+			return m.executeRemoteConfig(), nil
+		},
+		OnExtra: func(parts []string) (string, bool) {
+			switch strings.ToLower(parts[0]) {
+			case "/stream":
+				resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
+				return resp, true
+			default:
+				return "", false
+			}
+		},
+	}); result.Handled {
+		if result.MuteSelfAdapter != "" {
+			return "MUTES:" + result.MuteSelfAdapter, true
+		}
+		return result.Response, true
 	}
-	switch strings.ToLower(parts[0]) {
-	case "/provider":
-		return m.executeRemoteProviderCommand(parts), true
-	case "/model":
-		return m.executeRemoteModelCommand(parts), true
-	case "/restart":
-		return m.executeRemoteRestartCommand(parts), true
-	case "/listim":
-		return m.executeRemoteListIM(), true
-	case "/muteim":
-		return m.executeRemoteMuteIM(parts), true
-	case "/muteall":
-		return m.executeRemoteMuteAll(), true
-	case "/muteself":
-		return m.executeRemoteMuteSelf(), true
-	case "/help":
-		return m.executeRemoteHelp(), true
-	case "/config":
-		return m.executeRemoteConfig(), true
-	case "/stream":
-		resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
-		return resp, true
-	default:
-		return fmt.Sprintf("Unknown command: %s. Try /help", strings.ToLower(parts[0])), true
-	}
+	return "", false
 }
 
 // ---- Provider / Model ----
@@ -146,83 +172,6 @@ type remoteRestartMsg struct{}
 
 // ---- IM management (aligned with daemon_bridge.go) ----
 
-func (m *Model) executeRemoteListIM() string {
-	if m.imManager == nil {
-		return "IM manager not available"
-	}
-	snapshot := m.imManager.Snapshot()
-	if len(snapshot.Adapters) == 0 {
-		return "📭 No IM adapters configured."
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📬 IM Adapters:\n")
-	for _, a := range snapshot.Adapters {
-		status := "✅ online"
-		if !a.Healthy {
-			status = "❌ " + a.Status
-		}
-		bound := ""
-		for _, binding := range snapshot.CurrentBindings {
-			if binding.Adapter == a.Name {
-				if binding.Muted {
-					bound = " 🔇 muted"
-				} else {
-					bound = " 📡 active"
-				}
-				break
-			}
-		}
-		sb.WriteString(fmt.Sprintf("  • %s [%s]%s %s\n", a.Name, a.Platform, bound, status))
-	}
-	return sb.String()
-}
-
-func (m *Model) executeRemoteMuteIM(parts []string) string {
-	if m.imManager == nil {
-		return "IM manager not available"
-	}
-	if len(parts) < 2 {
-		return "Usage: /muteim <adapter_name>\nUse /listim to see adapter names."
-	}
-	name := parts[1]
-	selfAdapter := m.remoteInboundAdapter
-	if name == selfAdapter {
-		return "⚠️ Cannot mute yourself. Use /muteself instead."
-	}
-	if err := m.imManager.MuteBinding(name); err != nil {
-		return fmt.Sprintf("Failed to mute %s: %v", name, err)
-	}
-	return fmt.Sprintf("🔇 Muted adapter: %s", name)
-}
-
-func (m *Model) executeRemoteMuteAll() string {
-	if m.imManager == nil {
-		return "IM manager not available"
-	}
-	selfAdapter := m.remoteInboundAdapter
-	count, err := m.imManager.MuteAllExcept(selfAdapter)
-	if err != nil {
-		return fmt.Sprintf("Failed: %v", err)
-	}
-	if selfAdapter != "" {
-		return fmt.Sprintf("🔇 Muted %d adapter(s), keeping %s active", count, selfAdapter)
-	}
-	return fmt.Sprintf("🔇 Muted %d adapter(s)", count)
-}
-
-func (m *Model) executeRemoteMuteSelf() string {
-	if m.imManager == nil {
-		return "IM manager not available"
-	}
-	adapter := m.remoteInboundAdapter
-	if adapter == "" {
-		return "Cannot determine your adapter."
-	}
-	// Return special marker — caller sends warning first, then mutes after delay.
-	return "MUTES:" + adapter
-}
-
 // scheduleMuteSelf returns a tea.Cmd that waits briefly (so the warning
 // message is delivered) and then mutes the adapter.
 func (m *Model) scheduleMuteSelf(adapter string) tea.Cmd {
@@ -232,20 +181,6 @@ func (m *Model) scheduleMuteSelf(adapter string) tea.Cmd {
 		}
 		return nil
 	})
-}
-
-func (m *Model) executeRemoteHelp() string {
-	return "Available commands:\n" +
-		"/listim - List IM adapters and their status\n" +
-		"/muteim <name> - Mute a specific adapter\n" +
-		"/muteall - Mute all adapters except the one you're using\n" +
-		"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)\n" +
-		"/restart [debug] - Restart ggcode (add 'debug' to enable GGCODE_DEBUG=1)\n" +
-		"/provider [vendor] [endpoint] - Show or switch LLM provider\n" +
-		"/model [name] - Show or switch model\n" +
-		"/stream start|stop|status|config - Control live streaming\n" +
-		"/config - Show current provider, model and endpoint configuration\n" +
-		"/help - Show this help"
 }
 
 func (m *Model) executeRemoteConfig() string {

@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
-import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 import { marked } from 'marked'
+import { useTranslation } from '../i18n'
 
 // Configure marked — no special mermaid handling, we split manually.
 marked.setOptions({ gfm: true, breaks: true })
@@ -112,7 +112,7 @@ interface AgentPanel {
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'run_done'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result'
-    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle'
+    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update'
   data: string // JSON-encoded payload
 }
 
@@ -129,9 +129,15 @@ interface StatusBarState {
   vendor: string
   model: string
   mode: string
+  contextUsed: number
+  contextTotal: number
+  usagePercent: number
+  remainingPercent: number
   inputTokens: number
   outputTokens: number
-  contextWindow: number
+  cacheRead: number
+  cacheWrite: number
+  cacheHit: number
   status: string
 }
 
@@ -151,14 +157,63 @@ function parseJSON<T>(raw: string): T | null {
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  if (n >= 1_000_000 && n % 1_000_000 === 0) return `${n / 1_000_000}m`
+  if (n >= 1_000 && n % 1_000 === 0) return `${n / 1_000}k`
   return String(n)
+}
+
+function sameMessageShape(a: ChatMessage, b: ChatMessage): boolean {
+  return a.role === b.role &&
+    a.content === b.content &&
+    a.toolName === b.toolName &&
+    a.toolID === b.toolID &&
+    a.toolArgs === b.toolArgs &&
+    a.toolDisplayName === b.toolDisplayName &&
+    a.toolDetail === b.toolDetail &&
+    a.isError === b.isError &&
+    a.streaming === b.streaming
+}
+
+function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessage[] {
+  const next = history.map((h: any, index: number) => {
+    const candidate: ChatMessage = {
+      id: previous[index]?.id || nextID(),
+      role: (h.role || 'assistant') as ChatRole,
+      content: h.content || '',
+      toolName: h.toolName,
+      toolID: h.toolID,
+      toolArgs: h.toolArgs,
+      toolDisplayName: h.toolDisplayName,
+      toolDetail: h.toolDetail,
+      isError: h.isError,
+      streaming: !!h.streaming,
+      timestamp: previous[index]?.timestamp || Date.now(),
+    }
+    const prev = previous[index]
+    if (prev && sameMessageShape(prev, candidate)) {
+      return prev
+    }
+    return candidate
+  })
+  if (next.length === previous.length && next.every((msg, index) => msg === previous[index])) {
+    return previous
+  }
+  return next
+}
+
+function isNearBottom(el: HTMLElement | null, threshold = 48): boolean {
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+}
+
+function getTabAutoScroll(state: Record<string, boolean>, tab: string): boolean {
+  return state[tab] ?? true
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ChatView({ onShare, sessionId }: { onShare?: () => void; sessionId?: string }) {
+export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void }) {
+  const { t } = useTranslation()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
   const [activeTab, setActiveTab] = useState<string>('main') // 'main' or agentID
@@ -166,7 +221,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [statusBar, setStatusBar] = useState<StatusBarState>({
-    vendor: '', model: '', mode: 'auto', inputTokens: 0, outputTokens: 0, contextWindow: 0, status: 'ready',
+    vendor: '', model: '', mode: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
@@ -191,51 +246,107 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
       next.set(agentID, { id: agentID, name, kind, status: 'running', task: '', messages: [], reasoningBuf: '' })
       return next
     })
-    // Auto-switch to new agent tab
-    setActiveTab(agentID)
   }, [])
 
   // Reasoning buffer: accumulates during streaming, attached to next message
   const reasoningBuf = useRef('')
+  const messagesRef = useRef<ChatMessage[]>([])
 
   // Load session history when sessionId changes
   useEffect(() => {
     if (!sessionId) {
       setMessages([])
+      messagesRef.current = []
+      setThinking(false)
       return
     }
     App.GetSessionHistory().then((history: any[]) => {
       if (!history || history.length === 0) {
         setMessages([])
+        messagesRef.current = []
+        setThinking(false)
         return
       }
-      const loaded: ChatMessage[] = history.map((h: any) => ({
-        id: nextID(),
-        role: (h.role || 'assistant') as ChatRole,
-        content: h.content || '',
-        toolName: h.toolName,
-        toolID: h.toolID,
-        toolArgs: h.toolArgs,
-        toolDisplayName: h.toolDisplayName,
-        toolDetail: h.toolDetail,
-        isError: h.isError,
-        streaming: false,
-        timestamp: Date.now(),
-      }))
+      autoScrollByTabRef.current.main = true
+      const loaded = materializeHistory(history, messagesRef.current)
+      messagesRef.current = loaded
       setMessages(loaded)
+      setThinking(false)
     }).catch(() => {})
   }, [sessionId])
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const [history, working] = await Promise.all([
+          App.GetSessionHistory() as Promise<any[]>,
+          App.IsWorking(),
+        ])
+        if (cancelled || !history) return
+        const loaded = materializeHistory(history, messagesRef.current)
+        messagesRef.current = loaded
+        setMessages(loaded)
+        setIsStreaming(!!working)
+        const hasAgentOutput = loaded.some(m => m.role !== 'user')
+        setThinking(!!working && !hasAgentOutput)
+      } catch {}
+    }
+    void refresh()
+    const id = window.setInterval(() => { void refresh() }, 250)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [])
 
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const autoScrollByTabRef = useRef<Record<string, boolean>>({ main: true })
+  const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
+  const suppressNextScrollEventRef = useRef(false)
+  const currentTabStreaming = activeTab === 'main'
+    ? isStreaming
+    : (agentPanels.get(activeTab)?.status === 'running')
 
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, agentPanels, thinking])
+    if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+    const container = scrollContainerRef.current
+    if (container) {
+      suppressNextScrollEventRef.current = true
+      container.scrollTop = container.scrollHeight
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    }
+  }, [messages, agentPanels, thinking, activeTab])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => {
+    if (!currentTabStreaming) return
+    const id = window.setInterval(() => {
+      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+      const last = lastManualScrollAtByTabRef.current[activeTab] ?? 0
+      if (last === 0) return
+      if (Date.now() - last < 10_000) return
+      autoScrollByTabRef.current[activeTab] = true
+      const container = scrollContainerRef.current
+      if (container) {
+        suppressNextScrollEventRef.current = true
+        container.scrollTop = container.scrollHeight
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+      }
+    }, 500)
+    return () => window.clearInterval(id)
+  }, [currentTabStreaming, activeTab])
 
   // Render mermaid diagrams — eagerly try on every message update.
   // Success: replace with SVG, mark data-done (no retry).
@@ -279,215 +390,43 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
 
   // ── Event stream handler (follows Fyne chat_view.go handleEvent) ────────
 
-  useEffect(() => {
-    const off = EventsOn('chat:stream', (...args: any[]) => {
-      // Wails v2 EventsEmit may pass data as a single object or as (type, data) args
-      let normalizedEvt: StreamEvent | null = null
-
-      if (args.length === 1 && args[0]?.type) {
-        normalizedEvt = args[0]
-      } else if (args.length >= 2 && typeof args[0] === 'string') {
-        normalizedEvt = { type: args[0] as StreamEvent['type'], data: args[1] }
-      }
-
-      if (!normalizedEvt?.type) {
-        console.warn('[ChatView] unknown event format, args:', args.length, JSON.stringify(args[0])?.slice(0, 200))
-        return
-      }
-
-      handleStreamEvent(normalizedEvt)
-    })
-
-    function handleStreamEvent(evt: StreamEvent) {
+  const handleStreamEvent = useCallback((evt: StreamEvent) => {
       const raw = evt.data
 
       switch (evt.type) {
-
-        // ── text: assistant streaming chunk (mirrors EventAssistantChunk) ──
-        case 'text': {
-          const p = parseJSON<TextPayload>(raw)
-          if (!p) break
-          setThinking(false)
-
-          setMessages(prev => {
-            // Find existing streaming assistant message
-            const streamingIdx = prev.findIndex(
-              m => m.role === 'assistant' && m.streaming
-            )
-            if (streamingIdx >= 0) {
-              // Append to existing streaming message
-              const updated = [...prev]
-              updated[streamingIdx] = {
-                ...updated[streamingIdx],
-                content: updated[streamingIdx].content + p.content,
-              }
-              return updated
-            }
-            // First chunk: create new streaming assistant message
-            const reasoning = reasoningBuf.current
-            reasoningBuf.current = '' // clear for next round
-            const newMsg: ChatMessage = {
-              id: nextID(),
-              role: 'assistant',
-              content: p.content,
-              reasoning,
-              streaming: true,
-              timestamp: Date.now(),
-            }
-            streamingMsgID.current = newMsg.id
-            return [...prev, newMsg]
-          })
+        case 'text':
+        case 'tool_call_done':
+        case 'tool_result':
+        case 'done':
+        case 'error':
+        case 'run_done':
+        case 'reasoning':
+          // Main chat now comes exclusively from GetSessionHistory()+IsWorking polling.
+          // Keep stream events only for status/usage and subagent/swarm side channels.
           break
-        }
-
-        // ── tool_call_done: finalize current assistant text, create a "running" tool card ──
-        // Mirrors Fyne: FinalizeStreaming() then AppendChat(tool msg)
-        case 'tool_call_done': {
-          const p = parseJSON<ToolCallPayload>(raw)
-          if (!p) break
-          setThinking(false)
-          const reasoning = reasoningBuf.current
-          reasoningBuf.current = ''
-
-          setMessages(prev => {
-            const updated = [...prev]
-            // Finalize current streaming assistant message (mirrors FinalizeStreaming)
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].role === 'assistant' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false }
-                break
-              }
-            }
-            // Add tool card in "running" state
-            updated.push({
-              id: nextID(),
-              role: 'tool' as ChatRole,
-              content: '',
-              toolName: p.name,
-              toolID: p.id,
-              toolArgs: p.arguments,
-              toolDisplayName: p.displayName,
-              toolDetail: p.detail,
-              reasoning,
-              streaming: true,
-              timestamp: Date.now(),
-            })
-            return updated
-          })
-          break
-        }
-
-        // ── tool_result: tool execution finished, fill result ──
-        case 'tool_result': {
-          const p = parseJSON<ToolResultPayload>(raw)
-          if (!p) break
-          setMessages(prev => {
-            const idx = prev.findIndex(m => m.role === 'tool' && m.toolID === p.id)
-            if (idx >= 0) {
-              const updated = [...prev]
-              updated[idx] = {
-                ...updated[idx],
-                content: p.result,
-                isError: p.isError,
-                streaming: false,
-              }
-              return updated
-            }
-            return prev
-          })
-          break
-        }
-
-        // ── done: one LLM turn finished (NOT the entire run!) ──
-        // Mirrors Fyne: FinalizeStreaming() + update usage
-        // The agent may loop (text → tool → text → ...) so don't set idle here.
-        // Do NOT cancel streaming tools here — they may be waiting for
-        // approval/ask_user response. Tool streaming ends when tool_result arrives.
-        case 'done': {
-          const p = parseJSON<DonePayload>(raw)
-          setThinking(false)
-
-          // Finalize any streaming assistant message
-          setMessages(prev => {
-            const updated = [...prev]
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].role === 'assistant' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false }
-                break
-              }
-            }
-            return updated
-          })
-
-          // Update token usage (cumulative across turns)
-          if (p && (p.inputTokens || p.outputTokens)) {
-            setStatusBar(s => ({
-              ...s,
-              inputTokens: (s.inputTokens || 0) + (p.inputTokens || 0),
-              outputTokens: (s.outputTokens || 0) + (p.outputTokens || 0),
-              status: 'working',
-            }))
-          }
-          break
-        }
-
-        // ── error: display error message (mirrors error role in Fyne) ──
-        case 'error': {
-          const p = parseJSON<ErrorPayload>(raw)
-          setIsStreaming(false)
-          setThinking(false)
-
-          // Finalize any streaming messages
-          setMessages(prev => [
-            ...prev.map(m => m.streaming ? { ...m, streaming: false } : m),
-            {
-              id: nextID(),
-              role: 'error' as ChatRole,
-              content: p?.message ?? 'Unknown error',
-              timestamp: Date.now(),
-            },
-          ])
-          streamingMsgID.current = null
-          setStatusBar(s => ({ ...s, status: 'error' }))
-          inputRef.current?.focus()
-          break
-        }
-
-        // ── run_done: entire agent run finished ──
-        // This is when we actually set idle (mirrors Fyne post-RunStreamWithContent)
-        case 'run_done': {
-          setIsStreaming(false)
-          setThinking(false)
-          // Finalize any tool calls still streaming (no result received = cancelled by agent)
-          setMessages(prev => {
-            const updated = [...prev]
-            for (let i = 0; i < updated.length; i++) {
-              if (updated[i].role === 'tool' && updated[i].streaming) {
-                updated[i] = { ...updated[i], streaming: false, content: 'cancelled', isError: true }
-              }
-            }
-            return updated
-          })
-          setStatusBar(s => ({ ...s, status: 'ready' }))
-          inputRef.current?.focus()
-          break
-        }
-
-        // ── reasoning: accumulate into buffer, will attach to next message ──
-        case 'reasoning': {
-          const p = parseJSON<ReasoningPayload>(raw)
-          if (!p) break
-          if (p.content === '__redacted_thinking__') break
-          reasoningBuf.current += p.content
+        case 'usage_update': {
+          const p = parseJSON<any>(raw)
+          setStatusBar(s => ({
+            ...s,
+            inputTokens: p?.inputTokens ?? s.inputTokens,
+            outputTokens: p?.outputTokens ?? s.outputTokens,
+            cacheRead: p?.cacheRead ?? s.cacheRead,
+            cacheWrite: p?.cacheWrite ?? s.cacheWrite,
+            cacheHit: p?.cacheHit ?? s.cacheHit,
+            contextUsed: p?.contextUsed ?? s.contextUsed,
+            contextTotal: p?.contextTotal ?? s.contextTotal,
+            usagePercent: p?.usagePercent ?? s.usagePercent,
+            remainingPercent: p?.remainingPercent ?? s.remainingPercent,
+          }))
           break
         }
 
         // ── Sub-agent events ──
         // ── Sub-agent events → route to agent panel ──
         case 'subagent_text': {
-          const p = parseJSON<{ agentID: string; content: string }>(raw)
+          const p = parseJSON<{ agentID: string; title?: string; content: string }>(raw)
           if (!p) break
-          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => {
             const msgs = [...panel.messages]
             const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
@@ -501,16 +440,16 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
           break
         }
         case 'subagent_reasoning': {
-          const p = parseJSON<{ agentID: string; content: string }>(raw)
+          const p = parseJSON<{ agentID: string; title?: string; content: string }>(raw)
           if (!p || p.content === '__redacted_thinking__') break
-          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => ({ ...panel, reasoningBuf: panel.reasoningBuf + p.content }))
           break
         }
         case 'subagent_tool_call': {
-          const p = parseJSON<ToolCallPayload & { agentID: string }>(raw)
+          const p = parseJSON<ToolCallPayload & { agentID: string; title?: string }>(raw)
           if (!p) break
-          ensureAgentPanel(p.agentID, p.agentID, 'subagent')
+          ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => {
             const msgs = panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
             const reasoning = panel.reasoningBuf
@@ -525,7 +464,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
           break
         }
         case 'subagent_tool_result': {
-          const p = parseJSON<ToolResultPayload & { agentID: string }>(raw)
+          const p = parseJSON<ToolResultPayload & { agentID: string; title?: string }>(raw)
           if (!p) break
           updateAgentPanel(p.agentID, panel => {
             const msgs = [...panel.messages]
@@ -604,12 +543,29 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
           break
         }
       }
-    } // end handleStreamEvent
+    }, [ensureAgentPanel, updateAgentPanel])
 
-    return () => {
-      if (typeof off === 'function') off()
+  useEffect(() => {
+    let cancelled = false
+    const pump = async () => {
+      if (cancelled) return
+      try {
+        const events = await App.DrainStreamEvents() as StreamEvent[] | undefined
+        if (!cancelled && events && events.length > 0) {
+          for (const evt of events) {
+            if (!evt?.type) continue
+            handleStreamEvent(evt)
+          }
+        }
+      } catch {}
     }
-  }, [])
+    void pump()
+    const id = window.setInterval(() => { void pump() }, 150)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [handleStreamEvent])
 
   // ── Load model info on mount ──────────────────────────────────────────────
 
@@ -624,7 +580,10 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
             vendor: info.vendor ?? '',
             model: info.model ?? '',
             mode: info.mode ?? s.mode,
-            contextWindow: info.contextWindow ?? 0,
+            contextTotal: info.contextTotal ?? info.contextWindow ?? 0,
+            contextUsed: info.contextUsed ?? s.contextUsed,
+            usagePercent: info.usagePercent ?? s.usagePercent,
+            remainingPercent: info.remainingPercent ?? s.remainingPercent,
           }))
         }
       } catch {
@@ -688,13 +647,6 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     }
   }, [handleSend])
 
-  // ── Context usage percentage ──────────────────────────────────────────────
-
-  const totalTokens = statusBar.inputTokens + statusBar.outputTokens
-  const ctxPct = statusBar.contextWindow > 0
-    ? Math.min(100, (totalTokens / statusBar.contextWindow) * 100)
-    : 0
-
   // ── Status bar label ──────────────────────────────────────────────────────
 
   const statusLabel = statusBar.status === 'working' ? (thinking ? 'Thinking...' : 'Working...')
@@ -726,6 +678,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     return () => document.removeEventListener('click', handler)
   }, [modelPickerOpen])
   const shortModel = statusBar.model.split('/').pop() || statusBar.model
+  const workspaceLabel = workspace || 'Workspace'
   const modeOptions = ['supervised', 'plan', 'auto', 'bypass', 'autopilot'] as const
   const cycleMode = async () => {
     const idx = modeOptions.indexOf(statusBar.mode as any)
@@ -733,6 +686,14 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
     try {
       await App.SetPermissionMode(next)
       setStatusBar(s => ({ ...s, mode: next }))
+    } catch {}
+  }
+  const selectWorkspace = async () => {
+    try {
+      const dir = await App.SelectWorkspace()
+      if (dir) {
+        onWorkspaceSelected?.(dir)
+      }
     } catch {}
   }
 
@@ -749,6 +710,23 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         flexShrink: 0,
       }}>
         {/* Mode switcher — click to cycle supervised → plan → auto → bypass → autopilot */}
+        <button
+          onClick={selectWorkspace}
+          title={workspace || 'Select workspace'}
+          style={{
+            padding: '2px 10px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-card)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--color-border)',
+            fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600,
+            cursor: 'pointer',
+            maxWidth: 420,
+            overflowX: 'auto',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {workspaceLabel}
+        </button>
         <button
           onClick={cycleMode}
           title={`Permission mode: ${statusBar.mode}. Click to switch.`}
@@ -817,7 +795,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
         </div>
 
         {/* Context pill */}
-        {statusBar.contextWindow > 0 && (
+        {statusBar.contextTotal > 0 && (
           <span style={{
             padding: '2px 8px', borderRadius: 10,
             background: 'var(--color-card)',
@@ -825,7 +803,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
             fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
-            {formatTokens(totalTokens)} / {formatTokens(statusBar.contextWindow)}
+            {formatTokens(statusBar.contextUsed)} / {formatTokens(statusBar.contextTotal)}
             <span style={{
               width: 48, height: 4, borderRadius: 2,
               background: 'var(--color-surface)', display: 'inline-block',
@@ -833,10 +811,10 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
             }}>
               <span style={{
                 position: 'absolute', left: 0, top: 0,
-                width: `${Math.max(ctxPct, 1)}%`, height: '100%',
+              width: `${Math.max(statusBar.usagePercent, 1)}%`, height: '100%',
                 borderRadius: 2,
-                background: ctxPct > 80 ? 'var(--color-error)'
-                  : ctxPct > 50 ? 'var(--color-warning)'
+              background: statusBar.usagePercent > 80 ? 'var(--color-error)'
+                : statusBar.usagePercent > 50 ? 'var(--color-warning)'
                   : 'var(--color-success)',
               }} />
             </span>
@@ -875,7 +853,18 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
       )}
 
       {/* Messages — render active tab's content */}
-      <div style={{
+      <div
+        ref={scrollContainerRef}
+        onScroll={() => {
+          if (suppressNextScrollEventRef.current) {
+            suppressNextScrollEventRef.current = false
+            return
+          }
+          const nearBottom = isNearBottom(scrollContainerRef.current)
+          autoScrollByTabRef.current[activeTab] = nearBottom
+          lastManualScrollAtByTabRef.current[activeTab] = Date.now()
+        }}
+        style={{
         flex: 1, overflowY: 'auto',
         padding: 'var(--spacing-lg)',
         display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)',
@@ -949,7 +938,7 @@ export function ChatView({ onShare, sessionId }: { onShare?: () => void; session
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isStreaming ? 'Agent is working...' : 'Message ggcode...'}
+          placeholder={isStreaming ? t('chat.agentWorking') : t('chat.placeholder')}
           disabled={isStreaming}
           style={{
             flex: 1, height: 40, padding: '0 var(--spacing-md)',
@@ -1021,6 +1010,8 @@ function MessageCard({ msg }: { msg: ChatMessage }) {
       return <AssistantMessage msg={msg} />
     case 'tool':
       return <ToolMessage msg={msg} />
+    case 'reasoning':
+      return <ReasoningMessage msg={msg} />
     case 'error':
       return <ErrorMessage msg={msg} />
     case 'system':
@@ -1032,8 +1023,8 @@ function MessageCard({ msg }: { msg: ChatMessage }) {
 
 // ── Reasoning block (collapsible, shown before the message it belongs to) ──
 
-function ReasoningBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning' }: { text: string; defaultOpen?: boolean; label?: string }) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <div style={{
       borderRadius: 'var(--radius-md)',
@@ -1048,7 +1039,7 @@ function ReasoningBlock({ text }: { text: string }) {
         color: 'var(--text-tertiary)', fontSize: 11,
       }}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        Reasoning
+        {label}
       </button>
       {open && (
         <div style={{
@@ -1062,6 +1053,14 @@ function ReasoningBlock({ text }: { text: string }) {
           <div className="markdown-body" style={{ fontSize: 12 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(text) }} />
         </div>
       )}
+    </div>
+  )
+}
+
+function ReasoningMessage({ msg }: { msg: ChatMessage }) {
+  return (
+    <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
+      <ReasoningBlock text={msg.content} defaultOpen={true} label={msg.streaming ? 'Thinking...' : 'Thought'} />
     </div>
   )
 }

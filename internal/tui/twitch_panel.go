@@ -355,41 +355,7 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 }
 
 func (m *Model) ensureTwitchRuntime() error {
-	if m.imManager != nil {
-		return nil
-	}
-	if m.config == nil {
-		return errors.New(m.t("panel.twitch.error.config_unavailable"))
-	}
-	if !m.config.IM.Enabled {
-		m.config.IM.Enabled = true
-		if err := m.saveConfig(); err != nil {
-			return fmt.Errorf("enable IM runtime: %w", err)
-		}
-	}
-	bindingsPath, err := im.DefaultBindingsPath()
-	if err != nil {
-		return fmt.Errorf("resolving IM bindings path: %w", err)
-	}
-	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-	if err != nil {
-		return fmt.Errorf("creating IM binding store: %w", err)
-	}
-	imMgr := im.NewManager()
-	if err := imMgr.SetBindingStore(bindingStore); err != nil {
-		return fmt.Errorf("loading IM bindings: %w", err)
-	}
-	pairingPath, err := im.DefaultPairingStatePath()
-	if err != nil {
-		return fmt.Errorf("resolving IM pairing state path: %w", err)
-	}
-	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-	if err != nil {
-		return fmt.Errorf("creating IM pairing store: %w", err)
-	}
-	imMgr.SetPairingStore(pairingStore)
-	m.SetIMManager(imMgr)
-	return nil
+	return m.ensureCurrentWorkspaceIMManager(m.t("panel.twitch.error.config_unavailable"), "", true)
 }
 
 func (m *Model) bindTwitchEntry(entry twitchBindingEntry) tea.Cmd {

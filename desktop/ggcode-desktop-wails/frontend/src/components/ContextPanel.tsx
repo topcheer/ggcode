@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
+import { useTranslation } from '../i18n'
 
 interface ContextPanelProps {
   onClose: () => void
@@ -8,35 +9,38 @@ interface ContextPanelProps {
 }
 
 export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
+  const { t } = useTranslation()
   const [activeMode, setActiveMode] = useState('auto')
-  const [files, setFiles] = useState<string[]>([
-    'internal/middleware/auth.go',
-    'internal/config/config.go',
-    'cmd/server/main.go',
-  ])
+  const [mcpServers, setMcpServers] = useState<any[]>([])
 
   const usagePercent = statusBarData?.contextTotal
-    ? Math.round((statusBarData.contextUsed / statusBarData.contextTotal) * 100)
-    : 6
-  const ctxTotal = statusBarData?.contextTotal
-    ? (statusBarData.contextTotal / 1000).toFixed(1)
-    : '204.8'
-  const ctxUsed = statusBarData?.contextUsed
-    ? (statusBarData.contextUsed / 1000).toFixed(1)
-    : '12.4'
+    ? statusBarData.usagePercent
+    : 0
+  const formatTokens = (n?: number) => {
+    if (!n) return '0'
+    if (n >= 1000000 && n % 1000000 === 0) return `${n / 1000000}m`
+    if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`
+    return String(n)
+  }
+  const ctxTotal = formatTokens(statusBarData?.contextTotal)
+  const ctxUsed = formatTokens(statusBarData?.contextUsed)
 
   const tokens = [
-    { label: 'Input', value: statusBarData?.inputTokens?.toLocaleString() ?? '0', color: 'var(--color-info)' },
-    { label: 'Output', value: statusBarData?.outputTokens?.toLocaleString() ?? '0', color: 'var(--text-primary)' },
-    { label: 'Cache Read', value: '—', color: 'var(--color-success)' },
-    { label: 'Cache Write', value: '—', color: 'var(--color-warning)' },
-    { label: 'Cache Hit', value: statusBarData?.cacheHit ? `${statusBarData.cacheHit}%` : '—', color: 'var(--color-success)' },
+    { label: t('context.input'), value: formatTokens(statusBarData?.inputTokens), color: 'var(--color-info)' },
+    { label: t('context.output'), value: formatTokens(statusBarData?.outputTokens), color: 'var(--text-primary)' },
+    { label: t('context.cacheRead'), value: formatTokens(statusBarData?.cacheRead), color: 'var(--color-success)' },
+    { label: t('context.cacheWrite'), value: formatTokens(statusBarData?.cacheWrite), color: 'var(--color-warning)' },
+    { label: t('context.cacheHit'), value: `${statusBarData?.cacheHit ?? 0}%`, color: 'var(--color-success)' },
   ]
 
-  const modes = ['Yolo', 'Auto', 'Plan', 'Default']
+  const modes = ['Supervised', 'Plan', 'Auto', 'Bypass', 'Autopilot']
 
-  // Load config for permission mode
+  // Sync live permission mode from status bar data first, then fallback to config.
   useEffect(() => {
+    if (statusBarData?.mode) {
+      setActiveMode(statusBarData.mode)
+      return
+    }
     let cancelled = false
     async function load() {
       try {
@@ -49,10 +53,23 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [statusBarData?.mode])
 
   const modelLabel = statusBarData?.model ?? '...'
   const vendorLabel = statusBarData?.vendor ?? '...'
+
+  useEffect(() => {
+    let cancelled = false
+    const loadMCP = async () => {
+      try {
+        const list = await App.ListMCPServers()
+        if (!cancelled) setMcpServers(list || [])
+      } catch {}
+    }
+    void loadMCP()
+    const id = window.setInterval(() => { void loadMCP() }, 2000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
 
   return (
     <div style={{
@@ -65,7 +82,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>Context</span>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{t('context.title')}</span>
         <div style={{ flex: 1 }} />
         <button onClick={onClose} style={{
           background: 'none', border: 'none',
@@ -82,7 +99,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
           {modelLabel}
         </span>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-          {vendorLabel} • {ctxTotal}K context
+          {vendorLabel} • {t('context.contextLabel', { n: ctxTotal })}
         </span>
       </div>
 
@@ -91,7 +108,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 8,
       }}>
-        <span style={{ fontSize: 12, fontWeight: 500 }}>Context Usage</span>
+        <span style={{ fontSize: 12, fontWeight: 500 }}>{t('context.usage')}</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{
             flex: 1, height: 6, borderRadius: 3, background: 'var(--color-surface)',
@@ -100,7 +117,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
             <div style={{ width: `${usagePercent}%`, height: '100%', borderRadius: 3, background: 'var(--color-success)' }} />
           </div>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
-            {ctxUsed}K / {ctxTotal}K
+            {ctxUsed} / {ctxTotal}
           </span>
         </div>
         {tokens.map(t => (
@@ -117,32 +134,41 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 8,
       }}>
-        <span style={{ fontSize: 12, fontWeight: 500 }}>Permission Mode</span>
+        <span style={{ fontSize: 12, fontWeight: 500 }}>{t('context.permission')}</span>
         <div style={{ display: 'flex', gap: 6 }}>
           {modes.map(m => (
-            <button key={m} onClick={() => setActiveMode(m.toLowerCase())} style={{
+            <button key={m} style={{
               padding: '4px 10px', borderRadius: 'var(--radius-sm)',
               background: m.toLowerCase() === activeMode ? 'var(--color-primary)' : 'var(--color-surface)',
               color: m.toLowerCase() === activeMode ? '#fff' : 'var(--text-secondary)',
-              border: 'none', cursor: 'pointer', fontSize: 11,
+              border: 'none', cursor: 'default', fontSize: 11,
               fontWeight: m.toLowerCase() === activeMode ? 500 : 400,
             }}>{m}</button>
           ))}
         </div>
       </div>
 
-      {/* Files */}
+      {/* MCP servers */}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        <span style={{ fontSize: 12, fontWeight: 500 }}>Files in Context</span>
-        {files.map(f => (
-          <div key={f} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: 12 }}>📄</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
-              {f}
-            </span>
+        <span style={{ fontSize: 12, fontWeight: 500 }}>MCP</span>
+        {mcpServers.length === 0 ? (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            No MCP servers
+          </span>
+        ) : mcpServers.map(server => (
+          <div key={server.name} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 12 }}>{server.connected ? '🟢' : server.disabled ? '⚪' : server.status === 'failed' ? '🔴' : '🟡'}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
+                {server.name}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                {server.disabled ? 'disabled' : server.status || 'unknown'}
+              </span>
+            </div>
           </div>
         ))}
       </div>

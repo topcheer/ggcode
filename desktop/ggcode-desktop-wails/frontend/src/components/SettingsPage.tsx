@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
+import { useTranslation, type Locale } from '../i18n'
 
 interface Props {
   onBack: () => void
@@ -17,6 +18,7 @@ interface ImpersonationPreset {
 }
 
 export function SettingsPage({ onBack }: Props) {
+  const { t, locale, setLocale } = useTranslation()
   const [tab, setTab] = useState<SettingsTab>('provider')
   const [vendors, setVendors] = useState<string[]>([])
   const [endpoints, setEndpoints] = useState<{ key: string; displayName: string }[]>([])
@@ -38,7 +40,7 @@ export function SettingsPage({ onBack }: Props) {
   const [modelsSource, setModelsSource] = useState<'static' | 'dynamic' | 'error'>('static')
   const [modelsError, setModelsError] = useState('')
 
-  const [language, setLanguage] = useState('en')
+  const [language, setLanguage] = useState<Locale>('en')
   const [defaultMode, setDefaultMode] = useState('supervised')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -73,7 +75,7 @@ export function SettingsPage({ onBack }: Props) {
         // Load general config for language, mode, impersonation
         const cfg = await App.GetConfig() as any
         if (cancelled) return
-        setLanguage(cfg.language || 'en')
+        setLanguage((cfg.language === 'zh' || cfg.language === 'zh-CN') ? 'zh' : 'en')
         setDefaultMode(cfg.defaultMode || 'supervised')
         setSelectedPreset(cfg.impersonatePreset || 'none')
         setImpVersion(cfg.impersonateCustomVersion || '')
@@ -179,6 +181,7 @@ export function SettingsPage({ onBack }: Props) {
         model: currentModel,
         language,
         defaultMode,
+        baseURL: resolvedBaseURL,
       } as any)
       if (apiKey) {
         await App.SaveAPIKey(currentVendor, currentEndpoint, apiKey)
@@ -193,7 +196,7 @@ export function SettingsPage({ onBack }: Props) {
     } finally {
       setSaving(false)
     }
-  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode])
+  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL])
 
   const applyImpersonation = useCallback(async () => {
     setSaving(true)
@@ -207,8 +210,8 @@ export function SettingsPage({ onBack }: Props) {
   }, [selectedPreset, impVersion])
 
   const tabs: { id: SettingsTab; label: string }[] = [
-    { id: 'provider', label: 'Provider' },
-    { id: 'impersonation', label: 'Impersonation' },
+    { id: 'provider', label: t('settings.title') },
+    { id: 'impersonation', label: t('settings.impersonate') },
     { id: 'addEndpoint', label: '+ Endpoint' },
   ]
 
@@ -221,7 +224,7 @@ export function SettingsPage({ onBack }: Props) {
         padding: '12px 0', flexShrink: 0,
       }}>
         <button onClick={onBack} style={backBtnStyle}>
-          <ArrowLeft size={14} /> <span style={{ marginLeft: 4 }}>Back</span>
+          <ArrowLeft size={14} /> <span style={{ marginLeft: 4 }}>{t('onboarding.back')}</span>
         </button>
         <div style={{ marginTop: 8 }}>
           {tabs.map(t => (
@@ -243,16 +246,16 @@ export function SettingsPage({ onBack }: Props) {
         {/* Provider Tab */}
         {tab === 'provider' && (
           <>
-            <h3 style={sectionTitle}>LLM Provider</h3>
+            <h3 style={sectionTitle}>LLM {t('settings.title')}</h3>
 
-            <FieldRow label="Vendor">
+            <FieldRow label={t('settings.vendor')}>
               <select value={currentVendor} onChange={e => handleVendorChange(e.target.value)} style={selectStyle}>
                 <option value="">Choose vendor...</option>
                 {vendors.map(v => <option key={v} value={v}>{v}</option>)}
               </select>
             </FieldRow>
 
-            <FieldRow label="Endpoint">
+            <FieldRow label={t('settings.endpoint')}>
               <select value={currentEndpoint} onChange={e => handleEndpointChange(e.target.value)} style={selectStyle}>
                 <option value="">Choose endpoint...</option>
                 {endpoints.map(ep => <option key={ep.key} value={ep.key}>{ep.displayName || ep.key}</option>)}
@@ -260,24 +263,30 @@ export function SettingsPage({ onBack }: Props) {
             </FieldRow>
 
             {/* Resolved info: Base URL + Protocol */}
-            {resolvedBaseURL && (
-              <FieldRow label="Base URL">
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span style={{
-                    fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)',
-                    background: 'var(--color-bg)', padding: '6px 10px', borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--color-border)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>{resolvedBaseURL}</span>
+            <FieldRow label={t('settings.baseUrl')}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  value={resolvedBaseURL}
+                  onChange={e => setResolvedBaseURL(e.target.value)}
+                  placeholder="https://api.example.com/v1"
+                  style={{
+                    ...inputStyle,
+                    fontFamily: 'var(--font-mono)', fontSize: 12,
+                    flex: 1,
+                  }}
+                />
+                {resolvedProtocol && (
                   <span style={{
                     fontSize: 10, padding: '2px 6px', borderRadius: 'var(--radius-sm)',
                     background: 'rgba(59,130,246,0.15)', color: 'var(--color-info)',
+                    flexShrink: 0,
                   }}>{resolvedProtocol}</span>
-                </div>
-              </FieldRow>
-            )}
+                )}
+              </div>
+            </FieldRow>
 
             {/* API Key: show masked + edit */}
-            <FieldRow label="API Key">
+            <FieldRow label={t('settings.apiKey')}>
               <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
                 {apiKeySet && !apiKey && (
                   <div style={{
@@ -294,7 +303,7 @@ export function SettingsPage({ onBack }: Props) {
                 <div style={{ display: 'flex', gap: 4 }}>
                   <input type={showKey ? 'text' : 'password'} value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder={apiKeySet ? 'Enter new key to change...' : 'Enter API key...'}
+                    placeholder={apiKeySet ? '' : t('settings.apiKeyPlaceholder')}
                     style={{ ...inputStyle, flex: 1 }} />
                   <button onClick={() => setShowKey(p => !p)} style={iconBtnStyle}>
                     {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -304,7 +313,7 @@ export function SettingsPage({ onBack }: Props) {
             </FieldRow>
 
             {/* Model selection with refresh */}
-            <FieldRow label="Model">
+            <FieldRow label={t('settings.model')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select value={currentModel} onChange={e => setCurrentModel(e.target.value)}
                   style={{ ...selectStyle, flex: 1 }}>
@@ -326,25 +335,28 @@ export function SettingsPage({ onBack }: Props) {
               )}
             </FieldRow>
 
-            <h3 style={{ ...sectionTitle, marginTop: 24 }}>Behavior</h3>
-            <FieldRow label="Permission Mode">
+            <h3 style={{ ...sectionTitle, marginTop: 24 }}>{t('settings.permissionMode')}</h3>
+            <FieldRow label={t('settings.permissionMode')}>
               <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
                 <option value="supervised">Supervised (confirm each tool)</option>
                 <option value="bypass">Bypass (auto-approve safe tools)</option>
                 <option value="autopilot">Autopilot (approve everything)</option>
               </select>
             </FieldRow>
-            <FieldRow label="Language">
-              <select value={language} onChange={e => setLanguage(e.target.value)} style={selectStyle}>
+            <FieldRow label={t('settings.language')}>
+              <select value={language} onChange={e => {
+                const newLang = e.target.value as Locale
+                setLanguage(newLang)
+                setLocale(newLang) // Immediate UI switch
+              }} style={selectStyle}>
                 <option value="en">English</option>
                 <option value="zh">中文</option>
-                <option value="ja">日本語</option>
               </select>
             </FieldRow>
 
             <button onClick={save} disabled={saving || !currentVendor || !currentEndpoint}
               style={{ ...primaryBtnStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
-              {saved ? <><Check size={14} /> Saved</> : saving ? 'Saving...' : 'Save & Apply'}
+              {saved ? <><Check size={14} /> {t('settings.saved')}</> : saving ? t('settings.saving') : t('settings.save')}
             </button>
           </>
         )}
@@ -352,11 +364,11 @@ export function SettingsPage({ onBack }: Props) {
         {/* Impersonation Tab */}
         {tab === 'impersonation' && (
           <>
-            <h3 style={sectionTitle}>Impersonation</h3>
+            <h3 style={sectionTitle}>{t('settings.impersonate')}</h3>
             <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 16px' }}>
-              Set the User-Agent and headers to impersonate another tool. Some providers require specific headers.
+              {t('settings.impersonateHint')} — some providers require specific headers.
             </p>
-            <FieldRow label="Identity">
+            <FieldRow label={t('settings.identity')}>
               <select value={selectedPreset} onChange={e => {
                 const id = e.target.value
                 setSelectedPreset(id)
@@ -368,7 +380,7 @@ export function SettingsPage({ onBack }: Props) {
                 ))}
               </select>
             </FieldRow>
-            <FieldRow label="Version">
+            <FieldRow label={t('settings.impersonateVersion')}>
               <input value={impVersion} onChange={e => setImpVersion(e.target.value)}
                 placeholder="Version string..." style={inputStyle} />
             </FieldRow>
@@ -386,7 +398,7 @@ export function SettingsPage({ onBack }: Props) {
               )
             })()}
             <button onClick={applyImpersonation} disabled={saving} style={primaryBtnStyle}>
-              {saving ? 'Applying...' : 'Apply'}
+              {saving ? t('settings.saving') : t('settings.impersonateApply')}
             </button>
           </>
         )}

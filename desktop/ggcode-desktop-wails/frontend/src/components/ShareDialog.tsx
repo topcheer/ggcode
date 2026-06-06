@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { X, Copy, Smartphone, StopCircle, ExternalLink } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { useTranslation } from '../i18n'
 
 interface ShareInfo {
   connectURL: string
@@ -9,6 +10,7 @@ interface ShareInfo {
 }
 
 export default function ShareDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [shareInfo, setShareInfo] = useState<ShareInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -86,7 +88,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Smartphone size={20} style={{ color: 'var(--color-primary)' }} />
             <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>
-              Share with Mobile
+              {t('share.title')}
             </span>
           </div>
           <button onClick={onClose} style={{
@@ -98,7 +100,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
         {/* QR Code */}
         {loading && (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-tertiary)' }}>
-            Starting tunnel...
+            {t('share.generating')}
           </div>
         )}
 
@@ -137,7 +139,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
               background: 'var(--color-primary)', color: '#fff',
               border: 'none', cursor: 'pointer', fontSize: 11,
               display: 'flex', alignItems: 'center', gap: 4,
-            }}><Copy size={12} /> {copied ? 'Copied!' : 'Copy'}</button>
+            }}><Copy size={12} /> {copied ? t('share.copied') : t('share.copy')}</button>
           </div>
         )}
 
@@ -154,7 +156,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
             animation: 'pulse 2s infinite',
           }} />
           <span style={{ fontSize: 12, color: connected ? 'var(--color-success)' : 'var(--text-tertiary)' }}>
-            {connected ? 'Mobile client connected' : 'Waiting for connection...'}
+            {connected ? 'Mobile client connected' : t('share.generating')}
           </span>
         </div>
 
@@ -185,7 +187,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
             border: '1px solid rgba(220,38,38,0.3)',
             cursor: 'pointer', fontWeight: 600, fontSize: 13,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-          }}><StopCircle size={16} /> Stop Sharing</button>
+          }}><StopCircle size={16} /> {t('share.stopSharing')}</button>
         )}
       </div>
     </div>

@@ -84,6 +84,32 @@ func TestBuildAskUserResponseFromTunnelBuildsStructuredAnswers(t *testing.T) {
 	}
 }
 
+func TestDesktopToolLabelHelpersUseSharedPresentation(t *testing.T) {
+	rawArgs := `{"path":"/tmp/test.txt"}`
+	if got := toolDisplayName("read_file", rawArgs); got != "Read" {
+		t.Fatalf("expected shared display name, got %q", got)
+	}
+	if got := toolArgSummary("read_file", rawArgs); got != "/tmp/test.txt" {
+		t.Fatalf("expected shared detail, got %q", got)
+	}
+	if got := toolDescription("read_file", rawArgs); got != "Read /tmp/test.txt" {
+		t.Fatalf("expected inline shared description, got %q", got)
+	}
+}
+
+func TestDesktopToolDescriptionUsesSharedCommandPresentation(t *testing.T) {
+	rawArgs := `{"command":"echo hi","description":"Run smoke test"}`
+	if got := toolDisplayName("run_command", rawArgs); got != "Run smoke test" {
+		t.Fatalf("expected description-backed display name, got %q", got)
+	}
+	if got := toolArgSummary("run_command", rawArgs); got != "" {
+		t.Fatalf("expected empty detail for described command, got %q", got)
+	}
+	if got := toolDescription("run_command", rawArgs); got != "Run smoke test" {
+		t.Fatalf("expected shared command description, got %q", got)
+	}
+}
+
 func TestDesktopChatMessagesToTunnelHistoryPreservesSystemAndToolBoundaries(t *testing.T) {
 	history := desktopChatMessagesToTunnelHistory([]ChatMessage{
 		{Role: "user", Content: "check release", Time: time.Now()},

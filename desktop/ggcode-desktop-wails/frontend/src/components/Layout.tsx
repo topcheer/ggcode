@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { ViewMode, StatusBarData } from '../types'
+import { I18nProvider, useTranslation, type Locale } from '../i18n'
 import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
@@ -16,10 +17,12 @@ import { Onboarding } from './Onboarding'
 import { TopDragBar } from './TopDragBar'
 import { ApprovalDialog, ApprovalRequest } from './ApprovalDialog'
 import { AskUserDialog, AskUserRequest } from './AskUserDialog'
+import { PairingCodeDialog, PairingRequest } from './PairingCodeDialog'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
-export function Layout() {
+// Inner layout that uses useTranslation (must be inside I18nProvider)
+function LayoutInner() {
   const [view, setView] = useState<ViewMode>('chat')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
@@ -29,20 +32,29 @@ export function Layout() {
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
   const [askUserRequest, setAskUserRequest] = useState<AskUserRequest | null>(null)
+  const [pairingRequest, setPairingRequest] = useState<PairingRequest | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [needsOnboard, setNeedsOnboard] = useState(false)
+  const [currentWorkspace, setCurrentWorkspace] = useState('')
 
   // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
     vendor: '...',
     model: '...',
+    mode: 'auto',
     contextUsed: 0,
     contextTotal: 0,
+    usagePercent: 0,
+    remainingPercent: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
     cacheHit: 0,
     status: 'Ready',
   })
+
+  const { setLocale } = useTranslation()
 
   // Load initial config for shared state
   useEffect(() => {
@@ -50,13 +62,29 @@ export function Layout() {
     async function load() {
       try {
         const cfg = await App.GetConfig()
+        const [dir, info] = await Promise.all([App.GetWorkDir(), App.GetModelInfo()])
         if (cancelled) return
         setNeedsOnboard(cfg.needsSetup || false)
+        setCurrentWorkspace(dir || cfg.workDir || '')
+        // Initialize locale from saved language preference
+        if (cfg.language === 'zh' || cfg.language === 'zh-CN') {
+          setLocale('zh')
+        }
         if (!cfg.needsSetup) {
           setStatusBarData(prev => ({
             ...prev,
-            vendor: cfg.vendor || prev.vendor,
-            model: cfg.model || prev.model,
+            vendor: (info as any)?.vendor || cfg.vendor || prev.vendor,
+            model: (info as any)?.model || cfg.model || prev.model,
+            mode: (info as any)?.mode || prev.mode,
+            contextUsed: (info as any)?.contextUsed ?? prev.contextUsed,
+            contextTotal: (info as any)?.contextTotal ?? prev.contextTotal,
+            usagePercent: (info as any)?.usagePercent ?? prev.usagePercent,
+            remainingPercent: (info as any)?.remainingPercent ?? prev.remainingPercent,
+            inputTokens: (info as any)?.inputTokens ?? prev.inputTokens,
+            outputTokens: (info as any)?.outputTokens ?? prev.outputTokens,
+            cacheRead: (info as any)?.cacheRead ?? prev.cacheRead,
+            cacheWrite: (info as any)?.cacheWrite ?? prev.cacheWrite,
+            cacheHit: (info as any)?.cacheHit ?? prev.cacheHit,
           }))
         }
       } catch {
@@ -65,16 +93,18 @@ export function Layout() {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [setLocale])
 
   // Refresh status bar when config changes (e.g. after settings save)
   useEffect(() => {
     const refreshConfig = () => {
-      App.GetConfig().then(cfg => {
+      Promise.all([App.GetConfig(), App.GetWorkDir()]).then(([cfg, dir]) => {
+        setCurrentWorkspace((dir as string) || cfg.workDir || '')
         setStatusBarData(prev => ({
           ...prev,
           vendor: cfg.vendor || prev.vendor,
           model: cfg.model || prev.model,
+          mode: cfg.defaultMode || prev.mode,
         }))
       }).catch(() => {})
     }
@@ -82,32 +112,53 @@ export function Layout() {
     return () => { EventsOff('config:updated') }
   }, [])
 
-  // Listen for chat:stream events to update shared status
   useEffect(() => {
-    const off = EventsOn('chat:stream', (event: any) => {
-      if (!event) return
-      const { type, data } = event
-      let parsed: any = {}
-      if (data) {
-        try { parsed = JSON.parse(data) } catch { parsed = {} }
-      }
-      if (type === 'done') {
+    const off = EventsOn('workspace:changed', (event: any) => {
+      const dir = event?.workDir || ''
+      setCurrentWorkspace(dir)
+      setActiveSessionId(undefined)
+      setContextPanelOpen(false)
+      setShareDialogOpen(false)
+      Promise.all([App.GetConfig(), App.GetModelInfo()]).then(([cfg, info]) => {
+        setNeedsOnboard(cfg.needsSetup || false)
         setStatusBarData(prev => ({
           ...prev,
-          inputTokens: parsed.inputTokens ?? prev.inputTokens,
-          outputTokens: parsed.outputTokens ?? prev.outputTokens,
-          contextUsed: parsed.contextUsed ?? prev.contextUsed,
-          contextTotal: parsed.contextTotal ?? prev.contextTotal,
-          cacheHit: parsed.cacheHit ?? prev.cacheHit,
-          status: 'Ready',
+          vendor: (info as any)?.vendor || cfg.vendor || prev.vendor,
+          model: (info as any)?.model || cfg.model || prev.model,
         }))
-      } else if (type === 'text') {
-        setStatusBarData(prev => ({ ...prev, status: 'Streaming' }))
-      } else if (type === 'error') {
-        setStatusBarData(prev => ({ ...prev, status: 'Error' }))
-      }
+      }).catch(() => {})
     })
     return () => { if (typeof off === 'function') off() }
+  }, [])
+
+  // Listen for chat:stream events to update shared status
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const [info, working] = await Promise.all([App.GetModelInfo(), App.IsWorking()])
+        if (cancelled || !info) return
+        setStatusBarData(prev => ({
+          ...prev,
+          vendor: (info as any).vendor ?? prev.vendor,
+          model: (info as any).model ?? prev.model,
+          mode: (info as any).mode ?? prev.mode,
+          contextUsed: (info as any).contextUsed ?? prev.contextUsed,
+          contextTotal: (info as any).contextTotal ?? prev.contextTotal,
+          usagePercent: (info as any).usagePercent ?? prev.usagePercent,
+          remainingPercent: (info as any).remainingPercent ?? prev.remainingPercent,
+          inputTokens: (info as any).inputTokens ?? prev.inputTokens,
+          outputTokens: (info as any).outputTokens ?? prev.outputTokens,
+          cacheRead: (info as any).cacheRead ?? prev.cacheRead,
+          cacheWrite: (info as any).cacheWrite ?? prev.cacheWrite,
+          cacheHit: (info as any).cacheHit ?? prev.cacheHit,
+          status: working ? 'Working' : 'Ready',
+        }))
+      } catch {}
+    }
+    void refresh()
+    const id = window.setInterval(() => { void refresh() }, 500)
+    return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
   // Listen for approval and ask_user events from Go backend
@@ -117,6 +168,12 @@ export function Layout() {
     })
     EventsOn('ask_user:request', (data: any) => {
       setAskUserRequest(data as AskUserRequest)
+    })
+    EventsOn('im:pairing', (data: any) => {
+      setPairingRequest(data as PairingRequest)
+    })
+    EventsOn('im:pairing_done', () => {
+      setPairingRequest(null)
     })
     // Cancel events close any open dialogs
     EventsOn('approval:cancel', () => {
@@ -128,6 +185,8 @@ export function Layout() {
     return () => {
       EventsOff('approval:request')
       EventsOff('ask_user:request')
+      EventsOff('im:pairing')
+      EventsOff('im:pairing_done')
       EventsOff('approval:cancel')
       EventsOff('ask_user:cancel')
     }
@@ -159,6 +218,12 @@ export function Layout() {
   }, [])
 
   const backToChat = () => setView('chat')
+  const handleWorkspaceSelected = useCallback((dir: string) => {
+    setCurrentWorkspace(dir)
+    setActiveSessionId(undefined)
+    setContextPanelOpen(false)
+    setShareDialogOpen(false)
+  }, [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
@@ -184,11 +249,11 @@ export function Layout() {
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
 
             {sidebarOpen && view === 'chat' && (
-              <Sidebar onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} />
+              <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} />
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-              {view === 'chat' && <ChatView sessionId={activeSessionId} onShare={() => setShareDialogOpen(true)} />}
+              {view === 'chat' && <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} />}
               {view === 'settings' && <SettingsPage onBack={backToChat} />}
               {view === 'im' && <IMManagement />}
               {view === 'files' && <FileBrowser onBack={backToChat} />}
@@ -218,6 +283,24 @@ export function Layout() {
       {updateNotifOpen && <UpdateNotification onClose={() => setUpdateNotifOpen(false)} />}
       {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
+      {pairingRequest && <PairingCodeDialog request={pairingRequest} onClose={() => setPairingRequest(null)} />}
     </div>
+  )
+}
+
+// Top-level Layout wraps everything in I18nProvider
+export function Layout() {
+  const handleLocaleChange = useCallback(async (locale: Locale) => {
+    try {
+      await App.UpdateConfig({ language: locale })
+    } catch {
+      // ignore save errors during locale switch
+    }
+  }, [])
+
+  return (
+    <I18nProvider initialLocale="en" onLocaleChange={handleLocaleChange}>
+      <LayoutInner />
+    </I18nProvider>
   )
 }

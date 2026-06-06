@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -105,23 +106,10 @@ type SessionMessage struct {
 	ToolDisplay string `json:"toolDisplayName,omitempty"`
 	ToolDetail  string `json:"toolDetail,omitempty"`
 	IsError     bool   `json:"isError,omitempty"`
+	Streaming   bool   `json:"streaming,omitempty"`
 }
 
-// GetSessionHistory loads messages from the current session.
-func GetSessionHistory() ([]SessionMessage, error) {
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
-	if chat == nil {
-		return nil, nil
-	}
-	chat.mu.Lock()
-	ses := chat.currentSes
-	chat.mu.Unlock()
-	if ses == nil {
-		return nil, nil
-	}
-	msgs := ses.Messages
+func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 	result := make([]SessionMessage, 0, len(msgs))
 	for _, m := range msgs {
 		for _, block := range m.Content {
@@ -159,5 +147,16 @@ func GetSessionHistory() ([]SessionMessage, error) {
 			}
 		}
 	}
-	return result, nil
+	return result
+}
+
+// GetSessionHistory loads messages from the current session.
+func GetSessionHistory() ([]SessionMessage, error) {
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat == nil {
+		return nil, nil
+	}
+	return chat.CurrentSessionHistory(), nil
 }

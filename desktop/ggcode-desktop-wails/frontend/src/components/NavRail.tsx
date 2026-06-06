@@ -1,6 +1,7 @@
 import React from 'react'
 import { MessageSquare, FolderOpen, Settings, User, Radio, Server } from 'lucide-react'
 import { ViewMode } from '../types'
+import { useTranslation } from '../i18n'
 
 interface Props {
   view: ViewMode
@@ -8,15 +9,19 @@ interface Props {
   onAbout: () => void
 }
 
-const navItems: { id: ViewMode; icon: React.ReactNode; tooltip: string }[] = [
-  { id: 'chat', icon: <MessageSquare size={18} />, tooltip: 'Chat (⌘1)' },
-  { id: 'files', icon: <FolderOpen size={18} />, tooltip: 'Files (⌘2)' },
-  { id: 'im', icon: <Radio size={18} />, tooltip: 'IM Adapters' },
-  { id: 'mcp', icon: <Server size={18} />, tooltip: 'MCP Servers' },
-  { id: 'settings', icon: <Settings size={18} />, tooltip: 'Settings (⌘,)' },
-]
+function NavItems() {
+  const { t } = useTranslation()
+  return [
+    { id: 'chat' as ViewMode, icon: <MessageSquare size={18} />, tooltip: t('nav.chat') },
+    { id: 'files' as ViewMode, icon: <FolderOpen size={18} />, tooltip: t('nav.files') },
+    { id: 'im' as ViewMode, icon: <Radio size={18} />, tooltip: t('nav.im') },
+    { id: 'mcp' as ViewMode, icon: <Server size={18} />, tooltip: t('nav.mcp') },
+    { id: 'settings' as ViewMode, icon: <Settings size={18} />, tooltip: t('nav.settings') },
+  ]
+}
 
 export function NavRail({ view, onViewChange, onAbout }: Props) {
+  const navItems = NavItems()
   return (
     <div style={{
       width: 'var(--nav-rail-width)',

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -90,16 +89,7 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 func (c *Client) Start(ctx context.Context) error {
 	switch c.transport {
 	case "http":
-		c.httpClient = &http.Client{
-			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout:   30 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ResponseHeaderTimeout: 30 * time.Second,
-			},
-		}
+		c.httpClient = util.NewInsecureAwareClient(0) // no timeout; per-request context used
 		return nil
 	case "ws", "websocket":
 		headers := http.Header{}
@@ -427,6 +417,10 @@ func (c *Client) writeMessage(msg interface{}) error {
 }
 
 func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, error) {
+	return c.sendHTTPWithRetry(ctx, msg, true)
+}
+
+func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRetry bool) (*Response, error) {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal http message: %w", c.name, err)
@@ -443,9 +437,11 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
+	authHeader := ""
 	if c.oauthHandler != nil {
 		if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+			authHeader = "Bearer " + token
+			req.Header.Set("Authorization", authHeader)
 			debug.Log("mcp-http", "send_with_token server=%s has_token=true", c.name)
 		} else {
 			debug.Log("mcp-http", "send_no_token server=%s", c.name)
@@ -466,6 +462,12 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
 	if resp.StatusCode == http.StatusUnauthorized && c.oauthHandler != nil {
 		needsOAuth, _ := c.oauthHandler.Handle401(resp)
+		if allowRetry {
+			if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" && "Bearer "+token != authHeader {
+				debug.Log("mcp-http", "retry_after_discovery server=%s has_token=true", c.name)
+				return c.sendHTTPWithRetry(ctx, msg, false)
+			}
+		}
 		if needsOAuth {
 			return nil, &OAuthRequiredError{Handler: c.oauthHandler}
 		}

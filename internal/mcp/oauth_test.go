@@ -18,6 +18,21 @@ func TestOAuthHandler_providerID(t *testing.T) {
 	}
 }
 
+func TestOAuthHandler_canonicalProviderID(t *testing.T) {
+	h := NewOAuthHandler("test-server", "https://example.com/mcp", nil)
+	h.state = &oauthState{
+		protectedResourceMeta: &ProtectedResourceMetadata{
+			Resource: "https://api.example.com/mcp/",
+		},
+		authorizationServerMeta: &AuthorizationServerMetadata{
+			Issuer: "HTTPS://AUTH.EXAMPLE.COM/",
+		},
+	}
+	if got := h.canonicalProviderID(); got != "mcp-shared:https://auth.example.com|https://api.example.com/mcp" {
+		t.Fatalf("canonicalProviderID = %q", got)
+	}
+}
+
 func TestOAuthHandler_ServerName(t *testing.T) {
 	h := NewOAuthHandler("my-server", "https://example.com", nil)
 	if h.ServerName() != "my-server" {
@@ -243,6 +258,38 @@ func TestOAuthHandler_GetAccessToken_ValidToken(t *testing.T) {
 	}
 	if token != "valid-token" {
 		t.Errorf("token = %q, want %q", token, "valid-token")
+	}
+}
+
+func TestOAuthHandler_GetAccessToken_UsesCanonicalSharedTokenAfterDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	store := auth.NewStore(dir + "/auth.json")
+	if err := store.Save(&auth.Info{
+		ProviderID:    "mcp-shared:https://auth.example.com|https://api.example.com/mcp",
+		Type:          "oauth",
+		AccessToken:   "shared-token",
+		RefreshToken:  "shared-refresh",
+		OAuthIssuer:   "https://auth.example.com",
+		OAuthResource: "https://api.example.com/mcp",
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewOAuthHandler("different-server-name", "https://api.example.com/mcp", store)
+	h.state = &oauthState{
+		protectedResourceMeta: &ProtectedResourceMetadata{
+			Resource: "https://api.example.com/mcp",
+		},
+		authorizationServerMeta: &AuthorizationServerMetadata{
+			Issuer: "https://auth.example.com",
+		},
+	}
+	token, err := h.GetAccessToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "shared-token" {
+		t.Fatalf("token = %q, want shared-token", token)
 	}
 }
 

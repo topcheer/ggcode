@@ -117,6 +117,69 @@ func (m *Manager) DeleteBinding(adapter, workspace string) error {
 	return nil
 }
 
+// BindAdapterToWorkspace binds an adapter to a specific workspace,
+// removing any existing binding to a different workspace.
+func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
+	if adapterName == "" || workspace == "" {
+		return fmt.Errorf("adapter name and workspace must not be empty")
+	}
+
+	workspace = normalizeWorkspace(workspace)
+
+	m.mu.Lock()
+
+	if m.bindingStore == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("binding store not configured")
+	}
+
+	// Get existing bindings for this adapter
+	existing, err := m.bindingStore.ListByAdapter(adapterName)
+	if err != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("list existing bindings: %w", err)
+	}
+
+	// Remove bindings to other workspaces
+	for _, b := range existing {
+		if normalizeWorkspace(b.Workspace) != workspace {
+			if err := m.bindingStore.Delete(b.Workspace, adapterName); err != nil {
+				m.mu.Unlock()
+				return fmt.Errorf("delete old binding: %w", err)
+			}
+		}
+	}
+
+	// Create/update binding to the new workspace
+	binding := ChannelBinding{
+		Adapter:   adapterName,
+		Workspace: workspace,
+		BoundAt:   time.Now(),
+	}
+
+	if err := m.bindingStore.Save(binding); err != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("save binding: %w", err)
+	}
+
+	// Reload bindings to reflect the change
+	err = m.reloadBindingLocked()
+	if err != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("reload bindings: %w", err)
+	}
+
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+
+	// Call the callback outside the lock
+	if cb != nil {
+		cb(snapshot)
+	}
+
+	return nil
+}
+
 // UnbindAdapter removes the binding for whatever workspace has the given
 // adapter name. This is needed when unbinding from a panel where the current
 // session workspace may differ from the workspace that originally bound the

@@ -58,7 +58,7 @@ func newSlackAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAda
 	adapter := &slackAdapter{
 		name:       name,
 		manager:    mgr,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: util.NewInsecureAwareClient(30 * time.Second),
 		botToken:   botToken,
 		appToken:   appToken,
 	}
@@ -314,6 +314,9 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	if pairingResult.Consumed {
 		if _, sendErr := a.sendChannelMessage(ctx, channel, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
+		}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}

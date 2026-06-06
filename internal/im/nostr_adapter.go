@@ -299,6 +299,9 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 		debug.Log("nostr", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 		if pairingResult.Consumed {
 			_ = a.sendNostrDM(evt.PubKey, pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				debug.Log("nostr", "adapter=%s notify previous: %v", a.name, err)
+			}
 			return
 		}
 	}

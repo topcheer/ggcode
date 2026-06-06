@@ -337,6 +337,21 @@ func executeTask(
 					Timestamp:    time.Now(),
 				})
 			}
+		case provider.StreamEventReasoning:
+			if strings.TrimSpace(event.Text) == "" {
+				return
+			}
+			tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: event.Text})
+			if onEvent != nil {
+				onEvent(Event{
+					Type:         "teammate_reasoning",
+					TeamID:       team.ID,
+					TeammateID:   tm.ID,
+					TeammateName: tm.Name,
+					Result:       event.Text,
+					Timestamp:    time.Now(),
+				})
+			}
 		case provider.StreamEventToolCallDone:
 			flushText()
 			debug.Log("swarm", "teammate %s tool call done", tm.ID)

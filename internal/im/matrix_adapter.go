@@ -453,6 +453,9 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 		if pairingResult.Consumed {
 			_ = a.sendText(ctx, roomID, "", pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				a.publishState(false, "warning", err.Error())
+			}
 			return
 		}
 	}

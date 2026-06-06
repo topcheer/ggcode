@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -13,7 +15,7 @@ const (
 )
 
 func newProviderHTTPTransport() *http.Transport {
-	return &http.Transport{
+	base := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   providerDialTimeout,
 			KeepAlive: providerDialTimeout,
@@ -21,4 +23,5 @@ func newProviderHTTPTransport() *http.Transport {
 		TLSHandshakeTimeout:   providerTLSHandshakeTimeout,
 		ResponseHeaderTimeout: providerResponseHeaderTimeout,
 	}
+	return util.WrapTransport(base)
 }

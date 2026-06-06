@@ -29,9 +29,10 @@ func TestNormalizeRemoteAnswerToken(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"  Hello World  ", "hello world"},
+		{"  Hello World  ", "helloworld"},
 		{"YES", "yes"},
-		{"  Choice A ", "choice a"},
+		{"  Choice A ", "choicea"},
+		{"tab\there", "tabhere"},
 		{"", ""},
 	}
 	for _, tt := range tests {

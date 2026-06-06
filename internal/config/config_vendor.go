@@ -99,11 +99,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if maxTokens == 0 {
 		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
 	}
-	inferredWindow := inferContextWindow(model, ep.Protocol)
-	contextWindow := inferredWindow
-	if contextWindow == 0 {
-		// No static mapping for this model; fall back to endpoint config.
-		contextWindow = ep.ContextWindow
+	contextWindow := ep.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = inferContextWindow(model, ep.Protocol)
 	}
 	supportsVision := inferVisionSupport(model, ep.Protocol)
 	if ep.SupportsVision != nil {

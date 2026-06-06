@@ -152,6 +152,7 @@ func GetFullConfig() (*FullConfig, error) {
 		contextWindow = resolved.ContextWindow
 	}
 	_ = contextWindow
+	workDir, _ := os.Getwd()
 
 	return &FullConfig{
 		Vendor:      cfg.Vendor,
@@ -192,6 +193,7 @@ func GetFullConfig() (*FullConfig, error) {
 		KnightTrustLevel: cfg.KnightConfig.TrustLevel,
 
 		SidebarVisible: cfg.UI.SidebarVisible,
+		WorkDir:        workDir,
 		NeedsSetup:     cfg.NeedsOnboard(),
 	}, nil
 }
@@ -224,6 +226,22 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	if v, ok := values["defaultMode"].(string); ok {
 		cfg.DefaultMode = v
+	}
+	if v, ok := values["baseURL"].(string); ok && v != "" {
+		// Update the current endpoint's base_url
+		if cfg.Vendor != "" && cfg.Endpoint != "" {
+			if cfg.Vendors == nil {
+				cfg.Vendors = make(map[string]config.VendorConfig)
+			}
+			vc := cfg.Vendors[cfg.Vendor]
+			if vc.Endpoints == nil {
+				vc.Endpoints = make(map[string]config.EndpointConfig)
+			}
+			ep := vc.Endpoints[cfg.Endpoint]
+			ep.BaseURL = v
+			vc.Endpoints[cfg.Endpoint] = ep
+			cfg.Vendors[cfg.Vendor] = vc
+		}
 	}
 	if v, ok := values["maxIterations"].(float64); ok {
 		cfg.MaxIterations = int(v)

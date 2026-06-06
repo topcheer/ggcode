@@ -38,6 +38,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 		m.emitIMText(finalIMText)
 	}
 	m.chatListScrollToBottom()
+	m.persistFullSessionMessages()
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
@@ -78,6 +79,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 	}
 	m.chatListScrollToBottom()
+	m.persistFullSessionMessages()
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
@@ -107,6 +109,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	m.pushTunnelCurrentActivity()
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
 	m.chatListScrollToBottom()
+	m.persistFullSessionMessages()
 	return m, nil
 
 }
@@ -137,6 +140,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 	m.chatListScrollToBottom()
+	m.persistFullSessionMessages()
 	return m, nil
 
 }

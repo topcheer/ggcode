@@ -355,6 +355,9 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 		}
 		if pairingResult.Consumed {
 			_ = a.sendTwitchMessage(channelID, pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				a.publishState(false, "warning", err.Error())
+			}
 			return
 		}
 	}

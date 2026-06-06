@@ -51,6 +51,9 @@ func WithBearerToken(token string) ClientOption {
 // WithMTLS configures the client to use mutual TLS.
 func WithMTLS(tlsConfig *tls.Config) ClientOption {
 	return func(c *Client) {
+		if util.InsecureMode() {
+			tlsConfig.InsecureSkipVerify = true
+		}
 		c.httpClient = &http.Client{
 			Timeout: 15 * time.Minute,
 			Transport: &http.Transport{
@@ -73,11 +76,9 @@ func WithTokenProvider(p TokenProvider) ClientOption {
 // NewClient creates a new A2A client targeting the given server URL.
 func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 	c := &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		httpClient: &http.Client{
-			Timeout: 15 * time.Minute,
-		},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		apiKey:     apiKey,
+		httpClient: util.NewInsecureAwareClient(15 * time.Minute),
 	}
 	if apiKey != "" && c.authMethod == "" {
 		c.authMethod = "apiKey"

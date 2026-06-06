@@ -3,6 +3,7 @@ import {
   ChevronRight, ChevronDown, File, Folder, FileCode, FileJson,
   Settings, FileText, Image, FileTerminal, X
 } from 'lucide-react'
+import { useTranslation } from '../i18n'
 import * as App from '../../wailsjs/go/main/App'
 import hljs from 'highlight.js'
 import ReactMarkdown from 'react-markdown'
@@ -393,6 +394,7 @@ function HTMLPreview({ content }: { content: string }) {
 // ─── Main Component ───────────────────────────────────────
 
 export function FileBrowser({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation()
   const [activeFile, setActiveFile] = useState('')
   const [openTabs, setOpenTabs] = useState<string[]>([])
   const [tree, setTree] = useState<FileNode[]>([])
@@ -688,7 +690,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
             }}>
               <File size={32} />
-              <span style={{ fontSize: 13 }}>Binary file</span>
+              <span style={{ fontSize: 13 }}>{t('files.binaryFile')}</span>
               <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
             </div>
           )}
@@ -700,7 +702,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
             }}>
               <FileText size={32} />
-              <span style={{ fontSize: 13 }}>File too large to preview (&gt;2MB)</span>
+              <span style={{ fontSize: 13 }}>{t('files.fileTooLarge')}</span>
               <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
             </div>
           )}

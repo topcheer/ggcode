@@ -247,6 +247,67 @@ func TestHandlePairingInboundCreatesChallengeAndBindsOnCorrectCode(t *testing.T)
 	}
 }
 
+func TestNotifyPreviousBindingReplacedSendsSharedMessage(t *testing.T) {
+	mgr := NewManager()
+	sink := &stubSink{name: "qq"}
+	mgr.RegisterSink(sink)
+
+	err := mgr.NotifyPreviousBindingReplaced(context.Background(), PairingResult{
+		Bound: true,
+		PreviousBinding: &ChannelBinding{
+			Workspace: "/tmp/project",
+			Adapter:   "qq",
+			Platform:  PlatformQQ,
+			ChannelID: "group-old",
+		},
+		NewBinding: &ChannelBinding{
+			Workspace: "/tmp/project",
+			Adapter:   "telegram",
+			Platform:  PlatformTelegram,
+			ChannelID: "chat-new",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NotifyPreviousBindingReplaced returned error: %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("expected one direct notification, got %d", len(sink.events))
+	}
+	if got := sink.events[0].Text; got != "This workspace was switched to another Telegram channel. Start pairing again to rebind.\n当前目录已切换到其他 Telegram 渠道，如需重新绑定请再次发起配对。" {
+		t.Fatalf("unexpected notification text: %q", got)
+	}
+}
+
+func TestNotifyPreviousBindingReplacedSkipsSameBinding(t *testing.T) {
+	mgr := NewManager()
+	sink := &stubSink{name: "qq"}
+	mgr.RegisterSink(sink)
+
+	err := mgr.NotifyPreviousBindingReplaced(context.Background(), PairingResult{
+		Bound: true,
+		PreviousBinding: &ChannelBinding{
+			Workspace: "/tmp/project",
+			Adapter:   "qq",
+			Platform:  PlatformQQ,
+			ChannelID: "group-same",
+			ThreadID:  "thread-1",
+		},
+		NewBinding: &ChannelBinding{
+			Workspace: "/tmp/project",
+			Adapter:   "qq",
+			Platform:  PlatformQQ,
+			ChannelID: "group-same",
+			ThreadID:  "thread-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NotifyPreviousBindingReplaced returned error: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("expected no notification for same binding, got %d", len(sink.events))
+	}
+}
+
 func TestRejectPendingPairingBlacklistsAfterThreeRejectionsAndPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "im-pairing.json")
 	store, err := NewJSONFilePairingStore(path)

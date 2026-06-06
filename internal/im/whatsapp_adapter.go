@@ -521,6 +521,9 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 		}
 		if pairingResult.Consumed {
 			_ = a.replyToChat(chatID, pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(context.Background(), pairingResult); err != nil {
+				debug.Log("whatsapp", "adapter %q: notify previous: %v", a.name, err)
+			}
 			return
 		}
 	}

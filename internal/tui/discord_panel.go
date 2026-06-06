@@ -485,55 +485,7 @@ func (m *Model) ensureDiscordBotBinding(adapter string) error {
 }
 
 func (m *Model) ensureDiscordRuntime() error {
-	if m.imManager != nil {
-		return nil
-	}
-	if m.config == nil {
-		return errors.New(m.t("panel.discord.error.config_unavailable"))
-	}
-	if !m.config.IM.Enabled {
-		m.config.IM.Enabled = true
-		if err := m.saveConfig(); err != nil {
-			return fmt.Errorf("enable IM runtime: %w", err)
-		}
-	}
-	bindingsPath, err := im.DefaultBindingsPath()
-	if err != nil {
-		return fmt.Errorf("resolving IM bindings path: %w", err)
-	}
-	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-	if err != nil {
-		return fmt.Errorf("creating IM binding store: %w", err)
-	}
-	imMgr := im.NewManager()
-	if err := imMgr.SetBindingStore(bindingStore); err != nil {
-		return fmt.Errorf("loading IM bindings: %w", err)
-	}
-	pairingPath, err := im.DefaultPairingStatePath()
-	if err != nil {
-		return fmt.Errorf("resolving IM pairing state path: %w", err)
-	}
-	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-	if err != nil {
-		return fmt.Errorf("creating IM pairing store: %w", err)
-	}
-	if err := imMgr.SetPairingStore(pairingStore); err != nil {
-		return fmt.Errorf("loading IM pairing state: %w", err)
-	}
-	imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
-	if m.config != nil {
-		adapters := make(map[string]bool)
-		for n, acfg := range m.config.IM.Adapters {
-			adapters[n] = acfg.Enabled
-		}
-		imMgr.ApplyAdapterConfig(adapters)
-	}
-	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, imMgr); err != nil {
-		return fmt.Errorf("starting current workspace IM adapter: %w", err)
-	}
-	imMgr.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))
-	m.SetIMManager(imMgr)
-	return nil
+	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.discord.error.config_unavailable"), "", true)
 }
 
 func maxDiscord(v, min int) int {

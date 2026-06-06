@@ -40,7 +40,7 @@ type copilotHeaderRoundTripper struct {
 func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := rt.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = util.WrapTransport(nil)
 	}
 	clone := req.Clone(req.Context())
 	if req.Body != nil {

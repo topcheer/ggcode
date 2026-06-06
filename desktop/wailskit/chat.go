@@ -11,49 +11,47 @@ import (
 	"sync"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/acpclient"
+	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
-	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/relaycatalog"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/uiusage"
 )
-
-// pendingMessage holds a user message queued while the agent is busy.
-type pendingMessage struct {
-	Text   string
-	Hidden bool
-}
 
 // ChatBridge manages the full agent chat loop for the Wails frontend,
 // mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
-	cfg          *config.Config
-	resolved     *config.ResolvedEndpoint
-	agent        *agent.Agent
-	registry     *tool.Registry
-	workingDir   string
-	sessionStore session.Store
-	currentSes   *session.Session
+	cfg            *config.Config
+	resolved       *config.ResolvedEndpoint
+	agent          *agent.Agent
+	registry       *tool.Registry
+	mcpManager     *plugin.MCPManager
+	workingDir     string
+	sessionStore   session.Store
+	currentSes     *session.Session
 	permissionMode permission.PermissionMode
 
-	mu     sync.Mutex
+	mu        sync.Mutex
 	cancel    context.CancelFunc
 	cancelled bool
 	startTime time.Time
 
 	// Pending messages (mirrors Fyne pendingMsgs)
-	pendingMsgs []pendingMessage
+	pendingMsgs *agentruntime.PendingQueue[*tunnel.MessageData]
 
 	// Subsystems
 	cronScheduler *cron.Scheduler
@@ -62,9 +60,9 @@ type ChatBridge struct {
 	swarmMgr      *swarm.Manager
 
 	// Metrics
-	metricCancel    context.CancelFunc
-	metricCollector *metrics.Collector
-	usageTurnIndex  int
+	metricCancel         context.CancelFunc
+	metricCollector      *metrics.Collector
+	usageTurnIndex       int
 	lastMetricDigestTurn int
 
 	// Sub-agent tunnel tracking
@@ -74,12 +72,7 @@ type ChatBridge struct {
 	Emitter *im.IMEmitter
 
 	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
-	imRound struct {
-		Text          strings.Builder
-		ToolCalls     int
-		ToolSuccesses int
-		ToolFailures  int
-	}
+	imRound agentruntime.IMRoundState
 
 	// Mobile tunnel broker for outbound push
 	tunnelBroker           *tunnel.Broker
@@ -91,12 +84,12 @@ type ChatBridge struct {
 	shareTunnelBroker      *tunnel.Broker
 
 	// Pending approval/ask_user requests from agent
-	pendingMu        sync.Mutex
-	pendingApprovals map[string]chan permission.Decision
-	pendingAskUsers  map[string]chan tool.AskUserResponse
+	interactions *agentruntime.InteractionBroker
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
+
+	liveHistory []SessionMessage
 }
 
 // NewChatBridge creates a new chat bridge using the global config.
@@ -111,21 +104,83 @@ func NewChatBridge() (*ChatBridge, error) {
 		modeStr = "auto"
 	}
 	return &ChatBridge{
-		cfg:              cfg,
-		workingDir:       wd,
-		permissionMode:   permission.ParsePermissionMode(modeStr),
-		pendingApprovals: make(map[string]chan permission.Decision),
-		pendingAskUsers:  make(map[string]chan tool.AskUserResponse),
+		cfg:            cfg,
+		workingDir:     wd,
+		permissionMode: permission.ParsePermissionMode(modeStr),
+		pendingMsgs:    agentruntime.NewPendingQueue[*tunnel.MessageData](),
+		interactions:   agentruntime.NewInteractionBroker(),
 	}, nil
 }
 
 // SendMessage sends a user message and streams events to the frontend.
 // If agent is already running, queues the message for processing after the current turn.
 func (b *ChatBridge) SendMessage(userMsg string) error {
+	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, false)
+}
+
+func (b *ChatBridge) HandleTunnelUserMessage(data tunnel.MessageData) error {
+	if strings.TrimSpace(data.Text) == "" {
+		return nil
+	}
+	data.MessageID = tunnel.NormalizeClientMessageID(data.MessageID)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushUserMessageData(data)
+		broker.PushStatus(tunnel.StatusBusy, "")
+		b.resetTunnelRoundState()
+	}
+	return b.sendMessageData(data, true)
+}
+
+func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(string), currentAskUserRequest func() tool.AskUserRequest, clearAskUserRequest func()) {
+	if broker == nil {
+		return
+	}
+	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+		agentruntime.RouteTunnelCommand(cmd, agentruntime.TunnelCommandHooks{
+			OnUserMessage: func(data tunnel.MessageData) {
+				_ = b.HandleTunnelUserMessage(data)
+			},
+			OnApprovalResponse: func(data tunnel.ApprovalResponseData) {
+				b.HandleMobileApprovalResponse(data)
+			},
+			OnAskUserResponse: func(data tunnel.AskUserResponseData) {
+				req := tool.AskUserRequest{}
+				if currentAskUserRequest != nil {
+					req = currentAskUserRequest()
+				}
+				b.HandleMobileAskUserResponse(data, req)
+				if clearAskUserRequest != nil {
+					clearAskUserRequest()
+				}
+			},
+			OnInterrupt: func() {
+				b.Cancel()
+			},
+			OnLanguageChange: func(data tunnel.LanguageChangeData) {
+				if onLanguage != nil {
+					onLanguage(data.Language)
+				}
+			},
+			OnServerAck: func(messageID string) {
+				broker.PushServerAck(messageID)
+			},
+		})
+	})
+}
+
+func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush bool) error {
+	userMsg := strings.TrimSpace(data.Text)
+	if userMsg == "" {
+		return nil
+	}
 	b.mu.Lock()
 	if b.cancel != nil {
 		// Agent is busy — queue the message (mirrors Fyne QueueMessage)
-		b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: userMsg})
+		meta := &data
+		if !skipMobilePush {
+			meta = nil
+		}
+		b.pendingMsgs.Enqueue(userMsg, false, meta)
 		b.mu.Unlock()
 		if b.OnStreamEvent != nil {
 			raw, _ := json.Marshal(map[string]string{"message": "Message queued"})
@@ -152,7 +207,13 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 				if broker := b.currentTunnelBroker(); broker != nil {
 					broker.PushSystemMessage("Processing queued message...")
 				}
-				_ = b.SendMessage(pending.Text)
+				data := tunnel.MessageData{Text: pending.Text}
+				skipPush := false
+				if pending.Meta != nil {
+					data = *pending.Meta
+					skipPush = true
+				}
+				_ = b.sendMessageData(data, skipPush)
 			}
 		}
 	}()
@@ -167,14 +228,17 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	if err := b.ensureSession(); err != nil {
 		return fmt.Errorf("ensure session: %w", err)
 	}
+	// Rebind the per-session projection broker before every run so subsequent
+	// turns cannot inherit a stale broker callback/session binding.
+	b.bindTunnelProjectionSession()
+	b.appendLiveUserMessage(userMsg)
 
 	// Notify mobile client: user message + busy status
-	if broker := b.currentTunnelBroker(); broker != nil {
-		msgID := broker.NextMessageID()
-		broker.PushUserMessageData(tunnel.MessageData{
-			Text:      userMsg,
-			MessageID: msgID,
-		})
+	if broker := b.currentTunnelBroker(); broker != nil && !skipMobilePush {
+		if strings.TrimSpace(data.MessageID) == "" {
+			data.MessageID = broker.NextMessageID()
+		}
+		broker.PushUserMessageData(data)
 		broker.PushStatus(tunnel.StatusBusy, "")
 		b.resetTunnelRoundState()
 	}
@@ -185,6 +249,9 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 		}
 		b.emit(ev)
 	})
+	if err != nil {
+		b.appendLiveError(err.Error())
+	}
 	// Save session after each message (mirrors Fyne bridge)
 	b.saveSession()
 
@@ -219,19 +286,9 @@ func (b *ChatBridge) Cancel() {
 	b.cancelled = true
 	b.mu.Unlock()
 
-	// Close any pending approval/ask_user dialogs by sending deny/cancel
-	// to their channels. This unblocks RequestApproval/RequestAskUser so
-	// the agent loop can exit cleanly.
-	b.pendingMu.Lock()
-	for id, ch := range b.pendingApprovals {
-		ch <- permission.Deny
-		delete(b.pendingApprovals, id)
+	if b.interactions != nil {
+		b.interactions.CancelAll()
 	}
-	for id, ch := range b.pendingAskUsers {
-		ch <- tool.AskUserResponse{Status: tool.AskUserStatusCancelled}
-		delete(b.pendingAskUsers, id)
-	}
-	b.pendingMu.Unlock()
 
 	// Notify frontend to close dialogs
 	if b.OnStreamEvent != nil {
@@ -249,11 +306,13 @@ func (b *ChatBridge) Cancel() {
 
 // ClearCurrentSession resets the current session so next chat creates a fresh one.
 func (b *ChatBridge) ClearCurrentSession() {
+	state := agentruntime.ClearSession()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.currentSes = nil
-	b.usageTurnIndex = 0
-	b.lastMetricDigestTurn = 0
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.liveHistory = nil
 	b.tunnelMsgID = ""
 	b.tunnelMsgNeedsFinalize = false
 	if b.tunnelProjectionBroker != nil {
@@ -263,8 +322,6 @@ func (b *ChatBridge) ClearCurrentSession() {
 
 // LoadSession loads an existing session by ID.
 func (b *ChatBridge) LoadSession(id string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
 		if err != nil {
@@ -272,13 +329,21 @@ func (b *ChatBridge) LoadSession(id string) error {
 		}
 		b.sessionStore = store
 	}
-	ses, err := b.sessionStore.Load(id)
+	state, err := agentruntime.LoadSession(b.sessionStore, id)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
-	b.currentSes = ses
-	b.usageTurnIndex = session.LastTurnIndex(ses)
-	b.lastMetricDigestTurn = b.usageTurnIndex
+	b.ResetAgent()
+	b.mu.Lock()
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
+	b.mu.Unlock()
+	if err := b.initAgent(context.Background()); err != nil {
+		return fmt.Errorf("init agent for session load: %w", err)
+	}
+	agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
 	// Rebind projection session for the loaded session
 	b.bindTunnelProjectionSession()
 	return nil
@@ -286,9 +351,6 @@ func (b *ChatBridge) LoadSession(id string) error {
 
 // ensureSession creates a new session if none exists (mirrors Fyne bridge).
 func (b *ChatBridge) ensureSession() error {
-	if b.currentSes != nil {
-		return nil
-	}
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
 		if err != nil {
@@ -302,21 +364,32 @@ func (b *ChatBridge) ensureSession() error {
 		endpoint = b.cfg.Endpoint
 		model = b.cfg.Model
 	}
-	ses := session.NewSession(vendor, endpoint, model)
-	ses.Workspace = b.workingDir
-	if err := b.sessionStore.Save(ses); err != nil {
+	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
+	if err != nil {
 		return fmt.Errorf("save new session: %w", err)
 	}
-	b.currentSes = ses
+	if !created {
+		return nil
+	}
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
 	return nil
 }
 
 // saveSession persists the current session (mirrors Fyne bridge).
 func (b *ChatBridge) saveSession() {
-	if b.currentSes == nil || b.sessionStore == nil {
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.sessionStore
+	agent := b.agent
+	b.mu.Unlock()
+	if agent != nil {
+		_ = agentruntime.SaveAgentSessionSnapshot(store, ses, agent)
 		return
 	}
-	_ = b.sessionStore.Save(b.currentSes)
+	_ = agentruntime.SaveSessionMessages(store, ses, ses.Messages)
 }
 
 // CurrentSessionID returns the current session ID.
@@ -331,38 +404,25 @@ func (b *ChatBridge) CurrentSessionID() string {
 
 // EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
 func (b *ChatBridge) EnsureSession() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.currentSes != nil {
-		return
-	}
 	vendor, endpoint, model := "", "", ""
 	if b.cfg != nil {
 		vendor = b.cfg.Vendor
 		endpoint = b.cfg.Endpoint
 		model = b.cfg.Model
 	}
-	ses := session.NewSession(vendor, endpoint, model)
-	if b.sessionStore != nil {
-		_ = b.sessionStore.Save(ses)
+	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
+	if err != nil || !created {
+		return
 	}
-	b.currentSes = ses
+	b.mu.Lock()
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.mu.Unlock()
 }
 
 // initAgent sets up provider, tools, and agent — full parity with Fyne bridge.
 func (b *ChatBridge) initAgent(ctx context.Context) error {
-	// Resolve provider
-	resolved, err := b.cfg.ResolveActiveEndpoint()
-	if err != nil {
-		return fmt.Errorf("resolve endpoint: %w", err)
-	}
-	b.resolved = resolved
-
-	p, err := provider.NewProvider(resolved)
-	if err != nil {
-		return fmt.Errorf("create provider: %w", err)
-	}
-
 	// Permission policy (auto mode)
 	modeStr := b.cfg.DefaultMode
 	if modeStr == "" {
@@ -370,7 +430,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	}
 	mode := permission.ParsePermissionMode(modeStr)
 	b.permissionMode = mode
-	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+	policy := agentruntime.BuildInteractivePermissionPolicy(b.cfg, b.workingDir, false)
 
 	// Impersonation
 	if b.cfg.Impersonation.Preset != "" && b.cfg.Impersonation.Preset != "none" {
@@ -379,11 +439,17 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		}
 	}
 
-	// Tool registry
-	b.registry = tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(b.registry, nil, b.workingDir); err != nil {
-		log.Printf("Warning: some builtin tools failed: %v", err)
+	resolved, p, err := agentruntime.ResolveCurrentSelection(b.cfg)
+	if err != nil {
+		return fmt.Errorf("resolve provider selection: %w", err)
 	}
+	b.resolved = resolved
+
+	core, err := agentruntime.BuildInteractiveRuntimeCore(b.cfg, b.workingDir, policy)
+	if err != nil {
+		return fmt.Errorf("build runtime core: %w", err)
+	}
+	b.registry = core.Registry
 
 	// Cron tools
 	b.cronScheduler = cron.NewScheduler(nil)
@@ -393,28 +459,16 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	_ = b.registry.Register(tool.CronCreateTool{Scheduler: b.cronScheduler})
 	_ = b.registry.Register(tool.CronDeleteTool{Scheduler: b.cronScheduler})
 	_ = b.registry.Register(tool.CronListTool{Scheduler: b.cronScheduler})
-
-	// MCP tools
-	mergedServers, _ := mcp.MergeStartupServers(b.workingDir, b.cfg.MCPServers)
-	mcpMgr := plugin.NewMCPManager(mergedServers, b.registry)
-	_ = b.registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
-	_ = b.registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
-	_ = b.registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-
-	// Plugin tools
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(b.cfg.Plugins)
-	_ = pluginMgr.RegisterTools(b.registry)
-
-	// Memory tools
-	autoMem := memory.NewAutoMemory()
-	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
-	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
-	_ = b.registry.Register(saveMemoryTool)
+	mcpMgr := core.MCPManager
+	b.mcpManager = mcpMgr
+	autoMem := core.AutoMemory
+	projectAutoMem := core.ProjectAutoMem
+	commandMgr := core.CommandManager
+	saveMemoryTool := core.SaveMemoryTool
 	// When save_memory saves, rebuild system prompt so agent sees new memory
 	// (mirrors Fyne setupAgent line 710)
 	saveMemoryTool.SetAfterSave(func() {
-		newPrompt := buildWailsSystemPrompt(b.workingDir, b.permissionMode, autoMem, projectAutoMem)
+		newPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, b.permissionMode, autoMem, projectAutoMem, commandMgr)
 		b.mu.Lock()
 		if b.agent != nil {
 			b.agent.UpdateSystemPrompt(newPrompt)
@@ -430,80 +484,67 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		return b.RequestApproval(ctx, "", toolName, input)
 	})
-	if len(b.acpClientMgr.Available()) > 0 {
-		_ = b.registry.Register(tool.DelegateTool{
-			Manager:           b.acpClientMgr,
-			SubAgentManagerFn: func() *subagent.Manager { return b.subAgentMgr },
-			WorkingDir:        b.workingDir,
-			WorkingDirFn: func() string {
-				if b.agent != nil {
-					return b.agent.WorkingDir()
-				}
-				return b.workingDir
-			},
-		})
-	}
-
 	// Sub-agent manager
-	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
 	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
 	}
-	b.registry.Register(tool.SpawnAgentTool{
-		Manager:      b.subAgentMgr,
-		Provider:     p,
-		Tools:        b.registry,
-		AgentFactory: agentFactory,
-		WorkingDir:   b.workingDir,
+	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, b.workingDir, b.recordSessionUsage, agentFactory)
+	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, b.recordSessionUsage))
+	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
+		if b.agent != nil {
+			return b.agent.WorkingDir()
+		}
+		return b.workingDir
 	})
-	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
-	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
 
 	// Forward sub-agent events to frontend
 	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
 		if b.OnStreamEvent == nil {
 			return
 		}
-		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "content": text})
+		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "title": b.subagentPanelTitle(agentID), "content": text})
 		b.OnStreamEvent("subagent_text", raw)
+		agentruntime.PushTunnelSubagentText(b.currentTunnelBroker, agentID, text)
 	})
 	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
 		if b.OnStreamEvent == nil {
+			agentruntime.PushTunnelSubagentReasoning(b.currentTunnelBroker, agentID, text)
 			return
 		}
-		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "content": text})
+		raw, _ := json.Marshal(map[string]string{"agentID": agentID, "title": b.subagentPanelTitle(agentID), "content": text})
 		b.OnStreamEvent("subagent_reasoning", raw)
+		agentruntime.PushTunnelSubagentReasoning(b.currentTunnelBroker, agentID, text)
 	})
 	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
-		if b.OnStreamEvent == nil {
-			return
-		}
 		if displayName == "" {
 			pres := tool.DescribeTool(toolName, args)
 			displayName = pres.DisplayName
 			detail = pres.Detail
 		}
-		raw, _ := json.Marshal(map[string]string{
-			"agentID": agentID, "id": toolID, "name": toolName,
-			"displayName": displayName, "arguments": args, "detail": detail,
-		})
-		b.OnStreamEvent("subagent_tool_call", raw)
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{
+				"agentID": agentID, "title": b.subagentPanelTitle(agentID), "id": toolID, "name": toolName,
+				"displayName": displayName, "arguments": args, "detail": detail,
+			})
+			b.OnStreamEvent("subagent_tool_call", raw)
+		}
+		agentruntime.PushTunnelSubagentToolCall(b.currentTunnelBroker, agentID, toolID, toolName, displayName, args, detail)
 	})
 	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
-		if b.OnStreamEvent == nil {
-			return
-		}
 		if displayName == "" {
 			pres := tool.DescribeTool(toolName, "")
 			displayName = pres.DisplayName
 			detail = pres.Detail
 		}
-		raw, _ := json.Marshal(map[string]interface{}{
-			"agentID": agentID, "id": toolID, "name": toolName,
-			"displayName": displayName, "detail": detail,
-			"result": result, "isError": isError,
-		})
-		b.OnStreamEvent("subagent_tool_result", raw)
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]interface{}{
+				"agentID": agentID, "title": b.subagentPanelTitle(agentID), "id": toolID, "name": toolName,
+				"displayName": displayName, "detail": detail,
+				"result": result, "isError": isError,
+			})
+			b.OnStreamEvent("subagent_tool_result", raw)
+		}
+		agentruntime.PushTunnelSubagentToolResult(b.currentTunnelBroker, agentID, toolID, toolName, displayName, detail, result, isError)
 	})
 
 	// Swarm manager
@@ -515,18 +556,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		_ = tool.RegisterBuiltinTools(reg, nil, b.workingDir)
 		return reg
 	}
-	b.swarmMgr = swarm.NewManager(b.cfg.Swarm, p, swarmFactory, toolBuilder)
-
-	b.registry.Register(tool.TeamCreateTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeamDeleteTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateSpawnTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateListTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateShutdownTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateResultsTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskCreateTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskListTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskClaimTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskCompleteTool{Manager: b.swarmMgr})
+	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
 
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 
@@ -574,49 +604,25 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 
 		// Push to mobile tunnel (mirrors Fyne line 648-698)
 		if broker := b.currentTunnelBroker(); broker != nil {
-			switch ev.Type {
-			case "teammate_tool_call":
-				displayName := ""
-				detail := ""
-				pres := tool.DescribeTool(ev.CurrentTool, ev.ToolArgs)
-				displayName = pres.DisplayName
-				detail = pres.Detail
-				broker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, displayName, ev.ToolArgs, detail)
-				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
-			case "teammate_tool_result":
-				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
-			case "teammate_text":
-				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-				broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
-			case "teammate_spawned":
-				broker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", "", ev.TeamID)
-			case "teammate_working":
-				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
-			case "teammate_idle":
-				if ev.Result != "" {
-					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-					broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
-				}
-				success := ev.Error == nil
-				summary := ev.Result
-				if ev.Error != nil {
-					summary = ev.Error.Error()
-				}
-				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
-			case "teammate_shutdown":
-				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
-			case "teammate_error":
-				errMsg := ""
-				if ev.Error != nil {
-					errMsg = ev.Error.Error()
-				}
-				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, errMsg, false)
-			}
+			_ = broker
+			agentruntime.PushTunnelSwarmEvent(
+				b.currentTunnelBroker,
+				b.swarmMgr,
+				ev,
+				func(toolName, args string) string {
+					pres := tool.DescribeTool(toolName, args)
+					return pres.DisplayName
+				},
+				func(toolName, args string) string {
+					pres := tool.DescribeTool(toolName, args)
+					return pres.Detail
+				},
+			)
 		}
 	})
 
 	// Create agent — mirror Fyne setupAgent exactly
-	systemPrompt := buildWailsSystemPrompt(b.workingDir, b.permissionMode, autoMem, projectAutoMem)
+	systemPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, b.permissionMode, autoMem, projectAutoMem, commandMgr)
 	maxIter := b.cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 200
@@ -638,12 +644,19 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	a.SetMetricHandler(b.metricCollector.Emit)
 
 	// Context window — critical for context compaction (mirrors Fyne line 737-742)
-	if resolved.ContextWindow > 0 {
-		a.ContextManager().SetContextWindow(resolved.ContextWindow)
-	}
-	if resolved.MaxTokens > 0 {
-		a.ContextManager().SetOutputReserve(resolved.MaxTokens)
-	}
+	agentruntime.ApplyResolvedLimitsToAgent(a, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, a, func(resp relaycatalog.ResolveResponse) {
+		b.mu.Lock()
+		if b.resolved != nil {
+			if resp.ContextWindow > 0 {
+				b.resolved.ContextWindow = resp.ContextWindow
+			}
+			if resp.MaxOutputTokens > 0 {
+				b.resolved.MaxTokens = resp.MaxOutputTokens
+			}
+		}
+		b.mu.Unlock()
+	})
 
 	// Wire approval handler
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
@@ -667,33 +680,46 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		}
 	}
 
+	_, _ = agentruntime.ApplyProjectMemoryToAgent(a, b.workingDir)
+
 	b.agent = a
 	// Set interruption handler — agent checks for pending messages during compact etc.
 	// (mirrors Fyne line 836-839)
 	a.SetInterruptionHandler(func() string {
 		return b.drainPendingInterrupt()
 	})
-	b.EnsureSession() // mirrors Fyne setupAgent line 743
+	b.EnsureSession()               // mirrors Fyne setupAgent line 743
 	b.bindTunnelProjectionSession() // record events even before Share (mirrors Fyne line 303)
 	return nil
+}
+
+func (b *ChatBridge) subagentPanelTitle(agentID string) string {
+	if b.subAgentMgr == nil {
+		return agentID
+	}
+	snap, ok := b.subAgentMgr.SnapshotByID(agentID)
+	if !ok {
+		return agentID
+	}
+	switch {
+	case strings.TrimSpace(snap.DisplayTask) != "":
+		return snap.DisplayTask
+	case strings.TrimSpace(snap.Task) != "":
+		return snap.Task
+	case strings.TrimSpace(snap.Name) != "":
+		return snap.Name
+	default:
+		return agentID
+	}
 }
 
 func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	var eventType string
 	var data interface{}
+	var semantic agentruntime.DesktopStreamSemantic
+	var ok bool
 
 	switch ev.Type {
-	case provider.StreamEventText:
-		eventType = "text"
-		data = map[string]string{"content": ev.Text}
-		b.imRound.Text.WriteString(ev.Text)
-		// Push to mobile via tunnel
-		if broker := b.currentTunnelBroker(); broker != nil {
-			b.markTunnelMainStreamActive()
-			broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-			broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
-		}
-
 	case provider.StreamEventToolCallChunk:
 		eventType = "tool_call_chunk"
 		data = map[string]interface{}{
@@ -701,135 +727,210 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			"name": ev.Tool.Name,
 		}
 
-	case provider.StreamEventToolCallDone:
-		pres := tool.DescribeTool(ev.Tool.Name, string(ev.Tool.Arguments))
-		eventType = "tool_call_done"
-		b.imRound.ToolCalls++
-		if b.Emitter != nil {
-			b.Emitter.TriggerTyping()
-		}
-		// Push to mobile via tunnel (mirrors Fyne: flush text before tool call)
-		if broker := b.currentTunnelBroker(); broker != nil {
-			b.flushTunnelTextStream(broker, true)
-			args := string(ev.Tool.Arguments)
-			if len([]rune(args)) > 2000 {
-				args = string([]rune(args)[:2000])
-			}
-			broker.PushToolCall(ev.Tool.ID, ev.Tool.Name, pres.DisplayName, args, pres.Detail)
-		}
-		data = map[string]interface{}{
-			"id":          ev.Tool.ID,
-			"name":        ev.Tool.Name,
-			"arguments":   string(ev.Tool.Arguments),
-			"displayName": pres.DisplayName,
-			"detail":      pres.Detail,
-		}
-
-	case provider.StreamEventToolResult:
-		eventType = "tool_result"
-		resultPreview := ev.Result
-		if len(resultPreview) > 500 {
-			resultPreview = resultPreview[:500] + "..."
-		}
-		data = map[string]interface{}{
-			"id":      ev.Tool.ID,
-			"name":    ev.Tool.Name,
-			"result":  resultPreview,
-			"isError": ev.IsError,
-		}
-		if ev.IsError {
-			b.imRound.ToolFailures++
-		} else {
-			b.imRound.ToolSuccesses++
-		}
-		// Emit tool result event to IM
-		if b.Emitter != nil {
-			content := ev.Result
-			if len([]rune(content)) > 2000 {
-				content = string([]rune(content)[:2000]) + "\n...(truncated)"
-			}
-			b.Emitter.EmitEvent(im.OutboundEvent{
-				Kind: im.OutboundEventToolResult,
-				ToolRes: &im.ToolResultInfo{
-					ToolName: ev.Tool.Name,
-					Args:     string(ev.Tool.Arguments),
-					Result:   content,
-					IsError:  ev.IsError,
-				},
-			})
-			b.Emitter.TriggerTyping()
-		}
-		// Push to mobile via tunnel (mirrors Fyne: reasoning done before tool result)
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-			broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
-		}
-
-	case provider.StreamEventDone:
-		eventType = "done"
-		// Emit round summary to IM (mirrors Fyne agentBridge)
-		if b.Emitter != nil {
-			text := strings.TrimSpace(b.imRound.Text.String())
-			if text != "" || b.imRound.ToolCalls > 0 {
-				b.Emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
-			}
-		}
-		// Reset round accumulator
-		b.imRound.Text.Reset()
-		b.imRound.ToolCalls = 0
-		b.imRound.ToolSuccesses = 0
-		b.imRound.ToolFailures = 0
-		b.resetTunnelRoundState()
-		// Mirror TUI/Fyne: only close text stream + rotate msgID on Done.
-		// Do NOT push idle/clear-activity here — that happens when the
-		// entire agent run finishes (in SendMessage after RunStream returns).
-		if broker := b.currentTunnelBroker(); broker != nil {
-			b.flushTunnelTextStream(broker, true)
-		}
-		usageData := map[string]interface{}{}
-		if ev.Usage != nil {
-			cacheTotal := ev.Usage.CacheRead + ev.Usage.CacheWrite + ev.Usage.InputTokens
-			cacheHit := 0
-			if cacheTotal > 0 && ev.Usage.CacheRead > 0 {
-				cacheHit = ev.Usage.CacheRead * 100 / cacheTotal
-			}
-			usageData = map[string]interface{}{
-				"inputTokens":  ev.Usage.InputTokens + ev.Usage.CacheRead,
-				"outputTokens": ev.Usage.OutputTokens,
-				"cacheRead":    ev.Usage.CacheRead,
-				"cacheWrite":   ev.Usage.CacheWrite,
-				"cacheHit":     cacheHit,
-			}
-		}
-		data = usageData
-
-	case provider.StreamEventError:
-		eventType = "error"
-		errMsg := "unknown error"
-		if ev.Error != nil {
-			errMsg = ev.Error.Error()
-		}
-		data = map[string]string{"message": errMsg}
-		// Push to mobile via tunnel (mirrors Fyne)
-		if broker := b.currentTunnelBroker(); broker != nil {
-			b.flushTunnelTextStream(broker, true)
-			broker.PushError(errMsg)
-		}
-
-	case provider.StreamEventReasoning:
-		eventType = "reasoning"
-		data = map[string]string{"content": ev.Text}
-		// Push to mobile via tunnel
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoning(b.tunnelReasoningMsgID(broker), ev.Text)
-		}
-
 	default:
-		return
+		semantic, ok = agentruntime.HandleDesktopStreamEvent(ev, &b.imRound,
+			agentruntime.NewDesktopEmitterAdapter(agentruntime.DesktopEmitterCallbacks{
+				TriggerTypingFn: func() {
+					if b.Emitter != nil {
+						b.Emitter.TriggerTyping()
+					}
+				},
+				EmitToolResultFn: func(toolName, rawArgs, result string, isError bool) {
+					if b.Emitter == nil {
+						return
+					}
+					b.Emitter.EmitEvent(im.OutboundEvent{
+						Kind: im.OutboundEventToolResult,
+						ToolRes: &im.ToolResultInfo{
+							ToolName: toolName,
+							Args:     rawArgs,
+							Result:   result,
+							IsError:  isError,
+						},
+					})
+				},
+				EmitRoundSummaryFn: func(text string, toolCalls, toolSuccesses, toolFailures int) {
+					if b.Emitter != nil {
+						b.Emitter.EmitRoundSummary(text, toolCalls, toolSuccesses, toolFailures)
+					}
+				},
+			}),
+			nil,
+		)
+		if !ok {
+			return
+		}
+		b.applySemanticToLiveHistory(semantic)
+		switch semantic.Type {
+		case provider.StreamEventText:
+			eventType = "text"
+			data = map[string]string{"content": semantic.Text}
+		case provider.StreamEventToolCallDone:
+			eventType = "tool_call_done"
+			data = map[string]interface{}{
+				"id":          semantic.ToolCall.ID,
+				"name":        semantic.ToolCall.Name,
+				"arguments":   semantic.ToolCall.RawArgs,
+				"displayName": semantic.ToolCall.DisplayName,
+				"detail":      semantic.ToolCall.Detail,
+			}
+		case provider.StreamEventToolResult:
+			eventType = "tool_result"
+			data = map[string]interface{}{
+				"id":      semantic.ToolResult.ID,
+				"name":    semantic.ToolResult.Name,
+				"result":  semantic.ToolResult.Preview,
+				"isError": semantic.ToolResult.IsError,
+			}
+		case provider.StreamEventDone:
+			eventType = "done"
+			data = semantic.UsageData
+			b.resetTunnelRoundState()
+		case provider.StreamEventError:
+			eventType = "error"
+			data = map[string]string{"message": semantic.ErrorText}
+		case provider.StreamEventReasoning:
+			eventType = "reasoning"
+			data = map[string]string{"content": semantic.Text}
+		default:
+			return
+		}
 	}
 
 	raw, _ := json.Marshal(data)
-	b.OnStreamEvent(eventType, raw)
+	if b.OnStreamEvent != nil {
+		b.OnStreamEvent(eventType, raw)
+	}
+}
+
+func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.liveHistory) > 0 {
+		out := make([]SessionMessage, len(b.liveHistory))
+		copy(out, b.liveHistory)
+		return out
+	}
+	if b.currentSes == nil {
+		return nil
+	}
+	return buildSessionHistoryFromMessages(b.currentSes.Messages)
+}
+
+func (b *ChatBridge) appendLiveUserMessage(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.liveHistory) == 0 && b.currentSes != nil {
+		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+	}
+	b.liveHistory = append(b.liveHistory, SessionMessage{
+		Role:    "user",
+		Content: text,
+	})
+}
+
+func (b *ChatBridge) appendLiveError(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.liveHistory) == 0 && b.currentSes != nil {
+		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+	}
+	b.liveHistory = append(b.liveHistory, SessionMessage{
+		Role:    "error",
+		Content: text,
+	})
+}
+
+func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStreamSemantic) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.liveHistory) == 0 && b.currentSes != nil {
+		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+	}
+	switch semantic.Type {
+	case provider.StreamEventReasoning:
+		if semantic.Text == "" {
+			return
+		}
+		if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "reasoning" && b.liveHistory[n-1].Streaming {
+			b.liveHistory[n-1].Content += semantic.Text
+			return
+		}
+		b.liveHistory = append(b.liveHistory, SessionMessage{
+			Role:      "reasoning",
+			Content:   semantic.Text,
+			Streaming: true,
+		})
+	case provider.StreamEventText:
+		b.finalizeLiveReasoningLocked()
+		if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "assistant" && b.liveHistory[n-1].Streaming {
+			b.liveHistory[n-1].Content += semantic.Text
+			return
+		}
+		b.liveHistory = append(b.liveHistory, SessionMessage{
+			Role:      "assistant",
+			Content:   semantic.Text,
+			Streaming: true,
+		})
+	case provider.StreamEventToolCallDone:
+		b.finalizeLiveReasoningLocked()
+		b.finalizeStreamingAssistantLocked()
+		if semantic.ToolCall == nil {
+			return
+		}
+		b.liveHistory = append(b.liveHistory, SessionMessage{
+			Role:        "tool",
+			ToolName:    semantic.ToolCall.Name,
+			ToolID:      semantic.ToolCall.ID,
+			ToolArgs:    semantic.ToolCall.RawArgs,
+			ToolDisplay: semantic.ToolCall.DisplayName,
+			ToolDetail:  semantic.ToolCall.Detail,
+			Streaming:   true,
+		})
+	case provider.StreamEventToolResult:
+		if semantic.ToolResult == nil {
+			return
+		}
+		for i := len(b.liveHistory) - 1; i >= 0; i-- {
+			if b.liveHistory[i].Role == "tool" && b.liveHistory[i].ToolID == semantic.ToolResult.ID {
+				b.liveHistory[i].Content = semantic.ToolResult.Preview
+				b.liveHistory[i].IsError = semantic.ToolResult.IsError
+				b.liveHistory[i].Streaming = false
+				break
+			}
+		}
+	case provider.StreamEventDone:
+		b.finalizeLiveReasoningLocked()
+		b.finalizeStreamingAssistantLocked()
+	case provider.StreamEventError:
+		b.finalizeLiveReasoningLocked()
+		b.finalizeStreamingAssistantLocked()
+		if semantic.ErrorText == "" {
+			return
+		}
+		b.liveHistory = append(b.liveHistory, SessionMessage{
+			Role:    "error",
+			Content: semantic.ErrorText,
+		})
+	}
+}
+
+func (b *ChatBridge) finalizeLiveReasoningLocked() {
+	if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "reasoning" && b.liveHistory[n-1].Streaming {
+		b.liveHistory[n-1].Streaming = false
+	}
+}
+
+func (b *ChatBridge) finalizeStreamingAssistantLocked() {
+	if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "assistant" && b.liveHistory[n-1].Streaming {
+		b.liveHistory[n-1].Streaming = false
+	}
 }
 
 // GetModelInfo returns the current model info for the status bar.
@@ -840,19 +941,24 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 	resolved, err := b.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		return map[string]interface{}{
-			"vendor": b.cfg.Vendor,
-			"model":  b.cfg.Model,
-			"mode":   b.GetPermissionMode(),
+			"vendor":       b.cfg.Vendor,
+			"model":        b.cfg.Model,
+			"mode":         b.GetPermissionMode(),
+			"contextTotal": 0,
 		}
 	}
-	return map[string]interface{}{
+	payload := map[string]interface{}{
 		"vendor":        b.cfg.Vendor,
 		"model":         b.cfg.Model,
 		"contextWindow": resolved.ContextWindow,
+		"contextTotal":  resolved.ContextWindow,
 		"mode":          b.GetPermissionMode(),
 	}
+	for key, value := range b.currentUsagePayload() {
+		payload[key] = value
+	}
+	return payload
 }
-
 
 // ─── Tunnel Broker Integration ──────────────────────────────────────
 // Full parity with Fyne AgentBridge tunnel logic.
@@ -864,14 +970,21 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		working    bool
 		cfg        *config.Config
 		currentSes *session.Session
+		attachCfg  agentruntime.TunnelAttachConfig
 	)
 	b.mu.Lock()
 	b.tunnelBroker = broker
+	b.shareTunnelBroker = broker
 	working = b.cancel != nil
 	cfg = b.cfg
 	currentSes = b.currentSes
-	if working && broker != nil && b.tunnelMsgID == "" {
-		b.tunnelMsgID = broker.NextMessageID()
+	if working {
+		state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
+			MessageID:     b.tunnelMsgID,
+			NeedsFinalize: b.tunnelMsgNeedsFinalize,
+		}, broker)
+		b.tunnelMsgID = state.MessageID
+		b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	}
 	b.mu.Unlock()
 
@@ -881,19 +994,13 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 
 	b.bindTunnelProjectionSession()
 
-	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+	attachCfg.ReplayProvider = func() []tunnel.GatewayMessage {
 		return b.CurrentSessionTunnelEvents()
-	})
-	broker.SetEventRecorder(nil)
-
-	if currentSes != nil && currentSes.ID != "" {
-		broker.BindSession(currentSes.ID)
-		broker.SetAuthorityEpoch(b.currentSessionTunnelAuthorityEpoch())
-		broker.AnnounceActiveSession(currentSes.ID)
 	}
 
-	if !working {
-		return
+	if currentSes != nil && currentSes.ID != "" {
+		attachCfg.SessionID = currentSes.ID
+		attachCfg.AuthorityEpoch = b.currentSessionTunnelAuthorityEpoch()
 	}
 
 	if cfg != nil {
@@ -904,45 +1011,54 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 			model = resolved.Model
 			vendorName = resolved.VendorName
 		}
-		broker.SendSessionInfo(tunnel.SessionInfoData{
+		info := tunnel.SessionInfoData{
 			Workspace: b.workingDir,
 			Model:     model,
 			Provider:  vendorName,
 			Mode:      cfg.DefaultMode,
-		})
+		}
+		if working {
+			attachCfg.SessionInfo = &info
+		}
 	}
-
-	status := b.CurrentTunnelStatus()
-	if status.Status != "" {
-		broker.PushStatus(status.Status, status.Message)
+	if working {
+		status := b.CurrentTunnelStatus()
+		attachCfg.Status = &status
+		activity := b.CurrentTunnelActivity()
+		attachCfg.Activity = &activity
 	}
-	broker.PushActivity(b.CurrentTunnelActivity())
+	agentruntime.AttachTunnelBroker(broker, attachCfg)
 }
 
 func (b *ChatBridge) DetachTunnelBroker() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.tunnelBroker = nil
+	b.shareTunnelBroker = nil
 }
 
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Mirrors Fyne: projection broker takes priority (works before Share)
-	if b.tunnelProjectionBroker != nil {
-		return b.tunnelProjectionBroker
-	}
 	return b.tunnelBroker
 }
 
 func (b *ChatBridge) currentShareTunnelBroker() *tunnel.Broker {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.shareTunnelBroker
+	if b.shareTunnelBroker != nil {
+		return b.shareTunnelBroker
+	}
+	return b.tunnelBroker
 }
 
 func (b *ChatBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
-	return b.currentTunnelBroker()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelProjectionBroker == nil {
+		b.tunnelProjectionBroker = tunnel.NewBroker(nil)
+	}
+	return b.tunnelProjectionBroker
 }
 
 func (b *ChatBridge) bindTunnelProjectionSession() {
@@ -955,12 +1071,7 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 
 	// Use offline projection broker (mirrors Fyne ensureTunnelProjectionBroker)
 	// This works even before Share — events are recorded for later replay.
-	b.mu.Lock()
-	if b.tunnelProjectionBroker == nil {
-		b.tunnelProjectionBroker = tunnel.NewBroker(nil)
-	}
-	broker := b.tunnelProjectionBroker
-	b.mu.Unlock()
+	broker := b.ensureTunnelProjectionBroker()
 
 	if b.projectionStore == nil {
 		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
@@ -968,30 +1079,12 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 		}
 	}
 
-	var authorityEpoch uint64 = 1
-
-	if b.projectionStore != nil {
-		if epoch, err := b.projectionStore.AuthorityEpoch(currentSes.ID); err == nil {
-			authorityEpoch = epoch
-		}
-		var replay []tunnel.GatewayMessage
-		if r, err := b.projectionStore.ReplayEvents(currentSes.ID); err == nil {
-			replay = r
-		}
-		if len(replay) == 0 {
-			replay = b.hydrateProjectionReplayFromSessionLedger(currentSes, replay)
-		}
-		if len(replay) > 0 {
-			broker.PrimeEventIDs(replay)
-		}
-	}
-
 	b.tunnelProjectionBroken = false
-	broker.SwitchSession(currentSes.ID)
-	broker.SetAuthorityEpoch(authorityEpoch)
-	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+	if _, err := agentruntime.PrepareProjectionBroker(broker, b.projectionStore, currentSes, func(ev tunnel.GatewayMessage) {
 		b.recordProjectionEvent(ev)
-	})
+	}); err != nil {
+		log.Printf("[wails-chat] projection replay prep failed for %s: %v", currentSes.ID, err)
+	}
 
 	b.mu.Lock()
 	if b.tunnelMsgID == "" {
@@ -1004,15 +1097,13 @@ func (b *ChatBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
 	b.mu.Lock()
 	store := b.projectionStore
 	b.mu.Unlock()
-	if store != nil {
-		if err := store.Append(msg); err != nil {
-			b.mu.Lock()
-			b.tunnelProjectionBroken = true
-			b.mu.Unlock()
-			log.Printf("[wails-chat] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
-			b.RecordTunnelEvent(msg)
-			return
-		}
+	if err := agentruntime.AppendProjectionEvent(store, msg); err != nil {
+		b.mu.Lock()
+		b.tunnelProjectionBroken = true
+		b.mu.Unlock()
+		log.Printf("[wails-chat] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
+		b.RecordTunnelEvent(msg)
+		return
 	}
 	b.RecordTunnelEvent(msg)
 	if broker := b.currentShareTunnelBroker(); broker != nil {
@@ -1055,12 +1146,10 @@ func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {
 }
 
 func (b *ChatBridge) CurrentTunnelActivity() string {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
 	switch {
-	case len(b.pendingApprovals) > 0:
+	case b.interactions != nil && b.interactions.ApprovalCount() > 0:
 		return "approval"
-	case len(b.pendingAskUsers) > 0:
+	case b.interactions != nil && b.interactions.AskUserCount() > 0:
 		return "ask_user"
 	case b.cancel != nil:
 		return "processing"
@@ -1072,54 +1161,38 @@ func (b *ChatBridge) CurrentTunnelActivity() string {
 func (b *ChatBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.tunnelMsgID == "" && broker != nil {
-		b.tunnelMsgID = broker.NextMessageID()
-	}
+	state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	}, broker)
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	return b.tunnelMsgID
 }
 
-func (b *ChatBridge) rotateTunnelMsgID(broker *tunnel.Broker) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if broker == nil {
-		b.tunnelMsgID = ""
-		return
-	}
-	b.tunnelMsgID = broker.NextMessageID()
-}
-
 func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
-	msgID := b.ensureTunnelMsgID(broker)
-	if msgID == "" {
-		return ""
-	}
-	return msgID + "-reasoning"
+	return agentruntime.TunnelReasoningMsgID(b.ensureTunnelMsgID(broker))
 }
 
 func (b *ChatBridge) markTunnelMainStreamActive() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.tunnelMsgID != "" {
-		b.tunnelMsgNeedsFinalize = true
-	}
+	state := agentruntime.MarkTunnelMainStreamActive(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	})
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 }
 
 func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {
-	if broker == nil {
-		return
-	}
 	b.mu.Lock()
-	if !force && !b.tunnelMsgNeedsFinalize {
-		b.mu.Unlock()
-		return
-	}
-	b.mu.Unlock()
-	broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-	msgID := b.ensureTunnelMsgID(broker)
-	broker.PushTextDone(msgID)
-	b.rotateTunnelMsgID(broker)
-	b.mu.Lock()
-	b.tunnelMsgNeedsFinalize = false
+	state := agentruntime.FlushTunnelMainStream(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	}, broker, force)
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	b.mu.Unlock()
 }
 
@@ -1137,7 +1210,7 @@ func (b *ChatBridge) currentSessionTunnelAuthorityEpoch() uint64 {
 	if store == nil || ses == nil {
 		return 1
 	}
-	if epoch, err := store.AuthorityEpoch(ses.ID); err == nil {
+	if epoch, err := agentruntime.ProjectionAuthorityEpoch(store, ses.ID); err == nil {
 		return epoch
 	}
 	return 1
@@ -1147,31 +1220,19 @@ func (b *ChatBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 	b.mu.Lock()
 	store := b.projectionStore
 	ses := b.currentSes
+	broken := b.tunnelProjectionBroken
 	b.mu.Unlock()
-	if store == nil || ses == nil {
+	if store == nil || ses == nil || broken {
 		return nil
 	}
-	events, err := store.ReplayEvents(ses.ID)
+	events, err := agentruntime.ProjectionReplay(store, ses.ID)
 	if err != nil {
+		b.mu.Lock()
+		b.tunnelProjectionBroken = true
+		b.mu.Unlock()
 		return nil
 	}
 	return events
-}
-
-func (b *ChatBridge) hydrateProjectionReplayFromSessionLedger(currentSes *session.Session, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
-	if currentSes == nil || len(currentSes.TunnelEvents) == 0 {
-		return replay
-	}
-	for _, te := range currentSes.TunnelEvents {
-		replay = append(replay, tunnel.GatewayMessage{
-			EventID:   te.EventID,
-			StreamID:  te.StreamID,
-			Type:      te.Type,
-			Data:      te.Data,
-			SessionID: currentSes.ID,
-		})
-	}
-	return replay
 }
 
 func (b *ChatBridge) pushTunnelSessionInfo(broker *tunnel.Broker) {
@@ -1198,23 +1259,11 @@ func (b *ChatBridge) pushTunnelSessionInfo(broker *tunnel.Broker) {
 }
 
 func (b *ChatBridge) pushTunnelApprovalResult(id, decision string) {
-	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushApprovalResult(id, decision)
-	}
+	agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), id, decision, agentruntime.TunnelStateUpdate{})
 }
 
 func (b *ChatBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
-	if broker := b.currentTunnelBroker(); broker != nil {
-		var answers []tunnel.AskUserAnswer
-		for _, a := range response.Answers {
-			answers = append(answers, tunnel.AskUserAnswer{
-				QuestionID:   a.ID,
-				ChoiceIDs:    a.SelectedChoiceIDs,
-				FreeformText: a.FreeformText,
-			})
-		}
-		broker.PushAskUserResponse(id, "", answers)
-	}
+	agentruntime.PushTunnelAskUserResponse(b.currentTunnelBroker(), id, response, agentruntime.TunnelStateUpdate{})
 }
 
 func (b *ChatBridge) nextTunnelRequestID() string {
@@ -1236,21 +1285,20 @@ func (b *ChatBridge) CurrentTunnelHistory() []tunnel.HistoryEntry {
 	// TODO: implement when HistoryEntry fields are needed
 	return nil
 }
+
 // RequestApproval blocks until the user (desktop or mobile) responds to an
 // approval request.  It stores a pending channel, pushes the request to a
 // connected tunnel broker, and emits an event so the Wails frontend can show
 // an approval dialog.
 func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, input string) permission.Decision {
-	ch := make(chan permission.Decision, 1)
-
-	b.pendingMu.Lock()
-	b.pendingApprovals[requestID] = ch
-	b.pendingMu.Unlock()
+	req := agentruntime.ApprovalRequest{ID: requestID, ToolName: toolName, Input: input}
 
 	// Push to mobile via tunnel
 	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushApprovalRequest(requestID, toolName, input)
-		broker.PushStatus(tunnel.StatusWaiting, "")
+		agentruntime.PushTunnelApprovalRequest(broker, requestID, toolName, input, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusWaiting,
+		})
 	}
 
 	// Emit to Wails frontend
@@ -1263,13 +1311,7 @@ func (b *ChatBridge) RequestApproval(ctx context.Context, requestID, toolName, i
 		b.OnStreamEvent("approval:request", raw)
 	}
 
-	// Block until user responds. Use background context so the approval
-	// outlives the agent's RunStream context — cancelling the agent run
-	// should not auto-deny a pending approval request.
-	select {
-	case d := <-ch:
-		return d
-	}
+	return b.interactions.AwaitApproval(context.WithoutCancel(ctx), req)
 }
 
 // RequestAskUser blocks until the user (desktop or mobile) responds to a
@@ -1278,18 +1320,14 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 	if len(req.Questions) == 0 {
 		return tool.AskUserResponse{Status: tool.AskUserStatusSubmitted}, nil
 	}
-
-	ch := make(chan tool.AskUserResponse, 1)
-
-	b.pendingMu.Lock()
-	b.pendingAskUsers[requestID] = ch
-	b.pendingMu.Unlock()
+	request := agentruntime.AskUserRequest{ID: requestID, Request: req}
 
 	// Push to mobile via tunnel
 	if broker := b.currentTunnelBroker(); broker != nil {
-		questions := buildWailsTunnelAskUserQuestions(req)
-		broker.PushAskUserRequest(requestID, req.Title, questions)
-		broker.PushStatus(tunnel.StatusWaiting, "")
+		agentruntime.PushTunnelAskUserRequest(broker, requestID, req, agentruntime.TunnelStateUpdate{
+			HasStatus: true,
+			Status:    tunnel.StatusWaiting,
+		})
 	}
 
 	// Emit to Wails frontend
@@ -1303,159 +1341,100 @@ func (b *ChatBridge) RequestAskUser(ctx context.Context, requestID string, req t
 		b.OnStreamEvent("ask_user:request", raw)
 	}
 
-	// Block until user responds. Use background context so ask_user
-	// outlives the agent's RunStream context — cancelling the agent run
-	// should not auto-cancel a pending user question.
-	select {
-	case resp := <-ch:
-		return resp, nil
-	}
+	return b.interactions.AwaitAskUser(context.WithoutCancel(ctx), request)
 }
 
 // RespondApproval delivers a desktop-originated approval decision to the
 // waiting channel.  decision is "allow", "deny", or "always_allow".
 func (b *ChatBridge) RespondApproval(requestID, decision string) {
-	b.pendingMu.Lock()
-	ch, ok := b.pendingApprovals[requestID]
-	if ok {
-		delete(b.pendingApprovals, requestID)
-	}
-	b.pendingMu.Unlock()
+	d := agentruntime.ApprovalDecisionFromTunnel(decision)
+	req, ok := b.interactions.ResolveApproval(requestID, d)
 	if !ok {
 		return
-	}
-
-	var d permission.Decision
-	switch decision {
-	case "allow":
-		d = permission.Allow
-	case "always_allow", "always":
-		d = permission.Allow
-	default:
-		d = permission.Deny
 	}
 
 	// Always-allow: persist override on the agent's permission policy
 	if (decision == "always_allow" || decision == "always") && b.agent != nil {
 		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
-			// We don't have toolName here; the caller (app.go) handles override
-			_ = p
+			p.SetOverride(req.ToolName, permission.Allow)
 		}
 	}
 
 	// Push result to mobile
-	if broker := b.currentTunnelBroker(); broker != nil && requestID != "" {
-		broker.PushApprovalResult(requestID, decision)
-		broker.PushStatus(tunnel.StatusBusy, "")
-	}
+	agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), requestID, decision, agentruntime.TunnelStateUpdate{
+		HasStatus: true,
+		Status:    tunnel.StatusBusy,
+	})
 
-	select {
-	case ch <- d:
-	default:
+}
+
+func (b *ChatBridge) PendingApprovalRequest() (string, string, bool) {
+	req, ok := b.interactions.FirstPendingApproval()
+	if !ok {
+		return "", "", false
 	}
+	return req.ID, req.ToolName, true
 }
 
 // RespondAskUser delivers a desktop-originated ask_user response to the
 // waiting channel.
 func (b *ChatBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
-	b.pendingMu.Lock()
-	ch, ok := b.pendingAskUsers[requestID]
-	if ok {
-		delete(b.pendingAskUsers, requestID)
-	}
-	b.pendingMu.Unlock()
-	if !ok {
+	if _, ok := b.interactions.ResolveAskUser(requestID, response); !ok {
 		return
 	}
 
 	// Push response to mobile
-	if broker := b.currentTunnelBroker(); broker != nil && requestID != "" {
-		answers := make([]tunnel.AskUserAnswer, len(response.Answers))
-		for i, answer := range response.Answers {
-			answers[i] = tunnel.AskUserAnswer{
-				QuestionID:   answer.ID,
-				ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
-				FreeformText: answer.FreeformText,
-			}
-		}
-		broker.PushAskUserResponse(requestID, response.Status, answers)
-		broker.PushStatus(tunnel.StatusBusy, "")
-	}
+	agentruntime.PushTunnelAskUserResponse(b.currentTunnelBroker(), requestID, response, agentruntime.TunnelStateUpdate{
+		HasStatus: true,
+		Status:    tunnel.StatusBusy,
+	})
 
-	select {
-	case ch <- response:
-	default:
+}
+
+func (b *ChatBridge) PendingAskUserRequest() (string, tool.AskUserRequest, bool) {
+	req, ok := b.interactions.FirstPendingAskUser()
+	if !ok {
+		return "", tool.AskUserRequest{}, false
 	}
+	return req.ID, req.Request, true
 }
 
 // HandleMobileApprovalResponse processes an approval response received from
 // the mobile client via the tunnel.
 func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
-	b.pendingMu.Lock()
-	ch, ok := b.pendingApprovals[data.ID]
-	if ok {
-		delete(b.pendingApprovals, data.ID)
-	}
-	b.pendingMu.Unlock()
+	decision := agentruntime.ResolveTunnelApproval(data.Decision, "", nil)
+	req, ok := b.interactions.ResolveApproval(data.ID, decision)
 	if !ok {
 		return
 	}
-
-	decision := permission.Deny
-	switch data.Decision {
-	case tunnel.DecisionAllow:
-		decision = permission.Allow
-	case tunnel.DecisionAlwaysAllow, "always":
-		decision = permission.Allow
-	default:
-		decision = permission.Deny
-	}
+	agentruntime.ResolveTunnelApproval(data.Decision, req.ToolName, func(toolName string) {
+		if b.agent != nil {
+			if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+				p.SetOverride(toolName, permission.Allow)
+			}
+		}
+	})
 
 	// Push result to mobile (for relay persistence)
-	if broker := b.currentTunnelBroker(); broker != nil && data.ID != "" {
-		broker.PushApprovalResult(data.ID, data.Decision)
-		broker.PushStatus(tunnel.StatusBusy, "")
-	}
-
-	select {
-	case ch <- decision:
-	default:
-	}
+	agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), data.ID, data.Decision, agentruntime.TunnelStateUpdate{
+		HasStatus: true,
+		Status:    tunnel.StatusBusy,
+	})
 }
 
 // HandleMobileAskUserResponse processes an ask_user response received from
 // the mobile client via the tunnel.
 func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData, req tool.AskUserRequest) {
-	b.pendingMu.Lock()
-	ch, ok := b.pendingAskUsers[data.ID]
-	if ok {
-		delete(b.pendingAskUsers, data.ID)
-	}
-	b.pendingMu.Unlock()
-	if !ok {
+	response := agentruntime.BuildAskUserResponseFromTunnel(req, data.Status, data.Answers)
+	if _, ok := b.interactions.ResolveAskUser(data.ID, response); !ok {
 		return
 	}
 
-	response := buildWailsAskUserResponseFromTunnel(req, data.Status, data.Answers)
-
 	// Push response to mobile (for relay persistence)
-	if broker := b.currentTunnelBroker(); broker != nil && data.ID != "" {
-		answers := make([]tunnel.AskUserAnswer, len(response.Answers))
-		for i, answer := range response.Answers {
-			answers[i] = tunnel.AskUserAnswer{
-				QuestionID:   answer.ID,
-				ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
-				FreeformText: answer.FreeformText,
-			}
-		}
-		broker.PushAskUserResponse(data.ID, response.Status, answers)
-		broker.PushStatus(tunnel.StatusBusy, "")
-	}
-
-	select {
-	case ch <- response:
-	default:
-	}
+	agentruntime.PushTunnelAskUserResponse(b.currentTunnelBroker(), data.ID, response, agentruntime.TunnelStateUpdate{
+		HasStatus: true,
+		Status:    tunnel.StatusBusy,
+	})
 }
 
 // CurrentAskUserRequest returns the pending ask_user request for the given ID,
@@ -1476,150 +1455,17 @@ func (b *ChatBridge) SetApprovalOverride(toolName string) {
 	}
 }
 
-// ─── Tunnel AskUser conversion helpers ─────────────────────────────
-
-func buildWailsTunnelAskUserQuestions(req tool.AskUserRequest) []tunnel.AskUserQuestion {
-	questions := make([]tunnel.AskUserQuestion, len(req.Questions))
-	for i, q := range req.Questions {
-		choices := make([]tunnel.AskUserChoice, len(q.Choices))
-		for j, c := range q.Choices {
-			choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
-		}
-		questions[i] = tunnel.AskUserQuestion{
-			ID:            q.ID,
-			Prompt:        q.Prompt,
-			Kind:          q.Kind,
-			Choices:       choices,
-			AllowFreeform: q.AllowFreeform,
-			Placeholder:   q.Placeholder,
-		}
-	}
-	return questions
-}
-
-func buildWailsAskUserResponseFromTunnel(req tool.AskUserRequest, status string, answers []tunnel.AskUserAnswer) tool.AskUserResponse {
-	normalizedStatus := strings.TrimSpace(status)
-	if normalizedStatus == "" {
-		normalizedStatus = tool.AskUserStatusSubmitted
-	}
-	answerByQuestion := make(map[string]tunnel.AskUserAnswer, len(answers))
-	for _, answer := range answers {
-		answerByQuestion[answer.QuestionID] = answer
-	}
-	out := tool.AskUserResponse{
-		Status:        normalizedStatus,
-		Title:         req.Title,
-		QuestionCount: len(req.Questions),
-		Answers:       make([]tool.AskUserAnswer, 0, len(req.Questions)),
-	}
-	for _, question := range req.Questions {
-		raw := answerByQuestion[question.ID]
-		answer := buildWailsAskUserAnswer(question, raw.ChoiceIDs, raw.FreeformText)
-		if answer.Answered {
-			out.AnsweredCount++
-		}
-		out.Answers = append(out.Answers, answer)
-	}
-	return out
-}
-
-func buildWailsAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string, freeform string) tool.AskUserAnswer {
-	selectedSet := make(map[string]struct{}, len(selectedIDs))
-	for _, id := range selectedIDs {
-		selectedSet[id] = struct{}{}
-	}
-	orderedIDs := make([]string, 0, len(selectedSet))
-	orderedLabels := make([]string, 0, len(selectedSet))
-	for _, choice := range question.Choices {
-		if _, ok := selectedSet[choice.ID]; ok {
-			orderedIDs = append(orderedIDs, choice.ID)
-			orderedLabels = append(orderedLabels, choice.Label)
-		}
-	}
-	freeform = strings.TrimSpace(freeform)
-	answerMode := tool.AskUserAnswerModeNone
-	completionStatus := tool.AskUserCompletionUnanswered
-	switch {
-	case len(orderedIDs) == 0 && freeform == "":
-		answerMode = tool.AskUserAnswerModeNone
-		completionStatus = tool.AskUserCompletionUnanswered
-	case len(orderedIDs) == 0 && freeform != "":
-		answerMode = tool.AskUserAnswerModeFreeformOnly
-		if question.Kind == tool.AskUserKindText {
-			completionStatus = tool.AskUserCompletionAnswered
-		} else {
-			completionStatus = tool.AskUserCompletionPartial
-		}
-	case len(orderedIDs) > 0 && freeform == "":
-		answerMode = tool.AskUserAnswerModeSelectionOnly
-		completionStatus = tool.AskUserCompletionAnswered
-	default:
-		answerMode = tool.AskUserAnswerModeSelectionAndFreeform
-		completionStatus = tool.AskUserCompletionAnswered
-	}
-	return tool.AskUserAnswer{
-		ID:                question.ID,
-		Title:             question.Title,
-		Kind:              question.Kind,
-		CompletionStatus:  completionStatus,
-		AnswerMode:        answerMode,
-		Answered:          completionStatus == tool.AskUserCompletionAnswered,
-		SelectedChoiceIDs: orderedIDs,
-		SelectedChoices:   orderedLabels,
-		FreeformText:      freeform,
-	}
-}
-
 // ─── System Prompt ───────────────────────────────────────────────────
 
 // buildWailsSystemPrompt builds the system prompt for the agent.
 // Mirrors Fyne buildSystemPrompt exactly.
 // buildWailsSystemPrompt builds the system prompt for the agent.
 // Mirrors Fyne buildSystemPrompt exactly — includes auto-memory content.
-func buildWailsSystemPrompt(workingDir string, mode permission.PermissionMode, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
-	hostname, _ := os.Hostname()
-	cwd := workingDir
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+func buildWailsSystemPrompt(cfg *config.Config, workingDir string, mode permission.PermissionMode, globalAutoMem, projectAutoMem *memory.AutoMemory, commandMgr *commands.Manager) string {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
 	}
-	prompt := fmt.Sprintf(`You are ggcode, an AI coding assistant running as a desktop application.
-
-## Environment
-- OS: %s
-- Working directory: %s
-
-## Instructions
-- Be precise, concise, and proactive.
-- Prefer small, reversible changes over broad rewrites.
-- Read before you edit, and inspect results before claiming success.
-`, hostname, cwd)
-
-	// Mode-specific instruction: overrides stale autopilot messages in context
-	prompt += "\n## Current Permission Mode\n"
-	switch mode {
-	case permission.AutopilotMode:
-		prompt += "Autopilot mode is active. You may proceed autonomously without waiting for user confirmation. When you need user input, use the ask_user tool.\n"
-	case permission.BypassMode:
-		prompt += "Bypass mode is active. Most tool calls are auto-approved. Only critical operations require approval.\n"
-	case permission.PlanMode:
-		prompt += "Plan mode is active. You are in read-only exploration mode. Do NOT write files or execute commands unless explicitly approved.\n"
-	case permission.AutoMode:
-		prompt += "Auto mode is active. Safe operations are auto-approved, dangerous ones require user approval.\n"
-	default: // SupervisedMode
-		prompt += "Supervised mode is active. Tool calls require explicit user approval.\n"
-	}
-
-	if projectAutoMem != nil {
-		if projectContent, _, _ := projectAutoMem.LoadAll(); projectContent != "" {
-			prompt += "\n\n## Auto Memory (Project)\n" + projectContent
-		}
-	}
-	if globalAutoMem != nil {
-		if globalContent, _, _ := globalAutoMem.LoadAll(); globalContent != "" {
-			prompt += "\n\n## Auto Memory (Global)\n" + globalContent
-		}
-	}
-	return prompt
+	return agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, nil, commandMgr, globalAutoMem, projectAutoMem, "")
 }
 
 // ─── Session Usage Tracking ──────────────────────────────────────────
@@ -1633,9 +1479,9 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
 		return
 	}
 	ses := b.currentSes
+	ses.TokenUsage = ses.TokenUsage.Add(usage)
 	ses.AddUsageForEndpoint(ses.Vendor, ses.Endpoint, usage)
 	ses.UpdatedAt = time.Now()
-	total := ses.UsageForEndpoint(ses.Vendor, ses.Endpoint)
 	store := b.sessionStore
 	turnIdx := b.usageTurnIndex
 	entry := session.UsageEntry{
@@ -1657,14 +1503,45 @@ func (b *ChatBridge) recordSessionUsage(usage provider.TokenUsage) {
 
 	// Notify frontend of updated usage
 	if b.OnStreamEvent != nil {
-		raw, _ := json.Marshal(map[string]interface{}{
-			"input_tokens":  total.InputTokens,
-			"output_tokens": total.OutputTokens,
-			"cache_read":    total.CacheRead,
-			"cache_write":   total.CacheWrite,
-		})
+		raw, _ := json.Marshal(b.currentUsagePayload())
 		b.OnStreamEvent("usage_update", raw)
 	}
+}
+
+func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	payload := map[string]interface{}{
+		"inputTokens":      0,
+		"outputTokens":     0,
+		"cacheRead":        0,
+		"cacheWrite":       0,
+		"cacheHit":         0,
+		"contextUsed":      0,
+		"contextTotal":     0,
+		"usagePercent":     0,
+		"remainingPercent": 0,
+	}
+	if b.currentSes != nil {
+		usage := b.currentSes.UsageForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint)
+		payload["inputTokens"] = usage.DisplayInputTokens()
+		payload["outputTokens"] = usage.OutputTokens
+		payload["cacheRead"] = usage.CacheRead
+		payload["cacheWrite"] = usage.CacheWrite
+		payload["cacheHit"] = usage.CacheHitPercent()
+	}
+	if b.agent != nil {
+		cm := b.agent.ContextManager()
+		display, ok := uiusage.BuildContextDisplay(cm.TokenCount(), cm.ContextWindow(), cm.AutoCompactThreshold())
+		if ok {
+			payload["contextUsed"] = display.UsedTokens
+			payload["contextTotal"] = display.MaxTokens
+			payload["usagePercent"] = display.UsagePercent
+			payload["remainingPercent"] = display.RemainingPercent
+		}
+	}
+	return payload
 }
 
 // ─── Metrics ──────────────────────────────────────────────────────────
@@ -1698,48 +1575,7 @@ func (b *ChatBridge) markTunnelSubagentSpawned(id string) bool {
 }
 
 func (b *ChatBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
-	if sa == nil {
-		return
-	}
-	broker := b.currentTunnelBroker()
-	if broker == nil {
-		return
-	}
-
-	pushSpawn := func() {
-		if b.markTunnelSubagentSpawned(sa.ID) {
-			broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
-		}
-	}
-
-	switch sa.Status {
-	case subagent.StatusRunning:
-		pushSpawn()
-		broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
-
-	case subagent.StatusCompleted:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		if sa.Result != "" {
-			msgID := tunnelSubagentTextID(sa.ID)
-			broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
-		}
-		broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
-
-	case subagent.StatusFailed:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		errMsg := ""
-		if sa.Error != nil {
-			errMsg = sa.Error.Error()
-		}
-		broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
-
-	case subagent.StatusCancelled:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
-	}
+	agentruntime.PushTunnelSubagentEvent(b.currentTunnelBroker, b.markTunnelSubagentSpawned, sa)
 }
 
 // ─── Permission Mode ──────────────────────────────────────────────────
@@ -1777,27 +1613,16 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 
 // QueueMessage stores a user message to be sent after the current agent turn.
 func (b *ChatBridge) QueueMessage(msg string) {
-	b.mu.Lock()
-	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg})
-	b.mu.Unlock()
+	b.pendingMsgs.Enqueue(msg, false, nil)
 }
 
 // QueueHiddenMessage stores a hidden message (mirrors Fyne).
 func (b *ChatBridge) QueueHiddenMessage(msg string) {
-	b.mu.Lock()
-	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg, Hidden: true})
-	b.mu.Unlock()
+	b.pendingMsgs.Enqueue(msg, true, nil)
 }
 
-func (b *ChatBridge) drainPending() (pendingMessage, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.pendingMsgs) == 0 {
-		return pendingMessage{}, false
-	}
-	msg := b.pendingMsgs[0]
-	b.pendingMsgs = b.pendingMsgs[1:]
-	return msg, true
+func (b *ChatBridge) drainPending() (agentruntime.PendingMessage[*tunnel.MessageData], bool) {
+	return b.pendingMsgs.Consume()
 }
 
 func (b *ChatBridge) drainPendingInterrupt() string {
@@ -1825,7 +1650,7 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	if b.cancel != nil {
-		b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: text, Hidden: true})
+		b.pendingMsgs.Enqueue(text, true, nil)
 		b.mu.Unlock()
 		return nil
 	}
@@ -1916,6 +1741,27 @@ func (b *ChatBridge) CurrentSession() *session.Session {
 	return b.currentSes
 }
 
+func (b *ChatBridge) PrepareShareBroker(broker *tunnel.Broker, snapshotProvider func() tunnel.BrokerSnapshot) {
+	if broker == nil || snapshotProvider == nil {
+		return
+	}
+	b.EnsureSession()
+	snapshot := snapshotProvider()
+	sessionID := ""
+	if current := b.CurrentSession(); current != nil {
+		sessionID = current.ID
+	}
+	replayedCanonical := agentruntime.PublishShareState(broker, sessionID, snapshot, b.CurrentSessionTunnelEvents(), true)
+	broker.SetSnapshotProvider(snapshotProvider)
+	b.AttachTunnelBroker(broker)
+	if !replayedCanonical {
+		latest := snapshotProvider()
+		if !agentruntime.ShareSnapshotMatches(snapshot, latest) {
+			agentruntime.PublishShareState(broker, sessionID, latest, nil, true)
+		}
+	}
+}
+
 // SessionStore returns the session store.
 func (b *ChatBridge) SessionStore() session.Store {
 	b.mu.Lock()
@@ -1947,40 +1793,31 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	if model == "" || b.cfg == nil {
 		return fmt.Errorf("model is empty or config is nil")
 	}
-
-	// Update config with the new model selection (mirrors Fyne line 2934-2937)
-	if err := b.cfg.SetActiveSelection(b.cfg.Vendor, b.cfg.Endpoint, model); err != nil {
-		return fmt.Errorf("set active selection: %w", err)
-	}
-	_ = b.cfg.Save()
-
-	// Re-resolve endpoint (picks up new context window, etc.)
-	resolved, err := b.cfg.ResolveActiveEndpoint()
+	resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, b.cfg.Vendor, b.cfg.Endpoint, model)
 	if err != nil {
-		return fmt.Errorf("resolve endpoint: %w", err)
-	}
-	b.mu.Lock()
-	b.resolved = resolved
-	b.mu.Unlock()
-
-	prov, err := provider.NewProvider(resolved)
-	if err != nil {
-		return fmt.Errorf("create provider: %w", err)
+		return fmt.Errorf("activate current selection: %w", err)
 	}
 
 	b.mu.Lock()
 	a := b.agent
 	b.mu.Unlock()
 
-	if a != nil {
-		a.SetProvider(prov)
-		if resolved.ContextWindow > 0 {
-			a.ContextManager().SetContextWindow(resolved.ContextWindow)
+	b.mu.Lock()
+	b.resolved = resolved
+	b.mu.Unlock()
+	agentruntime.ApplyProviderToAgent(a, prov, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, a, func(resp relaycatalog.ResolveResponse) {
+		b.mu.Lock()
+		if b.resolved != nil {
+			if resp.ContextWindow > 0 {
+				b.resolved.ContextWindow = resp.ContextWindow
+			}
+			if resp.MaxOutputTokens > 0 {
+				b.resolved.MaxTokens = resp.MaxOutputTokens
+			}
 		}
-		if resolved.MaxTokens > 0 {
-			a.ContextManager().SetOutputReserve(resolved.MaxTokens)
-		}
-	}
+		b.mu.Unlock()
+	})
 	return nil
 }
 
@@ -2102,10 +1939,11 @@ func (b *ChatBridge) refreshSystemPrompt() {
 	if pam := memory.NewProjectAutoMemory(b.workingDir); pam != nil {
 		projectAutoMem = pam
 	}
+	startupAssets := agentruntime.LoadInteractiveStartupAssets(b.workingDir, autoMem, projectAutoMem)
 	b.mu.Lock()
 	mode := b.permissionMode
 	b.mu.Unlock()
-	newPrompt := buildWailsSystemPrompt(b.workingDir, mode, autoMem, projectAutoMem)
+	newPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, mode, autoMem, projectAutoMem, startupAssets.CommandManager)
 	b.mu.Lock()
 	if b.agent != nil {
 		b.agent.UpdateSystemPrompt(newPrompt)

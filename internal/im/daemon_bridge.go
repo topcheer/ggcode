@@ -163,7 +163,7 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	}
 
 	text := strings.Join(values, ",")
-	resp := buildAskUserResponse(pending.request, text)
+	resp := BuildAskUserResponseFromText(pending.request, text)
 	select {
 	case pending.response <- resp:
 	default:
@@ -257,6 +257,76 @@ func (b *DaemonBridge) notifyUserMessage(content []provider.ContentBlock) {
 	}
 }
 
+func (b *DaemonBridge) tryQueueInterruption(content []provider.ContentBlock, logPrefix string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cancelFunc == nil {
+		return false
+	}
+	debug.Log("daemon-bridge", "%squeuing interruption: %s", logPrefix, truncateStr(extractText(content), 80))
+	b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
+	return true
+}
+
+func (b *DaemonBridge) beginRunSlot() context.Context {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ctx2, cancel := context.WithCancel(context.Background())
+	b.pendingInterruptions = b.pendingInterruptions[:0]
+	b.agent.SetInterruptionHandler(func() string {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.pendingInterruptions) == 0 {
+			return ""
+		}
+		msg := b.pendingInterruptions[0]
+		b.pendingInterruptions = b.pendingInterruptions[1:]
+		return extractText(msg.Content)
+	})
+	b.cancelFunc = cancel
+	return ctx2
+}
+
+func (b *DaemonBridge) finishRunSlot() {
+	b.mu.Lock()
+	b.cancelFunc = nil
+	b.agent.SetInterruptionHandler(nil)
+	b.mu.Unlock()
+	b.notifyRunStateChange(false)
+}
+
+func (b *DaemonBridge) nextPendingInterruption() []provider.ContentBlock {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pendingInterruptions) == 0 {
+		return nil
+	}
+	next := b.pendingInterruptions[0].Content
+	b.pendingInterruptions = b.pendingInterruptions[1:]
+	return next
+}
+
+func (b *DaemonBridge) runQueuedLoop(ctx context.Context, content []provider.ContentBlock, logPrefix string, preRun func(context.Context, string) bool, onRunError func(error)) {
+	defer b.finishRunSlot()
+	for {
+		text := extractText(content)
+		if preRun != nil && preRun(ctx, text) {
+			return
+		}
+		err := b.runAgentStream(ctx, content)
+		if err != nil && !errors.Is(err, context.Canceled) && onRunError != nil {
+			onRunError(err)
+		}
+
+		nextContent := b.nextPendingInterruption()
+		if len(nextContent) == 0 {
+			return
+		}
+		debug.Log("daemon-bridge", "%sdraining queued message: %s", logPrefix, truncateStr(extractText(nextContent), 80))
+		content = nextContent
+	}
+}
+
 // SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
 func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMessage) error {
 	if b == nil {
@@ -272,8 +342,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		}
 	}
 
+	b.mu.Lock()
+	hasPendingApproval := b.pendingApproval != nil
+	hasPendingAsk := b.pendingAsk != nil
+	b.mu.Unlock()
+	route := RouteInboundText(text, hasPendingApproval, hasPendingAsk)
+
 	// Slash commands take priority over everything (including pending approval/ask_user)
-	if strings.HasPrefix(text, "/") {
+	if route.Kind == InboundRouteSlash {
 		return b.handleSlashCommand(ctx, text, msg)
 	}
 
@@ -281,31 +357,25 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Lock()
 	approvalCh := b.pendingApproval
 	b.mu.Unlock()
-	if approvalCh != nil && text != "" {
-		decision, ok := parseDaemonApprovalReply(text)
-		if ok {
-			approvalCh <- decision
-			b.mu.Lock()
-			b.pendingApproval = nil
-			b.mu.Unlock()
-			return nil
-		}
-		// Not a valid approval reply — fall through to ask_user or normal message
+	if route.Kind == InboundRouteApproval && approvalCh != nil {
+		approvalCh <- route.Decision
+		b.mu.Lock()
+		b.pendingApproval = nil
+		b.mu.Unlock()
+		return nil
 	}
 
 	// Check for pending ask_user — if so, route reply there
 	b.mu.Lock()
 	pending := b.pendingAsk
 	b.mu.Unlock()
-	if pending != nil {
-		if text != "" {
-			resp := buildAskUserResponse(pending.request, text)
-			pending.response <- resp
-			b.mu.Lock()
-			b.pendingAsk = nil
-			b.mu.Unlock()
-			return nil
-		}
+	if route.Kind == InboundRouteAskUser && pending != nil {
+		resp := BuildAskUserResponseFromText(pending.request, route.Text)
+		pending.response <- resp
+		b.mu.Lock()
+		b.pendingAsk = nil
+		b.mu.Unlock()
+		return nil
 	}
 
 	// Normal agent submission
@@ -315,7 +385,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}
 
 	// Check text is not empty
-	if text == "" {
+	if route.Kind == InboundRouteEmpty || text == "" {
 		return nil
 	}
 	b.notifyUserMessage(content)
@@ -329,76 +399,20 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		b.followSink.OnUserMessage(text)
 	}
 
-	// Atomically check for an active run and either queue as interruption
-	// or claim the run slot. This eliminates the TOCTOU window where two
-	// concurrent IM messages could both see cancelFunc==nil and start
-	// duplicate agent runs.
-	b.mu.Lock()
-
-	if b.cancelFunc != nil {
-		// Agent run already active — queue as interruption.
-		debug.Log("daemon-bridge", "agent running, queuing interruption: %s", truncateStr(text, 80))
-		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{
-			Content: []provider.ContentBlock{{Type: "text", Text: text}},
-		})
-		b.mu.Unlock()
+	content = []provider.ContentBlock{{Type: "text", Text: text}}
+	if b.tryQueueInterruption(content, "") {
 		return nil
 	}
-
-	// No active run — claim the slot under a single lock acquisition.
-	// Use context.Background() rather than the caller's ctx because the
-	// agent run (including ask_user waiting for IM replies) must survive
-	// beyond the lifetime of a single WS event callback. The caller's ctx
-	// is typically tied to a Feishu/Telegram SDK event and expires when
-	// that event processing completes or the WS reconnects.
-	ctx2, cancel := context.WithCancel(context.Background())
-
-	b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
-	b.agent.SetInterruptionHandler(func() string {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if len(b.pendingInterruptions) == 0 {
-			return ""
-		}
-		msg := b.pendingInterruptions[0]
-		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return extractText(msg.Content)
-	})
-	b.cancelFunc = cancel
-	b.mu.Unlock()
 	b.notifyRunStateChange(true)
-
-	// Run agent (may loop if interruptions arrived mid-run).
-	for {
-		err := b.runAgentStream(ctx2, content)
-
-		if err != nil && !errors.Is(err, context.Canceled) {
-			b.emitter.EmitText(provider.UserFacingError(err))
+	ctx2 := b.beginRunSlot()
+	b.runQueuedLoop(ctx2, content, "", func(ctx context.Context, text string) bool {
+		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
+			return b.tryHarnessAutoRun(ctx, text) != nil
 		}
-
-		// Check if more messages arrived during the run.
-		b.mu.Lock()
-		var nextContent []provider.ContentBlock
-		if len(b.pendingInterruptions) > 0 {
-			nextContent = b.pendingInterruptions[0].Content
-			b.pendingInterruptions = b.pendingInterruptions[1:]
-		}
-		b.mu.Unlock()
-
-		if len(nextContent) == 0 {
-			break
-		}
-
-		nextText := extractText(nextContent)
-		debug.Log("daemon-bridge", "draining queued message for next round: %s", truncateStr(nextText, 80))
-		content = nextContent
-	}
-
-	b.mu.Lock()
-	b.cancelFunc = nil
-	b.agent.SetInterruptionHandler(nil)
-	b.mu.Unlock()
-	b.notifyRunStateChange(false)
+		return false
+	}, func(err error) {
+		b.emitter.EmitText(provider.UserFacingError(err))
+	})
 
 	return nil
 }
@@ -490,13 +504,12 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 // handleApproval is the ApprovalHandler for daemon mode — pushes tool permission
 // requests to IM and waits for a y/a/n reply.
 func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, input string) permission.Decision {
-	detail := formatToolInline(toolName, input)
 	lang := b.language
 	var prompt string
 	if lang == "zh-CN" || lang == "zh" {
-		prompt = fmt.Sprintf("🔒 需要审批: %s\n\n回复 y 允许 · a 总是允许 · n 拒绝", detail)
+		prompt = FormatApprovalRequest(ToolLangZhCN, toolName, input)
 	} else {
-		prompt = fmt.Sprintf("🔒 Approval required: %s\n\nReply y allow · a always allow · n deny", detail)
+		prompt = FormatApprovalRequest(ToolLangEn, toolName, input)
 	}
 	b.emitter.EmitText(prompt)
 
@@ -518,19 +531,9 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			decisionStr = "allow"
 		}
 		if lang == "zh-CN" || lang == "zh" {
-			switch decisionStr {
-			case "allow":
-				resultMsg = fmt.Sprintf("✅ 已允许: %s", formatToolInline(toolName, ""))
-			case "deny":
-				resultMsg = fmt.Sprintf("❌ 已拒绝: %s", formatToolInline(toolName, ""))
-			}
+			resultMsg = FormatApprovalResult(ToolLangZhCN, toolName, decisionStr)
 		} else {
-			switch decisionStr {
-			case "allow":
-				resultMsg = fmt.Sprintf("✅ Allowed: %s", formatToolInline(toolName, ""))
-			case "deny":
-				resultMsg = fmt.Sprintf("❌ Denied: %s", formatToolInline(toolName, ""))
-			}
+			resultMsg = FormatApprovalResult(ToolLangEn, toolName, decisionStr)
 		}
 		if resultMsg != "" {
 			b.emitter.EmitText(resultMsg)
@@ -571,20 +574,6 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	b.usageTurnIndex++
 	b.mu.Unlock()
 
-	// Set up interruption handler so mid-run IM messages get injected
-	// into the agent's context instead of cancelling the stream.
-	b.agent.SetInterruptionHandler(func() string {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if len(b.pendingInterruptions) == 0 {
-			return ""
-		}
-		msg := b.pendingInterruptions[0]
-		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return extractText(msg.Content)
-	})
-	defer b.agent.SetInterruptionHandler(nil)
-
 	// Save user message to session
 	b.appendUserMessage(content)
 
@@ -613,7 +602,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				round.SetAskUser(b.emitter.FormatAskUserPrompt(string(event.Tool.Arguments)))
 			}
 			if !isDaemonSkippedTool(toolName) {
-				round.ToolCalls++
+				round.NoteToolCall()
 			}
 			// Sleep tool is special: emit the duration immediately
 			// so the user sees it before the tool blocks.
@@ -635,11 +624,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// OnToolResult is forwarded to keep terminal output clean.
 
 		case provider.StreamEventToolResult:
-			if event.IsError {
-				round.ToolFailures++
-			} else {
-				round.ToolSuccesses++
-			}
+			round.NoteToolResult(event.IsError)
 			toolInfo := ToolResultInfo{
 				ToolName: event.Tool.Name,
 				Args:     string(event.Tool.Arguments),
@@ -651,7 +636,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			switch b.resolveEffectiveOutputMode() {
 			case "summary":
 				// Only buffer, never send individual tool results
-				round.pendingTools = append(round.pendingTools, toolInfo)
+				round.PendingTools = append(round.PendingTools, toolInfo)
 			case "quiet":
 				// Buffer for aggregation; errors still sent immediately
 				if event.IsError {
@@ -660,7 +645,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 						ToolRes: &toolInfo,
 					})
 				} else {
-					round.pendingTools = append(round.pendingTools, toolInfo)
+					round.PendingTools = append(round.PendingTools, toolInfo)
 				}
 			default: // verbose
 				b.emitter.EmitEvent(OutboundEvent{
@@ -678,8 +663,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			mode := b.resolveEffectiveOutputMode()
 
 			// For quiet/summary modes, emit aggregated tool summary
-			if (mode == "quiet" || mode == "summary") && len(round.pendingTools) > 0 {
-				summary := formatToolSummary(b.language, round.pendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
+			if (mode == "quiet" || mode == "summary") && len(round.PendingTools) > 0 {
+				summary := formatToolSummary(b.language, round.PendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 				if summary != "" {
 					b.emitter.EmitText(summary)
 				}
@@ -888,28 +873,7 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 
 // --- helpers ---
 
-type daemonRoundState struct {
-	text          strings.Builder
-	ToolCalls     int
-	ToolSuccesses int
-	ToolFailures  int
-	AskUserText   string
-	// Buffered tool results for quiet/summary mode
-	pendingTools []ToolResultInfo
-}
-
-func (s *daemonRoundState) AppendText(t string)    { s.text.WriteString(t) }
-func (s *daemonRoundState) Text() string           { return s.text.String() }
-func (s *daemonRoundState) SetAskUser(t string)    { s.AskUserText = strings.TrimSpace(t) }
-func (s *daemonRoundState) HasVisibleOutput() bool { return strings.TrimSpace(s.Text()) != "" }
-func (s *daemonRoundState) Reset() {
-	s.text.Reset()
-	s.ToolCalls = 0
-	s.ToolSuccesses = 0
-	s.ToolFailures = 0
-	s.AskUserText = ""
-	s.pendingTools = nil
-}
+type daemonRoundState = SummaryRoundState
 
 // isDaemonSkippedTool returns true for sub-agent lifecycle tools that
 // should not be counted as visible tool calls in the daemon IM status.
@@ -930,53 +894,6 @@ func contentToText(blocks []provider.ContentBlock) string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// buildAskUserResponse constructs an AskUserResponse from user IM text.
-// Uses the shared ParseMultiQuestionReply for multi-question support and
-// ParseRemoteQuestionnaireAnswer for single-question parsing.
-func buildAskUserResponse(req toolpkg.AskUserRequest, text string) toolpkg.AskUserResponse {
-	if len(req.Questions) == 1 {
-		// Single question: parse directly
-		q := req.Questions[0]
-		selected, freeform, err := ParseRemoteQuestionnaireAnswer(text, q)
-		parsed := []ParsedQuestionAnswer{{
-			QuestionIndex: 0,
-			Selected:      selected,
-			Freeform:      freeform,
-			Error:         err,
-		}}
-		return BuildAskUserResponse(req, parsed)
-	}
-
-	// Multi-question: try multi-line split first
-	lines := SplitNonEmptyLines(text)
-	if len(lines) >= len(req.Questions) {
-		parsed := ParseMultiQuestionReply(text, req.Questions)
-		allOK := true
-		for _, p := range parsed {
-			if p.Error != nil {
-				allOK = false
-				break
-			}
-		}
-		if allOK {
-			return BuildAskUserResponse(req, parsed)
-		}
-	}
-
-	// Fallback: treat entire text as freeform answer to all questions
-	parsed := make([]ParsedQuestionAnswer, len(req.Questions))
-	for i, q := range req.Questions {
-		selected, freeform, err := ParseRemoteQuestionnaireAnswer(text, q)
-		parsed[i] = ParsedQuestionAnswer{
-			QuestionIndex: i,
-			Selected:      selected,
-			Freeform:      freeform,
-			Error:         err,
-		}
-	}
-	return BuildAskUserResponse(req, parsed)
 }
 
 func jsonMarshalArgs(v any) (string, error) {
@@ -1052,184 +969,85 @@ func formatIMToolDisplayName(toolName string) string {
 
 // handleSlashCommand processes IM slash commands.
 func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg InboundMessage) error {
-	parts := strings.Fields(text)
-	cmd := strings.ToLower(parts[0])
-
-	switch cmd {
-	case "/restart":
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "/restart") {
 		b.mu.Lock()
 		onRestart := b.onRestart
 		b.mu.Unlock()
-		if onRestart != nil {
-			// /restart debug → enable debug logging on next launch
-			if len(parts) > 1 && strings.ToLower(parts[1]) == "debug" {
+		if onRestart == nil {
+			return fmt.Errorf("restart not available")
+		}
+	}
+
+	if result := ExecuteExtendedIMSlashCommand(ExtendedIMSlashOptions{
+		Manager:     b.manager,
+		SelfAdapter: msg.Envelope.Adapter,
+		Text:        text,
+		HelpExtraLines: []string{
+			"/restart [debug] - Restart daemon (unmutes all adapters; add 'debug' to enable GGCODE_DEBUG=1)",
+			"/provider [vendor] [endpoint] - Show or switch LLM provider",
+			"/model [name] - Show or switch model",
+			"/config - Show current provider and model configuration",
+		},
+		OnRestart: func(debugMode bool) (string, error) {
+			b.mu.Lock()
+			onRestart := b.onRestart
+			b.mu.Unlock()
+			if onRestart == nil {
+				return "", fmt.Errorf("restart not available")
+			}
+			if debugMode {
 				b.mu.Lock()
 				b.restartDebug = true
 				b.mu.Unlock()
-				b.emitter.EmitText("🔄 Restarting daemon with debug logging (GGCODE_DEBUG=1)...")
-			} else {
-				b.emitter.EmitText("🔄 Restarting daemon...")
+				safego.Go("im.daemonBridge.restart", func() {
+					time.Sleep(1 * time.Second)
+					onRestart()
+				})
+				return "🔄 Restarting daemon with debug logging (GGCODE_DEBUG=1)...", nil
 			}
 			safego.Go("im.daemonBridge.restart", func() {
 				time.Sleep(1 * time.Second)
 				onRestart()
 			})
-			return nil
-		}
-		return fmt.Errorf("restart not available")
-
-	case "/listim":
-		return b.handleListIM()
-
-	case "/muteim":
-		if len(parts) < 2 {
-			b.emitter.EmitText("Usage: /muteim <adapter_name>\nUse /listim to see adapter names.")
-			return nil
-		}
-		return b.handleMuteIM(parts[1], msg)
-
-	case "/muteall":
-		return b.handleMuteAll(msg)
-
-	case "/muteself":
-		return b.handleMuteSelf(msg)
-
-	case "/help":
-		b.emitter.EmitText("Available commands:\n" +
-			"/listim - List IM adapters and their status\n" +
-			"/muteim <name> - Mute a specific adapter\n" +
-			"/muteall - Mute all adapters except the one you're using\n" +
-			"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)\n" +
-			"/restart [debug] - Restart daemon (unmutes all adapters; add 'debug' to enable GGCODE_DEBUG=1)\n" +
-			"/provider [vendor] [endpoint] - Show or switch LLM provider\n" +
-			"/model [name] - Show or switch model\n" +
-			"/config - Show current provider and model configuration\n" +
-			"/help - Show this help")
-		return nil
-
-	case "/provider":
-		return b.handleProviderCommand(parts)
-
-	case "/model":
-		return b.handleModelCommand(parts)
-
-	case "/config":
-		return b.handleConfigCommand()
-
-	default:
-		b.emitter.EmitText("Unknown command: " + cmd + ". Try /help")
-		return nil
-	}
-}
-
-// parseDaemonApprovalReply parses an IM text reply as an approval decision.
-func parseDaemonApprovalReply(text string) (permission.Decision, bool) {
-	t := strings.ToLower(strings.TrimSpace(text))
-	switch t {
-	case "y", "yes", "ok", "好", "好的", "允许", "同意", "确认":
-		return permission.Allow, true
-	case "a", "always", "总是允许", "总是", "始终允许":
-		return permission.Allow, true
-	case "n", "no", "nope", "拒绝", "取消", "不要", "deny":
-		return permission.Deny, true
-	}
-	if strings.HasPrefix(t, "y") && len(t) <= 3 {
-		return permission.Allow, true
-	}
-	if strings.HasPrefix(t, "n") && len(t) <= 3 {
-		return permission.Deny, true
-	}
-	return permission.Deny, false
-}
-
-func (b *DaemonBridge) handleListIM() error {
-	snapshot := b.manager.Snapshot()
-
-	if len(snapshot.Adapters) == 0 {
-		b.emitter.EmitText("📭 No IM adapters configured.")
-		return nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📬 IM Adapters:\n")
-
-	for _, a := range snapshot.Adapters {
-		status := "✅ online"
-		if !a.Healthy {
-			status = "❌ " + a.Status
-		}
-
-		// Check if bound
-		bound := ""
-		for _, binding := range snapshot.CurrentBindings {
-			if binding.Adapter == a.Name {
-				if binding.Muted {
-					bound = " 🔇 muted"
-				} else {
-					bound = " 📡 active"
-				}
-				break
+			return "🔄 Restarting daemon...", nil
+		},
+		OnProvider: func(vendor, endpoint string) (string, error) {
+			b.mu.Lock()
+			fn := b.onProviderSwitch
+			b.mu.Unlock()
+			if fn == nil {
+				return "", fmt.Errorf("provider switching not available in this mode")
 			}
+			return fn(vendor, endpoint, "")
+		},
+		OnModel: func(model string) (string, error) {
+			b.mu.Lock()
+			fn := b.onProviderSwitch
+			b.mu.Unlock()
+			if fn == nil {
+				return "", fmt.Errorf("model switching not available in this mode")
+			}
+			return fn("", "", model)
+		},
+		OnConfig: func() (string, error) {
+			b.mu.Lock()
+			fn := b.onProviderSwitch
+			b.mu.Unlock()
+			if fn == nil {
+				return "", fmt.Errorf("config display not available in this mode")
+			}
+			return fn("", "", "")
+		},
+	}); result.Handled {
+		if result.Response != "" {
+			b.emitter.EmitText(result.Response)
 		}
-
-		sb.WriteString(fmt.Sprintf("  • %s [%s]%s %s\n", a.Name, a.Platform, bound, status))
-	}
-
-	b.emitter.EmitText(sb.String())
-	return nil
-}
-
-func (b *DaemonBridge) handleMuteIM(adapterName string, msg InboundMessage) error {
-	selfAdapter := msg.Envelope.Adapter
-	if adapterName == selfAdapter {
-		b.emitter.EmitText("⚠️ Cannot mute yourself with /muteim. Use /muteself instead.")
+		if result.MuteSelfAdapter != "" {
+			time.Sleep(500 * time.Millisecond)
+			b.manager.MuteBinding(result.MuteSelfAdapter)
+		}
 		return nil
 	}
-
-	if err := b.manager.MuteBinding(adapterName); err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute %s: %v", adapterName, err))
-		return nil
-	}
-
-	b.emitter.EmitText(fmt.Sprintf("🔇 Muted adapter: %s", adapterName))
-	return nil
-}
-
-func (b *DaemonBridge) handleMuteAll(msg InboundMessage) error {
-	selfAdapter := msg.Envelope.Adapter
-
-	count, err := b.manager.MuteAllExcept(selfAdapter)
-	if err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute adapters: %v", err))
-		return nil
-	}
-
-	if selfAdapter != "" {
-		b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s), keeping %s active", count, selfAdapter))
-	} else {
-		b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s)", count))
-	}
-	return nil
-}
-
-func (b *DaemonBridge) handleMuteSelf(msg InboundMessage) error {
-	selfAdapter := msg.Envelope.Adapter
-	if selfAdapter == "" {
-		b.emitter.EmitText("❌ Cannot determine your adapter name.")
-		return nil
-	}
-
-	// Emit warning FIRST (before muting, so the message actually gets delivered)
-	b.emitter.EmitText(fmt.Sprintf(
-		"🔇 Muting adapter %s. You will NOT receive any more replies.\n"+
-			"💡 Use /restart from another adapter to recover.",
-		selfAdapter,
-	))
-
-	// Small delay to ensure the message is sent before we disconnect
-	time.Sleep(500 * time.Millisecond)
-
-	b.manager.MuteBinding(selfAdapter)
 	return nil
 }
 
@@ -1365,72 +1183,22 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		}
 	}
 
-	// Atomically check if agent is running and either queue interruption
-	// or claim the "run starter" role. This prevents TOCTOU races with
-	// concurrent IM messages.
-	b.mu.Lock()
-	activeCancel := b.cancelFunc
-	if activeCancel != nil {
-		// Agent is running — inject as interruption
-		debug.Log("daemon-bridge", "webchat: queuing interruption: %s", truncateStr(text, 80))
-		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
-		b.mu.Unlock()
+	if b.tryQueueInterruption(content, "webchat: ") {
 		return
 	}
-
-	// Agent is idle — claim the run slot under the lock
-	ctx2, cancel := context.WithCancel(context.Background())
-	b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
-	b.agent.SetInterruptionHandler(func() string {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if len(b.pendingInterruptions) == 0 {
-			return ""
-		}
-		msg := b.pendingInterruptions[0]
-		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return extractText(msg.Content)
-	})
-	b.cancelFunc = cancel
-	b.mu.Unlock()
 	b.notifyRunStateChange(true)
+	ctx2 := b.beginRunSlot()
 
 	// Start the run outside the lock
 	safego.Go("im.daemonBridge.run", func() {
-		defer func() {
-			b.mu.Lock()
-			b.cancelFunc = nil
-			b.agent.SetInterruptionHandler(nil)
-			b.mu.Unlock()
-			b.notifyRunStateChange(false)
-		}()
-		// Check if this input should be routed to harness auto-run
-		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
-			if harnessResult := b.tryHarnessAutoRun(ctx2, text); harnessResult != nil {
-				return
+		b.runQueuedLoop(ctx2, content, "webchat: ", func(ctx context.Context, text string) bool {
+			if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
+				return b.tryHarnessAutoRun(ctx, text) != nil
 			}
-		}
-		for {
-			err := b.runAgentStream(ctx2, content)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				debug.Log("daemon-bridge", "webchat: agent run error: %v", err)
-			}
-
-			b.mu.Lock()
-			var nextContent []provider.ContentBlock
-			if len(b.pendingInterruptions) > 0 {
-				nextContent = b.pendingInterruptions[0].Content
-				b.pendingInterruptions = b.pendingInterruptions[1:]
-			}
-			b.mu.Unlock()
-
-			if len(nextContent) == 0 {
-				break
-			}
-			debug.Log("daemon-bridge", "webchat: draining queued message: %s", truncateStr(extractText(nextContent), 80))
-			content = nextContent
-		}
-
+			return false
+		}, func(err error) {
+			debug.Log("daemon-bridge", "webchat: agent run error: %v", err)
+		})
 	})
 }
 
