@@ -142,6 +142,9 @@ func (a *App) initWorkspace(dir string) {
 	chat.EnsureSession()
 	_ = chat.InitAgent()
 
+	// Start IM adapters AFTER InitAgent so the bridge has the correct chat instance
+	a.startIMAdapters()
+
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
 			"workDir": dir,
@@ -684,7 +687,11 @@ func (a *App) initIMRuntime() {
 				// Pairing complete — dismiss dialog
 				runtime.EventsEmit(a.ctx, "im:pairing_done", map[string]string{})
 			}
-			// Adapter status snapshot for IM management page
+			// Push status to frontend via both Wails events and stream events
+			raw, _ := json.Marshal(snap)
+			if a.chat != nil && a.chat.OnStreamEvent != nil {
+				a.chat.OnStreamEvent("im:status", raw)
+			}
 			runtime.EventsEmit(a.ctx, "im:status", map[string]interface{}{
 				"adapters": len(snap.Adapters),
 			})
@@ -695,30 +702,10 @@ func (a *App) initIMRuntime() {
 	}
 
 	a.imManager = runtimeInit.Manager
-	// Push IM adapter status changes to frontend
-	if a.imManager != nil {
-		a.imManager.SetOnUpdate(func(snap im.StatusSnapshot) {
-			raw, _ := json.Marshal(snap)
-			if a.chat != nil && a.chat.OnStreamEvent != nil {
-				a.chat.OnStreamEvent("im:status", raw)
-			}
-		})
-	}
+	// Single OnUpdate callback handles pairing + status + stream event push
 	a.imInstanceDetect = runtimeInit.InstanceDetect
 	if len(runtimeInit.OtherInstances) > 0 {
 		fmt.Printf("im: auto-muted IM channels, another instance is primary\n")
-	}
-
-	// Start adapters bound to current workspace
-	a.startIMAdapters()
-
-	// Bind IM emitter to chat bridge for outbound push
-	if a.chat != nil {
-		lang := ""
-		if cfg != nil {
-			lang = cfg.Language
-		}
-		a.chat.Emitter = im.NewIMEmitter(a.imManager, lang, workDir)
 	}
 }
 
@@ -730,6 +717,15 @@ func (a *App) startIMAdapters() {
 	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
 	if cfg == nil || !cfg.IM.Enabled {
 		return
+	}
+
+	// Bind IM emitter to chat bridge for outbound push
+	if a.chat != nil {
+		lang := ""
+		if cfg != nil {
+			lang = cfg.Language
+		}
+		a.chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
 	}
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{
