@@ -36,6 +36,9 @@ func (t ConfigTool) Description() string {
 	return "Read, write, list, or delete configuration settings. " +
 		"Supports dot-notation keys across all config files: " +
 		"core (vendor/endpoint/model/language), api_key, vendors, mcp_servers, im, a2a, knight, harness, oauth_tokens. " +
+		"Key patterns for model management: " +
+		"'vendors.<name>.endpoints.<ep>.models' (static list), " +
+		"'vendors.<name>.endpoints.<ep>.discover_models' (live API discovery). " +
 		"Provider-affecting changes (vendor/endpoint/model/api_key) are probed before committing. " +
 		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML. " +
 		"Use list=true to discover all keys."
@@ -46,7 +49,7 @@ func (t ConfigTool) Parameters() json.RawMessage {
 		"properties": {
 			"setting": {
 				"type": "string",
-				"description": "Config key in dot-notation. Examples: 'vendor', 'model', 'api_key', 'mcp_servers.my-server', 'im.output_mode', 'a2a.auth.api_key', 'knight.enabled'. Use list=true to discover all available keys."
+				"description": "Config key in dot-notation. Common keys: 'vendor', 'endpoint', 'model', 'api_key', 'language', 'default_mode', 'max_iterations', 'scope'. Vendor/endpoint info: 'vendors.<name>', 'vendors.<name>.endpoints.<ep>'. Model lists: 'vendors.<name>.endpoints.<ep>.models' (configured), 'vendors.<name>.endpoints.<ep>.discover_models' (live API query). MCP: 'mcp_servers', 'mcp_servers.<name>'. IM: 'im.output_mode', 'im.adapters.<name>'. A2A: 'a2a.host', 'a2a.auth.api_key'. Knight: 'knight.enabled'. Use list=true to see all."
 			},
 			"value": {
 				"type": "string",
