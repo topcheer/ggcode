@@ -77,9 +77,12 @@ type ChatBridge struct {
 	// IM round accumulator for emitter (mirrors Fyne agentBridge.imRound)
 	imRound agentruntime.IMRoundState
 
-	// Mobile tunnel broker for outbound push
+	// Unified tunnel event management (from InteractiveRuntimeCore.Tunnel)
+	tunnelHost *agentruntime.TunnelHost
+
+	// Legacy tunnel fields — will be removed after full migration to tunnelHost
 	tunnelBroker           *tunnel.Broker
-	tunnelProjectionBroker *tunnel.Broker // offline broker for event recording before Share
+	tunnelProjectionBroker *tunnel.Broker
 	tunnelMsgID            string
 	tunnelMsgNeedsFinalize bool
 	tunnelProjectionBroken bool
@@ -113,6 +116,11 @@ func NewChatBridge() (*ChatBridge, error) {
 		pendingMsgs:    agentruntime.NewPendingQueue[*tunnel.MessageData](),
 		interactions:   agentruntime.NewInteractionBroker(),
 	}, nil
+}
+
+// SetTunnelHost sets the unified tunnel host from InteractiveRuntimeCore.Tunnel.
+func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
+	b.tunnelHost = th
 }
 
 // SendMessage sends a user message and streams events to the frontend.
@@ -486,6 +494,8 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	// Start all background services (MCP connections, etc.)
 	core.StartBackgroundServices()
+	// Set unified tunnel host for mobile streaming
+	b.tunnelHost = core.Tunnel
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
 	commandMgr := core.CommandManager
@@ -831,15 +841,19 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.OnStreamEvent(eventType, raw)
 	}
 
-	// Push to tunnel broker for mobile clients (mirrors daemon shareController.HandleStreamEvent)
-	b.pushSemanticToTunnel(semantic)
+	// Push to tunnel via unified TunnelHost (preferred) or legacy path
+	if b.tunnelHost != nil {
+		b.tunnelHost.PushStreamEvent(ev)
+	} else {
+		b.pushSemanticToTunnelLegacy(semantic)
+	}
 }
 
 // pushSemanticToTunnel forwards agent stream events to connected mobile clients
 // via the projection broker (which records events for replay AND forwards to
 // the online share broker). Mirrors TUI's Model.pushTunnelEvent() and daemon's
 // shareController.HandleStreamEvent().
-func (b *ChatBridge) pushSemanticToTunnel(sem agentruntime.DesktopStreamSemantic) {
+func (b *ChatBridge) pushSemanticToTunnelLegacy(sem agentruntime.DesktopStreamSemantic) {
 	// Use the projection broker so events are recorded AND forwarded to the share broker
 	broker := b.getTunnelProjectionBroker()
 	if broker == nil {
@@ -1059,6 +1073,11 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 // AttachTunnelBroker connects the broker for outbound event push to mobile.
 // Mirrors Fyne AgentBridge.AttachTunnelBroker exactly.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
+	// Delegate to unified TunnelHost if available
+	if b.tunnelHost != nil {
+		b.tunnelHost.AttachOnlineBroker(broker)
+	}
+
 	var (
 		working    bool
 		cfg        *config.Config
@@ -1124,6 +1143,9 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 }
 
 func (b *ChatBridge) DetachTunnelBroker() {
+	if b.tunnelHost != nil {
+		b.tunnelHost.DetachOnlineBroker()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.tunnelBroker = nil
@@ -1163,7 +1185,16 @@ func (b *ChatBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
 func (b *ChatBridge) bindTunnelProjectionSession() {
 	b.mu.Lock()
 	currentSes := b.currentSes
+	th := b.tunnelHost
 	b.mu.Unlock()
+
+	// Use unified TunnelHost if available
+	if th != nil {
+		th.BindSession(currentSes, b.sessionStore)
+		return
+	}
+
+	// Legacy fallback
 	if currentSes == nil {
 		return
 	}
