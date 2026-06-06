@@ -2,12 +2,15 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build build-desktop test lint verify-ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots
+.PHONY: build build-desktop-wails test lint verify-ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots
 
 TAGS := goolm
 
 build:
 	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
+
+build-desktop-wails:
+	cd desktop/ggcode-desktop-wails && wails build -tags "$(TAGS)" -clean
 
 test:
 	go test -tags "$(TAGS)" ./...

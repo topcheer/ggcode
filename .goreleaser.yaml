@@ -86,8 +86,8 @@ brews:
       email: bot@ggcode.dev
     directory: Formula
 
-# Desktop Cask is managed by .github/workflows/release.yml (publish-homebrew-desktop job)
-# because the desktop DMG is built outside GoReleaser.
+# Desktop DMG/MSI/AppImage are built by .github/workflows/release.yml
+# using Wails (desktop/ggcode-desktop-wails), not GoReleaser.
 
 sboms:
   - artifacts: archive
