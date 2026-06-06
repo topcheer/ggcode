@@ -66,14 +66,12 @@ func (a *configAccess) Get(key string) (string, error) {
 	// --- Vendors ---
 	case key == "vendors":
 		return a.listVendors()
+	case strings.HasPrefix(key, "vendors.") && strings.HasSuffix(key, ".discover_models"):
+		return a.discoverModels(key)
+	case strings.HasPrefix(key, "vendors.") && strings.HasSuffix(key, ".models"):
+		return a.getEndpointModels(key)
 	case strings.HasPrefix(key, "vendors."):
 		return a.getVendorPath(strings.TrimPrefix(key, "vendors."))
-
-	// --- Model Discovery ---
-	case strings.HasSuffix(key, ".discover_models"):
-		return a.discoverModels(key)
-	case strings.HasSuffix(key, ".models") && strings.HasPrefix(key, "vendors."):
-		return a.getEndpointModels(key)
 
 	// --- MCP Servers ---
 	case key == "mcp_servers":
