@@ -836,9 +836,12 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 }
 
 // pushSemanticToTunnel forwards agent stream events to connected mobile clients
-// via the tunnel broker. Mirrors daemon's shareController.HandleStreamEvent.
+// via the projection broker (which records events for replay AND forwards to
+// the online share broker). Mirrors TUI's Model.pushTunnelEvent() and daemon's
+// shareController.HandleStreamEvent().
 func (b *ChatBridge) pushSemanticToTunnel(sem agentruntime.DesktopStreamSemantic) {
-	broker := b.currentTunnelBroker()
+	// Use the projection broker so events are recorded AND forwarded to the share broker
+	broker := b.getTunnelProjectionBroker()
 	if broker == nil {
 		return
 	}
@@ -859,6 +862,7 @@ func (b *ChatBridge) pushSemanticToTunnel(sem agentruntime.DesktopStreamSemantic
 			b.mu.Lock()
 			b.tunnelMsgNeedsFinalize = true
 			b.mu.Unlock()
+			broker.PushReasoningDone(agentruntime.TunnelReasoningMsgID(b.tunnelMsgID))
 			broker.PushText(b.tunnelMsgID, sem.Text)
 		}
 	case provider.StreamEventReasoning:
@@ -1139,6 +1143,12 @@ func (b *ChatBridge) currentShareTunnelBroker() *tunnel.Broker {
 		return b.shareTunnelBroker
 	}
 	return b.tunnelBroker
+}
+
+func (b *ChatBridge) getTunnelProjectionBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tunnelProjectionBroker
 }
 
 func (b *ChatBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
