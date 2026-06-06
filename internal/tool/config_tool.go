@@ -8,56 +8,74 @@ import (
 	"strings"
 )
 
-// ConfigAccess provides read/write access to runtime configuration.
+// ConfigAccess provides unified read/write access to ALL ggcode configuration.
+// Implementations route dot-notation keys to the appropriate config file
+// (ggcode.yaml, keys.env, harness.yaml, oauth-tokens, etc.).
 type ConfigAccess interface {
-	Get(key string) (string, bool)
+	// Get reads a config key. Supports dot-notation paths.
+	// Returns the value as a string (complex values are JSON-encoded).
+	Get(key string) (string, error)
+	// Set writes a config key. Persists to the appropriate file.
+	// For provider-affecting keys, probes the target before committing.
 	Set(key, value string) error
-	List() map[string]string
+	// List returns all config settings, optionally filtered by section.
+	// Section can be: "", "core", "api_key", "vendors", "mcp", "im", "a2a", "knight", "harness", "oauth", "runtime".
+	List(section string) (string, error)
+	// Delete removes a config key.
+	// Only works for: mcp_servers.<name>, im.adapters.<name>, oauth_tokens.<provider>.
+	Delete(key string) error
 }
 
-// ConfigTool reads or writes a configuration setting.
-// When value is provided, it writes; otherwise it reads.
+// ConfigTool reads, writes, lists, or deletes configuration settings.
 type ConfigTool struct {
 	Access ConfigAccess
 }
 
 func (t ConfigTool) Name() string { return "config" }
 func (t ConfigTool) Description() string {
-	return "Read or write a runtime configuration setting. " +
-		"If value is provided, sets the setting; otherwise returns the current value. " +
-		"Use list=true to see all settings."
+	return "Read, write, list, or delete configuration settings. " +
+		"Supports dot-notation keys across all config files: " +
+		"core (vendor/endpoint/model/language), api_key, vendors, mcp_servers, im, a2a, knight, harness, oauth_tokens. " +
+		"Provider-affecting changes (vendor/endpoint/model/api_key) are probed before committing. " +
+		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML. " +
+		"Use list=true to discover all keys."
 }
 func (t ConfigTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"setting": {
-			"type": "string",
-			"description": "Configuration key to read or write"
+		"type": "object",
+		"properties": {
+			"setting": {
+				"type": "string",
+				"description": "Config key in dot-notation. Examples: 'vendor', 'model', 'api_key', 'mcp_servers.my-server', 'im.output_mode', 'a2a.auth.api_key', 'knight.enabled'. Use list=true to discover all available keys."
+			},
+			"value": {
+				"type": "string",
+				"description": "Value to set (omit to read current value). For complex values (arrays, objects), pass a JSON string. For secrets (api_key, tokens), the value is stored securely in keys.env, never in the main config file."
+			},
+			"list": {
+				"type": "boolean",
+				"description": "List all settings. Optionally filter by section: 'core', 'api_key', 'vendors', 'mcp', 'im', 'a2a', 'knight', 'harness', 'oauth', 'runtime'. Empty string or omitted lists everything."
+			},
+			"delete": {
+				"type": "boolean",
+				"description": "Delete the specified key. Supported keys: 'mcp_servers.<name>' (remove MCP server), 'im.adapters.<name>' (remove IM adapter), 'oauth_tokens.<provider>' (clear cached OAuth token)."
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Reading config', '修改配置'). You MUST always provide this field."
+			}
 		},
-		"value": {
-			"type": "string",
-			"description": "Value to set (omit to read)"
-		},
-		"list": {
-			"type": "boolean",
-			"description": "List all configuration settings (ignores other params)"
-		},
-		"description": {
-			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
-		}
-	},
-	"required": [
-		"description"
-	]
-}`)
+		"required": [
+			"description"
+		]
+	}`)
 }
 func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Setting string `json:"setting"`
 		Value   string `json:"value"`
 		List    bool   `json:"list"`
+		Delete  bool   `json:"delete"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -65,45 +83,63 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 
 	// List mode
 	if args.List {
-		all := t.Access.List()
-		if len(all) == 0 {
-			return Result{Content: "No configuration settings.\n"}, nil
+		content, err := t.Access.List(args.Setting) // Setting used as section filter
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		keys := make([]string, 0, len(all))
-		for k := range all {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var sb strings.Builder
-		for _, k := range keys {
-			fmt.Fprintf(&sb, "- %s: %s\n", k, all[k])
-		}
-		return Result{Content: sb.String()}, nil
+		return Result{Content: content}, nil
 	}
 
 	if strings.TrimSpace(args.Setting) == "" {
 		return Result{IsError: true, Content: "setting is required (or use list=true)"}, nil
 	}
 
-	// Read mode
+	// Delete mode
+	if args.Delete {
+		if err := t.Access.Delete(args.Setting); err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		return Result{Content: fmt.Sprintf("Deleted %s\n", args.Setting)}, nil
+	}
+
+	// Read mode — check if "value" was explicitly provided
 	if args.Value == "" {
-		// Check if it was explicitly provided as empty vs not provided
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(input, &raw); err == nil && raw != nil {
 			if _, hasValue := raw["value"]; !hasValue {
 				// No value key → read mode
-				val, ok := t.Access.Get(args.Setting)
-				if !ok {
-					return Result{IsError: true, Content: fmt.Sprintf("setting %q not found", args.Setting)}, nil
+				val, err := t.Access.Get(args.Setting)
+				if err != nil {
+					return Result{IsError: true, Content: err.Error()}, nil
 				}
 				return Result{Content: fmt.Sprintf("%s = %s\n", args.Setting, val)}, nil
 			}
 		}
 	}
 
-	// Write mode (value provided, even if empty string)
+	// Write mode
 	if err := t.Access.Set(args.Setting, args.Value); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	return Result{Content: fmt.Sprintf("Set %s = %s\n", args.Setting, args.Value)}, nil
+}
+
+// --- Helpers ---
+
+// FormatSortedMap formats a map as sorted key=value lines under a header.
+func FormatSortedMap(header string, m map[string]string) string {
+	if len(m) == 0 {
+		return header + "(none)\n"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, k := range keys {
+		fmt.Fprintf(&sb, "  %s: %s\n", k, m[k])
+	}
+	return sb.String()
 }

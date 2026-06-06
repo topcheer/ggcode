@@ -46,6 +46,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(saveMemoryTool)
 
+	// Config tool — unified config management across all config files
+	_ = registry.Register(tool.ConfigTool{Access: NewConfigAccess(cfg, workingDir)})
+
 	startupAssets := LoadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr := startupAssets.CommandManager
 	commandMgr.SetExtraProviders(func() []*commands.Command {

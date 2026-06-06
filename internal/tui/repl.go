@@ -326,12 +326,6 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
 }
 
-// SetConfigTool registers the config tool backed by the current config.
-func (r *REPL) SetConfigTool(tools *tool.Registry) {
-	access := &replConfigAccess{model: &r.model}
-	tools.Register(tool.ConfigTool{Access: access})
-}
-
 // SetSendMessageTool registers the send_message tool for agent communication.
 func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
 	tools.Register(tool.SendMessageTool{Manager: mgr})
@@ -483,52 +477,6 @@ func (s *replModeSwitcher) RestoreMode(fallback permission.PermissionMode) permi
 // modeChangeMsg is sent to update the Model's mode from a goroutine.
 type modeChangeMsg struct {
 	Mode permission.PermissionMode
-}
-
-// replConfigAccess implements tool.ConfigAccess backed by the TUI Model's config.
-type replConfigAccess struct {
-	model *Model
-}
-
-func (a *replConfigAccess) Get(key string) (string, bool) {
-	if a.model.config == nil {
-		return "", false
-	}
-	switch key {
-	case "vendor":
-		return a.model.config.Vendor, true
-	case "endpoint":
-		return a.model.config.Endpoint, true
-	case "model":
-		return a.model.config.Model, true
-	case "language":
-		return a.model.config.Language, true
-	case "max_iterations":
-		return fmt.Sprintf("%d", a.model.config.MaxIterations), true
-	case "default_mode":
-		return a.model.config.DefaultMode, true
-	default:
-		return "", false
-	}
-}
-
-func (a *replConfigAccess) Set(key, value string) error {
-	// V1: read-only config tool; writing is not yet supported
-	return fmt.Errorf("setting %q is not supported in V1 (use /config command)", key)
-}
-
-func (a *replConfigAccess) List() map[string]string {
-	if a.model.config == nil {
-		return nil
-	}
-	return map[string]string{
-		"vendor":         a.model.config.Vendor,
-		"endpoint":       a.model.config.Endpoint,
-		"model":          a.model.config.Model,
-		"language":       a.model.config.Language,
-		"max_iterations": fmt.Sprintf("%d", a.model.config.MaxIterations),
-		"default_mode":   a.model.config.DefaultMode,
-	}
 }
 
 func (r *REPL) SetAskUserTool(tools *tool.Registry) {
