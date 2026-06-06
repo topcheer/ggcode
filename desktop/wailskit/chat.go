@@ -629,6 +629,9 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 	}
 	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
 	core.SetConfigAgent(a)
+	core.SetConfigUINotify(func() {
+		b.onConfigProviderChanged()
+	})
 	a.SetPermissionPolicy(policy)
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
@@ -1820,6 +1823,28 @@ func (b *ChatBridge) SwitchModel(model string) error {
 		b.mu.Unlock()
 	})
 	return nil
+}
+
+// onConfigProviderChanged syncs Wails bridge state after the config tool
+// changes vendor/endpoint/model/api_key. Updates b.resolved and b.currentSes
+// so the frontend model picker and status bar reflect the new selection.
+func (b *ChatBridge) onConfigProviderChanged() {
+	if b.cfg == nil {
+		return
+	}
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return
+	}
+	b.mu.Lock()
+	b.resolved = resolved
+	if b.currentSes != nil {
+		b.currentSes.Vendor = b.cfg.Vendor
+		b.currentSes.Endpoint = b.cfg.Endpoint
+		b.currentSes.Model = resolved.Model
+	}
+	b.mu.Unlock()
+	// TODO: emit Wails frontend event to refresh model picker when available
 }
 
 // PushErrorToMobile pushes an error message to mobile via tunnel.
