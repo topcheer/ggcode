@@ -56,6 +56,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case imRuntimeUpdatedMsg:
 		return m, nil
 
+	case providerChangedMsg:
+		// Config tool changed provider — refresh model state from config.
+		if m.config != nil {
+			if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved != nil {
+				m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+			}
+			m.syncSessionSelection()
+		}
+		return m, nil
+
 	case a2aEventUpdatedMsg:
 		return m, nil
 
