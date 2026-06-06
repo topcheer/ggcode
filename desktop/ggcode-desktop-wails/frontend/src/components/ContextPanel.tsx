@@ -144,25 +144,28 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
       }}>
         <span style={{ fontSize: 12, fontWeight: 500 }}>IM</span>
-        {imAdapters.length === 0 ? (
-          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-            No IM adapters
-          </span>
-        ) : imAdapters.map(adapter => (
-          <div key={adapter.name} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: 12 }}>
-              {adapter.enabled && !adapter.muted ? '🟢' : adapter.muted ? '🔇' : '⚪'}
+        {(() => {
+          const bound = imAdapters.filter(a => a.isCurrent)
+          return bound.length === 0 ? (
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              No bound IM adapters
             </span>
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
-                {adapter.name}
+          ) : bound.map(adapter => (
+            <div key={adapter.name} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 12 }}>
+                {adapter.enabled && !adapter.muted ? '🟢' : adapter.muted ? '🔇' : '⚪'}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
-                {adapter.platform}{adapter.isCurrent ? ' · active' : adapter.workspace ? ` · ${adapter.workspace.split('/').pop()}` : ''}{adapter.muted ? ' · muted' : ''}
-              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
+                  {adapter.name}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                  {adapter.platform}{adapter.muted ? ' · muted' : ''}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        })()}
       </div>
 
       {/* MCP servers */}
