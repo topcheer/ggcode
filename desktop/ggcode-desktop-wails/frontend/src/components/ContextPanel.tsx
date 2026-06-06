@@ -4,6 +4,15 @@ import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import type { StatusBarData } from '../types'
 import { useTranslation } from '../i18n'
 
+interface IMAdapterInfo {
+  name: string
+  enabled: boolean
+  muted: boolean
+  platform: string
+  workspace: string
+  isCurrent: boolean
+}
+
 interface ContextPanelProps {
   onClose: () => void
   statusBarData?: StatusBarData
@@ -11,8 +20,8 @@ interface ContextPanelProps {
 
 export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
   const { t } = useTranslation()
-  const [activeMode, setActiveMode] = useState('auto')
   const [mcpServers, setMcpServers] = useState<any[]>([])
+  const [imAdapters, setImAdapters] = useState<IMAdapterInfo[]>([])
 
   const usagePercent = statusBarData?.contextTotal
     ? statusBarData.usagePercent
@@ -34,27 +43,19 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     { label: t('context.cacheHit'), value: `${statusBarData?.cacheHit ?? 0}%`, color: 'var(--color-success)' },
   ]
 
-  const modes = ['Supervised', 'Plan', 'Auto', 'Bypass', 'Autopilot']
-
-  // Sync live permission mode from status bar data first, then fallback to config.
+  // Load IM adapters with real-time updates
   useEffect(() => {
-    if (statusBarData?.mode) {
-      setActiveMode(statusBarData.mode)
-      return
-    }
     let cancelled = false
-    async function load() {
+    const loadIM = async () => {
       try {
-        const cfg = await App.GetConfig()
-        if (cancelled) return
-        if (cfg.defaultMode) setActiveMode(cfg.defaultMode)
-      } catch {
-        // fallback to default
-      }
+        const list = await App.ListIMAdapters() as IMAdapterInfo[]
+        if (!cancelled) setImAdapters(list || [])
+      } catch {}
     }
-    load()
-    return () => { cancelled = true }
-  }, [statusBarData?.mode])
+    void loadIM()
+    EventsOn('im:status', () => { void loadIM() })
+    return () => { cancelled = true; EventsOff('im:status') }
+  }, [])
 
   const modelLabel = statusBarData?.model ?? '...'
   const vendorLabel = statusBarData?.vendor ?? '...'
@@ -137,23 +138,31 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
         ))}
       </div>
 
-      {/* Permission mode */}
+      {/* IM adapters */}
       <div style={{
         padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 8,
+        background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        <span style={{ fontSize: 12, fontWeight: 500 }}>{t('context.permission')}</span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {modes.map(m => (
-            <button key={m} style={{
-              padding: '4px 10px', borderRadius: 'var(--radius-sm)',
-              background: m.toLowerCase() === activeMode ? 'var(--color-primary)' : 'var(--color-surface)',
-              color: m.toLowerCase() === activeMode ? '#fff' : 'var(--text-secondary)',
-              border: 'none', cursor: 'default', fontSize: 11,
-              fontWeight: m.toLowerCase() === activeMode ? 500 : 400,
-            }}>{m}</button>
-          ))}
-        </div>
+        <span style={{ fontSize: 12, fontWeight: 500 }}>IM</span>
+        {imAdapters.length === 0 ? (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            No IM adapters
+          </span>
+        ) : imAdapters.map(adapter => (
+          <div key={adapter.name} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: 12 }}>
+              {adapter.enabled && !adapter.muted ? '🟢' : adapter.muted ? '🔇' : '⚪'}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
+                {adapter.name}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+                {adapter.platform}{adapter.isCurrent ? ' · active' : adapter.workspace ? ` · ${adapter.workspace.split('/').pop()}` : ''}{adapter.muted ? ' · muted' : ''}
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* MCP servers */}
