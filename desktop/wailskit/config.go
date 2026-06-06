@@ -39,7 +39,6 @@ func GetGlobalConfig() *config.Config {
 }
 
 // ResolveConfigFilePath finds the config file for a workspace directory.
-// Mirrors desktop/ggcode-desktop/app.go resolveConfigFilePath.
 func ResolveConfigFilePath(workDir string) string {
 	for _, p := range []string{
 		filepath.Join(workDir, "ggcode.yaml"),

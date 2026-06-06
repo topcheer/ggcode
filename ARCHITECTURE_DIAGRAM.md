@@ -9,7 +9,7 @@
 
 ┌──────────────────────┐          ┌──────────────────────┐
 │   DESKTOP CLIENT     │          │   MOBILE CLIENT      │
-│  (ggcode-desktop)    │          │  (Flutter App)       │
+│  (Wails Desktop)     │          │  (Flutter App)       │
 └─────────┬────────────┘          └──────────┬───────────┘
           │                                   │
           │ Broadcasts events                │ Sends messages

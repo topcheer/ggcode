@@ -21,7 +21,6 @@ Without it, builds fail due to missing libolm C headers (mautrix crypto dependen
 
 ```bash
 make build          # go build -tags goolm -o bin/ggcode ./cmd/ggcode
-make build-desktop  # go build -tags goolm -ldflags "-X main.Version=..." -o bin/ggcode-desktop .
 make test           # go test -tags goolm ./...
 make lint           # go vet -tags goolm ./...
 make install        # go install -tags goolm github.com/topcheer/ggcode/cmd/ggcode
@@ -52,9 +51,9 @@ Linter config (`.golangci.yml`): `gofmt`, `govet`, `errcheck`, `staticcheck`, `u
 ```
 cmd/ggcode/            CLI entrypoint, root command, pipe mode, resume, harness/mcp subcommands
 cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
-desktop/               Desktop GUI application (Fyne-based, separate Go module)
-  ggcode-desktop/      Main desktop app — visual chat, IM integration, tool approval dialogs, tunnel relay
-  markdownx/           Extended Markdown widget (Fyne, Mermaid support)
+desktop/               Desktop GUI application (Wails-based)
+  ggcode-desktop-wails/ Wails desktop app — React frontend, Go backend
+  wailskit/            Shared Go backend for Wails desktop (ChatBridge, config, tunnel)
 ggcode-relay/          Standalone relay server for mobile tunnel (WebSocket, SQLite event persistence)
 internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
@@ -214,7 +213,7 @@ Available in any IM channel connected to a ggcode daemon:
 
 ## CLI Modes
 
-- **Desktop GUI**: `ggcode-desktop` — native desktop application with visual chat, IM settings panel, tool approval dialogs, session sidebar
+- **Desktop GUI**: `ggcode-desktop-wails` — Wails-based desktop application with React frontend, visual chat, IM integration, tool approval dialogs, session sidebar
 - **Interactive TUI**: `ggcode` — launches the full Bubble Tea TUI
 - **Daemon mode**: `ggcode daemon` — headless agent with IM gateway; `--follow` for terminal follow display
 - **Pipe mode**: `ggcode -p "prompt"` — non-interactive, sends prompt and outputs response
