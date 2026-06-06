@@ -65,6 +65,9 @@ type ChatBridge struct {
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 
+	// UI event emitter — set by app.go via SetEmitEvent
+	emitEvent func(name string, payload ...interface{})
+
 	// Sub-agent tunnel tracking
 	spawnedSet map[string]bool
 
@@ -1844,7 +1847,10 @@ func (b *ChatBridge) onConfigProviderChanged() {
 		b.currentSes.Model = resolved.Model
 	}
 	b.mu.Unlock()
-	// TODO: emit Wails frontend event to refresh model picker when available
+	// Notify Wails frontend to refresh model picker and status bar
+	if b.emitEvent != nil {
+		b.emitEvent("config:updated", nil)
+	}
 }
 
 // PushErrorToMobile pushes an error message to mobile via tunnel.
