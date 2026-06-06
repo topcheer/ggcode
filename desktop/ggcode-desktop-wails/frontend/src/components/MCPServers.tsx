@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi, RefreshCw, Power } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useTranslation } from '../i18n'
 
 type TransportType = 'stdio' | 'http' | 'ws'
@@ -90,7 +91,12 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
     }
   }
 
-  useEffect(() => { loadServers() }, [])
+  useEffect(() => {
+    loadServers()
+    // Real-time updates: backend pushes mcp:status when server connects/disconnects/fails
+    EventsOn('mcp:status', () => { loadServers() })
+    return () => { EventsOff('mcp:status') }
+  }, [])
 
   const handleAdd = async () => {
     if (!addName.trim()) { setAddError('Name is required'); return }

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import type { JSX } from 'react'
 import { Plus, Trash2, Power, PowerOff, Volume2, VolumeX } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useTranslation } from '../i18n'
 
 // ── Types matching Go structs ──
@@ -109,6 +110,9 @@ export function IMManagement() {
 
   useEffect(() => {
     loadData()
+    // Real-time updates: backend pushes im:status when adapter connects/disconnects
+    EventsOn('im:status', () => { loadData() })
+    return () => { EventsOff('im:status') }
   }, [])
 
   async function loadData() {
