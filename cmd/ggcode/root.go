@@ -890,6 +890,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}
+
+	// Wire config tool UI notify — sync TUI state after provider changes
+	core.SetConfigUINotify(func() {
+		repl.OnConfigProviderChanged()
+	})
+
 	trace.Mark("before repl run")
 	return repl.Run()
 }

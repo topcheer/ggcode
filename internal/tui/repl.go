@@ -113,6 +113,24 @@ func (r *REPL) SetConfig(cfg *config.Config) {
 	r.model.SetConfig(cfg)
 }
 
+// OnConfigProviderChanged is called by the config tool after a provider change.
+// It syncs TUI-specific state: session persistence, status bar display, and
+// context window probe.
+func (r *REPL) OnConfigProviderChanged() {
+	if r.model.config == nil {
+		return
+	}
+	// Sync session store with new vendor/endpoint/model
+	r.model.syncSessionSelection()
+	// Update TUI display state
+	resolved, err := r.model.config.ResolveActiveEndpoint()
+	if err == nil && resolved != nil {
+		r.model.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+	}
+	// Probe real context window in background
+	r.model.startContextProbe()
+}
+
 func (r *REPL) SetPluginManager(mgr *plugin.Manager) {
 	r.model.SetPluginManager(mgr)
 }
