@@ -24,7 +24,8 @@ type InteractiveRuntimeCore struct {
 	SaveMemoryTool *tool.SaveMemoryTool
 	StartupAssets  StartupAssets
 	CommandManager *commands.Manager
-	configAccess   *configAccess // for SetAgent after agent creation
+	Tunnel         *TunnelHost // unified tunnel event management
+	configAccess   *configAccess
 
 	mcpCtx    context.Context
 	mcpCancel context.CancelFunc
@@ -72,6 +73,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		SaveMemoryTool: saveMemoryTool,
 		StartupAssets:  startupAssets,
 		CommandManager: commandMgr,
+		Tunnel:         NewTunnelHost(),
 		configAccess:   cfgAccess,
 	}, nil
 }
@@ -110,6 +112,9 @@ func (c *InteractiveRuntimeCore) Close() {
 	}
 	if c.MCPManager != nil {
 		c.MCPManager.Close()
+	}
+	if c.Tunnel != nil {
+		c.Tunnel.Close()
 	}
 }
 
