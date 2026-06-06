@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"context"
+
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -23,6 +25,9 @@ type InteractiveRuntimeCore struct {
 	StartupAssets  StartupAssets
 	CommandManager *commands.Manager
 	configAccess   *configAccess // for SetAgent after agent creation
+
+	mcpCtx    context.Context
+	mcpCancel context.CancelFunc
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -86,6 +91,32 @@ func (c *InteractiveRuntimeCore) SetConfigUINotify(fn func()) {
 	if c.configAccess != nil {
 		c.configAccess.SetUINotify(fn)
 	}
+}
+
+// StartBackgroundServices launches all background services: MCP connections, etc.
+// Must be called after UI callbacks are set (SetConfigUINotify, MCP OnUpdate, etc.)
+// so that status changes are forwarded to the UI layer.
+func (c *InteractiveRuntimeCore) StartBackgroundServices() {
+	if c.MCPManager != nil {
+		c.mcpCtx, c.mcpCancel = context.WithCancel(context.Background())
+		c.MCPManager.StartBackground(c.mcpCtx)
+	}
+}
+
+// Close stops all background services. Call on shutdown.
+func (c *InteractiveRuntimeCore) Close() {
+	if c.mcpCancel != nil {
+		c.mcpCancel()
+	}
+	if c.MCPManager != nil {
+		c.MCPManager.Close()
+	}
+}
+
+// MCPManagerCancel returns the MCP cancel function for callers that need
+// cleanup on exit (e.g. TUI's defer chain).
+func (c *InteractiveRuntimeCore) MCPManagerCancel() context.CancelFunc {
+	return c.mcpCancel
 }
 
 func NewSkillTool(
