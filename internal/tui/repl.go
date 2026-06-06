@@ -114,21 +114,26 @@ func (r *REPL) SetConfig(cfg *config.Config) {
 }
 
 // OnConfigProviderChanged is called by the config tool after a provider change.
-// It syncs TUI-specific state: session persistence, status bar display, and
-// context window probe.
+// It sends a Bubble Tea message to update the TUI state and triggers background tasks.
 func (r *REPL) OnConfigProviderChanged() {
 	if r.model.config == nil {
 		return
 	}
-	// Sync session store with new vendor/endpoint/model
-	r.model.syncSessionSelection()
-	// Update TUI display state
-	resolved, err := r.model.config.ResolveActiveEndpoint()
-	if err == nil && resolved != nil {
-		r.model.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
-	}
-	// Probe real context window in background
+	// Probe real context window in background (safe to call from any goroutine)
 	r.model.startContextProbe()
+	// Trigger Bubble Tea re-render so status bar and terminal title update
+	r.sendTUI(providerChangedMsg{})
+}
+
+// providerChangedMsg triggers a UI refresh after config tool changes the provider.
+type providerChangedMsg struct{}
+
+func (r *REPL) sendTUI(msg tea.Msg) {
+	if r.programSend != nil {
+		r.programSend(msg)
+	} else if r.program != nil {
+		r.program.Send(msg)
+	}
 }
 
 func (r *REPL) SetPluginManager(mgr *plugin.Manager) {
