@@ -830,6 +830,66 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 	if b.OnStreamEvent != nil {
 		b.OnStreamEvent(eventType, raw)
 	}
+
+	// Push to tunnel broker for mobile clients (mirrors daemon shareController.HandleStreamEvent)
+	b.pushSemanticToTunnel(semantic)
+}
+
+// pushSemanticToTunnel forwards agent stream events to connected mobile clients
+// via the tunnel broker. Mirrors daemon's shareController.HandleStreamEvent.
+func (b *ChatBridge) pushSemanticToTunnel(sem agentruntime.DesktopStreamSemantic) {
+	broker := b.currentTunnelBroker()
+	if broker == nil {
+		return
+	}
+
+	// Ensure we have a message ID for the current stream
+	b.mu.Lock()
+	state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	}, broker)
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
+	b.mu.Unlock()
+
+	switch sem.Type {
+	case provider.StreamEventText:
+		if sem.Text != "" {
+			b.mu.Lock()
+			b.tunnelMsgNeedsFinalize = true
+			b.mu.Unlock()
+			broker.PushText(b.tunnelMsgID, sem.Text)
+		}
+	case provider.StreamEventReasoning:
+		if chunk := tunnel.NormalizeReasoningChunk(sem.Text); chunk != "" {
+			b.mu.Lock()
+			b.tunnelMsgNeedsFinalize = true
+			b.mu.Unlock()
+			broker.PushReasoning(agentruntime.TunnelReasoningMsgID(b.tunnelMsgID), chunk)
+		}
+	case provider.StreamEventToolCallDone:
+		b.flushTunnelTextStream(broker, false)
+		name := strings.TrimSpace(sem.ToolCall.Name)
+		if name == "" {
+			name = "tool"
+		}
+		present := tool.DescribeTool(name, sem.ToolCall.RawArgs)
+		broker.PushToolCall(sem.ToolCall.ID, name, sem.ToolCall.DisplayName, sem.ToolCall.RawArgs, present.Detail)
+	case provider.StreamEventToolResult:
+		content := sem.ToolResult.Preview
+		if len([]rune(content)) > 2000 {
+			content = string([]rune(content)[:1997]) + "\n..."
+		}
+		broker.PushToolResult(sem.ToolResult.ID, sem.ToolResult.Name, content, sem.ToolResult.IsError)
+	case provider.StreamEventDone:
+		b.flushTunnelTextStream(broker, true)
+	case provider.StreamEventError:
+		b.flushTunnelTextStream(broker, true)
+		if sem.ErrorText != "" {
+			broker.PushError(sem.ErrorText)
+		}
+	}
 }
 
 func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
