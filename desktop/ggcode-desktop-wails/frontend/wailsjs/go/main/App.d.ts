@@ -11,8 +11,6 @@ export function ApplyImpersonation(arg1:string,arg2:string,arg3:Record<string, s
 
 export function BindIMAdapter(arg1:string):Promise<void>;
 
-export function RebindIMAdapter(arg1:string):Promise<void>;
-
 export function CancelMessage():Promise<void>;
 
 export function CheckForUpdates():Promise<Record<string, any>>;
@@ -80,6 +78,8 @@ export function NewSession():Promise<void>;
 export function ReadFileAsBase64(arg1:string):Promise<main.FileBinaryData>;
 
 export function ReadFileContent(arg1:string):Promise<string>;
+
+export function RebindIMAdapter(arg1:string):Promise<void>;
 
 export function ReconnectMCPServer(arg1:string):Promise<boolean>;
 

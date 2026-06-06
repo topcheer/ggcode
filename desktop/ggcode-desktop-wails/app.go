@@ -137,6 +137,9 @@ func (a *App) initWorkspace(dir string) {
 	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
 
+	// Auto-create initial session so the UI has an active session on startup
+	chat.EnsureSession()
+
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
 			"workDir": dir,

@@ -18,10 +18,6 @@ export function BindIMAdapter(arg1) {
   return window['go']['main']['App']['BindIMAdapter'](arg1);
 }
 
-export function RebindIMAdapter(arg1) {
-  return window['go']['main']['App']['RebindIMAdapter'](arg1);
-}
-
 export function CancelMessage() {
   return window['go']['main']['App']['CancelMessage']();
 }
@@ -156,6 +152,10 @@ export function ReadFileAsBase64(arg1) {
 
 export function ReadFileContent(arg1) {
   return window['go']['main']['App']['ReadFileContent'](arg1);
+}
+
+export function RebindIMAdapter(arg1) {
+  return window['go']['main']['App']['RebindIMAdapter'](arg1);
 }
 
 export function ReconnectMCPServer(arg1) {

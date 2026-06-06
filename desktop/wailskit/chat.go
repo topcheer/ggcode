@@ -353,6 +353,8 @@ func (b *ChatBridge) LoadSession(id string) error {
 }
 
 // ensureSession creates a new session if none exists (mirrors Fyne bridge).
+// EnsureSession creates a new session if one doesn't already exist.
+// Called on startup and before sending messages.
 func (b *ChatBridge) ensureSession() error {
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
@@ -407,6 +409,14 @@ func (b *ChatBridge) CurrentSessionID() string {
 
 // EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
 func (b *ChatBridge) EnsureSession() {
+	// Ensure session store is initialized
+	if b.sessionStore == nil {
+		store, err := session.NewDefaultStore()
+		if err != nil {
+			return
+		}
+		b.sessionStore = store
+	}
 	vendor, endpoint, model := "", "", ""
 	if b.cfg != nil {
 		vendor = b.cfg.Vendor
