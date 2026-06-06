@@ -695,6 +695,15 @@ func (a *App) initIMRuntime() {
 	}
 
 	a.imManager = runtimeInit.Manager
+	// Push IM adapter status changes to frontend
+	if a.imManager != nil {
+		a.imManager.SetOnUpdate(func(snap im.StatusSnapshot) {
+			raw, _ := json.Marshal(snap)
+			if a.chat != nil && a.chat.OnStreamEvent != nil {
+				a.chat.OnStreamEvent("im:status", raw)
+			}
+		})
+	}
 	a.imInstanceDetect = runtimeInit.InstanceDetect
 	if len(runtimeInit.OtherInstances) > 0 {
 		fmt.Printf("im: auto-muted IM channels, another instance is primary\n")

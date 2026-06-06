@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import * as App from '../../wailsjs/go/main/App'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import type { StatusBarData } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -67,8 +68,15 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
       } catch {}
     }
     void loadMCP()
-    const id = window.setInterval(() => { void loadMCP() }, 2000)
-    return () => { cancelled = true; window.clearInterval(id) }
+    // Poll every 5s as fallback
+    const id = window.setInterval(() => { void loadMCP() }, 5000)
+    // Real-time updates: backend pushes mcp:status when server connects/disconnects/fails
+    EventsOn('mcp:status', () => { void loadMCP() })
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+      EventsOff('mcp:status')
+    }
   }, [])
 
   return (

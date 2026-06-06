@@ -475,6 +475,15 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	_ = b.registry.Register(tool.CronListTool{Scheduler: b.cronScheduler})
 	mcpMgr := core.MCPManager
 	b.mcpManager = mcpMgr
+	// Push MCP server status changes to frontend via stream events
+	if mcpMgr != nil {
+		mcpMgr.SetOnUpdate(func(servers []plugin.MCPServerInfo) {
+			raw, _ := json.Marshal(servers)
+			if b.OnStreamEvent != nil {
+				b.OnStreamEvent("mcp:status", raw)
+			}
+		})
+	}
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
 	commandMgr := core.CommandManager
