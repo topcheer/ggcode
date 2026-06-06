@@ -42,6 +42,7 @@ type TeammateEventType int
 
 const (
 	TeammateEventText       TeammateEventType = iota // LLM text output
+	TeammateEventReasoning                           // LLM thinking/reasoning output
 	TeammateEventToolCall                            // tool invocation started
 	TeammateEventToolResult                          // tool execution result
 	TeammateEventError                               // error encountered
@@ -50,7 +51,7 @@ const (
 // TeammateEvent is a single recorded event from a teammate's execution.
 type TeammateEvent struct {
 	Type     TeammateEventType
-	Text     string // TeammateEventText / TeammateEventError
+	Text     string // TeammateEventText / TeammateEventReasoning / TeammateEventError
 	ToolName string // TeammateEventToolCall / TeammateEventToolResult
 	ToolID   string // TeammateEventToolCall / TeammateEventToolResult — unique ID for precise matching
 	ToolArgs string // TeammateEventToolCall

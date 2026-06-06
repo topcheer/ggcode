@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"regexp"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/util"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -341,7 +341,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				}})
 				return
 			}
-			round.ToolCalls++
+			round.NoteToolCall()
 			// Accumulate tool events for batched delivery.
 			batchMu.Lock()
 			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
@@ -381,11 +381,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				m.program.Send(subAgentUpdateMsg{AgentID: extractAgentID(string(event.Tool.Arguments))})
 				return
 			}
-			if event.IsError {
-				round.ToolFailures++
-			} else {
-				round.ToolSuccesses++
-			}
+			round.NoteToolResult(event.IsError)
 			// Emit tool result to IM based on output mode.
 			toolInfo := im.ToolResultInfo{
 				ToolName: event.Tool.Name,
@@ -490,39 +486,7 @@ func buildBatchedStreamMessages(runID int, text, reasoning string, status []agen
 	return msgs
 }
 
-type agentIMRoundState struct {
-	text          strings.Builder
-	ToolCalls     int
-	ToolSuccesses int
-	ToolFailures  int
-	AskUserText   string
-	PendingTools  []im.ToolResultInfo // buffered tool results for quiet/summary mode
-}
-
-func (s *agentIMRoundState) AppendText(text string) {
-	s.text.WriteString(text)
-}
-
-func (s *agentIMRoundState) Text() string {
-	return s.text.String()
-}
-
-func (s *agentIMRoundState) SetAskUser(text string) {
-	s.AskUserText = strings.TrimSpace(text)
-}
-
-func (s *agentIMRoundState) HasVisibleOutput() bool {
-	return strings.TrimSpace(s.Text()) != ""
-}
-
-func (s *agentIMRoundState) Reset() {
-	s.text.Reset()
-	s.ToolCalls = 0
-	s.ToolSuccesses = 0
-	s.ToolFailures = 0
-	s.AskUserText = ""
-	s.PendingTools = nil
-}
+type agentIMRoundState = im.SummaryRoundState
 
 func buildAgentSubmissionContent(text string, img *imageAttachedMsg, includeImage bool) []provider.ContentBlock {
 	prompt := strings.TrimSpace(text)

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -217,7 +219,7 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := (&http.Client{Timeout: defaultShareIssueTimout}).Do(req)
+	resp, err := util.NewInsecureAwareClient(defaultShareIssueTimout).Do(req)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: %w", err)
 	}
@@ -341,7 +343,7 @@ func refreshIssuedShareSession(ctx context.Context, relayURL string, server Shar
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: defaultShareIssueTimout}).Do(req)
+	resp, err := util.NewInsecureAwareClient(defaultShareIssueTimout).Do(req)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: %w", err)
 	}

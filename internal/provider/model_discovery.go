@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type modelDiscoveryResponse struct {
@@ -64,7 +65,7 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 		return cachedModels, nil
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
+	client := util.NewInsecureAwareClient(8 * time.Second)
 	var errs []string
 	if cacheErr != nil {
 		errs = append(errs, fmt.Sprintf("cache %s: %v", cacheKey, cacheErr))

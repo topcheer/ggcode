@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -44,17 +43,5 @@ func (b *tuiIMBridge) SubmitInboundMessage(ctx context.Context, msg im.InboundMe
 }
 
 func buildRemoteInboundPrompt(msg im.InboundMessage) string {
-	blocks := msg.ProviderContent()
-	lines := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		switch block.Type {
-		case "text":
-			if text := strings.TrimSpace(block.Text); text != "" {
-				lines = append(lines, text)
-			}
-		case "image":
-			lines = append(lines, "[Attached image from remote IM]")
-		}
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n\n"))
+	return im.BuildInboundText(msg)
 }

@@ -21,12 +21,13 @@ type SwarmTaskCreateTool struct {
 
 func (t SwarmTaskCreateTool) Name() string { return "swarm_task_create" }
 func (t SwarmTaskCreateTool) Description() string {
-	return "Create a task on a team's shared task board and assign it to a specific teammate for execution. " +
-		"CRITICAL: You MUST always set 'assignee' to the teammate ID best suited for this task. " +
-		"Only leave 'assignee' empty when you genuinely cannot determine who should do it — in that case " +
-		"any idle teammate may claim it regardless of suitability. " +
+	return "Create a task on a team's shared task board so work is visible, coordinated, and easy to hand off. " +
+		"Set 'assignee' when there is a clear best owner for the task. " +
+		"Only leave 'assignee' empty when the right owner is genuinely unclear — in that case any suitable idle teammate may claim it. " +
 		"When assignee is set, the task is pushed directly to that teammate's inbox for immediate execution. " +
-		"Do NOT use send_message to follow up on a task with an assignee — the task is already delivered automatically."
+		"Before creating a new task, make sure the work is not already tracked on the board. " +
+		"Use this for real handoffs, help requests, or distinct follow-up work — not for duplicate reminders. " +
+		"Do NOT use send_message to follow up on a task with an assignee unless you have new material information — the task is already delivered automatically."
 }
 func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -119,7 +120,11 @@ func formatTaskPrompt(tk task.Task) string {
 	if tk.Description != "" {
 		sb.WriteString(fmt.Sprintf("Description: %s\n", tk.Description))
 	}
-	sb.WriteString("\nComplete this task now. Use swarm_task_complete when done.")
+	sb.WriteString("\nComplete this task now.")
+	sb.WriteString("\nIf this task reached you by direct assignment, start it directly and do not re-claim it from the board first.")
+	sb.WriteString("\nBefore creating any new follow-up task, check whether related work is already tracked so you avoid duplicate effort.")
+	sb.WriteString("\nIf you need help or discover specialized follow-up work, send one targeted request or create one clear handoff task with enough context.")
+	sb.WriteString("\nUse swarm_task_complete when done.")
 	return sb.String()
 }
 

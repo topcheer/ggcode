@@ -48,10 +48,15 @@ export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp"
 export interface StatusBarData {
   vendor: string
   model: string
+  mode: string
   contextUsed: number
   contextTotal: number
+  usagePercent: number
+  remainingPercent: number
   inputTokens: number
   outputTokens: number
+  cacheRead: number
+  cacheWrite: number
   cacheHit: number
   status: string
 }

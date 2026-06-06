@@ -376,66 +376,16 @@ func (qs *questionnaireState) saveActiveQuestionInput() {
 
 func (qs *questionnaireState) buildResponse(status string) toolpkg.AskUserResponse {
 	qs.saveActiveQuestionInput()
-	answers := make([]toolpkg.AskUserAnswer, 0, len(qs.request.Questions))
-	answeredCount := 0
-	for i, question := range qs.request.Questions {
-		answer := qs.buildAnswer(i, question)
-		if answer.Answered {
-			answeredCount++
-		}
-		answers = append(answers, answer)
-	}
-	return toolpkg.AskUserResponse{
-		Status:        status,
-		Title:         qs.request.Title,
-		QuestionCount: len(qs.request.Questions),
-		AnsweredCount: answeredCount,
-		Answers:       answers,
-	}
+	return im.BuildAskUserResponseWithStatus(qs.request, qs.parsedAnswers(), status)
 }
 
 func (qs *questionnaireState) buildAnswer(index int, question toolpkg.AskUserQuestion) toolpkg.AskUserAnswer {
 	answerState := qs.answers[index]
-	selectedIDs := make([]string, 0, len(answerState.selected))
-	selectedLabels := make([]string, 0, len(answerState.selected))
-	for _, choice := range question.Choices {
-		if _, ok := answerState.selected[choice.ID]; ok {
-			selectedIDs = append(selectedIDs, choice.ID)
-			selectedLabels = append(selectedLabels, choice.Label)
-		}
+	selected := make(map[string]struct{}, len(answerState.selected))
+	for id := range answerState.selected {
+		selected[id] = struct{}{}
 	}
-	freeform := strings.TrimSpace(answerState.freeform)
-	answerMode := toolpkg.AskUserAnswerModeNone
-	completionStatus := toolpkg.AskUserCompletionUnanswered
-	switch {
-	case len(selectedIDs) == 0 && freeform == "":
-		answerMode = toolpkg.AskUserAnswerModeNone
-		completionStatus = toolpkg.AskUserCompletionUnanswered
-	case len(selectedIDs) == 0 && freeform != "":
-		answerMode = toolpkg.AskUserAnswerModeFreeformOnly
-		if question.Kind == toolpkg.AskUserKindText {
-			completionStatus = toolpkg.AskUserCompletionAnswered
-		} else {
-			completionStatus = toolpkg.AskUserCompletionPartial
-		}
-	case len(selectedIDs) > 0 && freeform == "":
-		answerMode = toolpkg.AskUserAnswerModeSelectionOnly
-		completionStatus = toolpkg.AskUserCompletionAnswered
-	default:
-		answerMode = toolpkg.AskUserAnswerModeSelectionAndFreeform
-		completionStatus = toolpkg.AskUserCompletionAnswered
-	}
-	return toolpkg.AskUserAnswer{
-		ID:                question.ID,
-		Title:             question.Title,
-		Kind:              question.Kind,
-		CompletionStatus:  completionStatus,
-		AnswerMode:        answerMode,
-		Answered:          completionStatus == toolpkg.AskUserCompletionAnswered,
-		SelectedChoiceIDs: selectedIDs,
-		SelectedChoices:   selectedLabels,
-		FreeformText:      freeform,
-	}
+	return im.BuildAskUserAnswer(question, selected, strings.TrimSpace(answerState.freeform))
 }
 
 func (qs *questionnaireState) answerCompletionStatus(index int) string {
@@ -443,136 +393,66 @@ func (qs *questionnaireState) answerCompletionStatus(index int) string {
 }
 
 func (qs *questionnaireState) answeredCount() int {
-	count := 0
-	for i, question := range qs.request.Questions {
-		if qs.buildAnswer(i, question).Answered {
-			count++
-		}
-	}
-	return count
+	return im.AnsweredCount(qs.request, qs.parsedAnswers())
 }
 
 func (qs *questionnaireState) firstUnansweredQuestionIndex() int {
-	for i, question := range qs.request.Questions {
-		if !qs.buildAnswer(i, question).Answered {
-			return i
-		}
-	}
-	return -1
+	return im.FirstUnansweredQuestionIndex(qs.request, qs.parsedAnswers())
 }
 
 func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool, error) {
 	if qs == nil {
 		return false, fmt.Errorf("questionnaire unavailable")
 	}
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return false, fmt.Errorf("empty answer")
-	}
-
-	// Multi-question fast path: if there are multiple unanswered questions and
-	// the input contains multiple lines, try to split and answer each question
-	// with its corresponding line.
-	unansweredCount := 0
-	firstUnanswered := -1
-	for i, q := range qs.request.Questions {
-		if !qs.buildAnswer(i, q).Answered {
-			if firstUnanswered < 0 {
-				firstUnanswered = i
-			}
-			unansweredCount++
-		}
-	}
-
-	if unansweredCount > 1 {
-		// Split input into lines (handle both \n and \r\n), skip blank lines.
-		rawLines := splitNonEmptyLines(text)
-		if len(rawLines) > 1 && len(rawLines) <= unansweredCount {
-			applied := 0
-			qi := firstUnanswered
-			for _, line := range rawLines {
-				// Find next unanswered question
-				for qi < len(qs.request.Questions) {
-					if !qs.buildAnswer(qi, qs.request.Questions[qi]).Answered {
-						break
-					}
-					qi++
-				}
-				if qi >= len(qs.request.Questions) {
-					break
-				}
-
-				answer := &qs.answers[qi]
-				question := qs.request.Questions[qi]
-				selected, freeform, err := parseRemoteQuestionnaireAnswer(line, question)
-				if err != nil {
-					// If a line fails to parse, skip it and let the single-question
-					// fallback handle the entire input.
-					break
-				}
-				if selected != nil {
-					answer.selected = selected
-				}
-				if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
-					answer.freeform = freeform
-				}
-				applied++
-				qi++
-			}
-
-			if applied > 0 {
-				if qs.answeredCount() >= len(qs.request.Questions) {
-					return true, nil
-				}
-				nextIdx := qs.firstUnansweredQuestionIndex()
-				if nextIdx >= 0 {
-					qs.tabIndex = nextIdx
-					qs.loadActiveQuestion(lang)
-				}
-				return false, nil
-			}
-			// Fall through to single-question handling
-		}
-	}
-
-	// Single-question path: process the entire input as the answer to the
-	// first unanswered question.
-	idx := firstUnanswered
-	if idx < 0 {
-		idx = qs.activeQuestionIndex()
-	}
-	if idx < 0 || idx >= len(qs.request.Questions) {
-		return false, fmt.Errorf("no active question")
-	}
-	qs.tabIndex = idx
-	qs.loadActiveQuestion(lang)
-	answer := &qs.answers[idx]
-	question := qs.request.Questions[idx]
-
-	selected, freeform, err := parseRemoteQuestionnaireAnswer(text, question)
+	parsed, completed, nextIdx, err := im.ApplyRemoteQuestionnaireAnswer(qs.request, qs.parsedAnswers(), raw)
 	if err != nil {
 		return false, err
 	}
-	if selected != nil {
-		answer.selected = selected
-	}
-	if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
-		answer.freeform = freeform
-		// Sync the input widget so saveActiveQuestionInput() won't overwrite
-		// the remote answer with a stale (empty) input value.
-		if idx == qs.activeQuestionIndex() {
-			qs.input.SetValue(freeform)
-		}
-	}
-	if qs.answeredCount() >= len(qs.request.Questions) {
+	qs.applyParsedAnswers(parsed)
+	if completed {
 		return true, nil
 	}
-	nextIdx := qs.firstUnansweredQuestionIndex()
 	if nextIdx >= 0 {
 		qs.tabIndex = nextIdx
 		qs.loadActiveQuestion(lang)
+		if nextIdx < len(parsed) && nextIdx == qs.activeQuestionIndex() {
+			qs.input.SetValue(parsed[nextIdx].Freeform)
+		}
 	}
 	return false, nil
+}
+
+func (qs *questionnaireState) parsedAnswers() []im.ParsedQuestionAnswer {
+	parsed := make([]im.ParsedQuestionAnswer, 0, len(qs.request.Questions))
+	for i := range qs.request.Questions {
+		answerState := qs.answers[i]
+		selected := make(map[string]struct{}, len(answerState.selected))
+		for id := range answerState.selected {
+			selected[id] = struct{}{}
+		}
+		parsed = append(parsed, im.ParsedQuestionAnswer{
+			QuestionIndex: i,
+			Selected:      selected,
+			Freeform:      strings.TrimSpace(answerState.freeform),
+		})
+	}
+	return parsed
+}
+
+func (qs *questionnaireState) applyParsedAnswers(parsed []im.ParsedQuestionAnswer) {
+	for i := range qs.answers {
+		if i >= len(parsed) {
+			qs.answers[i].selected = make(map[string]struct{})
+			qs.answers[i].freeform = ""
+			continue
+		}
+		selected := make(map[string]struct{}, len(parsed[i].Selected))
+		for id := range parsed[i].Selected {
+			selected[id] = struct{}{}
+		}
+		qs.answers[i].selected = selected
+		qs.answers[i].freeform = parsed[i].Freeform
+	}
 }
 
 // splitNonEmptyLines delegates to the shared implementation in the im package.
@@ -584,28 +464,12 @@ func parseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion
 	return im.ParseRemoteQuestionnaireAnswer(raw, question)
 }
 
-func parseRemoteQuestionnaireSelections(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, bool, error) {
-	// Delegate to im package — but this function is only called internally
-	// by parseRemoteQuestionnaireAnswer above, which already delegates.
-	// Keep this stub for any direct callers.
-	selected, freeform, err := im.ParseRemoteQuestionnaireAnswer(raw, question)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(selected) > 0 {
-		return selected, true, nil
-	}
-	if freeform != "" {
-		return nil, false, nil
-	}
-	return nil, false, nil
-}
-
 func normalizeRemoteAnswerToken(s string) string {
-	// normalizeRemoteAnswerToken is no longer used directly — the logic
-	// lives in im.NormalizeRemoteAnswerToken (unexported). This stub
-	// satisfies any remaining references.
-	return strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	return s
 }
 
 func questionnairePanelTitle(lang Language) string {

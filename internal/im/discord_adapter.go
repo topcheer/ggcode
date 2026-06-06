@@ -70,7 +70,7 @@ func newDiscordAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMA
 	adapter := &discordAdapter{
 		name:       name,
 		manager:    mgr,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: util.NewInsecureAwareClient(30 * time.Second),
 		token:      token,
 		apiBase:    apiBase,
 	}
@@ -327,6 +327,9 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	if pairingResult.Consumed {
 		if sendErr := a.sendChannelMessage(ctx, channelID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
+		}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}

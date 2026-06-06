@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ChevronRight, FolderOpen } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 interface Props {
   onComplete: () => void
@@ -27,6 +28,7 @@ interface EndpointPreset {
 }
 
 export function Onboarding({ onComplete }: Props) {
+  const { t } = useTranslation()
   const [step, setStep] = useState<'workspace' | 'setup' | 'mode'>('workspace')
   const [workDir, setWorkDir] = useState('')
 
@@ -124,10 +126,10 @@ export function Onboarding({ onComplete }: Props) {
         alignItems: 'center', justifyContent: 'center', gap: 20,
       }}>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-          Choose Permission Mode
+          {t('settings.permissionMode')}
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0, maxWidth: 400, textAlign: 'center' }}>
-          How much control do you want over tool execution?
+          {t('onboarding.configHint')}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 420 }}>
           {MODES.map(m => (
@@ -156,13 +158,13 @@ export function Onboarding({ onComplete }: Props) {
             flex: 1, height: 40, borderRadius: 'var(--radius-md)',
             background: 'var(--color-surface)', border: '1px solid var(--color-border)',
             color: 'var(--text-secondary)', fontSize: 14, cursor: 'pointer',
-          }}>Back</button>
+          }}>{t('onboarding.back')}</button>
           <button onClick={handleSubmit} disabled={saving} style={{
             flex: 2, height: 40, borderRadius: 'var(--radius-md)',
             background: saving ? 'var(--color-border)' : 'var(--color-primary)',
             color: '#fff', fontSize: 14, fontWeight: 600,
             border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
-          }}>{saving ? 'Saving...' : 'Start Using GGCode'}</button>
+          }}>{saving ? t('settings.saving') : t('onboarding.getStarted')}</button>
         </div>
       </div>
     )
@@ -180,15 +182,15 @@ export function Onboarding({ onComplete }: Props) {
         border: '1px solid var(--color-border)',
       }}>
         <h2 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>
-          Configure LLM Provider
+          Configure LLM {t('settings.title')}
         </h2>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 24px' }}>
-          Set up your AI provider to start chatting
+          {t('onboarding.vendorHint')}
         </p>
 
         {/* Vendor */}
         <label style={{ display: 'block', marginBottom: 16 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Vendor</span>
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.vendor')}</span>
           <select value={selectedVendor} onChange={e => {
             setSelectedVendor(e.target.value)
             setSelectedEndpoint('')
@@ -202,7 +204,7 @@ export function Onboarding({ onComplete }: Props) {
         {/* Endpoint */}
         {currentPreset && (
           <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Endpoint</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.endpoint')}</span>
             <select value={selectedEndpoint} onChange={e => {
               setSelectedEndpoint(e.target.value)
               setSelectedModel('')
@@ -218,12 +220,12 @@ export function Onboarding({ onComplete }: Props) {
         {/* API Key */}
         {selectedEndpoint && (
           <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>API Key</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
             <input
               type="password"
               value={apiKey}
               onChange={e => setApiKey(e.target.value)}
-              placeholder="Enter your API key..."
+              placeholder={t('settings.apiKeyPlaceholder')}
               style={inputStyle}
             />
           </label>
@@ -232,7 +234,7 @@ export function Onboarding({ onComplete }: Props) {
         {/* Model */}
         {showModels && (
           <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Model</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.model')}</span>
             <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
               <option value="">Choose model...</option>
               {models.map(m => <option key={m} value={m}>{m}</option>)}
@@ -257,7 +259,7 @@ export function Onboarding({ onComplete }: Props) {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           }}
         >
-          Next
+          {t('onboarding.next')}
           <ChevronRight size={16} />
         </button>
       </div>

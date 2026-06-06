@@ -123,7 +123,7 @@ func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 	adapter := &feishuAdapter{
 		name:        name,
 		manager:     mgr,
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  util.NewInsecureAwareClient(30 * time.Second),
 		appID:       appID,
 		appSecret:   appSecret,
 		encryptKey:  encryptKey,
@@ -377,6 +377,9 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 	if pairingResult.Consumed {
 		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
+		}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}
@@ -761,6 +764,9 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	if pairingResult.Consumed {
 		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
+		}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}

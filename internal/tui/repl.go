@@ -13,6 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -830,8 +831,7 @@ func (r *REPL) Run() error {
 	}
 	if err == nil && r.store != nil && r.model.session != nil {
 		// Save session on clean exit
-		r.model.session.Messages = r.agent.Messages()
-		_ = r.store.Save(r.model.session)
+		_ = agentruntime.SaveAgentSessionSnapshot(r.store, r.model.session, r.agent)
 	}
 
 	if m, ok := finalModel.(Model); ok {
@@ -903,9 +903,7 @@ func (r *REPL) loadSession(id string) {
 		r.createSession()
 		return
 	}
-	for _, msg := range ses.Messages {
-		r.agent.AddMessage(msg)
-	}
+	agentruntime.RestoreSessionIntoAgent(r.agent, ses)
 	r.model.SetSession(ses, r.store)
 	r.model.rebuildConversationFromMessages(ses.Messages)
 	r.model.restoreHistoryFromMessages(ses.Messages)

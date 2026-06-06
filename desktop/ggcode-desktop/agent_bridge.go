@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 
@@ -19,15 +18,16 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/relaycatalog"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -48,14 +48,13 @@ type AgentBridge struct {
 	cancelled bool
 	working   bool
 
-	pendingMu   sync.Mutex
-	pendingMsgs []pendingMessage
+	pendingMsgs *agentruntime.PendingQueue[struct{}]
 
 	startTime time.Time // when current agent loop started
 
 	Emitter *im.IMEmitter
 
-	imRound        imRoundState // per-round IM emission state
+	imRound        agentruntime.IMRoundState // per-round IM emission state
 	mainWindow     fyne.Window
 	permissionMode permission.PermissionMode
 
@@ -88,14 +87,13 @@ type AgentBridge struct {
 	tunnelMsgID            string
 	tunnelMsgNeedsFinalize bool
 	spawnedSet             map[string]bool // tracks which subagents have been announced to mobile
-	approvalRespCh         chan permission.Decision
 	approvalRequestID      string
 	approvalToolName       string
 	approvalDialog         dialog.Dialog
-	askUserRespCh          chan tool.AskUserResponse
 	askUserRequestID       string
 	askUserRequest         tool.AskUserRequest
 	askUserDialog          dialog.Dialog
+	interactions           *agentruntime.InteractionBroker
 	cronScheduler          *cron.Scheduler
 }
 
@@ -136,9 +134,7 @@ func (b *AgentBridge) bindTunnelProjectionSession() {
 	if currentSes == nil || strings.TrimSpace(currentSes.ID) == "" {
 		return
 	}
-
 	broker := b.ensureTunnelProjectionBroker()
-	authorityEpoch := uint64(1)
 	b.mu.Lock()
 	b.tunnelProjectionBroken = false
 	b.mu.Unlock()
@@ -160,32 +156,15 @@ func (b *AgentBridge) bindTunnelProjectionSession() {
 		}
 	}
 
-	broker.SwitchSession(currentSes.ID)
-	if store != nil {
-		var err error
-		authorityEpoch, err = store.AuthorityEpoch(currentSes.ID)
-		if err != nil {
-			b.mu.Lock()
-			b.tunnelProjectionBroken = true
-			b.mu.Unlock()
-			log.Printf("[desktop] projection authority epoch load failed for %s: %v", currentSes.ID, err)
-			authorityEpoch = 1
-		}
-		replay, err := store.ReplayEvents(currentSes.ID)
-		if err != nil {
-			b.mu.Lock()
-			b.tunnelProjectionBroken = true
-			b.mu.Unlock()
-			log.Printf("[desktop] projection replay load failed for %s: %v", currentSes.ID, err)
-		} else {
-			replay = b.hydrateProjectionReplayFromSessionLedger(currentSes, store, replay)
-			broker.PrimeEventIDs(replay)
-		}
-	}
-	broker.SetAuthorityEpoch(authorityEpoch)
-	broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+	_, err := agentruntime.PrepareProjectionBroker(broker, store, currentSes, func(ev tunnel.GatewayMessage) {
 		b.recordProjectionEvent(ev)
 	})
+	if err != nil {
+		b.mu.Lock()
+		b.tunnelProjectionBroken = true
+		b.mu.Unlock()
+		log.Printf("[desktop] projection replay prep failed for %s: %v", currentSes.ID, err)
+	}
 
 	b.mu.Lock()
 	if b.tunnelMsgID == "" {
@@ -198,15 +177,13 @@ func (b *AgentBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
 	b.mu.Lock()
 	store := b.tunnelProjectionStore
 	b.mu.Unlock()
-	if store != nil {
-		if err := store.Append(msg); err != nil {
-			b.mu.Lock()
-			b.tunnelProjectionBroken = true
-			b.mu.Unlock()
-			log.Printf("[desktop] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
-			b.RecordTunnelEvent(msg)
-			return
-		}
+	if err := agentruntime.AppendProjectionEvent(store, msg); err != nil {
+		b.mu.Lock()
+		b.tunnelProjectionBroken = true
+		b.mu.Unlock()
+		log.Printf("[desktop] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
+		b.RecordTunnelEvent(msg)
+		return
 	}
 	b.RecordTunnelEvent(msg)
 	if broker := b.currentShareTunnelBroker(); broker != nil {
@@ -217,36 +194,28 @@ func (b *AgentBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
 func (b *AgentBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.tunnelMsgID == "" && broker != nil {
-		b.tunnelMsgID = broker.NextMessageID()
-	}
+	state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	}, broker)
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	return b.tunnelMsgID
 }
 
-func (b *AgentBridge) rotateTunnelMsgID(broker *tunnel.Broker) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if broker == nil {
-		b.tunnelMsgID = ""
-		return
-	}
-	b.tunnelMsgID = broker.NextMessageID()
-}
-
 func (b *AgentBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
-	msgID := b.ensureTunnelMsgID(broker)
-	if msgID == "" {
-		return ""
-	}
-	return msgID + "-reasoning"
+	return agentruntime.TunnelReasoningMsgID(b.ensureTunnelMsgID(broker))
 }
 
 func (b *AgentBridge) markTunnelMainStreamActive() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.tunnelMsgID != "" {
-		b.tunnelMsgNeedsFinalize = true
-	}
+	state := agentruntime.MarkTunnelMainStreamActive(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	})
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 }
 
 func tunnelSubagentTextID(agentID string) string {
@@ -258,21 +227,13 @@ func tunnelSubagentReasoningID(agentID string) string {
 }
 
 func (b *AgentBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {
-	if broker == nil {
-		return
-	}
 	b.mu.Lock()
-	if !force && !b.tunnelMsgNeedsFinalize {
-		b.mu.Unlock()
-		return
-	}
-	b.mu.Unlock()
-	broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-	msgID := b.ensureTunnelMsgID(broker)
-	broker.PushTextDone(msgID)
-	b.rotateTunnelMsgID(broker)
-	b.mu.Lock()
-	b.tunnelMsgNeedsFinalize = false
+	state := agentruntime.FlushTunnelMainStream(agentruntime.TunnelMainStream{
+		MessageID:     b.tunnelMsgID,
+		NeedsFinalize: b.tunnelMsgNeedsFinalize,
+	}, broker, force)
+	b.tunnelMsgID = state.MessageID
+	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	b.mu.Unlock()
 }
 
@@ -284,6 +245,7 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		mode       string
 		status     tunnel.StatusData
 		currentSes *session.Session
+		attachCfg  agentruntime.TunnelAttachConfig
 	)
 	b.mu.Lock()
 	b.tunnelBroker = broker
@@ -292,8 +254,13 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	cfg = b.cfg
 	mode = b.permissionMode.String()
 	currentSes = b.currentSes
-	if working && broker != nil && b.tunnelMsgID == "" {
-		b.tunnelMsgID = broker.NextMessageID()
+	if working {
+		state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
+			MessageID:     b.tunnelMsgID,
+			NeedsFinalize: b.tunnelMsgNeedsFinalize,
+		}, broker)
+		b.tunnelMsgID = state.MessageID
+		b.tunnelMsgNeedsFinalize = state.NeedsFinalize
 	}
 	b.mu.Unlock()
 
@@ -301,33 +268,33 @@ func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		return
 	}
 	b.bindTunnelProjectionSession()
-	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+	attachCfg.ReplayProvider = func() []tunnel.GatewayMessage {
 		return b.CurrentSessionTunnelEvents()
-	})
-	broker.SetEventRecorder(nil)
-	if currentSes != nil && currentSes.ID != "" {
-		broker.BindSession(currentSes.ID)
-		broker.SetAuthorityEpoch(b.currentSessionTunnelAuthorityEpoch())
-		broker.AnnounceActiveSession(currentSes.ID)
 	}
-	if !working {
-		return
+	if currentSes != nil && currentSes.ID != "" {
+		attachCfg.SessionID = currentSes.ID
+		attachCfg.AuthorityEpoch = b.currentSessionTunnelAuthorityEpoch()
 	}
 	if resolved != nil && cfg != nil {
-		broker.SendSessionInfo(tunnel.SessionInfoData{
+		info := tunnel.SessionInfoData{
 			Workspace: b.workingDir,
 			Model:     resolved.Model,
 			Provider:  resolved.VendorName,
 			Mode:      mode,
 			Version:   Version,
 			Language:  cfg.Language,
-		})
+		}
+		if working {
+			attachCfg.SessionInfo = &info
+		}
 	}
-	status = b.CurrentTunnelStatus()
-	if status.Status != "" {
-		broker.PushStatus(status.Status, status.Message)
+	if working {
+		status = b.CurrentTunnelStatus()
+		attachCfg.Status = &status
+		activity := b.CurrentTunnelActivity()
+		attachCfg.Activity = &activity
 	}
-	broker.PushActivity(b.CurrentTunnelActivity())
+	agentruntime.AttachTunnelBroker(broker, attachCfg)
 }
 
 func (b *AgentBridge) DetachTunnelBroker() {
@@ -363,58 +330,19 @@ func (b *AgentBridge) markTunnelSubagentSpawned(id string) bool {
 }
 
 func (b *AgentBridge) pushTunnelSubagentEvent(sa *subagent.SubAgent) {
-	if sa == nil {
-		return
-	}
-	broker := b.currentTunnelBroker()
-	if broker == nil {
-		return
-	}
-
-	pushSpawn := func() {
-		if b.markTunnelSubagentSpawned(sa.ID) {
-			broker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
-		}
-	}
-
-	switch sa.Status {
-	case subagent.StatusRunning:
-		pushSpawn()
-		broker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
-
-	case subagent.StatusCompleted:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		if sa.Result != "" {
-			msgID := tunnelSubagentTextID(sa.ID)
-			broker.PushSubagentText(sa.ID, msgID, sa.Result, true)
-		}
-		broker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
-
-	case subagent.StatusFailed:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		errMsg := ""
-		if sa.Error != nil {
-			errMsg = sa.Error.Error()
-		}
-		broker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
-
-	case subagent.StatusCancelled:
-		pushSpawn()
-		broker.PushReasoningDone(tunnelSubagentReasoningID(sa.ID))
-		broker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
-	}
+	agentruntime.PushTunnelSubagentEvent(b.currentTunnelBroker, b.markTunnelSubagentSpawned, sa)
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
 	b := &AgentBridge{
-		cfg:        cfg,
-		prov:       prov,
-		resolved:   resolved,
-		ui:         ui,
-		workingDir: workingDir,
-		spawnedSet: make(map[string]bool),
+		cfg:          cfg,
+		prov:         prov,
+		resolved:     resolved,
+		ui:           ui,
+		workingDir:   workingDir,
+		spawnedSet:   make(map[string]bool),
+		pendingMsgs:  agentruntime.NewPendingQueue[struct{}](),
+		interactions: agentruntime.NewInteractionBroker(),
 	}
 
 	// Initialize session store (session created lazily in ensureSession).
@@ -444,38 +372,24 @@ func (b *AgentBridge) registerSubagentCallbacks() {
 
 	// Forward sub-agent text chunks to mobile (unthrottled).
 	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			msgID := tunnelSubagentTextID(agentID)
-			broker.PushSubagentText(agentID, msgID, text, false)
-		}
+		agentruntime.PushTunnelSubagentText(b.currentTunnelBroker, agentID, text)
 	})
 	b.subAgentMgr.SetOnReasoning(func(agentID, text string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			if chunk := tunnel.NormalizeReasoningChunk(text); chunk != "" {
-				broker.PushSubagentReasoning(agentID, tunnelSubagentReasoningID(agentID), chunk, false)
-			}
-		}
+		agentruntime.PushTunnelSubagentReasoning(b.currentTunnelBroker, agentID, text)
 	})
 
 	// Forward sub-agent tool calls/results to mobile.
 	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, displayName, args, detail string) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			if displayName == "" {
-				displayName = toolDisplayName(toolName, args)
-			}
-			if detail == "" {
-				detail = toolArgSummary(toolName, args)
-			}
-			broker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
+		if displayName == "" {
+			displayName = toolDisplayName(toolName, args)
 		}
+		if detail == "" {
+			detail = toolArgSummary(toolName, args)
+		}
+		agentruntime.PushTunnelSubagentToolCall(b.currentTunnelBroker, agentID, toolID, toolName, displayName, args, detail)
 	})
 	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
-		if broker := b.currentTunnelBroker(); broker != nil {
-			broker.PushReasoningDone(tunnelSubagentReasoningID(agentID))
-			broker.PushSubagentToolResult(agentID, toolID, toolName, displayName, detail, result, isError)
-		}
+		agentruntime.PushTunnelSubagentToolResult(b.currentTunnelBroker, agentID, toolID, toolName, displayName, detail, result, isError)
 	})
 }
 
@@ -491,10 +405,8 @@ func (b *AgentBridge) setupAgent() error {
 		modeStr = "auto"
 	}
 	mode := permission.ParsePermissionMode(modeStr)
-	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+	policy := agentruntime.BuildInteractivePermissionPolicy(b.cfg, b.workingDir, false)
 	b.permissionMode = mode
-
-	b.registry = tool.NewRegistry()
 
 	// Apply impersonation from config (same as TUI startup).
 	if b.cfg != nil && b.cfg.Impersonation.Preset != "" && b.cfg.Impersonation.Preset != "none" {
@@ -502,10 +414,11 @@ func (b *AgentBridge) setupAgent() error {
 			provider.SetActiveImpersonation(preset, b.cfg.Impersonation.CustomVersion, b.cfg.Impersonation.CustomHeaders)
 		}
 	}
-
-	if err := tool.RegisterBuiltinTools(b.registry, nil, b.workingDir); err != nil {
-		return fmt.Errorf("register builtin tools: %w", err)
+	core, err := agentruntime.BuildInteractiveRuntimeCore(b.cfg, b.workingDir, policy)
+	if err != nil {
+		return fmt.Errorf("build runtime core: %w", err)
 	}
+	b.registry = core.Registry
 	if b.cronScheduler == nil {
 		b.cronScheduler = cron.NewScheduler(nil)
 	}
@@ -515,21 +428,11 @@ func (b *AgentBridge) setupAgent() error {
 	_ = b.registry.Register(tool.CronCreateTool{Scheduler: b.cronScheduler})
 	_ = b.registry.Register(tool.CronDeleteTool{Scheduler: b.cronScheduler})
 	_ = b.registry.Register(tool.CronListTool{Scheduler: b.cronScheduler})
-
-	mergedServers, _ := mcp.MergeStartupServers(b.workingDir, b.cfg.MCPServers)
-	mcpMgr := plugin.NewMCPManager(mergedServers, b.registry)
-	_ = b.registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
-	_ = b.registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
-	_ = b.registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(b.cfg.Plugins)
-	_ = pluginMgr.RegisterTools(b.registry)
-
-	autoMem := memory.NewAutoMemory()
-	projectAutoMem := memory.NewProjectAutoMemory(b.workingDir)
-	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
-	_ = b.registry.Register(saveMemoryTool)
+	mcpMgr := core.MCPManager
+	autoMem := core.AutoMemory
+	projectAutoMem := core.ProjectAutoMem
+	commandMgr := core.CommandManager
+	saveMemoryTool := core.SaveMemoryTool
 
 	if b.acpClientMgr != nil {
 		b.acpClientMgr.CloseAll()
@@ -538,35 +441,18 @@ func (b *AgentBridge) setupAgent() error {
 	b.acpClientMgr.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		return b.requestToolApproval(ctx, toolName, input)
 	})
-	if len(b.acpClientMgr.Available()) > 0 {
-		_ = b.registry.Register(tool.DelegateTool{
-			Manager:           b.acpClientMgr,
-			SubAgentManagerFn: func() *subagent.Manager { return b.subAgentMgr },
-			WorkingDir:        b.workingDir,
-			WorkingDirFn: func() string {
-				if b.agent != nil {
-					return b.agent.WorkingDir()
-				}
-				return b.workingDir
-			},
-		})
-	}
-
 	// Sub-agent manager.
-	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
 	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
 	}
-	b.registry.Register(tool.SpawnAgentTool{
-		Manager:      b.subAgentMgr,
-		Provider:     b.prov,
-		Tools:        b.registry,
-		AgentFactory: agentFactory,
-		WorkingDir:   b.workingDir,
-		OnUsage:      b.recordSessionUsage,
+	b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, b.prov, b.registry, agentFactory, b.workingDir, b.recordSessionUsage))
+	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, b.prov, b.workingDir, b.recordSessionUsage, agentFactory)
+	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
+		if b.agent != nil {
+			return b.agent.WorkingDir()
+		}
+		return b.workingDir
 	})
-	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
-	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
 	b.registerSubagentCallbacks()
 
 	// Swarm manager.
@@ -578,19 +464,7 @@ func (b *AgentBridge) setupAgent() error {
 		_ = tool.RegisterBuiltinTools(reg, nil, b.workingDir)
 		return reg
 	}
-	b.swarmMgr = swarm.NewManager(b.cfg.Swarm, b.prov, swarmFactory, toolBuilder)
-	b.swarmMgr.SetUsageHandler(b.recordSessionUsage)
-
-	b.registry.Register(tool.TeamCreateTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeamDeleteTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateSpawnTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateListTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateShutdownTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.TeammateResultsTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskCreateTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskListTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskClaimTool{Manager: b.swarmMgr})
-	b.registry.Register(tool.SwarmTaskCompleteTool{Manager: b.swarmMgr})
+	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, b.prov, b.registry, b.recordSessionUsage, swarmFactory, toolBuilder)
 
 	// Re-register send_message with both managers.
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
@@ -647,59 +521,13 @@ func (b *AgentBridge) setupAgent() error {
 
 		// Push to mobile client
 		if broker := b.currentTunnelBroker(); broker != nil {
-			switch ev.Type {
-			case "teammate_tool_call":
-				detail := toolArgSummary(ev.CurrentTool, ev.ToolArgs)
-				broker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, toolDisplayName(ev.CurrentTool, ev.ToolArgs), ev.ToolArgs, detail)
-				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
-
-			case "teammate_tool_result":
-				broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.ToolArgs, ev.IsError)
-
-			case "teammate_text":
-				// Already handled above in throttle block if skipped
-				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-				broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
-
-			case "teammate_spawned":
-				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
-				color := ""
-				if ok {
-					color = snap.Color
-				}
-				broker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
-
-			case "teammate_working":
-				broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
-				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
-				if ok && len(snap.Events) > 0 {
-					last := snap.Events[len(snap.Events)-1]
-					if last.Type == swarm.TeammateEventText && last.Text != "" {
-						msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-						broker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
-					}
-				}
-
-			case "teammate_idle":
-				if ev.Result != "" {
-					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
-					broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
-				}
-				success := ev.Error == nil
-				summary := ev.Result
-				if ev.Error != nil {
-					summary = ev.Error.Error()
-				}
-				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
-
-			case "teammate_shutdown":
-				broker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
-			}
+			_ = broker
+			agentruntime.PushTunnelSwarmEvent(b.currentTunnelBroker, b.swarmMgr, ev, toolDisplayName, toolArgSummary)
 		}
 	})
 
 	b.systemPromptBuilder = func() string {
-		return buildSystemPrompt(b.workingDir, autoMem, projectAutoMem)
+		return buildSystemPrompt(b.cfg, b.workingDir, autoMem, projectAutoMem, commandMgr)
 	}
 	systemPrompt := b.systemPromptBuilder()
 	maxIter := b.cfg.MaxIterations
@@ -734,12 +562,21 @@ func (b *AgentBridge) setupAgent() error {
 		}
 	}
 
-	if b.resolved.ContextWindow > 0 {
-		b.agent.ContextManager().SetContextWindow(b.resolved.ContextWindow)
-	}
-	if b.resolved.MaxTokens > 0 {
-		b.agent.ContextManager().SetOutputReserve(b.resolved.MaxTokens)
-	}
+	_, _ = agentruntime.ApplyProjectMemoryToAgent(b.agent, b.workingDir)
+
+	agentruntime.ApplyResolvedLimitsToAgent(b.agent, b.resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, b.resolved, b.agent, func(resp relaycatalog.ResolveResponse) {
+		b.mu.Lock()
+		if b.resolved != nil {
+			if resp.ContextWindow > 0 {
+				b.resolved.ContextWindow = resp.ContextWindow
+			}
+			if resp.MaxOutputTokens > 0 {
+				b.resolved.MaxTokens = resp.MaxOutputTokens
+			}
+		}
+		b.mu.Unlock()
+	})
 	b.ensureSession()
 	return nil
 }
@@ -753,28 +590,30 @@ func (b *AgentBridge) requestToolApproval(ctx context.Context, toolName string, 
 	if b.mainWindow == nil {
 		return permission.Deny
 	}
-	resp := make(chan permission.Decision, 1)
 	requestID := ""
-	b.setPendingApproval(requestID, toolName, resp)
 	if broker := b.currentTunnelBroker(); broker != nil {
 		requestID = b.nextTunnelRequestID()
-		b.setPendingApproval(requestID, toolName, resp)
-		broker.PushApprovalRequest(requestID, toolName, input)
-		broker.PushStatus(tunnel.StatusBusy, "")
-		broker.PushActivity(b.CurrentTunnelActivity())
+		agentruntime.PushTunnelApprovalRequest(broker, requestID, toolName, input, agentruntime.TunnelStateUpdate{
+			HasStatus:   true,
+			Status:      tunnel.StatusBusy,
+			HasActivity: true,
+			Activity:    b.CurrentTunnelActivity(),
+		})
 	}
+	b.setPendingApproval(requestID, toolName)
+	req := agentruntime.ApprovalRequest{ID: requestID, ToolName: toolName, Input: input}
 	fyne.Do(func() {
 		var d dialog.Dialog
 		denyBtn := widget.NewButton(t("approval.deny"), func() {
 			b.clearPendingApproval(requestID)
 			b.pushTunnelApprovalResult(requestID, tunnel.DecisionDeny)
-			resp <- permission.Deny
+			b.interactions.ResolveApproval(requestID, permission.Deny)
 			d.Hide()
 		})
 		allowBtn := widget.NewButton(t("approval.allow"), func() {
 			b.clearPendingApproval(requestID)
 			b.pushTunnelApprovalResult(requestID, tunnel.DecisionAllow)
-			resp <- permission.Allow
+			b.interactions.ResolveApproval(requestID, permission.Allow)
 			d.Hide()
 		})
 		allowBtn.Importance = widget.HighImportance
@@ -786,7 +625,7 @@ func (b *AgentBridge) requestToolApproval(ctx context.Context, toolName string, 
 			}
 			b.clearPendingApproval(requestID)
 			b.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
-			resp <- permission.Allow
+			b.interactions.ResolveApproval(requestID, permission.Allow)
 			d.Hide()
 		})
 		alwaysBtn.Importance = widget.SuccessImportance
@@ -814,14 +653,12 @@ func (b *AgentBridge) requestToolApproval(ctx context.Context, toolName string, 
 			d.Show()
 		}
 	})
-	select {
-	case d := <-resp:
-		b.clearPendingApproval(requestID)
-		return d
-	case <-ctx.Done():
+	decision := b.interactions.AwaitApproval(ctx, req)
+	if ctx.Err() != nil {
 		b.hideDialog(b.clearPendingApproval(requestID))
-		return permission.Deny
 	}
+	b.clearPendingApproval(requestID)
+	return decision
 }
 
 func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
@@ -924,86 +761,6 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 			defer logPanic("agent event handler")
 
 			switch ev.Type {
-			case provider.StreamEventText:
-				b.ui.AppendAssistantText(ev.Text)
-				b.imRound.Text.WriteString(ev.Text)
-				if broker := b.currentTunnelBroker(); broker != nil {
-					b.markTunnelMainStreamActive()
-					broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-					broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
-				}
-
-			case provider.StreamEventToolCallDone:
-				b.ui.FinalizeStreaming()
-
-				name := ev.Tool.Name
-				if name == "" {
-					name = "tool"
-				}
-				description := toolDescription(name, string(ev.Tool.Arguments))
-				args := toolArgSummary(name, string(ev.Tool.Arguments))
-
-				b.ui.AppendChat(ChatMessage{
-					Role:     "tool",
-					ToolName: name,
-					ToolID:   ev.Tool.ID,
-					ToolDesc: description,
-					ToolArgs: args,
-					ToolRaw:  string(ev.Tool.Arguments),
-					Content:  "",
-					Time:     time.Now(),
-				})
-
-				// Track tool calls in round state.
-				b.imRound.ToolCalls++
-
-				// Do NOT emit intermediate tool_call event to IM — only
-				// final results via OutboundEventToolResult. This mirrors
-				// the daemon bridge behavior (two events merged into one).
-				if b.Emitter != nil {
-					b.Emitter.TriggerTyping()
-				}
-				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker, true)
-					broker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
-				}
-
-			case provider.StreamEventToolResult:
-				content := ev.Result
-				if len([]rune(content)) > 2000 {
-					content = truncateRunes(content, 2000, "\n...(truncated)")
-				}
-				b.ui.UpdateToolResult(ev.Tool.ID, content, ev.IsError)
-				if ev.IsError {
-					b.imRound.ToolFailures++
-				} else {
-					b.imRound.ToolSuccesses++
-				}
-
-				// Emit tool result event to IM (includes tool call info
-				// so the start+result is delivered as a single message).
-				if b.Emitter != nil {
-					b.Emitter.EmitEvent(im.OutboundEvent{
-						Kind: im.OutboundEventToolResult,
-						ToolRes: &im.ToolResultInfo{
-							ToolName: ev.Tool.Name,
-							Args:     string(ev.Tool.Arguments),
-							Result:   content,
-							IsError:  ev.IsError,
-						},
-					})
-					b.Emitter.TriggerTyping()
-				}
-				if broker := b.currentTunnelBroker(); broker != nil {
-					broker.PushReasoningDone(b.tunnelReasoningMsgID(broker))
-					broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
-				}
-
-				// After spawn_agent completes, sync agent panels.
-				if ev.Tool.Name == "spawn_agent" && b.subAgentMgr != nil {
-					b.syncAgentPanels()
-				}
-
 			case provider.StreamEventSystem:
 				b.ui.FinalizeStreaming()
 				b.ui.AppendChat(ChatMessage{
@@ -1016,42 +773,70 @@ func (b *AgentBridge) sendContent(content []provider.ContentBlock, persistUser b
 					b.flushTunnelTextStream(broker, true)
 				}
 
-			case provider.StreamEventReasoning:
-				if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-					b.ui.AppendReasoning(chunk)
-					if broker := b.currentTunnelBroker(); broker != nil {
-						b.markTunnelMainStreamActive()
-						broker.PushReasoning(b.tunnelReasoningMsgID(broker), chunk)
-					}
+			default:
+				semantic, ok := agentruntime.HandleDesktopStreamEvent(ev, &b.imRound,
+					agentruntime.NewDesktopEmitterAdapter(agentruntime.DesktopEmitterCallbacks{
+						TriggerTypingFn: func() {
+							if b.Emitter != nil {
+								b.Emitter.TriggerTyping()
+							}
+						},
+						EmitToolResultFn: func(toolName, rawArgs, result string, isError bool) {
+							if b.Emitter == nil {
+								return
+							}
+							b.Emitter.EmitEvent(im.OutboundEvent{
+								Kind: im.OutboundEventToolResult,
+								ToolRes: &im.ToolResultInfo{
+									ToolName: toolName,
+									Args:     rawArgs,
+									Result:   result,
+									IsError:  isError,
+								},
+							})
+						},
+						EmitRoundSummaryFn: func(text string, toolCalls, toolSuccesses, toolFailures int) {
+							if b.Emitter != nil {
+								b.Emitter.EmitRoundSummary(text, toolCalls, toolSuccesses, toolFailures)
+							}
+						},
+					}),
+					agentruntime.NewDesktopMirrorAdapter(agentruntime.DesktopMirrorCallbacks{
+						CurrentBroker:   b.currentTunnelBroker,
+						EnsureMessageID: b.ensureTunnelMsgID,
+						ReasoningMsgID:  b.tunnelReasoningMsgID,
+						MarkMainActive:  b.markTunnelMainStreamActive,
+						FlushMainStream: b.flushTunnelTextStream,
+					}),
+				)
+				if !ok {
+					return
 				}
+				switch semantic.Type {
+				case provider.StreamEventText:
+					b.ui.AppendAssistantText(semantic.Text)
 
-			case provider.StreamEventDone:
-				// Each LLM turn ends with Done. Emit round summary to IM.
-				if b.Emitter != nil {
-					text := strings.TrimSpace(b.imRound.Text.String())
-					if text != "" || b.imRound.ToolCalls > 0 {
-						b.Emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
-					}
-					b.imRound.Text.Reset()
-					b.imRound.ToolCalls = 0
-					b.imRound.ToolSuccesses = 0
-					b.imRound.ToolFailures = 0
-				}
-				// Mirror TUI: only close text stream + rotate msgID.
-				// Do NOT push idle/clear-activity here — that happens only
-				// when the entire agent run finishes (via RunStreamWithContent
-				// returning).
-				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker, true)
-				}
+				case provider.StreamEventToolCallDone:
+					b.ui.FinalizeStreaming()
+					b.ui.AppendChat(ChatMessage{
+						Role:     "tool",
+						ToolName: semantic.ToolCall.Name,
+						ToolID:   semantic.ToolCall.ID,
+						ToolDesc: semantic.ToolCall.Inline,
+						ToolArgs: semantic.ToolCall.Detail,
+						ToolRaw:  semantic.ToolCall.RawArgs,
+						Content:  "",
+						Time:     time.Now(),
+					})
 
-			case provider.StreamEventError:
-				// Mirror TUI: close text stream, push error, rotate.
-				if broker := b.currentTunnelBroker(); broker != nil {
-					b.flushTunnelTextStream(broker, true)
-					if ev.Error != nil {
-						broker.PushError(ev.Error.Error())
+				case provider.StreamEventToolResult:
+					b.ui.UpdateToolResult(semantic.ToolResult.ID, semantic.ToolResult.Content, semantic.ToolResult.IsError)
+					if semantic.ToolResult.Name == "spawn_agent" && b.subAgentMgr != nil {
+						b.syncAgentPanels()
 					}
+
+				case provider.StreamEventReasoning:
+					b.ui.AppendReasoning(semantic.Text)
 				}
 			}
 		}
@@ -1168,6 +953,57 @@ func (b *AgentBridge) PushUserMessageToMobile(text string) {
 	}
 }
 
+func (b *AgentBridge) HandleTunnelUserMessage(data tunnel.MessageData) {
+	text := strings.TrimSpace(data.Text)
+	if text == "" {
+		return
+	}
+	if b.ui != nil {
+		b.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
+	}
+	data.Text = text
+	data.MessageID = tunnel.NormalizeClientMessageID(data.MessageID)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushUserMessageData(data)
+	}
+	_ = b.Send(text)
+}
+
+func (b *AgentBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(string), onTheme func(string)) {
+	if broker == nil {
+		return
+	}
+	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+		agentruntime.RouteTunnelCommand(cmd, agentruntime.TunnelCommandHooks{
+			OnUserMessage: func(data tunnel.MessageData) {
+				b.HandleTunnelUserMessage(data)
+			},
+			OnApprovalResponse: func(data tunnel.ApprovalResponseData) {
+				b.handleMobileApprovalResponse(data)
+			},
+			OnAskUserResponse: func(data tunnel.AskUserResponseData) {
+				b.handleMobileAskUserResponse(data)
+			},
+			OnLanguageChange: func(data tunnel.LanguageChangeData) {
+				if onLanguage != nil {
+					onLanguage(data.Language)
+				}
+			},
+			OnThemeChange: func(data tunnel.ThemeChangeData) {
+				if onTheme != nil {
+					onTheme(data.Theme)
+				}
+			},
+			OnInterrupt: func() {
+				b.Cancel()
+			},
+			OnServerAck: func(messageID string) {
+				broker.PushServerAck(messageID)
+			},
+		})
+	})
+}
+
 func (b *AgentBridge) PushSystemMessageToMobile(text string) {
 	if broker := b.currentTunnelBroker(); broker != nil && strings.TrimSpace(text) != "" {
 		broker.PushSystemMessage(text)
@@ -1207,27 +1043,20 @@ func (b *AgentBridge) PushErrorToMobile(text string) {
 
 // QueueMessage stores a user message to be sent after the current agent turn.
 func (b *AgentBridge) QueueMessage(msg string) {
-	b.pendingMu.Lock()
-	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg})
-	b.pendingMu.Unlock()
+	b.pendingMsgs.Enqueue(msg, false, struct{}{})
 }
 
 func (b *AgentBridge) QueueHiddenMessage(msg string) {
-	b.pendingMu.Lock()
-	b.pendingMsgs = append(b.pendingMsgs, pendingMessage{Text: msg, Hidden: true})
-	b.pendingMu.Unlock()
+	b.pendingMsgs.Enqueue(msg, true, struct{}{})
 }
 
 // drainPending returns and clears the next queued message.
 func (b *AgentBridge) drainPending() (pendingMessage, bool) {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	if len(b.pendingMsgs) == 0 {
+	msg, ok := b.pendingMsgs.Consume()
+	if !ok {
 		return pendingMessage{}, false
 	}
-	msg := b.pendingMsgs[0]
-	b.pendingMsgs = b.pendingMsgs[1:]
-	return msg, true
+	return pendingMessage{Text: msg.Text, Hidden: msg.Hidden}, true
 }
 
 func (b *AgentBridge) drainPendingInterrupt() string {
@@ -1268,6 +1097,13 @@ func (b *AgentBridge) TokenCount() int {
 		return 0
 	}
 	return b.agent.ContextManager().TokenCount()
+}
+
+func (b *AgentBridge) AutoCompactThreshold() int {
+	if b.agent == nil {
+		return 0
+	}
+	return b.agent.ContextManager().AutoCompactThreshold()
 }
 
 func (b *AgentBridge) recordSessionUsage(usage provider.TokenUsage) {
@@ -1368,384 +1204,16 @@ func (b *AgentBridge) SwarmPanels() []AgentPanelData {
 // ── Helpers ──────────────────────────────────────────
 
 func toolDisplayName(toolName, rawArgs string) string {
-	if toolName == "swarm_task_create" {
-		if subject := tool.SwarmTaskCreateSubject(rawArgs); subject != "" {
-			return subject
-		}
-	}
-	var args map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil {
-		if v, ok := args["description"]; ok {
-			var desc string
-			if json.Unmarshal(v, &desc) == nil && desc != "" {
-				return desc
-			}
-		}
-	}
-	return prettifyToolName(toolName)
+	return tool.DescribeTool(toolName, rawArgs).DisplayName
 }
 
 func toolDescription(toolName, rawArgs string) string {
-	var args map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return ""
-	}
-
-	// Helper to extract a string field.
-	str := func(field string) string {
-		if v, ok := args[field]; ok {
-			var s string
-			if json.Unmarshal(v, &s) == nil {
-				return s
-			}
-		}
-		return ""
-	}
-
-	if toolName == "swarm_task_create" {
-		return tool.SwarmTaskCreateSubject(rawArgs)
-	}
-
-	// First check for explicit description field from LLM.
-	// If present, use it as displayName with PrettyName in parentheses.
-	if desc := str("description"); desc != "" {
-		return desc + " (" + prettifyToolName(toolName) + ")"
-	}
-
-	switch toolName {
-	// File operations
-	case "read_file":
-		if p := str("path"); p != "" {
-			return shortPath(p)
-		}
-	case "write_file":
-		if p := str("path"); p != "" {
-			return shortPath(p)
-		}
-	case "edit_file", "multi_edit_file":
-		if p := str("file_path"); p != "" {
-			return shortPath(p)
-		}
-	case "notebook_edit":
-		if p := str("notebook_path"); p != "" {
-			return "Notebook: " + shortPath(p)
-		}
-
-	// Search / listing
-	case "search_files", "grep":
-		pat := str("pattern")
-		dir := str("directory")
-		if pat != "" {
-			d := "Grep: " + truncateRunes(pat, 60, "...")
-			if dir != "" {
-				d += " in " + shortPath(dir)
-			}
-			return d
-		}
-	case "glob":
-		pat := str("pattern")
-		dir := str("directory")
-		if pat != "" {
-			d := "Glob: " + truncateRunes(pat, 60, "...")
-			if dir != "" {
-				d += " in " + shortPath(dir)
-			}
-			return d
-		}
-	case "list_directory":
-		if p := str("path"); p != "" {
-			return shortPath(p)
-		}
-
-	// Web
-	case "web_search":
-		if q := str("query"); q != "" {
-			return truncateRunes(q, 80, "...")
-		}
-	case "web_fetch":
-		if u := str("url"); u != "" {
-			return truncateRunes(u, 80, "...")
-		}
-
-	// Commands
-	case "run_command", "start_command":
-		if c := str("command"); c != "" {
-			if comment := firstCommentLine(c); comment != "" {
-				return comment
-			}
-			return truncateRunes(strings.SplitN(c, "\n", 2)[0], 60, "...")
-		}
-	case "stop_command":
-		if id := str("job_id"); id != "" {
-			return "Stop Job: " + id
-		}
-	case "read_command_output":
-		if id := str("job_id"); id != "" {
-			return "Read Output: " + id
-		}
-	case "wait_command":
-		if id := str("job_id"); id != "" {
-			return "Wait: " + id
-		}
-	case "write_command_input":
-		if id := str("job_id"); id != "" {
-			return "Write Input: " + id
-		}
-	case "list_commands":
-		return "Background Jobs"
-
-	// Git
-	case "git_status":
-		return ""
-	case "git_diff":
-		if f := str("file"); f != "" {
-			return shortPath(f)
-		}
-		return ""
-	case "git_log":
-		return ""
-	case "git_show":
-		if r := str("revision"); r != "" {
-			return truncateRunes(r, 40, "...")
-		}
-		return ""
-	case "git_blame":
-		if f := str("file"); f != "" {
-			return shortPath(f)
-		}
-		return ""
-	case "git_add":
-		return ""
-	case "git_commit":
-		return ""
-	case "git_branch_list":
-		return ""
-	case "git_remote":
-		return ""
-	case "git_stash":
-		return ""
-	case "git_stash_list":
-		return "Git Stash List"
-
-	// Agent tools
-	case "spawn_agent":
-		task := truncateRunes(str("task"), 80, "...")
-		stype := str("subagent_type")
-		d := "(Spawn Sub-Agent)"
-		if stype != "" {
-			d += " " + stype
-		}
-		if task != "" {
-			d += " — " + task
-		}
-		return d
-	case "wait_agent":
-		if id := str("agent_id"); id != "" {
-			return "(Wait Agent) " + id
-		}
-		return "(Wait Agent)"
-	case "list_agents":
-		return "(List Agents)"
-
-	// Messaging
-	case "send_message":
-		to := str("to")
-		summary := str("summary")
-		if summary != "" {
-			return summary
-		}
-		if to != "" {
-			return "Send to: " + to
-		}
-		return "Send Message"
-
-	// Swarm / Team
-	case "swarm_task_create":
-		subj := str("subject")
-		assignee := str("assignee")
-		d := "Create Task"
-		if subj != "" {
-			d = truncateRunes(subj, 80, "...")
-		}
-		if assignee != "" {
-			d += " → " + assignee
-		}
-		return d
-	case "swarm_task_claim":
-		tid := str("task_id")
-		if tid != "" {
-			return "Claim Task: " + tid
-		}
-		return "Claim Task"
-	case "swarm_task_complete":
-		tid := str("task_id")
-		if tid != "" {
-			return "Complete Task: " + tid
-		}
-		return "Complete Task"
-	case "swarm_task_list":
-		tid := str("team_id")
-		if tid != "" {
-			return "List Tasks: " + tid
-		}
-		return "List Tasks"
-	case "team_create":
-		if n := str("name"); n != "" {
-			return "Create Team: " + n
-		}
-		return "Create Team"
-	case "team_delete":
-		if tid := str("team_id"); tid != "" {
-			return "Delete Team: " + tid
-		}
-		return "Delete Team"
-
-	// Teammate
-	case "teammate_spawn":
-		if n := str("name"); n != "" {
-			return "(Spawn Teammate) " + n
-		}
-		return "(Spawn Teammate)"
-	case "teammate_shutdown":
-		if tid := str("teammate_id"); tid != "" {
-			return "(Shutdown Teammate) " + tid
-		}
-		return "(Shutdown Teammate)"
-	case "teammate_list":
-		return "(List Teammates)"
-	case "teammate_results":
-		if tid := str("teammate_id"); tid != "" {
-			return "(Get Results) " + tid
-		}
-		return "(Get Results)"
-
-	// Other tools
-	case "save_memory":
-		if k := str("key"); k != "" {
-			return "Save Memory: " + k
-		}
-		return "Save Memory"
-	case "config":
-		if s := str("setting"); s != "" {
-			return "Config: " + s
-		}
-		return "Config"
-	case "skill":
-		if s := str("skill"); s != "" {
-			return "Skill: " + s
-		}
-		return "Skill"
-	case "ask_user":
-		return "Ask User"
-	case "todo_write":
-		return "Update Todos"
-	case "enter_plan_mode":
-		return "Enter Plan Mode"
-	case "exit_plan_mode":
-		return "Exit Plan Mode"
-	case "enter_worktree":
-		return "Enter Worktree"
-	case "exit_worktree":
-		return "Exit Worktree"
-	case "task_create":
-		if s := str("subject"); s != "" {
-			return s
-		}
-		return "Create Task"
-	case "task_get", "task_update", "task_stop", "task_list":
-		if s := str("subject"); s != "" {
-			return s
-		}
-		return prettifyToolName(toolName)
-	case "cron_create":
-		return "Schedule Job"
-	case "cron_delete":
-		return "Delete Job"
-	case "cron_list":
-		return "Scheduled Jobs"
-	case "list_mcp_capabilities":
-		return "MCP Capabilities"
-	case "get_mcp_prompt":
-		if n := str("name"); n != "" {
-			return "MCP Prompt: " + n
-		}
-		return "MCP Prompt"
-	case "read_mcp_resource":
-		if u := str("uri"); u != "" {
-			return "MCP Resource: " + truncateRunes(u, 60, "...")
-		}
-		return "MCP Resource"
-	}
-
-	// LSP tools
-	if strings.HasPrefix(toolName, "lsp_") {
-		op := strings.ReplaceAll(toolName[4:], "_", " ")
-		return "LSP: " + strings.Title(op)
-	}
-
-	// MCP tools (mcp__server__tool)
-	if strings.HasPrefix(toolName, "mcp__") {
-		parts := strings.Split(toolName, "__")
-		if len(parts) >= 3 {
-			return "MCP: " + strings.ReplaceAll(parts[len(parts)-1], "_", " ")
-		}
-	}
-
-	return prettifyToolName(toolName)
-}
-
-func shortPath(p string) string {
-	if len(p) > 60 {
-		// Try to shorten from the left: keep last 57 chars with "…"
-		runes := []rune(p)
-		if len(runes) > 57 {
-			return "…" + string(runes[len(runes)-57:])
-		}
-	}
-	return p
+	present := tool.DescribeTool(toolName, rawArgs)
+	return tool.FormatToolInline(present.DisplayName, present.Detail)
 }
 
 func toolArgSummary(toolName, rawArgs string) string {
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return ""
-	}
-	switch toolName {
-	case "read_file", "write_file", "edit_file":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case "run_command", "start_command":
-		if c, ok := args["command"].(string); ok {
-			return c
-		}
-	case "search_files", "grep":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "glob":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "list_directory":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case "swarm_task_create":
-		if assignee, ok := args["assignee"].(string); ok && strings.TrimSpace(assignee) != "" {
-			return strings.TrimSpace(assignee)
-		}
-		return ""
-	}
-	for _, v := range args {
-		if s, ok := v.(string); ok && len(s) > 0 {
-			if len([]rune(s)) > 60 {
-				return truncateRunes(s, 60, "...")
-			}
-			return s
-		}
-	}
-	return ""
+	return tool.DescribeTool(toolName, rawArgs).Detail
 }
 
 func extractJSONField(rawArgs, field string) string {
@@ -1937,34 +1405,11 @@ func agentEventTypeStr(t subagent.AgentEventType) string {
 	return "unknown"
 }
 
-func buildSystemPrompt(workingDir string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
-	hostname, _ := os.Hostname()
-	cwd := workingDir
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+func buildSystemPrompt(cfg *config.Config, workingDir string, globalAutoMem, projectAutoMem *memory.AutoMemory, commandMgr *commands.Manager) string {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
 	}
-	prompt := fmt.Sprintf(`You are ggcode, an AI coding assistant running as a desktop application.
-
-## Environment
-- OS: %s
-- Working directory: %s
-
-## Instructions
-- Be precise, concise, and proactive.
-- Prefer small, reversible changes over broad rewrites.
-- Read before you edit, and inspect results before claiming success.
-`, hostname, cwd)
-	if projectAutoMem != nil {
-		if projectContent, _, _ := projectAutoMem.LoadAll(); projectContent != "" {
-			prompt += "\n\n## Auto Memory (Project)\n" + projectContent
-		}
-	}
-	if globalAutoMem != nil {
-		if globalContent, _, _ := globalAutoMem.LoadAll(); globalContent != "" {
-			prompt += "\n\n## Auto Memory (Global)\n" + globalContent
-		}
-	}
-	return prompt
+	return agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, permission.ParsePermissionMode(cfg.DefaultMode), nil, commandMgr, globalAutoMem, projectAutoMem, "")
 }
 
 func (b *AgentBridge) refreshSystemPrompt() {
@@ -1990,40 +1435,12 @@ func (b *AgentBridge) saveSession() {
 	if agent == nil {
 		return
 	}
-	msgs := agent.Messages()
-	b.currentSes.Messages = msgs
-
-	// If no user messages, delete the empty session.
-	if len(b.currentSes.Messages) == 0 {
-		_ = b.sessionStore.Delete(b.currentSes.ID)
-		return
-	}
-
-	// Auto-generate title from first user message if still default.
-	if b.currentSes.Title == "" || b.currentSes.Title == "New session" {
-		for _, m := range b.currentSes.Messages {
-			if m.Role == "user" {
-				for _, block := range m.Content {
-					if block.Type == "text" && block.Text != "" {
-						text := block.Text
-						if len([]rune(text)) > 60 {
-							text = string([]rune(text)[:57]) + "..."
-						}
-						b.currentSes.Title = text
-						break
-					}
-				}
-				break
-			}
-		}
-	}
-
-	_ = b.sessionStore.Save(b.currentSes)
+	_ = agentruntime.SaveSessionMessages(b.sessionStore, b.currentSes, agent.Messages())
 }
 
 // ensureSession creates a new session if one doesn't exist yet.
 func (b *AgentBridge) ensureSession() {
-	if b.currentSes != nil || b.sessionStore == nil {
+	if b.sessionStore == nil {
 		return
 	}
 	vendor := ""
@@ -2034,18 +1451,20 @@ func (b *AgentBridge) ensureSession() {
 		endpoint = b.cfg.Endpoint
 		model = b.cfg.Model
 	}
-	ses := session.NewSession(vendor, endpoint, model)
-	_ = b.sessionStore.Save(ses)
-	b.currentSes = ses
-	b.usageTurnIndex = 0
-	b.lastMetricDigestTurn = 0
+	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
+	if err != nil || !created {
+		return
+	}
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	if b.ui != nil {
-		b.ui.SetSessionUsage(ses.UsageForEndpoint(ses.Vendor, ses.Endpoint))
-		b.ui.SetSessionMetrics(ses.MetricsForEndpoint(ses.Vendor, ses.Endpoint))
+		b.ui.SetSessionUsage(state.Session.UsageForEndpoint(state.Session.Vendor, state.Session.Endpoint))
+		b.ui.SetSessionMetrics(state.Session.MetricsForEndpoint(state.Session.Vendor, state.Session.Endpoint))
 	}
 	b.bindTunnelProjectionSession()
 	if broker := b.currentShareTunnelBroker(); broker != nil {
-		broker.AnnounceActiveSession(ses.ID)
+		broker.AnnounceActiveSession(state.Session.ID)
 	}
 }
 
@@ -2061,6 +1480,42 @@ func (b *AgentBridge) CurrentSession() *session.Session {
 	return b.currentSes
 }
 
+func (b *AgentBridge) PrepareShareBroker(broker *tunnel.Broker, snapshotProvider func() tunnel.BrokerSnapshot) {
+	if broker == nil || snapshotProvider == nil {
+		return
+	}
+	b.ensureSession()
+	snapshot := snapshotProvider()
+	sessionID := ""
+	if current := b.CurrentSession(); current != nil {
+		sessionID = current.ID
+	}
+	b.PrepareCurrentSessionTunnelLedger()
+	replayedCanonical := agentruntime.PublishShareState(broker, sessionID, snapshot, b.CurrentSessionTunnelEvents(), true)
+	broker.SetSnapshotProvider(snapshotProvider)
+	b.AttachTunnelBroker(broker)
+	if !replayedCanonical {
+		latest := snapshotProvider()
+		if !agentruntime.ShareSnapshotMatches(snapshot, latest) {
+			agentruntime.PublishShareState(broker, sessionID, latest, nil, true)
+		}
+	}
+}
+
+func (b *AgentBridge) PublishCurrentShareSnapshot(broker *tunnel.Broker, snapshotProvider func() tunnel.BrokerSnapshot, reset bool, resetLedger bool) {
+	if broker == nil || snapshotProvider == nil {
+		return
+	}
+	current := b.CurrentSession()
+	if current == nil {
+		return
+	}
+	if resetLedger {
+		b.ResetCurrentSessionTunnelLedger()
+	}
+	agentruntime.PublishShareState(broker, current.ID, snapshotProvider(), nil, reset)
+}
+
 func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 	b.mu.Lock()
 	currentSes := b.currentSes
@@ -2071,7 +1526,7 @@ func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 		return nil
 	}
 	if store != nil && strings.TrimSpace(currentSes.ID) != "" {
-		events, err := store.ReplayEvents(currentSes.ID)
+		events, err := agentruntime.ProjectionReplay(store, currentSes.ID)
 		if err != nil {
 			b.mu.Lock()
 			b.tunnelProjectionBroken = true
@@ -2087,41 +1542,13 @@ func (b *AgentBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
 }
 
 func (b *AgentBridge) hydrateProjectionReplayFromSessionLedger(currentSes *session.Session, store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
-	if currentSes == nil || store == nil || !currentSes.TunnelEventsComplete || len(currentSes.TunnelEvents) == 0 || strings.TrimSpace(currentSes.ID) == "" {
-		return replay
-	}
-	seen := make(map[string]struct{}, len(replay))
-	for _, msg := range replay {
-		if msg.EventID != "" {
-			seen[msg.EventID] = struct{}{}
-		}
-	}
-	appended := false
-	for _, ev := range currentSes.TunnelEvents {
-		if ev.EventID != "" {
-			if _, ok := seen[ev.EventID]; ok {
-				continue
-			}
-			seen[ev.EventID] = struct{}{}
-		}
-		if err := store.Append(tunnel.GatewayMessage{
-			SessionID: currentSes.ID,
-			EventID:   ev.EventID,
-			StreamID:  ev.StreamID,
-			Type:      ev.Type,
-			Data:      append(json.RawMessage(nil), ev.Data...),
-		}); err != nil {
-			log.Printf("[desktop] projection hydrate from session ledger failed for %s event=%s: %v", currentSes.ID, ev.EventID, err)
-			return replay
-		}
-		appended = true
-	}
-	if !appended {
-		return replay
-	}
-	updated, err := store.ReplayEvents(currentSes.ID)
+	updated, err := agentruntime.HydrateProjectionReplayFromSessionLedger(store, currentSes, replay)
 	if err != nil {
-		log.Printf("[desktop] projection reload after session-ledger hydrate failed for %s: %v", currentSes.ID, err)
+		sessionID := ""
+		if currentSes != nil {
+			sessionID = currentSes.ID
+		}
+		log.Printf("[desktop] projection hydrate from session ledger failed for %s: %v", sessionID, err)
 		return replay
 	}
 	return updated
@@ -2135,7 +1562,7 @@ func (b *AgentBridge) currentSessionTunnelAuthorityEpoch() uint64 {
 	if currentSes == nil || strings.TrimSpace(currentSes.ID) == "" || store == nil {
 		return 1
 	}
-	epoch, err := store.AuthorityEpoch(currentSes.ID)
+	epoch, err := agentruntime.ProjectionAuthorityEpoch(store, currentSes.ID)
 	if err != nil || epoch == 0 {
 		return 1
 	}
@@ -2648,20 +2075,18 @@ func (b *AgentBridge) ResumeSession(id string) error {
 		return err
 	}
 
-	ses, err := b.sessionStore.Load(id)
+	state, err := agentruntime.LoadSession(b.sessionStore, id)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
+	ses := state.Session
 
-	// Feed all messages into the agent context.
-	for _, msg := range ses.Messages {
-		b.agent.AddMessage(msg)
-	}
+	agentruntime.RestoreSessionIntoAgent(b.agent, ses)
 
 	b.mu.Lock()
-	b.currentSes = ses
-	b.usageTurnIndex = session.LastTurnIndex(ses)
-	b.lastMetricDigestTurn = b.usageTurnIndex
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.mu.Unlock()
 	b.bindTunnelProjectionSession()
 	if b.ui != nil {
@@ -2725,31 +2150,25 @@ func extractTextFromBlocks(blocks []provider.ContentBlock) string {
 	return strings.Join(parts, "\n")
 }
 
-// imRoundState tracks per-LLM-turn state for IM emission.
-type imRoundState struct {
-	Text          strings.Builder
-	ToolCalls     int
-	ToolSuccesses int
-	ToolFailures  int
-}
-
 // handleAskUser shows a dialog for ask_user tool questions.
 func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
 	if b.mainWindow == nil || len(req.Questions) == 0 {
 		return tool.AskUserResponse{Status: "skipped"}, nil
 	}
 
-	resp := make(chan tool.AskUserResponse, 1)
 	requestID := ""
-	b.setPendingAskUser(requestID, req, resp)
 	// Push to mobile tunnel client
 	if broker := b.currentTunnelBroker(); broker != nil {
 		requestID = b.nextTunnelRequestID()
-		b.setPendingAskUser(requestID, req, resp)
-		broker.PushAskUserRequest(requestID, req.Title, buildTunnelAskUserQuestions(req))
-		broker.PushStatus(tunnel.StatusBusy, "")
-		broker.PushActivity(b.CurrentTunnelActivity())
+		agentruntime.PushTunnelAskUserRequest(broker, requestID, req, agentruntime.TunnelStateUpdate{
+			HasStatus:   true,
+			Status:      tunnel.StatusBusy,
+			HasActivity: true,
+			Activity:    b.CurrentTunnelActivity(),
+		})
 	}
+	b.setPendingAskUser(requestID, req)
+	request := agentruntime.AskUserRequest{ID: requestID, Request: req}
 	fyne.Do(func() {
 		// Build form from questions
 		var answers []tool.AskUserAnswer
@@ -2819,7 +2238,7 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 					}
 					b.clearPendingAskUser(requestID)
 					b.pushTunnelAskUserResponse(requestID, response)
-					resp <- response
+					b.interactions.ResolveAskUser(requestID, response)
 					return
 				}
 				// Collect answers from form items
@@ -2867,7 +2286,7 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 				finalAnswers := make([]tool.AskUserAnswer, len(req.Questions))
 				answeredCount := 0
 				for i, question := range req.Questions {
-					finalAnswers[i] = buildAskUserAnswer(question, answers[i].SelectedChoiceIDs, answers[i].FreeformText)
+					finalAnswers[i] = agentruntime.BuildAskUserAnswer(question, answers[i].SelectedChoiceIDs, answers[i].FreeformText)
 					if finalAnswers[i].Answered {
 						answeredCount++
 					}
@@ -2881,7 +2300,7 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 				}
 				b.clearPendingAskUser(requestID)
 				b.pushTunnelAskUserResponse(requestID, response)
-				resp <- response
+				b.interactions.ResolveAskUser(requestID, response)
 			}, b.mainWindow)
 		d.Resize(fyne.NewSize(500, 400))
 		if b.attachAskUserDialog(requestID, d) {
@@ -2889,14 +2308,12 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 		}
 	})
 
-	select {
-	case r := <-resp:
-		b.clearPendingAskUser(requestID)
-		return r, nil
-	case <-ctx.Done():
+	response, err := b.interactions.AwaitAskUser(ctx, request)
+	if ctx.Err() != nil {
 		b.hideDialog(b.clearPendingAskUser(requestID))
-		return tool.AskUserResponse{Status: "cancelled"}, ctx.Err()
 	}
+	b.clearPendingAskUser(requestID)
+	return response, err
 }
 
 // truncate shortens a string for display.
@@ -2929,35 +2346,11 @@ func (b *AgentBridge) SwitchModel(model string) error {
 	if model == "" || b.cfg == nil {
 		return fmt.Errorf("model is empty or config is nil")
 	}
-
-	// Update config with the new model selection.
-	if err := b.cfg.SetActiveSelection(b.cfg.Vendor, b.cfg.Endpoint, model); err != nil {
-		return fmt.Errorf("set active selection: %w", err)
-	}
-	_ = b.cfg.Save()
-
-	// Re-resolve endpoint (picks up new context window, etc.).
-	resolved, err := b.cfg.ResolveActiveEndpoint()
+	resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, b.cfg.Vendor, b.cfg.Endpoint, model)
 	if err != nil {
-		return fmt.Errorf("resolve endpoint: %w", err)
+		return fmt.Errorf("activate current selection: %w", err)
 	}
-
-	// Create a new provider for the updated model.
-	prov, err := provider.NewProvider(resolved)
-	if err != nil {
-		return fmt.Errorf("create provider: %w", err)
-	}
-
-	// Swap provider on the live agent (thread-safe).
-	if b.agent != nil {
-		b.agent.SetProvider(prov)
-		if resolved.ContextWindow > 0 {
-			b.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
-		}
-		if resolved.MaxTokens > 0 {
-			b.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
-		}
-	}
+	agentruntime.ApplyProviderToAgent(b.agent, prov, resolved)
 
 	// Update bridge state so status bar reflects the new model.
 	b.mu.Lock()
@@ -2967,6 +2360,18 @@ func (b *AgentBridge) SwitchModel(model string) error {
 		b.currentSes.Model = resolved.Model
 	}
 	b.mu.Unlock()
+	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, b.agent, func(resp relaycatalog.ResolveResponse) {
+		b.mu.Lock()
+		if b.resolved != nil {
+			if resp.ContextWindow > 0 {
+				b.resolved.ContextWindow = resp.ContextWindow
+			}
+			if resp.MaxOutputTokens > 0 {
+				b.resolved.MaxTokens = resp.MaxOutputTokens
+			}
+		}
+		b.mu.Unlock()
+	})
 
 	return nil
 }
@@ -2979,19 +2384,18 @@ func (b *AgentBridge) nextTunnelRequestID() string {
 	return broker.NextMessageID()
 }
 
-func (b *AgentBridge) setPendingApproval(id, toolName string, ch chan permission.Decision) {
+func (b *AgentBridge) setPendingApproval(id, toolName string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.approvalRequestID = id
 	b.approvalToolName = toolName
-	b.approvalRespCh = ch
 	b.approvalDialog = nil
 }
 
 func (b *AgentBridge) attachApprovalDialog(id string, dlg dialog.Dialog) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.approvalRespCh == nil {
+	if b.approvalToolName == "" && b.approvalRequestID == "" {
 		return false
 	}
 	if strings.TrimSpace(id) != "" && b.approvalRequestID != id {
@@ -3001,23 +2405,21 @@ func (b *AgentBridge) attachApprovalDialog(id string, dlg dialog.Dialog) bool {
 	return true
 }
 
-func (b *AgentBridge) consumePendingApproval(id string) (string, chan permission.Decision, dialog.Dialog, bool) {
+func (b *AgentBridge) consumePendingApproval(id string) (string, dialog.Dialog, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.approvalRespCh == nil {
-		return "", nil, nil, false
+	if b.approvalToolName == "" && b.approvalRequestID == "" {
+		return "", nil, false
 	}
 	if strings.TrimSpace(id) != "" && b.approvalRequestID != "" && b.approvalRequestID != id {
-		return "", nil, nil, false
+		return "", nil, false
 	}
 	toolName := b.approvalToolName
-	ch := b.approvalRespCh
 	dlg := b.approvalDialog
-	b.approvalRespCh = nil
 	b.approvalRequestID = ""
 	b.approvalToolName = ""
 	b.approvalDialog = nil
-	return toolName, ch, dlg, true
+	return toolName, dlg, true
 }
 
 func (b *AgentBridge) clearPendingApproval(id string) dialog.Dialog {
@@ -3027,26 +2429,33 @@ func (b *AgentBridge) clearPendingApproval(id string) dialog.Dialog {
 		return nil
 	}
 	dlg := b.approvalDialog
-	b.approvalRespCh = nil
 	b.approvalRequestID = ""
 	b.approvalToolName = ""
 	b.approvalDialog = nil
 	return dlg
 }
 
-func (b *AgentBridge) setPendingAskUser(id string, req tool.AskUserRequest, ch chan tool.AskUserResponse) {
+func (b *AgentBridge) PendingApprovalRequest() (string, string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.approvalToolName == "" && b.approvalRequestID == "" {
+		return "", "", false
+	}
+	return b.approvalRequestID, b.approvalToolName, true
+}
+
+func (b *AgentBridge) setPendingAskUser(id string, req tool.AskUserRequest) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.askUserRequestID = id
 	b.askUserRequest = req
-	b.askUserRespCh = ch
 	b.askUserDialog = nil
 }
 
 func (b *AgentBridge) attachAskUserDialog(id string, dlg dialog.Dialog) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.askUserRespCh == nil {
+	if len(b.askUserRequest.Questions) == 0 && b.askUserRequestID == "" {
 		return false
 	}
 	if strings.TrimSpace(id) != "" && b.askUserRequestID != id {
@@ -3056,23 +2465,21 @@ func (b *AgentBridge) attachAskUserDialog(id string, dlg dialog.Dialog) bool {
 	return true
 }
 
-func (b *AgentBridge) consumePendingAskUser(id string) (tool.AskUserRequest, chan tool.AskUserResponse, dialog.Dialog, bool) {
+func (b *AgentBridge) consumePendingAskUser(id string) (tool.AskUserRequest, dialog.Dialog, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.askUserRespCh == nil {
-		return tool.AskUserRequest{}, nil, nil, false
+	if len(b.askUserRequest.Questions) == 0 && b.askUserRequestID == "" {
+		return tool.AskUserRequest{}, nil, false
 	}
 	if strings.TrimSpace(id) != "" && b.askUserRequestID != "" && b.askUserRequestID != id {
-		return tool.AskUserRequest{}, nil, nil, false
+		return tool.AskUserRequest{}, nil, false
 	}
 	req := b.askUserRequest
-	ch := b.askUserRespCh
 	dlg := b.askUserDialog
 	b.askUserRequestID = ""
 	b.askUserRequest = tool.AskUserRequest{}
-	b.askUserRespCh = nil
 	b.askUserDialog = nil
-	return req, ch, dlg, true
+	return req, dlg, true
 }
 
 func (b *AgentBridge) clearPendingAskUser(id string) dialog.Dialog {
@@ -3084,9 +2491,54 @@ func (b *AgentBridge) clearPendingAskUser(id string) dialog.Dialog {
 	dlg := b.askUserDialog
 	b.askUserRequestID = ""
 	b.askUserRequest = tool.AskUserRequest{}
-	b.askUserRespCh = nil
 	b.askUserDialog = nil
 	return dlg
+}
+
+func (b *AgentBridge) PendingAskUserRequest() (string, tool.AskUserRequest, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.askUserRequest.Questions) == 0 && b.askUserRequestID == "" {
+		return "", tool.AskUserRequest{}, false
+	}
+	return b.askUserRequestID, b.askUserRequest, true
+}
+
+func (b *AgentBridge) RespondApproval(requestID, decision string) {
+	toolName, dlg, ok := b.consumePendingApproval(requestID)
+	if !ok {
+		return
+	}
+	b.hideDialog(dlg)
+	decisionValue := agentruntime.ResolveTunnelApproval(decision, toolName, func(toolName string) {
+		if b.agent != nil {
+			if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+				p.SetOverride(toolName, permission.Allow)
+			}
+		}
+	})
+	b.interactions.ResolveApproval(requestID, decisionValue)
+	agentruntime.ApplyTunnelStateUpdate(b.currentTunnelBroker(), agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
+}
+
+func (b *AgentBridge) RespondAskUser(requestID string, response tool.AskUserResponse) {
+	_, dlg, ok := b.consumePendingAskUser(requestID)
+	if !ok {
+		return
+	}
+	b.hideDialog(dlg)
+	b.interactions.ResolveAskUser(requestID, response)
+	agentruntime.ApplyTunnelStateUpdate(b.currentTunnelBroker(), agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
 }
 
 func (b *AgentBridge) hideDialog(dlg dialog.Dialog) {
@@ -3099,168 +2551,65 @@ func (b *AgentBridge) hideDialog(dlg dialog.Dialog) {
 }
 
 func (b *AgentBridge) pushTunnelApprovalResult(id, decision string) {
-	broker := b.currentTunnelBroker()
-	if broker == nil || strings.TrimSpace(id) == "" {
-		return
-	}
-	broker.PushApprovalResult(id, decision)
-	broker.PushStatus(tunnel.StatusBusy, "")
-	broker.PushActivity(b.CurrentTunnelActivity())
+	agentruntime.PushTunnelApprovalResult(b.currentTunnelBroker(), id, decision, agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
 }
 
 func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
-	broker := b.currentTunnelBroker()
-	if broker == nil || strings.TrimSpace(id) == "" {
-		return
-	}
-	answers := make([]tunnel.AskUserAnswer, len(response.Answers))
-	for i, answer := range response.Answers {
-		answers[i] = tunnel.AskUserAnswer{
-			QuestionID:   answer.ID,
-			ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
-			FreeformText: answer.FreeformText,
-		}
-	}
-	broker.PushAskUserResponse(id, response.Status, answers)
-	broker.PushStatus(tunnel.StatusBusy, "")
-	broker.PushActivity(b.CurrentTunnelActivity())
+	agentruntime.PushTunnelAskUserResponse(b.currentTunnelBroker(), id, response, agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
 }
 
 func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
-	toolName, ch, dlg, ok := b.consumePendingApproval(data.ID)
+	toolName, dlg, ok := b.consumePendingApproval(data.ID)
 	if !ok {
 		return
 	}
 	b.hideDialog(dlg)
-	if data.Decision == tunnel.DecisionAlwaysAllow && b.agent != nil {
-		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
-			p.SetOverride(toolName, permission.Allow)
+	decision := agentruntime.ResolveTunnelApproval(data.Decision, toolName, func(toolName string) {
+		if b.agent != nil {
+			if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+				p.SetOverride(toolName, permission.Allow)
+			}
 		}
-	}
-	decision := permission.Deny
-	switch data.Decision {
-	case tunnel.DecisionAllow:
-		decision = permission.Allow
-	case tunnel.DecisionAlwaysAllow, "always":
-		decision = permission.Allow
-	default:
-		decision = permission.Deny
-	}
-	select {
-	case ch <- decision:
-	default:
-	}
-	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushStatus(tunnel.StatusBusy, "")
-		broker.PushActivity(b.CurrentTunnelActivity())
-	}
+	})
+	b.interactions.ResolveApproval(data.ID, decision)
+	agentruntime.ApplyTunnelStateUpdate(b.currentTunnelBroker(), agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
 }
 
 func (b *AgentBridge) handleMobileAskUserResponse(data tunnel.AskUserResponseData) {
-	req, ch, dlg, ok := b.consumePendingAskUser(data.ID)
+	req, dlg, ok := b.consumePendingAskUser(data.ID)
 	if !ok {
 		return
 	}
 	b.hideDialog(dlg)
 	response := buildAskUserResponseFromTunnel(req, data.Status, data.Answers)
-	select {
-	case ch <- response:
-	default:
-	}
-	if broker := b.currentTunnelBroker(); broker != nil {
-		broker.PushStatus(tunnel.StatusBusy, "")
-		broker.PushActivity(b.CurrentTunnelActivity())
-	}
+	b.interactions.ResolveAskUser(data.ID, response)
+	agentruntime.ApplyTunnelStateUpdate(b.currentTunnelBroker(), agentruntime.TunnelStateUpdate{
+		HasStatus:   true,
+		Status:      tunnel.StatusBusy,
+		HasActivity: true,
+		Activity:    b.CurrentTunnelActivity(),
+	})
 }
 
 func buildTunnelAskUserQuestions(req tool.AskUserRequest) []tunnel.AskUserQuestion {
-	questions := make([]tunnel.AskUserQuestion, len(req.Questions))
-	for i, q := range req.Questions {
-		choices := make([]tunnel.AskUserChoice, len(q.Choices))
-		for j, c := range q.Choices {
-			choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
-		}
-		questions[i] = tunnel.AskUserQuestion{
-			ID:            q.ID,
-			Prompt:        q.Prompt,
-			Kind:          q.Kind,
-			Choices:       choices,
-			AllowFreeform: q.AllowFreeform,
-			Placeholder:   q.Placeholder,
-		}
-	}
-	return questions
+	return agentruntime.BuildTunnelAskUserQuestions(req)
 }
 
 func buildAskUserResponseFromTunnel(req tool.AskUserRequest, status string, answers []tunnel.AskUserAnswer) tool.AskUserResponse {
-	normalizedStatus := strings.TrimSpace(status)
-	if normalizedStatus == "" {
-		normalizedStatus = tool.AskUserStatusSubmitted
-	}
-	answerByQuestion := make(map[string]tunnel.AskUserAnswer, len(answers))
-	for _, answer := range answers {
-		answerByQuestion[answer.QuestionID] = answer
-	}
-	out := tool.AskUserResponse{
-		Status:        normalizedStatus,
-		Title:         req.Title,
-		QuestionCount: len(req.Questions),
-		Answers:       make([]tool.AskUserAnswer, 0, len(req.Questions)),
-	}
-	for _, question := range req.Questions {
-		raw := answerByQuestion[question.ID]
-		answer := buildAskUserAnswer(question, raw.ChoiceIDs, raw.FreeformText)
-		if answer.Answered {
-			out.AnsweredCount++
-		}
-		out.Answers = append(out.Answers, answer)
-	}
-	return out
-}
-
-func buildAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string, freeform string) tool.AskUserAnswer {
-	selectedSet := make(map[string]struct{}, len(selectedIDs))
-	for _, id := range selectedIDs {
-		selectedSet[id] = struct{}{}
-	}
-	orderedIDs := make([]string, 0, len(selectedSet))
-	orderedLabels := make([]string, 0, len(selectedSet))
-	for _, choice := range question.Choices {
-		if _, ok := selectedSet[choice.ID]; ok {
-			orderedIDs = append(orderedIDs, choice.ID)
-			orderedLabels = append(orderedLabels, choice.Label)
-		}
-	}
-	freeform = strings.TrimSpace(freeform)
-	answerMode := tool.AskUserAnswerModeNone
-	completionStatus := tool.AskUserCompletionUnanswered
-	switch {
-	case len(orderedIDs) == 0 && freeform == "":
-		answerMode = tool.AskUserAnswerModeNone
-		completionStatus = tool.AskUserCompletionUnanswered
-	case len(orderedIDs) == 0 && freeform != "":
-		answerMode = tool.AskUserAnswerModeFreeformOnly
-		if question.Kind == tool.AskUserKindText {
-			completionStatus = tool.AskUserCompletionAnswered
-		} else {
-			completionStatus = tool.AskUserCompletionPartial
-		}
-	case len(orderedIDs) > 0 && freeform == "":
-		answerMode = tool.AskUserAnswerModeSelectionOnly
-		completionStatus = tool.AskUserCompletionAnswered
-	default:
-		answerMode = tool.AskUserAnswerModeSelectionAndFreeform
-		completionStatus = tool.AskUserCompletionAnswered
-	}
-	return tool.AskUserAnswer{
-		ID:                question.ID,
-		Title:             question.Title,
-		Kind:              question.Kind,
-		CompletionStatus:  completionStatus,
-		AnswerMode:        answerMode,
-		Answered:          completionStatus == tool.AskUserCompletionAnswered,
-		SelectedChoiceIDs: orderedIDs,
-		SelectedChoices:   orderedLabels,
-		FreeformText:      freeform,
-	}
+	return agentruntime.BuildAskUserResponseFromTunnel(req, status, answers)
 }

@@ -176,8 +176,8 @@ func newWechatAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 	return &WechatAdapter{
 		name:       name,
 		manager:    mgr,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		lpClient:   &http.Client{Timeout: 40 * time.Second},
+		httpClient: util.NewInsecureAwareClient(30 * time.Second),
+		lpClient:   util.NewInsecureAwareClient(40 * time.Second),
 		baseURL:    baseURL,
 		botToken:   botToken,
 	}, nil
@@ -423,13 +423,8 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	}
 	if pairingResult.Consumed {
 		_ = a.sendTextToUser(ctx, channelID, pairingResult.ReplyText)
-		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
-			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
-			}); err != nil {
-				debug.Log("wechat", "adapter=%s notify previous channel: %v", a.name, err)
-			}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			debug.Log("wechat", "adapter=%s notify previous channel: %v", a.name, err)
 		}
 		return
 	}

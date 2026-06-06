@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -283,15 +284,15 @@ type Model struct {
 // semantics for Model don't split the queue into independent copies — the
 // agent goroutine's closure and the TUI goroutine's Update both reach the
 // same underlying slice through the pointer.
-type pendingQueue struct {
-	mu    sync.Mutex
-	items []pendingSubmission
+type pendingSubmission struct {
+	Text                  string
+	Hidden                bool
+	TunnelMessageOverride *tunnel.MessageData
 }
 
-type pendingSubmission struct {
-	Text           string
-	Hidden         bool
-	TunnelOverride *tunnel.MessageData
+type pendingQueue struct {
+	items []pendingSubmission
+	q     *agentruntime.PendingQueue[*tunnel.MessageData]
 }
 
 type a2aEventUpdatedMsg struct{}
@@ -629,6 +630,10 @@ func (m *Model) startContextProbe() {
 		debug.Log("probe", "startContextProbe skipped: no model selected")
 		return
 	}
+	if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.ContextWindow > 0 {
+		debug.Log("probe", "startContextProbe skipped: explicit context_window=%d configured", ep.ContextWindow)
+		return
+	}
 
 	debug.Log("probe", "startContextProbe: vendor=%s model=%s baseURL=%s",
 		resolved.VendorID, resolved.Model, resolved.BaseURL)
@@ -762,6 +767,13 @@ func (m *Model) detectAndAutoMute() {
 	if session == nil {
 		return
 	}
+	autoMuteCount := 0
+	for _, binding := range m.imManager.CurrentBindings() {
+		if binding.Muted || strings.TrimSpace(binding.ChannelID) == "" {
+			continue
+		}
+		autoMuteCount++
+	}
 
 	detect, others, err := m.imManager.RegisterInstance(session.Workspace)
 	if err != nil {
@@ -773,11 +785,10 @@ func (m *Model) detectAndAutoMute() {
 		return
 	}
 
-	// Other instances exist — auto-mute all active channels
-	count, _ := m.imManager.MuteAll()
-	if count > 0 {
+	// RegisterInstance already auto-muted active channels; just surface the result.
+	if autoMuteCount > 0 {
 		primary := others[0] // oldest
-		msg := m.t("panel.im.message.auto_mute", count, primary.PID, primary.StartedAt.Format("15:04"))
+		msg := m.t("panel.im.message.auto_mute", autoMuteCount, primary.PID, primary.StartedAt.Format("15:04"))
 		m.chatWriteSystem(nextSystemID(), msg)
 	}
 }

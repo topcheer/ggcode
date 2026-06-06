@@ -82,7 +82,7 @@ func newQQAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 	adapter := &qqAdapter{
 		name:             name,
 		manager:          mgr,
-		httpClient:       &http.Client{Timeout: 60 * time.Second},
+		httpClient:       util.NewInsecureAwareClient(60 * time.Second),
 		appID:            appID,
 		appSecret:        appSecret,
 		credentialSource: source,
@@ -520,16 +520,8 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 		if sendErr := a.sendReplyText(ctx, channelID, msgID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
-		if pairingResult.Bound && pairingResult.PreviousBinding != nil &&
-			(pairingResult.NewBinding == nil ||
-				pairingResult.PreviousBinding.Adapter != pairingResult.NewBinding.Adapter ||
-				pairingResult.PreviousBinding.ChannelID != pairingResult.NewBinding.ChannelID) {
-			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: "当前目录已解绑到其他 QQ 渠道，如需重新绑定请再次发起配对。",
-			}); err != nil {
-				a.publishState(false, "warning", err.Error())
-			}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/uiusage"
 
 	"github.com/topcheer/ggcode/desktop/markdownx"
 )
@@ -812,16 +813,24 @@ func (cv *ChatView) updateStatusBar(working bool) {
 	resolved := cv.bridge.Resolved()
 	tc := cv.bridge.TokenCount()
 	cw := cv.bridge.ContextWindow()
+	threshold := cv.bridge.AutoCompactThreshold()
+	display, ok := uiusage.BuildContextDisplay(tc, cw, threshold)
+	usedLabel := uiusage.HumanizeTokenCount(tc)
+	maxLabel := uiusage.HumanizeTokenCount(cw)
+	if ok {
+		usedLabel = display.UsedLabel
+		maxLabel = display.MaxLabel
+	}
 	var text string
 	if working {
 		text = fmt.Sprintf("%s/%s | %s/%s | working (%s)",
 			resolved.VendorID, resolved.Model,
-			humanizeTokens(tc), humanizeTokens(cw),
+			usedLabel, maxLabel,
 			cv.bridge.Elapsed().Round(time.Second))
 	} else {
 		text = fmt.Sprintf("%s/%s | %s/%s",
 			resolved.VendorID, resolved.Model,
-			humanizeTokens(tc), humanizeTokens(cw))
+			usedLabel, maxLabel)
 	}
 	if text != cv.lastStatus {
 		cv.lastStatus = text

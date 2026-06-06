@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/skip2/go-qrcode"
@@ -22,80 +21,48 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
-// desktopIMBridge implements im.Bridge, routing inbound IM messages
-// into the desktop agent for processing.
-type desktopIMBridge struct {
-	app *App
-}
-
-func newDesktopIMBridge(app *App) *desktopIMBridge {
-	return &desktopIMBridge{app: app}
-}
-
-// SubmitInboundMessage is called by im.Manager when an IM message arrives.
-// It injects the message as a user prompt into the active agent session.
-func (b *desktopIMBridge) SubmitInboundMessage(ctx context.Context, msg im.InboundMessage) error {
-	if b.app == nil {
-		return fmt.Errorf("app not available")
+func newDesktopIMBridge(app *App) im.Bridge {
+	return &im.InteractiveTextBridge{
+		Submit: func(_ context.Context, text string) error {
+			if app == nil {
+				return fmt.Errorf("app not available")
+			}
+			fyne.Do(func() {
+				if app.agentBridge != nil {
+					app.agentBridge.Send(text)
+				}
+			})
+			return nil
+		},
+		CurrentApproval: func() (string, string, bool) {
+			if app == nil || app.agentBridge == nil {
+				return "", "", false
+			}
+			return app.agentBridge.PendingApprovalRequest()
+		},
+		ResolveApproval: func(requestID, decision string) {
+			if app == nil || app.agentBridge == nil {
+				return
+			}
+			app.agentBridge.RespondApproval(requestID, decision)
+		},
+		CurrentAskUser: func() (string, toolpkg.AskUserRequest, bool) {
+			if app == nil || app.agentBridge == nil {
+				return "", toolpkg.AskUserRequest{}, false
+			}
+			return app.agentBridge.PendingAskUserRequest()
+		},
+		ResolveAskUser: func(requestID string, response toolpkg.AskUserResponse) {
+			if app == nil || app.agentBridge == nil {
+				return
+			}
+			app.agentBridge.RespondAskUser(requestID, response)
+		},
 	}
-
-	// Build the text from the inbound message.
-	text := buildInboundText(msg)
-	if text == "" {
-		return nil
-	}
-
-	// Run on the UI goroutine to safely interact with agent.
-	fyne.Do(func() {
-		if b.app.agentBridge != nil {
-			b.app.agentBridge.Send(text)
-		}
-	})
-
-	return nil
-}
-
-// buildInboundText extracts displayable text from an inbound message.
-func buildInboundText(msg im.InboundMessage) string {
-	blocks := msg.ProviderContent()
-	if len(blocks) == 0 {
-		return strings.TrimSpace(msg.Text)
-	}
-	var parts []string
-	for _, block := range blocks {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			parts = append(parts, strings.TrimSpace(block.Text))
-		}
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "\n")
-	}
-	return strings.TrimSpace(msg.Text)
-}
-
-// showPairingChallenge displays a dialog for the user to confirm
-// a pairing challenge from an IM adapter.
-func (a *App) showPairingChallenge(challenge im.PairingChallenge) {
-	if a.window == nil {
-		return
-	}
-
-	adapterName := challenge.Adapter
-	code := challenge.Code
-
-	msg := fmt.Sprintf("IM adapter '%s' is requesting to pair.\n\nEnter this code in your IM channel:\n\n    %s", adapterName, code)
-
-	fyne.Do(func() {
-		dialog.ShowInformation("IM Pairing Request", msg, a.window)
-	})
-}
-
-// showPairingCode displays the pairing code for platforms that need scan+confirm.
-func showPairingCode(w fyne.Window, adapterName, code string) {
-	msg := fmt.Sprintf("Adapter '%s' pairing code:\n\n    %s\n\nEnter this code in the IM channel to complete binding.", adapterName, code)
-	dialog.ShowInformation("Pairing Code", msg, w)
 }
 
 // startIMAdapters starts all enabled adapters bound to the current workspace.
@@ -129,7 +96,11 @@ func (a *App) showPairingCodeDialog(ch *im.PairingChallenge) {
 	adapterLbl := widget.NewLabel(fmt.Sprintf("%s (%s)", ch.Adapter, ch.Platform))
 	adapterLbl.Alignment = fyne.TextAlignCenter
 
-	hintLbl := widget.NewLabel(t("im.code_hint"))
+	hintText := t("im.code_hint")
+	if ch.Kind == im.PairingKindRebind {
+		hintText = "Enter this code in the new IM channel to switch binding:"
+	}
+	hintLbl := widget.NewLabel(hintText)
 	hintLbl.Alignment = fyne.TextAlignCenter
 
 	codeText := canvas.NewText(ch.Code, theme.ForegroundColor())

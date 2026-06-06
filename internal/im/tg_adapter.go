@@ -81,7 +81,7 @@ func newTGAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 	adapter := &tgAdapter{
 		name:       name,
 		manager:    mgr,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: util.NewInsecureAwareClient(60 * time.Second),
 		botToken:   botToken,
 		apiBase:    apiBase,
 		parseMode:  parseMode,
@@ -297,16 +297,8 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 		if sendErr := a.sendReplyText(ctx, chatID, msgID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
-		if pairingResult.Bound && pairingResult.PreviousBinding != nil &&
-			(pairingResult.NewBinding == nil ||
-				pairingResult.PreviousBinding.Adapter != pairingResult.NewBinding.Adapter ||
-				pairingResult.PreviousBinding.ChannelID != pairingResult.NewBinding.ChannelID) {
-			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: "当前目录已解绑到其他 Telegram 渠道，如需重新绑定请再次发起配对。",
-			}); err != nil {
-				a.publishState(false, "warning", err.Error())
-			}
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			a.publishState(false, "warning", err.Error())
 		}
 		return
 	}

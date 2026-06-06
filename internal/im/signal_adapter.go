@@ -100,11 +100,15 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 	groupAllowlist := parseCommaList(stringValue(adapterCfg.Extra, "group_allowlist"), os.Getenv("SIGNAL_GROUP_ALLOWLIST"))
 
 	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "SIGNAL_PROXY")
-	httpClient := &http.Client{Timeout: signalRequestTimeout}
+	httpClient := util.NewInsecureAwareClient(signalRequestTimeout)
 	if proxy != "" {
 		proxyURL, err := url.Parse(proxy)
 		if err == nil {
-			httpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+			if base, ok := httpClient.Transport.(*http.Transport); ok && base != nil {
+				base.Proxy = http.ProxyURL(proxyURL)
+			} else {
+				httpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+			}
 		}
 	}
 
@@ -211,7 +215,7 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 	// /v1/receive/ is a long-poll endpoint — it blocks until a message
 	// arrives (or times out server-side). Use a long client timeout and
 	// issue requests sequentially, not on a ticker.
-	client := &http.Client{Timeout: 300 * time.Second}
+	client := util.NewInsecureAwareClient(300 * time.Second)
 
 	for {
 		if ctx.Err() != nil {
@@ -460,6 +464,9 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		if pairingResult.Consumed {
 			// Auto-add first paired group to allowlist
 			_ = a.sendText(chatID, pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				a.publishState(false, "warning", err.Error())
+			}
 			return
 		}
 	}
@@ -624,7 +631,7 @@ func (a *signalAdapter) healthCheck() error {
 	if err != nil {
 		return err
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := util.NewInsecureAwareClient(10 * time.Second).Do(req)
 	if err != nil {
 		return fmt.Errorf("health check: %w", err)
 	}
@@ -747,7 +754,7 @@ func CheckSignalDaemon(baseURL string) error {
 		baseURL = "http://" + baseURL
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := util.NewInsecureAwareClient(5 * time.Second)
 	resp, err := client.Get(baseURL + "/v1/about")
 	if err != nil {
 		return fmt.Errorf("signal-cli daemon not reachable at %s: %w", baseURL, err)
@@ -772,7 +779,7 @@ func FetchSignalQRCode(baseURL, deviceName string) ([]byte, error) {
 	if deviceName == "" {
 		deviceName = "ggcode"
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := util.NewInsecureAwareClient(30 * time.Second)
 	resp, err := client.Get(fmt.Sprintf("%s/v1/qrcodelink?device_name=%s", baseURL, url.QueryEscape(deviceName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch QR code: %w", err)

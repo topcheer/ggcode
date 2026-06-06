@@ -22,6 +22,10 @@ type Info struct {
 	AccessToken   string    `json:"access_token,omitempty"`
 	RefreshToken  string    `json:"refresh_token,omitempty"`
 	EnterpriseURL string    `json:"enterprise_url,omitempty"`
+	OAuthIssuer   string    `json:"oauth_issuer,omitempty"`
+	OAuthResource string    `json:"oauth_resource,omitempty"`
+	OAuthClientID string    `json:"oauth_client_id,omitempty"`
+	OAuthSecret   string    `json:"oauth_client_secret,omitempty"`
 	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

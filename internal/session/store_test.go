@@ -6,10 +6,26 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
+
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatal("condition not met before timeout")
+	}
+}
 
 func TestSaveLoad(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
@@ -97,6 +113,29 @@ func TestAppendMessage(t *testing.T) {
 	reloaded, _ := store.Load(ses.ID)
 	if len(reloaded.Messages) != 1 {
 		t.Fatalf("after append, messages=%d", len(reloaded.Messages))
+	}
+}
+
+func TestAppendMessageGeneratesUTF8SafeTitle(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = ""
+	store.Save(ses)
+
+	text := "这是一个很长很长的中文标题这是一个很长很长的中文标题这是一个很长很长的中文标题这是一个很长很长的中文标题"
+	msg := provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: text}}}
+	if err := store.AppendMessage(ses, msg); err != nil {
+		t.Fatal(err)
+	}
+
+	if !utf8.ValidString(ses.Title) {
+		t.Fatalf("expected valid UTF-8 title, got %q", ses.Title)
+	}
+	if got, want := ses.Title, util.Truncate(text, 60); got != want {
+		t.Fatalf("title mismatch: got %q want %q", got, want)
 	}
 }
 
@@ -672,21 +711,25 @@ func TestListCleansUpEmptySessions(t *testing.T) {
 	idx = append(idx, indexEntry{ID: ses2.ID, Title: "empty"})
 	store.saveIndex(idx)
 
-	// List should clean up the empty session.
+	// List should return quickly from the index, then clean up the empty session in the background.
 	list, err := store.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 {
-		t.Fatalf("List returned %d sessions, want 1", len(list))
+	if len(list) != 2 {
+		t.Fatalf("first List should return index entries before background cleanup, got %d", len(list))
 	}
-	if list[0].ID != ses1.ID {
-		t.Errorf("expected session %s, got %s", ses1.ID, list[0].ID)
-	}
-	// Empty session file should be gone.
-	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
-		t.Error("empty session file should have been cleaned up")
-	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+			return false
+		}
+		list, err := store.List()
+		if err != nil {
+			return false
+		}
+		return len(list) == 1 && list[0].ID == ses1.ID
+	})
 }
 
 func TestDefaultDir_RespectsHomeOverride(t *testing.T) {

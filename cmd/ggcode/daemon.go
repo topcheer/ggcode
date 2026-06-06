@@ -22,8 +22,8 @@ import (
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
-	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -32,7 +32,6 @@ import (
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -139,53 +138,26 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return err
 	}
 
-	// Permission policy
 	workingDir, _ := os.Getwd()
-	allowedDirs := cfg.ExpandAllowedDirs(".")
-	rules := make(map[string]permission.Decision)
-	for t, perm := range cfg.ToolPerms {
-		switch config.ToolPermission(perm) {
-		case "allow":
-			rules[t] = permission.Allow
-		case "deny":
-			rules[t] = permission.Deny
-		default:
-			rules[t] = permission.Ask
-		}
-	}
 	mode := permission.ParsePermissionMode(cfg.DefaultMode)
 	if bypass {
 		mode = permission.BypassMode
 	}
-	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 
 	// Tools
 	var ag *agent.Agent
-	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
+	core, err := agentruntime.BuildInteractiveRuntimeCore(cfg, workingDir, policy)
+	if err != nil {
 		return err
 	}
-	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
-	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
-	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
-	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(cfg.Plugins)
-	if err := pluginMgr.RegisterTools(registry); err != nil {
-		return err
-	}
-
-	autoMem := memory.NewAutoMemory()
-	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
-	_ = registry.Register(saveMemoryTool)
-
-	_, _, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
-	commandMgr.SetExtraProviders(func() []*commands.Command {
-		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
-	})
+	registry := core.Registry
+	mcpMgr := core.MCPManager
+	autoMem := core.AutoMemory
+	projectAutoMem := core.ProjectAutoMem
+	saveMemoryTool := core.SaveMemoryTool
+	startupAssets := core.StartupAssets
+	commandMgr := startupAssets.CommandManager
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
 	}
@@ -210,34 +182,27 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return a, nil
 	}
 
-	_ = registry.Register(tool.SkillTool{
-		Skills:       commandMgr,
-		Runtime:      mcpMgr,
-		Provider:     prov,
-		Tools:        registry,
-		AgentFactory: skillAgentFactory,
-		WorkingDir:   workingDir,
-		OnUsage:      nil,
-		OnSkillUsed: func(ref string) {
-			if knightAgent != nil {
-				knightAgent.RecordSkillUse(ref)
-			}
-		},
-		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
-			if knightAgent == nil {
-				return
-			}
-			if event.Err != nil || event.Result.IsError {
-				knightAgent.RecordSkillEffectiveness(event.Ref, 1)
-				return
-			}
-			if event.Mode == tool.SkillExecutionModeFork {
-				knightAgent.RecordSkillEffectiveness(event.Ref, 4)
-				return
-			}
-			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
-		},
-	})
+	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil)
+	skillTool.OnSkillUsed = func(ref string) {
+		if knightAgent != nil {
+			knightAgent.RecordSkillUse(ref)
+		}
+	}
+	skillTool.OnSkillCompleted = func(event tool.SkillExecutionEvent) {
+		if knightAgent == nil {
+			return
+		}
+		if event.Err != nil || event.Result.IsError {
+			knightAgent.RecordSkillEffectiveness(event.Ref, 1)
+			return
+		}
+		if event.Mode == tool.SkillExecutionModeFork {
+			knightAgent.RecordSkillEffectiveness(event.Ref, 4)
+			return
+		}
+		knightAgent.RecordSkillEffectiveness(event.Ref, 3)
+	}
+	_ = registry.Register(skillTool)
 	var subMgr *subagent.Manager
 	acpClientMgr := acpclient.NewClientManager(workingDir, policy)
 	if len(acpClientMgr.Available()) > 0 {
@@ -266,28 +231,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		toolNames[i] = t.Name()
 	}
 	buildCurrentSystemPrompt := func() (string, []string) {
-		userSlashCmds := commandMgr.UserSlashCommands()
-		customCmdNames := make([]string, 0, len(userSlashCmds))
-		for name := range userSlashCmds {
-			customCmdNames = append(customCmdNames, name)
-		}
-		prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
-		skillsPrompt, promptSkillRefs := buildSkillsSystemPromptWithPromptRefs(commandMgr.List())
-		if skillsPrompt != "" {
-			prompt += "\n\n## Skills\n" + skillsPrompt
-		}
-		if mode == permission.AutopilotMode {
-			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-		}
-		if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
-			prompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
-		}
-		if projectAutoMem != nil {
-			if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
-				prompt += "\n\n## Auto Memory (Project)\n" + projContent
-			}
-		}
-		return prompt, promptSkillRefs
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	var promptSkillRefsMu sync.RWMutex
@@ -324,13 +268,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			debug.Log("daemon", "Knight scenario record failed: %v", scenarioErr)
 		}
 	})
-	if resolved.ContextWindow > 0 {
-		ag.ContextManager().SetContextWindow(resolved.ContextWindow)
-	}
+	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
-	if resolved.MaxTokens > 0 {
-		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
-	}
 	ag.SetPermissionPolicy(policy)
 	ag.SetWorkingDir(workingDir)
 	ag.SetSupportsVision(resolved.SupportsVision)
@@ -360,18 +300,21 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	restartCh := make(chan struct{}, 1)
 
 	// IM Manager
-	imMgr := im.NewManager()
-	bindingsPath, err := im.DefaultBindingsPath()
+	adapters := make(map[string]bool)
+	if cfg != nil {
+		for name, acfg := range cfg.IM.Adapters {
+			adapters[name] = acfg.Enabled
+		}
+	}
+	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
+		Workspace:       workingDir,
+		EnabledAdapters: adapters,
+	})
 	if err != nil {
-		return fmt.Errorf("resolving IM bindings path: %w", err)
+		return fmt.Errorf("initializing IM runtime: %w", err)
 	}
-	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-	if err != nil {
-		return fmt.Errorf("creating IM binding store: %w", err)
-	}
-	if err := imMgr.SetBindingStore(bindingStore); err != nil {
-		return fmt.Errorf("loading IM bindings: %w", err)
-	}
+	imMgr := runtimeInit.Manager
+	bindingStore := runtimeInit.BindingStore
 
 	// Check for existing bindings for this workspace
 	bindings, err := bindingStore.ListByWorkspace(workingDir)
@@ -391,28 +334,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		} else {
 			return fmt.Errorf("%s", daemon.Tr(daemon.ResolveLang(cfg.Language), "daemon.no_binding"))
 		}
-	}
-
-	pairingPath, err := im.DefaultPairingStatePath()
-	if err != nil {
-		return fmt.Errorf("resolving IM pairing state path: %w", err)
-	}
-	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-	if err != nil {
-		return fmt.Errorf("creating IM pairing store: %w", err)
-	}
-	if err := imMgr.SetPairingStore(pairingStore); err != nil {
-		return fmt.Errorf("loading IM pairing state: %w", err)
-	}
-
-	// Bind session
-	imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
-	if cfg != nil {
-		adapters := make(map[string]bool)
-		for name, acfg := range cfg.IM.Adapters {
-			adapters[name] = acfg.Enabled
-		}
-		imMgr.ApplyAdapterConfig(adapters)
 	}
 
 	// Determine language
@@ -508,18 +429,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			defer bridge.SetRunStateHook(nil)
 			defer bridge.SetUserMessageHook(nil)
 
-			tunnelBroker.OnCommand(func(cmd tunnel.GatewayMessage) {
-				shareController.HandleCommand(bridge, cmd)
-			})
-			tunnelBroker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
-				return shareController.Snapshot()
-			})
-			if ses != nil && ses.ID != "" {
-				tunnelBroker.SwitchSession(ses.ID)
-			} else {
-				tunnelBroker.ResetSession()
-			}
-			tunnelBroker.SendSnapshot(shareController.Snapshot())
+			shareController.PrepareBroker(tunnelBroker, bridge, ses)
 			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
 			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", info.ConnectURL)
 			fmt.Fprintf(os.Stderr, "%s\n", info.QRCode)
@@ -700,7 +610,42 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 	bridge.SetProviderSwitchHook(func(vendor, endpoint, model string) (string, error) {
-		return daemonProviderSwitch(cfg, vendor, endpoint, model)
+		resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
+		if err != nil {
+			return "", err
+		}
+		agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
+		if ses != nil {
+			ses.Vendor = cfg.Vendor
+			ses.Endpoint = cfg.Endpoint
+			ses.Model = resolved.Model
+		}
+		if vendor == "" && endpoint == "" && model == "" {
+			vendors := make([]string, 0)
+			for v := range cfg.Vendors {
+				vendors = append(vendors, v)
+			}
+			endpoints := cfg.EndpointNames(cfg.Vendor)
+			models := resolved.Models
+			if len(models) == 0 && resolved.Model != "" {
+				models = []string{resolved.Model}
+			}
+			return fmt.Sprintf(
+				"📋 Current config:\n  Provider: %s (%s)\n  Model: %s\n  Available providers: %s\n  Endpoints: %s\n  Models: %s",
+				resolved.VendorName, resolved.EndpointName, resolved.Model,
+				strings.Join(vendors, ", "),
+				strings.Join(endpoints, ", "),
+				strings.Join(models, ", "),
+			), nil
+		}
+		if model != "" {
+			return fmt.Sprintf("✅ Model switched to: %s (%s)", resolved.Model, resolved.VendorName), nil
+		}
+		if vendor != "" {
+			return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+		}
+		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
 	})
 	debug.Log("daemon", "Knight config: enabled=%v trust=%s budget=%d idle=%ds capabilities=%v",
 		cfg.Knight().Enabled, cfg.Knight().TrustLevel, cfg.Knight().DailyTokenBudget,
@@ -1306,6 +1251,43 @@ func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.Daemon
 	}
 }
 
+func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, target daemonTunnelCommandTarget, ses *session.Session) {
+	if c == nil || broker == nil || target == nil {
+		return
+	}
+	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+		c.HandleCommand(target, cmd)
+	})
+	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+		return c.Snapshot()
+	})
+
+	sessionID := ""
+	var replay []tunnel.GatewayMessage
+	if ses != nil {
+		sessionID = ses.ID
+	}
+	if sessionID != "" {
+		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
+			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+				events, err := agentruntime.ProjectionReplay(store, sessionID)
+				if err != nil {
+					return nil
+				}
+				return events
+			})
+			broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+				_ = agentruntime.AppendProjectionEvent(store, ev)
+			})
+			if epoch, events, err := agentruntime.PrepareProjectionReplay(store, ses); err == nil {
+				broker.SetAuthorityEpoch(epoch)
+				replay = events
+			}
+		}
+	}
+	agentruntime.PublishShareState(broker, sessionID, c.Snapshot(), replay, true)
+}
+
 func (c *daemonTunnelShareController) Snapshot() tunnel.BrokerSnapshot {
 	snapshot := tunnel.BrokerSnapshot{
 		SessionInfo: c.sessionInfo,
@@ -1356,24 +1338,21 @@ func (c *daemonTunnelShareController) HandleCommand(target daemonTunnelCommandTa
 	if c == nil || c.broker == nil || target == nil {
 		return
 	}
-	switch cmd.Type {
-	case tunnel.CmdMessage, "user_text":
-		var data tunnel.MessageData
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
-			return
-		}
-		if strings.TrimSpace(data.Text) == "" {
-			return
-		}
-		c.SetNextUserMessageOverride(data)
-		target.SendUserMessage([]provider.ContentBlock{{Type: "text", Text: data.Text}})
-		c.broker.PushServerAck(data.MessageID)
-	case tunnel.CmdInterrupt:
-		if !target.InterruptActiveRun() {
-			return
-		}
-		c.cancelCurrentRun()
-	}
+	agentruntime.RouteTunnelCommand(cmd, agentruntime.TunnelCommandHooks{
+		OnUserMessage: func(data tunnel.MessageData) {
+			c.SetNextUserMessageOverride(data)
+			target.SendUserMessage([]provider.ContentBlock{{Type: "text", Text: data.Text}})
+		},
+		OnInterrupt: func() {
+			if !target.InterruptActiveRun() {
+				return
+			}
+			c.cancelCurrentRun()
+		},
+		OnServerAck: func(messageID string) {
+			c.broker.PushServerAck(messageID)
+		},
+	})
 }
 
 func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent) {
@@ -1472,7 +1451,7 @@ func (c *daemonTunnelShareController) handleReasoning(chunk string) {
 	c.mu.Lock()
 	c.reasoningTail += chunk
 	c.mu.Unlock()
-	c.broker.PushReasoning(tunnelReasoningMsgIDFor(msgID), chunk)
+	c.broker.PushReasoning(agentruntime.TunnelReasoningMsgID(msgID), chunk)
 }
 
 func (c *daemonTunnelShareController) handleText(text string) {
@@ -1484,7 +1463,7 @@ func (c *daemonTunnelShareController) handleText(text string) {
 	c.mu.Lock()
 	c.textTail += text
 	c.mu.Unlock()
-	c.broker.PushReasoningDone(tunnelReasoningMsgIDFor(msgID))
+	c.broker.PushReasoningDone(agentruntime.TunnelReasoningMsgID(msgID))
 	c.broker.PushText(msgID, text)
 }
 
@@ -1518,7 +1497,7 @@ func (c *daemonTunnelShareController) rolloverMainStream(force bool) {
 	if msgID == "" {
 		return
 	}
-	c.broker.PushReasoningDone(tunnelReasoningMsgIDFor(msgID))
+	c.broker.PushReasoningDone(agentruntime.TunnelReasoningMsgID(msgID))
 	if !force && !needsFinalize {
 		return
 	}
@@ -1636,14 +1615,6 @@ func daemonTruncateRunes(s string, maxRunes int, suffix string) string {
 		return string(runes[:maxRunes])
 	}
 	return string(runes[:maxRunes-len(suffixRunes)]) + suffix
-}
-
-func tunnelReasoningMsgIDFor(msgID string) string {
-	msgID = strings.TrimSpace(msgID)
-	if msgID == "" {
-		return ""
-	}
-	return msgID + "-reasoning"
 }
 
 // readKeyboard reads raw keystrokes from stdin and sends them to the channel.
@@ -1765,50 +1736,4 @@ func writeClipboard(text string) {
 	}
 	cmd.Stdin = strings.NewReader(text)
 	_ = cmd.Run()
-}
-
-// daemonProviderSwitch handles /provider, /model, /config IM commands.
-// All three params may be empty (show current config), or selectively set.
-func daemonProviderSwitch(cfg *config.Config, vendor, endpoint, model string) (string, error) {
-	// All empty → show current config
-	if vendor == "" && endpoint == "" && model == "" {
-		resolved, err := cfg.ResolveActiveEndpoint()
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve config: %w", err)
-		}
-		vendors := make([]string, 0)
-		for v := range cfg.Vendors {
-			vendors = append(vendors, v)
-		}
-		endpoints := cfg.EndpointNames(cfg.Vendor)
-		models := resolved.Models
-		if len(models) == 0 && resolved.Model != "" {
-			models = []string{resolved.Model}
-		}
-		return fmt.Sprintf(
-			"📋 Current config:\n  Provider: %s (%s)\n  Model: %s\n  Available providers: %s\n  Endpoints: %s\n  Models: %s",
-			resolved.VendorName, resolved.EndpointName, resolved.Model,
-			strings.Join(vendors, ", "),
-			strings.Join(endpoints, ", "),
-			strings.Join(models, ", "),
-		), nil
-	}
-
-	// Set the selection
-	if err := cfg.SetActiveSelection(vendor, endpoint, model); err != nil {
-		return "", err
-	}
-
-	resolved, err := cfg.ResolveActiveEndpoint()
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve after switch: %w", err)
-	}
-
-	if model != "" {
-		return fmt.Sprintf("✅ Model switched to: %s (%s)", resolved.Model, resolved.VendorName), nil
-	}
-	if vendor != "" {
-		return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
-	}
-	return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
 }

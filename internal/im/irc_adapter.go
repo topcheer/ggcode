@@ -457,6 +457,9 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 		}
 		if pairingResult.Consumed {
 			_ = a.sendIRCMessage(channelID, pairingResult.ReplyText)
+			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+				a.publishState(false, "warning", err.Error())
+			}
 			return
 		}
 	}

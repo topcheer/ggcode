@@ -9,11 +9,11 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/provider"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -223,30 +223,13 @@ func (m *Model) tryActivateCurrentSelection() error {
 	if m.config == nil {
 		return fmt.Errorf("config not loaded")
 	}
-	resolved, err := m.config.ResolveActiveEndpoint()
-	if err != nil {
-		return err
-	}
-	if resolved.APIKey == "" {
-		if resolved.AuthType == "oauth" {
-			return fmt.Errorf("no login configured for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
-		}
-		return fmt.Errorf("no api key configured for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
-	}
-	prov, err := provider.NewProvider(resolved)
+	resolved, prov, err := agentruntime.ResolveCurrentSelection(m.config)
 	if err != nil {
 		return err
 	}
 	if m.agent != nil {
-		m.agent.SetProvider(prov)
-		if resolved.ContextWindow > 0 {
-			m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
-		}
-		if resolved.MaxTokens > 0 {
-			m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
-		}
-		// Unconditionally set probe key for context window inference from overflow errors.
-		m.agent.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
+		agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
+		agentruntime.StartAsyncRelayModelLimitRefresh(m.config, resolved, m.agent, nil)
 		// Silently probe actual context window in background
 		m.startContextProbe()
 	}
@@ -262,27 +245,13 @@ func (m *Model) ensureProviderSync() {
 	if m.config == nil || m.agent == nil {
 		return
 	}
-	resolved, err := m.config.ResolveActiveEndpoint()
+	resolved, prov, err := agentruntime.ResolveCurrentSelection(m.config)
 	if err != nil {
-		debug.Log("provider", "ensureProviderSync: resolve failed: %v", err)
+		debug.Log("provider", "ensureProviderSync: activate failed: %v", err)
 		return
 	}
-	if resolved.APIKey == "" {
-		debug.Log("provider", "ensureProviderSync: no API key for %s/%s", resolved.VendorID, resolved.EndpointID)
-		return
-	}
-	prov, err := provider.NewProvider(resolved)
-	if err != nil {
-		debug.Log("provider", "ensureProviderSync: new provider failed: %v", err)
-		return
-	}
-	m.agent.SetProvider(prov)
-	if resolved.ContextWindow > 0 {
-		m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
-	}
-	if resolved.MaxTokens > 0 {
-		m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
-	}
+	agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
+	agentruntime.StartAsyncRelayModelLimitRefresh(m.config, resolved, m.agent, nil)
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	m.syncSessionSelection()
 	// Silently probe actual context window in background

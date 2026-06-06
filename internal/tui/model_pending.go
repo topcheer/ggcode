@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"sync"
@@ -175,45 +176,67 @@ func cloneTunnelMessageData(data *tunnel.MessageData) *tunnel.MessageData {
 	return &cp
 }
 
+func (q *pendingQueue) ensureQueue() *agentruntime.PendingQueue[*tunnel.MessageData] {
+	if q.q != nil {
+		return q.q
+	}
+	queue := agentruntime.NewPendingQueue[*tunnel.MessageData]()
+	for _, item := range q.items {
+		queue.Enqueue(item.Text, item.Hidden, cloneTunnelMessageData(item.TunnelMessageOverride))
+	}
+	q.q = queue
+	return queue
+}
+
+func (q *pendingQueue) syncItemsFromQueue(queue *agentruntime.PendingQueue[*tunnel.MessageData]) {
+	snapshot := queue.Snapshot()
+	if len(snapshot) == 0 {
+		q.items = nil
+		q.q = queue
+		return
+	}
+	items := make([]pendingSubmission, 0, len(snapshot))
+	for _, item := range snapshot {
+		items = append(items, pendingSubmission{
+			Text:                  item.Text,
+			Hidden:                item.Hidden,
+			TunnelMessageOverride: cloneTunnelMessageData(item.Meta),
+		})
+	}
+	q.items = items
+	q.q = queue
+}
+
 func (q *pendingQueue) enqueue(text string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.items = append(q.items, pendingSubmission{Text: text})
-	return len(q.items)
+	queue := q.ensureQueue()
+	count := queue.Enqueue(text, false, nil)
+	q.syncItemsFromQueue(queue)
+	return count
 }
 
 func (q *pendingQueue) enqueueHidden(text string, override *tunnel.MessageData) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.items = append(q.items, pendingSubmission{
-		Text:           text,
-		Hidden:         true,
-		TunnelOverride: cloneTunnelMessageData(override),
-	})
-	return len(q.items)
+	queue := q.ensureQueue()
+	count := queue.Enqueue(text, true, cloneTunnelMessageData(override))
+	q.syncItemsFromQueue(queue)
+	return count
 }
 
 func (q *pendingQueue) count() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	return len(q.items)
 }
 
 func (q *pendingQueue) clear() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.items = nil
+	q.q = agentruntime.NewPendingQueue[*tunnel.MessageData]()
 }
 
 func (q *pendingQueue) snapshot() []string {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	if len(q.items) == 0 {
 		return nil
 	}
-	out := make([]string, len(q.items))
-	for i, item := range q.items {
-		out[i] = item.Text
+	out := make([]string, 0, len(q.items))
+	for _, item := range q.items {
+		out = append(out, item.Text)
 	}
 	return out
 }
@@ -224,53 +247,40 @@ func (q *pendingQueue) consume() string {
 }
 
 func (q *pendingQueue) consumeVisiblePrefix() string {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.items) == 0 {
+	queue := q.ensureQueue()
+	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
+		return !item.Hidden && item.Meta == nil
+	})
+	q.syncItemsFromQueue(queue)
+	if len(items) == 0 {
 		return ""
 	}
-	first := q.items[0]
-	if first.Hidden || first.TunnelOverride != nil {
-		return ""
-	}
-	parts := []string{first.Text}
-	consumed := 1
-	for consumed < len(q.items) {
-		item := q.items[consumed]
-		if item.Hidden || item.TunnelOverride != nil {
-			break
-		}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
 		parts = append(parts, item.Text)
-		consumed++
 	}
-	q.items = q.items[consumed:]
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
 func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.items) == 0 {
+	queue := q.ensureQueue()
+	item, ok := queue.Consume()
+	if !ok {
+		q.syncItemsFromQueue(queue)
 		return "", false, nil
 	}
-
-	first := q.items[0]
-	if first.Hidden || first.TunnelOverride != nil {
-		q.items = q.items[1:]
-		return strings.TrimSpace(first.Text), true, cloneTunnelMessageData(first.TunnelOverride)
+	if item.Hidden || item.Meta != nil {
+		q.syncItemsFromQueue(queue)
+		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta)
 	}
-
-	parts := []string{first.Text}
-	consumed := 1
-	for consumed < len(q.items) {
-		item := q.items[consumed]
-		if item.Hidden || item.TunnelOverride != nil {
-			break
-		}
-		parts = append(parts, item.Text)
-		consumed++
+	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
+		return !item.Hidden && item.Meta == nil
+	})
+	q.syncItemsFromQueue(queue)
+	parts := []string{item.Text}
+	for _, pending := range items {
+		parts = append(parts, pending.Text)
 	}
-	q.items = q.items[consumed:]
 	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil
 }
 

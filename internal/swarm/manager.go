@@ -541,12 +541,18 @@ func (m *Manager) NotifyIdleRunners(teamID string) {
 func buildTeammateSystemPrompt(name, teamName, workingDir string) string {
 	prompt := fmt.Sprintf(
 		"You are a teammate named %q in team %q. "+
-			"Complete tasks assigned to you via messages or the task board. "+
+			"Work like a professional collaborative team member. "+
+			"Use the shared task board as the source of truth for tracked work. "+
+			"If a task is assigned to you directly via inbox, start it immediately and do not re-claim it from the board first. "+
+			"If you choose unassigned work from the board, claim it before starting. "+
+			"Before creating a new follow-up task, check whether related work is already tracked so you do not duplicate effort. "+
+			"Share intermediate findings when they materially unblock another teammate, but avoid repetitive back-and-forth or message loops. "+
+			"If you need help or discover specialized follow-up work, send one targeted request or create one clear handoff task with enough context. "+
 			"Only claim tasks that match your role and capabilities. "+
-			"If a task does not match your role, leave it for another teammate. "+
+			"If a task does not match your role, hand it off cleanly instead of doing partial low-quality work. "+
 			"Do not spawn further sub-agents or teammates. "+
 			"Do not use emoji with Variation Selector-16 (U+FE0F, e.g. warning_sign+VS16) — use plain text instead to avoid terminal rendering issues. "+
-			"Report results concisely when done.",
+			"Report results concisely and mark tracked tasks complete when done.",
 		name, teamName,
 	)
 	if workingDir != "" {

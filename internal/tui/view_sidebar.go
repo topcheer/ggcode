@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/uiusage"
 	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/version"
 )
@@ -603,30 +604,15 @@ func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
 	maxTokens := cm.ContextWindow()
 	tokenCount := cm.TokenCount()
 	threshold := cm.AutoCompactThreshold()
-	if maxTokens <= 0 || threshold <= 0 {
+	display, ok := uiusage.BuildContextDisplay(tokenCount, maxTokens, threshold)
+	if !ok {
 		return sidebarContextStatLine{}, false
 	}
 
-	usagePercent := int(float64(tokenCount) / float64(maxTokens) * 100)
-	if usagePercent < 0 {
-		usagePercent = 0
-	}
-	if usagePercent > 100 {
-		usagePercent = 100
-	}
-
-	remainingPercent := int(float64(threshold-tokenCount) / float64(threshold) * 100)
-	if remainingPercent < 0 {
-		remainingPercent = 0
-	}
-	if remainingPercent > 100 {
-		remainingPercent = 100
-	}
-
 	return sidebarContextStatLine{
-		maxTokens:        maxTokens,
-		usagePercent:     usagePercent,
-		remainingPercent: remainingPercent,
+		maxTokens:        display.MaxTokens,
+		usagePercent:     display.UsagePercent,
+		remainingPercent: display.RemainingPercent,
 	}, true
 }
 
@@ -645,13 +631,7 @@ func (m Model) sidebarSessionMetrics() []metrics.MetricEvent {
 }
 
 func humanizeTokenCount(n int) string {
-	if n >= 1000000 && n%1000000 == 0 {
-		return fmt.Sprintf("%dm", n/1000000)
-	}
-	if n >= 1000 && n%1000 == 0 {
-		return fmt.Sprintf("%dk", n/1000)
-	}
-	return fmt.Sprintf("%d", n)
+	return uiusage.HumanizeTokenCount(n)
 }
 
 func formatMetricDuration(d time.Duration) string {

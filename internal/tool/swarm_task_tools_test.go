@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/task"
 )
 
 // ——— SwarmTaskCreate ———
@@ -27,6 +29,37 @@ func TestSwarmTaskCreateTool(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
+	}
+}
+
+func TestSwarmTaskCreateToolDescriptionEmphasizesCoordination(t *testing.T) {
+	desc := SwarmTaskCreateTool{}.Description()
+	for _, want := range []string{
+		"shared task board",
+		"clear best owner",
+		"not already tracked on the board",
+		"distinct follow-up work",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("expected description to contain %q, got %q", want, desc)
+		}
+	}
+}
+
+func TestFormatTaskPromptEmphasizesCollaborationRules(t *testing.T) {
+	prompt := formatTaskPrompt(task.Task{
+		Subject:     "Investigate API",
+		Description: "Look into the REST endpoints",
+	})
+	for _, want := range []string{
+		"do not re-claim it from the board first",
+		"avoid duplicate effort",
+		"one clear handoff task",
+		"Use swarm_task_complete when done",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q, got %q", want, prompt)
+		}
 	}
 }
 

@@ -1,0 +1,104 @@
+package agentruntime
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
+)
+
+type SessionState struct {
+	Session              *session.Session
+	UsageTurnIndex       int
+	LastMetricDigestTurn int
+}
+
+func AdoptSession(ses *session.Session) SessionState {
+	turnIndex := session.LastTurnIndex(ses)
+	return SessionState{
+		Session:              ses,
+		UsageTurnIndex:       turnIndex,
+		LastMetricDigestTurn: turnIndex,
+	}
+}
+
+func EnsureSession(store session.Store, current *session.Session, vendor, endpoint, model, workspace string) (SessionState, bool, error) {
+	if current != nil {
+		return AdoptSession(current), false, nil
+	}
+	if store == nil {
+		return SessionState{}, false, fmt.Errorf("session store missing")
+	}
+	ses := session.NewSession(vendor, endpoint, model)
+	ses.Workspace = workspace
+	if err := store.Save(ses); err != nil {
+		return SessionState{}, false, err
+	}
+	return AdoptSession(ses), true, nil
+}
+
+func LoadSession(store session.Store, id string) (SessionState, error) {
+	if store == nil {
+		return SessionState{}, fmt.Errorf("session store missing")
+	}
+	ses, err := store.Load(id)
+	if err != nil {
+		return SessionState{}, err
+	}
+	return AdoptSession(ses), nil
+}
+
+func ClearSession() SessionState {
+	return SessionState{}
+}
+
+func SaveSessionMessages(store session.Store, ses *session.Session, messages []provider.Message) error {
+	if store == nil || ses == nil {
+		return nil
+	}
+	ses.Messages = messages
+	ses.UpdatedAt = time.Now()
+
+	if len(ses.Messages) == 0 {
+		return store.Delete(ses.ID)
+	}
+
+	if ses.Title == "" || ses.Title == "New session" {
+		for _, msg := range ses.Messages {
+			if msg.Role != "user" {
+				continue
+			}
+			for _, block := range msg.Content {
+				if block.Type != "text" || block.Text == "" {
+					continue
+				}
+				text := block.Text
+				if len([]rune(text)) > 60 {
+					text = string([]rune(text)[:57]) + "..."
+				}
+				ses.Title = text
+				return store.Save(ses)
+			}
+		}
+	}
+
+	return store.Save(ses)
+}
+
+func SaveAgentSessionSnapshot(store session.Store, ses *session.Session, agentInst *agent.Agent) error {
+	if agentInst == nil {
+		return SaveSessionMessages(store, ses, ses.Messages)
+	}
+	return SaveSessionMessages(store, ses, agentInst.Messages())
+}
+
+func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
+	if agentInst == nil || ses == nil {
+		return
+	}
+	for _, msg := range ses.Messages {
+		agentInst.AddMessage(msg)
+	}
+}

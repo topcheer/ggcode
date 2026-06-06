@@ -64,8 +64,9 @@ type Broker struct {
 	toolArgs         map[string]string
 	subagentToolMeta map[string]subagentToolMeta
 
-	reasoningMu     sync.Mutex
-	activeReasoning map[string]string // msgID -> agentID (empty for main agent)
+	reasoningMu        sync.Mutex
+	activeReasoning    map[string]string // msgID -> agentID (empty for main agent)
+	activeReasoningBuf map[string]string // msgID -> accumulated reasoning text
 
 	// Text batching
 	textMu     sync.Mutex
@@ -113,18 +114,19 @@ type pendingClientReplay struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:           sess,
-		sessionID:         newTunnelSessionID(),
-		sessionGeneration: 1,
-		outDone:           make(chan struct{}),
-		textBuf:           make(map[string]*textEntry),
-		activeText:        make(map[string]*textEntry),
-		textTick:          time.NewTicker(300 * time.Millisecond),
-		textDone:          make(chan struct{}),
-		sendWaiters:       make(map[string]chan struct{}),
-		toolArgs:          make(map[string]string),
-		subagentToolMeta:  make(map[string]subagentToolMeta),
-		activeReasoning:   make(map[string]string),
+		session:            sess,
+		sessionID:          newTunnelSessionID(),
+		sessionGeneration:  1,
+		outDone:            make(chan struct{}),
+		textBuf:            make(map[string]*textEntry),
+		activeText:         make(map[string]*textEntry),
+		textTick:           time.NewTicker(300 * time.Millisecond),
+		textDone:           make(chan struct{}),
+		sendWaiters:        make(map[string]chan struct{}),
+		toolArgs:           make(map[string]string),
+		subagentToolMeta:   make(map[string]subagentToolMeta),
+		activeReasoning:    make(map[string]string),
+		activeReasoningBuf: make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
@@ -166,6 +168,11 @@ type textEntry struct {
 	agentID string
 	text    string
 	kind    string
+}
+
+type reasoningEntry struct {
+	agentID string
+	text    string
 }
 
 // senderLoop drains the outbound queue. Never blocks the producer.
@@ -302,6 +309,51 @@ func (b *Broker) replayActiveText(active map[string]textEntry) {
 			b.enqueueWithStream(EventSubagentText, id, SubagentTextData{AgentID: entry.agentID, ID: id, Chunk: entry.text})
 		} else {
 			b.enqueueWithStream(EventText, id, TextData{ID: id, Chunk: entry.text, Kind: entry.kind})
+		}
+	}
+}
+
+func (b *Broker) activeReasoningSnapshot() map[string]reasoningEntry {
+	b.reasoningMu.Lock()
+	defer b.reasoningMu.Unlock()
+	if len(b.activeReasoningBuf) == 0 {
+		return nil
+	}
+	out := make(map[string]reasoningEntry, len(b.activeReasoningBuf))
+	for id, text := range b.activeReasoningBuf {
+		if text == "" {
+			continue
+		}
+		out[id] = reasoningEntry{
+			agentID: b.activeReasoning[id],
+			text:    text,
+		}
+	}
+	return out
+}
+
+func (b *Broker) replayActiveReasoning(active map[string]reasoningEntry) {
+	if len(active) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(active))
+	for id := range active {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		entry := active[id]
+		if entry.text == "" {
+			continue
+		}
+		if entry.agentID != "" {
+			b.enqueueWithStream(EventSubagentReasoning, id, SubagentReasoningData{
+				AgentID: entry.agentID,
+				ID:      id,
+				Chunk:   entry.text,
+			})
+		} else {
+			b.enqueueWithStream(EventReasoning, id, TextData{ID: id, Chunk: entry.text})
 		}
 	}
 }
@@ -538,6 +590,7 @@ func (b *Broker) resetProjectionAndEnqueue(clearActive bool) {
 	b.textMu.Unlock()
 	b.reasoningMu.Lock()
 	b.activeReasoning = make(map[string]string)
+	b.activeReasoningBuf = make(map[string]string)
 	b.reasoningMu.Unlock()
 	b.enqueueControl(EventSnapshotReset, nil)
 }
@@ -632,6 +685,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			activeText := b.activeTextSnapshot()
+			activeReasoning := b.activeReasoningSnapshot()
 			snapshot, ok := b.currentSnapshot(provider)
 			if !ok {
 				return
@@ -645,6 +699,10 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			b.replayActiveText(activeText)
+			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+				return
+			}
+			b.replayActiveReasoning(activeReasoning)
 			b.clientProjectionSeeded.Store(true)
 		}()
 		return
@@ -712,6 +770,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			return
 		}
 		activeText := b.activeTextSnapshot()
+		activeReasoning := b.activeReasoningSnapshot()
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
 		}
@@ -720,6 +779,10 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			return
 		}
 		b.replayActiveText(activeText)
+		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+			return
+		}
+		b.replayActiveReasoning(activeReasoning)
 		b.markRelayReady()
 	}()
 }
@@ -914,7 +977,11 @@ func (b *Broker) PushReasoning(id, chunk string) {
 	if b.activeReasoning == nil {
 		b.activeReasoning = make(map[string]string)
 	}
+	if b.activeReasoningBuf == nil {
+		b.activeReasoningBuf = make(map[string]string)
+	}
 	b.activeReasoning[id] = ""
+	b.activeReasoningBuf[id] += chunk
 	b.reasoningMu.Unlock()
 	b.enqueueWithStream(EventReasoning, id, TextData{ID: id, Chunk: chunk})
 }
@@ -929,13 +996,14 @@ func (b *Broker) PushReasoningDone(id string) {
 	agentID, ok := b.activeReasoning[id]
 	if ok {
 		delete(b.activeReasoning, id)
+		delete(b.activeReasoningBuf, id)
 	}
 	b.reasoningMu.Unlock()
 	if !ok {
 		return
 	}
 	if agentID != "" {
-		b.enqueueWithStream(EventSubagentReasoningDone, id, SubagentTextData{AgentID: agentID, ID: id, Done: true})
+		b.enqueueWithStream(EventSubagentReasoningDone, id, SubagentReasoningData{AgentID: agentID, ID: id, Done: true})
 		return
 	}
 	b.enqueueWithStream(EventReasoningDone, id, TextData{ID: id, Done: true})
@@ -1097,9 +1165,13 @@ func (b *Broker) PushSubagentReasoning(agentID, msgID, chunk string, done bool) 
 		if b.activeReasoning == nil {
 			b.activeReasoning = make(map[string]string)
 		}
+		if b.activeReasoningBuf == nil {
+			b.activeReasoningBuf = make(map[string]string)
+		}
 		b.activeReasoning[msgID] = agentID
+		b.activeReasoningBuf[msgID] += chunk
 		b.reasoningMu.Unlock()
-		b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentTextData{
+		b.enqueueWithStream(EventSubagentReasoning, msgID, SubagentReasoningData{
 			AgentID: agentID,
 			ID:      msgID,
 			Chunk:   chunk,

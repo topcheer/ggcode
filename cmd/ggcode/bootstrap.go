@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -11,14 +12,6 @@ import (
 // applies impersonation settings, and creates the provider.
 // Shared by TUI, Pipe, and Daemon entry points.
 func ResolveProvider(cfg *config.Config) (provider.Provider, *config.ResolvedEndpoint, error) {
-	resolved, err := cfg.ResolveActiveEndpoint()
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving endpoint: %w", err)
-	}
-	if resolved.APIKey == "" {
-		return nil, nil, fmt.Errorf("no API key for vendor %q endpoint %q. Set the api_key in config or /provider", resolved.VendorID, resolved.EndpointID)
-	}
-
 	// Apply impersonation settings from config before creating provider
 	if imp := cfg.Impersonation; imp.Preset != "" {
 		var preset *provider.ImpersonationPreset
@@ -32,9 +25,9 @@ func ResolveProvider(cfg *config.Config) (provider.Provider, *config.ResolvedEnd
 		provider.SetActiveImpersonation(preset, imp.CustomVersion, customHeaders)
 	}
 
-	prov, err := provider.NewProvider(resolved)
+	resolved, prov, err := agentruntime.ResolveCurrentSelection(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("creating provider: %w", err)
+		return nil, nil, fmt.Errorf("resolving provider selection: %w", err)
 	}
 	return prov, resolved, nil
 }

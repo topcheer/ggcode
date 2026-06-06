@@ -5,17 +5,22 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/plugin"
 )
 
 // MCPServerInfo is a frontend-friendly representation of an MCP server config.
 type MCPServerInfo struct {
-	Name    string            `json:"name"`
-	Type    string            `json:"type,omitempty"`
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type,omitempty"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Status    string            `json:"status,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	Disabled  bool              `json:"disabled,omitempty"`
+	Connected bool              `json:"connected,omitempty"`
 }
 
 // ListMCPServers returns all configured MCP servers.
@@ -31,16 +36,62 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 	result := make([]MCPServerInfo, 0, len(cfg.MCPServers))
 	for _, s := range cfg.MCPServers {
 		result = append(result, MCPServerInfo{
-			Name:    s.Name,
-			Type:    s.Type,
-			Command: s.Command,
-			Args:    s.Args,
-			Env:     s.Env,
-			URL:     s.URL,
-			Headers: s.Headers,
+			Name:     s.Name,
+			Type:     s.Type,
+			Command:  s.Command,
+			Args:     s.Args,
+			Env:      s.Env,
+			URL:      s.URL,
+			Headers:  s.Headers,
+			Status:   "unknown",
+			Disabled: plugin.MCPDisabled(s.Name),
 		})
 	}
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat == nil || chat.mcpManager == nil {
+		return result, nil
+	}
+	snapshot := chat.mcpManager.Snapshot()
+	byName := make(map[string]plugin.MCPServerInfo, len(snapshot))
+	for _, info := range snapshot {
+		byName[info.Name] = info
+	}
+	for i := range result {
+		if info, ok := byName[result[i].Name]; ok {
+			result[i].Status = string(info.Status)
+			result[i].Error = info.Error
+			result[i].Disabled = info.Disabled
+			result[i].Connected = info.Status == plugin.MCPStatusConnected
+		}
+	}
 	return result, nil
+}
+
+func SetMCPServerEnabled(name string, enabled bool) bool {
+	disabled := !enabled
+	plugin.SetMCPDisabled(name, disabled)
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat == nil || chat.mcpManager == nil {
+		return false
+	}
+	if disabled {
+		return chat.mcpManager.Disconnect(name)
+	}
+	return chat.mcpManager.Reconnect(name)
+}
+
+func ReconnectMCPServer(name string) bool {
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat == nil || chat.mcpManager == nil {
+		return false
+	}
+	return chat.mcpManager.Reconnect(name)
 }
 
 // AddMCPServer adds a new MCP server configuration.

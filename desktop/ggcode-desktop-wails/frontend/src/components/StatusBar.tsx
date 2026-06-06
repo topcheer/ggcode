@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
+import { useTranslation } from '../i18n'
 
 interface StatusBarProps {
   onContextToggle?: () => void
@@ -9,59 +10,22 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onContextToggle, data }: StatusBarProps) {
+  const { t } = useTranslation()
   const [info, setInfo] = useState<StatusBarData>(data ?? {
     vendor: '...',
     model: '...',
+    mode: 'auto',
     contextUsed: 0,
     contextTotal: 0,
+    usagePercent: 0,
+    remainingPercent: 0,
     inputTokens: 0,
     outputTokens: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
     cacheHit: 0,
-    status: 'Ready',
+    status: t('status.ready'),
   })
-
-  // Load config on mount
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const cfg = await App.GetConfig()
-        if (cancelled) return
-        setInfo(prev => ({
-          ...prev,
-          vendor: cfg.vendor || prev.vendor,
-          model: cfg.model || prev.model,
-        }))
-      } catch {
-        // GetConfig not available yet, keep defaults
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [])
-
-  // Listen for chat:stream events to update token usage
-  useEffect(() => {
-    const off = EventsOn('chat:stream', (data: any) => {
-      if (!data) return
-      if (data.type === 'done') {
-        setInfo(prev => ({
-          ...prev,
-          inputTokens: data.inputTokens ?? prev.inputTokens,
-          outputTokens: data.outputTokens ?? prev.outputTokens,
-          contextUsed: data.contextUsed ?? prev.contextUsed,
-          contextTotal: data.contextTotal ?? prev.contextTotal,
-          cacheHit: data.cacheHit ?? prev.cacheHit,
-          status: 'Ready',
-        }))
-      } else if (data.type === 'start') {
-        setInfo(prev => ({ ...prev, status: 'Thinking...' }))
-      } else if (data.type === 'stream') {
-        setInfo(prev => ({ ...prev, status: 'Streaming' }))
-      }
-    })
-    return () => { if (typeof off === 'function') off() }
-  }, [])
 
   // Merge external data if provided
   useEffect(() => {
@@ -69,7 +33,8 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
   }, [data])
 
   const formatTokens = (n: number) => {
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
+    if (n >= 1000000 && n % 1000000 === 0) return `${n / 1000000}m`
+    if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`
     return String(n)
   }
 
@@ -106,7 +71,7 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
         fontSize: 10, fontFamily: 'var(--font-mono)',
       }}>⌘.</button>
       <span style={{
-        color: info.status === 'Ready' ? 'var(--color-success)' : 'var(--color-warning)',
+        color: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
       }}>● {info.status}</span>
     </div>
   )

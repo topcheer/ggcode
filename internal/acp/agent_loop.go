@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -63,12 +64,8 @@ func NewAgentLoop(
 		debug.Log("acp", "warning: could not resolve endpoint: %v", resolveErr)
 	}
 	if resolveErr == nil {
-		if resolved.ContextWindow > 0 {
-			a.ContextManager().SetContextWindow(resolved.ContextWindow)
-		}
-		if resolved.MaxTokens > 0 {
-			a.ContextManager().SetOutputReserve(resolved.MaxTokens)
-		}
+		agentruntime.ApplyResolvedLimitsToAgent(a, resolved)
+		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, a, nil)
 		a.SetSupportsVision(resolved.SupportsVision)
 	}
 

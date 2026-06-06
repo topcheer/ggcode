@@ -1672,7 +1672,7 @@ func TestBuildSystemPromptIncludesProjectAutoMemory(t *testing.T) {
 		t.Fatalf("save memory: %v", err)
 	}
 
-	prompt := buildSystemPrompt(projectDir, nil, projectAutoMem)
+	prompt := buildSystemPrompt(config.DefaultConfig(), projectDir, nil, projectAutoMem, nil)
 	if !strings.Contains(prompt, "## Auto Memory (Project)") || !strings.Contains(prompt, "applies to desktop prompt") {
 		t.Fatalf("expected project auto memory in prompt, got %q", prompt)
 	}

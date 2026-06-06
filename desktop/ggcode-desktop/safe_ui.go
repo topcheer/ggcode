@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/uiusage"
 )
 
 // ── Event-driven UI updates ────────────────────────
@@ -181,12 +182,13 @@ func (u *UIState) SetTokenUsage(usage string, pct float64) {
 }
 
 func (u *UIState) SetSessionUsage(usage provider.TokenUsage) {
-	total := humanizeTokens(usage.Total())
-	input := humanizeTokens(usage.DisplayInputTokens())
-	output := humanizeTokens(usage.OutputTokens)
-	cacheRead := humanizeTokens(usage.CacheRead)
-	cacheWrite := humanizeTokens(usage.CacheWrite)
-	cacheHit := fmt.Sprintf("%d%%", usage.CacheHitPercent())
+	display := uiusage.BuildSessionUsageDisplay(usage)
+	total := display.TotalLabel
+	input := display.InputLabel
+	output := display.OutputLabel
+	cacheRead := display.CacheReadLabel
+	cacheWrite := display.CacheWriteLabel
+	cacheHit := fmt.Sprintf("%d%%", display.CacheHitPercent)
 	_ = u.SessionUsageTotal.Set(total)
 	_ = u.SessionUsageInput.Set(input)
 	_ = u.SessionUsageOutput.Set(output)

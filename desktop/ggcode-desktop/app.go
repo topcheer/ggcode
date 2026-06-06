@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,11 +23,12 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/uiusage"
 
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -393,87 +393,12 @@ func (a *App) showShareDialog() {
 
 		broker := tunnel.NewBroker(sess)
 
-		// Handle commands from mobile client
-		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-			switch cmd.Type {
-			case "user_text", "message":
-				var data tunnel.MessageData
-				if err := json.Unmarshal(cmd.Data, &data); err != nil {
-					return
-				}
-				text := data.Text
-				if text != "" {
-					fyne.Do(func() {
-						if a.ui != nil {
-							a.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
-						}
-					})
-					a.forwardTunnelUserMessage(broker, data)
-				}
-				// Acknowledge to mobile client that the message was received by desktop.
-				broker.PushServerAck(data.MessageID)
-			case tunnel.CmdApprovalResponse:
-				if a.agentBridge == nil {
-					return
-				}
-				var data tunnel.ApprovalResponseData
-				if err := json.Unmarshal(cmd.Data, &data); err != nil {
-					return
-				}
-				a.agentBridge.handleMobileApprovalResponse(data)
-			case tunnel.CmdAskUserResponse:
-				if a.agentBridge == nil {
-					return
-				}
-				var data tunnel.AskUserResponseData
-				if err := json.Unmarshal(cmd.Data, &data); err != nil {
-					return
-				}
-				a.agentBridge.handleMobileAskUserResponse(data)
-			case tunnel.CmdLanguageChange:
-				var data tunnel.LanguageChangeData
-				if err := json.Unmarshal(cmd.Data, &data); err != nil {
-					return
-				}
-				a.applyLanguageChange(data.Language)
-			case tunnel.CmdThemeChange:
-				var data tunnel.ThemeChangeData
-				if err := json.Unmarshal(cmd.Data, &data); err != nil {
-					return
-				}
-				a.applyThemeChange(data.Theme)
-			case tunnel.CmdInterrupt:
-				if a.agentBridge != nil {
-					a.agentBridge.Cancel()
-				}
-			}
-		})
-
 		a.setTunnelState(sess, broker)
 		if a.agentBridge != nil {
-			a.agentBridge.ensureSession()
-
-			snapshot := a.tunnelSnapshot()
-			switchedSession := false
-			if current := a.agentBridge.CurrentSession(); current != nil {
-				broker.SwitchSession(current.ID)
-				switchedSession = true
-			}
-			a.agentBridge.PrepareCurrentSessionTunnelLedger()
-			replayedCanonical := false
-			if events := a.agentBridge.CurrentSessionTunnelEvents(); len(events) > 0 {
-				broker.ReplayEvents(events, !switchedSession)
-				replayedCanonical = true
-			} else {
-				broker.SendSnapshot(snapshot)
-			}
-			broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+			a.agentBridge.BindShareCommands(broker, a.applyLanguageChange, a.applyThemeChange)
+			a.agentBridge.PrepareShareBroker(broker, func() tunnel.BrokerSnapshot {
 				return a.tunnelSnapshot()
 			})
-			a.agentBridge.AttachTunnelBroker(broker)
-			if !replayedCanonical {
-				a.reseedTunnelSnapshotAfterAttach(broker, snapshot)
-			}
 		}
 
 		return info, nil
@@ -534,23 +459,7 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 }
 
 func desktopTunnelSnapshotMatches(a, b tunnel.BrokerSnapshot) bool {
-	if a.SessionInfo != b.SessionInfo || a.Status != b.Status || a.Activity != b.Activity {
-		return false
-	}
-	if !desktopTunnelHistoryMatches(a.History, b.History) {
-		return false
-	}
-	if len(a.ExtraEvents) != len(b.ExtraEvents) {
-		return false
-	}
-	for i := range a.ExtraEvents {
-		if a.ExtraEvents[i].Type != b.ExtraEvents[i].Type ||
-			a.ExtraEvents[i].StreamID != b.ExtraEvents[i].StreamID ||
-			!bytes.Equal(a.ExtraEvents[i].Data, b.ExtraEvents[i].Data) {
-			return false
-		}
-	}
-	return true
+	return agentruntime.ShareSnapshotMatches(a, b)
 }
 
 func (a *App) reseedTunnelSnapshotAfterAttach(broker *tunnel.Broker, seeded tunnel.BrokerSnapshot) {
@@ -561,16 +470,12 @@ func (a *App) reseedTunnelSnapshotAfterAttach(broker *tunnel.Broker, seeded tunn
 	if desktopTunnelSnapshotMatches(seeded, latest) {
 		return
 	}
+	sessionID := ""
 	if a.agentBridge != nil {
-		if current := a.agentBridge.CurrentSession(); current != nil && current.ID != "" {
-			broker.SwitchSession(current.ID)
-		} else {
-			broker.ResetSession()
-		}
-	} else {
-		broker.ResetSession()
+		a.agentBridge.PublishCurrentShareSnapshot(broker, a.tunnelSnapshot, true, false)
+		return
 	}
-	broker.SendSnapshot(latest)
+	agentruntime.PublishShareState(broker, sessionID, latest, nil, true)
 }
 
 func (a *App) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
@@ -788,11 +693,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 func (a *App) closeTunnelGracefully(timeout time.Duration) {
 	broker := a.currentTunnelBroker()
 	sess := a.currentTunnelSession()
-	if broker != nil {
-		broker.StopSharingGracefully(timeout)
-	} else if sess != nil {
-		sess.DestroyGracefully(timeout)
-	}
+	agentruntime.StopSharedTunnelGracefully(sess, broker, timeout)
 	a.clearTunnelState()
 }
 
@@ -1197,9 +1098,7 @@ func (a *App) resumeSession(id string) {
 
 		// Push updated session info + history to mobile client.
 		if broker := a.currentTunnelBroker(); broker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-			broker.SwitchSession(a.agentBridge.CurrentSession().ID)
-			a.agentBridge.ResetCurrentSessionTunnelLedger()
-			broker.SendSnapshot(a.tunnelSnapshot())
+			a.agentBridge.PublishCurrentShareSnapshot(broker, a.tunnelSnapshot, true, true)
 		}
 
 		// Refresh sidebar.
@@ -1268,13 +1167,7 @@ func (a *App) startChat() {
 		}
 	}
 
-	resolved, err := a.cfg.ResolveActiveEndpoint()
-	if err != nil {
-		a.showError(t("error.resolve_endpoint", err))
-		return
-	}
-
-	prov, err := provider.NewProvider(resolved)
+	resolved, prov, err := agentruntime.ResolveCurrentSelection(a.cfg)
 	if err != nil {
 		a.showError(t("error.create_provider", err))
 		return
@@ -1299,9 +1192,7 @@ func (a *App) startChat() {
 	if broker := a.currentTunnelBroker(); broker != nil {
 		bridge.AttachTunnelBroker(broker)
 		if current := bridge.CurrentSession(); current != nil {
-			broker.SwitchSession(current.ID)
-			bridge.ResetCurrentSessionTunnelLedger()
-			broker.SendSnapshot(a.tunnelSnapshot())
+			bridge.PublishCurrentShareSnapshot(broker, a.tunnelSnapshot, true, true)
 		}
 	}
 
@@ -1355,7 +1246,13 @@ func (a *App) refreshSidebar() {
 	if a.agentBridge != nil {
 		tc := a.agentBridge.TokenCount()
 		cw := a.agentBridge.ContextWindow()
-		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
+		threshold := a.agentBridge.AutoCompactThreshold()
+		display, ok := uiusage.BuildContextDisplay(tc, cw, threshold)
+		if !ok {
+			a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", uiusage.HumanizeTokenCount(tc), uiusage.HumanizeTokenCount(cw)), 0)
+			return
+		}
+		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", display.UsedLabel, display.MaxLabel), float64(display.UsagePercent)/100)
 	}
 }
 
@@ -1583,13 +1480,7 @@ func resolveConfigFilePath(workDir string) string {
 }
 
 func humanizeTokens(n int) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	}
-	if n >= 1000 {
-		return fmt.Sprintf("%.1fK", float64(n)/1000)
-	}
-	return fmt.Sprintf("%d", n)
+	return uiusage.HumanizeTokenCount(n)
 }
 
 func max(a, b int) int {
@@ -1606,79 +1497,45 @@ func (a *App) initIMRuntime() {
 	}
 	defer safeRecover("initIMRuntime")
 
-	mgr := im.NewManager()
-
-	bindingsPath, err := im.DefaultBindingsPath()
-	if err != nil {
-		return
-	}
-	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-	if err != nil {
-		return
-	}
-	if err := mgr.SetBindingStore(bindingStore); err != nil {
-		return
-	}
-
-	pairingPath, err := im.DefaultPairingStatePath()
-	if err != nil {
-		return
-	}
-	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-	if err != nil {
-		return
-	}
-	if err := mgr.SetPairingStore(pairingStore); err != nil {
-		return
-	}
-
 	workDir := ""
 	if a.dc != nil {
 		workDir = a.dc.WorkDir
 	}
-	mgr.BindSession(im.SessionBinding{Workspace: workDir})
-
+	adapters := make(map[string]bool)
 	if a.cfg != nil {
-		adapters := make(map[string]bool)
 		for name, acfg := range a.cfg.IM.Adapters {
 			adapters[name] = acfg.Enabled
 		}
-		mgr.ApplyAdapterConfig(adapters)
+	}
+	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
+		Workspace:        workDir,
+		EnabledAdapters:  adapters,
+		RegisterInstance: workDir != "",
+		OnUpdate: func(snap im.StatusSnapshot) {
+			if snap.PendingPairing != nil && a.imPairingWin == nil {
+				ch := snap.PendingPairing
+				fyne.Do(func() {
+					a.showPairingCodeDialog(ch)
+				})
+			}
+			if snap.PendingPairing == nil && a.imPairingWin != nil {
+				fyne.Do(func() {
+					a.imPairingWin.Close()
+					a.imPairingWin = nil
+				})
+			}
+		},
+	})
+	if err != nil {
+		return
 	}
 
-	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
-		if snap.PendingPairing != nil && a.imPairingWin == nil {
-			ch := snap.PendingPairing
-			fyne.Do(func() {
-				a.showPairingCodeDialog(ch)
-			})
-		}
-		if snap.PendingPairing == nil && a.imPairingWin != nil {
-			fyne.Do(func() {
-				a.imPairingWin.Close()
-				a.imPairingWin = nil
-			})
-		}
-	})
-
-	a.imManager = mgr
-
-	// Register this desktop instance for multi-instance detection.
-	// If TUI or another instance is already running on this workspace,
-	// auto-mute all IM adapters to avoid duplicate message processing.
-	if a.dc.WorkDir != "" {
-		detect, others, err := mgr.RegisterInstance(a.dc.WorkDir)
-		if err == nil {
-			a.imInstanceDetect = detect
-			if len(others) > 0 {
-				count, _ := mgr.MuteAll()
-				if count > 0 {
-					primary := others[0]
-					logf("im", "auto-muted %d channel(s), primary PID=%d started at %s",
-						count, primary.PID, primary.StartedAt.Format("15:04:05"))
-				}
-			}
-		}
+	a.imManager = runtimeInit.Manager
+	a.imInstanceDetect = runtimeInit.InstanceDetect
+	if len(runtimeInit.OtherInstances) > 0 {
+		primary := runtimeInit.OtherInstances[0]
+		logf("im", "auto-muted IM channels, primary PID=%d started at %s",
+			primary.PID, primary.StartedAt.Format("15:04:05"))
 	}
 
 	// Start adapters bound to current workspace.

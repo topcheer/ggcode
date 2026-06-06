@@ -313,6 +313,14 @@ type SubagentTextData struct {
 	Done    bool   `json:"done"`
 }
 
+// SubagentReasoningData carries streaming reasoning from a sub-agent.
+type SubagentReasoningData struct {
+	AgentID string `json:"agent_id"`
+	ID      string `json:"id"` // reasoning stream ID for grouping chunks
+	Chunk   string `json:"chunk"`
+	Done    bool   `json:"done"`
+}
+
 // SubagentStatusData carries status updates for a sub-agent.
 type SubagentStatusData struct {
 	AgentID string `json:"agent_id"`

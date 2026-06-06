@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // maxResponseBodyBytes limits HTTP response body reads to prevent memory exhaustion.
@@ -106,7 +108,9 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			}
 			return origDial(dialCtx, network, dialAddr)
 		}
-		client.Transport = transport
+		client.Transport = util.WrapTransport(transport)
+	} else {
+		client.Transport = util.WrapTransport(nil)
 	}
 
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {

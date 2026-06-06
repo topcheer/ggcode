@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import type { JSX } from 'react'
 import { Plus, Trash2, Power, PowerOff, Volume2, VolumeX } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { useTranslation } from '../i18n'
 
 // ── Types matching Go structs ──
 
@@ -98,6 +99,7 @@ function PlatformIcon({ platform, size = 20 }: { platform: string; size?: number
 // ── Component ──
 
 export function IMManagement() {
+  const { t } = useTranslation()
   const [adapters, setAdapters] = useState<IMAdapterInfo[]>([])
   const [platforms, setPlatforms] = useState<IMPlatformMeta[]>([])
   const [showAdd, setShowAdd] = useState(false)
@@ -179,7 +181,7 @@ export function IMManagement() {
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, flex: 1, overflow: 'auto', minHeight: 0 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>IM Adapters</h3>
+        <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{t('im.title')}</h3>
         <div style={{ flex: 1 }} />
         <button onClick={() => { setShowAdd(true); setError('') }} style={{
           display: 'flex', alignItems: 'center', gap: 6,
@@ -187,7 +189,7 @@ export function IMManagement() {
           background: 'var(--color-primary)', color: '#fff',
           border: 'none', cursor: 'pointer', fontSize: 13,
         }}>
-          <Plus size={14} /> Add Adapter
+          <Plus size={14} /> {t('im.addAdapter')}
         </button>
       </div>
 
@@ -196,7 +198,7 @@ export function IMManagement() {
       {/* Adapter list — grouped by workspace */}
       {adapters.length === 0 ? (
         <div style={{ color: 'var(--text-tertiary)', fontSize: 13, textAlign: 'center', padding: 40 }}>
-          No IM adapters configured. Click "Add Adapter" to get started.
+          {t('im.noAdapters')}
         </div>
       ) : (() => {
         // Group by isCurrent, then workspace, then unbound
@@ -207,7 +209,7 @@ export function IMManagement() {
             {current.length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-success)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                  This Workspace ({current.length})
+                  {t('im.currentWorkspace')} ({current.length})
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {current.map(adapter => <AdapterRow key={adapter.name} adapter={adapter} onReload={loadData} onEdit={(n: string, e: Record<string, string>) => { setEditFields(e); setEditAdapter(n); setError('') }} />)}
@@ -217,7 +219,7 @@ export function IMManagement() {
             {other.length > 0 && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                  {current.length > 0 ? 'Other Adapters' : 'All Adapters'} ({other.length})
+                  {current.length > 0 ? t('im.otherWorkspaces') : t('im.unbound')} ({other.length})
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: 0.7 }}>
                   {other.map(adapter => <AdapterRow key={adapter.name} adapter={adapter} onReload={loadData} onEdit={(n: string, e: Record<string, string>) => { setEditFields(e); setEditAdapter(n); setError('') }} />)}
@@ -239,6 +241,7 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
   onCancel: () => void
   error: string
 }) {
+  const { t } = useTranslation()
   const [selectedPlatform, setSelectedPlatform] = useState('')
   const [adapterName, setAdapterName] = useState('')
   const [fields, setFields] = useState<Record<string, string>>({})
@@ -247,7 +250,7 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
   const platform = platforms.find(p => p.id === selectedPlatform)
 
   function handleAdd() {
-    if (!selectedPlatform) { setLocalError('Select a platform'); return }
+    if (!selectedPlatform) { setLocalError(t('im.selectPlatform')); return }
     if (!adapterName.trim()) { setLocalError('Enter an adapter name'); return }
     if (platform && !platform.qrAuth) {
       for (const f of platform.fields) {
@@ -259,26 +262,26 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
 
   return (
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
-      <h3 style={{ margin: 0 }}>Add IM Adapter</h3>
+      <h3 style={{ margin: 0 }}>{t('im.addAdapter')}</h3>
 
       {(error || localError) && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error || localError}</div>}
 
       {/* Platform select */}
       <label style={{ display: 'block' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Platform</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('im.platform')}</span>
         <select value={selectedPlatform} onChange={e => { setSelectedPlatform(e.target.value); setFields({}); setLocalError('') }} style={{
           width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
           background: 'var(--color-bg)', border: '1px solid var(--color-border)',
           color: 'var(--text-primary)', fontSize: 13, outline: 'none',
         }}>
-          <option value="">Select platform...</option>
+          <option value="">{t('im.selectPlatform')}</option>
           {platforms.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
         </select>
       </label>
 
       {/* Adapter name */}
       <label style={{ display: 'block' }}>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Adapter Name</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('im.name')}</span>
         <input value={adapterName} onChange={e => setAdapterName(e.target.value)} placeholder="e.g. dingtalk-alerts, telegram-dev" style={{
           width: '100%', height: 36, padding: '0 12px', borderRadius: 'var(--radius-md)',
           background: 'var(--color-bg)', border: '1px solid var(--color-border)',
@@ -314,12 +317,12 @@ function AddAdapterDialog({ platforms, onAdd, onCancel, error }: {
           flex: 1, height: 36, borderRadius: 'var(--radius-md)',
           background: 'var(--color-surface)', border: '1px solid var(--color-border)',
           color: 'var(--text-secondary)', cursor: 'pointer',
-        }}>Cancel</button>
+        }}>{t('im.cancel')}</button>
         <button onClick={handleAdd} style={{
           flex: 2, height: 36, borderRadius: 'var(--radius-md)',
           background: 'var(--color-primary)', color: '#fff',
           border: 'none', cursor: 'pointer', fontWeight: 600,
-        }}>Add Adapter</button>
+        }}>{t('im.addAdapter')}</button>
       </div>
     </div>
   )
@@ -336,6 +339,7 @@ function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCan
   onCancel: () => void
   error: string
 }) {
+  const { t } = useTranslation()
   return (
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
       <h3 style={{ margin: 0 }}>Edit: {adapter.name}</h3>
@@ -373,12 +377,12 @@ function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCan
           flex: 1, height: 36, borderRadius: 'var(--radius-md)',
           background: 'var(--color-surface)', border: '1px solid var(--color-border)',
           color: 'var(--text-secondary)', cursor: 'pointer',
-        }}>Cancel</button>
+        }}>{t('im.cancel')}</button>
         <button onClick={onSave} style={{
           flex: 2, height: 36, borderRadius: 'var(--radius-md)',
           background: 'var(--color-primary)', color: '#fff',
           border: 'none', cursor: 'pointer', fontWeight: 600,
-        }}>Save</button>
+        }}>{t('im.save')}</button>
       </div>
     </div>
   )
@@ -391,6 +395,15 @@ function AdapterRow({ adapter, onReload, onEdit }: {
   onReload: () => void
   onEdit: (name: string, extra: Record<string, string>) => void
 }) {
+  const { t } = useTranslation()
+
+  // Button visibility logic:
+  // - isCurrent: show enable/disable + mute/unmute + edit + delete
+  // - workspace && !isCurrent: show rebind + edit + delete
+  // - !workspace: show bind + edit + delete
+  const isBound = !!adapter.workspace
+  const isBoundToCurrent = adapter.isCurrent
+
   return (
     <div style={{
       padding: '12px 16px', borderRadius: 'var(--radius-md)',
@@ -424,30 +437,22 @@ function AdapterRow({ adapter, onReload, onEdit }: {
       </div>
 
       {/* Actions */}
-      <button onClick={async () => {
-        try { await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled); onReload() } catch {}
-      }} style={{
-        padding: '4px 8px', borderRadius: 'var(--radius-sm)',
-        border: 'none', cursor: 'pointer', fontSize: 11,
-        background: adapter.enabled ? 'var(--color-warning)' : 'var(--color-success)',
-        color: '#fff',
-      }}>
-        {adapter.enabled ? 'Disable' : 'Enable'}
-      </button>
+      {/* Enable/Disable button - only for current workspace binding */}
+      {isBoundToCurrent && (
+        <button onClick={async () => {
+          try { await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled); onReload() } catch {}
+        }} style={{
+          padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+          border: 'none', cursor: 'pointer', fontSize: 11,
+          background: adapter.enabled ? 'var(--color-warning)' : 'var(--color-success)',
+          color: '#fff',
+        }}>
+          {adapter.enabled ? t('im.offline') : t('im.online')}
+        </button>
+      )}
 
-      <button onClick={() => {
-        const fields: Record<string, string> = {}
-        if (adapter.extra) for (const [k, v] of Object.entries(adapter.extra)) fields[k] = String(v)
-        onEdit(adapter.name, fields)
-      }} style={{
-        padding: '4px 10px', borderRadius: 'var(--radius-sm)',
-        border: '1px solid var(--color-border)', cursor: 'pointer',
-        background: 'var(--color-surface)', color: 'var(--text-secondary)', fontSize: 11,
-      }}>
-        Edit
-      </button>
-
-      {adapter.workspace && (
+      {/* Mute/Unmute button - only for current workspace binding */}
+      {isBoundToCurrent && (
         <button onClick={async () => {
           try {
             await App.MuteIMAdapter(adapter.name, !adapter.muted)
@@ -460,10 +465,64 @@ function AdapterRow({ adapter, onReload, onEdit }: {
           color: adapter.muted ? 'var(--color-success)' : '#D29922',
           display: 'flex', alignItems: 'center', gap: 3,
         }}>
-          {adapter.muted ? <><Volume2 size={11} /> Unmute</> : <><VolumeX size={11} /> Mute</>}
+          {adapter.muted ? <><Volume2 size={11} /> {t('im.unmute')}</> : <><VolumeX size={11} /> {t('im.mute')}</>}
         </button>
       )}
 
+      {/* Unbind button - only for current workspace binding */}
+      {isBoundToCurrent && (
+        <button onClick={async () => {
+          if (!confirm(`Unbind adapter "${adapter.name}"?`)) return
+          try { await App.UnbindIMAdapter(adapter.name); onReload() } catch {}
+        }} style={{
+          padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+          border: 'none', cursor: 'pointer',
+          background: 'var(--color-error)', color: '#fff', fontSize: 11,
+        }}>
+          Unbind
+        </button>
+      )}
+
+      {/* Bind button - only for unbound adapters */}
+      {!isBound && (
+        <button onClick={async () => {
+          try { await App.BindIMAdapter(adapter.name); onReload() } catch {}
+        }} style={{
+          padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+          border: 'none', cursor: 'pointer',
+          background: 'var(--color-success)', color: '#fff', fontSize: 11,
+        }}>
+          Bind
+        </button>
+      )}
+
+      {/* Rebind button - for adapters bound to other workspaces */}
+      {isBound && !isBoundToCurrent && (
+        <button onClick={async () => {
+          try { await App.RebindIMAdapter(adapter.name); onReload() } catch {}
+        }} style={{
+          padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+          border: 'none', cursor: 'pointer',
+          background: 'var(--color-warning)', color: '#fff', fontSize: 11,
+        }}>
+          Rebind
+        </button>
+      )}
+
+      {/* Edit button - always available */}
+      <button onClick={() => {
+        const fields: Record<string, string> = {}
+        if (adapter.extra) for (const [k, v] of Object.entries(adapter.extra)) fields[k] = String(v)
+        onEdit(adapter.name, fields)
+      }} style={{
+        padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--color-border)', cursor: 'pointer',
+        background: 'var(--color-surface)', color: 'var(--text-secondary)', fontSize: 11,
+      }}>
+        Edit
+      </button>
+
+      {/* Delete button - always available */}
       <button onClick={async () => {
         if (!confirm(`Remove adapter "${adapter.name}"?`)) return
         try { await App.RemoveIMAdapter(adapter.name); onReload() } catch {}

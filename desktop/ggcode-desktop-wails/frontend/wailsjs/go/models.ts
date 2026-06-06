@@ -28,6 +28,20 @@ export namespace main {
 	        this.qrCodeBase64 = source["qrCodeBase64"];
 	    }
 	}
+	export class StreamEventEnvelope {
+	    type: string;
+	    data: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StreamEventEnvelope(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.data = source["data"];
+	    }
+	}
 
 }
 
@@ -279,6 +293,10 @@ export namespace wailskit {
 	    env?: Record<string, string>;
 	    url?: string;
 	    headers?: Record<string, string>;
+	    status?: string;
+	    error?: string;
+	    disabled?: boolean;
+	    connected?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MCPServerInfo(source);
@@ -293,6 +311,10 @@ export namespace wailskit {
 	        this.env = source["env"];
 	        this.url = source["url"];
 	        this.headers = source["headers"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.disabled = source["disabled"];
+	        this.connected = source["connected"];
 	    }
 	}
 	export class ResolvedEndpointInfo {
@@ -362,6 +384,7 @@ export namespace wailskit {
 	    toolDisplayName?: string;
 	    toolDetail?: string;
 	    isError?: boolean;
+	    streaming?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionMessage(source);
@@ -377,6 +400,7 @@ export namespace wailskit {
 	        this.toolDisplayName = source["toolDisplayName"];
 	        this.toolDetail = source["toolDetail"];
 	        this.isError = source["isError"];
+	        this.streaming = source["streaming"];
 	    }
 	}
 	export class TestEndpointResult {

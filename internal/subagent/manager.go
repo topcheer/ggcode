@@ -331,6 +331,15 @@ func (m *Manager) Get(id string) (*SubAgent, bool) {
 	return sa, ok
 }
 
+// SnapshotByID returns a stable copy of a sub-agent snapshot.
+func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
+	sa, ok := m.Get(id)
+	if !ok || sa == nil {
+		return Snapshot{}, false
+	}
+	return sa.snapshot(), true
+}
+
 // GetOutput returns the result of a completed (or in-progress) sub-agent.
 // Returns (result, true) if the agent exists, ("", false) otherwise.
 func (m *Manager) GetTaskOutput(id string) (string, bool) {

@@ -23,16 +23,18 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	d := &drainHelper{}
 
 	b := &Broker{
-		session:           sess,
-		sessionGeneration: 1,
-		outDone:           make(chan struct{}),
-		textBuf:           make(map[string]*textEntry),
-		activeText:        make(map[string]*textEntry),
-		textTick:          time.NewTicker(300 * time.Millisecond),
-		textDone:          make(chan struct{}),
-		sendWaiters:       make(map[string]chan struct{}),
-		toolArgs:          make(map[string]string),
-		subagentToolMeta:  make(map[string]subagentToolMeta),
+		session:            sess,
+		sessionGeneration:  1,
+		outDone:            make(chan struct{}),
+		textBuf:            make(map[string]*textEntry),
+		activeText:         make(map[string]*textEntry),
+		textTick:           time.NewTicker(300 * time.Millisecond),
+		textDone:           make(chan struct{}),
+		sendWaiters:        make(map[string]chan struct{}),
+		toolArgs:           make(map[string]string),
+		subagentToolMeta:   make(map[string]subagentToolMeta),
+		activeReasoning:    make(map[string]string),
+		activeReasoningBuf: make(map[string]string),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 	b.projectionCond = sync.NewCond(&b.projectionMu)
@@ -2044,6 +2046,74 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	}
 	if last.SessionID != msgs[0].SessionID {
 		t.Fatalf("in-flight text should use reset session id, got reset=%q text=%q", msgs[0].SessionID, last.SessionID)
+	}
+}
+
+func TestBrokerClientConnectedReplaysInFlightReasoningAfterSnapshot(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History:     []HistoryEntry{{Role: "user", Content: "question"}},
+			Status:      StatusData{Status: "thinking", Message: "processing"},
+		}
+	})
+
+	b.PushReasoning("reason-live", "step 1")
+	d.drain()
+
+	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 0})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 5 || msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected reset, snapshot, and in-flight reasoning, got %+v", msgs)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Type != EventReasoning {
+		t.Fatalf("expected in-flight reasoning after snapshot, got %q", last.Type)
+	}
+	var data TextData
+	if err := json.Unmarshal(last.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.ID != "reason-live" || data.Chunk != "step 1" {
+		t.Fatalf("unexpected in-flight reasoning replay: %+v", data)
+	}
+}
+
+func TestBrokerClientConnectedReplaysInFlightSubagentReasoningAfterSnapshot(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+		}
+	})
+
+	b.PushSubagentReasoning("sa-1", "reason-sa-1", "plan", false)
+	d.drain()
+
+	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 0})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 3 || msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected reset, snapshot, and in-flight subagent reasoning, got %+v", msgs)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Type != EventSubagentReasoning {
+		t.Fatalf("expected in-flight subagent reasoning after snapshot, got %q", last.Type)
+	}
+	var data SubagentReasoningData
+	if err := json.Unmarshal(last.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.AgentID != "sa-1" || data.ID != "reason-sa-1" || data.Chunk != "plan" {
+		t.Fatalf("unexpected in-flight subagent reasoning replay: %+v", data)
 	}
 }
 

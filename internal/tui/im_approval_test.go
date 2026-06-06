@@ -11,7 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// --- parseApprovalReply / isApprovalAlwaysReply ---
+// --- im.ParseApprovalReply / im.IsApprovalAlwaysReply ---
 
 func TestParseApprovalReply(t *testing.T) {
 	tests := []struct {
@@ -59,14 +59,14 @@ func TestParseApprovalReply(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got, ok := parseApprovalReply(tt.input)
+			got, ok := im.ParseApprovalReply(tt.input)
 			if ok != tt.wantOK {
 				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
 			}
 			if got != tt.want {
 				t.Errorf("decision = %v, want %v", got, tt.want)
 			}
-			always := isApprovalAlwaysReply(tt.input)
+			always := im.IsApprovalAlwaysReply(tt.input)
 			if always != tt.wantAlways {
 				t.Errorf("always = %v, want %v", always, tt.wantAlways)
 			}
@@ -75,7 +75,7 @@ func TestParseApprovalReply(t *testing.T) {
 }
 
 func TestParseApprovalReply_TrimSpace(t *testing.T) {
-	decision, ok := parseApprovalReply("  y  ")
+	decision, ok := im.ParseApprovalReply("  y  ")
 	if !ok || decision != permission.Allow {
 		t.Errorf("expected Allow ok=true, got %v ok=%v", decision, ok)
 	}
