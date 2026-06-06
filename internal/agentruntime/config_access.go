@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -22,11 +23,24 @@ import (
 type configAccess struct {
 	cfg        *config.Config
 	workingDir string
+	agentInst  *agent.Agent // set after agent creation via SetAgent()
+	uiNotify   func()       // optional UI refresh callback
 }
 
 // NewConfigAccess creates a ConfigAccess backed by the given config.
 func NewConfigAccess(cfg *config.Config, workingDir string) *configAccess {
 	return &configAccess{cfg: cfg, workingDir: workingDir}
+}
+
+// SetAgent injects the agent instance for provider hot-reload.
+// Must be called after agent creation.
+func (a *configAccess) SetAgent(ag *agent.Agent) {
+	a.agentInst = ag
+}
+
+// SetUINotify sets an optional callback for UI refresh after provider changes.
+func (a *configAccess) SetUINotify(fn func()) {
+	a.uiNotify = fn
 }
 
 // --- Get ---
@@ -398,6 +412,7 @@ func (a *configAccess) setWithProbe(key, value string) error {
 	}
 
 	debug.Log("config", "switched provider to %s/%s/%s (probe OK)", newVendor, newEndpoint, newModel)
+	a.reloadProvider()
 	return nil
 }
 
@@ -469,7 +484,11 @@ func (a *configAccess) setAPIKeyWithProbe(value string) error {
 		return fmt.Errorf("refusing to set api_key: probe failed: %w.\nCurrent key is unchanged.", err)
 	}
 
-	return a.cfg.SetEndpointAPIKey(vendor, endpoint, value, false)
+	err = a.cfg.SetEndpointAPIKey(vendor, endpoint, value, false)
+	if err == nil {
+		a.reloadProvider()
+	}
+	return err
 }
 
 func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
@@ -485,7 +504,11 @@ func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
 		if err := probeProvider(testResolved); err != nil {
 			return fmt.Errorf("refusing to set api_key for vendor %s: probe failed: %w", vendor, err)
 		}
-		return a.cfg.SetVendorAPIKey(vendor, value)
+		err = a.cfg.SetVendorAPIKey(vendor, value)
+		if err == nil {
+			a.reloadProvider()
+		}
+		return err
 	}
 	// endpoint-level key
 	vendor, endpoint := parts[0], parts[1]
@@ -497,7 +520,11 @@ func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
 	if err := probeProvider(testResolved); err != nil {
 		return fmt.Errorf("refusing to set api_key for %s/%s: probe failed: %w", vendor, endpoint, err)
 	}
-	return a.cfg.SetEndpointAPIKey(vendor, endpoint, value, false)
+	err = a.cfg.SetEndpointAPIKey(vendor, endpoint, value, false)
+	if err == nil {
+		a.reloadProvider()
+	}
+	return err
 }
 
 // ============================================================================
@@ -1032,6 +1059,28 @@ func redactIMAdapter(ad config.IMAdapterConfig) config.IMAdapterConfig {
 		}
 	}
 	return ad
+}
+
+// reloadProvider rebuilds the provider from current config and applies it
+// to the running agent. Called after vendor/endpoint/model/api_key changes.
+func (a *configAccess) reloadProvider() {
+	if a.agentInst == nil {
+		debug.Log("config", "no agent set, skipping provider reload")
+		return
+	}
+
+	resolved, prov, err := ResolveCurrentSelection(a.cfg)
+	if err != nil {
+		debug.Log("config", "provider reload failed: %v", err)
+		return
+	}
+
+	ApplyProviderToAgent(a.agentInst, prov, resolved)
+	debug.Log("config", "provider reloaded: %s/%s/%s", resolved.VendorID, resolved.EndpointID, resolved.Model)
+
+	if a.uiNotify != nil {
+		a.uiNotify()
+	}
 }
 
 func truncate(s string, maxLen int) string {

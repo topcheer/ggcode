@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -21,6 +22,7 @@ type InteractiveRuntimeCore struct {
 	SaveMemoryTool *tool.SaveMemoryTool
 	StartupAssets  StartupAssets
 	CommandManager *commands.Manager
+	configAccess   *configAccess // for SetAgent after agent creation
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -47,7 +49,8 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	_ = registry.Register(saveMemoryTool)
 
 	// Config tool — unified config management across all config files
-	_ = registry.Register(tool.ConfigTool{Access: NewConfigAccess(cfg, workingDir)})
+	cfgAccess := NewConfigAccess(cfg, workingDir)
+	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
 
 	startupAssets := LoadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr := startupAssets.CommandManager
@@ -64,7 +67,25 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		SaveMemoryTool: saveMemoryTool,
 		StartupAssets:  startupAssets,
 		CommandManager: commandMgr,
+		configAccess:   cfgAccess,
 	}, nil
+}
+
+// SetConfigAgent injects the agent into the config tool for provider hot-reload.
+// Must be called after the agent is created. Without this, config changes to
+// vendor/endpoint/model/api_key will persist to disk but won't take effect
+// until the next session restart.
+func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
+	if c.configAccess != nil {
+		c.configAccess.SetAgent(ag)
+	}
+}
+
+// SetConfigUINotify sets an optional callback for UI refresh after provider changes.
+func (c *InteractiveRuntimeCore) SetConfigUINotify(fn func()) {
+	if c.configAccess != nil {
+		c.configAccess.SetUINotify(fn)
+	}
 }
 
 func NewSkillTool(

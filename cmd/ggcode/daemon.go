@@ -243,6 +243,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
+	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
 		systemPrompt = nextPrompt
