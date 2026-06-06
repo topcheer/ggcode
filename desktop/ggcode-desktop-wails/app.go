@@ -126,7 +126,7 @@ func (a *App) initWorkspace(dir string) {
 	chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
 		a.emitStreamEvent(eventType, data)
 	}
-	chat.emitEvent = func(name string, payload ...interface{}) {
+	chat.EmitEvent = func(name string, payload ...interface{}) {
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, name, payload...)
 		}
