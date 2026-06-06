@@ -687,7 +687,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	cronScheduler := cron.NewScheduler(nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
 	repl.SetPlanModeTools(registry)
-	repl.SetConfigTool(registry)
 	repl.SetSendMessageTool(subMgr, registry)
 	repl.SetTaskOutputTool(subMgr, registry)
 	trace.Mark("register repl tools")
