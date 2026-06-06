@@ -222,7 +222,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 	}()
 
 	if b.agent == nil {
-		if err := b.initAgent(ctx); err != nil {
+		if err := b.InitAgent(ctx); err != nil {
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}
@@ -343,7 +343,7 @@ func (b *ChatBridge) LoadSession(id string) error {
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
 	b.mu.Unlock()
-	if err := b.initAgent(context.Background()); err != nil {
+	if err := b.InitAgent(context.Background()); err != nil {
 		return fmt.Errorf("init agent for session load: %w", err)
 	}
 	agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
@@ -434,8 +434,9 @@ func (b *ChatBridge) EnsureSession() {
 	b.mu.Unlock()
 }
 
-// initAgent sets up provider, tools, and agent — full parity with Fyne bridge.
-func (b *ChatBridge) initAgent(ctx context.Context) error {
+// InitAgent sets up provider, tools, and agent — full parity with Fyne bridge.
+// Called on startup or before the first message if not yet initialized.
+func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// Permission policy (auto mode)
 	modeStr := b.cfg.DefaultMode
 	if modeStr == "" {
@@ -1684,7 +1685,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	}()
 
 	if b.agent == nil {
-		if err := b.initAgent(ctx); err != nil {
+		if err := b.InitAgent(ctx); err != nil {
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}
@@ -1886,7 +1887,7 @@ func (b *ChatBridge) PushUserMessageToMobile(msg string) {
 
 // ResumeSession loads a session and re-initializes the agent for it.
 func (b *ChatBridge) ResumeSession(id string) error {
-	if err := b.initAgent(context.Background()); err != nil {
+	if err := b.InitAgent(context.Background()); err != nil {
 		return err
 	}
 	if err := b.LoadSession(id); err != nil {
@@ -1924,7 +1925,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	}()
 
 	if b.agent == nil {
-		if err := b.initAgent(ctx); err != nil {
+		if err := b.InitAgent(ctx); err != nil {
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}

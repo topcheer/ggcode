@@ -137,8 +137,10 @@ func (a *App) initWorkspace(dir string) {
 	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
 
-	// Auto-create initial session so the UI has an active session on startup
+	// Auto-create initial session and start agent so MCP servers
+	// and context window are available immediately on startup
 	chat.EnsureSession()
+	_ = chat.InitAgent()
 
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "workspace:changed", map[string]interface{}{
