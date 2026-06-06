@@ -628,6 +628,7 @@ func (b *ChatBridge) initAgent(ctx context.Context) error {
 		maxIter = 200
 	}
 	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
+	core.SetConfigAgent(a)
 	a.SetPermissionPolicy(policy)
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)

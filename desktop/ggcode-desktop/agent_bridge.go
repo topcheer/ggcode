@@ -535,6 +535,7 @@ func (b *AgentBridge) setupAgent() error {
 		maxIter = 200
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
+	core.SetConfigAgent(b.agent)
 	saveMemoryTool.SetAfterSave(b.refreshSystemPrompt)
 
 	b.agent.SetPermissionPolicy(policy)
