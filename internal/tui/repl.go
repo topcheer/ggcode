@@ -106,6 +106,7 @@ func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
 // SetCore stores the runtime core reference for unified background service management.
 func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	r.core = core
+	r.model.tunnelHost = core.Tunnel
 }
 
 // SetResumeID sets the session ID to resume.

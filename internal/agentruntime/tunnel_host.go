@@ -51,9 +51,14 @@ type TunnelHost struct {
 
 // NewTunnelHost creates a new TunnelHost with an offline projection broker.
 func NewTunnelHost() *TunnelHost {
-	return &TunnelHost{
+	h := &TunnelHost{
 		projBroker: tunnel.NewBroker(nil), // offline broker, no relay
 	}
+	// Always set event recorder so projBroker.Push*() calls are forwarded
+	h.projBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
+		h.recordEvent(ev)
+	})
+	return h
 }
 
 // BindSession binds the tunnel host to a session for event recording.
@@ -369,6 +374,18 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 	}
 
 	// 3. Forward to online broker
+	if online != nil {
+		online.PublishRecordedEvent(ev)
+	}
+}
+
+// forwardToOnline pushes an event directly to the online broker.
+// Used as fallback when the projection broker has no event recorder
+// (e.g. before BindSession was called).
+func (h *TunnelHost) forwardToOnline(ev tunnel.GatewayMessage) {
+	h.mu.Lock()
+	online := h.onlineBroker
+	h.mu.Unlock()
 	if online != nil {
 		online.PublishRecordedEvent(ev)
 	}

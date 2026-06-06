@@ -262,6 +262,7 @@ type Model struct {
 	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
 
 	// Mobile tunnel
+	tunnelHost                *agentruntime.TunnelHost // unified tunnel management
 	tunnelSession             *tunnel.Session
 	tunnelBroker              *tunnel.Broker
 	tunnelProjectionBroker    *tunnel.Broker
