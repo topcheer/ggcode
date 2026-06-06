@@ -46,8 +46,8 @@ type REPL struct {
 	planSwitcher        *replModeSwitcher
 	store               session.Store
 	resumeID            string
+	core                *agentruntime.InteractiveRuntimeCore
 	mcpMgr              *plugin.MCPManager
-	mcpCancel           context.CancelFunc
 	commandMgr          *commands.Manager
 	skillsChangedHook   func()
 	imManager           *im.Manager
@@ -101,6 +101,11 @@ func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
 	r.mcpMgr = mgr
 	r.model.SetMCPManager(mgr)
+}
+
+// SetCore stores the runtime core reference for unified background service management.
+func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
+	r.core = core
 }
 
 // SetResumeID sets the session ID to resume.
@@ -576,6 +581,9 @@ func (r *REPL) Run() error {
 	}
 	debug.Log("repl", "Run() START resumeID=%q", r.resumeID)
 	traceMark("start")
+	if r.core != nil {
+		defer r.core.Close()
+	}
 	// Initialize session
 	if r.store != nil {
 		if r.resumeID != "" {
@@ -632,10 +640,6 @@ func (r *REPL) Run() error {
 				r.program.Send(mcpServersMsg{Servers: servers})
 			}
 		})
-		defer r.mcpMgr.Close()
-		if r.mcpCancel != nil {
-			defer r.mcpCancel()
-		}
 	}
 	traceMark("wire mcp callbacks")
 	if r.commandMgr != nil {
@@ -769,9 +773,7 @@ func (r *REPL) Run() error {
 		}
 		if r.mcpMgr != nil {
 			start := time.Now()
-			mcpCtx, mcpCancel := context.WithCancel(context.Background())
-			r.mcpCancel = mcpCancel // assign before StartBackground to avoid fast-exit race
-			r.mcpMgr.StartBackground(mcpCtx)
+			r.core.StartBackgroundServices()
 			debug.Log("repl", "startup timing repl.mcp StartBackground duration=%s", time.Since(start).Round(time.Millisecond))
 		}
 	})

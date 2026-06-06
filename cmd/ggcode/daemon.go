@@ -489,14 +489,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	defer imMgr.UnregisterInstance()
 
-	// Start MCP connections
-	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer mcpCancel()
-	for _, warning := range mcpMgr.ConnectAll(mcpCtx) {
-		fmt.Fprintln(os.Stderr, warning)
+	// Start background services (MCP connections, etc.)
+	if mcpMgr := core.MCPManager; mcpMgr != nil {
+		// Daemon follow mode: show MCP OAuth URLs in terminal
+		mcpMgr.SetURLOpener(func(url string) error {
+			fmt.Fprintf(os.Stderr, "\x1b[34m\u2b21 MCP OAuth:\x1b[0m opening browser %s\r\n", url)
+			return nil
+		})
 	}
-	mcpMgr.StartBackground(context.Background())
-	defer mcpMgr.Close()
+	core.StartBackgroundServices()
+	defer core.Close()
 
 	// MCP OAuth watcher for daemon follow mode
 	mcpMgr.SetURLOpener(func(url string) error {

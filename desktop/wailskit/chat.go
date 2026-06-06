@@ -484,6 +484,8 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			}
 		})
 	}
+	// Start all background services (MCP connections, etc.)
+	core.StartBackgroundServices()
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
 	commandMgr := core.CommandManager

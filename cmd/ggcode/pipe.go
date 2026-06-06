@@ -69,13 +69,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return 1
 	}
 	registry := core.Registry
-	mcpMgr := core.MCPManager
-	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer mcpCancel()
-	for _, warning := range mcpMgr.ConnectAll(mcpCtx) {
-		fmt.Fprintln(os.Stderr, warning)
-	}
-	defer mcpMgr.Close()
+	core.StartBackgroundServices()
+	defer core.Close()
 
 	// Load project memory documents.
 	projectMem, projectMemFiles, _ := memory.LoadProjectMemory(workingDir)
@@ -89,7 +84,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil))
+	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil))
 	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
 		return permission.Deny
 	})

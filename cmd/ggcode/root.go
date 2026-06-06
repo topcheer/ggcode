@@ -654,6 +654,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetSessionStore(store)
 	repl.SetMCPServers(mcpInfos)
 	repl.SetMCPManager(mcpMgr)
+	repl.SetCore(core)
 	repl.SetPluginManager(pluginMgr)
 	repl.SetCommandsManager(commandMgr)
 	repl.SetSkillsChangedHook(refreshAgentSystemPrompt)
