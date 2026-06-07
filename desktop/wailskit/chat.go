@@ -1071,11 +1071,18 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 // Full parity with Fyne AgentBridge tunnel logic.
 
 // AttachTunnelBroker connects the broker for outbound event push to mobile.
-// Mirrors Fyne AgentBridge.AttachTunnelBroker exactly.
+// When TunnelHost is available, only the upper-level config (session info,
+// replay, status) is applied; projection/stream state is handled by TunnelHost.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
-	// Delegate to unified TunnelHost if available
+	// Delegate online broker attachment to TunnelHost
 	if b.tunnelHost != nil {
 		b.tunnelHost.AttachOnlineBroker(broker)
+	} else {
+		// Legacy: store broker for currentTunnelBroker()
+		b.mu.Lock()
+		b.tunnelBroker = broker
+		b.shareTunnelBroker = broker
+		b.mu.Unlock()
 	}
 
 	var (
@@ -1085,12 +1092,10 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		attachCfg  agentruntime.TunnelAttachConfig
 	)
 	b.mu.Lock()
-	b.tunnelBroker = broker
-	b.shareTunnelBroker = broker
 	working = b.cancel != nil
 	cfg = b.cfg
 	currentSes = b.currentSes
-	if working {
+	if working && b.tunnelHost == nil {
 		state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
 			MessageID:     b.tunnelMsgID,
 			NeedsFinalize: b.tunnelMsgNeedsFinalize,
@@ -1145,11 +1150,12 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 func (b *ChatBridge) DetachTunnelBroker() {
 	if b.tunnelHost != nil {
 		b.tunnelHost.DetachOnlineBroker()
+	} else {
+		b.mu.Lock()
+		b.tunnelBroker = nil
+		b.shareTunnelBroker = nil
+		b.mu.Unlock()
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.tunnelBroker = nil
-	b.shareTunnelBroker = nil
 }
 
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
