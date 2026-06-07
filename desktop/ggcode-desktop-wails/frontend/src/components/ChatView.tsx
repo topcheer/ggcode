@@ -1068,6 +1068,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           0%, 100% { opacity: 1; }
           50% { opacity: 0.3; }
         }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
       `}</style>
     </div>
   )
@@ -1245,7 +1248,15 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
       }} onClick={() => (msg.content || commandContent) && setExpanded(!expanded)}>
         {/* Status icon */}
         {msg.streaming ? (
-          <span style={{ color: 'var(--color-warning)', fontSize: 10 }}>●</span>
+          <span style={{
+            display: 'inline-block',
+            width: 14, height: 14,
+            border: '2px solid var(--color-border)',
+            borderTopColor: 'var(--color-info)',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+            flexShrink: 0,
+          }} />
         ) : msg.isError ? (
           <span style={{ color: '#ef4444', fontSize: 12 }}>✕</span>
         ) : (
