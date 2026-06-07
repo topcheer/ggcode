@@ -408,7 +408,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           ))
           break
         }
-        case 'tool_call_done': {        case 'tool_call_done': {
+        case 'tool_call_done': {
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
           setMessages(prev => {
@@ -1237,7 +1237,6 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
 
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '80%', marginTop: 4, marginBottom: 4, width: '100%' }}>
-      {msg.reasoning && <ReasoningBlock text={msg.reasoning} />}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 10px',
