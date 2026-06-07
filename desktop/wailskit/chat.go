@@ -1153,12 +1153,24 @@ func (b *ChatBridge) DetachTunnelBroker() {
 }
 
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
+	// Prefer TunnelHost's projection broker — it has event recorder for
+	// projection store + session recording + online broker forwarding.
+	if b.tunnelHost != nil {
+		if pb := b.tunnelHost.ProjectionBroker(); pb != nil {
+			return pb
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.tunnelBroker
 }
 
 func (b *ChatBridge) currentShareTunnelBroker() *tunnel.Broker {
+	if b.tunnelHost != nil {
+		if pb := b.tunnelHost.ProjectionBroker(); pb != nil {
+			return pb
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.shareTunnelBroker != nil {
