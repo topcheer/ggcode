@@ -485,6 +485,11 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	core.StartBackgroundServices()
 	// Set unified tunnel host for mobile streaming
 	b.tunnelHost = core.Tunnel
+	// Inject tool description logic for mobile display
+	core.Tunnel.ToolDescribeFunc = func(toolName, rawArgs string) (string, string) {
+		pres := tool.DescribeTool(toolName, rawArgs)
+		return pres.DisplayName, pres.Detail
+	}
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
 	commandMgr := core.CommandManager
