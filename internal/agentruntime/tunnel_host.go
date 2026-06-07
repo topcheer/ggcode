@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -133,15 +134,21 @@ func (h *TunnelHost) DetachOnlineBroker() {
 	h.onlineBroker = nil
 }
 
-// Close cleans up tunnel host resources.
+// Close stops any active share gracefully and cleans up resources.
 func (h *TunnelHost) Close() {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	online := h.onlineBroker
 	h.onlineBroker = nil
 	h.projBroker = nil
 	h.projStore = nil
 	h.session = nil
 	h.sessionStore = nil
+	h.mu.Unlock()
+
+	// Gracefully stop any active share so relay and mobile clients are notified
+	if online != nil {
+		online.StopSharingGracefully(2 * time.Second)
+	}
 }
 
 // OnlineBroker returns the current online broker, or nil.
