@@ -418,7 +418,7 @@ jobs:
           path: dist/desktop-linux-arm64
       - name: Upload all extra assets to release
         env:
-          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
