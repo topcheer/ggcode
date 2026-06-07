@@ -227,6 +227,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [pendingMessages, setPendingMessages] = useState<string[]>([])
 
+  // Listen for pending_consumed events from backend
+  useEffect(() => {
+    const off = (window as any).EventsOn?.('pending_consumed', () => {
+      setPendingMessages(prev => prev.length > 0 ? prev.slice(1) : prev)
+    })
+    return () => { off?.() }
+  }, [])
+
   // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
     setAgentPanels(prev => {
@@ -288,10 +296,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         const loaded = materializeHistory(history, messagesRef.current)
         messagesRef.current = loaded
         setMessages(loaded)
-
-        // Clear pending messages that are now in session history
-        const historyTexts = new Set(history.filter((h: any) => h.role === 'user').map((h: any) => (h.content || '').trim()))
-        setPendingMessages(prev => prev.filter(m => !historyTexts.has(m)))
         setIsStreaming(!!working)
         const hasAgentOutput = loaded.some(m => m.role !== 'user')
         setThinking(!!working && !hasAgentOutput)
