@@ -830,6 +830,7 @@ func (m *Manager) autoCompactThresholdLocked() int {
 
 func (m *Manager) usablePromptBudgetLocked() int {
 	if m.contextWindow <= 0 {
+
 		return 0
 	}
 	reserve := m.effectiveOutputReserveLocked()
@@ -838,7 +839,6 @@ func (m *Manager) usablePromptBudgetLocked() int {
 	if budget < minSummaryReserve {
 		return minSummaryReserve
 	}
-	debug.Log("ctx", "usableBudget: max=%d - reserve=%d - safety=%d = %d", m.contextWindow, reserve, safety, budget)
 	return budget
 }
 
