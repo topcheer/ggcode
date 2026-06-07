@@ -182,6 +182,45 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Wait Agent", displayTarget(argStr(args, "task_id")))
 	case "list_agents":
 		return toolPres("List Agents", "")
+	case "team_create":
+		return toolPres("Create Team", displayTarget(argStr(args, "name")))
+	case "team_delete":
+		return toolPres("Delete Team", "")
+	case "teammate_spawn":
+		return toolPres("Spawn", displayTarget(firstNonEmpty(
+			argStr(args, "name"),
+			argStr(args, "task"),
+		)))
+	case "teammate_shutdown":
+		return toolPres("Shutdown", displayTarget(argStr(args, "name")))
+	case "swarm_task_claim":
+		return toolPres("Claim Task", displayTarget(argStr(args, "task_id")))
+	case "swarm_task_complete":
+		return toolPres("Complete Task", displayTarget(argStr(args, "task_id")))
+	case "swarm_task_list":
+		return toolPres("Tasks", "list")
+	case "delegate":
+		return toolPres("Delegate", displayTarget(argStr(args, "agent")))
+	case "send_message":
+		return toolPres("Send", compactSingleLine(argStr(args, "message")))
+	case "cron_create":
+		return toolPres("Schedule", compactSingleLine(argStr(args, "prompt")))
+	case "cron_list":
+		return toolPres("Schedules", "list")
+	case "cron_delete":
+		return toolPres("Delete Schedule", displayTarget(argStr(args, "jobId")))
+	case "enter_plan_mode":
+		return toolPres("Plan", "")
+	case "exit_plan_mode":
+		return toolPres("Execute", "")
+	case "enter_worktree":
+		return toolPres("Worktree", displayTarget(argStr(args, "name")))
+	case "exit_worktree":
+		return toolPres("Exit Worktree", displayTarget(argStr(args, "action")))
+	case "a2a_send_task":
+		return toolPres("A2A", displayTarget(argStr(args, "target")))
+	case "read_mcp_resource":
+		return toolPres("MCP Resource", displayTarget(argStr(args, "uri")))
 	default:
 		// MCP tools or unknown — prettify the name
 		return toolPres(prettifyToolName(toolName), compactArgsPreview(rawArgs))
