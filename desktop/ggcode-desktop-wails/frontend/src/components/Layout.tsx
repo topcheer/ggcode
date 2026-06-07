@@ -254,7 +254,10 @@ function LayoutInner() {
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-              {view === 'chat' && <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} />}
+              {/* ChatView always mounted — hidden via display:none to preserve state */}
+              <div style={{ display: view === 'chat' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minWidth: 0 }}>
+                <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} />
+              </div>
               {view === 'settings' && <SettingsPage onBack={backToChat} />}
               {view === 'debug' && <DebugConsole />}
               {view === 'im' && <IMManagement />}
