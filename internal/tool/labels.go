@@ -29,6 +29,34 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := extractFileTarget(toolName, rawArgs)
 
+	// Tools with special label logic — use specific fields, not generic description
+	// These tools either have no "description" param, or their "description" field
+	// means something different (long requirements instead of brief label).
+	specialLabelTools := map[string]bool{
+		// Commands: use first-line comment as label
+		"run_command": true, "start_command": true, "bash": true, "powershell": true,
+		// Agent: description is brief label, but handled specially for truncation
+		"spawn_agent": true,
+		// Task: description = detailed requirements, subject = brief title
+		"swarm_task_create": true, "task_create": true,
+		// Plan mode: special rendering
+		"enter_plan_mode": true, "exit_plan_mode": true,
+		// Teammate: uses name field
+		"teammate_spawn": true,
+	}
+
+	// Most tools have a "description" parameter (brief activity label from LLM).
+	// Use it as displayName when available, with detail as fallback context.
+	if !specialLabelTools[toolName] {
+		if desc := strings.TrimSpace(argStr(args, "description")); desc != "" {
+			detail := ""
+			if fileTarget != "" {
+				detail = fileTarget
+			}
+			return toolPres(desc, detail)
+		}
+	}
+
 	switch toolName {
 	case "read_file":
 		return toolPres("Read", fileTarget)
@@ -158,10 +186,14 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		d := time.Duration(sec)*time.Second + time.Duration(ms)*time.Millisecond
 		return toolPres("Sleep", d.String())
 	case "spawn_agent":
-		return toolPres("Spawn Agent", displayTarget(firstNonEmpty(
-			argStr(args, "description"),
-			argStr(args, "prompt"),
-		)))
+		desc := strings.TrimSpace(argStr(args, "description"))
+		if len(desc) > 60 {
+			desc = desc[:57] + "..."
+		}
+		if desc == "" {
+			desc = "Spawn Agent"
+		}
+		return toolPres(desc, "")
 	case "task_create":
 		return toolPres("Task", displayTarget(firstNonEmpty(
 			argStr(args, "subject"),
@@ -210,9 +242,9 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	case "cron_delete":
 		return toolPres("Delete Schedule", displayTarget(argStr(args, "jobId")))
 	case "enter_plan_mode":
-		return toolPres("Plan", "")
+		return toolPres("Planning...", "")
 	case "exit_plan_mode":
-		return toolPres("Execute", "")
+		return toolPres("Execute Plan", "")
 	case "enter_worktree":
 		return toolPres("Worktree", displayTarget(argStr(args, "name")))
 	case "exit_worktree":

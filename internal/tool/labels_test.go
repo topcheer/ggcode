@@ -364,9 +364,9 @@ func TestDescribeTool(t *testing.T) {
 		{
 			name: "spawn_agent", toolName: "spawn_agent",
 			rawArgs:     `{"description":"fix bug in auth"}`,
-			wantName:    "Spawn Agent",
-			wantDetail:  "fix bug in auth",
-			wantDisplay: "Spawn Agent fix bug in auth",
+			wantName:    "fix bug in auth",
+			wantDetail:  "",
+			wantDisplay: "fix bug in auth",
 		},
 		{
 			name: "wait_agent", toolName: "wait_agent",
