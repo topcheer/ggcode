@@ -1021,16 +1021,22 @@ func (a *App) IsSharing() bool {
 
 // StartShare starts a tunnel session and returns connection info for the frontend.
 func (a *App) StartShare() (*ShareInfo, error) {
-	// If already sharing, refresh the invite
+	// If already sharing, try to refresh the invite.
 	if sess := a.currentTunnelSession(); sess != nil {
 		info, err := sess.RefreshInvite(context.Background())
 		if err != nil {
-			return nil, fmt.Errorf("refresh invite: %w", err)
+			// Stale session (room not live, relay restarted, etc.) — discard
+			// and create a fresh one below.
+			debug.Log("share", "refresh invite failed, starting new session: %v", err)
+			a.tunnelMu.Lock()
+			a.tunnelSession = nil
+			a.tunnelMu.Unlock()
+		} else {
+			return &ShareInfo{
+				ConnectURL:   info.ConnectURL,
+				QRCodeBase64: encodeQRBase64(info.QRCodePNG),
+			}, nil
 		}
-		return &ShareInfo{
-			ConnectURL:   info.ConnectURL,
-			QRCodeBase64: encodeQRBase64(info.QRCodePNG),
-		}, nil
 	}
 
 	// Start new tunnel session
