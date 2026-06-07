@@ -837,21 +837,59 @@ func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 // SaveIMAdapter creates or updates an IM adapter.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	debug.Log("desktop", "IM SaveAdapter: name=%s platform=%s", name, values["platform"])
+	// Stop existing adapter if running (for config updates)
+	a.imStopAdapter(name)
 	err := wailskit.SaveIMAdapter(name, values)
 	if err != nil {
 		debug.Log("desktop", "IM SaveAdapter failed: %v", err)
+		return err
 	}
-	return err
+	// Auto-start if enabled
+	if values["enabled"] != "false" {
+		go a.imStartAdapter(name)
+	}
+	return nil
 }
 
 // RemoveIMAdapter removes an IM adapter by name.
 func (a *App) RemoveIMAdapter(name string) error {
 	debug.Log("desktop", "IM RemoveAdapter: name=%s", name)
+	a.imStopAdapter(name)
 	err := wailskit.RemoveIMAdapter(name)
 	if err != nil {
 		debug.Log("desktop", "IM RemoveAdapter failed: %v", err)
 	}
 	return err
+}
+
+// imStartAdapter starts a single adapter by name in the background.
+func (a *App) imStartAdapter(name string) {
+	if a.imManager == nil {
+		debug.Log("desktop", "IM start %s: manager not initialized", name)
+		return
+	}
+	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+	if cfg == nil {
+		debug.Log("desktop", "IM start %s: no config", name)
+		return
+	}
+	debug.Log("desktop", "IM start: starting adapter %s", name)
+	if err := im.StartNamedAdapter(context.Background(), cfg.IM, name, a.imManager); err != nil {
+		debug.Log("desktop", "IM start %s failed: %v", name, err)
+	} else {
+		debug.Log("desktop", "IM start %s: ok", name)
+	}
+}
+
+// imStopAdapter stops a single adapter by name.
+func (a *App) imStopAdapter(name string) {
+	if a.imManager == nil {
+		debug.Log("desktop", "IM stop %s: manager not initialized", name)
+		return
+	}
+	debug.Log("desktop", "IM stop: stopping adapter %s", name)
+	a.imManager.StopAdapter(name)
+	debug.Log("desktop", "IM stop %s: ok", name)
 }
 
 // SetIMAdapterEnabled enables or disables an IM adapter.
@@ -860,8 +898,14 @@ func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
 	err := wailskit.SetIMAdapterEnabled(name, enabled)
 	if err != nil {
 		debug.Log("desktop", "IM SetEnabled failed: %v", err)
+		return err
 	}
-	return err
+	if enabled {
+		go a.imStartAdapter(name)
+	} else {
+		a.imStopAdapter(name)
+	}
+	return nil
 }
 
 // MuteIMAdapter mutes or unmutes an adapter channel.
@@ -883,23 +927,30 @@ func (a *App) BindIMAdapter(name string) error {
 	err := wailskit.BindIMAdapter(name, a.workDir, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM Bind failed: %v", err)
+		return err
 	}
-	return err
+	// Start the adapter after binding
+	go a.imStartAdapter(name)
+	return nil
 }
 
 // RebindIMAdapter re-binds an adapter to the current workspace.
 func (a *App) RebindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Rebind: name=%s workDir=%s", name, a.workDir)
+	a.imStopAdapter(name)
 	err := wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM Rebind failed: %v", err)
+		return err
 	}
-	return err
+	go a.imStartAdapter(name)
+	return nil
 }
 
 // UnbindIMAdapter removes all bindings for an adapter.
 func (a *App) UnbindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Unbind: name=%s", name)
+	a.imStopAdapter(name)
 	err := wailskit.UnbindIMAdapter(name, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM Unbind failed: %v", err)
