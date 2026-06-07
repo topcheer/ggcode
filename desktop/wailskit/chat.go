@@ -1541,6 +1541,9 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 	if !ok {
 		return ""
 	}
+	if b.OnStreamEvent != nil {
+		b.OnStreamEvent("pending_consumed", nil)
+	}
 	if !pending.Hidden {
 		// Persist visible user message
 		b.mu.Lock()
@@ -1809,6 +1812,9 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		b.mu.Unlock()
 
 		if pending, ok := b.drainPending(); ok {
+			if b.OnStreamEvent != nil {
+				b.OnStreamEvent("pending_consumed", nil)
+			}
 			if pending.Hidden {
 				_ = b.SendHiddenText(pending.Text)
 			} else {
