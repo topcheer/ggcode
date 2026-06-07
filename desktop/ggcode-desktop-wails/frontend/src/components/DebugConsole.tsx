@@ -11,6 +11,10 @@ interface LogEntry {
 const MAX_LINES = 5000
 const POLL_INTERVAL = 300
 
+// Module-level state — survives component unmount when navigating away
+let persistentLines: LogEntry[] = []
+let persistentEnabled = false
+
 // Category colors
 const catColors: Record<string, string> = {
   agent: '#22c55e',
@@ -26,19 +30,29 @@ const catColors: Record<string, string> = {
 }
 
 export default function DebugConsole() {
-  const [lines, setLines] = useState<LogEntry[]>([])
-  const [enabled, setEnabled] = useState(false)
+  const [lines, setLines] = useState<LogEntry[]>(() => persistentLines)
+  const [enabled, setEnabled] = useState(() => persistentEnabled)
   const [filter, setFilter] = useState('')
   const [catFilter, setCatFilter] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState(true)
   const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const enabledRef = useRef(false)
+  const enabledRef = useRef(persistentEnabled)
+
+  // Sync lines to persistent store
+  const updateLines = useCallback((updater: (prev: LogEntry[]) => LogEntry[]) => {
+    setLines(prev => {
+      const next = updater(prev)
+      persistentLines = next
+      return next
+    })
+  }, [])
 
   // Toggle log capture
   const toggle = useCallback(async () => {
     const next = !enabledRef.current
     enabledRef.current = next
+    persistentEnabled = next
     setEnabled(next)
     try {
       // @ts-ignore — Wails binding
@@ -47,29 +61,29 @@ export default function DebugConsole() {
   }, [])
 
   // Clear local buffer
-  const clear = useCallback(() => setLines([]), [])
+  const clear = useCallback(() => updateLines(() => []), [])
 
-  // On mount: check backend state and start polling if active
+  // On mount: check backend state and restore
   useEffect(() => {
-    // Check if backend is already capturing (e.g. we navigated away and back)
-    const checkAndPoll = async () => {
-      // Drain first to see if there's pending data
+    if (!persistentEnabled) return
+    // Drain any logs that accumulated while we were away
+    const drain = async () => {
       try {
         // @ts-ignore — Wails binding
         const raw = await window.go?.main?.App?.DrainLogStream?.()
         if (raw && raw !== '[]') {
-          // Backend was capturing — sync state
-          enabledRef.current = true
-          setEnabled(true)
           const entries: LogEntry[] = JSON.parse(raw)
           if (entries.length > 0) {
-            setLines(entries)
+            updateLines(prev => {
+              const next = [...prev, ...entries]
+              return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next
+            })
           }
         }
       } catch { /* ignore */ }
     }
-    checkAndPoll()
-  }, [])
+    drain()
+  }, [updateLines])
 
   // Poll for new log entries
   useEffect(() => {
@@ -81,7 +95,7 @@ export default function DebugConsole() {
         if (!raw || raw === '[]') return
         const entries: LogEntry[] = JSON.parse(raw)
         if (entries.length === 0) return
-        setLines(prev => {
+        updateLines(prev => {
           const next = [...prev, ...entries]
           return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next
         })
@@ -89,7 +103,7 @@ export default function DebugConsole() {
     }
     const id = setInterval(poll, POLL_INTERVAL)
     return () => clearInterval(id)
-  }, [])
+  }, [updateLines])
 
   // Auto-scroll
   useEffect(() => {
