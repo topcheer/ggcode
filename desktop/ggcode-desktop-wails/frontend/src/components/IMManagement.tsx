@@ -469,7 +469,7 @@ function AdapterRow({ adapter, onReload, onEdit }: {
           color: adapter.muted ? 'var(--color-success)' : '#D29922',
           display: 'flex', alignItems: 'center', gap: 3,
         }}>
-          {adapter.muted ? <><Volume2 size={11} /> {t('im.unmute')}</> : <><VolumeX size={11} /> {t('im.mute')}</>}
+          {adapter.muted ? <><Volume2 size={11} /> {t('im.unmute')}</> : <><Volume2 size={11} /> {t('im.mute')}</>}
         </button>
       )}
 
