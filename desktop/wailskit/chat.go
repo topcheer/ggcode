@@ -1004,9 +1004,15 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 // When TunnelHost is available, only the upper-level config (session info,
 // replay, status) is applied; projection/stream state is handled by TunnelHost.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
-	var currentSes *session.Session
+	var (
+		currentSes *session.Session
+		working    bool
+		cfg        *config.Config
+	)
 	b.mu.Lock()
 	currentSes = b.currentSes
+	working = b.cancel != nil
+	cfg = b.cfg
 	b.mu.Unlock()
 
 	if broker == nil {
@@ -1021,8 +1027,31 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		if currentSes != nil {
 			b.tunnelHost.BindSession(currentSes, b.sessionStore)
 		}
-		replay := b.tunnelHost.PrepareOnlineShare(broker)
-		_ = replay
+		_ = b.tunnelHost.PrepareOnlineShare(broker)
+	}
+
+	// Send initial control messages so mobile has session info, status, and activity
+	if working && cfg != nil {
+		resolved, _ := cfg.ResolveActiveEndpoint()
+		model := ""
+		vendorName := ""
+		if resolved != nil {
+			model = resolved.Model
+			vendorName = resolved.VendorName
+		}
+		broker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: b.workingDir,
+			Model:     model,
+			Provider:  vendorName,
+			Mode:      cfg.DefaultMode,
+			Language:  cfg.Language,
+		})
+		status := b.CurrentTunnelStatus()
+		broker.PushStatus(status.Status, status.Message)
+		activity := b.CurrentTunnelActivity()
+		if activity != "" {
+			broker.PushActivity(activity)
+		}
 	}
 }
 
