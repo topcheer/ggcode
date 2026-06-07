@@ -174,6 +174,9 @@ func TestSessionsListNoStore(t *testing.T) {
 }
 
 func TestSessionsListWithSessions(t *testing.T) {
+	// Isolate HOME to avoid pollution from other tests
+	t.Setenv("HOME", t.TempDir())
+
 	dir := t.TempDir()
 	store, err := session.NewJSONLStore(dir)
 	if err != nil {
