@@ -31,6 +31,12 @@ type Session struct {
 	meta     RelayClientMetadata
 	mu       sync.RWMutex
 	info     *SessionInfo
+
+	// cachedConnState holds the connected state received from the relay
+	// before OnConnected was wired up (e.g. during sess.Start() before
+	// NewBroker is created). When OnConnected is eventually called, we
+	// replay this cached state so handleRelayConnected always runs.
+	cachedConnState *RelayConnectedState
 }
 
 // SessionInfo contains the connection details after a session starts.
@@ -108,9 +114,14 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		}
 	})
 	client.OnConnected(func(info RelayConnectedState) {
-		s.mu.RLock()
+		s.mu.Lock()
 		fn := s.onConn
-		s.mu.RUnlock()
+		if fn == nil {
+			// Broker hasn't been created yet — cache the state so
+			// OnConnected can replay it later.
+			s.cachedConnState = &info
+		}
+		s.mu.Unlock()
 		if fn != nil {
 			fn(info)
 		}
@@ -157,9 +168,17 @@ func (s *Session) OnMessage(fn func(msg GatewayMessage)) {
 }
 
 func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
+	var cached *RelayConnectedState
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.onConn = fn
+	cached = s.cachedConnState
+	s.cachedConnState = nil
+	s.mu.Unlock()
+	// Replay the cached connected state that arrived before this handler
+	// was registered (e.g. relay responded before NewBroker was called).
+	if cached != nil && fn != nil {
+		go fn(*cached)
+	}
 }
 
 func (s *Session) Send(msg GatewayMessage) error {

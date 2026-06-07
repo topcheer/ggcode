@@ -131,6 +131,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
   bool _awaitingSnapshotProjection = false;
+  Timer? _snapshotProjectionTimeout;
   int _connectionGeneration = 0;
   final List<StreamSubscription<dynamic>> _serviceSubscriptions =
       <StreamSubscription<dynamic>>[];
@@ -293,6 +294,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           savedSessionId.isNotEmpty ? _lastDurableEventId : '';
       _relayAuthorityEpoch = 0;
       _awaitingSnapshotProjection = false;
+      _snapshotProjectionTimeout?.cancel();
+      _snapshotProjectionTimeout = null;
       _recentEventIds.clear();
       _recentEventSet.clear();
       final hadSavedSession = savedSessionId.isNotEmpty;
@@ -368,6 +371,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _resumeOverrideEventId = '';
     _relayAuthorityEpoch = 0;
     _awaitingSnapshotProjection = false;
+    _snapshotProjectionTimeout?.cancel();
+    _snapshotProjectionTimeout = null;
     _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
@@ -492,6 +497,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _recentEventIds.clear();
         _recentEventSet.clear();
         _awaitingSnapshotProjection = true;
+        _snapshotProjectionTimeout?.cancel();
+        _snapshotProjectionTimeout = Timer(const Duration(seconds: 15), () {
+          // Safety net: if session_info never arrives (e.g. host bug or
+          // network loss), clear the flag so the UI doesn't stay stuck on
+          // the loading screen forever.
+          if (_awaitingSnapshotProjection) {
+            debugPrint('[connection] snapshot projection timeout — clearing awaitingSnapshotProjection');
+            _awaitingSnapshotProjection = false;
+            _syncSessionReady();
+          }
+        });
         _beginSnapshotSync();
         _markProjectionAuthoritative();
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
@@ -527,6 +543,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final wasAwaitingSnapshotProjection = _awaitingSnapshotProjection;
         if (wasAwaitingSnapshotProjection) {
           _awaitingSnapshotProjection = false;
+          _snapshotProjectionTimeout?.cancel();
+          _snapshotProjectionTimeout = null;
         }
         if (_pendingReplayCount == 0) {
           _clearRelaySyncState();
@@ -1130,6 +1148,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _resumeOverrideEventId = '';
     _relayAuthorityEpoch = 0;
     _awaitingSnapshotProjection = false;
+    _snapshotProjectionTimeout?.cancel();
+    _snapshotProjectionTimeout = null;
     _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
@@ -1182,6 +1202,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _recentEventIds.clear();
     _recentEventSet.clear();
     _awaitingSnapshotProjection = false;
+    _snapshotProjectionTimeout?.cancel();
+    _snapshotProjectionTimeout = null;
     _relayAuthorityEpoch = authorityEpoch;
     _sessionId = sessionId;
     if (sessionId.isNotEmpty) {
@@ -1784,6 +1806,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _pendingResumeMode = '';
     _relaySyncTimeout?.cancel();
     _relaySyncTimeout = null;
+    _snapshotProjectionTimeout?.cancel();
+    _snapshotProjectionTimeout = null;
     _disposeActiveService();
   }
 

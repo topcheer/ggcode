@@ -93,6 +93,11 @@ lipo -create \
   -output "${UNIVERSAL_APP}/${EXEC_PATH}"
 chmod 0755 "${UNIVERSAL_APP}/${EXEC_PATH}"
 
+# Also extract arch-specific bare binaries for Homebrew formula
+cp "${AMD64_APP}/${EXEC_PATH}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_darwin_amd64"
+cp "${ARM64_APP}/${EXEC_PATH}" "${OUTPUT_DIR}/ggcode-desktop_${PACKAGE_VERSION}_darwin_arm64"
+echo "  Extracted darwin_amd64 and darwin_arm64 bare binaries"
+
 # Free disk space
 rm -rf "${WAILS_DIR}/build/bin"
 go clean -cache 2>/dev/null || true

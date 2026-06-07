@@ -25,6 +25,12 @@ func PublishShareState(broker *tunnel.Broker, sessionID string, snapshot tunnel.
 	}
 	if len(replay) > 0 {
 		broker.ReplayEvents(replay, reset && !switchedSession)
+		// Always ensure session_info is sent even when replaying events.
+		// Mobile relies on receiving session_info to clear its
+		// _awaitingSnapshotProjection flag and set sessionReady=true.
+		if snapshot.SessionInfo != (tunnel.SessionInfoData{}) {
+			broker.SendSessionInfo(snapshot.SessionInfo)
+		}
 		return true
 	}
 	broker.SendSnapshot(snapshot)

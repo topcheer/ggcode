@@ -235,7 +235,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-darwin
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/ggcode-desktop_*_darwin_*
 
   build-desktop-windows:
     name: Build desktop Windows
@@ -508,7 +510,7 @@ jobs:
 
             depends_on macos: ">= :ventura"
 
-            app "GGCode Desktop.app"
+            app "GGCode-Desktop.app"
 
             zap trash: [
               "~/Library/Application Support/ggcode-desktop",
@@ -570,9 +572,13 @@ jobs:
 
           # Download and compute SHA256 for each platform
           echo "Computing SHA256 for desktop binaries..."
+          MACOS_ARM64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_darwin_arm64" | sha256sum | awk '{print $1}')
+          MACOS_AMD64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_darwin_amd64" | sha256sum | awk '{print $1}')
           LINUX_ARM64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_arm64" | sha256sum | awk '{print $1}')
           LINUX_AMD64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_amd64" | sha256sum | awk '{print $1}')
 
+          echo "darwin_arm64:  $MACOS_ARM64_SHA"
+          echo "darwin_amd64:  $MACOS_AMD64_SHA"
           echo "linux_arm64:   $LINUX_ARM64_SHA"
           echo "linux_amd64:   $LINUX_AMD64_SHA"
 
@@ -583,6 +589,17 @@ jobs:
             homepage "https://github.com/topcheer/ggcode"
             version "VERSION_PLACEHOLDER"
             license "MIT"
+
+            on_macos do
+              on_intel do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_darwin_amd64"
+                sha256 "MACOS_AMD64_SHA_PLACEHOLDER"
+              end
+              on_arm do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_darwin_arm64"
+                sha256 "MACOS_ARM64_SHA_PLACEHOLDER"
+              end
+            end
 
             on_linux do
               on_intel do
@@ -604,6 +621,8 @@ jobs:
 
           # Replace placeholders
           FORMULA="${FORMULA//VERSION_PLACEHOLDER/$VERSION}"
+          FORMULA="${FORMULA//MACOS_AMD64_SHA_PLACEHOLDER/$MACOS_AMD64_SHA}"
+          FORMULA="${FORMULA//MACOS_ARM64_SHA_PLACEHOLDER/$MACOS_ARM64_SHA}"
           FORMULA="${FORMULA//LINUX_AMD64_SHA_PLACEHOLDER/$LINUX_AMD64_SHA}"
           FORMULA="${FORMULA//LINUX_ARM64_SHA_PLACEHOLDER/$LINUX_ARM64_SHA}"
 
