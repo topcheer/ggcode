@@ -525,7 +525,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
               id: nextID(), role: 'tool' as ChatRole, content: '',
               toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
-              reasoning, streaming: true, timestamp: Date.now(),
+              streaming: true, timestamp: Date.now(),
             })
             return { ...panel, messages: msgs, reasoningBuf: '' }
           })
@@ -571,7 +571,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
               id: nextID(), role: 'tool' as ChatRole, content: '',
               toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
-              teammateName: p.teammateName, reasoning, streaming: true, timestamp: Date.now(),
+              teammateName: p.teammateName, streaming: true, timestamp: Date.now(),
             })
             return { ...panel, messages: msgs, reasoningBuf: '' }
           })
@@ -1179,7 +1179,6 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   const isSubAgent = !!msg.agentID
   return (
     <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
-      {msg.reasoning && <ReasoningBlock text={msg.reasoning} />}
       <div style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
         color: isSubAgent ? 'var(--color-info)' : 'var(--color-success)',
