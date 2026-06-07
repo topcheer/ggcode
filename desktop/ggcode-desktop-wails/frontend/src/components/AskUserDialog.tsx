@@ -75,9 +75,10 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
       const answerArray = request.questions.map(q => {
         const a = answers[q.id] || { selectedChoiceIds: [], freeformText: '' }
         return {
-          question_id: q.id,
-          choice_ids: a.selectedChoiceIds,
+          id: q.id,
+          selected_choice_ids: a.selectedChoiceIds,
           freeform_text: a.freeformText,
+          answered: true,
         }
       })
       const responsePayload = {
