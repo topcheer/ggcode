@@ -1326,8 +1326,13 @@ func (b *ChatBridge) HandleMobileApprovalResponse(data tunnel.ApprovalResponseDa
 
 // HandleMobileAskUserResponse processes an ask_user response received from
 // the mobile client via the tunnel.
-func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData, req tool.AskUserRequest) {
-	response := agentruntime.BuildAskUserResponseFromTunnel(req, data.Status, data.Answers)
+func (b *ChatBridge) HandleMobileAskUserResponse(data tunnel.AskUserResponseData, _ tool.AskUserRequest) {
+	// Retrieve the original request from interactions broker (not the empty param)
+	req, found := b.interactions.PendingAskUser(data.ID)
+	if !found {
+		return
+	}
+	response := agentruntime.BuildAskUserResponseFromTunnel(req.Request, data.Status, data.Answers)
 	if _, ok := b.interactions.ResolveAskUser(data.ID, response); !ok {
 		return
 	}
