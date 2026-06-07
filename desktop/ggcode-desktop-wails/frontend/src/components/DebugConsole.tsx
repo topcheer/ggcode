@@ -19,6 +19,12 @@ let persistentEnabled = false
 const catColors: Record<string, string> = {
   agent: '#22c55e',
   tool: '#3b82f6',
+  context: '#06b6d4',
+  openai: '#10a37f',
+  anthropic: '#d97706',
+  gemini: '#4285f4',
+  provider: '#8b5cf6',
+  probe: '#6366f1',
   relay: '#a855f7',
   tunnel: '#f59e0b',
   broker: '#ec4899',
@@ -27,6 +33,20 @@ const catColors: Record<string, string> = {
   swarm: '#f97316',
   desktop: '#8b5cf6',
   im: '#06b6d4',
+  qq: '#12b7f5',
+  tg: '#0088cc',
+  discord: '#5865f2',
+  dingtalk: '#0089ff',
+  whatsapp: '#25d366',
+  wechat: '#07c160',
+  signal: '#3a76f0',
+  mattermost: '#0058cc',
+  pc: '#9333ea',
+  daemon: '#ef4444',
+  mcp: '#f472b6',
+  harness: '#fb923c',
+  tui: '#34d399',
+  permission: '#fbbf24',
 }
 
 export default function DebugConsole() {
