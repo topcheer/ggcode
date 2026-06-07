@@ -225,6 +225,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [pendingMessages, setPendingMessages] = useState<string[]>([])
 
   // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
@@ -287,6 +288,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         const loaded = materializeHistory(history, messagesRef.current)
         messagesRef.current = loaded
         setMessages(loaded)
+
+        // Clear pending messages that are now in session history
+        const historyTexts = new Set(history.filter((h: any) => h.role === 'user').map((h: any) => (h.content || '').trim()))
+        setPendingMessages(prev => prev.filter(m => !historyTexts.has(m)))
         setIsStreaming(!!working)
         const hasAgentOutput = loaded.some(m => m.role !== 'user')
         setThinking(!!working && !hasAgentOutput)
@@ -610,10 +615,13 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     setInput('')
 
     if (isStreaming) {
-      // Agent is busy — send to backend for queueing
+      // Agent is busy — send to backend for queueing, show as pending
+      setInput('')
+      setPendingMessages(prev => [...prev, text])
       try {
         await App.SendMessage(text)
       } catch (err: any) {
+        setPendingMessages(prev => prev.filter(m => m !== text))
         setMessages(prev => [...prev, {
           id: nextID(),
           role: 'error',
@@ -943,6 +951,30 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       </div>
 
       {/* Input area */}
+      {pendingMessages.length > 0 && (
+        <div style={{
+          padding: '6px var(--spacing-lg)',
+          display: 'flex', flexDirection: 'column', gap: 4,
+          borderTop: '1px solid var(--color-border)',
+          background: 'var(--color-surface)',
+        }}>
+          {pendingMessages.map((text, i) => (
+            <div key={i} style={{
+              fontSize: 12, color: 'var(--text-secondary)',
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 8px', borderRadius: 'var(--radius-md)',
+              background: 'var(--color-card)',
+            }}>
+              <span style={{
+                display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                background: 'var(--color-warning)',
+                animation: 'pulse 1.5s ease-in-out infinite',
+              }} />
+              <span style={{ opacity: 0.7 }}>{text}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{
         padding: 'var(--spacing-md) var(--spacing-lg)',
         borderTop: '1px solid var(--color-border)',
