@@ -262,9 +262,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     }
     App.GetSessionHistory().then((history: any[]) => {
       if (!history || history.length === 0) {
-        setMessages([])
-        messagesRef.current = []
-        setThinking(false)
+        // Don't clear existing messages — backend may not have loaded yet
         return
       }
       autoScrollByTabRef.current.main = true
