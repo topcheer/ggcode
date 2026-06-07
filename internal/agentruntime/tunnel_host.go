@@ -66,7 +66,8 @@ func NewTunnelHost() *TunnelHost {
 
 // BindSession binds the tunnel host to a session for event recording.
 // Call this when the session changes or is first created.
-func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) {
+// Returns the projection broker state with replay events and authority epoch.
+func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) ProjectionBrokerState {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.session = ses
@@ -75,7 +76,7 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) {
 	h.needsFinalize = false
 
 	if ses == nil || strings.TrimSpace(ses.ID) == "" {
-		return
+		return ProjectionBrokerState{}
 	}
 
 	// Ensure projection store exists
@@ -90,9 +91,10 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) {
 	h.projBroken = false
 
 	// Prepare projection broker with event recorder
-	_, _ = PrepareProjectionBroker(h.projBroker, h.projStore, ses, func(ev tunnel.GatewayMessage) {
+	state, _ := PrepareProjectionBroker(h.projBroker, h.projStore, ses, func(ev tunnel.GatewayMessage) {
 		h.recordEvent(ev)
 	})
+	return state
 }
 
 // AttachOnlineBroker connects an online tunnel broker (from a Share session).
