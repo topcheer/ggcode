@@ -1965,8 +1965,12 @@ func TestBrokerHandleClientConnectedPublishesAuthoritativeSnapshotWhenRoomEmpty(
 	if msgs[1].Type != EventSessionInfo {
 		t.Fatalf("expected session_info after snapshot_reset, got %q", msgs[1].Type)
 	}
-	if msgs[len(msgs)-1].Type != EventStatus {
-		t.Fatalf("expected status after snapshot history, got %q", msgs[len(msgs)-1].Type)
+	if msgs[len(msgs)-1].Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %q", msgs[len(msgs)-1].Type)
+	}
+	// Status should be second-to-last (before replay_done).
+	if msgs[len(msgs)-2].Type != EventStatus {
+		t.Fatalf("expected status before replay_done, got %q", msgs[len(msgs)-2].Type)
 	}
 }
 
@@ -2030,15 +2034,20 @@ func TestBrokerClientConnectedReplaysInFlightTextAfterSnapshot(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) < 5 || msgs[0].Type != EventSnapshotReset {
-		t.Fatalf("expected reset, snapshot, and in-flight text, got %+v", msgs)
+	if len(msgs) < 6 || msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected reset, snapshot, in-flight text, and replay_done, got %+v", msgs)
 	}
 	last := msgs[len(msgs)-1]
-	if last.Type != EventText {
-		t.Fatalf("expected in-flight text after snapshot, got %q", last.Type)
+	if last.Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %q", last.Type)
+	}
+	// Second-to-last should be in-flight text.
+	textMsg := msgs[len(msgs)-2]
+	if textMsg.Type != EventText {
+		t.Fatalf("expected in-flight text before replay_done, got %q", textMsg.Type)
 	}
 	var data TextData
-	if err := json.Unmarshal(last.Data, &data); err != nil {
+	if err := json.Unmarshal(textMsg.Data, &data); err != nil {
 		t.Fatal(err)
 	}
 	if data.ID != "msg-live" || data.Chunk != "partial answer" {
@@ -2068,15 +2077,19 @@ func TestBrokerClientConnectedReplaysInFlightReasoningAfterSnapshot(t *testing.T
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) < 5 || msgs[0].Type != EventSnapshotReset {
-		t.Fatalf("expected reset, snapshot, and in-flight reasoning, got %+v", msgs)
+	if len(msgs) < 6 || msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected reset, snapshot, in-flight reasoning, and replay_done, got %+v", msgs)
 	}
 	last := msgs[len(msgs)-1]
-	if last.Type != EventReasoning {
-		t.Fatalf("expected in-flight reasoning after snapshot, got %q", last.Type)
+	if last.Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %q", last.Type)
+	}
+	reasonMsg := msgs[len(msgs)-2]
+	if reasonMsg.Type != EventReasoning {
+		t.Fatalf("expected in-flight reasoning before replay_done, got %q", reasonMsg.Type)
 	}
 	var data TextData
-	if err := json.Unmarshal(last.Data, &data); err != nil {
+	if err := json.Unmarshal(reasonMsg.Data, &data); err != nil {
 		t.Fatal(err)
 	}
 	if data.ID != "reason-live" || data.Chunk != "step 1" {
@@ -2101,15 +2114,19 @@ func TestBrokerClientConnectedReplaysInFlightSubagentReasoningAfterSnapshot(t *t
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) < 3 || msgs[0].Type != EventSnapshotReset {
-		t.Fatalf("expected reset, snapshot, and in-flight subagent reasoning, got %+v", msgs)
+	if len(msgs) < 4 || msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected reset, snapshot, in-flight subagent reasoning, and replay_done, got %+v", msgs)
 	}
 	last := msgs[len(msgs)-1]
-	if last.Type != EventSubagentReasoning {
-		t.Fatalf("expected in-flight subagent reasoning after snapshot, got %q", last.Type)
+	if last.Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %q", last.Type)
+	}
+	saMsg := msgs[len(msgs)-2]
+	if saMsg.Type != EventSubagentReasoning {
+		t.Fatalf("expected in-flight subagent reasoning before replay_done, got %q", saMsg.Type)
 	}
 	var data SubagentReasoningData
-	if err := json.Unmarshal(last.Data, &data); err != nil {
+	if err := json.Unmarshal(saMsg.Data, &data); err != nil {
 		t.Fatal(err)
 	}
 	if data.AgentID != "sa-1" || data.ID != "reason-sa-1" || data.Chunk != "plan" {

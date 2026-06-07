@@ -8,7 +8,7 @@ import (
 )
 
 type InteractiveTextBridge struct {
-	Submit          func(context.Context, string) error
+	Submit          func(context.Context, string, string) error // (ctx, text, adapterName)
 	CurrentApproval func() (requestID, toolName string, ok bool)
 	ResolveApproval func(requestID, decision string)
 	CurrentAskUser  func() (requestID string, req toolpkg.AskUserRequest, ok bool)
@@ -45,5 +45,5 @@ func (b *InteractiveTextBridge) SubmitInboundMessage(ctx context.Context, msg In
 			}
 		}
 	}
-	return b.Submit(ctx, text)
+	return b.Submit(ctx, text, msg.Envelope.Adapter)
 }

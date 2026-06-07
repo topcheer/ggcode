@@ -10,7 +10,7 @@ import (
 func TestInteractiveTextBridgeResolvesApproval(t *testing.T) {
 	var resolvedID, resolvedDecision string
 	bridge := &InteractiveTextBridge{
-		Submit: func(context.Context, string) error {
+		Submit: func(context.Context, string, string) error {
 			t.Fatal("expected approval reply not to submit normal text")
 			return nil
 		},
@@ -35,7 +35,7 @@ func TestInteractiveTextBridgeResolvesAskUser(t *testing.T) {
 	var resolvedID string
 	var response toolpkg.AskUserResponse
 	bridge := &InteractiveTextBridge{
-		Submit: func(context.Context, string) error {
+		Submit: func(context.Context, string, string) error {
 			t.Fatal("expected ask_user reply not to submit normal text")
 			return nil
 		},

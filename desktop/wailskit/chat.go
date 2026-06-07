@@ -117,14 +117,15 @@ func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 // SendMessage sends a user message and streams events to the frontend.
 // If agent is already running, queues the message for processing after the current turn.
 func (b *ChatBridge) SendMessage(userMsg string) error {
-	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, "desktop")
+	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, "desktop", "")
 }
 
 // SendNonUIMessage sends a user message originating from a non-desktop source (IM/mobile).
 // It pushes a user_message event to the frontend so the message appears in the chat,
 // but avoids duplicate display on the originating surface.
-func (b *ChatBridge) SendNonUIMessage(userMsg string, source string) error {
-	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, source)
+// excludeAdapter is the IM adapter name to exclude from echo (prevents IM self-echo).
+func (b *ChatBridge) SendNonUIMessage(userMsg string, source string, excludeAdapter string) error {
+	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, source, excludeAdapter)
 }
 
 func (b *ChatBridge) HandleTunnelUserMessage(data tunnel.MessageData) error {
@@ -137,7 +138,7 @@ func (b *ChatBridge) HandleTunnelUserMessage(data tunnel.MessageData) error {
 		broker.PushStatus(tunnel.StatusBusy, "")
 		b.resetTunnelRoundState()
 	}
-	return b.sendMessageData(data, "mobile")
+	return b.sendMessageData(data, "mobile", "")
 }
 
 func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(string), currentAskUserRequest func() tool.AskUserRequest, clearAskUserRequest func()) {
@@ -177,7 +178,7 @@ func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(st
 	})
 }
 
-func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string) error {
+func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, excludeAdapter string) error {
 	userMsg := strings.TrimSpace(data.Text)
 	if userMsg == "" {
 		return nil
@@ -230,7 +231,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string) err
 					data = *pending.Meta
 					src = "mobile"
 				}
-				_ = b.sendMessageData(data, src)
+				_ = b.sendMessageData(data, src, "")
 			}
 		}
 	}()
@@ -261,6 +262,17 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string) err
 		broker.PushUserMessageData(data)
 		broker.PushStatus(tunnel.StatusBusy, "")
 		b.resetTunnelRoundState()
+	}
+
+	// Echo user message to IM channels so other IM surfaces can see it.
+	// For IM-originated messages, exclude the source adapter to prevent self-echo.
+	// For desktop/mobile messages, broadcast to all IM adapters.
+	if b.Emitter != nil {
+		if source == "im" && excludeAdapter != "" {
+			b.Emitter.EmitUserTextExcept(userMsg, excludeAdapter)
+		} else if source != "im" {
+			b.Emitter.EmitUserText(userMsg)
+		}
 	}
 
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {

@@ -764,12 +764,12 @@ func (a *App) startIMAdapters() {
 	}
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{
-		Submit: func(_ context.Context, text string) error {
+		Submit: func(_ context.Context, text string, adapterName string) error {
 			if a == nil || a.chat == nil {
 				return fmt.Errorf("app not available")
 			}
 			safego.Run("im-inbound", func() {
-				_ = a.chat.SendNonUIMessage(text, "im")
+				_ = a.chat.SendNonUIMessage(text, "im", adapterName)
 			})
 			return nil
 		},
