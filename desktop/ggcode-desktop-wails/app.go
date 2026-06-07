@@ -643,7 +643,7 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 	}
 
 	response := tool.AskUserResponse{
-		Status:        tool.AskUserStatus(payload.Status),
+		Status:        payload.Status,
 		QuestionCount: len(payload.Answers),
 		AnsweredCount: answeredCount,
 		Answers:       payload.Answers,
