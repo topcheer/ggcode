@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
 
@@ -226,15 +225,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [pendingCount, setPendingCount] = useState(0)
-
-  // Listen for pending_consumed events from backend
-  useEffect(() => {
-    const off = EventsOn('pending_consumed', () => {
-      setPendingCount(prev => Math.max(0, prev - 1))
-    })
-    return () => { off?.() }
-  }, [])
 
   // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
@@ -285,29 +275,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     }).catch(() => {})
   }, [sessionId])
 
+  // Initial load only. Event stream handles incremental updates.
+  // run_done event does a final consistency check via GetSessionHistory.
   useEffect(() => {
     let cancelled = false
-    const refresh = async () => {
-      try {
-        const [history, working] = await Promise.all([
-          App.GetSessionHistory() as Promise<any[]>,
-          App.IsWorking(),
-        ])
-        if (cancelled || !history) return
-        const loaded = materializeHistory(history, messagesRef.current)
-        messagesRef.current = loaded
-        setMessages(loaded)
-        setIsStreaming(!!working)
-        const hasAgentOutput = loaded.some(m => m.role !== 'user')
-        setThinking(!!working && !hasAgentOutput)
-      } catch {}
-    }
-    void refresh()
-    const id = window.setInterval(() => { void refresh() }, 250)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
+    App.GetSessionHistory().then((history: any[]) => {
+      if (cancelled || !history) return
+      const loaded = materializeHistory(history, messagesRef.current)
+      messagesRef.current = loaded
+      setMessages(loaded)
+    }).catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   // Ref to streaming assistant message ID for efficient updates
@@ -404,16 +382,97 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       const raw = evt.data
 
       switch (evt.type) {
-        case 'text':
-        case 'tool_call_done':
-        case 'tool_result':
-        case 'done':
-        case 'error':
-        case 'run_done':
-        case 'reasoning':
-          // Main chat now comes exclusively from GetSessionHistory()+IsWorking polling.
-          // Keep stream events only for status/usage and subagent/swarm side channels.
+        case 'user_message': {
+          const p = parseJSON<{ content: string }>(raw)
+          if (!p) break
+          setMessages(prev => [...prev, {
+            id: nextID(), role: 'user' as const,
+            content: p.content, timestamp: Date.now(),
+          }])
           break
+        }
+        case 'text': {
+          const p = parseJSON<{ content: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const msgs = [...prev]
+            const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
+            if (idx >= 0) {
+              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
+            } else {
+              const reasoning = reasoningBuf.current
+              reasoningBuf.current = ''
+              msgs.push({
+                id: nextID(), role: 'assistant' as const,
+                content: p.content, reasoning, streaming: true,
+                timestamp: Date.now(),
+              })
+            }
+            return msgs
+          })
+          break
+        }
+        case 'reasoning': {
+          const p = parseJSON<{ content: string }>(raw)
+          if (!p) break
+          reasoningBuf.current += p.content
+          break
+        }
+        case 'tool_call_done': {
+          const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            msgs.push({
+              id: nextID(), role: 'tool' as const, content: '',
+              toolName: p.name, toolID: p.id,
+              toolArgs: p.arguments, toolDisplayName: p.displayName,
+              toolDetail: p.detail, streaming: true,
+              timestamp: Date.now(),
+            })
+            return msgs
+          })
+          break
+        }
+        case 'tool_result': {
+          const p = parseJSON<{ id: string; result: string; isError?: boolean }>(raw)
+          if (!p) break
+          setMessages(prev => {
+            const msgs = [...prev]
+            const idx = msgs.findIndex(m => m.role === 'tool' && m.toolID === p.id)
+            if (idx >= 0) {
+              msgs[idx] = { ...msgs[idx], content: p.result, isError: p.isError, streaming: false }
+            }
+            return msgs
+          })
+          break
+        }
+        case 'done': {
+          setMessages(prev => prev.map(m => m.streaming ? { ...m, streaming: false } : m))
+          break
+        }
+        case 'error': {
+          const p = parseJSON<{ message: string }>(raw)
+          setMessages(prev => [...prev, {
+            id: nextID(), role: 'error' as const,
+            content: p?.message || raw, timestamp: Date.now(),
+          }])
+          break
+        }
+        case 'run_done': {
+          setIsStreaming(false)
+          setThinking(false)
+          setStatusBar(s => ({ ...s, status: 'idle' }))
+          // Final consistency check: reload from backend to ensure nothing was missed
+          App.GetSessionHistory().then((history: any[]) => {
+            if (history) {
+              const loaded = materializeHistory(history, messagesRef.current)
+              messagesRef.current = loaded
+              setMessages(loaded)
+            }
+          })
+          break
+        }
         case 'usage_update': {
           const p = parseJSON<any>(raw)
           setStatusBar(s => ({
@@ -620,13 +679,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     setInput('')
 
     if (isStreaming) {
-      // Agent is busy — send to backend for queueing
+      // Agent is busy — send to backend for queueing.
+      // The user_message event will render it when backend processes it.
       setInput('')
-      setPendingCount(prev => prev + 1)
       try {
         await App.SendMessage(text)
       } catch (err: any) {
-        setPendingCount(prev => Math.max(0, prev - 1))
         setMessages(prev => [...prev, {
           id: nextID(),
           role: 'error' as const,
@@ -956,22 +1014,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       </div>
 
       {/* Input area */}
-      {pendingCount > 0 && (
-        <div style={{
-          padding: '6px var(--spacing-lg)',
-          borderTop: '1px solid var(--color-border)',
-          background: 'var(--color-surface)',
-          fontSize: 12, color: 'var(--text-secondary)',
-          display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <span style={{
-            display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-            background: 'var(--color-warning)',
-            animation: 'pulse 1.5s ease-in-out infinite',
-          }} />
-          {pendingCount === 1 ? '1 message queued' : `${pendingCount} messages queued`}
-        </div>
-      )}
       <div style={{
         padding: 'var(--spacing-md) var(--spacing-lg)',
         borderTop: '1px solid var(--color-border)',

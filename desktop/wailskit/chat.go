@@ -183,18 +183,11 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 			meta = nil
 		}
 		b.pendingMsgs.Enqueue(userMsg, false, meta)
-		// Write to live history so GetSessionHistory returns it immediately
-		if len(b.liveHistory) == 0 && b.currentSes != nil {
-			b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
-		}
-		b.liveHistory = append(b.liveHistory, SessionMessage{
-			Role:    "user",
-			Content: userMsg,
-		})
 		b.mu.Unlock()
+		// Notify frontend of the user message for event-driven rendering
 		if b.OnStreamEvent != nil {
-			raw, _ := json.Marshal(map[string]string{"message": "Message queued"})
-			b.OnStreamEvent("message_queued", raw)
+			raw, _ := json.Marshal(map[string]string{"content": userMsg})
+			b.OnStreamEvent("user_message", raw)
 		}
 		return nil
 	}
@@ -246,6 +239,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 	// turns cannot inherit a stale broker callback/session binding.
 	b.bindTunnelProjectionSession()
 	b.appendLiveUserMessage(userMsg)
+
+	// Notify frontend of the user message for event-driven rendering
+	if b.OnStreamEvent != nil {
+		raw, _ := json.Marshal(map[string]string{"content": userMsg})
+		b.OnStreamEvent("user_message", raw)
+	}
 
 	// Notify mobile client: user message + busy status
 	if broker := b.currentTunnelBroker(); broker != nil && !skipMobilePush {
