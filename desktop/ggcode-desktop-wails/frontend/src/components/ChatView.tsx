@@ -597,9 +597,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
-    if (!text || isStreaming) return
+    if (!text) return
 
-    // Add user message (mirrors Fyne chat_view.go onSend: AppendChat(user))
+    // Add user message to chat
     const userMsg: ChatMessage = {
       id: nextID(),
       role: 'user',
@@ -608,6 +608,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     }
     setMessages(prev => [...prev, userMsg])
     setInput('')
+
+    if (isStreaming) {
+      // Agent is busy — send to backend for queueing
+      try {
+        await App.SendMessage(text)
+      } catch (err: any) {
+        setMessages(prev => [...prev, {
+          id: nextID(),
+          role: 'error',
+          content: err?.message ?? String(err),
+          timestamp: Date.now(),
+        }])
+      }
+      return
+    }
+
     setIsStreaming(true)
     setThinking(true)
     reasoningBuf.current = ''
