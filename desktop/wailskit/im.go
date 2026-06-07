@@ -60,7 +60,10 @@ func GetIMPlatformRegistry() []IMPlatformMeta {
 
 // ListIMAdapters returns all configured IM adapters with workspace binding info.
 // imManager may be nil (no runtime bindings available).
-func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() []im.ChannelBinding }) ([]IMAdapterInfo, error) {
+func ListIMAdapters(workingDir string, imMgr interface {
+	AllPersistedBindings() []im.ChannelBinding
+	IsMuted(adapterName string) bool
+}) ([]IMAdapterInfo, error) {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
@@ -81,24 +84,20 @@ func ListIMAdapters(workingDir string, imMgr interface{ AllPersistedBindings() [
 		}
 	}
 
-	// Build a muted lookup from runtime bindings
-	var mutedAdapters map[string]bool
-	if imMgr != nil {
-		mutedAdapters = make(map[string]bool)
-		for _, b := range imMgr.AllPersistedBindings() {
-			mutedAdapters[b.Adapter] = b.Muted
-		}
-	}
-
 	var result []IMAdapterInfo
 	for name, acfg := range cfg.IM.Adapters {
 		ws := boundWorkspaces[name]
 		isCurrent := ws != "" && (ws == workingDir || ws == normalizedWS)
 
+		var muted bool
+		if imMgr != nil {
+			muted = imMgr.IsMuted(name)
+		}
+
 		result = append(result, IMAdapterInfo{
 			Name:      name,
 			Enabled:   acfg.Enabled,
-			Muted:     mutedAdapters != nil && mutedAdapters[name],
+			Muted:     muted,
 			Platform:  acfg.Platform,
 			Transport: acfg.Transport,
 			Command:   acfg.Command,
