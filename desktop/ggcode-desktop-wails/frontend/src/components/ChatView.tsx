@@ -416,7 +416,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
           setMessages(prev => {
-            const msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            // Close streaming for text/reasoning only, not other tool calls
+            const msgs = prev.map(m =>
+              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+            )
             msgs.push({
               id: nextID(), role: 'tool' as const, content: '',
               toolName: p.name, toolID: p.id,
