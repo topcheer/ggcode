@@ -87,7 +87,6 @@ func (m *Manager) persistBinding(b ChannelBinding) error {
 	if m.bindingStore == nil {
 		return nil
 	}
-	b.Muted = false
 	return m.bindingStore.Save(b)
 }
 
