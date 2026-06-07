@@ -265,6 +265,14 @@ func (m *Manager) SetOnUpdate(cb func(StatusSnapshot)) {
 	m.onUpdate = cb
 }
 
+// IsMuted returns the runtime muted state for an adapter.
+func (m *Manager) IsMuted(adapterName string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.currentBindings[adapterName]
+	return ok && b.Muted
+}
+
 func (m *Manager) BindSession(binding SessionBinding) {
 	m.mu.Lock()
 	if binding.BoundAt.IsZero() {
