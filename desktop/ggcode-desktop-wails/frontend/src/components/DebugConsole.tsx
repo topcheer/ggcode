@@ -36,16 +36,40 @@ export default function DebugConsole() {
   const enabledRef = useRef(false)
 
   // Toggle log capture
-  const toggle = useCallback(() => {
+  const toggle = useCallback(async () => {
     const next = !enabledRef.current
     enabledRef.current = next
     setEnabled(next)
-    // @ts-ignore — Wails binding
-    window.go?.main?.App?.ToggleLogStream?.(next)
+    try {
+      // @ts-ignore — Wails binding
+      await window.go?.main?.App?.ToggleLogStream?.(next)
+    } catch { /* ignore */ }
   }, [])
 
   // Clear local buffer
   const clear = useCallback(() => setLines([]), [])
+
+  // On mount: check backend state and start polling if active
+  useEffect(() => {
+    // Check if backend is already capturing (e.g. we navigated away and back)
+    const checkAndPoll = async () => {
+      // Drain first to see if there's pending data
+      try {
+        // @ts-ignore — Wails binding
+        const raw = await window.go?.main?.App?.DrainLogStream?.()
+        if (raw && raw !== '[]') {
+          // Backend was capturing — sync state
+          enabledRef.current = true
+          setEnabled(true)
+          const entries: LogEntry[] = JSON.parse(raw)
+          if (entries.length > 0) {
+            setLines(entries)
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    checkAndPoll()
+  }, [])
 
   // Poll for new log entries
   useEffect(() => {
