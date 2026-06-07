@@ -452,6 +452,11 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 		}
 		r.sendProgramMsgs(msgs...)
 	})
+
+	// Start the background ticker that flushes accumulated teammate
+	// text/reasoning at ~12.5 Hz instead of per-token (~50-100 Hz
+	// per teammate). Same pattern as sub-agent stream batching.
+	mgr.StartStreamBatcher()
 }
 
 func (r *REPL) sendProgramMsgs(msgs ...tea.Msg) {
