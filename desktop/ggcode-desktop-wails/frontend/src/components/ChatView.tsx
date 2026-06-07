@@ -275,19 +275,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     }).catch(() => {})
   }, [sessionId])
 
-  // Initial load only. Event stream handles incremental updates.
-  // run_done event does a final consistency check via GetSessionHistory.
-  useEffect(() => {
-    let cancelled = false
-    App.GetSessionHistory().then((history: any[]) => {
-      if (cancelled || !history) return
-      const loaded = materializeHistory(history, messagesRef.current)
-      messagesRef.current = loaded
-      setMessages(loaded)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [])
-
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
 
@@ -384,7 +371,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       switch (evt.type) {
         case 'text': {
           const p = parseJSON<{ content: string }>(raw)
-          if (!p) break
+          if (!p || !p.content) break
           setMessages(prev => {
             const msgs = [...prev]
             const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
@@ -403,7 +390,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         }
         case 'reasoning': {
           const p = parseJSON<{ content: string }>(raw)
-          if (!p) break
+          if (!p || !p.content) break
           reasoningBuf.current += p.content
           break
         }
