@@ -376,9 +376,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
             if (idx >= 0) {
               msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
             } else {
+              const reasoning = reasoningBuf.current
+              reasoningBuf.current = ''
               msgs.push({
                 id: nextID(), role: 'assistant' as const,
-                content: p.content, streaming: true,
+                content: p.content, reasoning, streaming: true,
                 timestamp: Date.now(),
               })
             }
@@ -393,20 +395,25 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           break
         }
         case 'reasoning_done': {
-          const reasoning = reasoningBuf.current
-          reasoningBuf.current = ''
-          if (!reasoning) break
-          setMessages(prev => [...prev, {
-            id: nextID(), role: 'assistant' as const,
-            content: '', reasoning, timestamp: Date.now(),
-          }])
+          // Reasoning complete — mark it but don't create a message yet.
+          // The pending reasoning will be attached to the next assistant message.
           break
         }
         case 'tool_call_done': {
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
+          // Flush pending reasoning before tool call
+          const pendingReasoning = reasoningBuf.current
+          reasoningBuf.current = ''
           setMessages(prev => {
-            const msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            let msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            if (pendingReasoning) {
+              msgs.push({
+                id: nextID(), role: 'assistant' as const,
+                content: '', reasoning: pendingReasoning,
+                timestamp: Date.now(),
+              })
+            }
             msgs.push({
               id: nextID(), role: 'tool' as const, content: '',
               toolName: p.name, toolID: p.id,
@@ -432,7 +439,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           break
         }
         case 'done': {
-          setMessages(prev => prev.map(m => m.streaming ? { ...m, streaming: false } : m))
+          const pendingReasoning = reasoningBuf.current
+          reasoningBuf.current = ''
+          setMessages(prev => {
+            let msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            if (pendingReasoning) {
+              msgs.push({
+                id: nextID(), role: 'assistant' as const,
+                content: '', reasoning: pendingReasoning,
+                timestamp: Date.now(),
+              })
+            }
+            return msgs
+          })
           break
         }
         case 'error': {
