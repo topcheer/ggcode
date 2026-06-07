@@ -13,7 +13,14 @@ import (
 )
 
 func TestAnalyzeRecent_ConcurrentAccess(t *testing.T) {
-	dir := t.TempDir()
+	// Use manual temp dir instead of t.TempDir() to avoid
+	// "TempDir RemoveAll cleanup: unlinkat: directory not empty" caused by
+	// JSONL store file handles still held during concurrent access.
+	dir, err := os.MkdirTemp("", "knight-race-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
 	homeDir := filepath.Join(dir, "home")
 	projDir := filepath.Join(dir, "project")
 	storeDir := filepath.Join(homeDir, ".ggcode", "sessions")
