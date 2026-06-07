@@ -1314,8 +1314,8 @@ func TestBrokerHandleRelayConnectedReplaysOnlyMissingSuffixForRecoveredRelayHist
 	}
 
 	msgs := d.drain()
-	if len(msgs) != 1 {
-		t.Fatalf("expected only missing suffix replayed, got %+v", msgs)
+	if len(msgs) != 2 {
+		t.Fatalf("expected missing suffix + replay_done, got %+v", msgs)
 	}
 	if msgs[0].EventID != "ev-000000003" || msgs[0].Type != EventTextDone {
 		t.Fatalf("unexpected suffix replay: %+v", msgs[0])
@@ -1401,8 +1401,8 @@ func TestBrokerHandleRelayConnectedResetsSameSessionWhenRecoveredHistoryDiverges
 	}
 
 	msgs := d.drain()
-	if len(msgs) != 3 {
-		t.Fatalf("expected full replay after divergence, got %+v", msgs)
+	if len(msgs) != 4 {
+		t.Fatalf("expected full replay + replay_done after divergence, got %+v", msgs)
 	}
 	if msgs[0].EventID != "ev-000000001" || msgs[2].EventID != "ev-000000003" {
 		t.Fatalf("unexpected full replay order: %+v", msgs)
@@ -1629,8 +1629,8 @@ func TestBrokerHandleClientConnectedReseedsWhenLastEventDiffers(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) != 2 {
-		t.Fatalf("expected authoritative replay after stale relay history, got %d messages", len(msgs))
+	if len(msgs) != 3 {
+		t.Fatalf("expected authoritative replay + replay_done after stale relay history, got %d messages", len(msgs))
 	}
 	if msgs[0].Type != EventSnapshotReset {
 		t.Fatalf("expected snapshot_reset first, got %q", msgs[0].Type)
@@ -1685,8 +1685,8 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) != 3 {
-		t.Fatalf("expected snapshot reset plus canonical replay, got %d messages", len(msgs))
+	if len(msgs) != 4 {
+		t.Fatalf("expected snapshot reset + canonical replay + replay_done, got %d messages", len(msgs))
 	}
 	if msgs[0].Type != EventSnapshotReset {
 		t.Fatalf("expected first event snapshot_reset, got %q", msgs[0].Type)
@@ -1826,8 +1826,8 @@ func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightRep
 
 	time.Sleep(20 * time.Millisecond)
 	msgs := d.drain()
-	if len(msgs) != 6 {
-		t.Fatalf("expected replay for original and queued client connects, got %+v", msgs)
+	if len(msgs) != 8 {
+		t.Fatalf("expected replay for original and queued client connects (4 each), got %+v", msgs)
 	}
 	resetCount := 0
 	for _, msg := range msgs {
@@ -1924,8 +1924,8 @@ func TestBrokerHandleClientConnectedCoalescesDuplicateCanonicalReplay(t *testing
 	if resetCount != 1 {
 		t.Fatalf("expected exactly one snapshot_reset for duplicate canonical replay, got %d in %+v", resetCount, msgs)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("expected one canonical replay batch, got %d messages: %+v", len(msgs), msgs)
+	if len(msgs) != 4 {
+		t.Fatalf("expected one canonical replay batch + replay_done, got %d messages: %+v", len(msgs), msgs)
 	}
 }
 
@@ -2417,11 +2417,14 @@ func TestBrokerReplayEventsPreservesExistingIDs(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 replayed messages, got %d", len(msgs))
+	if len(msgs) != 3 {
+		t.Fatalf("expected 2 replayed messages + replay_done, got %d", len(msgs))
 	}
 	if msgs[0].EventID != "ev-000000007" || msgs[1].EventID != "ev-000000008" {
 		t.Fatalf("replayed event ids changed: %+v", msgs)
+	}
+	if msgs[2].Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %+v", msgs[2])
 	}
 
 	b.PushStatus("idle", "")
@@ -2444,14 +2447,18 @@ func TestBrokerReplayResetDoesNotConsumeEventOrdinal(t *testing.T) {
 	}, true)
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
-	if len(msgs) != 3 {
-		t.Fatalf("expected snapshot reset plus 2 replayed messages, got %d", len(msgs))
+	// snapshot_reset + 2 replayed messages + replay_done
+	if len(msgs) != 4 {
+		t.Fatalf("expected snapshot reset + 2 replayed messages + replay_done, got %d", len(msgs))
 	}
 	if msgs[0].Type != EventSnapshotReset || msgs[0].EventID != "" {
 		t.Fatalf("expected snapshot_reset without event id, got %+v", msgs[0])
 	}
 	if msgs[1].EventID != "ev-000000007" || msgs[2].EventID != "ev-000000008" {
 		t.Fatalf("replayed event ids changed after reset: %+v", msgs)
+	}
+	if msgs[3].Type != EventReplayDone {
+		t.Fatalf("expected replay_done as last message, got %+v", msgs[3])
 	}
 
 	b.PushStatus("idle", "")

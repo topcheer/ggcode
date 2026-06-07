@@ -176,13 +176,10 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 		return nil
 	}
 
-	// Notify frontend about the incoming user message (from IM/mobile/other non-UI source)
-	if b.OnStreamEvent != nil {
-		source := "im"
-		if skipMobilePush {
-			source = "mobile"
-		}
-		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": source})
+	// Notify frontend about non-desktop user messages (IM/mobile).
+	// Desktop UI already adds its own messages via handleSend; skip to avoid duplicates.
+	if b.OnStreamEvent != nil && skipMobilePush {
+		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": "im"})
 		b.OnStreamEvent("user_message", raw)
 	}
 

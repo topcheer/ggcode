@@ -132,6 +132,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String? _connectInFlightUrl;
   bool _awaitingSnapshotProjection = false;
   Timer? _snapshotProjectionTimeout;
+  bool _resumeCompleted = false;
   int _connectionGeneration = 0;
   final List<StreamSubscription<dynamic>> _serviceSubscriptions =
       <StreamSubscription<dynamic>>[];
@@ -435,7 +436,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         _sessionId = sessionId;
         _noteAuthorityEpoch(msg);
-        if (state.relaySync == null) {
+        // Do not re-enter relaySync waiting after resume_ack has already
+        // completed the resume cycle. The active_session arriving here is
+        // triggered by handleRelayConnected(client) on the host side and its
+        // snapshot_reset + replayCanonicalEvents will drive the sync instead.
+        if (state.relaySync == null && !_resumeCompleted) {
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
@@ -460,6 +465,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           '[connection] resume_ack session=$sessionId replay=$replayCount mode=$resumeMode',
         );
         _resumeOverrideEventId = '';
+        _resumeCompleted = true;
         _beginResumeReplaySync(
           replayCount: replayCount,
           resumeMode: resumeMode,
@@ -573,6 +579,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               lastEventId: _lastAppliedEventId,
               authorityEpoch: _relayAuthorityEpoch,
             ));
+        break;
+
+      case 'replay_done':
+        // Host signals end of replay batch. Unconditionally clear sync state
+        // so the UI stops showing "relay sync" loading indicators.
+        _awaitingSnapshotProjection = false;
+        _snapshotProjectionTimeout?.cancel();
+        _snapshotProjectionTimeout = null;
+        _clearRelaySyncState();
+        _syncSessionReady();
         break;
 
       case 'activity':

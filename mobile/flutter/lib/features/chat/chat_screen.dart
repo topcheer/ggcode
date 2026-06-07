@@ -1041,6 +1041,11 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
             ),
             Expanded(
               child: MobileScanner(
+                controller: MobileScannerController(
+                  facing: CameraFacing.back,
+                  detectionSpeed: DetectionSpeed.normal,
+                  torchEnabled: false,
+                ),
                 onDetect: (capture) {
                   if (_handled) return;
                   if (capture.barcodes.isEmpty) return;
