@@ -902,7 +902,17 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       if (!ref.mounted) return;
       for (final record in _store!.loadWorkspaces()) {
         if (record.key.isNotEmpty) {
-          workspaces[record.key] = record;
+          // If displayName is missing (e.g. legacy data), try to recover it
+          // from the cached snapshot's sessionInfo.
+          var updated = record;
+          if (record.displayName.isEmpty && record.lastSessionId.isNotEmpty) {
+            final snap = _store!.loadSnapshot(record.lastSessionId);
+            final name = _workspaceDisplayName(record.url, snap?.sessionInfo);
+            if (name.isNotEmpty) {
+              updated = record.copyWith(displayName: name);
+            }
+          }
+          workspaces[record.key] = updated;
         }
       }
       for (final record in _store!.loadSessions()) {
@@ -921,29 +931,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     }
     final selectedWorkspaceKey = index['selected_workspace_key'] as String?;
     final selectedSessionId = index['selected_session_id'] as String?;
-    final selectedWorkspaceUrl = normalizeTunnelUrl(
-      index[_workspaceCacheIndexSelectedWorkspaceUrlKey] as String? ?? '',
-    );
-    if (selectedWorkspaceKey != null &&
-        selectedWorkspaceKey.isNotEmpty &&
-        selectedWorkspaceUrl.isNotEmpty) {
-      final existing = workspaces[selectedWorkspaceKey];
-      workspaces[selectedWorkspaceKey] = (existing ??
-              WorkspaceRecord(
-                key: selectedWorkspaceKey,
-                url: selectedWorkspaceUrl,
-                displayName: _workspaceDisplayName(selectedWorkspaceUrl, null),
-                lastSessionId: selectedSessionId ?? '',
-                lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
-              ))
-          .copyWith(
-        url: selectedWorkspaceUrl,
-        displayName: existing?.displayName.isNotEmpty == true
-            ? existing!.displayName
-            : _workspaceDisplayName(selectedWorkspaceUrl, null),
-        lastSessionId: selectedSessionId ?? existing?.lastSessionId ?? '',
-      );
-    }
+    // Workspace creation happens only in registerLiveState when session_info
+    // arrives. Here we just record the selected key so the UI can show which
+    // workspace was last active.
     if (!ref.mounted) return;
     state = WorkspaceCacheState(
       initialized: true,
@@ -966,31 +956,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (!ref.mounted) return;
     final normalized = normalizeTunnelUrl(url);
     final key = _workspaceKeyForUrl(normalized);
-    final now = DateTime.now();
-    final current = state.workspaces[key];
-    final selectedSessionId = current?.lastSessionId.isNotEmpty == true
-        ? current!.lastSessionId
-        : null;
-    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces)
-      ..[key] = (current ??
-              WorkspaceRecord(
-                key: key,
-                url: normalized,
-                displayName: _workspaceDisplayName(normalized, null),
-                lastSessionId: selectedSessionId ?? '',
-                lastOpenedAt: now,
-              ))
-          .copyWith(url: normalized, lastOpenedAt: now);
-    state = state.copyWith(
-      workspaces: workspaces,
-      selectedWorkspaceKey: key,
-      selectedSessionId: selectedSessionId,
-      liveWorkspaceKey: key,
-      liveSessionId: state.liveWorkspaceKey == key ? state.liveSessionId : null,
-    );
-    _dirtyWorkspaces.add(key);
-    _selectionDirty = true;
-    _scheduleFlush();
+    // Workspace/session creation happens only in registerLiveState when
+    // session_info arrives. Here we just record the key so the UI knows
+    // which relay the user scanned.
+    state = state.copyWith(selectedWorkspaceKey: key);
   }
 
   Future<void> clearSelection() async {
@@ -1153,9 +1122,20 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
+    final displayName = _workspaceDisplayName(workspace?.url ?? '', sessionInfo);
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
-        displayName: _workspaceDisplayName(workspace.url, sessionInfo),
+        displayName: displayName.isNotEmpty ? displayName : workspace.displayName,
+        lastSessionId: sessionId,
+        lastOpenedAt: now,
+      );
+    } else if (displayName.isNotEmpty) {
+      // Workspace doesn't exist yet — create it now that we have sessionInfo.
+      final url = state.workspaces[workspaceKey]?.url ?? '';
+      workspaces[workspaceKey] = WorkspaceRecord(
+        key: workspaceKey,
+        url: url,
+        displayName: displayName,
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
@@ -1646,14 +1626,17 @@ proto.SessionInfoData? _sessionInfoFromJson(Map<String, dynamic>? json) {
   return proto.SessionInfoData.fromJson(json);
 }
 
+/// Extract workspace display name from sessionInfo.workspace (the desktop's
+/// working directory path, e.g. "/Users/zanchen/projects/my-app" → "my-app").
+/// Returns empty string if sessionInfo or workspace is unavailable — the caller
+/// should load from cached snapshot instead of guessing from the relay URL.
 String _workspaceDisplayName(String url, proto.SessionInfoData? sessionInfo) {
   final workspace = sessionInfo?.workspace ?? '';
   if (workspace.isNotEmpty) {
     final parts = workspace.split('/');
     return parts.isNotEmpty ? parts.last : workspace;
   }
-  final uri = Uri.tryParse(url);
-  return uri?.host.isNotEmpty == true ? uri!.host : 'Workspace';
+  return '';
 }
 
 String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
