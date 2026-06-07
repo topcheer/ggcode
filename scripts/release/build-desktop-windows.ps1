@@ -18,7 +18,7 @@ $UpgradeCode = "{CB2D6759-52A6-4C5E-8D56-FF21F3E3CE9D}"
 
 # Resolve OutputDir to absolute path
 $AbsOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $pwd $OutputDir }
-New-Item -ItemType Directory -Force -Path $AbsOutputDir | OutOfNull
+New-Item -ItemType Directory -Force -Path $AbsOutputDir | Out-Null
 
 $Ldflags = @(
   "-s", "-w",
@@ -52,7 +52,7 @@ $wailsJson | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $WailsDir "wails.
 
 $stageDir = Join-Path $AbsOutputDir "ggcode-desktop-msi-stage"
 Remove-Item -Recurse -Force $stageDir -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $stageDir | OutOfNull
+New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
 Push-Location $WailsDir
   $env:CGO_ENABLED = "1"
