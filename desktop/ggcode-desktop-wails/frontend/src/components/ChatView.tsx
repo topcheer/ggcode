@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
 
@@ -229,7 +230,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
 
   // Listen for pending_consumed events from backend
   useEffect(() => {
-    const off = (window as any).EventsOn?.('pending_consumed', () => {
+    const off = EventsOn('pending_consumed', () => {
       setPendingMessages(prev => prev.length > 0 ? prev.slice(1) : prev)
     })
     return () => { off?.() }
