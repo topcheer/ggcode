@@ -9,26 +9,9 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-// TunnelHost manages the full lifecycle of tunnel event streaming.
-// It is owned by InteractiveRuntimeCore and used by all frontends (TUI, daemon, desktop).
-//
-// Architecture:
-//
-//	Frontend (TUI/Daemon/Wails)
-//	  → agent.RunStream(callback)
-//	    → TunnelHost.PushStreamEvent(ev)
-//	      → projBroker.Push*()            [always, records events]
-//	        → eventRecorder callback
-//	          → projStore.Append()         [persist for replay]
-//	          → session.TunnelEvents append[persist in session]
-//	          → onlineBroker.Publish()     [forward to mobile, if connected]
-//
-// Frontends only need to:
-//  1. Create a TunnelHost (via InteractiveRuntimeCore)
-//  2. Call BindSession(session, store) when the session changes
-//  3. Call AttachOnlineBroker(broker) when Share starts
-//  4. Call DetachOnlineBroker() when Share stops
-//  5. Let the core call PushStreamEvent(ev) in the agent stream callback
+// TunnelHost provides unified tunnel stream management for all frontends.
+// It owns the projection broker (for recording and replay) and optionally
+// forwards events to an online broker (when a mobile Share is active).
 type TunnelHost struct {
 	mu sync.Mutex
 
@@ -37,31 +20,23 @@ type TunnelHost struct {
 	projStore  *tunnel.ProjectionStore
 	projBroken bool
 
-	// Online layer (active when Share is on)
+	// Online layer (set when a Share is active)
 	onlineBroker *tunnel.Broker
 
-	// Message stream state
+	// Stream state
 	currentMsgID  string
 	needsFinalize bool
 
 	// Session reference for recording
 	session      *session.Session
 	sessionStore session.Store
-
-	// Optional callback to describe a tool for mobile display.
-	// Returns (displayName, detail). If nil, both will be empty strings.
 }
 
 // NewTunnelHost creates a new TunnelHost with an offline projection broker.
 func NewTunnelHost() *TunnelHost {
-	h := &TunnelHost{
+	return &TunnelHost{
 		projBroker: tunnel.NewBroker(nil), // offline broker, no relay
 	}
-	// Always set event recorder so projBroker.Push*() calls are forwarded
-	h.projBroker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-		h.recordEvent(ev)
-	})
-	return h
 }
 
 // BindSession binds the tunnel host to a session for event recording.
@@ -105,11 +80,68 @@ func (h *TunnelHost) AttachOnlineBroker(broker *tunnel.Broker) {
 	h.onlineBroker = broker
 }
 
+// PrepareOnlineShare configures an online broker for a fresh Share session.
+// This must be called after AttachOnlineBroker. It performs all the
+// negotiation steps that TUI's handleTunnelStartMsg does:
+//
+//   - SetEventRecorder(nil) — online broker should not record; projection broker does that
+//   - SetReplayProvider — provides canonical replay events from projection store
+//   - BindSession + SetAuthorityEpoch — binds online broker to current session
+//   - AnnounceActiveSession — tells relay which session is active
+//
+// Returns the replay events so the caller can also ReplayEvents() if needed.
+func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) []tunnel.GatewayMessage {
+	h.mu.Lock()
+	ses := h.session
+	projStore := h.projStore
+	broken := h.projBroken
+	h.mu.Unlock()
+
+	if broker == nil || ses == nil || strings.TrimSpace(ses.ID) == "" {
+		return nil
+	}
+
+	// Online broker should NOT record events — projection broker handles that
+	broker.SetEventRecorder(nil)
+
+	// Bind online broker to session
+	broker.BindSession(ses.ID)
+
+	// Set replay provider from projection store
+	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
+		return h.TunnelEvents()
+	})
+
+	// Set authority epoch
+	if projStore != nil && !broken {
+		if epoch, err := ProjectionAuthorityEpoch(projStore, ses.ID); err == nil && epoch > 0 {
+			broker.SetAuthorityEpoch(epoch)
+		}
+	}
+
+	// Announce active session to relay so clients can find it
+	broker.AnnounceActiveSession(ses.ID)
+
+	// Return replay events for caller to push
+	return h.TunnelEvents()
+}
+
 // DetachOnlineBroker disconnects the online broker (Share stopped).
 func (h *TunnelHost) DetachOnlineBroker() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.onlineBroker = nil
+}
+
+// Close cleans up tunnel host resources.
+func (h *TunnelHost) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onlineBroker = nil
+	h.projBroker = nil
+	h.projStore = nil
+	h.session = nil
+	h.sessionStore = nil
 }
 
 // OnlineBroker returns the current online broker, or nil.
@@ -119,156 +151,44 @@ func (h *TunnelHost) OnlineBroker() *tunnel.Broker {
 	return h.onlineBroker
 }
 
-// ProjectionBroker returns the projection broker for replay/attach operations.
+// ProjectionBroker returns the projection broker, or nil.
 func (h *TunnelHost) ProjectionBroker() *tunnel.Broker {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.projBroker
 }
 
-// ProjectionStore returns the projection store for replay queries.
+// ProjectionStore returns the projection store, or nil.
 func (h *TunnelHost) ProjectionStore() *tunnel.ProjectionStore {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.projStore
 }
 
-// IsProjectionBroken returns whether the projection store is in a broken state.
-func (h *TunnelHost) IsProjectionBroken() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.projBroken
-}
-
-// PushStreamEvent pushes a provider stream event to the mobile client.
-// This is the single entry point that all frontends should use in their
-// agent stream callback.
-func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker == nil {
-		return
-	}
-
-	switch ev.Type {
-	case provider.StreamEventText:
-		msgID := h.ensureMsgID(broker)
-		if msgID == "" {
-			return
-		}
-		h.markActive()
-		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
-		broker.PushText(msgID, ev.Text)
-
-	case provider.StreamEventReasoning:
-		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			msgID := h.ensureMsgID(broker)
-			if msgID == "" {
-				return
-			}
-			h.markActive()
-			broker.PushReasoning(TunnelReasoningMsgID(msgID), chunk)
-		}
-
-	case provider.StreamEventToolCallDone:
-		h.rollover(broker, true)
-		name := strings.TrimSpace(ev.Tool.Name)
-		if name == "" {
-			name = "tool"
-		}
-		// Push raw toolName + args only; mobile decides how to present them
-		broker.PushToolCall(ev.Tool.ID, name, "", string(ev.Tool.Arguments), "")
-
-	case provider.StreamEventToolResult:
-		h.rollover(broker, false)
-		content := ev.Result
-		if len([]rune(content)) > 2000 {
-			runes := []rune(content)
-			content = string(runes[:minInt(len(runes), 1997)]) + "\n...(truncated)"
-		}
-		broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
-
-	case provider.StreamEventSystem:
-		h.rollover(broker, true)
-
-	case provider.StreamEventDone:
-		h.rollover(broker, true)
-
-	case provider.StreamEventError:
-		h.rollover(broker, true)
-		if ev.Error != nil {
-			broker.PushError(provider.UserFacingError(ev.Error))
-		}
-	}
-}
-
-// PushUserMessage pushes a user message to the mobile client.
-func (h *TunnelHost) PushUserMessage(text string) {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker != nil {
-		broker.PushUserMessage(text)
-	}
-}
-
-// PushUserMessageData pushes a user message with metadata to the mobile client.
-func (h *TunnelHost) PushUserMessageData(data tunnel.MessageData) {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker != nil {
-		broker.PushUserMessageData(data)
-	}
-}
-
-// PushStatus pushes a status update to the mobile client.
-func (h *TunnelHost) PushStatus(status, message string) {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker != nil {
-		broker.PushStatus(status, message)
-	}
-}
-
-// PushActivity pushes an activity update to the mobile client.
-func (h *TunnelHost) PushActivity(activity string) {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker != nil {
-		broker.PushActivity(strings.TrimSpace(activity))
-	}
-}
-
-// NextMessageID returns the next message ID from the projection broker.
-func (h *TunnelHost) NextMessageID() string {
-	h.mu.Lock()
-	broker := h.projBroker
-	h.mu.Unlock()
-	if broker != nil {
-		return broker.NextMessageID()
-	}
-	return ""
-}
-
-// CurrentMsgID returns the current stream message ID.
-func (h *TunnelHost) CurrentMsgID() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.currentMsgID
-}
-
-// ResetStreamState resets the message stream state for a new round.
+// ResetStreamState resets the stream state for a new chat turn.
 func (h *TunnelHost) ResetStreamState() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.currentMsgID = ""
 	h.needsFinalize = false
 }
 
-// TunnelEvents returns recorded tunnel events for the current session (for replay).
+// AuthorityEpoch returns the current projection authority epoch.
+func (h *TunnelHost) AuthorityEpoch() uint64 {
+	h.mu.Lock()
+	store := h.projStore
+	ses := h.session
+	h.mu.Unlock()
+	if store == nil || ses == nil {
+		return 1
+	}
+	if epoch, err := ProjectionAuthorityEpoch(store, ses.ID); err == nil {
+		return epoch
+	}
+	return 1
+}
+
+// TunnelEvents returns the projection replay events for the current session.
 func (h *TunnelHost) TunnelEvents() []tunnel.GatewayMessage {
 	h.mu.Lock()
 	store := h.projStore
@@ -288,35 +208,111 @@ func (h *TunnelHost) TunnelEvents() []tunnel.GatewayMessage {
 	return events
 }
 
-// AuthorityEpoch returns the projection authority epoch for the current session.
-func (h *TunnelHost) AuthorityEpoch() uint64 {
+// PushStreamEvent pushes a provider stream event through the tunnel.
+// This is the main entry point called by the agent stream callback.
+func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 	h.mu.Lock()
-	store := h.projStore
-	ses := h.session
+	broker := h.projBroker
 	h.mu.Unlock()
-	if store == nil || ses == nil {
-		return 1
+	if broker == nil {
+		return
 	}
-	if epoch, err := ProjectionAuthorityEpoch(store, ses.ID); err == nil {
-		return epoch
+
+	switch ev.Type {
+	case provider.StreamEventText:
+		msgID := h.ensureMsgID(broker)
+		h.rollover(broker, false)
+		h.markActive()
+		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
+		broker.PushText(msgID, ev.Text)
+
+	case provider.StreamEventReasoning:
+		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
+			msgID := h.ensureMsgID(broker)
+			h.markActive()
+			broker.PushReasoning(TunnelReasoningMsgID(msgID), chunk)
+		}
+
+	case provider.StreamEventToolCallDone:
+		h.rollover(broker, true)
+		name := strings.TrimSpace(ev.Tool.Name)
+		if name == "" {
+			name = "tool"
+		}
+		// Push raw toolName + args only; mobile decides how to present them
+		broker.PushToolCall(ev.Tool.ID, name, "", string(ev.Tool.Arguments), "")
+
+	case provider.StreamEventToolResult:
+		h.rollover(broker, false)
+		content := ev.Result
+		if len([]rune(content)) > 2000 {
+			content = string([]rune(content)[:1997]) + "\n..."
+		}
+		broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
+
+	case provider.StreamEventDone:
+		h.rollover(broker, true)
+
+	case provider.StreamEventError:
+		h.rollover(broker, true)
+		if ev.Error != nil {
+			broker.PushError(provider.UserFacingError(ev.Error))
+		}
 	}
-	return 1
 }
 
-// Close cleans up tunnel host resources.
-func (h *TunnelHost) Close() {
+// PushUserMessage pushes a user message to the tunnel.
+func (h *TunnelHost) PushUserMessage(text string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.onlineBroker = nil
-	h.projBroker = nil
+	broker := h.projBroker
+	h.mu.Unlock()
+	if broker == nil {
+		return
+	}
+	broker.PushUserMessage(text)
 }
 
-// ── Internal helpers ──
+// PushUserMessageData pushes a user message with custom data to the tunnel.
+func (h *TunnelHost) PushUserMessageData(data tunnel.MessageData) {
+	h.mu.Lock()
+	broker := h.projBroker
+	h.mu.Unlock()
+	if broker == nil {
+		return
+	}
+	broker.PushUserMessageData(data)
+}
+
+// PushStatus pushes a status update to the mobile client.
+func (h *TunnelHost) PushStatus(status, message string) {
+	h.mu.Lock()
+	broker := h.projBroker
+	h.mu.Unlock()
+	if broker == nil {
+		return
+	}
+	broker.PushStatus(status, message)
+}
+
+// PushActivity pushes an activity update to the mobile client.
+func (h *TunnelHost) PushActivity(activity string) {
+	h.mu.Lock()
+	broker := h.projBroker
+	h.mu.Unlock()
+	if broker == nil {
+		return
+	}
+	broker.PushActivity(activity)
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 func (h *TunnelHost) ensureMsgID(broker *tunnel.Broker) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.currentMsgID == "" && broker != nil {
+	if h.currentMsgID == "" {
 		h.currentMsgID = broker.NextMessageID()
 	}
 	return h.currentMsgID
@@ -337,58 +333,51 @@ func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
 		return
 	}
 	if finalize {
-		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
 		broker.PushTextDone(msgID)
 	}
-	h.mu.Lock()
-	if startNew && broker != nil {
+	if startNew {
+		h.mu.Lock()
 		h.currentMsgID = broker.NextMessageID()
+		h.needsFinalize = false
+		h.mu.Unlock()
+	} else {
+		h.mu.Lock()
+		h.needsFinalize = false
+		h.mu.Unlock()
 	}
-	h.needsFinalize = false
-	h.mu.Unlock()
 }
 
-// recordEvent is the event recorder callback for the projection broker.
-// It writes to the projection store, records in session, and forwards to online broker.
+// recordEvent is called by the projection broker's event recorder.
+// It persists the event to the session and forwards to the online broker.
 func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
+	// Persist to session
 	h.mu.Lock()
-	store := h.projStore
-	broken := h.projBroken
-	online := h.onlineBroker
 	ses := h.session
-	sesStore := h.sessionStore
+	store := h.sessionStore
 	h.mu.Unlock()
 
-	// 1. Write to projection store
-	if store != nil && !broken {
-		if err := AppendProjectionEvent(store, ev); err != nil {
-			h.mu.Lock()
-			h.projBroken = true
-			h.mu.Unlock()
-		}
+	if ses == nil || ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
+		return
+	}
+	if store == nil {
+		return
 	}
 
-	// 2. Record in session
-	if ses != nil && sesStore != nil && ev.EventID != "" && ev.Type != tunnel.EventSnapshotReset {
-		record := session.TunnelEvent{
-			EventID:  ev.EventID,
-			StreamID: ev.StreamID,
-			Type:     ev.Type,
-			Data:     append([]byte(nil), ev.Data...),
-		}
-		ses.TunnelEvents = append(ses.TunnelEvents, record)
+	record := session.TunnelEvent{
+		EventID:  ev.EventID,
+		StreamID: ev.StreamID,
+		Type:     ev.Type,
+		Data:     append([]byte(nil), ev.Data...),
+	}
+	ses.TunnelEvents = append(ses.TunnelEvents, record)
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
+	} else {
+		_ = store.Save(ses)
 	}
 
-	// 3. Forward to online broker
-	if online != nil {
-		online.PublishRecordedEvent(ev)
-	}
-}
-
-// forwardToOnline pushes an event directly to the online broker.
-// Used as fallback when the projection broker has no event recorder
-// (e.g. before BindSession was called).
-func (h *TunnelHost) forwardToOnline(ev tunnel.GatewayMessage) {
+	// Forward to online broker if connected
 	h.mu.Lock()
 	online := h.onlineBroker
 	h.mu.Unlock()
@@ -397,9 +386,4 @@ func (h *TunnelHost) forwardToOnline(ev tunnel.GatewayMessage) {
 	}
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+// TunnelReasoningMsgID is in tunnel_main_stream.go
