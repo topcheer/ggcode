@@ -1000,20 +1000,8 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 // When TunnelHost is available, only the upper-level config (session info,
 // replay, status) is applied; projection/stream state is handled by TunnelHost.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
-	// Delegate online broker attachment to TunnelHost
-	if b.tunnelHost != nil {
-		b.tunnelHost.AttachOnlineBroker(broker)
-	}
-
-	var (
-		working    bool
-		cfg        *config.Config
-		currentSes *session.Session
-		attachCfg  agentruntime.TunnelAttachConfig
-	)
+	var currentSes *session.Session
 	b.mu.Lock()
-	working = b.cancel != nil
-	cfg = b.cfg
 	currentSes = b.currentSes
 	b.mu.Unlock()
 
@@ -1021,103 +1009,16 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		return
 	}
 
-	// Bind session and get replay state from projection store
-	var replayState agentruntime.ProjectionBrokerState
-	if b.tunnelHost != nil && currentSes != nil {
-		replayState = b.tunnelHost.BindSession(currentSes, b.sessionStore)
-	}
-
-	replay := replayState.Replay
-	if len(replay) == 0 {
-		replay = b.CurrentSessionTunnelEvents()
-	}
-	attachCfg.ReplayProvider = func() []tunnel.GatewayMessage {
-		return replay
-	}
-
-	if currentSes != nil && currentSes.ID != "" {
-		attachCfg.SessionID = currentSes.ID
-		if replayState.AuthorityEpoch > 0 {
-			attachCfg.AuthorityEpoch = replayState.AuthorityEpoch
-		} else {
-			attachCfg.AuthorityEpoch = b.currentSessionTunnelAuthorityEpoch()
+	// Delegate all negotiation to TunnelHost:
+	// AttachOnlineBroker, BindSession, PrepareOnlineShare (SetEventRecorder(nil),
+	// SetReplayProvider, BindSession, SetAuthorityEpoch, AnnounceActiveSession)
+	if b.tunnelHost != nil {
+		b.tunnelHost.AttachOnlineBroker(broker)
+		if currentSes != nil {
+			b.tunnelHost.BindSession(currentSes, b.sessionStore)
 		}
-	}
-
-	if cfg != nil {
-		resolved, _ := cfg.ResolveActiveEndpoint()
-		model := ""
-		vendorName := ""
-		if resolved != nil {
-			model = resolved.Model
-			vendorName = resolved.VendorName
-		}
-		info := tunnel.SessionInfoData{
-			Workspace: b.workingDir,
-			Model:     model,
-			Provider:  vendorName,
-			Mode:      cfg.DefaultMode,
-		}
-		if working {
-			attachCfg.SessionInfo = &info
-		}
-	}
-	if working {
-		status := b.CurrentTunnelStatus()
-		attachCfg.Status = &status
-		activity := b.CurrentTunnelActivity()
-		attachCfg.Activity = &activity
-	}
-
-	agentruntime.AttachTunnelBroker(broker, attachCfg)
-
-	// Bootstrap: if replay is missing SessionInfo/Status/Activity, send them
-	if len(replay) > 0 {
-		b.ensureTunnelBootstrap(broker, replay, cfg, working)
-	}
-}
-
-// ensureTunnelBootstrap sends SessionInfo/Status/Activity if replay lacks them.
-func (b *ChatBridge) ensureTunnelBootstrap(broker *tunnel.Broker, replay []tunnel.GatewayMessage, cfg *config.Config, working bool) {
-	hasSessionInfo := false
-	hasStatus := false
-	hasActivity := false
-	for _, ev := range replay {
-		switch ev.Type {
-		case tunnel.EventSessionInfo:
-			hasSessionInfo = true
-		case tunnel.EventStatus:
-			hasStatus = true
-		case tunnel.EventActivity:
-			hasActivity = true
-		}
-	}
-	if !hasSessionInfo && cfg != nil && working {
-		resolved, _ := cfg.ResolveActiveEndpoint()
-		model := ""
-		vendorName := ""
-		if resolved != nil {
-			model = resolved.Model
-			vendorName = resolved.VendorName
-		}
-		broker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: b.workingDir,
-			Model:     model,
-			Provider:  vendorName,
-			Mode:      cfg.DefaultMode,
-		})
-	}
-	if !hasStatus && working {
-		status := b.CurrentTunnelStatus()
-		if status.Status != "" {
-			broker.PushStatus(status.Status, status.Message)
-		}
-	}
-	if !hasActivity && working {
-		activity := b.CurrentTunnelActivity()
-		if activity != "" {
-			broker.PushActivity(activity)
-		}
+		replay := b.tunnelHost.PrepareOnlineShare(broker)
+		_ = replay
 	}
 }
 
