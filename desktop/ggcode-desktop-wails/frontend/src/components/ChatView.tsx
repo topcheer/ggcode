@@ -457,6 +457,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           setIsStreaming(false)
           setThinking(false)
           setStatusBar(s => ({ ...s, status: 'idle' }))
+          // Clear completed agent panels
+          setAgentPanels(prev => {
+            const next = new Map<string, AgentPanel>()
+            for (const [id, panel] of prev) {
+              if (panel.status === 'running') {
+                next.set(id, { ...panel, status: 'completed', messages: panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m) })
+              }
+            }
+            return next
+          })
           break
         }
         case 'usage_update': {
