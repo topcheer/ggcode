@@ -525,6 +525,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'session_info':
         if (!_shouldApplyEvent(msg)) {
           _ackSkippedEvent(msg);
+          // Even when dedup-skipped, session_info means the host has sent its
+          // projection — clear the awaiting flag so sessionReady can become true.
+          if (_awaitingSnapshotProjection) {
+            _awaitingSnapshotProjection = false;
+            _snapshotProjectionTimeout?.cancel();
+            _snapshotProjectionTimeout = null;
+            _syncSessionReady();
+          }
           break;
         }
         final data = proto.SessionInfoData.fromJson(msg.data!);

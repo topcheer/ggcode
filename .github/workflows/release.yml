@@ -425,6 +425,7 @@ jobs:
             dist/macos-pkg/*.pkg \
             dist/windows-msi/*.msi \
             dist/desktop-darwin/*.dmg \
+            dist/desktop-darwin/ggcode-desktop_*_darwin_* \
             dist/desktop-windows/* \
             dist/desktop-linux-amd64/ggcode-desktop_* \
             dist/desktop-linux-arm64/ggcode-desktop_* \
