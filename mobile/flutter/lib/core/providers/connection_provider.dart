@@ -252,7 +252,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
     // Snapshot current UI state before loading persisted values.
     final uiSessionId = _sessionId;
-    final uiHasContent = ref.read(sessionInfoProvider) != null;
+    // Check for actual rendered content, not just sessionInfo.
+    // sessionInfo can survive a disconnect that cleared the chat UI.
+    final uiHasContent =
+        ref.read(chatProvider).isNotEmpty;
 
     await _loadResumeState();
     if (!_isConnectionGenerationCurrent(generation)) return;
@@ -280,7 +283,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // _loadResumeState overwrites _sessionId/_lastAppliedEventId from prefs.
     final savedSessionId = _sessionId;
 
-    if (uiHasContent && uiSessionId == savedSessionId) {
+    // When clearState is true (e.g. scanned from chat screen), always do a
+    // fresh restore from local cache. When false (e.g. reconnecting), keep
+    // existing UI if it matches the session being reconnected.
+    final keepExistingUi = !clearState &&
+        uiHasContent &&
+        uiSessionId == savedSessionId;
+
+    if (keepExistingUi) {
       // UI already renders this session — keep it. Ordinal dedup will skip
       // relay replay events we already have rendered.
       _beginRelaySyncWaiting(hasLocalState: true);
@@ -1256,10 +1266,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     // Skip already-cached events: relay may replay events earlier than our
     // snapshot's lastEventId (ACK latency).  Skip + ACK so relay advances.
-    final ord = _parseEventOrdinal(eventId);
-    final last = _parseEventOrdinal(_lastAppliedEventId);
-    if (ord != null && last != null && ord <= last) {
-      return false;
+    // Exception: when awaiting a snapshot projection (after snapshot_reset),
+    // the host is sending a complete fresh view — accept all events regardless
+    // of ordinal to avoid dropping replayCanonicalEvents data that arrives
+    // before (or interleaved with) the snapshot_reset message.
+    if (!_awaitingSnapshotProjection) {
+      final ord = _parseEventOrdinal(eventId);
+      final last = _parseEventOrdinal(_lastAppliedEventId);
+      if (ord != null && last != null && ord <= last) {
+        return false;
+      }
     }
     return true;
   }

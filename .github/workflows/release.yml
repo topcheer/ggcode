@@ -421,15 +421,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload "${GITHUB_REF_NAME}" \
-            dist/macos-pkg/*.pkg \
-            dist/windows-msi/*.msi \
-            dist/desktop-darwin/*.dmg \
-            dist/desktop-darwin/ggcode-desktop_*_darwin_* \
-            dist/desktop-windows/* \
-            dist/desktop-linux-amd64/ggcode-desktop_* \
-            dist/desktop-linux-arm64/ggcode-desktop_* \
-            --clobber
+          # Upload each asset group separately so one failure doesn't block others
+          for pattern in \
+            "dist/macos-pkg/*.pkg" \
+            "dist/windows-msi/*.msi" \
+            "dist/desktop-darwin/*.dmg" \
+            "dist/desktop-darwin/ggcode-desktop_*_darwin_*" \
+            "dist/desktop-windows/*" \
+            "dist/desktop-linux-amd64/ggcode-desktop_*" \
+            "dist/desktop-linux-arm64/ggcode-desktop_*"; do
+            files=( $pattern )
+            if [ ${#files[@]} -gt 0 ] && [ -e "${files[0]}" ]; then
+              echo "Uploading: $pattern (${#files[@]} file(s))"
+              gh release upload "${GITHUB_REF_NAME}" $pattern --clobber || echo "WARN: failed to upload $pattern"
+            else
+              echo "SKIP: no files matching $pattern"
+            fi
+          done
 
   publish-winget:
     name: Publish desktop to winget
