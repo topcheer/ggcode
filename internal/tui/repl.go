@@ -320,6 +320,12 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 			IsError:     isError,
 		})
 	})
+
+	// Start the background ticker that flushes accumulated stream
+	// text/reasoning chunks at ~12.5 Hz instead of per-token (~50-100 Hz
+	// per agent). Without this, 2+ concurrent sub-agents flood Bubble Tea's
+	// event loop with 200-400 messages/second, causing severe TUI stutter.
+	mgr.StartStreamBatcher()
 }
 
 // SetTaskManager wires the task manager and registers task tools.
@@ -457,14 +463,11 @@ func (r *REPL) sendProgramMsgs(msgs ...tea.Msg) {
 		if r.program == nil {
 			return
 		}
-		program := r.program
-		send = program.Send
+		send = r.program.Send
 	}
-	safego.Go("tui.program.send", func() {
-		for _, msg := range msgs {
-			send(msg)
-		}
-	})
+	for _, msg := range msgs {
+		send(msg)
+	}
 }
 
 // replModeSwitcher implements tool.ModeSwitcher by delegating to the TUI Model.

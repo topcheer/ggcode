@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -238,6 +239,12 @@ func (s *SubAgent) statusInfo() StatusInfo {
 }
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
+// streamBatchInterval controls how often accumulated sub-agent stream text
+// and reasoning chunks are flushed to the TUI. Without batching, each LLM
+// token (~50-100/s per agent) triggers a separate program.Send → Bubble Tea
+// Update(), flooding the event loop and causing severe TUI stuttering.
+const streamBatchInterval = 80 * time.Millisecond
+
 type Manager struct {
 	agents       map[string]*SubAgent
 	mu           sync.Mutex
@@ -246,8 +253,8 @@ type Manager struct {
 	showOutput   bool
 	onUpdate     func(*SubAgent)
 	onComplete   func(*SubAgent)
-	onStreamText func(agentID, text string)                                                        // called on each text chunk (no throttle)
-	onReasoning  func(agentID, text string)                                                        // called on each reasoning chunk (no throttle)
+	onStreamText func(agentID, text string)                                                        // called on batched text
+	onReasoning  func(agentID, text string)                                                        // called on batched reasoning
 	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
 	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
 	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
@@ -257,6 +264,15 @@ type Manager struct {
 	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
+
+	// streamBatch accumulates text/reasoning chunks per agent and flushes
+	// them at streamBatchInterval. This prevents the TUI event loop from
+	// being flooded with per-token messages when multiple sub-agents stream
+	// concurrently. Guarded by streamBatchMu.
+	streamBatchMu   sync.Mutex
+	streamTextBuf   map[string]*strings.Builder // agentID → accumulated text
+	streamRsnBuf    map[string]*strings.Builder // agentID → accumulated reasoning
+	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
 }
 
 // NewManager creates a Manager with the given config.
@@ -271,12 +287,15 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Manager{
-		agents:     make(map[string]*SubAgent),
-		sem:        make(chan struct{}, max),
-		timeout:    timeout,
-		showOutput: cfg.ShowOutput,
-		rootCtx:    rootCtx,
-		rootCancel: rootCancel,
+		agents:          make(map[string]*SubAgent),
+		sem:             make(chan struct{}, max),
+		timeout:         timeout,
+		showOutput:      cfg.ShowOutput,
+		rootCtx:         rootCtx,
+		rootCancel:      rootCancel,
+		streamTextBuf:   make(map[string]*strings.Builder),
+		streamRsnBuf:    make(map[string]*strings.Builder),
+		streamBatchDone: make(chan struct{}),
 	}
 }
 
@@ -292,6 +311,10 @@ func (m *Manager) RootContext() context.Context {
 
 // Shutdown cancels every running sub-agent. Call once during app shutdown.
 func (m *Manager) Shutdown() {
+	// Stop the stream batch ticker goroutine.
+	close(m.streamBatchDone)
+	// Flush any remaining buffered text before shutdown.
+	m.flushStreamBatch()
 	if m.rootCancel != nil {
 		m.rootCancel()
 	}
@@ -599,23 +622,100 @@ func (m *Manager) NotifyToolResult(agentID, toolID, toolName, displayName, detai
 	}
 }
 
-// NotifyStreamText forwards a text chunk to the onStreamText callback.
+// NotifyStreamText buffers a text chunk for batched delivery to the
+// onStreamText callback. Chunks are accumulated per-agent and flushed
+// at streamBatchInterval to avoid flooding the TUI event loop.
 func (m *Manager) NotifyStreamText(agentID, text string) {
 	m.mu.Lock()
 	fn := m.onStreamText
 	m.mu.Unlock()
-	if fn != nil {
-		fn(agentID, text)
+	if fn == nil {
+		return
 	}
+	m.streamBatchMu.Lock()
+	buf, ok := m.streamTextBuf[agentID]
+	if !ok {
+		buf = &strings.Builder{}
+		m.streamTextBuf[agentID] = buf
+	}
+	buf.WriteString(text)
+	m.streamBatchMu.Unlock()
 }
 
+// NotifyReasoning buffers a reasoning chunk for batched delivery.
 func (m *Manager) NotifyReasoning(agentID, text string) {
 	m.mu.Lock()
 	fn := m.onReasoning
 	m.mu.Unlock()
-	if fn != nil {
-		fn(agentID, text)
+	if fn == nil {
+		return
 	}
+	m.streamBatchMu.Lock()
+	buf, ok := m.streamRsnBuf[agentID]
+	if !ok {
+		buf = &strings.Builder{}
+		m.streamRsnBuf[agentID] = buf
+	}
+	buf.WriteString(text)
+	m.streamBatchMu.Unlock()
+}
+
+// StartStreamBatcher starts the background goroutine that periodically
+// flushes accumulated stream text/reasoning to the registered callbacks.
+// Must be called after SetOnStreamText/SetOnReasoning.
+func (m *Manager) StartStreamBatcher() {
+	go func() {
+		ticker := time.NewTicker(streamBatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.flushStreamBatch()
+			case <-m.streamBatchDone:
+				return
+			case <-m.rootCtx.Done():
+				m.flushStreamBatch()
+				return
+			}
+		}
+	}()
+}
+
+// flushStreamBatch delivers all accumulated text/reasoning chunks to
+// their respective callbacks in a single burst, then clears the buffers.
+func (m *Manager) flushStreamBatch() {
+	m.streamBatchMu.Lock()
+	textBufs := m.streamTextBuf
+	rsnBufs := m.streamRsnBuf
+	m.streamTextBuf = make(map[string]*strings.Builder)
+	m.streamRsnBuf = make(map[string]*strings.Builder)
+	m.streamBatchMu.Unlock()
+
+	if len(textBufs) == 0 && len(rsnBufs) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	onText := m.onStreamText
+	onRsn := m.onReasoning
+	m.mu.Unlock()
+
+	for id, buf := range textBufs {
+		if buf.Len() > 0 && onText != nil {
+			onText(id, buf.String())
+		}
+	}
+	for id, buf := range rsnBufs {
+		if buf.Len() > 0 && onRsn != nil {
+			onRsn(id, buf.String())
+		}
+	}
+}
+
+// FlushStreamBatch exports flushStreamBatch for use in tests that need
+// synchronous delivery of buffered stream events.
+func (m *Manager) FlushStreamBatch() {
+	m.flushStreamBatch()
 }
 
 // SetOnComplete sets a callback invoked when any sub-agent completes.
