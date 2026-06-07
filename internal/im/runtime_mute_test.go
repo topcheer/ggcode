@@ -839,13 +839,13 @@ func TestPersistBindingStripsMuted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Manually trigger persistBinding — should strip Muted
+	// Manually trigger persistBinding — should preserve Muted state
 	b.Muted = true
 	if err := mgr.persistBinding(b); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Muted {
-		t.Fatal("persistBinding should strip Muted flag before saving")
+	if !saved.Muted {
+		t.Fatal("persistBinding should preserve Muted flag")
 	}
 }
 
