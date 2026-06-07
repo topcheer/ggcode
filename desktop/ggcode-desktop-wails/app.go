@@ -873,6 +873,15 @@ func (a *App) imStartAdapter(name string) {
 		debug.Log("desktop", "IM start %s: no config", name)
 		return
 	}
+	// Ensure session is bound so pairing and inbound work
+	if a.chat != nil {
+		if ses := a.chat.CurrentSession(); ses != nil {
+			a.imManager.BindSession(im.SessionBinding{
+				SessionID: ses.ID,
+				Workspace: a.workDir,
+			})
+		}
+	}
 	debug.Log("desktop", "IM start: starting adapter %s", name)
 	if err := im.StartNamedAdapter(context.Background(), cfg.IM, name, a.imManager); err != nil {
 		debug.Log("desktop", "IM start %s failed: %v", name, err)
