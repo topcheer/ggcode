@@ -174,10 +174,21 @@ func TestSessionsListNoStore(t *testing.T) {
 }
 
 func TestSessionsListWithSessions(t *testing.T) {
-	// Isolate HOME to avoid pollution from other tests
-	t.Setenv("HOME", t.TempDir())
+	// Use manual temp dirs instead of t.TempDir() to avoid
+	// "TempDir RemoveAll cleanup: unlinkat: directory not empty" caused by
+	// JSONL store file handles still held during cleanup.
+	homeDir, err := os.MkdirTemp("", "webui-test-home-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(homeDir)
+	t.Setenv("HOME", homeDir)
 
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "webui-test-store-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
 	store, err := session.NewJSONLStore(dir)
 	if err != nil {
 		t.Fatal(err)
