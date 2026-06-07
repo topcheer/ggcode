@@ -1399,44 +1399,6 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 	// Delegate stream push to unified TunnelHost
 	if c.tunnelHost != nil {
 		c.tunnelHost.PushStreamEvent(ev)
-		return
-	}
-
-	// Legacy fallback (when no TunnelHost available)
-	if c.broker == nil {
-		return
-	}
-	switch ev.Type {
-	case provider.StreamEventText:
-		c.handleText(ev.Text)
-	case provider.StreamEventReasoning:
-		if chunk := tunnel.NormalizeReasoningChunk(ev.Text); chunk != "" {
-			c.handleReasoning(chunk)
-		}
-	case provider.StreamEventToolCallDone:
-		c.rolloverMainStream(true)
-		name := strings.TrimSpace(ev.Tool.Name)
-		if name == "" {
-			name = "tool"
-		}
-		present := tool.DescribeTool(name, string(ev.Tool.Arguments))
-		c.broker.PushToolCall(ev.Tool.ID, name, daemonToolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), present.Detail)
-	case provider.StreamEventToolResult:
-		c.rolloverMainStream(false)
-		content := ev.Result
-		if len([]rune(content)) > 2000 {
-			content = daemonTruncateRunes(content, 2000, "\n...(truncated)")
-		}
-		c.broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
-	case provider.StreamEventSystem:
-		c.rolloverMainStream(true)
-	case provider.StreamEventDone:
-		c.rolloverMainStream(true)
-	case provider.StreamEventError:
-		c.rolloverMainStream(true)
-		if ev.Error != nil {
-			c.broker.PushError(provider.UserFacingError(ev.Error))
-		}
 	}
 }
 
@@ -1480,31 +1442,6 @@ func (c *daemonTunnelShareController) setStatus(status, message string) {
 func (c *daemonTunnelShareController) cancelCurrentRun() {
 	c.rolloverMainStream(true)
 	c.setStatus(tunnel.StatusIdle, "cancelled")
-}
-
-func (c *daemonTunnelShareController) handleReasoning(chunk string) {
-	msgID := c.currentOrNextMsgID()
-	if msgID == "" {
-		return
-	}
-	c.markMainStreamActive()
-	c.mu.Lock()
-	c.reasoningTail += chunk
-	c.mu.Unlock()
-	c.broker.PushReasoning(agentruntime.TunnelReasoningMsgID(msgID), chunk)
-}
-
-func (c *daemonTunnelShareController) handleText(text string) {
-	msgID := c.currentOrNextMsgID()
-	if msgID == "" {
-		return
-	}
-	c.markMainStreamActive()
-	c.mu.Lock()
-	c.textTail += text
-	c.mu.Unlock()
-	c.broker.PushReasoningDone(agentruntime.TunnelReasoningMsgID(msgID))
-	c.broker.PushText(msgID, text)
 }
 
 func (c *daemonTunnelShareController) currentOrNextMsgID() string {
