@@ -110,7 +110,7 @@ interface AgentPanel {
 // ── Event types (mirrors wailskit/chat.go emit()) ────────────────────────────
 
 interface StreamEvent {
-  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'run_done' | 'user_message'
+  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'run_done'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result'
     | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update'
   data: string // JSON-encoded payload
@@ -382,15 +382,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       const raw = evt.data
 
       switch (evt.type) {
-        case 'user_message': {
-          const p = parseJSON<{ content: string }>(raw)
-          if (!p) break
-          setMessages(prev => [...prev, {
-            id: nextID(), role: 'user' as const,
-            content: p.content, timestamp: Date.now(),
-          }])
-          break
-        }
         case 'text': {
           const p = parseJSON<{ content: string }>(raw)
           if (!p) break
@@ -463,14 +454,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           setIsStreaming(false)
           setThinking(false)
           setStatusBar(s => ({ ...s, status: 'idle' }))
-          // Final consistency check: reload from backend to ensure nothing was missed
-          App.GetSessionHistory().then((history: any[]) => {
-            if (history) {
-              const loaded = materializeHistory(history, messagesRef.current)
-              messagesRef.current = loaded
-              setMessages(loaded)
-            }
-          })
           break
         }
         case 'usage_update': {
@@ -680,8 +663,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
 
     if (isStreaming) {
       // Agent is busy — send to backend for queueing.
-      // The user_message event will render it when backend processes it.
-      setInput('')
+      // User message already added to chat above.
       try {
         await App.SendMessage(text)
       } catch (err: any) {
