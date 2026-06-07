@@ -622,6 +622,13 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     if (isStreaming) {
       // Agent is busy — send to backend for queueing, show as pending
       setInput('')
+      // Render user message immediately (like TUI chatWriteUser)
+      setMessages(prev => [...prev, {
+        id: nextID(),
+        role: 'user' as const,
+        content: text,
+        timestamp: Date.now(),
+      }])
       setPendingMessages(prev => [...prev, text])
       try {
         await App.SendMessage(text)
@@ -629,7 +636,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         setPendingMessages(prev => prev.filter(m => m !== text))
         setMessages(prev => [...prev, {
           id: nextID(),
-          role: 'error',
+          role: 'error' as const,
           content: err?.message ?? String(err),
           timestamp: Date.now(),
         }])
