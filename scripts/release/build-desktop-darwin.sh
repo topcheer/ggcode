@@ -65,11 +65,15 @@ LDFLAGS="-s -w -X github.com/topcheer/ggcode/internal/version.Version=${VERSION}
 
 echo "  Building for amd64..."
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
-  wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/amd64 -o "${APP_NAME}-amd64" -clean -skipbindings
+  wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/amd64 -clean -skipbindings
+# Wails uses wails.json "name" for the .app bundle name, not -o flag.
+# Rename to arch-specific name before building the next arch.
+mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAME}-amd64.app" 2>/dev/null || true
 
 echo "  Building for arm64..."
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-  wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/arm64 -o "${APP_NAME}-arm64" -clean -skipbindings
+  wails build -tags goolm -ldflags "${LDFLAGS}" -platform darwin/arm64 -skipbindings
+mv "${WAILS_DIR}/build/bin/GGCode Desktop.app" "${WAILS_DIR}/build/bin/${APP_NAME}-arm64.app" 2>/dev/null || true
 
 popd >/dev/null
 
