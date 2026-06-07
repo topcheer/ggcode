@@ -72,7 +72,6 @@ func LoadInstanceConfig(workspace string) *Config {
 		return nil
 	}
 	cfg.FilePath = path
-	debug.Log("config", "loaded instance config from %s", path)
 	return &cfg
 }
 
@@ -388,8 +387,6 @@ func (c *Config) SaveInstance(workspace string) error {
 		if _, err := os.Stat(path); err == nil {
 			if err := os.Remove(path); err != nil {
 				debug.Log("config", "SaveInstance: failed to remove empty instance config: %v", err)
-			} else {
-				debug.Log("config", "SaveInstance: removed empty instance config %s", path)
 			}
 		}
 		return nil
@@ -402,7 +399,6 @@ func (c *Config) SaveInstance(workspace string) error {
 	if err := writeFileAtomic(path, data, secureConfigFileMode); err != nil {
 		return err
 	}
-	debug.Log("config", "saved instance config to %s (%d bytes)", path, len(data))
 
 	// Migrate any plaintext API keys in the instance config to instance keys.env.
 	// Use instance-prefixed env vars to avoid overwriting global keys.
@@ -411,7 +407,6 @@ func (c *Config) SaveInstance(workspace string) error {
 		if migrated, migrateErr := MigrateInstancePlaintextAPIKeys(path, hash); migrateErr != nil {
 			debug.Log("config", "SaveInstance: migration error: %v", migrateErr)
 		} else if len(migrated) > 0 {
-			debug.Log("config", "SaveInstance: migrated %d plaintext secret(s)", len(migrated))
 		}
 	}
 
@@ -519,7 +514,6 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	instanceCfg := LoadInstanceConfig(workspace)
 	if instanceCfg != nil {
 		MergeInstance(cfg, instanceCfg)
-		debug.Log("config", "applied instance config for workspace %s", workspace)
 	}
 	// Always record instance paths so HasInstanceConfigAttached() returns true
 	// even when no instance config file exists yet. This allows the user to
@@ -530,7 +524,6 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
 	if a2aOverride := LoadA2AOverride(workspace); a2aOverride != nil {
 		MergeA2AConfig(&cfg.A2A, a2aOverride)
-		debug.Log("config", "applied legacy .ggcode/a2a.yaml override")
 	}
 
 	return cfg, nil
@@ -584,7 +577,6 @@ func MigrateA2AYaml(workspace string) bool {
 		return false
 	}
 
-	debug.Log("config", "migrated legacy .ggcode/a2a.yaml to %s", instPath)
 	return true
 }
 
