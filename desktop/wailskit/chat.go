@@ -80,15 +80,6 @@ type ChatBridge struct {
 	// Unified tunnel event management (from InteractiveRuntimeCore.Tunnel)
 	tunnelHost *agentruntime.TunnelHost
 
-	// Legacy tunnel fields — will be removed after full migration to tunnelHost
-	tunnelBroker           *tunnel.Broker
-	tunnelProjectionBroker *tunnel.Broker
-	tunnelMsgID            string
-	tunnelMsgNeedsFinalize bool
-	tunnelProjectionBroken bool
-	projectionStore        *tunnel.ProjectionStore
-	shareTunnelBroker      *tunnel.Broker
-
 	// Pending approval/ask_user requests from agent
 	interactions *agentruntime.InteractionBroker
 
@@ -324,10 +315,8 @@ func (b *ChatBridge) ClearCurrentSession() {
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = nil
-	b.tunnelMsgID = ""
-	b.tunnelMsgNeedsFinalize = false
-	if b.tunnelProjectionBroker != nil {
-		b.tunnelProjectionBroker.ResetSession()
+	if b.tunnelHost != nil {
+		b.tunnelHost.ResetStreamState()
 	}
 }
 
@@ -841,72 +830,9 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		b.OnStreamEvent(eventType, raw)
 	}
 
-	// Push to tunnel via unified TunnelHost (preferred) or legacy path
+	// Push to tunnel via unified TunnelHost
 	if b.tunnelHost != nil {
 		b.tunnelHost.PushStreamEvent(ev)
-	} else {
-		b.pushSemanticToTunnelLegacy(semantic)
-	}
-}
-
-// pushSemanticToTunnel forwards agent stream events to connected mobile clients
-// via the projection broker (which records events for replay AND forwards to
-// the online share broker). Mirrors TUI's Model.pushTunnelEvent() and daemon's
-// shareController.HandleStreamEvent().
-func (b *ChatBridge) pushSemanticToTunnelLegacy(sem agentruntime.DesktopStreamSemantic) {
-	// Use the projection broker so events are recorded AND forwarded to the share broker
-	broker := b.getTunnelProjectionBroker()
-	if broker == nil {
-		return
-	}
-
-	// Ensure we have a message ID for the current stream
-	b.mu.Lock()
-	state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
-		MessageID:     b.tunnelMsgID,
-		NeedsFinalize: b.tunnelMsgNeedsFinalize,
-	}, broker)
-	b.tunnelMsgID = state.MessageID
-	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
-	b.mu.Unlock()
-
-	switch sem.Type {
-	case provider.StreamEventText:
-		if sem.Text != "" {
-			b.mu.Lock()
-			b.tunnelMsgNeedsFinalize = true
-			b.mu.Unlock()
-			broker.PushReasoningDone(agentruntime.TunnelReasoningMsgID(b.tunnelMsgID))
-			broker.PushText(b.tunnelMsgID, sem.Text)
-		}
-	case provider.StreamEventReasoning:
-		if chunk := tunnel.NormalizeReasoningChunk(sem.Text); chunk != "" {
-			b.mu.Lock()
-			b.tunnelMsgNeedsFinalize = true
-			b.mu.Unlock()
-			broker.PushReasoning(agentruntime.TunnelReasoningMsgID(b.tunnelMsgID), chunk)
-		}
-	case provider.StreamEventToolCallDone:
-		b.flushTunnelTextStream(broker, false)
-		name := strings.TrimSpace(sem.ToolCall.Name)
-		if name == "" {
-			name = "tool"
-		}
-		present := tool.DescribeTool(name, sem.ToolCall.RawArgs)
-		broker.PushToolCall(sem.ToolCall.ID, name, sem.ToolCall.DisplayName, sem.ToolCall.RawArgs, present.Detail)
-	case provider.StreamEventToolResult:
-		content := sem.ToolResult.Preview
-		if len([]rune(content)) > 2000 {
-			content = string([]rune(content)[:1997]) + "\n..."
-		}
-		broker.PushToolResult(sem.ToolResult.ID, sem.ToolResult.Name, content, sem.ToolResult.IsError)
-	case provider.StreamEventDone:
-		b.flushTunnelTextStream(broker, true)
-	case provider.StreamEventError:
-		b.flushTunnelTextStream(broker, true)
-		if sem.ErrorText != "" {
-			broker.PushError(sem.ErrorText)
-		}
 	}
 }
 
@@ -1077,12 +1003,6 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	// Delegate online broker attachment to TunnelHost
 	if b.tunnelHost != nil {
 		b.tunnelHost.AttachOnlineBroker(broker)
-	} else {
-		// Legacy: store broker for currentTunnelBroker()
-		b.mu.Lock()
-		b.tunnelBroker = broker
-		b.shareTunnelBroker = broker
-		b.mu.Unlock()
 	}
 
 	var (
@@ -1095,14 +1015,7 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	working = b.cancel != nil
 	cfg = b.cfg
 	currentSes = b.currentSes
-	if working && b.tunnelHost == nil {
-		state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
-			MessageID:     b.tunnelMsgID,
-			NeedsFinalize: b.tunnelMsgNeedsFinalize,
-		}, broker)
-		b.tunnelMsgID = state.MessageID
-		b.tunnelMsgNeedsFinalize = state.NeedsFinalize
-	}
+
 	b.mu.Unlock()
 
 	if broker == nil {
@@ -1150,139 +1063,28 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 func (b *ChatBridge) DetachTunnelBroker() {
 	if b.tunnelHost != nil {
 		b.tunnelHost.DetachOnlineBroker()
-	} else {
-		b.mu.Lock()
-		b.tunnelBroker = nil
-		b.shareTunnelBroker = nil
-		b.mu.Unlock()
 	}
 }
 
 func (b *ChatBridge) currentTunnelBroker() *tunnel.Broker {
-	// Prefer TunnelHost's projection broker — it has event recorder for
-	// projection store + session recording + online broker forwarding.
 	if b.tunnelHost != nil {
 		if pb := b.tunnelHost.ProjectionBroker(); pb != nil {
 			return pb
 		}
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.tunnelBroker
+	return nil
 }
 
 func (b *ChatBridge) currentShareTunnelBroker() *tunnel.Broker {
-	if b.tunnelHost != nil {
-		if pb := b.tunnelHost.ProjectionBroker(); pb != nil {
-			return pb
-		}
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.shareTunnelBroker != nil {
-		return b.shareTunnelBroker
-	}
-	return b.tunnelBroker
-}
-
-func (b *ChatBridge) getTunnelProjectionBroker() *tunnel.Broker {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.tunnelProjectionBroker
-}
-
-func (b *ChatBridge) ensureTunnelProjectionBroker() *tunnel.Broker {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.tunnelProjectionBroker == nil {
-		b.tunnelProjectionBroker = tunnel.NewBroker(nil)
-	}
-	return b.tunnelProjectionBroker
+	return b.currentTunnelBroker()
 }
 
 func (b *ChatBridge) bindTunnelProjectionSession() {
 	b.mu.Lock()
 	currentSes := b.currentSes
-	th := b.tunnelHost
 	b.mu.Unlock()
-
-	// Use unified TunnelHost if available
-	if th != nil {
-		th.BindSession(currentSes, b.sessionStore)
-		return
-	}
-
-	// Legacy fallback
-	if currentSes == nil {
-		return
-	}
-
-	// Use offline projection broker (mirrors Fyne ensureTunnelProjectionBroker)
-	// This works even before Share — events are recorded for later replay.
-	broker := b.ensureTunnelProjectionBroker()
-
-	if b.projectionStore == nil {
-		if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
-			b.projectionStore = store
-		}
-	}
-
-	b.tunnelProjectionBroken = false
-	if _, err := agentruntime.PrepareProjectionBroker(broker, b.projectionStore, currentSes, func(ev tunnel.GatewayMessage) {
-		b.recordProjectionEvent(ev)
-	}); err != nil {
-		log.Printf("[wails-chat] projection replay prep failed for %s: %v", currentSes.ID, err)
-	}
-
-	b.mu.Lock()
-	if b.tunnelMsgID == "" {
-		b.tunnelMsgID = broker.NextMessageID()
-	}
-	b.mu.Unlock()
-}
-
-func (b *ChatBridge) recordProjectionEvent(msg tunnel.GatewayMessage) {
-	b.mu.Lock()
-	store := b.projectionStore
-	b.mu.Unlock()
-	if err := agentruntime.AppendProjectionEvent(store, msg); err != nil {
-		b.mu.Lock()
-		b.tunnelProjectionBroken = true
-		b.mu.Unlock()
-		log.Printf("[wails-chat] projection append failed for %s event=%s: %v", msg.SessionID, msg.EventID, err)
-		b.RecordTunnelEvent(msg)
-		return
-	}
-	b.RecordTunnelEvent(msg)
-	if broker := b.currentShareTunnelBroker(); broker != nil {
-		broker.PublishRecordedEvent(msg)
-	}
-}
-
-func (b *ChatBridge) RecordTunnelEvent(msg tunnel.GatewayMessage) {
-	if msg.EventID == "" || msg.Type == tunnel.EventSnapshotReset {
-		return
-	}
-	b.mu.Lock()
-	if b.currentSes == nil || b.sessionStore == nil {
-		b.mu.Unlock()
-		return
-	}
-	record := session.TunnelEvent{
-		EventID:  msg.EventID,
-		StreamID: msg.StreamID,
-		Type:     msg.Type,
-		Data:     append([]byte(nil), msg.Data...),
-	}
-	b.currentSes.TunnelEvents = append(b.currentSes.TunnelEvents, record)
-	ses := b.currentSes
-	store := b.sessionStore
-	b.mu.Unlock()
-
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
-	} else {
-		_ = store.Save(ses)
+	if b.tunnelHost != nil {
+		b.tunnelHost.BindSession(currentSes, b.sessionStore)
 	}
 }
 
@@ -1306,81 +1108,35 @@ func (b *ChatBridge) CurrentTunnelActivity() string {
 	}
 }
 
+// TunnelHost handles all message stream state internally.
+// These methods are kept as no-op stubs for any remaining callers.
+
 func (b *ChatBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state := agentruntime.EnsureTunnelMainStream(agentruntime.TunnelMainStream{
-		MessageID:     b.tunnelMsgID,
-		NeedsFinalize: b.tunnelMsgNeedsFinalize,
-	}, broker)
-	b.tunnelMsgID = state.MessageID
-	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
-	return b.tunnelMsgID
+	return ""
 }
 
 func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
-	return agentruntime.TunnelReasoningMsgID(b.ensureTunnelMsgID(broker))
+	return ""
 }
 
-func (b *ChatBridge) markTunnelMainStreamActive() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state := agentruntime.MarkTunnelMainStreamActive(agentruntime.TunnelMainStream{
-		MessageID:     b.tunnelMsgID,
-		NeedsFinalize: b.tunnelMsgNeedsFinalize,
-	})
-	b.tunnelMsgID = state.MessageID
-	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
-}
+func (b *ChatBridge) markTunnelMainStreamActive() {}
 
-func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {
-	b.mu.Lock()
-	state := agentruntime.FlushTunnelMainStream(agentruntime.TunnelMainStream{
-		MessageID:     b.tunnelMsgID,
-		NeedsFinalize: b.tunnelMsgNeedsFinalize,
-	}, broker, force)
-	b.tunnelMsgID = state.MessageID
-	b.tunnelMsgNeedsFinalize = state.NeedsFinalize
-	b.mu.Unlock()
-}
+func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {}
 
-func (b *ChatBridge) resetTunnelRoundState() {
-	b.mu.Lock()
-	b.tunnelMsgNeedsFinalize = false
-	b.mu.Unlock()
-}
+func (b *ChatBridge) resetTunnelRoundState() {}
 
 func (b *ChatBridge) currentSessionTunnelAuthorityEpoch() uint64 {
-	b.mu.Lock()
-	store := b.projectionStore
-	ses := b.currentSes
-	b.mu.Unlock()
-	if store == nil || ses == nil {
-		return 1
-	}
-	if epoch, err := agentruntime.ProjectionAuthorityEpoch(store, ses.ID); err == nil {
-		return epoch
+	if b.tunnelHost != nil {
+		return b.tunnelHost.AuthorityEpoch()
 	}
 	return 1
 }
 
 func (b *ChatBridge) CurrentSessionTunnelEvents() []tunnel.GatewayMessage {
-	b.mu.Lock()
-	store := b.projectionStore
-	ses := b.currentSes
-	broken := b.tunnelProjectionBroken
-	b.mu.Unlock()
-	if store == nil || ses == nil || broken {
-		return nil
+	if b.tunnelHost != nil {
+		return b.tunnelHost.TunnelEvents()
 	}
-	events, err := agentruntime.ProjectionReplay(store, ses.ID)
-	if err != nil {
-		b.mu.Lock()
-		b.tunnelProjectionBroken = true
-		b.mu.Unlock()
-		return nil
-	}
-	return events
+	return nil
 }
 
 func (b *ChatBridge) pushTunnelSessionInfo(broker *tunnel.Broker) {
@@ -1419,9 +1175,12 @@ func (b *ChatBridge) nextTunnelRequestID() string {
 }
 
 func (b *ChatBridge) ResetCurrentSessionTunnelLedger() {
+	if b.tunnelHost == nil {
+		return
+	}
+	store := b.tunnelHost.ProjectionStore()
 	b.mu.Lock()
 	ses := b.currentSes
-	store := b.projectionStore
 	b.mu.Unlock()
 	if ses == nil || store == nil {
 		return
