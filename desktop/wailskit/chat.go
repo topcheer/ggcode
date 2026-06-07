@@ -117,7 +117,14 @@ func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 // SendMessage sends a user message and streams events to the frontend.
 // If agent is already running, queues the message for processing after the current turn.
 func (b *ChatBridge) SendMessage(userMsg string) error {
-	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, false)
+	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, "desktop")
+}
+
+// SendNonUIMessage sends a user message originating from a non-desktop source (IM/mobile).
+// It pushes a user_message event to the frontend so the message appears in the chat,
+// but avoids duplicate display on the originating surface.
+func (b *ChatBridge) SendNonUIMessage(userMsg string, source string) error {
+	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, source)
 }
 
 func (b *ChatBridge) HandleTunnelUserMessage(data tunnel.MessageData) error {
@@ -130,7 +137,7 @@ func (b *ChatBridge) HandleTunnelUserMessage(data tunnel.MessageData) error {
 		broker.PushStatus(tunnel.StatusBusy, "")
 		b.resetTunnelRoundState()
 	}
-	return b.sendMessageData(data, true)
+	return b.sendMessageData(data, "mobile")
 }
 
 func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(string), currentAskUserRequest func() tool.AskUserRequest, clearAskUserRequest func()) {
@@ -170,7 +177,7 @@ func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(st
 	})
 }
 
-func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush bool) error {
+func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string) error {
 	userMsg := strings.TrimSpace(data.Text)
 	if userMsg == "" {
 		return nil
@@ -178,8 +185,8 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 
 	// Notify frontend about non-desktop user messages (IM/mobile).
 	// Desktop UI already adds its own messages via handleSend; skip to avoid duplicates.
-	if b.OnStreamEvent != nil && skipMobilePush {
-		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": "im"})
+	if b.OnStreamEvent != nil && source != "desktop" {
+		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": source})
 		b.OnStreamEvent("user_message", raw)
 	}
 
@@ -187,7 +194,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 	if b.cancel != nil {
 		// Agent is busy — queue the message (mirrors Fyne QueueMessage)
 		meta := &data
-		if !skipMobilePush {
+		if source == "desktop" {
 			meta = nil
 		}
 		b.pendingMsgs.Enqueue(userMsg, false, meta)
@@ -218,12 +225,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 					broker.PushSystemMessage("Processing queued message...")
 				}
 				data := tunnel.MessageData{Text: pending.Text}
-				skipPush := false
+				src := "desktop"
 				if pending.Meta != nil {
 					data = *pending.Meta
-					skipPush = true
+					src = "mobile"
 				}
-				_ = b.sendMessageData(data, skipPush)
+				_ = b.sendMessageData(data, src)
 			}
 		}
 	}()
@@ -244,7 +251,8 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 	b.appendLiveUserMessage(userMsg)
 
 	// Notify mobile client: user message + busy status
-	if broker := b.currentTunnelBroker(); broker != nil && !skipMobilePush {
+	// Only push to mobile for desktop-originated messages (mobile/IM already showed on their side)
+	if broker := b.currentTunnelBroker(); broker != nil && source == "desktop" {
 		if strings.TrimSpace(data.MessageID) == "" {
 			data.MessageID = broker.NextMessageID()
 		}
