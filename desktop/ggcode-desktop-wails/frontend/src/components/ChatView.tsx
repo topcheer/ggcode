@@ -90,7 +90,6 @@ interface ChatMessage {
   toolDetail?: string
   agentID?: string
   teammateName?: string
-  reasoning?: string
   isError?: boolean
   streaming?: boolean
   timestamp: number
@@ -248,8 +247,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     })
   }, [])
 
-  // Reasoning buffer: accumulates during streaming, attached to next message
-  const reasoningBuf = useRef('')
   const messagesRef = useRef<ChatMessage[]>([])
 
   // Load session history when sessionId changes
@@ -409,10 +406,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           setMessages(prev => prev.map(m =>
             m.role === 'reasoning' && m.streaming ? { ...m, streaming: false } : m
           ))
-          reasoningBuf.current = ''
           break
         }
-        case 'tool_call_done': {
+        case 'tool_call_done': {        case 'tool_call_done': {
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
           setMessages(prev => {
@@ -709,7 +705,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
 
     setIsStreaming(true)
     setThinking(true)
-    reasoningBuf.current = ''
     setStatusBar(s => ({ ...s, status: 'working' }))
 
     try {
