@@ -111,7 +111,7 @@ interface AgentPanel {
 
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done'
-    | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result'
+    | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result' | 'subagent_done'
     | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update'
   data: string // JSON-encoded payload
 }
@@ -593,6 +593,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           updateAgentPanel(p.teammateID, panel => ({
             ...panel,
             status: p.content ? 'completed' : 'idle',
+            messages: panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m),
+          }))
+          break
+        }
+        case 'subagent_done': {
+          const p = parseJSON<{ agentID: string; title: string; isError: boolean }>(raw)
+          if (!p) break
+          updateAgentPanel(p.agentID, panel => ({
+            ...panel,
+            status: p.isError ? 'failed' as const : 'completed' as const,
             messages: panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m),
           }))
           break

@@ -575,6 +575,18 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		agentruntime.PushTunnelSubagentToolResult(b.currentTunnelBroker, agentID, toolID, toolName, displayName, detail, result, isError)
 	})
 
+	// Notify frontend when a sub-agent completes
+	b.subAgentMgr.SetOnComplete(func(sa *subagent.SubAgent) {
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]interface{}{
+				"agentID": sa.ID,
+				"title":   b.subagentPanelTitle(sa.ID),
+				"isError": sa.Status == subagent.StatusFailed,
+			})
+			b.OnStreamEvent("subagent_done", raw)
+		}
+	})
+
 	// Swarm manager
 	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
