@@ -34,6 +34,10 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function DrainLogStream() {
+  return window['go']['main']['App']['DrainLogStream']();
+}
+
 export function DrainStreamEvents() {
   return window['go']['main']['App']['DrainStreamEvents']();
 }
@@ -232,6 +236,10 @@ export function TestEndpointConnection(arg1, arg2, arg3) {
 
 export function TestIMConnection(arg1) {
   return window['go']['main']['App']['TestIMConnection'](arg1);
+}
+
+export function ToggleLogStream(arg1) {
+  return window['go']['main']['App']['ToggleLogStream'](arg1);
 }
 
 export function UnbindIMAdapter(arg1) {

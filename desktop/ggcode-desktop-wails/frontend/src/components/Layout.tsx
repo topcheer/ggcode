@@ -5,6 +5,7 @@ import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
 import { SettingsPage } from './SettingsPage'
+import DebugConsole from './DebugConsole'
 import { IMManagement } from './IMManagement'
 import { FileBrowser } from './FileBrowser'
 import { MCPServers } from './MCPServers'
@@ -255,6 +256,7 @@ function LayoutInner() {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
               {view === 'chat' && <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} />}
               {view === 'settings' && <SettingsPage onBack={backToChat} />}
+              {view === 'debug' && <DebugConsole />}
               {view === 'im' && <IMManagement />}
               {view === 'files' && <FileBrowser onBack={backToChat} />}
               {view === 'mcp' && <MCPServers onBack={backToChat} />}

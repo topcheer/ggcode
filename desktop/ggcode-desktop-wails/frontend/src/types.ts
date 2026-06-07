@@ -43,7 +43,7 @@ export interface EndpointInfo {
   displayName: string
 }
 
-export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp"
+export type ViewMode = "chat" | "settings" | "im" | "files" | "mcp" | "debug"
 
 export interface StatusBarData {
   vendor: string
