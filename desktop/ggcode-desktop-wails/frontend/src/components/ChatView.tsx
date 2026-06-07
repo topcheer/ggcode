@@ -411,6 +411,30 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         case 'tool_call_done': {
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
+
+          // exit_plan_mode: render plan as markdown, skip tool call UI
+          if (p.name === 'exit_plan_mode') {
+            const planArgs = parseJSON<{ plan: string }>(p.arguments || '{}')
+            if (planArgs?.plan) {
+              setMessages(prev => [...prev, {
+                id: nextID(), role: 'assistant' as const,
+                content: planArgs.plan, streaming: false,
+                timestamp: Date.now(),
+              }])
+            }
+            break
+          }
+
+          // enter_plan_mode: just show brief indicator, skip tool call UI
+          if (p.name === 'enter_plan_mode') {
+            setMessages(prev => [...prev, {
+              id: nextID(), role: 'assistant' as const,
+              content: '📝 Entering plan mode...', streaming: false,
+              timestamp: Date.now(),
+            }])
+            break
+          }
+
           setMessages(prev => {
             // Close streaming for text/reasoning only, not other tool calls
             const msgs = prev.map(m =>
