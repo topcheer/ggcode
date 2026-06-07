@@ -112,7 +112,7 @@ interface AgentPanel {
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result' | 'subagent_done'
-    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update'
+    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update' | 'user_message'
   data: string // JSON-encoded payload
 }
 
