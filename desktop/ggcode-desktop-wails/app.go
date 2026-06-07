@@ -182,12 +182,14 @@ func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
 	})
 	// Emit interactive events as standalone events for Layout-level dialogs.
 	if eventType == "ask_user:request" || eventType == "approval:request" ||
-		eventType == "ask_user:cancel" || eventType == "approval:cancel" ||
-		eventType == "pending_consumed" {
+		eventType == "ask_user:cancel" || eventType == "approval:cancel" {
 		var parsed interface{}
 		if err := json.Unmarshal(data, &parsed); err == nil {
 			a.enqueueUIEvent(eventType, parsed)
 		}
+	}
+	if eventType == "pending_consumed" {
+		a.enqueueUIEvent(eventType, nil)
 	}
 }
 
