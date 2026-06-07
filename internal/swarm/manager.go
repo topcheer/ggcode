@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/task"
+	"strings"
 )
 
 // AgentFactory creates an agent with the given provider, tool set, system prompt, and max turns.
@@ -29,6 +30,12 @@ type usageHandlerSetter interface {
 type ToolBuilder func(allowedTools []string) interface{}
 
 // Manager manages swarm teams: creation, teammate spawning, lifecycle.
+// streamBatchInterval controls how often accumulated teammate text/reasoning
+// events are flushed to the TUI. Without batching, each LLM streaming token
+// (~50-100/s per teammate) triggers a separate callback → program.Send →
+// Bubble Tea Update(), compounding with sub-agent flooding.
+const swarmStreamBatchInterval = 80 * time.Millisecond
+
 type Manager struct {
 	teams    map[string]*Team
 	provider provider.Provider
@@ -51,6 +58,14 @@ type Manager struct {
 	rootCancel context.CancelFunc
 	mu         sync.Mutex
 	nextTeamID int
+
+	// streamBatch accumulates teammate_text/teammate_reasoning events per
+	// teammate and flushes them at swarmStreamBatchInterval to prevent
+	// TUI message flooding. Guarded by streamBatchMu.
+	streamBatchMu   sync.Mutex
+	streamTextBuf   map[string]*strings.Builder // teammateID → accumulated text
+	streamRsnBuf    map[string]*strings.Builder // teammateID → accumulated reasoning
+	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
 }
 
 // NewManager creates a swarm Manager.
@@ -67,14 +82,17 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Manager{
-		teams:        make(map[string]*Team),
-		provider:     prov,
-		cfg:          cfg,
-		agentFactory: factory,
-		toolBuilder:  builder,
-		results:      make(map[string]string),
-		rootCtx:      rootCtx,
-		rootCancel:   rootCancel,
+		teams:           make(map[string]*Team),
+		provider:        prov,
+		cfg:             cfg,
+		agentFactory:    factory,
+		toolBuilder:     builder,
+		results:         make(map[string]string),
+		rootCtx:         rootCtx,
+		rootCancel:      rootCancel,
+		streamTextBuf:   make(map[string]*strings.Builder),
+		streamRsnBuf:    make(map[string]*strings.Builder),
+		streamBatchDone: make(chan struct{}),
 	}
 }
 
@@ -94,6 +112,10 @@ func (m *Manager) RootContext() context.Context {
 
 // Shutdown cancels all running teammates and stops the manager.
 func (m *Manager) Shutdown() {
+	// Stop the stream batch ticker and flush remaining text.
+	close(m.streamBatchDone)
+	m.flushStreamBatch()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, team := range m.teams {
@@ -509,12 +531,107 @@ func (m *Manager) emit(ev Event) {
 		// leader can still retrieve it via GetTeammateResult.
 	}
 
+	// Batch high-frequency text/reasoning events to prevent TUI flooding.
+	// These arrive at ~50-100/s per teammate from the LLM streaming callback.
+	switch ev.Type {
+	case "teammate_text":
+		m.streamBatchMu.Lock()
+		buf, ok := m.streamTextBuf[ev.TeammateID]
+		if !ok {
+			buf = &strings.Builder{}
+			m.streamTextBuf[ev.TeammateID] = buf
+		}
+		buf.WriteString(ev.Result)
+		m.streamBatchMu.Unlock()
+		return
+	case "teammate_reasoning":
+		m.streamBatchMu.Lock()
+		buf, ok := m.streamRsnBuf[ev.TeammateID]
+		if !ok {
+			buf = &strings.Builder{}
+			m.streamRsnBuf[ev.TeammateID] = buf
+		}
+		buf.WriteString(ev.Result)
+		m.streamBatchMu.Unlock()
+		return
+	}
+
+	// Non-batched events go directly to the callback.
 	m.mu.Lock()
 	fn := m.onUpdate
 	m.mu.Unlock()
 	if fn != nil {
 		fn(ev)
 	}
+}
+
+// StartStreamBatcher starts the background goroutine that periodically
+// flushes accumulated teammate text/reasoning events. Must be called
+// after SetOnUpdate.
+func (m *Manager) StartStreamBatcher() {
+	go func() {
+		ticker := time.NewTicker(swarmStreamBatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.flushStreamBatch()
+			case <-m.streamBatchDone:
+				return
+			case <-m.rootCtx.Done():
+				m.flushStreamBatch()
+				return
+			}
+		}
+	}()
+}
+
+// flushStreamBatch delivers accumulated text/reasoning as single batched
+// events per teammate, then clears the buffers.
+func (m *Manager) flushStreamBatch() {
+	m.streamBatchMu.Lock()
+	textBufs := m.streamTextBuf
+	rsnBufs := m.streamRsnBuf
+	m.streamTextBuf = make(map[string]*strings.Builder)
+	m.streamRsnBuf = make(map[string]*strings.Builder)
+	m.streamBatchMu.Unlock()
+
+	if len(textBufs) == 0 && len(rsnBufs) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	fn := m.onUpdate
+	m.mu.Unlock()
+	if fn == nil {
+		return
+	}
+
+	for id, buf := range textBufs {
+		if buf.Len() > 0 {
+			fn(Event{
+				Type:       "teammate_text",
+				TeammateID: id,
+				Result:     buf.String(),
+				Timestamp:  time.Now(),
+			})
+		}
+	}
+	for id, buf := range rsnBufs {
+		if buf.Len() > 0 {
+			fn(Event{
+				Type:       "teammate_reasoning",
+				TeammateID: id,
+				Result:     buf.String(),
+				Timestamp:  time.Now(),
+			})
+		}
+	}
+}
+
+// FlushStreamBatch exports flushStreamBatch for use in tests.
+func (m *Manager) FlushStreamBatch() {
+	m.flushStreamBatch()
 }
 
 // NotifyIdleRunners sends a task-available hint to all idle teammates,
