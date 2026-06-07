@@ -442,7 +442,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           break
         }
         case 'done': {
-          setMessages(prev => prev.map(m => m.streaming ? { ...m, streaming: false } : m))
+          // Close streaming for text/reasoning messages only.
+          // Tool messages stay streaming until their tool_result arrives.
+          setMessages(prev => prev.map(m =>
+            m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+          ))
           break
         }
         case 'error': {
