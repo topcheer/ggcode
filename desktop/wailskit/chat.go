@@ -203,6 +203,10 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 
 		// Process queued messages (mirrors Fyne line 906-919)
 		if pending, ok := b.drainPending(); ok {
+			// Notify frontend that a pending message is being consumed
+			if b.OnStreamEvent != nil {
+				b.OnStreamEvent("pending_consumed", nil)
+			}
 			if pending.Hidden {
 				_ = b.SendHiddenText(pending.Text)
 			} else {
