@@ -626,23 +626,27 @@ func (a *App) RespondAskUser(requestID string, answersJSON string) {
 		return
 	}
 
-	var answers []tool.AskUserAnswer
-	if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+	// Frontend sends {"status":"submitted","answers":[...]}
+	var payload struct {
+		Status  string               `json:"status"`
+		Answers []tool.AskUserAnswer `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(answersJSON), &payload); err != nil {
 		return
 	}
 
 	answeredCount := 0
-	for _, ans := range answers {
+	for _, ans := range payload.Answers {
 		if ans.Answered {
 			answeredCount++
 		}
 	}
 
 	response := tool.AskUserResponse{
-		Status:        tool.AskUserStatusSubmitted,
-		QuestionCount: len(answers),
+		Status:        tool.AskUserStatus(payload.Status),
+		QuestionCount: len(payload.Answers),
 		AnsweredCount: answeredCount,
-		Answers:       answers,
+		Answers:       payload.Answers,
 	}
 	a.chat.RespondAskUser(requestID, response)
 }
