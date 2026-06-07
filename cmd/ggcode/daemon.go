@@ -376,11 +376,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Bind tunnel host to session for projection recording
 	core.Tunnel.BindSession(ses, store)
-	// Inject tool description logic for mobile display
-	core.Tunnel.ToolDescribeFunc = func(toolName, rawArgs string) (string, string) {
-		pres := tool.DescribeTool(toolName, rawArgs)
-		return daemonToolDisplayName(toolName, rawArgs), pres.Detail
-	}
 
 	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 

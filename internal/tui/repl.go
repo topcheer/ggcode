@@ -107,12 +107,6 @@ func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
 func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	r.core = core
 	r.model.tunnelHost = core.Tunnel
-	// Inject TUI's tool description logic for mobile display
-	core.Tunnel.ToolDescribeFunc = func(toolName, rawArgs string) (string, string) {
-		present := describeTool(LangEnglish, toolName, rawArgs)
-		title := toolCallDisplayName(toolName, rawArgs)
-		return title, present.Detail
-	}
 }
 
 // SetResumeID sets the session ID to resume.

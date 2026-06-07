@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/protocol.dart' as proto;
+import '../models/tool_display.dart';
 import 'connection_provider.dart';
 import 'ui_providers.dart';
 
@@ -426,7 +427,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             state[i],
       ];
     } else {
-      final resolvedName = displayName.isNotEmpty ? displayName : toolName;
+      final resolvedName = displayName.isNotEmpty
+          ? displayName
+          : toolCallDisplayName(toolName, '');
       state = [
         ...state,
         ChatMessage(
@@ -453,6 +456,13 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void handleToolCall(proto.ToolCallData data, {String? messageId}) {
     finalizePendingReasoning(sourceId: null, collapse: true);
+    // Server pushes raw toolName + args; we compute displayName locally
+    final displayName = data.displayName.isNotEmpty
+        ? data.displayName
+        : toolCallDisplayName(data.toolName, data.args);
+    final detail = data.detail.isNotEmpty
+        ? data.detail
+        : toolCallDetail(data.toolName, data.args);
     state = [
       ...state,
       ChatMessage(
@@ -460,9 +470,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             'tool-${data.toolId.isNotEmpty ? data.toolId : _msgCounter++}',
         toolId: data.toolId,
         toolName: data.toolName,
-        toolDisplayName: data.displayName,
-        toolDetail: data.detail,
-        text: data.displayName.isNotEmpty ? data.displayName : data.toolName,
+        toolDisplayName: displayName,
+        toolDetail: detail,
+        text: displayName,
         time: DateTime.now(),
       ),
     ];
