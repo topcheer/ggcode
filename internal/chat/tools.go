@@ -109,7 +109,9 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	if t.isError {
-		return t.styles.ErrorStyle.Render(t.result)
+		// Word-wrap the error so measureHeight counts the correct number of lines
+		lines := wrapLines(t.result, width)
+		return t.styles.ErrorStyle.Render(strings.Join(lines, "\n"))
 	}
 
 	// File tool: line count or edit diff
