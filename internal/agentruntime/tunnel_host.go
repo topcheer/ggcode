@@ -120,11 +120,18 @@ func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) []tunnel.GatewayM
 		}
 	}
 
-	// Announce active session to relay so clients can find it
+	// Replay projection events to online broker first, then announce.
+	// Mobile expects: replay → session_info/status/activity → active_session.
+	replay := h.TunnelEvents()
+	if len(replay) > 0 {
+		broker.ReplayEvents(replay, false)
+	}
+
+	// Announce active session LAST — after replay so mobile has all history
+	// before processing the active_session handshake.
 	broker.AnnounceActiveSession(ses.ID)
 
-	// Return replay events for caller to push
-	return h.TunnelEvents()
+	return replay
 }
 
 // DetachOnlineBroker disconnects the online broker (Share stopped).
