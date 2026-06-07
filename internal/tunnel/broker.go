@@ -638,13 +638,8 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			debug.Log("tunnel", "broker: rejecting unsupported relay client protocol=%d session=%q", info.ProtocolVersion, currentSessionID)
 			return
 		}
-		// Use relayRecoveryPlan (same logic as server path) to decide how
-		// much the relay already has vs what we need to send.  This avoids
-		// dual-chain replay where both relay-resume and host-replay send
-		// overlapping events to the mobile client.
-		plan, events := b.relayRecoveryPlan(info, currentSessionID)
-		if b.clientProjectionSeeded.Load() && plan.trusted {
-			// Relay history matches host state exactly — nothing to send.
+		// Fast path: if we already seeded and relay history matches, skip.
+		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
 			b.bumpNextEvent(info.LastEventID)
 			b.flushAllText()
 			return
@@ -666,7 +661,17 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
+			// Compute recovery plan inside goroutine to avoid blocking
+			// the caller (handleRelayConnected runs on the readPump).
+			plan, events := b.relayRecoveryPlan(info, currentSessionID)
 			debug.Log("tunnel", "broker: client connected recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
+			if plan.trusted {
+				// Relay already has everything — just bump + flush.
+				b.bumpNextEvent(info.LastEventID)
+				b.flushAllText()
+				b.clientProjectionSeeded.Store(true)
+				return
+			}
 			b.flushAllText()
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
@@ -676,16 +681,21 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			// Only replay the suffix that relay history doesn't have.
+			suffix := events
 			if plan.replayFrom < len(events) {
-				events = events[plan.replayFrom:]
+				suffix = events[plan.replayFrom:]
 			} else {
-				events = nil
+				suffix = nil
 			}
-			if replayed := b.replayCanonicalEvents(plan.reset, events); replayed {
-				b.enqueueControl(EventReplayDone, nil)
-				b.clientProjectionSeeded.Store(true)
-				return
+			if len(suffix) > 0 {
+				if replayed := b.replayCanonicalEvents(true, suffix); replayed {
+					b.enqueueControl(EventReplayDone, nil)
+					b.clientProjectionSeeded.Store(true)
+					return
+				}
 			}
+			// No suffix to replay (or replay was empty) — send authoritative
+			// snapshot with in-flight data so the client gets the full picture.
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
