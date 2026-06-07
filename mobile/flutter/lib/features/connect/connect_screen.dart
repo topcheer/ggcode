@@ -191,6 +191,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               // Scanner
               Expanded(
                 child: MobileScanner(
+                  controller: MobileScannerController(
+                    facing: CameraFacing.back,
+                    detectionSpeed: DetectionSpeed.normal,
+                    torchEnabled: false,
+                  ),
                   onDetect: (capture) {
                     if (capture.barcodes.isEmpty) return;
                     final rawValue = capture.barcodes.first.rawValue;

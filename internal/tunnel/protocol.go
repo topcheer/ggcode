@@ -51,6 +51,7 @@ const (
 	EventSubagentComplete      = "subagent_complete"
 	EventResumeMiss            = "resume_miss"
 	EventSnapshotReset         = "snapshot_reset"
+	EventReplayDone            = "replay_done"     // host signals end of replay batch after snapshot_reset
 	EventLanguageChange        = "language_change" // bidirectional language sync
 	EventError                 = "error"
 	EventPing                  = "ping"

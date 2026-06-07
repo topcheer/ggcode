@@ -678,6 +678,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			if replayed := b.replayCanonicalEvents(true, events); replayed {
+				b.enqueueControl(EventReplayDone, nil)
 				b.clientProjectionSeeded.Store(true)
 				return
 			}
@@ -763,6 +764,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			events = nil
 		}
 		if replayed := b.replayCanonicalEvents(false, events); replayed {
+			b.enqueueControl(EventReplayDone, nil)
 			b.markRelayReady()
 			return
 		}
@@ -1676,6 +1678,7 @@ func (b *Broker) ReplayEvents(events []GatewayMessage, reset bool) {
 	for _, msg := range events {
 		b.enqueueRecorded(msg)
 	}
+	b.enqueueControl(EventReplayDone, nil)
 }
 
 func (b *Broker) PublishRecordedEvent(msg GatewayMessage) {
