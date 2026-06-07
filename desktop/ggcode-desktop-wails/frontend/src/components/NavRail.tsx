@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, User, Radio, Server } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, User, Radio, Server, Terminal } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -17,6 +17,7 @@ function NavItems() {
     { id: 'im' as ViewMode, icon: <Radio size={18} />, tooltip: t('nav.im') },
     { id: 'mcp' as ViewMode, icon: <Server size={18} />, tooltip: t('nav.mcp') },
     { id: 'settings' as ViewMode, icon: <Settings size={18} />, tooltip: t('nav.settings') },
+    { id: 'debug' as ViewMode, icon: <Terminal size={18} />, tooltip: 'Debug Console' },
   ]
 }
 

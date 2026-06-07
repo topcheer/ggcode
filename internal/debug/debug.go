@@ -269,11 +269,12 @@ var (
 	mu        sync.RWMutex
 	enabled   bool
 	once      sync.Once
-	sinks     map[string]*asyncFileSink // category name → sink
-	mainSink  *asyncFileSink            // writes all logs (compat)
-	loggers   map[string]*log.Logger    // category name → logger
-	tagFilter map[string]bool           // nil = all; non-nil = only these categories
-	verbose   map[string]bool           // categories with verbose (level 2) logging
+	sinks     map[string]*asyncFileSink  // category name → sink
+	mainSink  *asyncFileSink             // writes all logs (compat)
+	liveSink  func(category, msg string) // optional real-time sink (e.g. LogStream)
+	loggers   map[string]*log.Logger     // category name → logger
+	tagFilter map[string]bool            // nil = all; non-nil = only these categories
+	verbose   map[string]bool            // categories with verbose (level 2) logging
 )
 
 // Init initializes the debug logging system.
@@ -481,6 +482,19 @@ func Log(pkg, format string, args ...interface{}) {
 		ts := time.Now().Format("15:04:05.000000")
 		_, _ = ms.Write([]byte(ts + " " + msg))
 	}
+
+	// Write to live sink (e.g. Wails DebugConsole)
+	if sink := liveSink; sink != nil {
+		sink(cat, strings.TrimRight(msg, "\n"))
+	}
+}
+
+// SetLiveSink registers a callback that receives every log line in real-time.
+// The callback is called with (category, message). Pass nil to remove.
+func SetLiveSink(fn func(category, msg string)) {
+	mu.Lock()
+	liveSink = fn
+	mu.Unlock()
 }
 
 // Logf writes a raw formatted message (no package tag).

@@ -19,6 +19,8 @@ export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string)
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function DrainLogStream():Promise<string>;
+
 export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;
 
 export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
@@ -118,6 +120,8 @@ export function SwitchModel(arg1:string):Promise<void>;
 export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Promise<wailskit.TestEndpointResult>;
 
 export function TestIMConnection(arg1:string):Promise<void>;
+
+export function ToggleLogStream(arg1:boolean):Promise<void>;
 
 export function UnbindIMAdapter(arg1:string):Promise<void>;
 

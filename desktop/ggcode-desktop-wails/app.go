@@ -13,6 +13,7 @@ import (
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -42,8 +43,11 @@ type App struct {
 
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
-	streamMu     sync.Mutex
-	streamQueue  []StreamEventEnvelope
+
+	// Runtime debug log stream
+	logStream   *wailskit.LogStream
+	streamMu    sync.Mutex
+	streamQueue []StreamEventEnvelope
 }
 
 type uiEvent struct {
@@ -134,6 +138,12 @@ func (a *App) initWorkspace(dir string) {
 	a.chat = chat
 	wailskit.SetChatBridge(chat)
 
+	// Initialize log stream and hook to debug.Log
+	a.logStream = wailskit.NewLogStream(2000)
+	debug.SetLiveSink(func(category, msg string) {
+		a.logStream.Write(category, msg)
+	})
+
 	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
 
@@ -163,6 +173,21 @@ func (a *App) DrainStreamEvents() []StreamEventEnvelope {
 	copy(out, a.streamQueue)
 	a.streamQueue = a.streamQueue[:0]
 	return out
+}
+
+// ToggleLogStream enables or disables the runtime debug log stream.
+func (a *App) ToggleLogStream(enabled bool) {
+	if a.logStream != nil {
+		a.logStream.ToggleLogStream(enabled)
+	}
+}
+
+// DrainLogStream returns new log entries since last call as JSON string.
+func (a *App) DrainLogStream() string {
+	if a.logStream == nil {
+		return "[]"
+	}
+	return a.logStream.DrainLogStreamJSON()
 }
 
 func (a *App) emitStreamEvent(eventType string, data json.RawMessage) {
