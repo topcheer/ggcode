@@ -483,6 +483,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	// Start all background services (MCP connections, etc.)
 	core.StartBackgroundServices()
+	// Close old tunnel host (stops any active share) before setting new one
+	if b.tunnelHost != nil {
+		b.tunnelHost.Close()
+	}
 	// Set unified tunnel host for mobile streaming
 	b.tunnelHost = core.Tunnel
 	autoMem := core.AutoMemory
