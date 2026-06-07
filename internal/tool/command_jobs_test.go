@@ -53,7 +53,10 @@ func TestCommandJobManagerStop(t *testing.T) {
 	}
 }
 
-func TestCommandJobManagerOwnerContextCancellationStopsJobImmediately(t *testing.T) {
+func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
+	// After the fix, start_command uses context.Background() internally so
+	// that cancelling the caller's context does NOT kill the background
+	// process. The process must be stopped explicitly via Stop().
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr := NewCommandJobManager(t.TempDir())
 
@@ -64,33 +67,47 @@ func TestCommandJobManagerOwnerContextCancellationStopsJobImmediately(t *testing
 
 	cancel()
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer waitCancel()
-	snap, err := mgr.Wait(waitCtx, started.ID, 2*time.Second, 20, 0)
+	// Give a brief moment for any potential (now absent) cancellation to propagate.
+	time.Sleep(100 * time.Millisecond)
+
+	// The process should still be running.
+	snap, err := mgr.Read(started.ID, 10, 0)
 	if err != nil {
-		t.Fatalf("wait cancelled command job: %v", err)
+		t.Fatalf("read command job: %v", err)
 	}
-	if snap.Status != CommandJobCancelled {
-		t.Fatalf("expected cancelled status after owner context cancel, got %s", snap.Status)
+	if snap.Status != CommandJobRunning {
+		t.Fatalf("expected running status after owner context cancel, got %s", snap.Status)
+	}
+
+	// Clean up: stop the job explicitly.
+	if _, err := mgr.Stop(started.ID); err != nil {
+		t.Fatalf("stop command job: %v", err)
 	}
 }
 
-func TestCommandJobManagerWaitRespectsCancellation(t *testing.T) {
+func TestCommandJobManagerWaitIgnoresCancelledContext(t *testing.T) {
+	// After the fix, wait_command does not propagate request context
+	// cancellation. It waits for the specified duration or job completion.
 	mgr := NewCommandJobManager(t.TempDir())
 	started, err := mgr.Start(context.Background(), "sleep 5", 30*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
 
+	// Wait with an already-cancelled context should still succeed.
 	waitCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := mgr.Wait(waitCtx, started.ID, 30*time.Second, 20, 0); err == nil {
-		t.Fatal("expected wait to stop on cancelled context")
+	snap, err := mgr.Wait(waitCtx, started.ID, 1*time.Second, 20, 0)
+	if err != nil {
+		t.Fatalf("wait should not error on cancelled context: %v", err)
+	}
+	if snap.Status != CommandJobRunning {
+		t.Fatalf("expected running, got %s", snap.Status)
 	}
 
 	if _, err := mgr.Stop(started.ID); err != nil {
-		t.Fatalf("stop command job after cancelled wait: %v", err)
+		t.Fatalf("stop command job: %v", err)
 	}
 }
 

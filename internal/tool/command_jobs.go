@@ -88,11 +88,11 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 	if timeout <= 0 {
 		timeout = defaultCommandTimeout
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	jobCtx, cancel := context.WithTimeout(ctx, timeout)
+	// Use context.Background() so the background process is NOT tied to
+	// the incoming request context. The request ctx dies when the tool call
+	// returns, which would kill the process prematurely. Only the timeout
+	// (managed by the job's own context) should control the process lifetime.
+	jobCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd, _, err := util.NewShellCommandContext(jobCtx, command)
 	if err != nil {
 		cancel()
@@ -510,10 +510,7 @@ func isFinishedCommandStatus(status CommandJobStatus) bool {
 	}
 }
 
-func waitForCommandJob(ctx context.Context, job *CommandJob, wait time.Duration) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func waitForCommandJob(_ context.Context, job *CommandJob, wait time.Duration) error {
 	if isFinishedCommandStatus(jobSnapshotStatus(job)) {
 		return nil
 	}
@@ -527,8 +524,6 @@ func waitForCommandJob(ctx context.Context, job *CommandJob, wait time.Duration)
 		return nil
 	case <-timer.C:
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
