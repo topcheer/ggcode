@@ -47,6 +47,11 @@ type TunnelHost struct {
 	// Session reference for recording
 	session      *session.Session
 	sessionStore session.Store
+
+	// Optional callback to describe a tool for mobile display.
+	// If nil, displayName and detail will be empty strings.
+	// Signature: (toolName, rawArgs string) -> (displayName, detail string)
+	ToolDescribeFunc func(toolName, rawArgs string) (displayName, detail string)
 }
 
 // NewTunnelHost creates a new TunnelHost with an offline projection broker.
@@ -172,7 +177,12 @@ func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 		if name == "" {
 			name = "tool"
 		}
-		broker.PushToolCall(ev.Tool.ID, name, "", string(ev.Tool.Arguments), "")
+		rawArgs := string(ev.Tool.Arguments)
+		var displayName, detail string
+		if h.ToolDescribeFunc != nil {
+			displayName, detail = h.ToolDescribeFunc(name, rawArgs)
+		}
+		broker.PushToolCall(ev.Tool.ID, name, displayName, rawArgs, detail)
 
 	case provider.StreamEventToolResult:
 		h.rollover(broker, false)
