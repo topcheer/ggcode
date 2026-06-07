@@ -175,6 +175,17 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 	if userMsg == "" {
 		return nil
 	}
+
+	// Notify frontend about the incoming user message (from IM/mobile/other non-UI source)
+	if b.OnStreamEvent != nil {
+		source := "im"
+		if skipMobilePush {
+			source = "mobile"
+		}
+		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": source})
+		b.OnStreamEvent("user_message", raw)
+	}
+
 	b.mu.Lock()
 	if b.cancel != nil {
 		// Agent is busy — queue the message (mirrors Fyne QueueMessage)
