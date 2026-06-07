@@ -961,6 +961,10 @@ func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStr
 func (b *ChatBridge) finalizeLiveReasoningLocked() {
 	if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "reasoning" && b.liveHistory[n-1].Streaming {
 		b.liveHistory[n-1].Streaming = false
+		// Notify frontend that reasoning is complete
+		if b.OnStreamEvent != nil {
+			b.OnStreamEvent("reasoning_done", nil)
+		}
 	}
 }
 
