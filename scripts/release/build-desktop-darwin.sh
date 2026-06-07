@@ -119,6 +119,20 @@ else
   echo "  Skipping codesign (no signing identity)"
 fi
 
+hdiutil_create() {
+  local attempts=3
+  for i in $(seq 1 $attempts); do
+    if hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"; then
+      return 0
+    fi
+    echo "  hdiutil attempt $i/$attempts failed, retrying in 5s..."
+    sleep 5
+    rm -f "${DMG_PATH}"
+  done
+  echo "  hdiutil failed after $attempts attempts"
+  return 1
+}
+
 # ── Create DMG ─────────────────────────────────────────────
 echo "  Creating .dmg..."
 DMG_NAME="ggcode-desktop_${PACKAGE_VERSION}_darwin_universal.dmg"
@@ -128,7 +142,7 @@ mkdir -p "${DMG_STAGING}"
 cp -R "${UNIVERSAL_APP}" "${DMG_STAGING}/"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
-hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"
+hdiutil_create
 rm -rf "${DMG_STAGING}"
 
 # ── Notarize ───────────────────────────────────────────────
@@ -148,7 +162,7 @@ if [[ "${DO_NOTARIZE}" == "true" ]]; then
   mkdir -p "${DMG_STAGING}"
   cp -R "${UNIVERSAL_APP}" "${DMG_STAGING}/"
   ln -s /Applications "${DMG_STAGING}/Applications"
-  hdiutil create -volname "GGCode Desktop" -srcfolder "${DMG_STAGING}" -ov -format UDZO "${DMG_PATH}"
+  hdiutil_create
   rm -rf "${DMG_STAGING}"
   echo "  Notarization + Staple OK"
 else
