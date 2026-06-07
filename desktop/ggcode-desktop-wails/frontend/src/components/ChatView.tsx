@@ -939,7 +939,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.agentWorking') : t('chat.placeholder')}
-          disabled={isStreaming}
           style={{
             flex: 1, height: 40, padding: '0 var(--spacing-md)',
             borderRadius: 'var(--radius-lg)',
@@ -947,11 +946,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
             border: '1px solid var(--color-border)',
             color: 'var(--text-primary)', outline: 'none',
             fontSize: 13,
-            opacity: isStreaming ? 0.6 : 1,
           }}
         />
         {isStreaming ? (
-          <button onClick={handleCancel} style={{
+          <button onClick={handleCancel} title="Cancel" style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
             background: 'var(--color-error)', border: 'none', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -959,8 +957,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           }}>
             <Square size={16} fill="currentColor" />
           </button>
-        ) : (
-          <button onClick={handleSend} disabled={!input.trim()} style={{
+        ) : null}
+        <button onClick={handleSend} disabled={!input.trim()} style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
             background: input.trim() ? 'var(--color-primary)' : 'var(--color-surface)',
             border: 'none', cursor: input.trim() ? 'pointer' : 'default',
@@ -970,7 +968,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           }}>
             <ArrowUp size={18} strokeWidth={2.5} />
           </button>
-        )}
       </div>
 
       {/* Pulse animation keyframe */}
