@@ -1043,11 +1043,15 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	broker := tunnel.NewBroker(sess)
 
 	// Notify frontend when mobile client connects (via broker.OnRelayConnected —
-	// does NOT override broker's internal handleRelayConnected)
+	// does NOT override broker's internal handleRelayConnected).
+	// Only emit for client role — the initial server-role "connected" is just
+	// the host's own relay attachment, not a mobile device joining.
 	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
-		runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
-			"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
-		})
+		if info.Role == "client" {
+			runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
+				"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
+			})
+		}
 	})
 
 	a.setTunnelState(sess, broker)

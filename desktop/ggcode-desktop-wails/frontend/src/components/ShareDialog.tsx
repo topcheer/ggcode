@@ -25,6 +25,8 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     EventsOn('tunnel:connected', () => {
       setConnected(true)
+      // Auto-close the dialog once a mobile client has connected.
+      setTimeout(() => onClose(), 600)
     })
     EventsOn('tunnel:disconnected', () => {
       setConnected(false)
