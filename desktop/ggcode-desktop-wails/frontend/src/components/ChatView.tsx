@@ -93,6 +93,7 @@ interface ChatMessage {
   isError?: boolean
   streaming?: boolean
   timestamp: number
+  source?: string // 'im' | 'mobile' — non-UI message origin
 }
 
 // Agent panel: a sub-agent or teammate has its own tab with its own message stream
@@ -478,6 +479,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
             id: nextID(), role: 'error' as const,
             content: p?.message || raw, timestamp: Date.now(),
           }])
+          break
+        }
+        case 'user_message': {
+          const p = parseJSON<{ text: string; source: string }>(raw)
+          if (p?.text) {
+            setMessages(prev => [...prev, {
+              id: nextID(), role: 'user' as const,
+              content: p.text,
+              timestamp: Date.now(),
+              // Show source badge for non-UI messages
+              ...(p.source ? { source: p.source } : {}),
+            }])
+          }
           break
         }
         case 'run_done': {
@@ -1199,6 +1213,11 @@ function ReasoningMessage({ msg }: { msg: ChatMessage }) {
 function UserMessage({ msg }: { msg: ChatMessage }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
+      {msg.source && (
+        <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 2, marginRight: 4 }}>
+          via {msg.source === 'im' ? 'IM' : msg.source === 'mobile' ? 'Mobile' : msg.source}
+        </span>
+      )}
       <div style={{
         padding: 'var(--spacing-sm) var(--spacing-md)',
         borderRadius: 'var(--radius-lg)',
