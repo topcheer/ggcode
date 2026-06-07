@@ -308,9 +308,6 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	if m.tunnelHost != nil {
 		m.tunnelHost.AttachOnlineBroker(msg.broker)
 	}
-	if m.currentTunnelMsgID() == "" && m.tunnelProjectionBroker != nil {
-		m.setTunnelMainStream(m.tunnelProjectionBroker.NextMessageID(), false)
-	}
 	m.tunnelSpawned = make(map[string]bool)
 
 	// Register inbound command handler.
@@ -420,17 +417,13 @@ func tunnelReasoningMsgIDFor(msgID string) string {
 
 func (m *Model) ensureTunnelMainStreamState() *tunnelMainStreamState {
 	if m.tunnelMainStream == nil {
-		m.tunnelMainStream = &tunnelMainStreamState{
-			msgID:         m.tunnelMsgID,
-			needsFinalize: m.tunnelMsgNeedsFinalize,
-		}
+		m.tunnelMainStream = &tunnelMainStreamState{}
 	}
 	return m.tunnelMainStream
 }
 
 func (m *Model) syncTunnelMainStreamCache(msgID string, needsFinalize bool) {
-	m.tunnelMsgID = msgID
-	m.tunnelMsgNeedsFinalize = needsFinalize
+	// TunnelHost manages stream state; this is a no-op kept for compatibility.
 }
 
 func (m *Model) currentTunnelMsgID() string {
@@ -504,55 +497,22 @@ func subagentTunnelReasoningMsgID(agentID string) string {
 }
 
 func (m *Model) tunnelEventBroker() *tunnel.Broker {
-	return m.tunnelProjectionBroker
+	if m.tunnelHost != nil {
+		return m.tunnelHost.ProjectionBroker()
+	}
+	return nil
 }
 
 func (m *Model) ensureTunnelProjectionBroker() *tunnel.Broker {
-	if m.tunnelProjectionBroker == nil {
-		m.tunnelProjectionBroker = tunnel.NewBroker(nil)
-	}
-	return m.tunnelProjectionBroker
+	return m.tunnelEventBroker()
 }
 
 func (m *Model) bindTunnelProjectionSession() {
 	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
 		return
 	}
-
-	// Use unified TunnelHost if available
 	if m.tunnelHost != nil {
 		m.tunnelHost.BindSession(m.session, m.sessionStore)
-		return
-	}
-
-	// Legacy fallback
-	broker := m.ensureTunnelProjectionBroker()
-	store := m.tunnelProjectionStore
-	var replay []tunnel.GatewayMessage
-	m.tunnelProjectionBroken = false
-	if store == nil {
-		var err error
-		store, err = tunnel.NewDefaultProjectionStore()
-		if err != nil {
-			m.tunnelProjectionBroken = true
-			debug.Log("tunnel", "projection: init store failed for %s: %v", m.session.ID, err)
-		} else {
-			m.tunnelProjectionStore = store
-		}
-	}
-
-	state, err := agentruntime.PrepareProjectionBroker(broker, store, m.session, func(ev tunnel.GatewayMessage) {
-		m.recordProjectionEvent(ev)
-	})
-	if err != nil {
-		m.tunnelProjectionBroken = true
-		debug.Log("tunnel", "projection: prepare broker failed for %s: %v", m.session.ID, err)
-	} else {
-		replay = state.Replay
-	}
-	m.ensureProjectionBootstrap(broker, replay)
-	if m.currentTunnelMsgID() == "" {
-		m.setTunnelMainStream(broker.NextMessageID(), false)
 	}
 }
 
@@ -582,17 +542,10 @@ func projectionReplayHasType(events []tunnel.GatewayMessage, eventType string) b
 }
 
 func (m *Model) currentSessionTunnelAuthorityEpoch() uint64 {
-	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
-		return 1
+	if m.tunnelHost != nil {
+		return m.tunnelHost.AuthorityEpoch()
 	}
-	if m.tunnelProjectionStore == nil {
-		return 1
-	}
-	epoch, err := agentruntime.ProjectionAuthorityEpoch(m.tunnelProjectionStore, m.session.ID)
-	if err != nil || epoch == 0 {
-		return 1
-	}
-	return epoch
+	return 1
 }
 
 func (m *Model) hydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
@@ -608,20 +561,17 @@ func (m *Model) hydrateProjectionReplayFromSessionLedger(store *tunnel.Projectio
 	return updated
 }
 
+func (m *Model) tunnelHostProjectionStore() *tunnel.ProjectionStore {
+	if m.tunnelHost != nil {
+		return m.tunnelHost.ProjectionStore()
+	}
+	return nil
+}
+
 func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
-	if err := agentruntime.AppendProjectionEvent(m.tunnelProjectionStore, ev); err != nil {
-		m.tunnelProjectionBroken = true
-		debug.Log("tunnel", "projection: append failed for %s event=%s: %v", ev.SessionID, ev.EventID, err)
-		m.recordTunnelEvent(ev)
-		return
-	}
-	m.recordTunnelEvent(ev)
-	if m.captureTunnelShareBootstrapEvent(ev) {
-		return
-	}
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PublishRecordedEvent(ev)
-	}
+	// TunnelHost handles projection store + session recording + online forwarding.
+	// Keep only TUI-specific bootstrap capture.
+	m.captureTunnelShareBootstrapEvent(ev)
 }
 
 // pushTunnelEvent pushes a provider stream event to the mobile client.
@@ -1571,7 +1521,7 @@ func (m *Model) bootstrapTunnelShare(generation uint64) tea.Cmd {
 			return tunnelShareBootstrapMsg{generation: generation}
 		}
 		m.prepareCurrentSessionTunnelLedger()
-		if broker := m.tunnelProjectionBroker; broker != nil {
+		if broker := m.tunnelEventBroker(); broker != nil {
 			events := m.currentSessionTunnelReplayEvents()
 			if len(events) == 0 {
 				broker.SendSnapshot(m.tunnelSnapshot())
@@ -1688,19 +1638,8 @@ func (m *Model) reseedTunnelSnapshotAfterStart(seeded tunnel.BrokerSnapshot) {
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
-	if m.session == nil || m.tunnelProjectionBroken {
-		return nil
-	}
-	if m.tunnelProjectionStore != nil && strings.TrimSpace(m.session.ID) != "" {
-		events, err := m.tunnelProjectionStore.ReplayEvents(m.session.ID)
-		if err != nil {
-			m.tunnelProjectionBroken = true
-			debug.Log("tunnel", "projection: replay load failed for %s: %v", m.session.ID, err)
-			return nil
-		}
-		if events != nil {
-			return events
-		}
+	if m.tunnelHost != nil {
+		return m.tunnelHost.TunnelEvents()
 	}
 	return nil
 }
@@ -1996,14 +1935,14 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	}
 	ses := m.session
 	store := m.sessionStore
-	projectionStore := m.tunnelProjectionStore
+	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
 	_ = store.Save(ses)
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
-			if m.tunnelProjectionBroker != nil {
-				m.tunnelProjectionBroker.SetAuthorityEpoch(epoch)
+			if m.tunnelEventBroker() != nil {
+				m.tunnelEventBroker().SetAuthorityEpoch(epoch)
 			}
 			if m.tunnelBroker != nil {
 				m.tunnelBroker.SetAuthorityEpoch(epoch)
@@ -2022,14 +1961,14 @@ func (m *Model) resetCurrentSessionTunnelLedger() {
 	m.session.TunnelEventsComplete = false
 	ses := m.session
 	store := m.sessionStore
-	projectionStore := m.tunnelProjectionStore
+	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
 	_ = store.Save(ses)
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
-			if m.tunnelProjectionBroker != nil {
-				m.tunnelProjectionBroker.SetAuthorityEpoch(epoch)
+			if m.tunnelEventBroker() != nil {
+				m.tunnelEventBroker().SetAuthorityEpoch(epoch)
 			}
 			if m.tunnelBroker != nil {
 				m.tunnelBroker.SetAuthorityEpoch(epoch)

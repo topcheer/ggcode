@@ -265,11 +265,6 @@ type Model struct {
 	tunnelHost                *agentruntime.TunnelHost // unified tunnel management
 	tunnelSession             *tunnel.Session
 	tunnelBroker              *tunnel.Broker
-	tunnelProjectionBroker    *tunnel.Broker
-	tunnelProjectionStore     *tunnel.ProjectionStore
-	tunnelProjectionBroken    bool
-	tunnelMsgID               string
-	tunnelMsgNeedsFinalize    bool
 	tunnelMainStream          *tunnelMainStreamState
 	tunnelShareBootstrap      *tunnelShareBootstrapState
 	tunnelPendingApprovalID   string
