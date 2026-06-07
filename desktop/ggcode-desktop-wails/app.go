@@ -744,12 +744,15 @@ func (a *App) initIMRuntime() {
 // startIMAdapters starts all enabled adapters bound to the current workspace.
 func (a *App) startIMAdapters() {
 	if a.imManager == nil {
+		debug.Log("desktop", "IM start: manager not initialized, skipping")
 		return
 	}
 	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
 	if cfg == nil || !cfg.IM.Enabled {
+		debug.Log("desktop", "IM start: disabled in config, skipping")
 		return
 	}
+	debug.Log("desktop", "IM start: initializing adapters for workspace=%s", a.workDir)
 
 	// Bind IM emitter to chat bridge for outbound push
 	if a.chat != nil {
@@ -798,14 +801,17 @@ func (a *App) startIMAdapters() {
 
 	controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, a.imManager)
 	if err != nil {
+		debug.Log("desktop", "IM start failed: %v", err)
 		fmt.Printf("IM adapter start error: %v\n", err)
 		return
 	}
 	a.imController = controller
+	debug.Log("desktop", "IM start: adapter controller started successfully")
 }
 
 // stopIMAdapters stops all running IM adapters.
 func (a *App) stopIMAdapters() {
+	debug.Log("desktop", "IM stop: shutting down adapters")
 	if a.imController != nil {
 		a.imController.Stop()
 		a.imController = nil
@@ -830,22 +836,39 @@ func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 
 // SaveIMAdapter creates or updates an IM adapter.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
-	return wailskit.SaveIMAdapter(name, values)
+	debug.Log("desktop", "IM SaveAdapter: name=%s platform=%s", name, values["platform"])
+	err := wailskit.SaveIMAdapter(name, values)
+	if err != nil {
+		debug.Log("desktop", "IM SaveAdapter failed: %v", err)
+	}
+	return err
 }
 
 // RemoveIMAdapter removes an IM adapter by name.
 func (a *App) RemoveIMAdapter(name string) error {
-	return wailskit.RemoveIMAdapter(name)
+	debug.Log("desktop", "IM RemoveAdapter: name=%s", name)
+	err := wailskit.RemoveIMAdapter(name)
+	if err != nil {
+		debug.Log("desktop", "IM RemoveAdapter failed: %v", err)
+	}
+	return err
 }
 
 // SetIMAdapterEnabled enables or disables an IM adapter.
 func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
-	return wailskit.SetIMAdapterEnabled(name, enabled)
+	debug.Log("desktop", "IM SetEnabled: name=%s enabled=%v", name, enabled)
+	err := wailskit.SetIMAdapterEnabled(name, enabled)
+	if err != nil {
+		debug.Log("desktop", "IM SetEnabled failed: %v", err)
+	}
+	return err
 }
 
 // MuteIMAdapter mutes or unmutes an adapter channel.
 func (a *App) MuteIMAdapter(name string, muted bool) error {
+	debug.Log("desktop", "IM Mute: name=%s muted=%v", name, muted)
 	if a.imManager == nil {
+		debug.Log("desktop", "IM Mute failed: IM not initialized")
 		return fmt.Errorf("IM not initialized")
 	}
 	if muted {
@@ -856,17 +879,32 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 
 // BindIMAdapter binds an adapter to the current workspace.
 func (a *App) BindIMAdapter(name string) error {
-	return wailskit.BindIMAdapter(name, a.workDir, a.imManager)
+	debug.Log("desktop", "IM Bind: name=%s workDir=%s", name, a.workDir)
+	err := wailskit.BindIMAdapter(name, a.workDir, a.imManager)
+	if err != nil {
+		debug.Log("desktop", "IM Bind failed: %v", err)
+	}
+	return err
 }
 
 // RebindIMAdapter re-binds an adapter to the current workspace.
 func (a *App) RebindIMAdapter(name string) error {
-	return wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
+	debug.Log("desktop", "IM Rebind: name=%s workDir=%s", name, a.workDir)
+	err := wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
+	if err != nil {
+		debug.Log("desktop", "IM Rebind failed: %v", err)
+	}
+	return err
 }
 
 // UnbindIMAdapter removes all bindings for an adapter.
 func (a *App) UnbindIMAdapter(name string) error {
-	return wailskit.UnbindIMAdapter(name, a.imManager)
+	debug.Log("desktop", "IM Unbind: name=%s", name)
+	err := wailskit.UnbindIMAdapter(name, a.imManager)
+	if err != nil {
+		debug.Log("desktop", "IM Unbind failed: %v", err)
+	}
+	return err
 }
 
 // ─── Tunnel / Share ──────────────────────────────────────────────────
