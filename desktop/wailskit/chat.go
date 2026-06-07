@@ -1015,22 +1015,33 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	working = b.cancel != nil
 	cfg = b.cfg
 	currentSes = b.currentSes
-
 	b.mu.Unlock()
 
 	if broker == nil {
 		return
 	}
 
-	b.bindTunnelProjectionSession()
+	// Bind session and get replay state from projection store
+	var replayState agentruntime.ProjectionBrokerState
+	if b.tunnelHost != nil && currentSes != nil {
+		replayState = b.tunnelHost.BindSession(currentSes, b.sessionStore)
+	}
 
+	replay := replayState.Replay
+	if len(replay) == 0 {
+		replay = b.CurrentSessionTunnelEvents()
+	}
 	attachCfg.ReplayProvider = func() []tunnel.GatewayMessage {
-		return b.CurrentSessionTunnelEvents()
+		return replay
 	}
 
 	if currentSes != nil && currentSes.ID != "" {
 		attachCfg.SessionID = currentSes.ID
-		attachCfg.AuthorityEpoch = b.currentSessionTunnelAuthorityEpoch()
+		if replayState.AuthorityEpoch > 0 {
+			attachCfg.AuthorityEpoch = replayState.AuthorityEpoch
+		} else {
+			attachCfg.AuthorityEpoch = b.currentSessionTunnelAuthorityEpoch()
+		}
 	}
 
 	if cfg != nil {
@@ -1057,7 +1068,57 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		activity := b.CurrentTunnelActivity()
 		attachCfg.Activity = &activity
 	}
+
 	agentruntime.AttachTunnelBroker(broker, attachCfg)
+
+	// Bootstrap: if replay is missing SessionInfo/Status/Activity, send them
+	if len(replay) > 0 {
+		b.ensureTunnelBootstrap(broker, replay, cfg, working)
+	}
+}
+
+// ensureTunnelBootstrap sends SessionInfo/Status/Activity if replay lacks them.
+func (b *ChatBridge) ensureTunnelBootstrap(broker *tunnel.Broker, replay []tunnel.GatewayMessage, cfg *config.Config, working bool) {
+	hasSessionInfo := false
+	hasStatus := false
+	hasActivity := false
+	for _, ev := range replay {
+		switch ev.Type {
+		case tunnel.EventSessionInfo:
+			hasSessionInfo = true
+		case tunnel.EventStatus:
+			hasStatus = true
+		case tunnel.EventActivity:
+			hasActivity = true
+		}
+	}
+	if !hasSessionInfo && cfg != nil && working {
+		resolved, _ := cfg.ResolveActiveEndpoint()
+		model := ""
+		vendorName := ""
+		if resolved != nil {
+			model = resolved.Model
+			vendorName = resolved.VendorName
+		}
+		broker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: b.workingDir,
+			Model:     model,
+			Provider:  vendorName,
+			Mode:      cfg.DefaultMode,
+		})
+	}
+	if !hasStatus && working {
+		status := b.CurrentTunnelStatus()
+		if status.Status != "" {
+			broker.PushStatus(status.Status, status.Message)
+		}
+	}
+	if !hasActivity && working {
+		activity := b.CurrentTunnelActivity()
+		if activity != "" {
+			broker.PushActivity(activity)
+		}
+	}
 }
 
 func (b *ChatBridge) DetachTunnelBroker() {
