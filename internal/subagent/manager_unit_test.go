@@ -756,6 +756,8 @@ func TestManagerNotifyStreamText(t *testing.T) {
 	})
 
 	mgr.NotifyStreamText("sa-1", "hello chunk")
+	// Flush the batch buffer to deliver accumulated text synchronously.
+	mgr.FlushStreamBatch()
 
 	mu.Lock()
 	defer mu.Unlock()
