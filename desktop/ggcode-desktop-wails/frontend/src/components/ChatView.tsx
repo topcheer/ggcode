@@ -175,7 +175,7 @@ function sameMessageShape(a: ChatMessage, b: ChatMessage): boolean {
     a.streaming === b.streaming
 }
 
-function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessage[] {
+function materializeHistory(history: any[], previous: ChatMessage[], pendingMsgs: string[]): ChatMessage[] {
   const next = history.map((h: any, index: number) => {
     const candidate: ChatMessage = {
       id: previous[index]?.id || nextID(),
@@ -196,6 +196,18 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
     }
     return candidate
   })
+  // Append pending user messages that aren't in history yet
+  const historyTexts = new Set(history.filter((h: any) => h.role === 'user').map((h: any) => (h.content || '').trim()))
+  for (const text of pendingMsgs) {
+    if (!historyTexts.has(text)) {
+      next.push({
+        id: nextID(),
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
+      })
+    }
+  }
   if (next.length === previous.length && next.every((msg, index) => msg === previous[index])) {
     return previous
   }
@@ -227,6 +239,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [pendingMessages, setPendingMessages] = useState<string[]>([])
+  const pendingRef = useRef<string[]>([])
+  pendingRef.current = pendingMessages
 
   // Listen for pending_consumed events from backend
   useEffect(() => {
@@ -278,7 +292,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         return
       }
       autoScrollByTabRef.current.main = true
-      const loaded = materializeHistory(history, messagesRef.current)
+      const loaded = materializeHistory(history, messagesRef.current, pendingRef.current)
       messagesRef.current = loaded
       setMessages(loaded)
       setThinking(false)
@@ -294,7 +308,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           App.IsWorking(),
         ])
         if (cancelled || !history) return
-        const loaded = materializeHistory(history, messagesRef.current)
+        const loaded = materializeHistory(history, messagesRef.current, pendingRef.current)
         messagesRef.current = loaded
         setMessages(loaded)
         setIsStreaming(!!working)
@@ -622,13 +636,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     if (isStreaming) {
       // Agent is busy — send to backend for queueing, show as pending
       setInput('')
-      // Render user message immediately (like TUI chatWriteUser)
-      setMessages(prev => [...prev, {
-        id: nextID(),
-        role: 'user' as const,
-        content: text,
-        timestamp: Date.now(),
-      }])
       setPendingMessages(prev => [...prev, text])
       try {
         await App.SendMessage(text)
