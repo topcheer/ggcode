@@ -429,7 +429,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           if (p.name === 'enter_plan_mode') {
             setMessages(prev => [...prev, {
               id: nextID(), role: 'assistant' as const,
-              content: '📝 Entering plan mode...', streaming: false,
+              content: 'Entering plan mode...', streaming: false,
               timestamp: Date.now(),
             }])
             break
