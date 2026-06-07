@@ -183,6 +183,14 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, skipMobilePush boo
 			meta = nil
 		}
 		b.pendingMsgs.Enqueue(userMsg, false, meta)
+		// Write to live history so GetSessionHistory returns it immediately
+		if len(b.liveHistory) == 0 && b.currentSes != nil {
+			b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+		}
+		b.liveHistory = append(b.liveHistory, SessionMessage{
+			Role:    "user",
+			Content: userMsg,
+		})
 		b.mu.Unlock()
 		if b.OnStreamEvent != nil {
 			raw, _ := json.Marshal(map[string]string{"message": "Message queued"})
