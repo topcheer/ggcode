@@ -769,7 +769,7 @@ func (a *App) startIMAdapters() {
 				return fmt.Errorf("app not available")
 			}
 			safego.Run("im-inbound", func() {
-				_ = a.chat.SendMessage(text)
+				_ = a.chat.SendNonUIMessage(text, "im")
 			})
 			return nil
 		},
