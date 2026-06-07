@@ -364,16 +364,28 @@ func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
 // recordEvent is called by the projection broker's event recorder.
 // It persists the event to the session and forwards to the online broker.
 func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
-	// Persist to session
+	// Persist to projection store
 	h.mu.Lock()
+	projStore := h.projStore
 	ses := h.session
 	store := h.sessionStore
 	h.mu.Unlock()
 
-	if ses == nil || ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
+	if ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
 		return
 	}
-	if store == nil {
+
+	// Write to projection store (always, even before Share)
+	if projStore != nil {
+		if err := AppendProjectionEvent(projStore, ev); err != nil {
+			h.mu.Lock()
+			h.projBroken = true
+			h.mu.Unlock()
+		}
+	}
+
+	// Persist to session
+	if ses == nil || store == nil {
 		return
 	}
 
