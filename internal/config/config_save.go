@@ -62,7 +62,6 @@ func (c *Config) Save() error {
 	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
 		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
 	} else if len(migrated) > 0 {
-		debug.Log("config", "Save: re-migrated %d plaintext secret(s)", len(migrated))
 		if err := recompactConfigFile(c.FilePath); err != nil {
 			debug.Log("config", "Save: recompact error: %v", err)
 		}
@@ -140,16 +139,12 @@ func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 	// Migrate plaintext API keys if saving to a real file.
 	if c.saveScope == "instance" && c.instanceDir != "" {
 		hash := filepath.Base(c.instanceDir)
-		if migrated, migrateErr := MigrateInstancePlaintextAPIKeys(fp, hash); migrateErr != nil {
+		if _, migrateErr := MigrateInstancePlaintextAPIKeys(fp, hash); migrateErr != nil {
 			debug.Log("config", "patchConfigFile: instance migration error: %v", migrateErr)
-		} else if len(migrated) > 0 {
-			debug.Log("config", "patchConfigFile: migrated %d instance secret(s)", len(migrated))
 		}
 	} else {
-		if migrated, migrateErr := MigratePlaintextAPIKeys(fp); migrateErr != nil {
+		if _, migrateErr := MigratePlaintextAPIKeys(fp); migrateErr != nil {
 			debug.Log("config", "patchConfigFile: migration error: %v", migrateErr)
-		} else if len(migrated) > 0 {
-			debug.Log("config", "patchConfigFile: migrated %d plaintext secret(s)", len(migrated))
 		}
 	}
 

@@ -811,14 +811,10 @@ func Load(path string) (*Config, error) {
 			switch m.Section {
 			case "vendor":
 				if m.Endpoint != "" {
-					debug.Log("config", "migrated plaintext api_key: %s/%s -> ${%s}", m.Vendor, m.Endpoint, m.EnvVar)
 				} else {
-					debug.Log("config", "migrated plaintext api_key: %s -> ${%s}", m.Vendor, m.EnvVar)
 				}
 			case "im", "mcp_env", "mcp_headers":
-				debug.Log("config", "migrated plaintext secret: %s -> ${%s}", m.KeyPath, m.EnvVar)
 			default:
-				debug.Log("config", "migrated plaintext: %s -> ${%s}", m.KeyPath, m.EnvVar)
 			}
 		}
 		// Reload the config file after migration rewrote it.
@@ -838,7 +834,6 @@ func Load(path string) (*Config, error) {
 	// Remove deprecated system_prompt key from YAML if present.
 	if _, has := raw["system_prompt"]; has {
 		delete(raw, "system_prompt")
-		debug.Log("config", "removed deprecated system_prompt from %s", path)
 		if rewriteErr := rewriteYAML(path, raw); rewriteErr != nil {
 			debug.Log("config", "failed to rewrite config after removing system_prompt: %v", rewriteErr)
 		}
@@ -861,11 +856,6 @@ func Load(path string) (*Config, error) {
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
-	}
-
-	debug.Log("config", "Load: vendor=%s endpoint=%s model=%s max_iterations=%d", cfg.Vendor, cfg.Endpoint, cfg.Model, cfg.MaxIterations)
-	for vendorName, vc := range cfg.Vendors {
-		debug.Log("config", "  vendor %s: api_key_set=%t endpoints=%d", vendorName, vc.APIKey != "", len(vc.Endpoints))
 	}
 
 	// Re-save to apply compact format (strip default vendors, inline models/tags).
