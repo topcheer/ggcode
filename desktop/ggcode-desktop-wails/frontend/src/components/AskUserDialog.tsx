@@ -18,7 +18,7 @@ export interface AskUserQuestion {
 }
 
 export interface AskUserRequest {
-  requestId: string
+  requestID: string
   title: string
   questions: AskUserQuestion[]
 }
@@ -84,7 +84,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
         status: 'submitted',
         answers: answerArray,
       }
-      await App.RespondAskUser(request.requestId, JSON.stringify(responsePayload))
+      await App.RespondAskUser(request.requestID, JSON.stringify(responsePayload))
     } catch (e) {
       console.error('AskUser response error:', e)
     }
@@ -95,7 +95,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
     if (responding) return
     setResponding(true)
     try {
-      await App.RespondAskUser(request.requestId, JSON.stringify({
+      await App.RespondAskUser(request.requestID, JSON.stringify({
         status: 'cancelled',
         answers: [],
       }))
