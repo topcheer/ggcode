@@ -1542,8 +1542,8 @@ func TestBrokerHandleAdditionalClientConnectedReseedsWhenLocalReplayIsEmpty(t *t
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	if len(msgs) != 6 {
-		t.Fatalf("expected authoritative snapshot reseed when local replay is empty, got %+v", msgs)
+	if len(msgs) != 7 {
+		t.Fatalf("expected authoritative snapshot reseed + replay_done when local replay is empty, got %+v", msgs)
 	}
 	if msgs[0].Type != EventSnapshotReset {
 		t.Fatalf("expected snapshot_reset first, got %q", msgs[0].Type)

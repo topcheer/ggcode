@@ -638,12 +638,14 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			debug.Log("tunnel", "broker: rejecting unsupported relay client protocol=%d session=%q", info.ProtocolVersion, currentSessionID)
 			return
 		}
-		// A newly joined mobile client should NOT force-reset existing clients when
-		// the room already has retained history for the current active session.
-		if b.clientProjectionSeeded.Load() && b.trustRelayHistory(info, currentSessionID) {
+		// Use relayRecoveryPlan (same logic as server path) to decide how
+		// much the relay already has vs what we need to send.  This avoids
+		// dual-chain replay where both relay-resume and host-replay send
+		// overlapping events to the mobile client.
+		plan, events := b.relayRecoveryPlan(info, currentSessionID)
+		if b.clientProjectionSeeded.Load() && plan.trusted {
+			// Relay history matches host state exactly — nothing to send.
 			b.bumpNextEvent(info.LastEventID)
-			// Still flush any buffered live text so the joining client's resume replay
-			// can observe the latest assistant chunks without resetting the room.
 			b.flushAllText()
 			return
 		}
@@ -664,7 +666,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			debug.Log("tunnel", "broker: client connected (relay session=%q count=%d local session=%q), publishing authoritative snapshot", info.SessionID, info.HistoryCount, currentSessionID)
+			debug.Log("tunnel", "broker: client connected recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
 			b.flushAllText()
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
@@ -673,11 +675,13 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 				return
 			}
-			events := b.canonicalReplayEvents()
-			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
-				return
+			// Only replay the suffix that relay history doesn't have.
+			if plan.replayFrom < len(events) {
+				events = events[plan.replayFrom:]
+			} else {
+				events = nil
 			}
-			if replayed := b.replayCanonicalEvents(true, events); replayed {
+			if replayed := b.replayCanonicalEvents(plan.reset, events); replayed {
 				b.enqueueControl(EventReplayDone, nil)
 				b.clientProjectionSeeded.Store(true)
 				return
@@ -704,6 +708,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				return
 			}
 			b.replayActiveReasoning(activeReasoning)
+			b.enqueueControl(EventReplayDone, nil)
 			b.clientProjectionSeeded.Store(true)
 		}()
 		return

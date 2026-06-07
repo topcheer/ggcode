@@ -251,7 +251,9 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string) err
 	b.appendLiveUserMessage(userMsg)
 
 	// Notify mobile client: user message + busy status
-	// Only push to mobile for desktop-originated messages (mobile/IM already showed on their side)
+	// Tunnel is the desktop↔mobile channel; only push desktop-originated messages outbound.
+	// Mobile-originated messages are already in HandleTunnelUserMessage (inbound).
+	// IM messages are inbound through a separate channel, not routed through tunnel.
 	if broker := b.currentTunnelBroker(); broker != nil && source == "desktop" {
 		if strings.TrimSpace(data.MessageID) == "" {
 			data.MessageID = broker.NextMessageID()
