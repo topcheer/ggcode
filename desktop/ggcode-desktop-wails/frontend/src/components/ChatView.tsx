@@ -533,9 +533,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         }
         case 'subagent_reasoning': {
           const p = parseJSON<{ agentID: string; title?: string; content: string }>(raw)
-          if (!p || p.content === '__redacted_thinking__') break
+          if (!p || p.content === '__redacted_thinking__' || !p.content) break
           ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
-          updateAgentPanel(p.agentID, panel => ({ ...panel, reasoningBuf: panel.reasoningBuf + p.content }))
+          updateAgentPanel(p.agentID, panel => {
+            const msgs = [...panel.messages]
+            const idx = msgs.findIndex(m => m.role === 'reasoning' && m.streaming)
+            if (idx >= 0) {
+              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
+            } else {
+              msgs.push({ id: nextID(), role: 'reasoning', content: p.content, streaming: true, timestamp: Date.now() })
+            }
+            return { ...panel, messages: msgs }
+          })
           break
         }
         case 'subagent_tool_call': {
@@ -543,15 +552,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           if (!p) break
           ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => {
-            const msgs = panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
-            const reasoning = panel.reasoningBuf
+            // Only close text/reasoning streaming, not other tool calls
+            const msgs = panel.messages.map(m =>
+              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+            )
             msgs.push({
               id: nextID(), role: 'tool' as ChatRole, content: '',
               toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
               streaming: true, timestamp: Date.now(),
             })
-            return { ...panel, messages: msgs, reasoningBuf: '' }
+            return { ...panel, messages: msgs }
           })
           break
         }
@@ -589,15 +600,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           if (!p) break
           ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
           updateAgentPanel(p.teammateID, panel => {
-            const msgs = panel.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
-            const reasoning = panel.reasoningBuf
+            // Only close text/reasoning streaming, not other tool calls
+            const msgs = panel.messages.map(m =>
+              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+            )
             msgs.push({
               id: nextID(), role: 'tool' as ChatRole, content: '',
               toolName: p.name, toolID: p.id, toolArgs: p.arguments,
               toolDisplayName: p.displayName, toolDetail: p.detail,
               teammateName: p.teammateName, streaming: true, timestamp: Date.now(),
             })
-            return { ...panel, messages: msgs, reasoningBuf: '' }
+            return { ...panel, messages: msgs }
           })
           break
         }
