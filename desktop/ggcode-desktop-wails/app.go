@@ -909,6 +909,7 @@ func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
 }
 
 // MuteIMAdapter mutes or unmutes an adapter channel.
+// Muting stops the adapter runtime; unmuting restarts it.
 func (a *App) MuteIMAdapter(name string, muted bool) error {
 	debug.Log("desktop", "IM Mute: name=%s muted=%v", name, muted)
 	if a.imManager == nil {
@@ -916,9 +917,21 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 		return fmt.Errorf("IM not initialized")
 	}
 	if muted {
-		return a.imManager.MuteBinding(name)
+		// Stop the adapter
+		if err := a.imManager.MuteBinding(name); err != nil {
+			debug.Log("desktop", "IM MuteBinding failed: %v", err)
+			return err
+		}
+		a.imStopAdapter(name)
+	} else {
+		// Unmute and restart
+		if err := a.imManager.UnmuteBinding(name); err != nil {
+			debug.Log("desktop", "IM UnmuteBinding failed: %v", err)
+			return err
+		}
+		go a.imStartAdapter(name)
 	}
-	return a.imManager.UnmuteBinding(name)
+	return nil
 }
 
 // BindIMAdapter binds an adapter to the current workspace.
