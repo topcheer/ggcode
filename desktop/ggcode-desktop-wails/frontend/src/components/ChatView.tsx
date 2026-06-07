@@ -175,7 +175,7 @@ function sameMessageShape(a: ChatMessage, b: ChatMessage): boolean {
     a.streaming === b.streaming
 }
 
-function materializeHistory(history: any[], previous: ChatMessage[], pendingMsgs: string[]): ChatMessage[] {
+function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessage[] {
   const next = history.map((h: any, index: number) => {
     const candidate: ChatMessage = {
       id: previous[index]?.id || nextID(),
@@ -196,18 +196,6 @@ function materializeHistory(history: any[], previous: ChatMessage[], pendingMsgs
     }
     return candidate
   })
-  // Append pending user messages that aren't in history yet
-  const historyTexts = new Set(history.filter((h: any) => h.role === 'user').map((h: any) => (h.content || '').trim()))
-  for (const text of pendingMsgs) {
-    if (!historyTexts.has(text)) {
-      next.push({
-        id: nextID(),
-        role: 'user',
-        content: text,
-        timestamp: Date.now(),
-      })
-    }
-  }
   if (next.length === previous.length && next.every((msg, index) => msg === previous[index])) {
     return previous
   }
@@ -238,14 +226,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [pendingMessages, setPendingMessages] = useState<string[]>([])
-  const pendingRef = useRef<string[]>([])
-  pendingRef.current = pendingMessages
+  const [pendingCount, setPendingCount] = useState(0)
 
   // Listen for pending_consumed events from backend
   useEffect(() => {
     const off = EventsOn('pending_consumed', () => {
-      setPendingMessages(prev => prev.length > 0 ? prev.slice(1) : prev)
+      setPendingCount(prev => Math.max(0, prev - 1))
     })
     return () => { off?.() }
   }, [])
@@ -292,7 +278,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         return
       }
       autoScrollByTabRef.current.main = true
-      const loaded = materializeHistory(history, messagesRef.current, pendingRef.current)
+      const loaded = materializeHistory(history, messagesRef.current)
       messagesRef.current = loaded
       setMessages(loaded)
       setThinking(false)
@@ -308,7 +294,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           App.IsWorking(),
         ])
         if (cancelled || !history) return
-        const loaded = materializeHistory(history, messagesRef.current, pendingRef.current)
+        const loaded = materializeHistory(history, messagesRef.current)
         messagesRef.current = loaded
         setMessages(loaded)
         setIsStreaming(!!working)
@@ -634,13 +620,13 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
     setInput('')
 
     if (isStreaming) {
-      // Agent is busy — send to backend for queueing, show as pending
+      // Agent is busy — send to backend for queueing
       setInput('')
-      setPendingMessages(prev => [...prev, text])
+      setPendingCount(prev => prev + 1)
       try {
         await App.SendMessage(text)
       } catch (err: any) {
-        setPendingMessages(prev => prev.filter(m => m !== text))
+        setPendingCount(prev => Math.max(0, prev - 1))
         setMessages(prev => [...prev, {
           id: nextID(),
           role: 'error' as const,
@@ -970,28 +956,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       </div>
 
       {/* Input area */}
-      {pendingMessages.length > 0 && (
+      {pendingCount > 0 && (
         <div style={{
           padding: '6px var(--spacing-lg)',
-          display: 'flex', flexDirection: 'column', gap: 4,
           borderTop: '1px solid var(--color-border)',
           background: 'var(--color-surface)',
+          fontSize: 12, color: 'var(--text-secondary)',
+          display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          {pendingMessages.map((text, i) => (
-            <div key={i} style={{
-              fontSize: 12, color: 'var(--text-secondary)',
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '4px 8px', borderRadius: 'var(--radius-md)',
-              background: 'var(--color-card)',
-            }}>
-              <span style={{
-                display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-                background: 'var(--color-warning)',
-                animation: 'pulse 1.5s ease-in-out infinite',
-              }} />
-              <span style={{ opacity: 0.7 }}>{text}</span>
-            </div>
-          ))}
+          <span style={{
+            display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+            background: 'var(--color-warning)',
+            animation: 'pulse 1.5s ease-in-out infinite',
+          }} />
+          {pendingCount === 1 ? '1 message queued' : `${pendingCount} messages queued`}
         </div>
       )}
       <div style={{
