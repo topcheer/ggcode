@@ -448,12 +448,22 @@ func IsVerbose(pkg string) bool {
 // category-specific log file and the main log file.
 // Format: [HH:MM:SS.mmm] [pkg] message
 func Log(pkg, format string, args ...interface{}) {
+	cat := tagToCategory[pkg]
+	msg := fmt.Sprintf("[%s] "+format, append([]interface{}{pkg}, args...)...)
+	if len(msg) > maxMessageLen {
+		msg = msg[:maxMessageLen]
+	}
+
+	// LiveSink works independently of GGCODE_DEBUG — always fires
+	if sink := liveSink; sink != nil {
+		sink(cat, msg)
+	}
+
 	mu.RLock()
 	if !enabled {
 		mu.RUnlock()
 		return
 	}
-	cat := tagToCategory[pkg]
 	l := loggers[cat]
 	ms := mainSink
 	filt := tagFilter
@@ -466,31 +476,21 @@ func Log(pkg, format string, args ...interface{}) {
 		}
 	}
 
-	msg := fmt.Sprintf("[%s] "+format, append([]interface{}{pkg}, args...)...)
-	if len(msg) > maxMessageLen {
-		msg = msg[:maxMessageLen]
-	}
-	msg += "\n"
+	// Append newline for file output
+	fileMsg := msg + "\n"
 
 	// Write to category-specific file
 	if l != nil {
-		l.Print(msg)
+		l.Print(fileMsg)
 	}
 
 	// Write to main file with timestamp
 	if ms != nil {
 		ts := time.Now().Format("15:04:05.000000")
-		_, _ = ms.Write([]byte(ts + " " + msg))
-	}
-
-	// Write to live sink (e.g. Wails DebugConsole)
-	if sink := liveSink; sink != nil {
-		sink(cat, strings.TrimRight(msg, "\n"))
+		_, _ = ms.Write([]byte(ts + " " + fileMsg))
 	}
 }
 
-// SetLiveSink registers a callback that receives every log line in real-time.
-// The callback is called with (category, message). Pass nil to remove.
 func SetLiveSink(fn func(category, msg string)) {
 	mu.Lock()
 	liveSink = fn
