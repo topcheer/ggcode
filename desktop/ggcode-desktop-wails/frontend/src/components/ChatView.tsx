@@ -412,8 +412,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         case 'tool_call_done': {
           const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
           if (!p) break
+          // Flush any pending reasoning before tool call
+          const pendingReasoning = reasoningBuf.current
+          reasoningBuf.current = ''
           setMessages(prev => {
-            const msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            let msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            if (pendingReasoning) {
+              msgs.push({
+                id: nextID(), role: 'assistant' as const,
+                content: '', reasoning: pendingReasoning,
+                timestamp: Date.now(),
+              })
+            }
             msgs.push({
               id: nextID(), role: 'tool' as const, content: '',
               toolName: p.name, toolID: p.id,
@@ -439,7 +449,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           break
         }
         case 'done': {
-          setMessages(prev => prev.map(m => m.streaming ? { ...m, streaming: false } : m))
+          // Flush any pending reasoning
+          const pendingReasoning = reasoningBuf.current
+          reasoningBuf.current = ''
+          setMessages(prev => {
+            let msgs = prev.map(m => m.streaming ? { ...m, streaming: false } : m)
+            if (pendingReasoning) {
+              msgs.push({
+                id: nextID(), role: 'assistant' as const,
+                content: '', reasoning: pendingReasoning,
+                timestamp: Date.now(),
+              })
+            }
+            return msgs
+          })
           break
         }
         case 'error': {
