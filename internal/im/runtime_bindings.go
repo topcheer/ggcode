@@ -342,7 +342,6 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	}
 	binding.Muted = true
 	m.stopAdapter(adapterName)
-	_ = m.persistBinding(*binding)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -361,7 +360,6 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 		return ErrNoChannelBound
 	}
 	binding.Muted = false
-	_ = m.persistBinding(*binding)
 	onRestart := m.onRestart
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
