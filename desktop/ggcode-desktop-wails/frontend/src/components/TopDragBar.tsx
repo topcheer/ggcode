@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '../../wailsjs/runtime/runtime'
+import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised } from '../../wailsjs/runtime/runtime'
 
 // TopDragBar provides a draggable spacer at the top of each page.
 // On Windows (frameless mode), it shows minimize/maximize/close buttons.
@@ -34,12 +34,10 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation()
-    try {
-      Quit()
-    } catch {
-      window.close()
-    }
+    window.close()
   }
+
+
 
   return (
     <div style={{

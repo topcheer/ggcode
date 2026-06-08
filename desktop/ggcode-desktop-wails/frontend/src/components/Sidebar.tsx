@@ -40,8 +40,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
-
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -164,8 +162,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           <div
             key={s.id}
             onClick={() => handleSelect(s.id)}
-            onMouseEnter={() => setHoveredSessionId(s.id)}
-            onMouseLeave={() => setHoveredSessionId(prev => prev === s.id ? null : prev)}
             style={{
               padding: 'var(--spacing-sm) var(--spacing-md)',
               background: s.id === activeSessionId ? 'var(--color-card)' : 'transparent',
@@ -195,16 +191,12 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                 style={{
                   background: 'none', border: 'none',
                   color: 'var(--text-tertiary)', cursor: 'pointer',
-                  opacity: hoveredSessionId === s.id || s.id === activeSessionId ? 0.7 : 0.28,
-                  transition: 'opacity 0.15s, color 0.15s',
+                  opacity: 0, transition: 'opacity 0.15s',
                   display: 'flex', alignItems: 'center',
                   flexShrink: 0,
-                  padding: 4,
                 }}
-                aria-label="Delete session"
-                title="Delete session"
-                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-error)' }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = hoveredSessionId === s.id || s.id === activeSessionId ? '0.7' : '0.28'; e.currentTarget.style.color = 'var(--text-tertiary)' }}
+                onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                onMouseLeave={e => (e.currentTarget.style.opacity = '0')}
               >
                 <Trash2 size={12} />
               </button>
