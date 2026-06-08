@@ -82,12 +82,10 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           alignItems: 'center',
         }}>
           {/* Logo */}
-          <div style={{
-            width: 56, height: 56, borderRadius: 14,
-            background: 'var(--color-primary)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontWeight: 700, fontSize: 20,
-          }}>G</div>
+          <img src={new URL('../assets/images/logo-universal.png', import.meta.url).href}
+            alt="GGCode"
+            style={{ width: 56, height: 56, borderRadius: 14 }}
+          />
 
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>GGCode Desktop</div>
