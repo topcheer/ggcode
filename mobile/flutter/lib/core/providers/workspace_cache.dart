@@ -71,6 +71,7 @@ class CachedSessionRecord {
   final String provider;
   final String mode;
   final String version;
+  final String workspacePath;
   final String lastEventId;
   final int authorityEpoch;
   final DateTime lastUpdatedAt;
@@ -83,6 +84,7 @@ class CachedSessionRecord {
     required this.provider,
     required this.mode,
     required this.version,
+    this.workspacePath = '',
     required this.lastEventId,
     this.authorityEpoch = 0,
     required this.lastUpdatedAt,
@@ -94,6 +96,7 @@ class CachedSessionRecord {
     String? provider,
     String? mode,
     String? version,
+    String? workspacePath,
     String? lastEventId,
     int? authorityEpoch,
     DateTime? lastUpdatedAt,
@@ -106,6 +109,7 @@ class CachedSessionRecord {
         provider: provider ?? this.provider,
         mode: mode ?? this.mode,
         version: version ?? this.version,
+        workspacePath: workspacePath ?? this.workspacePath,
         lastEventId: lastEventId ?? this.lastEventId,
         authorityEpoch: authorityEpoch ?? this.authorityEpoch,
         lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
@@ -119,6 +123,7 @@ class CachedSessionRecord {
         'provider': provider,
         'mode': mode,
         'version': version,
+        'workspace_path': workspacePath,
         'last_event_id': lastEventId,
         'authority_epoch': authorityEpoch,
         'last_updated_at': lastUpdatedAt.toIso8601String(),
@@ -333,6 +338,7 @@ class _WorkspaceCacheSqlStore {
         provider TEXT NOT NULL,
         mode TEXT NOT NULL,
         version TEXT NOT NULL,
+        workspace_path TEXT NOT NULL DEFAULT '',
         last_event_id TEXT NOT NULL,
         authority_epoch INTEGER NOT NULL DEFAULT 0,
         last_updated_at TEXT NOT NULL,
@@ -360,6 +366,16 @@ class _WorkspaceCacheSqlStore {
     try {
       _db.execute(
         'ALTER TABLE cache_sessions ADD COLUMN authority_epoch INTEGER NOT NULL DEFAULT 0;',
+      );
+    } on SqliteException catch (err) {
+      final message = err.message.toLowerCase();
+      if (!message.contains('duplicate column name')) {
+        rethrow;
+      }
+    }
+    try {
+      _db.execute(
+        'ALTER TABLE cache_sessions ADD COLUMN workspace_path TEXT NOT NULL DEFAULT \'\';',
       );
     } on SqliteException catch (err) {
       final message = err.message.toLowerCase();
@@ -442,7 +458,7 @@ class _WorkspaceCacheSqlStore {
   List<CachedSessionRecord> loadSessions() {
     final rows = _db.select('''
       SELECT workspace_key, session_id, title, model, provider, mode, version,
-             last_event_id, authority_epoch, last_updated_at
+             workspace_path, last_event_id, authority_epoch, last_updated_at
       FROM cache_sessions
       ORDER BY last_updated_at DESC
     ''');
@@ -456,6 +472,7 @@ class _WorkspaceCacheSqlStore {
         provider: row['provider'] as String? ?? '',
         mode: row['mode'] as String? ?? '',
         version: row['version'] as String? ?? '',
+        workspacePath: row['workspace_path'] as String? ?? '',
         lastEventId: row['last_event_id'] as String? ?? '',
         authorityEpoch: (row['authority_epoch'] as num?)?.toInt() ?? 0,
         lastUpdatedAt:
@@ -544,15 +561,16 @@ class _WorkspaceCacheSqlStore {
       '''
       INSERT INTO cache_sessions(
         workspace_key, session_id, title, model, provider, mode, version,
-        last_event_id, authority_epoch, last_updated_at
+        workspace_path, last_event_id, authority_epoch, last_updated_at
       )
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_key, session_id) DO UPDATE SET
         title = excluded.title,
         model = excluded.model,
         provider = excluded.provider,
         mode = excluded.mode,
         version = excluded.version,
+        workspace_path = excluded.workspace_path,
         last_event_id = excluded.last_event_id,
         authority_epoch = excluded.authority_epoch,
         last_updated_at = excluded.last_updated_at
@@ -565,6 +583,7 @@ class _WorkspaceCacheSqlStore {
         record.provider,
         record.mode,
         record.version,
+        record.workspacePath,
         record.lastEventId,
         record.authorityEpoch,
         record.lastUpdatedAt.toIso8601String(),
@@ -1104,6 +1123,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 provider: sessionInfo?.provider ?? '',
                 mode: sessionInfo?.mode ?? '',
                 version: sessionInfo?.version ?? '',
+                workspacePath: sessionInfo?.workspace ?? '',
                 lastEventId: lastEventId ?? '',
                 authorityEpoch: authorityEpoch ?? 0,
                 lastUpdatedAt: now,
@@ -1114,6 +1134,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         provider: sessionInfo?.provider ?? state.sessions[sessionKey]?.provider,
         mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
         version: sessionInfo?.version ?? state.sessions[sessionKey]?.version,
+        workspacePath: sessionInfo?.workspace ?? state.sessions[sessionKey]?.workspacePath,
         lastEventId: lastEventId ?? state.sessions[sessionKey]?.lastEventId,
         authorityEpoch:
             authorityEpoch ?? state.sessions[sessionKey]?.authorityEpoch,

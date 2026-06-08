@@ -541,9 +541,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       style: TextStyle(color: AppColors.textPrimary),
                     ),
                     subtitle: Text(
-                      session.model.isNotEmpty
-                          ? session.model
-                          : session.provider,
+                      session.workspacePath.isNotEmpty
+                          ? _workspaceDisplayName(session.workspacePath)
+                          : (session.model.isNotEmpty
+                              ? '${session.provider} / ${session.model}'
+                              : session.provider),
                       style: TextStyle(color: AppColors.textMuted),
                     ),
                     trailing: session.sessionId == cache.selectedSessionId
@@ -1324,4 +1326,12 @@ class _ConnectionStatusIcon extends StatelessWidget {
         );
     }
   }
+}
+
+/// Extract the project directory name from a workspace path.
+/// e.g. "/Users/zanchen/projects/my-app" → "my-app"
+String _workspaceDisplayName(String workspacePath) {
+  if (workspacePath.isEmpty) return '';
+  final parts = workspacePath.split('/');
+  return parts.isNotEmpty ? parts.last : workspacePath;
 }
