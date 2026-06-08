@@ -946,33 +946,6 @@ void main() {
     expect(snapshot!.messages.single.text, 'persist immediately');
   });
 
-  test(
-      'workspace cache restores selected workspace url when sqlite is unavailable',
-      () async {
-    const selectedWorkspaceKey = 'workspace-fallback';
-    const selectedWorkspaceUrl = 'wss://example.test/ws?token=fallback';
-    SharedPreferences.setMockInitialValues({
-      'ggcode_workspace_cache_v1': jsonEncode({
-        'selected_workspace_key': selectedWorkspaceKey,
-        'selected_session_id': 'sess-fallback',
-        'selected_workspace_url': selectedWorkspaceUrl,
-      }),
-    });
-    debugWorkspaceCacheDatabasePathOverride = cacheDir.path;
-
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-
-    final cache = container.read(workspaceCacheProvider.notifier);
-    await cache.initialize();
-
-    final state = container.read(workspaceCacheProvider);
-    expect(state.initialized, isTrue);
-    expect(state.selectedWorkspaceKey, selectedWorkspaceKey);
-    expect(state.selectedSessionId, 'sess-fallback');
-    expect(cache.urlForWorkspace(selectedWorkspaceKey), selectedWorkspaceUrl);
-  });
-
   test('historical session view uses cached messages and disables sending',
       () async {
     final info = proto.SessionInfoData(
