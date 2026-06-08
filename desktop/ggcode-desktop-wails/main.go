@@ -32,6 +32,7 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		Frameless: true,
 		Mac: &mac.Options{
 			TitleBar: &mac.TitleBar{
 				TitlebarAppearsTransparent: true,
