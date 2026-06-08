@@ -62,6 +62,7 @@ type ChatBridge struct {
 	// Metrics
 	metricCancel         context.CancelFunc
 	metricCollector      *metrics.Collector
+	metricEvents         []metrics.MetricEvent
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 
@@ -861,6 +862,8 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			eventType = "done"
 			data = semantic.UsageData
 			b.resetTunnelRoundState()
+			// Emit turn metrics digest as a system message.
+			b.emitTurnDigest()
 		case provider.StreamEventError:
 			eventType = "error"
 			data = map[string]string{"message": semantic.ErrorText}
@@ -1500,9 +1503,35 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 
 // ─── Metrics ──────────────────────────────────────────────────────────
 
-// recordMetric records a metric event. Mirrors Fyne recordMetric.
+// recordMetric stores a metric event for turn digest generation.
 func (b *ChatBridge) recordMetric(ev interface{}) {
-	// Metrics are logged for now; can be extended to push to UI or remote
+	if me, ok := ev.(metrics.MetricEvent); ok {
+		b.metricEvents = append(b.metricEvents, me)
+	}
+}
+
+func (b *ChatBridge) emitTurnDigest() {
+	turnIndex := b.usageTurnIndex
+	if turnIndex <= 0 || turnIndex <= b.lastMetricDigestTurn {
+		return
+	}
+	turn, ok := metrics.TurnSummaryForIndex(b.metricEvents, turnIndex)
+	if !ok {
+		return
+	}
+	lang := "en"
+	if b.cfg != nil && b.cfg.Language == "zh-CN" {
+		lang = "zh-CN"
+	}
+	text := metrics.FormatTurnDigest(lang, turn)
+	b.lastMetricDigestTurn = turnIndex
+	if b.OnStreamEvent != nil {
+		raw, _ := json.Marshal(map[string]string{
+			"type": "system",
+			"text": text,
+		})
+		b.OnStreamEvent("system", raw)
+	}
 }
 
 // ─── Sub-agent tunnel helpers ────────────────────────────────────────
