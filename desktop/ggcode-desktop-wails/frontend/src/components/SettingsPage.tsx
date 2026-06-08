@@ -207,6 +207,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setApiKeySet(true)
       }
       setSaved(true)
+      setLocale(language)
       showToast?.('success', 'Settings saved')
       EventsEmit('config:updated')
       setTimeout(() => setSaved(false), 2000)
@@ -216,13 +217,14 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     } finally {
       setSaving(false)
     }
-  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL, showToast])
+  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL, setLocale, showToast])
 
   const applyImpersonation = useCallback(async () => {
     setSaving(true)
     try {
       await App.ApplyImpersonation(selectedPreset, impVersion, {} as Record<string, string>)
       showToast?.('success', 'Impersonation settings applied')
+      EventsEmit('config:updated')
     } catch (e: any) {
       showToast?.('error', `Failed to apply impersonation: ${e?.message || e}`)
       console.error('Apply failed:', e)
