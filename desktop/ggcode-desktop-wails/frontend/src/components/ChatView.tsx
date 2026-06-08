@@ -256,6 +256,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       setMessages([])
       messagesRef.current = []
       setThinking(false)
+      setStatusBar({
+        vendor: '', model: '', mode: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
+      })
       return
     }
     App.GetSessionHistory().then((history: any[]) => {
