@@ -42,7 +42,7 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
         marginBottom: 8, border: 'none', cursor: 'pointer',
         padding: 0, overflow: 'hidden',
       }}>
-        <img src={new URL('../assets/images/logo-universal.png', import.meta.url).href}
+        <img src={new URL('../assets/images/app-icon.png', import.meta.url).href}
           alt="GGCode"
           style={{ width: 32, height: 32, borderRadius: 8 }}
         />
