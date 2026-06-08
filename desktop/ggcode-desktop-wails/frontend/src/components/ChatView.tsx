@@ -110,7 +110,7 @@ interface AgentPanel {
 // ── Event types (mirrors wailskit/chat.go emit()) ────────────────────────────
 
 interface StreamEvent {
-  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done'
+  type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done' | 'system'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result' | 'subagent_done'
     | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update' | 'user_message'
   data: string // JSON-encoded payload
@@ -492,6 +492,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
               ...(p.source ? { source: p.source } : {}),
             }])
           }
+          break
+        }
+        case 'system': {
+          const p = parseJSON<{ text: string }>(raw)
+          if (!p?.text) break
+          setMessages(prev => [...prev, {
+            id: nextID(), role: 'system' as ChatRole,
+            content: p.text,
+            timestamp: Date.now(),
+          }])
           break
         }
         case 'run_done': {
