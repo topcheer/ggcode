@@ -37,14 +37,14 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
     }}>
       {/* Logo */}
       <button onClick={onAbout} style={{
-        width: 32, height: 32, borderRadius: 8,
+        width: 32, height: 32,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 8, border: 'none', cursor: 'pointer',
-        padding: 0, overflow: 'hidden',
+        padding: 0, overflow: 'hidden', background: 'transparent',
       }}>
         <img src={new URL('../assets/images/app-icon.png', import.meta.url).href}
           alt="GGCode"
-          style={{ width: 32, height: 32, borderRadius: 8 }}
+          style={{ width: 32, height: 32 }}
         />
       </button>
 
