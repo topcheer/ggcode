@@ -38,12 +38,14 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
       {/* Logo */}
       <button onClick={onAbout} style={{
         width: 32, height: 32, borderRadius: 8,
-        background: 'var(--color-primary)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: '#fff', fontWeight: 700, fontSize: 14,
         marginBottom: 8, border: 'none', cursor: 'pointer',
+        padding: 0, overflow: 'hidden',
       }}>
-        G
+        <img src={new URL('../assets/images/logo-universal.png', import.meta.url).href}
+          alt="GGCode"
+          style={{ width: 32, height: 32, borderRadius: 8 }}
+        />
       </button>
 
       {/* Nav items */}
