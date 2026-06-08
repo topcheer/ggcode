@@ -1524,25 +1524,29 @@ func (b *ChatBridge) recordMetric(ev interface{}) {
 	if !ok {
 		return
 	}
+	b.mu.Lock()
 	me.TurnIndex = b.usageTurnIndex
 	if b.currentSes != nil {
 		me.Model = b.currentSes.Model
 		me.Vendor = b.currentSes.Vendor
 		me.Endpoint = b.currentSes.Endpoint
-		// Persist to session so TUI/sidebar can use the data.
 		b.currentSes.Metrics = append(b.currentSes.Metrics, me)
 		b.currentSes.AppendMetricForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, me)
 	}
 	b.metricEvents = append(b.metricEvents, me)
+	b.mu.Unlock()
 }
 
 func (b *ChatBridge) emitTurnDigest() {
+	b.mu.Lock()
 	turnIndex := b.usageTurnIndex
 	if turnIndex <= 0 || turnIndex <= b.lastMetricDigestTurn {
+		b.mu.Unlock()
 		return
 	}
 	turn, ok := metrics.TurnSummaryForIndex(b.metricEvents, turnIndex)
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
 	lang := "en"
@@ -1553,7 +1557,6 @@ func (b *ChatBridge) emitTurnDigest() {
 	b.lastMetricDigestTurn = turnIndex
 
 	// Persist to liveHistory so CurrentSessionHistory includes it.
-	b.mu.Lock()
 	b.liveHistory = append(b.liveHistory, SessionMessage{
 		Role:    "system",
 		Content: text,
