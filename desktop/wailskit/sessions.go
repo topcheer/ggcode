@@ -82,6 +82,11 @@ func SetChatBridge(cb *ChatBridge) {
 	activeChatBridge = cb
 }
 
+// GetChatBridge returns the active chat bridge.
+func GetChatBridge() *ChatBridge {
+	return activeChatBridge
+}
+
 func NewSession() error {
 	if activeChatBridge != nil {
 		activeChatBridge.ClearCurrentSession()

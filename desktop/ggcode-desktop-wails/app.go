@@ -371,7 +371,14 @@ func (a *App) GetConfig() (*wailskit.FullConfig, error) {
 
 // UpdateConfig applies config values and saves.
 func (a *App) UpdateConfig(values map[string]interface{}) error {
-	return wailskit.UpdateConfig(values)
+	if err := wailskit.UpdateConfig(values); err != nil {
+		return err
+	}
+	// Refresh provider so the running agent uses the new LLM backend
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		bridge.OnConfigProviderChanged()
+	}
+	return nil
 }
 
 // GetVendors returns available vendor names.
