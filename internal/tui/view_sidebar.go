@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
@@ -87,11 +86,11 @@ func (m Model) renderSidebarMetricsSection() string {
 	}
 	rows = append(rows,
 		renderRow(m.t("label.turns"), fmt.Sprintf("%d", summary.TurnCount)),
-		renderRow(m.t("label.avg_ttft"), formatMetricDuration(summary.AvgTTFT)),
-		renderRow(m.t("label.p95_ttft"), formatMetricDuration(summary.P95TTFT)),
-		renderRow(m.t("label.avg_duration"), formatMetricDuration(summary.AvgDuration)),
-		renderRow(m.t("label.p95_duration"), formatMetricDuration(summary.P95Duration)),
-		renderRow(m.t("label.avg_think"), formatMetricDuration(summary.AvgThink)),
+		renderRow(m.t("label.avg_ttft"), metrics.FormatDuration(summary.AvgTTFT)),
+		renderRow(m.t("label.p95_ttft"), metrics.FormatDuration(summary.P95TTFT)),
+		renderRow(m.t("label.avg_duration"), metrics.FormatDuration(summary.AvgDuration)),
+		renderRow(m.t("label.p95_duration"), metrics.FormatDuration(summary.P95Duration)),
+		renderRow(m.t("label.avg_think"), metrics.FormatDuration(summary.AvgThink)),
 		renderRow(m.t("label.tools"), fmt.Sprintf("%d", summary.ToolCallCount)),
 		renderRow(m.t("label.fail_rate"), fmt.Sprintf("%d%%", summary.ToolFailureRate())),
 	)
@@ -634,23 +633,6 @@ func humanizeTokenCount(n int) string {
 	return uiusage.HumanizeTokenCount(n)
 }
 
-func formatMetricDuration(d time.Duration) string {
-	if d <= 0 {
-		return "-"
-	}
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d/time.Millisecond)
-	}
-	seconds := d.Seconds()
-	if seconds < 10 {
-		return fmt.Sprintf("%.1fs", seconds)
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.0fs", seconds)
-	}
-	return d.Round(time.Second).String()
-}
-
 func sidebarSlowTools(tools []metrics.ToolSummary) string {
 	if len(tools) == 0 {
 		return ""
@@ -661,7 +643,7 @@ func sidebarSlowTools(tools []metrics.ToolSummary) string {
 	}
 	parts := make([]string, 0, len(visible))
 	for _, tool := range visible {
-		parts = append(parts, fmt.Sprintf("%s %s", tool.Name, formatMetricDuration(tool.AvgDuration)))
+		parts = append(parts, fmt.Sprintf("%s %s", tool.Name, metrics.FormatDuration(tool.AvgDuration)))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -673,7 +655,7 @@ func sidebarRecentTurns(turns []metrics.TurnSummary) []string {
 	lines := make([]string, 0, min(2, len(turns)))
 	for i := len(turns) - 1; i >= 0 && len(lines) < 2; i-- {
 		turn := turns[i]
-		line := fmt.Sprintf("#%d %s / %s / %dt", turn.TurnIndex, formatMetricDuration(turn.TTFT), formatMetricDuration(turn.Duration), turn.ToolCallCount)
+		line := fmt.Sprintf("#%d %s / %s / %dt", turn.TurnIndex, metrics.FormatDuration(turn.TTFT), metrics.FormatDuration(turn.Duration), turn.ToolCallCount)
 		if turn.ToolFailureCount > 0 {
 			line += " !"
 		}
