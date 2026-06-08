@@ -364,7 +364,12 @@ func GetVendorPresets() []VendorPresetInfo {
 
 // VendorNames returns available vendor names.
 func VendorNames() []string {
-	cfg := config.DefaultConfig()
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	var names []string
 	for k := range cfg.Vendors {
 		names = append(names, k)
@@ -381,7 +386,12 @@ type EndpointInfo struct {
 
 // EndpointsForVendor returns endpoint info for a vendor.
 func EndpointsForVendor(vendor string) []EndpointInfo {
-	cfg := config.DefaultConfig()
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
 		return nil
@@ -399,7 +409,12 @@ func EndpointsForVendor(vendor string) []EndpointInfo {
 
 // ModelsForEndpoint returns available model names for a vendor and endpoint key.
 func ModelsForEndpoint(vendor, endpointKey string) []string {
-	cfg := config.DefaultConfig()
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	vc, ok := cfg.Vendors[vendor]
 	if !ok {
 		return nil
