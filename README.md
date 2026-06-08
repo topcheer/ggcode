@@ -127,7 +127,7 @@ GGCode Mobile is a companion app that lets you interact with your desktop agent 
 
 | Platform | Link | Notes |
 | --- | --- | --- |
-| iOS (TestFlight) | [Join Beta](https://testflight.apple.com/join/J34wVD6p) | Open in Safari on iPhone |
+| iOS | [App Store](https://apps.apple.com/app/ggcode-mobile/id6770855612) | Download from the App Store |
 | Android (Closed Testing) | [Join Google Group first](https://groups.google.com/g/gg-studio-ai-products) | **You must join the group to get access**, then opt in at [Play Store testing page](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) |
 | Discord Community | [Join Discord](https://discord.gg/F2v4mJmfG) | Get release updates, ask questions, and follow mobile beta progress |
 

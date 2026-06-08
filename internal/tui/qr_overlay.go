@@ -99,7 +99,7 @@ func (m Model) renderQROverlay() string {
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	body = append(body,
 		dimStyle.Render(" Get GGCode Mobile:"),
-		dimStyle.Render("   iOS:     https://testflight.apple.com/join/J34wVD6p"),
+		dimStyle.Render("   iOS:     https://apps.apple.com/app/ggcode-mobile/id6770855612"),
 		dimStyle.Render("   Android: https://play.google.com/apps/testing/gg.ai.ggcode.mobile"),
 		dimStyle.Render(fmt.Sprintf("   Discord: %s", qrOverlayDiscordURL)),
 		"",

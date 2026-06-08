@@ -111,7 +111,7 @@ GGCode Mobile 是一个移动端伴侣应用，可以通过 QR 码连接桌面 a
 
 | 平台 | 链接 | 说明 |
 | --- | --- | --- |
-| iOS (TestFlight) | [加入 Beta](https://testflight.apple.com/join/J34wVD6p) | 在 iPhone 的 Safari 中打开 |
+| iOS | [App Store](https://apps.apple.com/app/ggcode-mobile/id6770855612) | 从 App Store 下载 |
 | Android (Closed Testing) | [先加入 Google Group](https://groups.google.com/g/gg-studio-ai-products) | **必须先加入群组才能获得权限**，然后在 [Play Store 测试页](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) 加入测试 |
 | Discord 社区 | [加入 Discord](https://discord.gg/F2v4mJmfG) | 获取发布动态、提问交流，并跟进移动端 Beta 进展 |
 
