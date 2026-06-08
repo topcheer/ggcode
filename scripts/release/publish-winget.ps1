@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$PackageId,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$InstallerUrl,
+    [Parameter(Mandatory = $false)][string]$InstallerUrlArm64,
     [Parameter(Mandatory = $true)][string]$GitHubToken
 )
 
@@ -22,12 +23,21 @@ if (-not $packageExists) {
     exit 0
 }
 
-& $wingetCreate update $PackageId `
-    --version $releaseVersion `
-    --urls "$InstallerUrl|x64" `
-    --submit `
-    --token $GitHubToken `
-    --no-open
+if ($InstallerUrlArm64) {
+    & $wingetCreate update $PackageId `
+        --version $releaseVersion `
+        --urls "$InstallerUrl|x64" "$InstallerUrlArm64|arm64" `
+        --submit `
+        --token $GitHubToken `
+        --no-open
+} else {
+    & $wingetCreate update $PackageId `
+        --version $releaseVersion `
+        --urls "$InstallerUrl|x64" `
+        --submit `
+        --token $GitHubToken `
+        --no-open
+}
 
 if ($LASTEXITCODE -ne 0) {
     throw "wingetcreate update failed for $PackageId"
