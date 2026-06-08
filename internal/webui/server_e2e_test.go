@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -450,7 +451,11 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 }
 
 func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "wsfilter-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	store, _ := session.NewJSONLStore(dir)
 
 	// Create sessions in 3 different workspaces
