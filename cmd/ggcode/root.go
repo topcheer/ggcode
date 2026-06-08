@@ -686,7 +686,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
 
-	cronScheduler := cron.NewScheduler(nil) // enqueue callback wired by SetCronScheduler
+	cronStorePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
+	cronScheduler := cron.NewScheduler(nil, cronStorePath) // enqueue callback wired by SetCronScheduler
+	cronScheduler.Load(ag.WorkingDir())
 	repl.SetCronScheduler(cronScheduler, registry)
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)

@@ -1,7 +1,12 @@
 package cron
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -21,27 +26,182 @@ func (j *Job) Snapshot() Job {
 	return *j
 }
 
-// Scheduler manages in-memory cron-like prompt scheduling.
-type Scheduler struct {
-	mu      sync.Mutex
-	jobs    map[string]*Job
-	nextID  int
-	enqueue func(prompt string)
-	timers  map[string]*time.Timer
+// jobJSON is the serializable form of a Job (no timers, callbacks, etc).
+type jobJSON struct {
+	ID        string `json:"id"`
+	CronExpr  string `json:"cron_expr"`
+	Prompt    string `json:"prompt"`
+	Recurring bool   `json:"recurring"`
+	CreatedAt string `json:"created_at"`
 }
 
-// NewScheduler creates a scheduler with the given enqueue callback.
-// The enqueue callback is called when a job fires, typically injecting
-// the prompt into the TUI's conversation.
-func NewScheduler(enqueue func(prompt string)) *Scheduler {
+// workspaceBucket groups jobs under a workspace key.
+type workspaceBucket struct {
+	Workspace string    `json:"workspace"`
+	Jobs      []jobJSON `json:"jobs"`
+}
+
+// storeFile is the top-level structure persisted to disk.
+// Keyed by SHA256 of the workspace directory path.
+type storeFile map[string]workspaceBucket
+
+// Scheduler manages cron-like prompt scheduling with optional persistence.
+type Scheduler struct {
+	mu        sync.Mutex
+	jobs      map[string]*Job
+	nextID    int
+	enqueue   func(prompt string)
+	timers    map[string]*time.Timer
+	storePath string
+	wsKey     string // SHA256 of current workspace dir
+	wsDir     string // original workspace dir path
+}
+
+// workspaceKey returns the SHA256 hex of a directory path.
+func workspaceKey(dir string) string {
+	h := sha256.Sum256([]byte(dir))
+	return fmt.Sprintf("%x", h)
+}
+
+// NewScheduler creates a scheduler with the given enqueue callback and
+// optional persistence path. If storePath is empty, no persistence is used
+// (useful for tests).
+func NewScheduler(enqueue func(prompt string), storePath string) *Scheduler {
 	if enqueue == nil {
 		enqueue = func(string) {}
 	}
 	return &Scheduler{
-		jobs:    make(map[string]*Job),
-		enqueue: enqueue,
-		timers:  make(map[string]*time.Timer),
+		jobs:      make(map[string]*Job),
+		enqueue:   enqueue,
+		timers:    make(map[string]*time.Timer),
+		storePath: storePath,
 	}
+}
+
+// Load reads persisted recurring jobs for the given workspace and schedules them.
+// Must be called after NewScheduler, before any Create/Delete calls.
+// If storePath is empty or the file doesn't exist, Load is a no-op.
+func (s *Scheduler) Load(workspaceDir string) {
+	s.mu.Lock()
+	s.wsDir = workspaceDir
+	s.wsKey = workspaceKey(workspaceDir)
+	s.mu.Unlock()
+
+	if s.storePath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(s.storePath)
+	if err != nil {
+		// File doesn't exist yet — that's fine.
+		return
+	}
+
+	var sf storeFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		// Corrupted file — log and skip.
+		return
+	}
+
+	bucket, ok := sf[s.wsKey]
+	if !ok {
+		return
+	}
+
+	// Load jobs. Sort by CreatedAt for deterministic ID assignment.
+	sort.Slice(bucket.Jobs, func(i, j int) bool {
+		return bucket.Jobs[i].CreatedAt < bucket.Jobs[j].CreatedAt
+	})
+
+	for _, jj := range bucket.Jobs {
+		if !jj.Recurring {
+			continue // don't restore one-shot jobs
+		}
+
+		now := time.Now()
+		next, err := NextTime(jj.CronExpr, now)
+		if err != nil {
+			continue // skip broken cron expressions
+		}
+
+		createdAt, _ := time.Parse(time.RFC3339, jj.CreatedAt)
+
+		s.mu.Lock()
+		s.nextID++
+		job := &Job{
+			ID:        jj.ID,
+			CronExpr:  jj.CronExpr,
+			Prompt:    jj.Prompt,
+			Recurring: jj.Recurring,
+			CreatedAt: createdAt,
+			NextFire:  next,
+		}
+		s.jobs[job.ID] = job
+		// Track max ID to avoid collisions with new jobs.
+		// Parse numeric part from IDs like "cron-5".
+		var n int
+		fmt.Sscanf(job.ID, "cron-%d", &n)
+		if n > s.nextID {
+			s.nextID = n
+		}
+		s.mu.Unlock()
+
+		s.scheduleJob(job)
+	}
+}
+
+// save persists all recurring jobs for the current workspace to the store file.
+// It preserves other workspaces' data unchanged.
+func (s *Scheduler) save() {
+	if s.storePath == "" {
+		return
+	}
+
+	// Read existing file (other workspaces' data).
+	var sf storeFile
+	data, err := os.ReadFile(s.storePath)
+	if err == nil {
+		_ = json.Unmarshal(data, &sf)
+	}
+	if sf == nil {
+		sf = make(storeFile)
+	}
+
+	// Build current workspace's job list.
+	s.mu.Lock()
+	jobs := make([]jobJSON, 0)
+	for _, j := range s.jobs {
+		if !j.Recurring {
+			continue
+		}
+		jobs = append(jobs, jobJSON{
+			ID:        j.ID,
+			CronExpr:  j.CronExpr,
+			Prompt:    j.Prompt,
+			Recurring: j.Recurring,
+			CreatedAt: j.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	s.mu.Unlock()
+
+	// Update or remove the workspace bucket.
+	if len(jobs) == 0 {
+		delete(sf, s.wsKey)
+	} else {
+		sf[s.wsKey] = workspaceBucket{
+			Workspace: s.wsDir,
+			Jobs:      jobs,
+		}
+	}
+
+	// Write back.
+	out, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return
+	}
+	dir := filepath.Dir(s.storePath)
+	_ = os.MkdirAll(dir, 0755)
+	_ = os.WriteFile(s.storePath, out, 0644)
 }
 
 // Create adds a new scheduled job and returns its snapshot.
@@ -72,6 +232,7 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool) (Job, error)
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
+	s.save()
 
 	return job.Snapshot(), nil
 }
@@ -79,9 +240,8 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool) (Job, error)
 // Delete removes a scheduled job by ID.
 func (s *Scheduler) Delete(id string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if _, ok := s.jobs[id]; !ok {
+		s.mu.Unlock()
 		return false
 	}
 	if timer, ok := s.timers[id]; ok {
@@ -89,6 +249,9 @@ func (s *Scheduler) Delete(id string) bool {
 		delete(s.timers, id)
 	}
 	delete(s.jobs, id)
+	s.mu.Unlock()
+
+	s.save()
 	return true
 }
 
@@ -142,6 +305,7 @@ func (s *Scheduler) scheduleJob(job *Job) {
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
+				s.save()
 				return
 			}
 			job.NextFire = next
@@ -179,6 +343,7 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
+				s.save()
 				return
 			}
 			job.NextFire = next

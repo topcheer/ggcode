@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -505,7 +506,9 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	b.registry = core.Registry
 
 	// Cron tools
-	b.cronScheduler = cron.NewScheduler(nil)
+	cronStorePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
+	b.cronScheduler = cron.NewScheduler(nil, cronStorePath)
+	b.cronScheduler.Load(b.workingDir)
 	b.cronScheduler.SetEnqueue(func(prompt string) {
 		log.Printf("[cron] enqueued prompt: %s", prompt)
 	})
