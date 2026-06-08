@@ -666,9 +666,30 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			plan, events := b.relayRecoveryPlan(info, currentSessionID)
 			debug.Log("tunnel", "broker: client connected recovery plan trusted=%t reset=%t suffix_from=%d relay session=%q count=%d local session=%q", plan.trusted, plan.reset, plan.replayFrom, info.SessionID, info.HistoryCount, currentSessionID)
 			if plan.trusted {
-				// Relay already has everything — just bump + flush.
+				// Relay already has everything — bump + flush, but we must
+				// re-send session_info with the current encryption key.
+				// Relay replay ciphertext uses the old key which the new
+				// client cannot decrypt.
 				b.bumpNextEvent(info.LastEventID)
 				b.flushAllText()
+				if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+					return
+				}
+				b.snapshotMu.RLock()
+				provider := b.snapshotProvider
+				b.snapshotMu.RUnlock()
+				if provider != nil {
+					if snapshot, ok := b.currentSnapshot(provider); ok {
+						if snapshot.SessionInfo != (SessionInfoData{}) {
+							b.enqueue(EventSessionInfo, snapshot.SessionInfo)
+						}
+					}
+				}
+				if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
+					return
+				}
+				b.sendActiveSession(currentSessionID)
+				b.enqueueWithStream(EventReplayDone, "", nil)
 				b.clientProjectionSeeded.Store(true)
 				return
 			}
