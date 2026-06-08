@@ -715,7 +715,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
 	core.SetConfigAgent(a)
 	core.SetConfigUINotify(func() {
-		b.onConfigProviderChanged()
+		b.OnConfigProviderChanged()
 	})
 	a.SetPermissionPolicy(policy)
 
@@ -1854,10 +1854,11 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	return nil
 }
 
-// onConfigProviderChanged syncs Wails bridge state after the config tool
+// OnConfigProviderChanged syncs Wails bridge state after the config tool
 // changes vendor/endpoint/model/api_key. Updates b.resolved and b.currentSes
 // so the frontend model picker and status bar reflect the new selection.
-func (b *ChatBridge) onConfigProviderChanged() {
+// Also recreates the provider so the running agent uses the new LLM backend.
+func (b *ChatBridge) OnConfigProviderChanged() {
 	if b.cfg == nil {
 		return
 	}
@@ -1873,6 +1874,15 @@ func (b *ChatBridge) onConfigProviderChanged() {
 		b.currentSes.Model = resolved.Model
 	}
 	b.mu.Unlock()
+
+	// Recreate provider and update agent so it uses the new LLM backend
+	if resolvedNew, p, err := agentruntime.ResolveCurrentSelection(b.cfg); err == nil && b.agent != nil {
+		b.mu.Lock()
+		b.resolved = resolvedNew
+		b.agent.SetProvider(p)
+		b.mu.Unlock()
+	}
+
 	// Notify Wails frontend to refresh model picker and status bar
 	if b.EmitEvent != nil {
 		b.EmitEvent("config:updated", nil)
