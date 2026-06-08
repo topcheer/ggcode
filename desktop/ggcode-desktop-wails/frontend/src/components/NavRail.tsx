@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -7,6 +7,8 @@ interface Props {
   view: ViewMode
   onViewChange: (v: ViewMode) => void
   onAbout: () => void
+  sidebarOpen: boolean
+  onToggleSidebar: () => void
 }
 
 function NavItems() {
@@ -21,7 +23,7 @@ function NavItems() {
   ]
 }
 
-export function NavRail({ view, onViewChange, onAbout }: Props) {
+export function NavRail({ view, onViewChange, onAbout, sidebarOpen, onToggleSidebar }: Props) {
   const navItems = NavItems()
   return (
     <div style={{
@@ -46,6 +48,19 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
           alt="GGCode"
           style={{ width: 32, height: 32 }}
         />
+      </button>
+
+      {/* Sidebar toggle */}
+      <button onClick={onToggleSidebar} title={sidebarOpen ? 'Hide sessions' : 'Show sessions'} style={{
+        width: 36, height: 36, borderRadius: 6,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'transparent',
+        color: sidebarOpen ? 'var(--color-primary)' : 'var(--text-secondary)',
+        border: 'none', cursor: 'pointer',
+        transition: 'background 0.15s',
+        marginBottom: 4,
+      }}>
+        <PanelLeft size={18} />
       </button>
 
       {/* Nav items */}
