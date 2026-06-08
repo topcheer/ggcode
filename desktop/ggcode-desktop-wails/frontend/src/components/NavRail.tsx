@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, User, Radio, Server, Terminal } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -69,16 +69,6 @@ export function NavRail({ view, onViewChange, onAbout }: Props) {
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
-
-      {/* User avatar */}
-      <div style={{
-        width: 32, height: 32, borderRadius: 16,
-        background: '#6E40C9',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: '#fff', fontSize: 12, fontWeight: 600,
-      }}>
-        <User size={16} />
-      </div>
     </div>
   )
 }
