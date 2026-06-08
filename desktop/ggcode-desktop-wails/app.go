@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -519,7 +520,7 @@ func (a *App) RemoveMCPServer(name string) error {
 
 // GetVersion returns the application version.
 func (a *App) GetVersion() string {
-	return "1.3.60"
+	return version.Version
 }
 
 // CheckForUpdates checks GitHub for the latest release.
