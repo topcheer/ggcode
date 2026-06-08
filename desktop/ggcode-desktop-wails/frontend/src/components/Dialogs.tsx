@@ -82,7 +82,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           alignItems: 'center',
         }}>
           {/* Logo */}
-          <img src={new URL('../assets/images/logo-universal.png', import.meta.url).href}
+          <img src={new URL('../assets/images/app-icon.png', import.meta.url).href}
             alt="GGCode"
             style={{ width: 56, height: 56, borderRadius: 14 }}
           />
