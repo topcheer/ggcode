@@ -247,7 +247,7 @@ function LayoutInner() {
 
           {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} />
+            <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
             {sidebarOpen && view === 'chat' && (
               <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} />
