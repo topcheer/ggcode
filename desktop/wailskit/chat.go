@@ -1505,9 +1505,17 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 
 // recordMetric stores a metric event for turn digest generation.
 func (b *ChatBridge) recordMetric(ev interface{}) {
-	if me, ok := ev.(metrics.MetricEvent); ok {
-		b.metricEvents = append(b.metricEvents, me)
+	me, ok := ev.(metrics.MetricEvent)
+	if !ok {
+		return
 	}
+	me.TurnIndex = b.usageTurnIndex
+	if b.currentSes != nil {
+		me.Model = b.currentSes.Model
+		me.Vendor = b.currentSes.Vendor
+		me.Endpoint = b.currentSes.Endpoint
+	}
+	b.metricEvents = append(b.metricEvents, me)
 }
 
 func (b *ChatBridge) emitTurnDigest() {
@@ -1525,6 +1533,26 @@ func (b *ChatBridge) emitTurnDigest() {
 	}
 	text := metrics.FormatTurnDigest(lang, turn)
 	b.lastMetricDigestTurn = turnIndex
+
+	// Persist to liveHistory so CurrentSessionHistory includes it.
+	b.mu.Lock()
+	b.liveHistory = append(b.liveHistory, SessionMessage{
+		Role:    "system",
+		Content: text,
+	})
+	// Persist to session so it survives reload.
+	if b.currentSes != nil {
+		b.currentSes.Messages = append(b.currentSes.Messages, provider.Message{
+			Role: "system", Content: []provider.ContentBlock{provider.TextBlock(text)},
+		})
+		b.currentSes.UpdatedAt = time.Now()
+		if b.sessionStore != nil {
+			_ = b.sessionStore.Save(b.currentSes)
+		}
+	}
+	b.mu.Unlock()
+
+	// Push to frontend via event stream.
 	if b.OnStreamEvent != nil {
 		raw, _ := json.Marshal(map[string]string{
 			"type": "system",
