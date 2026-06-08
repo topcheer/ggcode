@@ -851,6 +851,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   final Set<String> _dirtySessions = <String>{};
   final Set<String> _dirtyWorkspaces = <String>{};
   bool _selectionDirty = false;
+  String? _pendingWorkspaceUrl;
 
   @override
   WorkspaceCacheState build() {
@@ -931,9 +932,6 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     }
     final selectedWorkspaceKey = index['selected_workspace_key'] as String?;
     final selectedSessionId = index['selected_session_id'] as String?;
-    // Workspace creation happens only in registerLiveState when session_info
-    // arrives. Here we just record the selected key so the UI can show which
-    // workspace was last active.
     if (!ref.mounted) return;
     state = WorkspaceCacheState(
       initialized: true,
@@ -956,9 +954,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (!ref.mounted) return;
     final normalized = normalizeTunnelUrl(url);
     final key = _workspaceKeyForUrl(normalized);
-    // Workspace/session creation happens only in registerLiveState when
-    // session_info arrives. Here we just record the key so the UI knows
-    // which relay the user scanned.
+    // Store the URL for registerLiveSession to use when creating the
+    // workspace record. Don't create the workspace itself yet — we need
+    // sessionInfo for the display name.
+    _pendingWorkspaceUrl = normalized;
     state = state.copyWith(selectedWorkspaceKey: key);
   }
 
@@ -1131,7 +1130,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     } else if (displayName.isNotEmpty) {
       // Workspace doesn't exist yet — create it now that we have sessionInfo.
-      final url = state.workspaces[workspaceKey]?.url ?? '';
+      final url = state.workspaces[workspaceKey]?.url ??
+          _pendingWorkspaceUrl ??
+          '';
+      _pendingWorkspaceUrl = null;
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
         url: url,
