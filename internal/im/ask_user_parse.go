@@ -103,7 +103,7 @@ func BuildAskUserAnswer(question toolpkg.AskUserQuestion, selected map[string]st
 		answer.CompletionStatus = toolpkg.AskUserCompletionUnanswered
 	case len(selectedIDs) == 0 && freeform != "":
 		answer.AnswerMode = toolpkg.AskUserAnswerModeFreeformOnly
-		if question.Kind == toolpkg.AskUserKindText {
+		if question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
 			answer.CompletionStatus = toolpkg.AskUserCompletionAnswered
 		} else {
 			answer.CompletionStatus = toolpkg.AskUserCompletionPartial
