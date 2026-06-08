@@ -467,6 +467,34 @@ jobs:
             -InstallerUrl $installerUrl `
             -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
 
+  publish-winget-cli:
+    name: Publish CLI to winget
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    needs:
+      - upload-release-assets
+    permissions:
+      contents: read
+    env:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+      WINGET_PACKAGE_ID: gg.ai.ggcode-cli
+    steps:
+      - uses: actions/checkout@v6
+      - name: Submit or skip winget update
+        shell: pwsh
+        run: |
+          if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN not configured; skipping winget submission."
+            exit 0
+          }
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ggcode_${packageVersion}_windows_x64.msi"
+          .\scripts\release\publish-winget.ps1 `
+            -PackageId $env:WINGET_PACKAGE_ID `
+            -Version "${{ github.ref_name }}" `
+            -InstallerUrl $installerUrl `
+            -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
+
   publish-homebrew-desktop:
     name: Publish desktop to Homebrew Cask
     if: github.event_name != 'workflow_dispatch'
@@ -675,6 +703,7 @@ jobs:
     needs:
       - upload-release-assets
       - publish-winget
+      - publish-winget-cli
     permissions:
       contents: write
     env:
