@@ -94,6 +94,7 @@ interface ChatMessage {
   streaming?: boolean
   timestamp: number
   source?: string // 'im' | 'mobile' — non-UI message origin
+  deliveryStatus?: 'pending' | 'sent' | 'failed'
 }
 
 // Agent panel: a sub-agent or teammate has its own tab with its own message stream
@@ -129,6 +130,7 @@ interface StatusBarState {
   vendor: string
   model: string
   mode: string
+  effort: string
   contextUsed: number
   contextTotal: number
   usagePercent: number
@@ -212,7 +214,7 @@ function getTabAutoScroll(state: Record<string, boolean>, tab: string): boolean 
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void }) {
+export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void }) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
@@ -221,7 +223,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [statusBar, setStatusBar] = useState<StatusBarState>({
-    vendor: '', model: '', mode: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
+    vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
@@ -257,7 +259,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
       messagesRef.current = []
       setThinking(false)
       setStatusBar({
-        vendor: '', model: '', mode: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
+        vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
       })
       return
     }
@@ -722,6 +724,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
             vendor: info.vendor ?? '',
             model: info.model ?? '',
             mode: info.mode ?? s.mode,
+            effort: info.effort ?? s.effort,
             contextTotal: info.contextTotal ?? info.contextWindow ?? 0,
             contextUsed: info.contextUsed ?? s.contextUsed,
             usagePercent: info.usagePercent ?? s.usagePercent,
@@ -737,56 +740,64 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
 
   // ── Send message ──────────────────────────────────────────────────────────
 
+  const markMessageDelivery = useCallback((id: string, deliveryStatus: ChatMessage['deliveryStatus']) => {
+    setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, deliveryStatus } : msg))
+  }, [])
+
+  const sendUserText = useCallback(async (text: string, existingID?: string) => {
+    const messageID = existingID || nextID()
+    if (!existingID) {
+      const userMsg: ChatMessage = {
+        id: messageID,
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
+        deliveryStatus: 'pending',
+      }
+      setMessages(prev => [...prev, userMsg])
+    } else {
+      markMessageDelivery(messageID, 'pending')
+    }
+
+    const wasStreaming = isStreaming
+    if (!wasStreaming) {
+      setIsStreaming(true)
+      setThinking(true)
+      setStatusBar(s => ({ ...s, status: 'working' }))
+    }
+
+    try {
+      await App.SendMessage(text)
+      markMessageDelivery(messageID, 'sent')
+    } catch (err: any) {
+      const message = err?.message ?? String(err)
+      markMessageDelivery(messageID, 'failed')
+      showToast?.('error', `Failed to send message: ${message}`)
+      if (!wasStreaming) {
+        setIsStreaming(false)
+        setThinking(false)
+        setStatusBar(s => ({ ...s, status: 'error' }))
+      }
+      setMessages(prev => [...prev, {
+        id: nextID(),
+        role: 'error' as const,
+        content: message,
+        timestamp: Date.now(),
+      }])
+    }
+  }, [isStreaming, markMessageDelivery, showToast])
+
   const handleSend = useCallback(async () => {
     const text = input.trim()
     if (!text) return
 
-    // Add user message to chat
-    const userMsg: ChatMessage = {
-      id: nextID(),
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    }
-    setMessages(prev => [...prev, userMsg])
     setInput('')
+    await sendUserText(text)
+  }, [input, sendUserText])
 
-    if (isStreaming) {
-      // Agent is busy — send to backend for queueing.
-      // User message already added to chat above.
-      try {
-        await App.SendMessage(text)
-      } catch (err: any) {
-        setMessages(prev => [...prev, {
-          id: nextID(),
-          role: 'error' as const,
-          content: err?.message ?? String(err),
-          timestamp: Date.now(),
-        }])
-      }
-      return
-    }
-
-    setIsStreaming(true)
-    setThinking(true)
-    setStatusBar(s => ({ ...s, status: 'working' }))
-
-    try {
-      // Call Go backend SendMessage
-      await App.SendMessage(text)
-    } catch (err: any) {
-      // Error handling (mirrors Fyne onSend error path)
-      setIsStreaming(false)
-      setThinking(false)
-      setMessages(prev => [...prev, {
-        id: nextID(),
-        role: 'error',
-        content: err?.message ?? String(err),
-        timestamp: Date.now(),
-      }])
-      setStatusBar(s => ({ ...s, status: 'error' }))
-    }
-  }, [input, isStreaming])
+  const handleRetrySend = useCallback((id: string, text: string) => {
+    void sendUserText(text, id)
+  }, [sendUserText])
 
   // ── Cancel ────────────────────────────────────────────────────────────────
 
@@ -799,6 +810,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
   // ── Key handler ───────────────────────────────────────────────────────────
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
+      e.preventDefault()
+      void (async () => {
+        try {
+          const result = await App.CycleReasoningEffort() as Record<string, any>
+          if (result?.supported) {
+            setStatusBar(s => ({ ...s, effort: result.effort ?? 'auto' }))
+          }
+        } catch {}
+      })()
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -909,6 +932,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
         </button>
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
           {statusLabel}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+          Effort: {statusBar.effort || 'auto'}
         </span>
         <div style={{ flex: 1 }} />
 
@@ -1031,7 +1057,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected }:
           // Main chat messages
           <>
             {messages.map(msg => (
-              <MessageCard key={msg.id} msg={msg} />
+              <MessageCard key={msg.id} msg={msg} onRetry={handleRetrySend} />
             ))}
           </>
         ) : (
@@ -1160,10 +1186,10 @@ function TabButton({ label, active, onClick, color }: { label: string; active: b
   )
 }
 
-function MessageCard({ msg }: { msg: ChatMessage }) {
+function MessageCard({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string) => void }) {
   switch (msg.role) {
     case 'user':
-      return <UserMessage msg={msg} />
+      return <UserMessage msg={msg} onRetry={onRetry} />
     case 'assistant':
       return <AssistantMessage msg={msg} />
     case 'tool':
@@ -1223,7 +1249,9 @@ function ReasoningMessage({ msg }: { msg: ChatMessage }) {
   )
 }
 
-function UserMessage({ msg }: { msg: ChatMessage }) {
+function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string) => void }) {
+  const failed = msg.deliveryStatus === 'failed'
+  const pending = msg.deliveryStatus === 'pending'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
       {msg.source && (
@@ -1234,12 +1262,35 @@ function UserMessage({ msg }: { msg: ChatMessage }) {
       <div style={{
         padding: 'var(--spacing-sm) var(--spacing-md)',
         borderRadius: 'var(--radius-lg)',
-        background: 'var(--color-primary)',
-        color: '#fff',
+        background: failed ? 'rgba(239, 68, 68, 0.16)' : 'var(--color-primary)',
+        border: failed ? '1px solid rgba(239, 68, 68, 0.45)' : '1px solid transparent',
+        color: failed ? '#fecaca' : '#fff',
         lineHeight: 1.6,
       }}>
         {msg.content}
       </div>
+      {(pending || failed) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginRight: 4, fontSize: 11, color: failed ? 'var(--color-error)' : 'var(--text-tertiary)' }}>
+          <span>{pending ? 'Sending...' : 'Failed to send'}</span>
+          {failed && onRetry && (
+            <button
+              type="button"
+              onClick={() => onRetry(msg.id, msg.content)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--color-primary)',
+                cursor: 'pointer',
+                fontSize: 11,
+                fontWeight: 600,
+                padding: 0,
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

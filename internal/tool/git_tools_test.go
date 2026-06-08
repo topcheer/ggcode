@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -118,5 +119,44 @@ func TestGitLogNonexistentPath(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error for nonexistent path")
+	}
+}
+
+func TestGitShowDescriptionIsLocalGit(t *testing.T) {
+	gs := GitShow{}
+	if !strings.Contains(gs.Description(), "local Git") {
+		t.Fatalf("git_show description should describe local Git behavior, got %q", gs.Description())
+	}
+	if strings.Contains(gs.Description(), "GitHub repository") {
+		t.Fatalf("git_show description should not imply GitHub API behavior, got %q", gs.Description())
+	}
+}
+
+func TestGitToolDescriptionsDiscourageBroadOrDestructiveActions(t *testing.T) {
+	ga := GitAdd{}
+	if !strings.Contains(ga.Description(), "avoid git_add files=[\".\"]") {
+		t.Fatalf("git_add description should discourage broad staging, got %q", ga.Description())
+	}
+	if !strings.Contains(string(ga.Parameters()), "Prefer explicit paths") {
+		t.Fatalf("git_add schema should prefer explicit paths, got %s", string(ga.Parameters()))
+	}
+
+	gc := GitCommit{}
+	if !strings.Contains(gc.Description(), "inspecting git status/diff") {
+		t.Fatalf("git_commit description should require status/diff inspection, got %q", gc.Description())
+	}
+	if !strings.Contains(string(gc.Parameters()), "new untracked files are not added") {
+		t.Fatalf("git_commit all schema should mention untracked files, got %s", string(gc.Parameters()))
+	}
+
+	gs := GitStash{}
+	if !strings.Contains(gs.Description(), "pop and drop are destructive") {
+		t.Fatalf("git_stash description should warn about destructive actions, got %q", gs.Description())
+	}
+	params := string(gs.Parameters())
+	for _, want := range []string{"drop removes an entry without applying", "Confirm the desired entry with git_stash_list"} {
+		if !strings.Contains(params, want) {
+			t.Fatalf("git_stash schema should mention %q, got %s", want, params)
+		}
 	}
 }

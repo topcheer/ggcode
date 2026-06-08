@@ -24,18 +24,29 @@ const (
 
 // OpenAIProvider implements Provider using the OpenAI-compatible API.
 type OpenAIProvider struct {
-	client    *openai.Client
-	model     string
-	maxTokens int
-	cap       *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
-	name      string
-	baseURL   string                    // endpoint URL, for logging
-	transport *headerInjectingTransport // kept for runtime header updates
+	client          *openai.Client
+	model           string
+	maxTokens       int
+	cap             *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
+	reasoningEffort string
+	name            string
+	baseURL         string                    // endpoint URL, for logging
+	transport       *headerInjectingTransport // kept for runtime header updates
 }
 
 // SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
 // Used by NewProvider to share learned state across reconstructions.
 func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+func (p *OpenAIProvider) SetReasoningEffort(effort string) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "", "low", "medium", "high":
+		p.reasoningEffort = effort
+	}
+}
+
+func (p *OpenAIProvider) ReasoningEffort() string { return p.reasoningEffort }
 
 // probeChat sends a single chat request without retry, adaptive cap
 // tracking, or token counting. Used by context window probing.
@@ -57,6 +68,47 @@ func (p *OpenAIProvider) effectiveMaxTokens() int {
 		}
 	}
 	return p.maxTokens
+}
+
+func (p *OpenAIProvider) applyReasoningEffort(req *openai.ChatCompletionRequest) bool {
+	if p.reasoningEffort == "" {
+		return false
+	}
+	req.ReasoningEffort = p.reasoningEffort
+	return true
+}
+
+func retryWithoutReasoningEffort(err error) bool {
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Param != nil && strings.EqualFold(*apiErr.Param, "reasoning_effort") {
+			return true
+		}
+		msg := strings.ToLower(apiErr.Message)
+		return strings.Contains(msg, "reasoning_effort") || strings.Contains(msg, "reasoning effort")
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "reasoning_effort") || strings.Contains(msg, "reasoning effort")
+}
+
+func (p *OpenAIProvider) createChatCompletion(ctx context.Context, req openai.ChatCompletionRequest, hasReasoningEffort bool) (openai.ChatCompletionResponse, error) {
+	resp, err := p.client.CreateChatCompletion(ctx, req)
+	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
+		req.ReasoningEffort = ""
+		p.SetReasoningEffort("")
+		resp, err = p.client.CreateChatCompletion(ctx, req)
+	}
+	return resp, err
+}
+
+func (p *OpenAIProvider) createChatCompletionStream(ctx context.Context, req openai.ChatCompletionRequest, hasReasoningEffort bool) (*openai.ChatCompletionStream, error) {
+	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
+		req.ReasoningEffort = ""
+		p.SetReasoningEffort("")
+		stream, err = p.client.CreateChatCompletionStream(ctx, req)
+	}
+	return stream, err
 }
 
 // headerInjectingTransport wraps an http.RoundTripper to inject custom headers
@@ -172,6 +224,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			IncludeUsage: true,
 		},
 	}
+	hasReasoningEffort := p.applyReasoningEffort(&req)
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
@@ -179,7 +232,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.CreateChatCompletion(ctx, req)
+		resp, callErr = p.createChatCompletion(ctx, req, hasReasoningEffort)
 		return callErr
 	}, providerRetryAttempts)
 	if err != nil {
@@ -213,6 +266,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			IncludeUsage: true,
 		},
 	}
+	hasReasoningEffort := p.applyReasoningEffort(&req)
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
@@ -240,7 +294,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 			// (Re-)establish the stream for each attempt
 			var localStreamer *openai.ChatCompletionStream
-			localStreamer, err = p.client.CreateChatCompletionStream(ctx, req)
+			localStreamer, err = p.createChatCompletionStream(ctx, req, hasReasoningEffort)
 			if err != nil {
 				if rejected, parsed := maxTokensRejection(err); rejected {
 					p.cap.OnRejected(parsed)

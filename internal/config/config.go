@@ -44,18 +44,19 @@ func lockConfigFile(path string) func() {
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName    string   `yaml:"display_name" json:"display_name"`
-	Protocol       string   `yaml:"protocol" json:"protocol"`
-	BaseURL        string   `yaml:"base_url" json:"base_url"`
-	AuthType       string   `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
-	APIKey         string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	ContextWindow  int      `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens      int      `yaml:"max_tokens" json:"max_tokens"`
-	SupportsVision *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
-	DefaultModel   string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
-	SelectedModel  string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
-	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
-	Tags           []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	DisplayName     string   `yaml:"display_name" json:"display_name"`
+	Protocol        string   `yaml:"protocol" json:"protocol"`
+	BaseURL         string   `yaml:"base_url" json:"base_url"`
+	AuthType        string   `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey          string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow   int      `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens       int      `yaml:"max_tokens" json:"max_tokens"`
+	ReasoningEffort string   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	SupportsVision  *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel    string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel   string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models          []string `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags            []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 // VendorConfig holds a real supplier plus its available endpoints.
@@ -67,21 +68,22 @@ type VendorConfig struct {
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
-	VendorID       string
-	VendorName     string
-	EndpointID     string
-	EndpointName   string
-	Protocol       string
-	AuthType       string
-	BaseURL        string
-	APIKey         string
-	EnterpriseURL  string
-	Model          string
-	ContextWindow  int
-	MaxTokens      int
-	SupportsVision bool
-	Models         []string
-	Tags           []string
+	VendorID        string
+	VendorName      string
+	EndpointID      string
+	EndpointName    string
+	Protocol        string
+	AuthType        string
+	BaseURL         string
+	APIKey          string
+	EnterpriseURL   string
+	Model           string
+	ContextWindow   int
+	MaxTokens       int
+	ReasoningEffort string
+	SupportsVision  bool
+	Models          []string
+	Tags            []string
 }
 
 // ToolPermission defines per-tool permission level in config.

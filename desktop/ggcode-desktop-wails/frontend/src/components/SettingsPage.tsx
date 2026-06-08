@@ -1,14 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale } from '../i18n'
+import { ViewMode } from '../types'
 
 interface Props {
   onBack: () => void
+  onNavigate?: (view: ViewMode) => void
+  onOpenContext?: () => void
+  onOpenShare?: () => void
+  onOpenAbout?: () => void
+  showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
-type SettingsTab = 'provider' | 'impersonation' | 'addEndpoint'
+type SettingsTab = 'provider' | 'agent' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics'
 
 interface ImpersonationPreset {
   id: string
@@ -17,7 +23,7 @@ interface ImpersonationPreset {
   extraHeaders?: Record<string, string>
 }
 
-export function SettingsPage({ onBack }: Props) {
+export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, onOpenAbout, showToast }: Props) {
   const { t, locale, setLocale } = useTranslation()
   const [tab, setTab] = useState<SettingsTab>('provider')
   const [vendors, setVendors] = useState<string[]>([])
@@ -102,7 +108,9 @@ export function SettingsPage({ onBack }: Props) {
         const ps = await App.GetImpersonationPresets()
         if (cancelled) return
         setPresets(ps as ImpersonationPreset[])
-      } catch {}
+      } catch (e: any) {
+        showToast?.('error', `Failed to load settings: ${e?.message || e}`)
+      }
     }
     load()
     return () => { cancelled = true }
@@ -117,9 +125,13 @@ export function SettingsPage({ onBack }: Props) {
     setApiKeyMasked('')
     setModels([])
     setModelsSource('static')
-    const eps = await App.GetEndpoints(vendor) as any[]
-    setEndpoints(eps || [])
-  }, [])
+    try {
+      const eps = await App.GetEndpoints(vendor) as any[]
+      setEndpoints(eps || [])
+    } catch (e: any) {
+      showToast?.('error', `Failed to load endpoints: ${e?.message || e}`)
+    }
+  }, [showToast])
 
   const handleEndpointChange = useCallback(async (endpoint: string) => {
     setCurrentEndpoint(endpoint)
@@ -139,7 +151,9 @@ export function SettingsPage({ onBack }: Props) {
           setModels(details.models)
         }
       }
-    } catch {}
+    } catch (e: any) {
+      showToast?.('error', `Failed to load endpoint details: ${e?.message || e}`)
+    }
 
     // Also load static models as fallback
     try {
@@ -147,8 +161,10 @@ export function SettingsPage({ onBack }: Props) {
       if (ms && ms.length > 0) {
         setModels(prev => prev.length > 0 ? prev : ms)
       }
-    } catch {}
-  }, [currentVendor])
+    } catch (e: any) {
+      showToast?.('error', `Failed to load static models: ${e?.message || e}`)
+    }
+  }, [currentVendor, showToast])
 
   // Refresh models dynamically from API
   const handleRefreshModels = useCallback(async () => {
@@ -165,11 +181,13 @@ export function SettingsPage({ onBack }: Props) {
         setModelsError('No models found')
       }
     } catch (e: any) {
-      setModelsError(e?.message || 'Failed to fetch models')
+      const message = e?.message || 'Failed to fetch models'
+      setModelsError(message)
+      showToast?.('error', `Failed to fetch models: ${message}`)
     } finally {
       setModelsLoading(false)
     }
-  }, [currentVendor, currentEndpoint, apiKey])
+  }, [currentVendor, currentEndpoint, apiKey, showToast])
 
   const save = useCallback(async () => {
     setSaving(true)
@@ -189,28 +207,41 @@ export function SettingsPage({ onBack }: Props) {
         setApiKeySet(true)
       }
       setSaved(true)
+      showToast?.('success', 'Settings saved')
       EventsEmit('config:updated')
       setTimeout(() => setSaved(false), 2000)
-    } catch (e) {
+    } catch (e: any) {
+      showToast?.('error', `Failed to save settings: ${e?.message || e}`)
       console.error('Save failed:', e)
     } finally {
       setSaving(false)
     }
-  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL])
+  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL, showToast])
 
   const applyImpersonation = useCallback(async () => {
     setSaving(true)
     try {
       await App.ApplyImpersonation(selectedPreset, impVersion, {} as Record<string, string>)
-    } catch (e) {
+      showToast?.('success', 'Impersonation settings applied')
+    } catch (e: any) {
+      showToast?.('error', `Failed to apply impersonation: ${e?.message || e}`)
       console.error('Apply failed:', e)
     } finally {
       setSaving(false)
     }
-  }, [selectedPreset, impVersion])
+  }, [selectedPreset, impVersion, showToast])
+
+  const openView = useCallback((view: ViewMode) => {
+    onNavigate?.(view)
+  }, [onNavigate])
+
+  const modeInfo = getModeInfo(defaultMode)
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'provider', label: t('settings.title') },
+    { id: 'agent', label: 'Agent & Safety' },
+    { id: 'integrations', label: 'Integrations' },
+    { id: 'diagnostics', label: 'Diagnostics' },
     { id: 'impersonation', label: t('settings.impersonate') },
     { id: 'addEndpoint', label: '+ Endpoint' },
   ]
@@ -361,6 +392,134 @@ export function SettingsPage({ onBack }: Props) {
           </>
         )}
 
+        {/* Agent & Safety Tab */}
+        {tab === 'agent' && (
+          <>
+            <h3 style={sectionTitle}>Agent & Safety</h3>
+            <p style={hintStyle}>
+              Review how much autonomy the desktop agent currently has. This summarizes existing behavior without changing advanced tool policies.
+            </p>
+
+            <div style={{ ...summaryCardStyle, borderColor: modeInfo.border, background: modeInfo.background }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <span style={{ width: 34, height: 34, borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: modeInfo.iconBackground, color: modeInfo.color }}>
+                  <Shield size={18} />
+                </span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{modeInfo.title}</div>
+                  <div style={{ fontSize: 12, color: modeInfo.color }}>{defaultMode || 'supervised'}</div>
+                </div>
+              </div>
+              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{modeInfo.description}</p>
+            </div>
+
+            <FieldRow label="Permission mode">
+              <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
+                <option value="supervised">Supervised (confirm each tool)</option>
+                <option value="auto">Auto (safe tools only)</option>
+                <option value="plan">Plan (read-only)</option>
+                <option value="bypass">Bypass (auto-approve most tools)</option>
+                <option value="autopilot">Autopilot (high autonomy)</option>
+              </select>
+              <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                Save to persist this default mode. Runtime mode changes still follow the app's normal mode handling.
+              </span>
+            </FieldRow>
+
+            <h3 style={{ ...sectionTitle, marginTop: 24 }}>Workspace & file access</h3>
+            <p style={hintStyle}>
+              File tools operate within the current workspace and configured allowed directories. Advanced allowed-directory editing is intentionally not exposed here yet to avoid changing safety boundaries accidentally.
+            </p>
+            <FeatureGrid>
+              <FeatureCard
+                icon={<FolderOpen size={18} />}
+                title="File Browser"
+                description="Browse files in the current workspace using the existing desktop file browser."
+                action="Open Files"
+                onClick={() => openView('files')}
+              />
+              <FeatureCard
+                icon={<PanelRight size={18} />}
+                title="Context Usage"
+                description="Inspect active context usage and token/cache totals before running long tasks."
+                action="Open Context"
+                onClick={onOpenContext}
+              />
+            </FeatureGrid>
+
+            <button onClick={save} disabled={saving || !currentVendor || !currentEndpoint}
+              style={{ ...primaryBtnStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {saved ? <><Check size={14} /> {t('settings.saved')}</> : saving ? t('settings.saving') : 'Save agent settings'}
+            </button>
+          </>
+        )}
+
+        {/* Integrations Tab */}
+        {tab === 'integrations' && (
+          <>
+            <h3 style={sectionTitle}>Integrations</h3>
+            <p style={hintStyle}>
+              Manage existing desktop features from one place. These shortcuts open the current dedicated screens without changing any backend configuration semantics.
+            </p>
+            <FeatureGrid>
+              <FeatureCard
+                icon={<Server size={18} />}
+                title="MCP Servers"
+                description="Configure Model Context Protocol servers and tools."
+                action="Manage MCP"
+                onClick={() => openView('mcp')}
+              />
+              <FeatureCard
+                icon={<Radio size={18} />}
+                title="IM Adapters"
+                description="Connect Telegram, Slack, Feishu, DingTalk and other chat adapters."
+                action="Manage IM"
+                onClick={() => openView('im')}
+              />
+              <FeatureCard
+                icon={<Share2 size={18} />}
+                title="Mobile Share"
+                description="Share the active desktop session with mobile clients through the relay."
+                action="Open Share"
+                onClick={onOpenShare}
+              />
+              <FeatureCard
+                icon={<PanelRight size={18} />}
+                title="Context Panel"
+                description="Inspect context usage, token totals, and cache statistics for the active session."
+                action="Open Context"
+                onClick={onOpenContext}
+              />
+            </FeatureGrid>
+          </>
+        )}
+
+        {/* Diagnostics Tab */}
+        {tab === 'diagnostics' && (
+          <>
+            <h3 style={sectionTitle}>Diagnostics</h3>
+            <p style={hintStyle}>
+              Tools for troubleshooting and support. These open existing desktop panels and dialogs.
+            </p>
+            <FeatureGrid>
+              <FeatureCard
+                icon={<Terminal size={18} />}
+                title="Debug Console"
+                description="View runtime logs and recent desktop/backend diagnostic events."
+                action="Open Console"
+                onClick={() => openView('debug')}
+              />
+              <FeatureCard
+                icon={<Info size={18} />}
+                title="About & Updates"
+                description="Check the app version, update status, release notes, and support links."
+                action="Open About"
+                onClick={onOpenAbout}
+              />
+            </FeatureGrid>
+          </>
+        )}
+
         {/* Impersonation Tab */}
         {tab === 'impersonation' && (
           <>
@@ -405,7 +564,7 @@ export function SettingsPage({ onBack }: Props) {
 
         {/* Add Endpoint Tab */}
         {tab === 'addEndpoint' && (
-          <AddEndpointForm vendors={vendors} currentVendor={currentVendor} onDone={() => {
+          <AddEndpointForm vendors={vendors} currentVendor={currentVendor} showToast={showToast} onDone={() => {
             handleVendorChange(currentVendor)
             setTab('provider')
           }} />
@@ -422,8 +581,8 @@ export function SettingsPage({ onBack }: Props) {
 }
 
 // Add Endpoint Form
-function AddEndpointForm({ vendors, currentVendor, onDone }: {
-  vendors: string[], currentVendor: string, onDone: () => void
+function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
+  vendors: string[], currentVendor: string, onDone: () => void, showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }) {
   const [vendor, setVendor] = useState(currentVendor)
   const [name, setName] = useState('')
@@ -440,22 +599,27 @@ function AddEndpointForm({ vendors, currentVendor, onDone }: {
       const result = await App.TestEndpointConnection(protocol, baseURL, epApiKey) as any
       setStatus(result.message || `Found ${result.modelCount || 0} models`)
     } catch (e: any) {
-      setStatus('Failed: ' + (e.message || e))
+      const message = e.message || e
+      setStatus('Failed: ' + message)
+      showToast?.('error', `Endpoint test failed: ${message}`)
     }
-  }, [protocol, baseURL, epApiKey])
+  }, [protocol, baseURL, epApiKey, showToast])
 
   const save = useCallback(async () => {
     if (!name || !baseURL || !vendor) return
     setSaving(true)
     try {
       await App.AddCustomEndpoint(vendor, name, protocol, baseURL, epApiKey)
+      showToast?.('success', 'Endpoint added')
       onDone()
     } catch (e: any) {
-      setStatus('Error: ' + (e.message || e))
+      const message = e.message || e
+      setStatus('Error: ' + message)
+      showToast?.('error', `Failed to add endpoint: ${message}`)
     } finally {
       setSaving(false)
     }
-  }, [vendor, name, protocol, baseURL, epApiKey, onDone])
+  }, [vendor, name, protocol, baseURL, epApiKey, onDone, showToast])
 
   return (
     <>
@@ -507,10 +671,60 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
+function FeatureGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+      {children}
+    </div>
+  )
+}
+
+function FeatureCard({ icon, title, description, action, onClick }: {
+  icon: React.ReactNode
+  title: string
+  description: string
+  action: string
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        textAlign: 'left',
+        padding: 14,
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border)',
+        background: 'var(--color-card)',
+        color: 'var(--text-primary)',
+        cursor: onClick ? 'pointer' : 'default',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        minHeight: 148,
+      }}
+    >
+      <span style={{ width: 32, height: 32, borderRadius: 'var(--radius-md)', background: 'rgba(59,130,246,0.14)', color: 'var(--color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {icon}
+      </span>
+      <span style={{ fontSize: 14, fontWeight: 600 }}>{title}</span>
+      <span style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-tertiary)', flex: 1 }}>{description}</span>
+      <span style={{ fontSize: 12, color: 'var(--color-primary)', fontWeight: 600 }}>{action}</span>
+    </button>
+  )
+}
+
 const sectionTitle: React.CSSProperties = {
   fontSize: 16, fontWeight: 600, color: 'var(--text-primary)',
   margin: '0 0 16px', paddingBottom: 8,
   borderBottom: '1px solid var(--color-border)',
+}
+
+const hintStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: 'var(--text-tertiary)',
+  lineHeight: 1.6,
+  margin: '0 0 16px',
 }
 
 const selectStyle: React.CSSProperties = {
@@ -536,6 +750,63 @@ const iconBtnStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-md)', cursor: 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   width: 36, height: 36, color: 'var(--text-tertiary)', flexShrink: 0,
+}
+
+function getModeInfo(mode: string) {
+  switch (mode) {
+    case 'plan':
+      return {
+        title: 'Read-only planning mode',
+        description: 'The agent can inspect files and search the workspace, but write actions and commands are blocked. This is the safest mode for exploration.',
+        color: 'var(--color-primary)',
+        border: 'rgba(59, 130, 246, 0.35)',
+        background: 'rgba(59, 130, 246, 0.08)',
+        iconBackground: 'rgba(59, 130, 246, 0.16)',
+      }
+    case 'auto':
+      return {
+        title: 'Auto mode',
+        description: 'Safe operations can proceed automatically while dangerous actions are denied or require escalation according to policy.',
+        color: 'var(--color-success)',
+        border: 'rgba(34, 197, 94, 0.35)',
+        background: 'rgba(34, 197, 94, 0.08)',
+        iconBackground: 'rgba(34, 197, 94, 0.16)',
+      }
+    case 'bypass':
+      return {
+        title: 'Bypass mode',
+        description: 'Most operations are allowed with fewer prompts. Use this only in trusted workspaces where you are comfortable with faster execution.',
+        color: 'var(--color-warning)',
+        border: 'rgba(245, 158, 11, 0.38)',
+        background: 'rgba(245, 158, 11, 0.09)',
+        iconBackground: 'rgba(245, 158, 11, 0.16)',
+      }
+    case 'autopilot':
+      return {
+        title: 'Autopilot mode',
+        description: 'The agent has high autonomy and can continue through many steps automatically. Review workspace state before using it on important code.',
+        color: 'var(--color-error)',
+        border: 'rgba(239, 68, 68, 0.38)',
+        background: 'rgba(239, 68, 68, 0.1)',
+        iconBackground: 'rgba(239, 68, 68, 0.18)',
+      }
+    default:
+      return {
+        title: 'Supervised mode',
+        description: 'The agent asks before unspecified tool actions. This is a balanced default for normal desktop use.',
+        color: 'var(--text-secondary)',
+        border: 'var(--color-border)',
+        background: 'var(--color-card)',
+        iconBackground: 'rgba(148, 163, 184, 0.14)',
+      }
+  }
+}
+
+const summaryCardStyle: React.CSSProperties = {
+  border: '1px solid var(--color-border)',
+  borderRadius: 'var(--radius-lg)',
+  padding: 14,
+  marginBottom: 18,
 }
 
 const primaryBtnStyle: React.CSSProperties = {

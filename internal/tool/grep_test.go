@@ -244,6 +244,56 @@ func TestGrep_CaseSensitive(t *testing.T) {
 	}
 }
 
+func TestGrep_LongAliasParameters(t *testing.T) {
+	dir := setupGrepTestDir(t)
+	tool := Grep{}
+
+	input, _ := json.Marshal(map[string]interface{}{
+		"pattern":     "Hello",
+		"path":        dir,
+		"ignore_case": true,
+		"before":      1,
+		"after":       1,
+		"output_mode": "content",
+	})
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !containsAll(result.Content, "hello.go", "hello world") {
+		t.Fatalf("expected long alias parameters to behave like -i/-B/-A, got:\n%s", result.Content)
+	}
+}
+
+func TestToolDescriptions_OptimizedForLLM(t *testing.T) {
+	rc := RunCommand{}
+	if containsAny(string(rc.Parameters()), "working_dir") {
+		t.Fatal("run_command schema should not advertise ignored working_dir")
+	}
+	if !containsAll(rc.Description(), "background job", "wait_command") {
+		t.Fatalf("run_command description should mention background job follow-up, got %q", rc.Description())
+	}
+
+	gb := GitBranchList{}
+	if !containsAll(gb.Description(), "local Git branches", "remote=true") || containsAny(gb.Description(), "GitHub repository") {
+		t.Fatalf("git_branch_list description should describe local git behavior, got %q", gb.Description())
+	}
+
+	mfr := MultiFileRead{}
+	if !containsAll(mfr.Description(), "text files", "Images", "read_file") {
+		t.Fatalf("multi_file_read description should clarify text/image behavior, got %q", mfr.Description())
+	}
+
+	mfe := MultiFileEdit{}
+	if !containsAll(mfe.Description(), "multiple existing files", "multi_edit_file") {
+		t.Fatalf("multi_file_edit description should clarify when to use multi_edit_file, got %q", mfe.Description())
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !containsAny(s, sub) {

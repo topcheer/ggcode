@@ -36,6 +36,9 @@ func (t ConfigTool) Description() string {
 	return "Read, write, list, or delete configuration settings. " +
 		"Supports dot-notation keys across all config files: " +
 		"core (vendor/endpoint/model/language), api_key, vendors, mcp_servers, im, a2a, knight, harness, oauth_tokens. " +
+		"Omit value to read a setting; empty string values are treated as reads to avoid accidental clearing. " +
+		"Critical provider settings (vendor/endpoint/model/api_key) affect whether ggcode can talk to the model. Before changing them, inspect current values and available models with list=true, vendors.<name>.endpoints.<ep>.models, or vendors.<name>.endpoints.<ep>.discover_models. " +
+		"Provider-affecting changes are probed before committing; if the probe fails, the existing working configuration is left unchanged. " +
 		"Key patterns for model management: " +
 		"'vendors.<name>.endpoints.<ep>.models' (static list), " +
 		"'vendors.<name>.endpoints.<ep>.discover_models' (live API discovery). " +
@@ -43,8 +46,7 @@ func (t ConfigTool) Description() string {
 		"and 'instance' (per-workspace config in ~/.ggcode/instances/{hash}/). " +
 		"Use 'scope' key to read or switch the current save scope (e.g. set scope=instance to save per-project). " +
 		"Instance scope is ideal for project-specific vendor/endpoint/model overrides. " +
-		"Provider-affecting changes (vendor/endpoint/model/api_key) are probed before committing. " +
-		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML. " +
+		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML, and are not echoed in set results. " +
 		"Use list=true to discover all keys."
 }
 func (t ConfigTool) Parameters() json.RawMessage {
@@ -53,11 +55,11 @@ func (t ConfigTool) Parameters() json.RawMessage {
 		"properties": {
 			"setting": {
 				"type": "string",
-				"description": "Config key in dot-notation. Common keys: 'vendor', 'endpoint', 'model', 'api_key', 'language', 'default_mode', 'max_iterations', 'scope'. Scope control: read 'scope' to see current save target, set 'scope' to 'global' or 'instance' to switch. Vendor/endpoint info: 'vendors.<name>', 'vendors.<name>.endpoints.<ep>'. Model lists: 'vendors.<name>.endpoints.<ep>.models' (configured), 'vendors.<name>.endpoints.<ep>.discover_models' (live API query). MCP: 'mcp_servers', 'mcp_servers.<name>'. IM: 'im.output_mode', 'im.adapters.<name>'. A2A: 'a2a.host', 'a2a.auth.api_key'. Knight: 'knight.enabled'. Use list=true to see all."
+			"description": "Config key in dot-notation. Common keys: 'vendor', 'endpoint', 'model', 'api_key', 'language', 'default_mode', 'max_iterations', 'scope'. Provider settings are critical: read current vendor/endpoint/model first, discover available models with vendors.<name>.endpoints.<ep>.discover_models when possible, and prefer scope=instance for project-specific overrides. Scope control: read 'scope' to see current save target, set 'scope' to 'global' or 'instance' to switch. Vendor/endpoint info: 'vendors.<name>', 'vendors.<name>.endpoints.<ep>'. Model lists: 'vendors.<name>.endpoints.<ep>.models' (configured), 'vendors.<name>.endpoints.<ep>.discover_models' (live API query). MCP: 'mcp_servers', 'mcp_servers.<name>'. IM: 'im.output_mode', 'im.adapters.<name>'. A2A: 'a2a.host', 'a2a.auth.api_key'. Knight: 'knight.enabled'. Use list=true to see all."
 			},
 			"value": {
 				"type": "string",
-				"description": "Value to set (omit to read current value). For complex values (arrays, objects), pass a JSON string. For secrets (api_key, tokens), the value is stored securely in keys.env, never in the main config file."
+			"description": "Value to set. Omit this field to read the current value. Empty strings are treated as reads to avoid accidental clearing. For complex values (arrays, objects), pass a JSON string. Provider-affecting values (vendor/endpoint/model/api_key) are probed before commit; failed probes leave the current working config unchanged. For secrets (api_key, tokens), the value is stored securely in keys.env, never in the main config file, and is not echoed back."
 			},
 			"list": {
 				"type": "boolean",
@@ -109,29 +111,30 @@ func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, e
 		return Result{Content: fmt.Sprintf("Deleted %s\n", args.Setting)}, nil
 	}
 
-	// Read mode — check if "value" was explicitly provided
+	// Read mode. Empty string values are treated as reads to avoid accidental clearing
+	// when clients include optional string fields with their zero value.
 	if args.Value == "" {
-		var raw map[string]json.RawMessage
-		if err := json.Unmarshal(input, &raw); err == nil && raw != nil {
-			if _, hasValue := raw["value"]; !hasValue {
-				// No value key → read mode
-				val, err := t.Access.Get(args.Setting)
-				if err != nil {
-					return Result{IsError: true, Content: err.Error()}, nil
-				}
-				return Result{Content: fmt.Sprintf("%s = %s\n", args.Setting, val)}, nil
-			}
+		val, err := t.Access.Get(args.Setting)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
 		}
+		return Result{Content: fmt.Sprintf("%s = %s\n", args.Setting, val)}, nil
 	}
 
 	// Write mode
 	if err := t.Access.Set(args.Setting, args.Value); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	return Result{Content: fmt.Sprintf("Set %s = %s\n", args.Setting, args.Value)}, nil
+	return Result{Content: fmt.Sprintf("Set %s = %s\n", args.Setting, configSetDisplayValue(args.Setting, args.Value))}, nil
 }
 
-// --- Helpers ---
+func configSetDisplayValue(setting, value string) string {
+	lower := strings.ToLower(setting)
+	if lower == "api_key" || strings.HasPrefix(lower, "api_key.") || strings.Contains(lower, "api_key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password") {
+		return "(secret stored securely)"
+	}
+	return value
+}
 
 // FormatSortedMap formats a map as sorted key=value lines under a header.
 func FormatSortedMap(header string, m map[string]string) string {

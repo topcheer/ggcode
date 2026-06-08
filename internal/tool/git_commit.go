@@ -13,7 +13,7 @@ type GitCommit struct{ WorkingDir string }
 func (t GitCommit) Name() string { return "git_commit" }
 
 func (t GitCommit) Description() string {
-	return "Commit staged changes with a message. A Co-Authored-By trailer is appended automatically."
+	return "Commit staged changes with a message. Commit only after inspecting git status/diff and staging exactly the intended files. A Co-Authored-By trailer is appended automatically."
 }
 
 func (t GitCommit) Parameters() json.RawMessage {
@@ -30,7 +30,7 @@ func (t GitCommit) Parameters() json.RawMessage {
 		},
 		"all": {
 			"type": "boolean",
-			"description": "Automatically stage modified/deleted files before committing (git commit -a)"
+			"description": "Automatically stage modified/deleted files before committing (git commit -a). Use only when the user explicitly wants all tracked modifications included; new untracked files are not added."
 		},
 		"description": {
 			"type": "string",

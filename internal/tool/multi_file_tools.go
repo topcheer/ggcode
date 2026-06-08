@@ -16,9 +16,10 @@ type MultiFileRead struct {
 func (t MultiFileRead) Name() string { return "multi_file_read" }
 
 func (t MultiFileRead) Description() string {
-	return "Read multiple existing files in one call before a coordinated multi-file edit. " +
+	return "Read multiple existing text files or extracted document text in one call before a coordinated multi-file edit. " +
 		"Recommended workflow: use multi_file_read first, then copy the numbered lines you want to change directly into multi_file_edit old_text. " +
 		"Output uses deterministic file blocks like `=== FILE: /abs/path ===`, numbered `cat -n` style lines (`   42\\t<content>`), and `[end file]`, so weak models can copy/paste anchors instead of reconstructing text. " +
+		"Images and binary files are not supported here; use read_file on one file at a time for images or rich media. " +
 		"Keep batches small, paths absolute and unique, and use offset/limit to narrow large files."
 }
 
@@ -168,7 +169,7 @@ type MultiFileEdit struct {
 func (t MultiFileEdit) Name() string { return "multi_file_edit" }
 
 func (t MultiFileEdit) Description() string {
-	return "Apply coordinated edits across multiple existing files in one call. " +
+	return "Apply coordinated edits across multiple existing files in one call. Use multi_edit_file instead when all edits are in a single file. " +
 		"Recommended workflow: 1) read target files with multi_file_read or read_file, 2) paste the numbered lines directly into old_text, 3) put the desired replacement in new_text. " +
 		"Group all edits for the same file into one files[] entry. Within each file, all old_text matches are resolved against the ORIGINAL file content, not after earlier edits in the same request. " +
 		"Default mode is atomic: if any file fails to plan, no files are written. Use mode=partial_success only when mixed write outcomes are acceptable."

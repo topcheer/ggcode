@@ -17,6 +17,8 @@ export function CheckForUpdates():Promise<Record<string, any>>;
 
 export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
+export function CycleReasoningEffort():Promise<Record<string, any>>;
+
 export function DeleteSession(arg1:string):Promise<void>;
 
 export function DrainLogStream():Promise<string>;

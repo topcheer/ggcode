@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -228,5 +229,15 @@ func TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand(t *testing.T) {
 	}
 	if state.pendingImage.sourcePath != "/tmp/ggcode-image-deadbeef.png" {
 		t.Fatalf("expected source path to survive async command, got %q", state.pendingImage.sourcePath)
+	}
+}
+
+func TestTruncateHarnessTextKeepsUTF8Valid(t *testing.T) {
+	got := truncateHarnessText("定位 TUI 面板和主输入框粘贴处理中文截断问题", 8)
+	if !utf8.ValidString(got) {
+		t.Fatalf("expected valid UTF-8, got %q", got)
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("expected no replacement rune, got %q", got)
 	}
 }

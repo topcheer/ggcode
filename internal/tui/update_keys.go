@@ -34,6 +34,18 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.relayoutAfterSidebarChange()
 		return m, nil
 	}
+	if msg.String() == "ctrl+g" {
+		effort, ok := m.cycleReasoningEffort()
+		if ok {
+			label := displayReasoningEffort(effort)
+			m.statusActivity = fmt.Sprintf("Reasoning effort: %s", label)
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Reasoning effort set to %s for this session", label))
+		} else {
+			m.statusActivity = "Reasoning effort not supported by current provider"
+			m.chatWriteSystem(nextSystemID(), "Reasoning effort is not supported by the current provider")
+		}
+		return m, nil
+	}
 	if msg.String() == "ctrl+f" {
 		m.toggleFileBrowser()
 		return m, nil

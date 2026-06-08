@@ -66,8 +66,8 @@ func TestSendMessage_BroadcastEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsAny(result.Content, "No running agents") {
-		t.Errorf("expected no agents message, got: %s", result.Content)
+	if !strings.Contains(result.Content, "No running sub-agents") || !strings.Contains(result.Content, "best-effort") {
+		t.Errorf("expected best-effort no recipients message, got: %s", result.Content)
 	}
 }
 
@@ -158,5 +158,30 @@ func TestListAgentsToolShowsProgressSummary(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, id) || !strings.Contains(result.Content, "Progress: Job ID: cmd-1") {
 		t.Fatalf("unexpected list output: %q", result.Content)
+	}
+}
+
+func TestAgentToolDescriptionsClarifyOneShotRuns(t *testing.T) {
+	spawnDesc := SpawnAgentTool{}.Description()
+	for _, want := range []string{"one-shot", "full task", "do not assume", "send_message"} {
+		if !strings.Contains(spawnDesc, want) {
+			t.Fatalf("spawn_agent description should mention %q, got %q", want, spawnDesc)
+		}
+	}
+	spawnParams := string(SpawnAgentTool{}.Parameters())
+	for _, want := range []string{"complete task description", "Include all context", "rather than trying to send follow-up work later"} {
+		if !strings.Contains(spawnParams, want) {
+			t.Fatalf("spawn_agent schema should mention %q, got %s", want, spawnParams)
+		}
+	}
+
+	waitDesc := WaitAgentTool{}.Description()
+	if !strings.Contains(waitDesc, "one-shot") || !strings.Contains(waitDesc, "does not send new instructions") {
+		t.Fatalf("wait_agent description should clarify polling-only behavior, got %q", waitDesc)
+	}
+
+	listDesc := ListAgentsTool{}.Description()
+	if !strings.Contains(listDesc, "one-shot") || !strings.Contains(listDesc, "Completed runs remain visible") {
+		t.Fatalf("list_agents description should clarify run lifecycle, got %q", listDesc)
 	}
 }

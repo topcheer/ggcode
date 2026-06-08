@@ -108,21 +108,22 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		supportsVision = *ep.SupportsVision
 	}
 	return &ResolvedEndpoint{
-		VendorID:       vendor,
-		VendorName:     util.FirstNonEmpty(vc.DisplayName, vendor),
-		EndpointID:     endpoint,
-		EndpointName:   util.FirstNonEmpty(ep.DisplayName, endpoint),
-		Protocol:       ep.Protocol,
-		AuthType:       authType,
-		BaseURL:        baseURL,
-		APIKey:         apiKey,
-		EnterpriseURL:  enterpriseURL,
-		Model:          model,
-		ContextWindow:  contextWindow,
-		MaxTokens:      maxTokens,
-		SupportsVision: supportsVision,
-		Models:         append([]string(nil), ep.Models...),
-		Tags:           append([]string(nil), ep.Tags...),
+		VendorID:        vendor,
+		VendorName:      util.FirstNonEmpty(vc.DisplayName, vendor),
+		EndpointID:      endpoint,
+		EndpointName:    util.FirstNonEmpty(ep.DisplayName, endpoint),
+		Protocol:        ep.Protocol,
+		AuthType:        authType,
+		BaseURL:         baseURL,
+		APIKey:          apiKey,
+		EnterpriseURL:   enterpriseURL,
+		Model:           model,
+		ContextWindow:   contextWindow,
+		MaxTokens:       maxTokens,
+		ReasoningEffort: strings.TrimSpace(ep.ReasoningEffort),
+		SupportsVision:  supportsVision,
+		Models:          append([]string(nil), ep.Models...),
+		Tags:            append([]string(nil), ep.Tags...),
 	}, nil
 }
 

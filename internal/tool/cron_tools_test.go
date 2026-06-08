@@ -234,8 +234,22 @@ func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 		t.Error("expected recurring=true")
 	}
 
-	// Verify it has a NextFire time set
 	if jobs[0].NextFire.IsZero() {
 		t.Error("expected NextFire to be set")
+	}
+}
+
+func TestCronCreateToolDescriptionClarifiesPersistence(t *testing.T) {
+	desc := CronCreateTool{}.Description()
+	for _, want := range []string{"Only recurring jobs are persisted", "one-shot reminders are in-memory"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("cron_create description should mention %q, got %q", want, desc)
+		}
+	}
+	params := string(CronCreateTool{}.Parameters())
+	for _, want := range []string{"Only recurring jobs are persisted", "recurring=false jobs are never persisted"} {
+		if !strings.Contains(params, want) {
+			t.Fatalf("cron_create schema should mention %q, got %s", want, params)
+		}
 	}
 }

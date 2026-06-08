@@ -192,6 +192,11 @@ type Provider interface {
 	CountTokens(ctx context.Context, messages []Message) (int, error)
 }
 
+type ReasoningEffortProvider interface {
+	SetReasoningEffort(effort string)
+	ReasoningEffort() string
+}
+
 // ChatResponse is the complete response from a non-streaming Chat call.
 type ChatResponse struct {
 	Message Message

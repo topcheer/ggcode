@@ -19,7 +19,8 @@ import { TopDragBar } from './TopDragBar'
 import { ApprovalDialog, ApprovalRequest } from './ApprovalDialog'
 import { AskUserDialog, AskUserRequest } from './AskUserDialog'
 import { PairingCodeDialog, PairingRequest } from './PairingCodeDialog'
-import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+import { Toast, ToastMessage, ToastType } from './Toast'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
 // Inner layout that uses useTranslation (must be inside I18nProvider)
@@ -37,6 +38,11 @@ function LayoutInner() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [needsOnboard, setNeedsOnboard] = useState(false)
   const [currentWorkspace, setCurrentWorkspace] = useState('')
+  const [toast, setToast] = useState<ToastMessage | null>(null)
+
+  const showToast = useCallback((type: ToastType, message: string) => {
+    setToast({ id: Date.now(), type, message })
+  }, [])
 
   // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
@@ -109,8 +115,8 @@ function LayoutInner() {
         }))
       }).catch(() => {})
     }
-    EventsOn('config:updated', refreshConfig)
-    return () => { EventsOff('config:updated') }
+    const off = EventsOn('config:updated', refreshConfig)
+    return () => { if (typeof off === 'function') off() }
   }, [])
 
   useEffect(() => {
@@ -158,38 +164,35 @@ function LayoutInner() {
       } catch {}
     }
     void refresh()
-    const id = window.setInterval(() => { void refresh() }, 500)
+    const id = window.setInterval(() => { void refresh() }, 2000)
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
   // Listen for approval and ask_user events from Go backend
   useEffect(() => {
-    EventsOn('approval:request', (data: any) => {
+    const offApprovalRequest = EventsOn('approval:request', (data: any) => {
       setApprovalRequest(data as ApprovalRequest)
     })
-    EventsOn('ask_user:request', (data: any) => {
+    const offAskUserRequest = EventsOn('ask_user:request', (data: any) => {
       setAskUserRequest(data as AskUserRequest)
     })
-    EventsOn('im:pairing', (data: any) => {
+    const offPairing = EventsOn('im:pairing', (data: any) => {
       setPairingRequest(data as PairingRequest)
     })
-    EventsOn('im:pairing_done', () => {
+    const offPairingDone = EventsOn('im:pairing_done', () => {
       setPairingRequest(null)
     })
     // Cancel events close any open dialogs
-    EventsOn('approval:cancel', () => {
+    const offApprovalCancel = EventsOn('approval:cancel', () => {
       setApprovalRequest(null)
     })
-    EventsOn('ask_user:cancel', () => {
+    const offAskUserCancel = EventsOn('ask_user:cancel', () => {
       setAskUserRequest(null)
     })
     return () => {
-      EventsOff('approval:request')
-      EventsOff('ask_user:request')
-      EventsOff('im:pairing')
-      EventsOff('im:pairing_done')
-      EventsOff('approval:cancel')
-      EventsOff('ask_user:cancel')
+      for (const off of [offApprovalRequest, offAskUserRequest, offPairing, offPairingDone, offApprovalCancel, offAskUserCancel]) {
+        if (typeof off === 'function') off()
+      }
     }
   }, [])
 
@@ -243,22 +246,22 @@ function LayoutInner() {
       ) : (
         <>
           {/* Global titlebar drag — spans entire width */}
-          <TopDragBar />
+          <TopDragBar subtitle={currentWorkspace ? currentWorkspace.split('/').filter(Boolean).slice(-2).join(' / ') : undefined} />
 
           {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
             {sidebarOpen && view === 'chat' && (
-              <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} />
+              <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
               {/* ChatView always mounted — hidden via display:none to preserve state */}
               <div style={{ display: view === 'chat' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minWidth: 0, overflow: 'hidden', height: 0 }}>
-                <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} />
+                <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
               </div>
-              {view === 'settings' && <SettingsPage onBack={backToChat} />}
+              {view === 'settings' && <SettingsPage onBack={backToChat} onNavigate={setView} onOpenContext={() => { setView('chat'); setContextPanelOpen(true) }} onOpenShare={() => setShareDialogOpen(true)} onOpenAbout={() => setAboutDialogOpen(true)} showToast={showToast} />}
               {view === 'debug' && <DebugConsole />}
               {view === 'im' && <IMManagement />}
               {view === 'files' && <FileBrowser onBack={backToChat} />}
@@ -289,6 +292,7 @@ function LayoutInner() {
       {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
       {pairingRequest && <PairingCodeDialog request={pairingRequest} onClose={() => setPairingRequest(null)} />}
+      <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
   )
 }

@@ -30,6 +30,10 @@ export function CompleteOnboard(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CompleteOnboard'](arg1, arg2, arg3, arg4);
 }
 
+export function CycleReasoningEffort() {
+  return window['go']['main']['App']['CycleReasoningEffort']();
+}
+
 export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }

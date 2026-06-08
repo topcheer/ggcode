@@ -163,6 +163,35 @@ func TestStripHTML(t *testing.T) {
 	}
 }
 
+func TestWebFetch_PromptIsPrependedNotExecuted(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "<html><body><h1>Hello</h1><p>World</p></body></html>")
+	}))
+	defer ts.Close()
+
+	wf := WebFetch{AllowPrivate: true}
+	input := json.RawMessage(fmt.Sprintf(`{"url": %q, "prompt": "Return only title"}`, ts.URL))
+	result, err := wf.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Prompt: Return only title") || !strings.Contains(result.Content, "Hello World") {
+		t.Fatalf("expected prompt to be prepended to raw fetched text, got %q", result.Content)
+	}
+}
+
+func TestWebToolDescriptions_ClarifyLLMResponsibilities(t *testing.T) {
+	if !strings.Contains(WebFetch{}.Description(), "does not summarize") {
+		t.Fatalf("web_fetch description should clarify prompt is not executed, got %q", WebFetch{}.Description())
+	}
+	if !strings.Contains(WebSearch{}.Description(), "not full page contents") || !strings.Contains(WebSearch{}.Description(), "web_fetch") {
+		t.Fatalf("web_search description should direct full-page reads to web_fetch, got %q", WebSearch{}.Description())
+	}
+}
+
 // --- web_search tests ---
 
 func TestWebSearch_InvalidInput(t *testing.T) {
@@ -204,6 +233,21 @@ func TestWebSearch_DDGMock(t *testing.T) {
 	}
 	if results[0].Snippet != "This domain is for use in illustrative examples" {
 		t.Errorf("unexpected snippet: %q", results[0].Snippet)
+	}
+}
+
+func TestWebSearch_DDGRedirectURLNormalization(t *testing.T) {
+	html := `<div class="result">
+<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs%3Fa%3D1%26b%3D2">Example Docs</a>
+<a class="result__snippet">Example snippet</a>
+</div>`
+
+	results := parseDDGResults(html, 1)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].URL != "https://example.com/docs?a=1&b=2" {
+		t.Fatalf("expected normalized uddg target URL, got %q", results[0].URL)
 	}
 }
 

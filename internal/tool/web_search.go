@@ -17,7 +17,7 @@ type WebSearch struct{}
 
 func (t WebSearch) Name() string { return "web_search" }
 func (t WebSearch) Description() string {
-	return "Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet."
+	return "Search the web using DuckDuckGo. Returns search result snippets, not full page contents. Use web_fetch on a selected result URL when you need the page text."
 }
 
 func (t WebSearch) Parameters() json.RawMessage {
@@ -179,7 +179,7 @@ func parseDDGResults(htmlBody string, max int) []searchResult {
 	// with <a class="result__a"> for title/link and <a class="result__snippet"> for snippet.
 	reResult := regexp.MustCompile(`(?is)<a[^>]+class="result__a"[^>]*>(.*?)</a>`)
 	reSnippet := regexp.MustCompile(`(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>`)
-	reHref := regexp.MustCompile(`href="(https?://[^"]+)"`)
+	reHref := regexp.MustCompile(`href="([^"]+)"`)
 
 	resultBlocks := regexp.MustCompile(`(?is)<div[^>]+class="result[^"]*"[^>]*>`)
 	indices := resultBlocks.FindAllStringIndex(htmlBody, max)
@@ -200,7 +200,7 @@ func parseDDGResults(htmlBody string, max int) []searchResult {
 			title = StripHTML(titleMatch[1])
 			hrefMatch := reHref.FindStringSubmatch(titleMatch[0])
 			if len(hrefMatch) > 1 {
-				resultURL = hrefMatch[1]
+				resultURL = normalizeDDGResultURL(hrefMatch[1])
 			}
 		}
 		if len(snippetMatch) > 1 {
@@ -216,4 +216,30 @@ func parseDDGResults(htmlBody string, max int) []searchResult {
 		}
 	}
 	return results
+}
+
+func normalizeDDGResultURL(raw string) string {
+	raw = strings.TrimSpace(strings.ReplaceAll(raw, "&amp;", "&"))
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		if u, err := url.Parse(raw); err == nil {
+			if uddg := u.Query().Get("uddg"); uddg != "" {
+				return uddg
+			}
+		}
+		return raw
+	}
+	if strings.HasPrefix(raw, "/") {
+		if u, err := url.Parse(raw); err == nil {
+			if uddg := u.Query().Get("uddg"); uddg != "" {
+				return uddg
+			}
+		}
+	}
+	return raw
 }

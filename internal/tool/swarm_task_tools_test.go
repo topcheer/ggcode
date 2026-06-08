@@ -55,7 +55,7 @@ func TestFormatTaskPromptEmphasizesCollaborationRules(t *testing.T) {
 		"do not re-claim it from the board first",
 		"avoid duplicate effort",
 		"one clear handoff task",
-		"Use swarm_task_complete when done",
+		"teammate runner will update the task board",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q, got %q", want, prompt)
@@ -119,6 +119,32 @@ func TestSwarmTaskListTool(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
+	}
+}
+
+func TestSwarmTaskListToolShowsOwnerForClaimedUnassignedTask(t *testing.T) {
+	mgr := swarmTestManager(t)
+	team := mgr.CreateTeam("test", "leader")
+
+	tm, err := mgr.EnsureTaskManager(team.ID)
+	if err != nil {
+		t.Fatalf("EnsureTaskManager failed: %v", err)
+	}
+	created := tm.Create("Claimed task", "", "", nil)
+	inProgress := task.StatusInProgress
+	owner := "tm-2"
+	if _, err := tm.Update(created.ID, task.UpdateOptions{Status: &inProgress, Owner: &owner}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	tool := SwarmTaskListTool{Manager: mgr}
+	input, _ := json.Marshal(map[string]string{"team_id": team.ID})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content, "Claimed task → tm-2") {
+		t.Fatalf("expected claimed task owner in list output, got %q", result.Content)
 	}
 }
 
@@ -299,5 +325,28 @@ func TestSwarmTaskCreateTool_NoAssigneeNotifiesIdleRunners(t *testing.T) {
 	// Verify the task was created (no panic from NotifyIdleRunners)
 	if !strings.Contains(result.Content, "Unassigned task") {
 		t.Errorf("result should contain task subject, got: %s", result.Content)
+	}
+}
+
+func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
+	createDesc := SwarmTaskCreateTool{}.Description()
+	for _, want := range []string{"directly to that teammate's inbox", "do not also call swarm_task_claim", "idle teammates are notified"} {
+		if !strings.Contains(createDesc, want) {
+			t.Fatalf("swarm_task_create description should mention %q, got %q", want, createDesc)
+		}
+	}
+	createParams := string(SwarmTaskCreateTool{}.Parameters())
+	if !strings.Contains(createParams, "direct-delivered") || !strings.Contains(createParams, "do not also call swarm_task_claim") {
+		t.Fatalf("swarm_task_create assignee schema should warn about direct delivery: %s", createParams)
+	}
+
+	claimDesc := SwarmTaskClaimTool{}.Description()
+	if !strings.Contains(claimDesc, "unassigned pending task") || !strings.Contains(claimDesc, "Do not call this for tasks that were created with an assignee") {
+		t.Fatalf("swarm_task_claim description should clarify assigned-task flow, got %q", claimDesc)
+	}
+
+	completeDesc := SwarmTaskCompleteTool{}.Description()
+	if !strings.Contains(completeDesc, "updates board state only") || !strings.Contains(completeDesc, "teammate_results") {
+		t.Fatalf("swarm_task_complete description should clarify board/output separation, got %q", completeDesc)
 	}
 }

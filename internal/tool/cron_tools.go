@@ -20,7 +20,7 @@ func (t CronCreateTool) Name() string { return "cron_create" }
 func (t CronCreateTool) Description() string {
 	return "Create a scheduled job that enqueues a prompt at specified intervals. " +
 		"Use cron format (e.g. '*/5 * * * *' for every 5 minutes). " +
-		"Set recurring=false for one-shot reminders."
+		"Set recurring=false for one-shot reminders. Only recurring jobs are persisted across restarts; one-shot reminders are in-memory and will be lost if the process exits before they fire."
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -36,11 +36,11 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		},
 		"recurring": {
 			"type": "boolean",
-			"description": "Whether to repeat (default true)"
+			"description": "Whether to repeat (default true). Only recurring jobs are persisted across restarts; one-shot reminders (recurring=false) are in-memory only."
 		},
 		"durable": {
 			"type": "boolean",
-			"description": "Whether to persist across sessions (default false, V1 ignores this)"
+			"description": "Whether to persist across sessions (default false, V1 ignores this). Persistence is controlled by recurring=true; recurring=false jobs are never persisted."
 		},
 		"description": {
 			"type": "string",
@@ -124,7 +124,11 @@ func (t CronDeleteTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
-	if !t.Scheduler.Delete(args.JobID) {
+	deleted, err := t.Scheduler.DeleteWithError(args.JobID)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("delete job %q: %v", args.JobID, err)}, nil
+	}
+	if !deleted {
 		return Result{IsError: true, Content: fmt.Sprintf("job %q not found", args.JobID)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Job %s deleted\n", args.JobID)}, nil

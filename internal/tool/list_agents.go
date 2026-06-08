@@ -20,7 +20,7 @@ type ListAgentsTool struct {
 func (t ListAgentsTool) Name() string { return "list_agents" }
 
 func (t ListAgentsTool) Description() string {
-	return "List all spawned agent runs and their current status."
+	return "List all spawned one-shot agent runs and their current status. Completed runs remain visible for review; use wait_agent to retrieve a specific run's result or progress snapshot."
 }
 
 func (t ListAgentsTool) Parameters() json.RawMessage {

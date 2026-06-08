@@ -33,7 +33,7 @@ type WebFetch struct {
 
 func (t WebFetch) Name() string { return "web_fetch" }
 func (t WebFetch) Description() string {
-	return "Fetch a URL and return its text content. Strips HTML tags and truncates to 50000 characters."
+	return "Fetch a URL and return its text content. Strips HTML tags and truncates to 50000 characters. The optional prompt is prepended to the fetched content for the LLM to use; this tool does not summarize or transform the page by itself. For interactive or login-required pages, use browser automation instead."
 }
 
 func (t WebFetch) Parameters() json.RawMessage {
@@ -46,7 +46,7 @@ func (t WebFetch) Parameters() json.RawMessage {
 		},
 		"prompt": {
 			"type": "string",
-			"description": "A prompt to apply to the fetched content for extraction or analysis"
+			"description": "Optional instruction prepended to the fetched text for the LLM. The tool itself does not execute this prompt or summarize the page."
 		},
 		"description": {
 			"type": "string",

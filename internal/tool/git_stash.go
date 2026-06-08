@@ -13,7 +13,7 @@ type GitStash struct{ WorkingDir string }
 func (t GitStash) Name() string { return "git_stash" }
 
 func (t GitStash) Description() string {
-	return "Manage git stash entries. Supports push, pop, apply, and drop actions."
+	return "Manage git stash entries. Supports push, pop, apply, and drop actions. Inspect git status/stash list first when possible; pop and drop are destructive because they remove stash entries."
 }
 
 func (t GitStash) Parameters() json.RawMessage {
@@ -26,7 +26,7 @@ func (t GitStash) Parameters() json.RawMessage {
 		},
 		"action": {
 			"type": "string",
-			"description": "Stash action: push, pop, apply, drop (default: push)",
+			"description": "Stash action: push, pop, apply, drop (default: push). pop applies and removes an entry; drop removes an entry without applying.",
 			"enum": [
 				"push",
 				"pop",
@@ -40,7 +40,7 @@ func (t GitStash) Parameters() json.RawMessage {
 		},
 		"index": {
 			"type": "integer",
-			"description": "Stash index for pop/apply/drop (default: 0, meaning latest)"
+			"description": "Stash index for pop/apply/drop (default: 0, meaning latest). Confirm the desired entry with git_stash_list before pop/drop."
 		},
 		"description": {
 			"type": "string",

@@ -30,7 +30,7 @@ type EnterPlanModeTool struct {
 
 func (t EnterPlanModeTool) Name() string { return "enter_plan_mode" }
 func (t EnterPlanModeTool) Description() string {
-	return "Switch into plan mode. In plan mode, only read-only tools (read_file, search_files, grep, glob, list_directory) are available. " +
+	return "Switch into plan mode. In plan mode, read-only exploration tools are allowed, including file/search tools (read_file, multi_file_read, list_directory, search_files, glob, grep), LSP lookup tools, read-only git inspection, web_fetch/web_search, task_list/task_get, cron_list, and command-output polling (list_commands, read_command_output, wait_command). Writes and shell execution are denied. " +
 		"Explore the codebase and design an approach, then call exit_plan_mode to present the plan for approval. " +
 		"Prefer this for non-trivial implementation tasks to get user alignment before writing code."
 }
