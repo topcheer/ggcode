@@ -1514,6 +1514,9 @@ func (b *ChatBridge) recordMetric(ev interface{}) {
 		me.Model = b.currentSes.Model
 		me.Vendor = b.currentSes.Vendor
 		me.Endpoint = b.currentSes.Endpoint
+		// Persist to session so TUI/sidebar can use the data.
+		b.currentSes.Metrics = append(b.currentSes.Metrics, me)
+		b.currentSes.AppendMetricForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, me)
 	}
 	b.metricEvents = append(b.metricEvents, me)
 }
