@@ -65,6 +65,7 @@ type ChatBridge struct {
 	metricEvents         []metrics.MetricEvent
 	usageTurnIndex       int
 	lastMetricDigestTurn int
+	pendingDigests       []provider.Message
 
 	// UI event emitter — set by app.go via SetEmitEvent
 	EmitEvent func(name string, payload ...interface{})
@@ -346,6 +347,8 @@ func (b *ChatBridge) ClearCurrentSession() {
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = nil
+	b.metricEvents = nil
+	b.pendingDigests = nil
 	if b.tunnelHost != nil {
 		b.tunnelHost.ResetStreamState()
 	}
@@ -369,6 +372,8 @@ func (b *ChatBridge) LoadSession(id string) error {
 	b.currentSes = state.Session
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.metricEvents = nil
+	b.pendingDigests = nil
 	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
 	b.mu.Unlock()
 	if err := b.InitAgent(context.Background()); err != nil {
@@ -417,12 +422,18 @@ func (b *ChatBridge) saveSession() {
 	ses := b.currentSes
 	store := b.sessionStore
 	agent := b.agent
+	digests := b.pendingDigests
+	b.pendingDigests = nil
 	b.mu.Unlock()
 	if agent != nil {
-		_ = agentruntime.SaveAgentSessionSnapshot(store, ses, agent)
+		_ = agentruntime.SaveAgentSessionSnapshotWithExtra(store, ses, agent, digests)
 		return
 	}
-	_ = agentruntime.SaveSessionMessages(store, ses, ses.Messages)
+	msgs := ses.Messages
+	if len(digests) > 0 {
+		msgs = append(msgs, digests...)
+	}
+	_ = agentruntime.SaveSessionMessages(store, ses, msgs)
 }
 
 // CurrentSessionID returns the current session ID.
@@ -862,6 +873,10 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			eventType = "done"
 			data = semantic.UsageData
 			b.resetTunnelRoundState()
+			// Flush pending metrics before generating the digest.
+			if b.metricCollector != nil {
+				b.metricCollector.Flush()
+			}
 			// Emit turn metrics digest as a system message.
 			b.emitTurnDigest()
 		case provider.StreamEventError:
@@ -1543,16 +1558,11 @@ func (b *ChatBridge) emitTurnDigest() {
 		Role:    "system",
 		Content: text,
 	})
-	// Persist to session so it survives reload.
-	if b.currentSes != nil {
-		b.currentSes.Messages = append(b.currentSes.Messages, provider.Message{
-			Role: "system", Content: []provider.ContentBlock{provider.TextBlock(text)},
-		})
-		b.currentSes.UpdatedAt = time.Now()
-		if b.sessionStore != nil {
-			_ = b.sessionStore.Save(b.currentSes)
-		}
-	}
+	// Stage digest for the next saveSession() — do NOT write to
+	// currentSes.Messages directly, as saveSession() replaces them
+	// with agent.Messages().
+	digestMsg := provider.Message{Role: "system", Content: []provider.ContentBlock{provider.TextBlock(text)}}
+	b.pendingDigests = append(b.pendingDigests, digestMsg)
 	b.mu.Unlock()
 
 	// Push to frontend via event stream.

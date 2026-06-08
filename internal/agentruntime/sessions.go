@@ -94,6 +94,16 @@ func SaveAgentSessionSnapshot(store session.Store, ses *session.Session, agentIn
 	return SaveSessionMessages(store, ses, agentInst.Messages())
 }
 
+// SaveAgentSessionSnapshotWithExtra appends extra messages (e.g. turn
+// digests) after the agent snapshot so they survive reload.
+func SaveAgentSessionSnapshotWithExtra(store session.Store, ses *session.Session, agentInst *agent.Agent, extra []provider.Message) error {
+	msgs := agentInst.Messages()
+	if len(extra) > 0 {
+		msgs = append(msgs, extra...)
+	}
+	return SaveSessionMessages(store, ses, msgs)
+}
+
 func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if agentInst == nil || ses == nil {
 		return
