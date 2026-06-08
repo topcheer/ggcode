@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -12,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type questionnaireState struct {
@@ -371,7 +371,12 @@ func (qs *questionnaireState) saveActiveQuestionInput() {
 	if idx < 0 {
 		return
 	}
-	qs.answers[idx].freeform = qs.input.Value()
+	// Only save TUI input value if the user actually typed something locally.
+	// Do not overwrite a value set by a remote answer (IM/tunnel).
+	inputVal := strings.TrimSpace(qs.input.Value())
+	if inputVal != "" {
+		qs.answers[idx].freeform = inputVal
+	}
 }
 
 func (qs *questionnaireState) buildResponse(status string) toolpkg.AskUserResponse {
