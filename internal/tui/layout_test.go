@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -49,6 +50,25 @@ func newTestModel() Model {
 	m.inputReady = true
 	m.sidebarVisible = true
 	return m
+}
+
+func TestAppendUserMessageTitleKeepsUTF8Valid(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	m := newTestModel()
+	m.sessionStore = store
+	m.session = &session.Session{ID: "test-session", Title: "New session", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+
+	m.appendUserMessage("定位 TUI 面板和主输入框粘贴处理中文截断问题定位 TUI 面板和主输入框粘贴处理中文截断问题")
+
+	if !utf8.ValidString(m.session.Title) {
+		t.Fatalf("expected valid UTF-8 title, got %q", m.session.Title)
+	}
+	if strings.ContainsRune(m.session.Title, utf8.RuneError) {
+		t.Fatalf("expected no replacement rune in title, got %q", m.session.Title)
+	}
 }
 
 // renderedOutput returns the conversation content from whichever path is active.

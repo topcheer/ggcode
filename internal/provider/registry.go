@@ -26,6 +26,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	case "openai":
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
+		p.SetReasoningEffort(resolved.ReasoningEffort)
 		return p, nil
 
 	case "copilot":

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -261,6 +262,47 @@ func TestRetryWithBackoffCtxHonorsRetryAfter(t *testing.T) {
 	}
 	if len(slept) != 2 || slept[0] != 2*time.Second || slept[1] != 2*time.Second {
 		t.Fatalf("expected retry-after sleeps [2s 2s], got %+v", slept)
+	}
+}
+
+func TestOpenAIReasoningEffortRetriesWithoutUnsupportedParam(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		if len(bodies) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unknown parameter: reasoning_effort","type":"invalid_request_error","param":"reasoning_effort","code":"unknown_parameter"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","created":0,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProviderWithBaseURL("test-key", "test-model", 1024, server.URL+"/v1")
+	p.SetReasoningEffort("high")
+	resp, err := p.Chat(context.Background(), []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}}}, nil)
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if resp == nil || len(resp.Message.Content) != 1 || resp.Message.Content[0].Text != "ok" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected fallback retry, got %d requests", len(bodies))
+	}
+	if bodies[0]["reasoning_effort"] != "high" {
+		t.Fatalf("expected first request reasoning_effort=high, got %#v", bodies[0]["reasoning_effort"])
+	}
+	if _, ok := bodies[1]["reasoning_effort"]; ok {
+		t.Fatalf("expected fallback request to omit reasoning_effort, got %#v", bodies[1]["reasoning_effort"])
+	}
+	if got := p.ReasoningEffort(); got != "" {
+		t.Fatalf("expected unsupported reasoning_effort to switch to auto, got %q", got)
 	}
 }
 

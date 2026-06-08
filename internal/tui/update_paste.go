@@ -57,6 +57,10 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		m.harnessPanel.actionInput, cmd = m.harnessPanel.actionInput.Update(msg)
 		return m, cmd
 	}
+	if m.mcpPanel != nil && m.mcpPanel.installMode {
+		m.mcpPanel.installInput += msg.Content
+		return m, nil
+	}
 	// Forward paste to IM panel create-input fields (manual string inputs).
 	if m.qqPanel != nil && m.qqPanel.createMode {
 		m.qqPanel.createInput += msg.Content
@@ -142,6 +146,10 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 	}
 	if m.dingtalkPanel != nil && m.dingtalkPanel.editState.mode == imEditInput {
 		m.dingtalkPanel.editState.editInput += msg.Content
+		return m, nil
+	}
+	if m.wechatPanel != nil && m.wechatPanel.editState.mode == imEditInput {
+		m.wechatPanel.editState.editInput += msg.Content
 		return m, nil
 	}
 	if m.wecomPanel != nil && m.wecomPanel.editState.mode == imEditInput {

@@ -91,7 +91,7 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	return Result{
-		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). All subsequent tool calls will use this directory.", worktreePath, branchName),
+		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName),
 		SuggestedWorkingDir: worktreePath,
 	}, nil
 }

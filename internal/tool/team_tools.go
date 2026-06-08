@@ -123,8 +123,7 @@ type TeammateSpawnTool struct {
 
 func (t TeammateSpawnTool) Name() string { return "teammate_spawn" }
 func (t TeammateSpawnTool) Description() string {
-	return "Spawn a teammate (worker agent) in a team. The teammate enters an idle loop, waiting for tasks via messages. " +
-		"Use send_message to assign work. Returns teammate info."
+	return "Spawn a teammate (worker agent) in a team. The teammate enters a persistent idle loop that consumes inbox messages and pending board tasks. Prefer swarm_task_create for tracked assignments; use send_message only for untracked follow-ups or lightweight task-like messages. Returns teammate info."
 }
 func (t TeammateSpawnTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -317,11 +316,9 @@ type TeammateResultsTool struct {
 
 func (t TeammateResultsTool) Name() string { return "teammate_results" }
 func (t TeammateResultsTool) Description() string {
-	return "Collect task results from teammates in a team. " +
-		"Returns the most recent output from each teammate that has completed a task. " +
-		"Use this after send_message to check if a teammate has finished and retrieve its output. " +
-		"If no result is available yet, the teammate may still be working — try again later. " +
-		"Optionally specify teammate_id to get a specific teammate's result."
+	return "Collect teammate outputs for a team. Returns each teammate's latest completed output only; results are not a queue, are not cleared after reading, and later work overwrites the previous result. " +
+		"Use this after send_message or swarm_task_create to check whether teammate work has produced output. If no result is available yet, the teammate may still be working — try again later. " +
+		"Use swarm_task_list for tracked board status and teammate_list for current idle/working state. Optionally specify teammate_id to get one teammate's latest result."
 }
 func (t TeammateResultsTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -333,7 +330,7 @@ func (t TeammateResultsTool) Parameters() json.RawMessage {
 		},
 		"teammate_id": {
 			"type": "string",
-			"description": "Optional: get result for a specific teammate only"
+			"description": "Optional: get only this teammate's latest completed output. This is not a history queue and is not cleared after reading."
 		},
 		"description": {
 			"type": "string",

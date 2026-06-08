@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -152,16 +153,20 @@ func (s *Scheduler) Load(workspaceDir string) {
 
 // save persists all recurring jobs for the current workspace to the store file.
 // It preserves other workspaces' data unchanged.
-func (s *Scheduler) save() {
+func (s *Scheduler) save() error {
 	if s.storePath == "" {
-		return
+		return nil
 	}
 
 	// Read existing file (other workspaces' data).
 	var sf storeFile
 	data, err := os.ReadFile(s.storePath)
 	if err == nil {
-		_ = json.Unmarshal(data, &sf)
+		if err := json.Unmarshal(data, &sf); err != nil {
+			return fmt.Errorf("parse cron store %s: %w", s.storePath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read cron store %s: %w", s.storePath, err)
 	}
 	if sf == nil {
 		sf = make(storeFile)
@@ -197,11 +202,16 @@ func (s *Scheduler) save() {
 	// Write back.
 	out, err := json.MarshalIndent(sf, "", "  ")
 	if err != nil {
-		return
+		return fmt.Errorf("encode cron store: %w", err)
 	}
 	dir := filepath.Dir(s.storePath)
-	_ = os.MkdirAll(dir, 0755)
-	_ = os.WriteFile(s.storePath, out, 0644)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create cron store dir %s: %w", dir, err)
+	}
+	if err := os.WriteFile(s.storePath, out, 0644); err != nil {
+		return fmt.Errorf("write cron store %s: %w", s.storePath, err)
+	}
+	return nil
 }
 
 // Create adds a new scheduled job and returns its snapshot.
@@ -232,27 +242,52 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool) (Job, error)
 	s.mu.Unlock()
 
 	s.scheduleJob(job)
-	s.save()
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		if timer, ok := s.timers[id]; ok {
+			timer.Stop()
+			delete(s.timers, id)
+		}
+		delete(s.jobs, id)
+		s.mu.Unlock()
+		return Job{}, err
+	}
 
 	return job.Snapshot(), nil
 }
 
 // Delete removes a scheduled job by ID.
 func (s *Scheduler) Delete(id string) bool {
+	deleted, err := s.DeleteWithError(id)
+	return deleted && err == nil
+}
+
+// DeleteWithError removes a scheduled job by ID and reports persistence errors.
+func (s *Scheduler) DeleteWithError(id string) (bool, error) {
 	s.mu.Lock()
-	if _, ok := s.jobs[id]; !ok {
+	job, ok := s.jobs[id]
+	if !ok {
 		s.mu.Unlock()
-		return false
+		return false, nil
 	}
-	if timer, ok := s.timers[id]; ok {
+	timer, hadTimer := s.timers[id]
+	if hadTimer {
 		timer.Stop()
 		delete(s.timers, id)
 	}
 	delete(s.jobs, id)
 	s.mu.Unlock()
 
-	s.save()
-	return true
+	if err := s.save(); err != nil {
+		s.mu.Lock()
+		s.jobs[id] = job
+		if hadTimer {
+			s.scheduleJobLocked(job)
+		}
+		s.mu.Unlock()
+		return true, err
+	}
+	return true, nil
 }
 
 // List returns snapshots of all jobs.
@@ -305,7 +340,9 @@ func (s *Scheduler) scheduleJob(job *Job) {
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
-				s.save()
+				if err := s.save(); err != nil {
+					log.Printf("[cron] failed to persist removal of broken job %s: %v", job.ID, err)
+				}
 				return
 			}
 			job.NextFire = next
@@ -343,7 +380,9 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
-				s.save()
+				if err := s.save(); err != nil {
+					log.Printf("[cron] failed to persist removal of broken job %s: %v", job.ID, err)
+				}
 				return
 			}
 			job.NextFire = next

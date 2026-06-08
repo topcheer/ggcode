@@ -106,6 +106,35 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 		cmd.Dir = m.workingDir
 	}
 
+	_, snapshot, err := m.startExisting(jobCtx, command, timeout, cancel, cmd)
+	return snapshot, err
+}
+
+// StartExisting starts an already-configured command as a managed background job.
+// The manager owns the command after this call and is the only code that waits
+// on it. The caller must not call Wait or cancel the command context after a
+// successful start; use Stop/Wait helpers on the returned job instead.
+func (m *CommandJobManager) StartExisting(ctx context.Context, cmd *exec.Cmd, command string, timeout time.Duration, cancel context.CancelFunc) (*CommandJob, *CommandJobSnapshot, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return nil, nil, fmt.Errorf("command is required")
+	}
+	if cmd == nil {
+		return nil, nil, fmt.Errorf("command is required")
+	}
+	if timeout <= 0 {
+		timeout = defaultCommandTimeout
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cancel == nil {
+		cancel = func() {}
+	}
+	return m.startExisting(ctx, command, timeout, cancel, cmd)
+}
+
+func (m *CommandJobManager) startExisting(ctx context.Context, command string, timeout time.Duration, cancel context.CancelFunc, cmd *exec.Cmd) (*CommandJob, *CommandJobSnapshot, error) {
 	job := m.newJob(command, timeout, cancel)
 	writer := &commandJobWriter{job: job}
 	cmd.Stdout = writer
@@ -115,7 +144,7 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to open command stdin: %v", err))
 		snapshot := m.snapshot(job)
-		return &snapshot, nil
+		return job, &snapshot, nil
 	}
 	job.stdin = stdin
 
@@ -124,12 +153,12 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to start command: %v", err))
 		snapshot := m.snapshot(job)
-		return &snapshot, nil
+		return job, &snapshot, nil
 	}
 
-	safego.Go("tool.commandJob.wait", func() { m.waitForJob(jobCtx, cmd, job) })
+	safego.Go("tool.commandJob.wait", func() { m.waitForJob(ctx, cmd, job) })
 	snapshot := m.snapshot(job)
-	return &snapshot, nil
+	return job, &snapshot, nil
 }
 
 func (m *CommandJobManager) List() []CommandJobSnapshot {
@@ -210,45 +239,6 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	return m.snapshot(job), nil
 }
 
-// AutoBackground adopts an already-running command process into a background
-// job. The caller loses ownership of cmd — the job manager will Wait for it
-// and capture output. initialStdout/initialStderr is output already captured
-// before the migration.
-func (m *CommandJobManager) AutoBackground(cmd *exec.Cmd, command string, initialStdout, initialStderr string) string {
-	ctx := context.Background()
-	cancel := func() {
-		configureCommandCancellation(cmd)
-		_ = cmd.Process.Kill()
-	}
-
-	job := m.newJob(command, defaultCommandTimeout, cancel)
-
-	// Seed the job with output already captured.
-	if initialStdout != "" {
-		job.appendOutput(initialStdout)
-	}
-	if initialStderr != "" {
-		job.appendOutput(initialStderr)
-	}
-
-	safego.Go("tool.commandJob.autoBackgroundWait", func() { m.waitForAutoBackgroundedJob(ctx, cmd, job) })
-	return job.ID
-}
-
-func (m *CommandJobManager) waitForAutoBackgroundedJob(ctx context.Context, cmd *exec.Cmd, job *CommandJob) {
-	defer close(job.done)
-	err := cmd.Wait()
-	if ctx.Err() != nil {
-		job.finish(CommandJobCancelled, "context canceled")
-		return
-	}
-	if err != nil {
-		job.finish(CommandJobFailed, err.Error())
-		return
-	}
-	job.finish(CommandJobCompleted, "")
-}
-
 func (m *CommandJobManager) newJob(command string, timeout time.Duration, cancel context.CancelFunc) *CommandJob {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -293,6 +283,12 @@ func (m *CommandJobManager) get(id string) (*CommandJob, error) {
 		return nil, fmt.Errorf("command job %q not found", id)
 	}
 	return job, nil
+}
+
+func (m *CommandJobManager) forget(id string) {
+	m.mu.Lock()
+	delete(m.jobs, id)
+	m.mu.Unlock()
 }
 
 func (m *CommandJobManager) snapshot(job *CommandJob) CommandJobSnapshot {

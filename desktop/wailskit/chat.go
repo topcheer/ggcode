@@ -33,6 +33,25 @@ import (
 	"github.com/topcheer/ggcode/internal/uiusage"
 )
 
+func displayReasoningEffort(effort string) string {
+	if strings.TrimSpace(effort) == "" {
+		return "auto"
+	}
+	return strings.TrimSpace(effort)
+}
+
+var reasoningEffortCycle = []string{"", "low", "medium", "high"}
+
+func nextReasoningEffort(current string) string {
+	current = strings.ToLower(strings.TrimSpace(current))
+	for i, effort := range reasoningEffortCycle {
+		if current == effort {
+			return reasoningEffortCycle[(i+1)%len(reasoningEffortCycle)]
+		}
+	}
+	return reasoningEffortCycle[1]
+}
+
 // ChatBridge manages the full agent chat loop for the Wails frontend,
 // mirroring the Fyne desktop's AgentBridge tool registration and session management.
 type ChatBridge struct {
@@ -1051,6 +1070,7 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 			"model":        b.cfg.Model,
 			"mode":         b.GetPermissionMode(),
 			"contextTotal": 0,
+			"effort":       displayReasoningEffort(b.ReasoningEffort()),
 		}
 	}
 	payload := map[string]interface{}{
@@ -1059,6 +1079,7 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 		"contextWindow": resolved.ContextWindow,
 		"contextTotal":  resolved.ContextWindow,
 		"mode":          b.GetPermissionMode(),
+		"effort":        displayReasoningEffort(b.ReasoningEffort()),
 	}
 	for key, value := range b.currentUsagePayload() {
 		payload[key] = value
@@ -1820,6 +1841,31 @@ func (b *ChatBridge) ResetAgent() {
 	b.metricCollector = nil
 	b.metricCancel = nil
 	b.mu.Unlock()
+}
+
+func (b *ChatBridge) ReasoningEffort() string {
+	b.mu.Lock()
+	a := b.agent
+	b.mu.Unlock()
+	if a == nil {
+		return ""
+	}
+	return a.ReasoningEffort()
+}
+
+func (b *ChatBridge) CycleReasoningEffort() (string, bool) {
+	b.mu.Lock()
+	a := b.agent
+	b.mu.Unlock()
+	if a == nil {
+		return "", false
+	}
+	current := a.ReasoningEffort()
+	next := nextReasoningEffort(current)
+	if !a.SetReasoningEffort(next) {
+		return displayReasoningEffort(current), false
+	}
+	return displayReasoningEffort(next), true
 }
 
 // SwitchModel hot-swaps the model at runtime (mirrors Fyne SwitchModel).

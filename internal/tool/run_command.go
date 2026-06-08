@@ -135,7 +135,7 @@ func firstShellWord(cmd string) string {
 func (t RunCommand) Name() string { return "run_command" }
 
 func (t RunCommand) Description() string {
-	return "Execute a shell command and return stdout/stderr. Has a 30-minute timeout by default."
+	return "Execute a shell command. Quick commands return stdout/stderr. Long-running commands may be automatically moved to a background job; use read_command_output, wait_command, or stop_command with the returned job ID. Has a 30-minute timeout by default."
 }
 
 func (t RunCommand) Parameters() json.RawMessage {
@@ -145,10 +145,6 @@ func (t RunCommand) Parameters() json.RawMessage {
 		"command": {
 			"type": "string",
 			"description": "Shell command to execute. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Run tests' or '# Install dependencies'). This comment is shown as the activity label in the UI."
-		},
-		"working_dir": {
-			"type": "string",
-			"description": "Working directory for the command (default: current directory)"
 		},
 		"timeout": {
 			"type": "integer",
@@ -226,10 +222,18 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.Timeout = int(defaultCommandTimeout / time.Second)
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
-	defer cancel()
+	var cmdCtx context.Context
+	var cancel context.CancelFunc
+	if t.JobManager != nil {
+		// Managed background jobs outlive this tool call, so their context must
+		// not derive from the request context or be deferred here.
+		cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
+	} else {
+		cmdCtx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
+		defer cancel()
+	}
 
-	cmd, _, err := util.NewShellCommandContext(timeoutCtx, args.Command)
+	cmd, _, err := util.NewShellCommandContext(cmdCtx, args.Command)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
 	}
@@ -246,7 +250,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Inject Co-Authored-By trailer for git commit commands
 	if isGitCommitCommand(args.Command) {
 		args.Command = injectCoAuthorTrailer(args.Command)
-		cmd, _, _ = util.NewShellCommandContext(timeoutCtx, args.Command)
+		cmd, _, _ = util.NewShellCommandContext(cmdCtx, args.Command)
 		configureCommandCancellation(cmd)
 		if t.WorkingDir != "" {
 			cmd.Dir = t.WorkingDir
@@ -278,7 +282,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if isDevServerCommand(args.Command) {
 			delay = autoBackgroundDelay
 		}
-		return t.executeWithAutoBackground(timeoutCtx, cmd, args.Command, &stdout, &stderr, delay)
+		return t.executeWithAutoBackground(cmdCtx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay)
 	}
 
 	err = cmd.Run()
@@ -317,73 +321,67 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return Result{Content: sb.String()}, nil
 }
 
-// executeWithAutoBackground starts a command and races between command
-// completion and the given delay. If the command finishes quickly,
-// its output is returned directly. If it runs longer than the delay, it is
-// automatically converted to a background job and the job ID is returned.
-func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd, command string, stdout, stderr *bytes.Buffer, delay time.Duration) (Result, error) {
-	if err := cmd.Start(); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to start command: %v", err)}, nil
+// executeWithAutoBackground starts a command as a managed job and waits up to
+// the given delay. If the command finishes quickly, its output is returned
+// directly. If it runs longer than the delay, the already-managed job ID is
+// returned. The job manager owns the process and performs the only Wait call.
+func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration) (Result, error) {
+	if t.JobManager == nil {
+		return Result{IsError: true, Content: "command job manager not available"}, nil
+	}
+	job, snapshot, err := t.JobManager.StartExisting(ctx, cmd, command, timeout, cancel)
+	if err != nil {
+		cancel()
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	if snapshot != nil && snapshot.Status == CommandJobFailed {
+		t.JobManager.forget(snapshot.ID)
+		return Result{IsError: true, Content: snapshot.ErrText}, nil
+	}
+	if job == nil || snapshot == nil {
+		cancel()
+		return Result{IsError: true, Content: "failed to start command job"}, nil
 	}
 
-	done := make(chan error, 1)
-	safego.Go("tool.runCommand.autoBackgroundWait", func() {
-		done <- cmd.Wait()
-	})
-
-	select {
-	case err := <-done:
-		// Command completed within the delay — return output directly.
-		output := stdout.String()
-		errOutput := stderr.String()
-		var sb strings.Builder
-		if output != "" {
-			sb.WriteString(output)
-		}
-		if errOutput != "" {
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString("STDERR:\n")
-			sb.WriteString(errOutput)
-		}
-		if err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)}, nil
-		}
-		if sb.Len() == 0 {
-			return Result{Content: "Command completed with no output."}, nil
-		}
-		return Result{Content: sb.String()}, nil
-
-	case <-time.After(delay):
-		// Command is still running — auto-background it.
-		if t.JobManager == nil {
-			// No job manager available; wait for completion (old behavior).
-			err := <-done
-			output := stdout.String()
-			errOutput := stderr.String()
-			var sb strings.Builder
-			sb.WriteString(output)
-			if errOutput != "" {
-				if sb.Len() > 0 {
-					sb.WriteString("\n")
-				}
-				sb.WriteString("STDERR:\n")
-				sb.WriteString(errOutput)
-			}
-			if err != nil {
-				return Result{IsError: true, Content: fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)}, nil
-			}
-			return Result{Content: sb.String()}, nil
-		}
-
-		// Migrate the running process into a background job.
-		jobID := t.JobManager.AutoBackground(cmd, command, stdout.String(), stderr.String())
+	if err := waitForCommandJob(context.Background(), job, delay); err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	snap := t.JobManager.snapshot(job)
+	snapshot = &snap
+	if snapshot.Status == CommandJobRunning {
 		return Result{Content: fmt.Sprintf(
 			"Command is still running after %v. Automatically moved to background (job %s).\nUse `read_command_output` to check progress or `stop_command` to stop it.",
-			delay, jobID,
+			delay, snapshot.ID,
 		)}, nil
 	}
+
+	content := commandSnapshotOutput(*snapshot)
+	if snapshot.Status == CommandJobFailed || snapshot.Status == CommandJobCancelled || snapshot.Status == CommandJobTimedOut {
+		t.JobManager.forget(snapshot.ID)
+		return Result{IsError: true, Content: content}, nil
+	}
+	t.JobManager.forget(snapshot.ID)
+	return Result{Content: content}, nil
+}
+
+func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
+	var sb strings.Builder
+	for _, line := range snapshot.Lines {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(line)
+	}
+	if snapshot.ErrText != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(snapshot.ErrText)
+	}
+	if sb.Len() == 0 {
+		return "Command completed with no output."
+	}
+	return sb.String()
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.

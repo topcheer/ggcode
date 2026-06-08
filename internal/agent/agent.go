@@ -260,6 +260,27 @@ func (a *Agent) Provider() provider.Provider {
 	return a.provider
 }
 
+func (a *Agent) SetReasoningEffort(effort string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.provider.(provider.ReasoningEffortProvider)
+	if !ok {
+		return false
+	}
+	p.SetReasoningEffort(effort)
+	return true
+}
+
+func (a *Agent) ReasoningEffort() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p, ok := a.provider.(provider.ReasoningEffortProvider)
+	if !ok {
+		return ""
+	}
+	return p.ReasoningEffort()
+}
+
 // ToolRegistry returns the tool registry used by this agent.
 func (a *Agent) ToolRegistry() *tool.Registry {
 	a.mu.RLock()

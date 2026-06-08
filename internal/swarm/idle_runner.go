@@ -282,7 +282,7 @@ func buildTaskPrompt(tk task.Task) string {
 	for k, v := range tk.Metadata {
 		sb.WriteString(fmt.Sprintf("%s: %s\n", k, v))
 	}
-	sb.WriteString("\nComplete this task now. Use swarm_task_complete when done.")
+	sb.WriteString("\nComplete this task now and return the final result. The teammate runner will update the task board when you finish.")
 	return sb.String()
 }
 

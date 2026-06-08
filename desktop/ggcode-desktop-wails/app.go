@@ -331,6 +331,14 @@ func (a *App) GetModelInfo() map[string]interface{} {
 	return a.chat.GetModelInfo()
 }
 
+func (a *App) CycleReasoningEffort() (map[string]interface{}, error) {
+	if a.chat == nil {
+		return map[string]interface{}{"effort": "auto", "supported": false}, nil
+	}
+	effort, supported := a.chat.CycleReasoningEffort()
+	return map[string]interface{}{"effort": effort, "supported": supported}, nil
+}
+
 // IsWorking reports whether the agent loop is currently running.
 func (a *App) IsWorking() bool {
 	if a.chat == nil {

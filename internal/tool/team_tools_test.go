@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -213,5 +214,25 @@ func TestTeammateShutdownTool_NotFound(t *testing.T) {
 	result, _ := tool.Execute(context.Background(), input)
 	if !result.IsError {
 		t.Error("expected error for nonexistent teammate")
+	}
+}
+
+func TestTeamToolDescriptionsClarifyTeammateLifecycleAndResults(t *testing.T) {
+	spawnDesc := TeammateSpawnTool{}.Description()
+	for _, want := range []string{"persistent idle loop", "swarm_task_create", "send_message only for untracked"} {
+		if !strings.Contains(spawnDesc, want) {
+			t.Fatalf("teammate_spawn description should mention %q, got %q", want, spawnDesc)
+		}
+	}
+
+	resultsDesc := TeammateResultsTool{}.Description()
+	for _, want := range []string{"latest completed output only", "not a queue", "not cleared after reading", "swarm_task_list", "teammate_list"} {
+		if !strings.Contains(resultsDesc, want) {
+			t.Fatalf("teammate_results description should mention %q, got %q", want, resultsDesc)
+		}
+	}
+	params := string(TeammateResultsTool{}.Parameters())
+	if !strings.Contains(params, "not a history queue") || !strings.Contains(params, "not cleared after reading") {
+		t.Fatalf("teammate_results teammate_id schema should clarify latest-result semantics: %s", params)
 	}
 }

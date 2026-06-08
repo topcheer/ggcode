@@ -9,6 +9,7 @@ interface Props {
   onShare?: () => void
   activeSessionId?: string
   workspace?: string
+  showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
 interface SessionItem {
@@ -33,7 +34,7 @@ function relativeTime(dateStr: string, t: (key: any, params?: Record<string, str
   return d.toLocaleDateString()
 }
 
-export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace }: Props) {
+export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace, showToast }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -58,8 +59,8 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           model: s.Model || s.model || '',
           msgCount: s.MsgCount || s.msgCount || 0,
         })))
-      } catch {
-        // Fallback: no sessions yet
+      } catch (e) {
+        showToast?.('error', `Failed to load sessions: ${e instanceof Error ? e.message : String(e)}`)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -74,24 +75,32 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
+    if (!window.confirm('Delete this session? This cannot be undone.')) return
     try {
       await App.DeleteSession(id)
       setSessions(prev => prev.filter(s => s.id !== id))
-    } catch {}
+      showToast?.('success', 'Session deleted')
+    } catch (e) {
+      showToast?.('error', `Failed to delete session: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   const handleNew = async () => {
     try {
       await App.NewSession()
       onSessionSelect?.('')
-    } catch {}
+    } catch (e) {
+      showToast?.('error', `Failed to create session: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   const handleSelect = async (id: string) => {
     try {
       await App.LoadSession(id)
       onSessionSelect?.(id)
-    } catch {}
+    } catch (e) {
+      showToast?.('error', `Failed to open session: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   return (

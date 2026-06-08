@@ -450,6 +450,43 @@ func TestTGPanelEditModePaste(t *testing.T) {
 	}
 }
 
+func TestMCPPanelInstallModePaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openMCPPanel()
+	m.mcpPanel.installMode = true
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "server -t http https://example.com/mcp"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.mcpPanel.installInput, "https://example.com/mcp") {
+		t.Fatalf("expected MCP install input to contain pasted text, got %q", m.mcpPanel.installInput)
+	}
+	if strings.Contains(m.input.Value(), "https://example.com/mcp") {
+		t.Fatal("expected main input to NOT receive paste when MCP install mode is active")
+	}
+}
+
+func TestWechatPanelEditModePaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openWechatPanel()
+	m.wechatPanel.editState = imAdapterEditState{
+		mode:        imEditInput,
+		adapterName: "test-wechat",
+		editField:   "bot_token",
+		editInput:   "old_",
+	}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "wechat-token"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.wechatPanel.editState.editInput, "wechat-token") {
+		t.Fatalf("expected WeChat edit input to contain pasted text, got %q", m.wechatPanel.editState.editInput)
+	}
+	if strings.Contains(m.input.Value(), "wechat-token") {
+		t.Fatal("expected main input to NOT receive paste when WeChat edit mode is active")
+	}
+}
+
 // --- PC panel create mode paste ---
 
 func TestPCPanelCreateModePaste(t *testing.T) {

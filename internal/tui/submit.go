@@ -38,11 +38,7 @@ func (m *Model) appendUserMessage(text string) {
 	m.session.UpdatedAt = time.Now()
 	// Auto-generate title from first user message
 	if m.session.Title == "" || m.session.Title == "New session" {
-		if len(text) > 60 {
-			m.session.Title = text[:57] + "..."
-		} else {
-			m.session.Title = text
-		}
+		m.session.Title = util.Truncate(text, 60)
 	}
 	ses := m.session
 	store := m.sessionStore

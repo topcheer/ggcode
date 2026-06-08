@@ -24,7 +24,7 @@ type SpawnAgentTool struct {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a sub-agent to work on a task independently. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result."
+	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
@@ -33,7 +33,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 	"properties": {
 		"task": {
 			"type": "string",
-			"description": "The task description for the sub-agent"
+			"description": "The complete task description for the one-shot sub-agent run. Include all context the sub-agent will need."
 		},
 		"tools": {
 			"type": "array",
@@ -44,7 +44,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"context": {
 			"type": "string",
-			"description": "Optional additional context for the sub-agent"
+			"description": "Optional additional context prepended to the sub-agent's initial task. Prefer including context here rather than trying to send follow-up work later."
 		},
 		"model": {
 			"type": "string",

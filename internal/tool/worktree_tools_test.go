@@ -75,6 +75,13 @@ func TestEnterWorktree_Execute(t *testing.T) {
 	if !strings.Contains(result.Content, ".ggcode/worktrees") {
 		t.Errorf("expected .ggcode/worktrees path: %s", result.Content)
 	}
+	if !strings.Contains(result.Content, "SuggestedWorkingDir is set to this path") {
+		t.Errorf("expected explicit SuggestedWorkingDir guidance: %s", result.Content)
+	}
+	if strings.Contains(result.Content, "All subsequent tool calls") {
+		t.Errorf("result should not imply all subsequent tool calls automatically switch directories: %s", result.Content)
+	}
+
 	// Verify SuggestedWorkingDir is set to the worktree path
 	if result.SuggestedWorkingDir == "" {
 		t.Error("SuggestedWorkingDir should be set")

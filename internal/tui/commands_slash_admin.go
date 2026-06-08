@@ -219,6 +219,37 @@ func (m *Model) reloadActiveProvider() error {
 	return nil
 }
 
+var reasoningEffortCycle = []string{"", "low", "medium", "high"}
+
+func nextReasoningEffort(current string) string {
+	current = strings.ToLower(strings.TrimSpace(current))
+	for i, effort := range reasoningEffortCycle {
+		if current == effort {
+			return reasoningEffortCycle[(i+1)%len(reasoningEffortCycle)]
+		}
+	}
+	return reasoningEffortCycle[1]
+}
+
+func displayReasoningEffort(effort string) string {
+	if strings.TrimSpace(effort) == "" {
+		return "auto"
+	}
+	return strings.TrimSpace(effort)
+}
+
+func (m *Model) cycleReasoningEffort() (string, bool) {
+	if m.agent == nil {
+		return "", false
+	}
+	current := m.agent.ReasoningEffort()
+	next := nextReasoningEffort(current)
+	if !m.agent.SetReasoningEffort(next) {
+		return current, false
+	}
+	return next, true
+}
+
 func (m *Model) tryActivateCurrentSelection() error {
 	if m.config == nil {
 		return fmt.Errorf("config not loaded")

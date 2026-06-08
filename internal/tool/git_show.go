@@ -13,7 +13,7 @@ type GitShow struct{ WorkingDir string }
 func (t GitShow) Name() string { return "git_show" }
 
 func (t GitShow) Description() string {
-	return "Get details for a commit from a GitHub repository"
+	return "Show details for a local Git commit, branch, or tag. Supports diffstat summary and optional file-specific diffs."
 }
 
 func (t GitShow) Parameters() json.RawMessage {

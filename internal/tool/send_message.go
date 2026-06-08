@@ -18,13 +18,11 @@ type SendMessageTool struct {
 
 func (t SendMessageTool) Name() string { return "send_message" }
 func (t SendMessageTool) Description() string {
-	return "Send a message or task to a running sub-agent or swarm teammate. " +
-		"Messages are sent asynchronously — the tool returns immediately after delivery. " +
-		"For swarm teammates, use teammate_results to collect the output when the teammate finishes. " +
-		"Use to='*' to broadcast to all agents and teammates. " +
-		"When sending to a swarm teammate (ID starts with 'tm-'), always provide team_id. " +
-		"NOTE: For assigning tracked tasks to teammates, prefer swarm_task_create (which auto-delivers to the assignee's inbox). " +
-		"Use send_message only for unstructured follow-ups, clarifications, or when no task tracking is needed."
+	return "Send an asynchronous message or lightweight task to another worker. " +
+		"For swarm teammates (tm-*), the message is delivered to the teammate inbox as task-like work; use teammate_results for the latest completed output, and prefer swarm_task_create for tracked work. " +
+		"For sub-agent runs (agent-*), delivery only writes to that run's mailbox and should not be treated as a reliable way to assign new work or get a response; spawn a new sub-agent with the full task instead. " +
+		"Use to='*' only for best-effort broadcast to currently running sub-agents and active teammates; it is not tracked and may not produce a result. " +
+		"When sending to a swarm teammate, provide team_id when known; if omitted for a tm-* recipient, the tool searches all teams for that teammate."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -32,11 +30,11 @@ func (t SendMessageTool) Parameters() json.RawMessage {
 	"properties": {
 		"to": {
 			"type": "string",
-			"description": "Recipient ID or '*' for broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2'). Sub-agent IDs start with 'agent-'."
+			"description": "Recipient ID or '*' for best-effort broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2') and receive task-like inbox work. Sub-agent IDs start with 'agent-' and only receive mailbox messages; do not rely on this for assigning new work."
 		},
 		"message": {
 			"type": "string",
-			"description": "The message or task content to send"
+			"description": "The message or task content to send. For tracked teammate work, use swarm_task_create instead of send_message."
 		},
 		"summary": {
 			"type": "string",
@@ -44,7 +42,7 @@ func (t SendMessageTool) Parameters() json.RawMessage {
 		},
 		"team_id": {
 			"type": "string",
-			"description": "REQUIRED for swarm teammates. The team ID (e.g., 'team-1'). Always include this when sending to teammates."
+			"description": "For swarm teammates, provide the team ID (e.g. 'team-1') when known. If omitted for a tm-* recipient, the tool searches all teams for that teammate."
 		},
 		"description": {
 			"type": "string",
@@ -123,16 +121,16 @@ func (t SendMessageTool) Execute(_ context.Context, input json.RawMessage) (Resu
 			}
 		}
 		if len(allSent) == 0 {
-			return Result{Content: "No running agents or teammates to broadcast to.\n"}, nil
+			return Result{Content: "No running sub-agents or active teammates to broadcast to. Broadcast is best-effort and not tracked.\n"}, nil
 		}
-		return Result{Content: fmt.Sprintf("Broadcast sent to %d recipient(s): %s\n", len(allSent), strings.Join(allSent, ", "))}, nil
+		return Result{Content: fmt.Sprintf("Best-effort broadcast sent to %d recipient(s): %s. Use teammate_results only for teammate outputs; sub-agent mailbox messages may not produce a response.\n", len(allSent), strings.Join(allSent, ", "))}, nil
 	}
 
 	if t.Manager != nil {
 		if err := t.Manager.SendToAgent(args.To, msg); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
-		return Result{Content: fmt.Sprintf("Message sent to agent %s\n", args.To)}, nil
+		return Result{Content: fmt.Sprintf("Mailbox message sent to sub-agent %s. This is best-effort only; spawned sub-agents are one-shot runs and may not consume mailbox messages or return a response. Use wait_agent for the original run result, or spawn_agent with a new full task for follow-up work.\n", args.To)}, nil
 	}
 
 	return Result{IsError: true, Content: fmt.Sprintf("Agent %q not found (no sub-agent manager configured)", args.To)}, nil
@@ -151,7 +149,7 @@ func (t SendMessageTool) sendToSwarm(to, message, summary, teamID string) (Resul
 		if len(sent) == 0 {
 			return Result{Content: "No active teammates to broadcast to.\n"}, nil
 		}
-		return Result{Content: fmt.Sprintf("Broadcast sent to %d teammate(s): %s\n", len(sent), strings.Join(sent, ", "))}, nil
+		return Result{Content: fmt.Sprintf("Best-effort broadcast sent to %d teammate(s): %s. This is not tracked on the task board; use teammate_results for latest outputs.\n", len(sent), strings.Join(sent, ", "))}, nil
 	}
 
 	// Fire-and-forget: send message asynchronously. Teammate executes in its own goroutine.
@@ -160,5 +158,5 @@ func (t SendMessageTool) sendToSwarm(to, message, summary, teamID string) (Resul
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Message sent to teammate %s. Use teammate_results to collect the output when ready.\n", to)}, nil
+	return Result{Content: fmt.Sprintf("Task-like message sent to teammate %s. This is not tracked on the task board; use teammate_results to collect the latest output when ready. For tracked work, use swarm_task_create instead.\n", to)}, nil
 }

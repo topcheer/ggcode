@@ -15,7 +15,7 @@ type GitAdd struct {
 func (t GitAdd) Name() string { return "git_add" }
 
 func (t GitAdd) Description() string {
-	return "Add file contents to the index (staging area)."
+	return "Add file contents to the index (staging area). Stage only the intended files; avoid git_add files=[\".\"] unless the user explicitly wants all current changes staged."
 }
 
 func (t GitAdd) Parameters() json.RawMessage {
@@ -31,7 +31,7 @@ func (t GitAdd) Parameters() json.RawMessage {
 			"items": {
 				"type": "string"
 			},
-			"description": "File paths to stage. Use [\".\"] to stage all changes."
+			"description": "File paths to stage. Prefer explicit paths. Use [\".\"] only when the user explicitly wants all current changes staged."
 		},
 		"description": {
 			"type": "string",

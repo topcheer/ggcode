@@ -235,10 +235,10 @@ func (t TaskUpdateTool) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "New subject"
 		},
-		"description": {
-			"type": "string",
-			"description": "New description"
-		},
+			"description": {
+				"type": "string",
+				"description": "Optional new task description. Omit this field when only changing status, owner, dependencies, activeForm, or metadata."
+			},
 		"owner": {
 			"type": "string",
 			"description": "Agent ID owning this task"
@@ -269,10 +269,9 @@ func (t TaskUpdateTool) Parameters() json.RawMessage {
 			"description": "Metadata to merge into the task"
 		}
 	},
-	"required": [
-		"taskId",
-		"description"
-	]
+		"required": [
+			"taskId"
+		]
 }`)
 }
 func (t TaskUpdateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {

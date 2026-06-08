@@ -845,10 +845,11 @@ func shortenHarnessPathToken(root, token string) string {
 
 func truncateHarnessText(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if limit <= 0 || len(text) <= limit {
+	runes := []rune(text)
+	if limit <= 0 || len(runes) <= limit {
 		return text
 	}
-	return strings.TrimSpace(text[:limit-1]) + "…"
+	return strings.TrimSpace(string(runes[:limit-1])) + "…"
 }
 
 func titleizeHarnessText(text string) string {

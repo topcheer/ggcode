@@ -906,12 +906,12 @@ func (t *TodoToolItem) Render(width int) string {
 	}
 	header := t.styles.ToolHeader(icon, label, width)
 	if active != "" {
-		maxActive := width - len(header) - 5
+		maxActive := width - lipgloss.Width(header) - 5
 		if maxActive < 10 {
 			maxActive = 10
 		}
-		if len(active) > maxActive {
-			active = active[:maxActive-1] + "…"
+		if lipgloss.Width(active) > maxActive {
+			active = truncateTailByWidth(active, maxActive-1) + "…"
 		}
 		header += fmt.Sprintf(" · %s", active)
 	}

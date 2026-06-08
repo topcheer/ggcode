@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/task"
@@ -147,6 +148,48 @@ func TestTaskOutput_NotFound(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error for nonexistent task")
+	}
+}
+
+func TestTaskUpdate_StatusDoesNotRequireDescription(t *testing.T) {
+	mgr := task.NewManager()
+	tk := TaskCreateTool{Manager: mgr}
+	input, _ := json.Marshal(map[string]interface{}{
+		"subject":     "Schema update test",
+		"description": "Original description",
+	})
+	if result, err := tk.Execute(context.Background(), input); err != nil || result.IsError {
+		t.Fatalf("create failed: result=%+v err=%v", result, err)
+	}
+
+	tu := TaskUpdateTool{Manager: mgr}
+	input, _ = json.Marshal(map[string]interface{}{
+		"taskId": "task-1",
+		"status": "completed",
+	})
+	result, err := tu.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error updating status without description: %s", result.Content)
+	}
+
+	got, ok := mgr.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to exist")
+	}
+	if got.Description != "Original description" {
+		t.Fatalf("status-only update should preserve description, got %q", got.Description)
+	}
+	if got.Status != task.StatusCompleted {
+		t.Fatalf("expected completed status, got %s", got.Status)
+	}
+
+	params := string(tu.Parameters())
+	if strings.Contains(params, `"taskId",
+			"description"`) {
+		t.Fatal("task_update schema should not require description for status-only updates")
 	}
 }
 

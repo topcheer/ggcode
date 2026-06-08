@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -173,9 +174,58 @@ func TestConfigToolSetValueEmpty(t *testing.T) {
 	acc := newMockConfigAccess()
 	ct := ConfigTool{Access: acc}
 
-	// value="" and not explicitly provided → should read
+	for name, inputMap := range map[string]map[string]string{
+		"omitted value": {
+			"setting":     "vendor",
+			"description": "test",
+		},
+		"explicit empty value": {
+			"setting":     "vendor",
+			"value":       "",
+			"description": "test",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			input, _ := json.Marshal(inputMap)
+			result, err := ct.Execute(context.Background(), input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.IsError {
+				t.Errorf("unexpected error result: %s", result.Content)
+			}
+			if result.Content != "vendor = zai\n" {
+				t.Errorf("expected read mode, got %q", result.Content)
+			}
+			if acc.data["vendor"] != "zai" {
+				t.Fatalf("empty value should not clear config, got %q", acc.data["vendor"])
+			}
+		})
+	}
+}
+
+func TestConfigToolDescriptionWarnsBeforeProviderChanges(t *testing.T) {
+	desc := ConfigTool{}.Description()
+	for _, want := range []string{"Critical provider settings", "inspect current values", "available models", "probed before committing", "left unchanged"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("config description should mention %q, got %q", want, desc)
+		}
+	}
+	params := string(ConfigTool{}.Parameters())
+	for _, want := range []string{"Provider settings are critical", "discover available models", "failed probes leave the current working config unchanged", "not echoed back"} {
+		if !strings.Contains(params, want) {
+			t.Fatalf("config schema should mention %q, got %s", want, params)
+		}
+	}
+}
+
+func TestConfigToolSetSecretDoesNotEchoValue(t *testing.T) {
+	acc := newMockConfigAccess()
+	ct := ConfigTool{Access: acc}
+
 	input, _ := json.Marshal(map[string]string{
-		"setting":     "vendor",
+		"setting":     "api_key",
+		"value":       "secret-token-value",
 		"description": "test",
 	})
 	result, err := ct.Execute(context.Background(), input)
@@ -183,9 +233,12 @@ func TestConfigToolSetValueEmpty(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.IsError {
-		t.Errorf("unexpected error result: %s", result.Content)
+		t.Fatalf("unexpected error result: %s", result.Content)
 	}
-	if result.Content != "vendor = zai\n" {
-		t.Errorf("expected read mode, got %q", result.Content)
+	if strings.Contains(result.Content, "secret-token-value") {
+		t.Fatalf("secret should not be echoed in set result: %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "secret stored securely") {
+		t.Fatalf("expected secret storage message, got %q", result.Content)
 	}
 }

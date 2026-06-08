@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseToolInputArg(t *testing.T) {
@@ -171,6 +173,20 @@ func TestTruncateTailByWidth(t *testing.T) {
 	got := truncateTailByWidth("hello world", 5)
 	if got == "" {
 		t.Error("expected non-empty")
+	}
+}
+
+func TestTodoToolItemRenderKeepsActiveTaskUTF8Valid(t *testing.T) {
+	item := NewTodoToolItem("todo-1", []TodoTask{
+		{ID: "1", Content: "定位 TUI 面板和主输入框粘贴处理中文截断问题", Status: "in_progress"},
+	}, DefaultStyles(), "en")
+
+	rendered := item.Render(60)
+	if !utf8.ValidString(rendered) {
+		t.Fatalf("expected valid UTF-8 render, got %q", rendered)
+	}
+	if strings.ContainsRune(rendered, utf8.RuneError) {
+		t.Fatalf("expected no replacement rune in render, got %q", rendered)
 	}
 }
 

@@ -28,8 +28,9 @@ func (t Grep) Name() string { return "grep" }
 
 func (t Grep) Description() string {
 	return "A powerful search tool built on ripgrep (with Go fallback). " +
-		"Supports regex, glob filtering, file type filtering, context lines, " +
-		"multiple output modes, multiline matching, and pagination."
+		"Prefer this for code/content search that needs context lines, pagination, file-type filtering, or large-repository performance. " +
+		"Use glob when you only need file paths, and search_files for simple content searches. " +
+		"Supports regex, glob filtering, file type filtering, context lines, multiple output modes, multiline matching, and pagination."
 }
 
 func (t Grep) Parameters() json.RawMessage {
@@ -61,21 +62,35 @@ func (t Grep) Parameters() json.RawMessage {
 			],
 			"description": "Output mode. 'content' shows matching lines with line numbers. 'files_with_matches' shows only file paths. 'count' shows match counts per file. Default: files_with_matches."
 		},
-		"-A": {
-			"type": "integer",
-			"description": "Number of lines to show after each match.",
-			"minimum": 0
-		},
-		"-B": {
-			"type": "integer",
-			"description": "Number of lines to show before each match.",
-			"minimum": 0
-		},
-		"-C": {
-			"type": "integer",
-			"description": "Alias for 'context'. Number of lines to show before and after each match.",
-			"minimum": 0
-		},
+			"after": {
+				"type": "integer",
+				"description": "Number of lines to show after each match. Prefer this over '-A'.",
+				"minimum": 0
+			},
+			"before": {
+				"type": "integer",
+				"description": "Number of lines to show before each match. Prefer this over '-B'.",
+				"minimum": 0
+			},
+			"ignore_case": {
+				"type": "boolean",
+				"description": "Case insensitive search. Prefer this over '-i'. Default false."
+			},
+			"-A": {
+				"type": "integer",
+				"description": "Backward-compatible alias for 'after'. Number of lines to show after each match.",
+				"minimum": 0
+			},
+			"-B": {
+				"type": "integer",
+				"description": "Backward-compatible alias for 'before'. Number of lines to show before each match.",
+				"minimum": 0
+			},
+			"-C": {
+				"type": "integer",
+				"description": "Alias for 'context'. Number of lines to show before and after each match.",
+				"minimum": 0
+			},
 		"context": {
 			"type": "integer",
 			"description": "Number of lines to show before and after each match. -C is an alias for this.",
@@ -113,19 +128,34 @@ func (t Grep) Parameters() json.RawMessage {
 
 // grepArgs holds all parsed arguments.
 type grepArgs struct {
-	Pattern    string `json:"pattern"`
-	Path       string `json:"path"`
-	Glob       string `json:"glob"`
-	Type       string `json:"type"`
-	OutputMode string `json:"output_mode"`
-	After      int    `json:"-A"`
-	Before     int    `json:"-B"`
-	Context    int    `json:"context"`
-	ContextC   int    `json:"-C"`
-	HeadLimit  int    `json:"head_limit"`
-	Offset     int    `json:"offset"`
-	Multiline  bool   `json:"multiline"`
-	IgnoreCase bool   `json:"-i"`
+	Pattern        string `json:"pattern"`
+	Path           string `json:"path"`
+	Glob           string `json:"glob"`
+	Type           string `json:"type"`
+	OutputMode     string `json:"output_mode"`
+	After          int    `json:"-A"`
+	Before         int    `json:"-B"`
+	AfterLong      int    `json:"after"`
+	BeforeLong     int    `json:"before"`
+	Context        int    `json:"context"`
+	ContextC       int    `json:"-C"`
+	HeadLimit      int    `json:"head_limit"`
+	Offset         int    `json:"offset"`
+	Multiline      bool   `json:"multiline"`
+	IgnoreCase     bool   `json:"-i"`
+	IgnoreCaseLong bool   `json:"ignore_case"`
+}
+
+func (a *grepArgs) normalizeAliases() {
+	if a.After == 0 && a.AfterLong > 0 {
+		a.After = a.AfterLong
+	}
+	if a.Before == 0 && a.BeforeLong > 0 {
+		a.Before = a.BeforeLong
+	}
+	if a.IgnoreCaseLong {
+		a.IgnoreCase = true
+	}
 }
 
 func (a *grepArgs) contextLines() int {
@@ -140,6 +170,8 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
+
+	args.normalizeAliases()
 
 	if args.Pattern == "" {
 		return Result{IsError: true, Content: "pattern is required"}, nil
