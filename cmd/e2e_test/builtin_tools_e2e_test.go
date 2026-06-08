@@ -47,7 +47,7 @@ func e2eBuiltinToolRegistry(t *testing.T, dir string) *tool.Registry {
 
 	// Built-in tools with real dependencies
 	taskMgr := task.NewManager()
-	sched := cron.NewScheduler(nil)
+	sched := cron.NewScheduler(nil, "")
 	switcher := &noopModeSwitcher{}
 
 	reg.Register(tool.TaskCreateTool{Manager: taskMgr})

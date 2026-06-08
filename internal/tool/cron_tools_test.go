@@ -10,7 +10,7 @@ import (
 )
 
 func TestCronCreateTool_Execute(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
@@ -43,7 +43,7 @@ func TestCronCreateTool_NilScheduler(t *testing.T) {
 }
 
 func TestCronCreateTool_InvalidInput(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
@@ -57,7 +57,7 @@ func TestCronCreateTool_InvalidInput(t *testing.T) {
 }
 
 func TestCronCreateTool_EmptyCron(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
@@ -71,7 +71,7 @@ func TestCronCreateTool_EmptyCron(t *testing.T) {
 }
 
 func TestCronCreateTool_EmptyPrompt(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
@@ -85,7 +85,7 @@ func TestCronCreateTool_EmptyPrompt(t *testing.T) {
 }
 
 func TestCronCreateTool_DefaultRecurring(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
@@ -108,7 +108,7 @@ func TestCronCreateTool_DefaultRecurring(t *testing.T) {
 }
 
 func TestCronDeleteTool_Execute(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronDeleteTool{Scheduler: s}
 
@@ -139,7 +139,7 @@ func TestCronDeleteTool_Execute(t *testing.T) {
 }
 
 func TestCronDeleteTool_NotFound(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronDeleteTool{Scheduler: s}
 
@@ -164,7 +164,7 @@ func TestCronDeleteTool_NilScheduler(t *testing.T) {
 }
 
 func TestCronListTool_Execute(t *testing.T) {
-	s := cron.NewScheduler(nil)
+	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()
 	tool := CronListTool{Scheduler: s}
 
@@ -208,7 +208,7 @@ func TestCronListTool_NilScheduler(t *testing.T) {
 
 func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 	var fired []string
-	s := cron.NewScheduler(func(prompt string) { fired = append(fired, prompt) })
+	s := cron.NewScheduler(func(prompt string) { fired = append(fired, prompt) }, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 
