@@ -30,6 +30,12 @@ class ResolveTargetTests(unittest.TestCase):
                 with patch.object(cli.platform, "machine", return_value=""):
                     self.assertEqual(cli.resolve_target(), ("windows", "x86_64"))
 
+    def test_urlopen_uses_default_tls_verification(self) -> None:
+        response = unittest.mock.Mock()
+        with patch.object(cli.urllib.request, "urlopen", return_value=response) as mocked:
+            self.assertIs(cli._urlopen("https://github.com/topcheer/ggcode"), response)
+        mocked.assert_called_once_with("https://github.com/topcheer/ggcode")
+
     def test_resolve_release_version_follows_latest_redirect(self) -> None:
         response = unittest.mock.Mock()
         response.geturl.return_value = "https://github.com/topcheer/ggcode/releases/tag/v9.9.9"

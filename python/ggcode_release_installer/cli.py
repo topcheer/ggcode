@@ -10,7 +10,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import ssl
 import tarfile
 import tempfile
 import urllib.parse
@@ -87,16 +86,8 @@ def metadata_path(directory: Path) -> Path:
     return directory / METADATA
 
 
-def _build_ssl_context() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
 def _urlopen(url: str) -> object:
-    ctx = _build_ssl_context()
-    return urllib.request.urlopen(url, context=ctx)
+    return urllib.request.urlopen(url)
 
 
 def download(url: str) -> bytes:
