@@ -82,11 +82,11 @@ func (m Model) statsPanelBody(width int) string {
 	rows := []string{
 		lipgloss.NewStyle().Bold(true).Render(statsPanelText(m.currentLanguage(), "overview")),
 		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "turns"), fmt.Sprintf("%d", summary.TurnCount), width, 14),
-		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_ttft"), formatMetricDuration(summary.AvgTTFT), width, 14),
-		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "p95_ttft"), formatMetricDuration(summary.P95TTFT), width, 14),
-		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_duration"), formatMetricDuration(summary.AvgDuration), width, 14),
-		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "p95_duration"), formatMetricDuration(summary.P95Duration), width, 14),
-		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_think"), formatMetricDuration(summary.AvgThink), width, 14),
+		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_ttft"), metrics.FormatDuration(summary.AvgTTFT), width, 14),
+		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "p95_ttft"), metrics.FormatDuration(summary.P95TTFT), width, 14),
+		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_duration"), metrics.FormatDuration(summary.AvgDuration), width, 14),
+		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "p95_duration"), metrics.FormatDuration(summary.P95Duration), width, 14),
+		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "avg_think"), metrics.FormatDuration(summary.AvgThink), width, 14),
 		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "tools"), fmt.Sprintf("%d", summary.ToolCallCount), width, 14),
 		m.renderSidebarDetailRowWithLabelWidth(statsPanelText(m.currentLanguage(), "fail_rate"), fmt.Sprintf("%d%%", summary.ToolFailureRate()), width, 14),
 	}
@@ -100,13 +100,13 @@ func (m Model) statsPanelBody(width int) string {
 	}
 	for i := len(summary.Turns) - 1; i >= 0; i-- {
 		turn := summary.Turns[i]
-		line := fmt.Sprintf("#%d  %s  %s  %s  %dt", turn.TurnIndex, formatMetricDuration(turn.TTFT), formatMetricDuration(turn.Duration), formatMetricDuration(turn.ThinkTime), turn.ToolCallCount)
+		line := fmt.Sprintf("#%d  %s  %s  %s  %dt", turn.TurnIndex, metrics.FormatDuration(turn.TTFT), metrics.FormatDuration(turn.Duration), metrics.FormatDuration(turn.ThinkTime), turn.ToolCallCount)
 		if turn.ToolFailureCount > 0 {
 			line += "  !"
 		}
 		rows = append(rows, truncateDisplayWidth(line, width))
 		if turn.SlowestTool != "" {
-			rows = append(rows, truncateDisplayWidth("    "+statsPanelText(m.currentLanguage(), "slowest")+": "+turn.SlowestTool+" "+formatMetricDuration(turn.SlowestToolDuration), width))
+			rows = append(rows, truncateDisplayWidth("    "+statsPanelText(m.currentLanguage(), "slowest")+": "+turn.SlowestTool+" "+metrics.FormatDuration(turn.SlowestToolDuration), width))
 		}
 	}
 
