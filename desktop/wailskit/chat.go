@@ -342,6 +342,7 @@ func (b *ChatBridge) Cancel() {
 // ClearCurrentSession resets the current session so next chat creates a fresh one.
 func (b *ChatBridge) ClearCurrentSession() {
 	state := agentruntime.ClearSession()
+	b.ResetAgent()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.currentSes = state.Session
@@ -1876,11 +1877,20 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 	b.mu.Unlock()
 
 	// Recreate provider and update agent so it uses the new LLM backend
-	if resolvedNew, p, err := agentruntime.ResolveCurrentSelection(b.cfg); err == nil && b.agent != nil {
-		b.mu.Lock()
-		b.resolved = resolvedNew
-		b.agent.SetProvider(p)
-		b.mu.Unlock()
+	resolvedNew, p, err := agentruntime.ResolveCurrentSelection(b.cfg)
+	if err != nil {
+		return
+	}
+	b.mu.Lock()
+	b.resolved = resolvedNew
+	agent := b.agent
+	b.mu.Unlock()
+
+	log.Printf("[wails] OnConfigProviderChanged: vendor=%s endpoint=%s model=%s provider=%s agent=%v",
+		b.cfg.Vendor, b.cfg.Endpoint, resolvedNew.Model, p.Name(), agent != nil)
+
+	if agent != nil {
+		agent.SetProvider(p)
 	}
 
 	// Notify Wails frontend to refresh model picker and status bar
