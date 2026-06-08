@@ -346,14 +346,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// Reasoning content (DeepSeek v4, etc.)
 					if delta.ReasoningContent != "" {
 						reasoningBuf.WriteString(delta.ReasoningContent)
-						debug.Log("openai", "chunk reasoning len=%d total=%d", len(delta.ReasoningContent), reasoningBuf.Len())
 						emitted = true
 						ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}
 					}
 
 					// Text content
 					if delta.Content != "" {
-						debug.Log("openai", "chunk text=%q", delta.Content)
 						outputChars += len(delta.Content)
 						emitted = true
 						ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
