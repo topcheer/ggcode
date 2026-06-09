@@ -617,6 +617,45 @@ func TestRestartCommandWritesSystemMessage(t *testing.T) {
 	}
 }
 
+func TestTmuxEnterDefaultSessionName(t *testing.T) {
+	tests := []struct {
+		workspace string
+		want      string
+	}{
+		{"/tmp/my-project", "ggcode-my-project"},
+		{"/tmp/https-github-com-topcheer-cc-git-ggcode-coding-age-s7ccb6", "ggcode-https-github-com-topcheer-cc-git-ggcode-coding-a"},
+		{".", "ggcode"},
+		{"", "ggcode"},
+	}
+	for _, tt := range tests {
+		if got := defaultTmuxSessionName(tt.workspace); got != tt.want {
+			t.Fatalf("defaultTmuxSessionName(%q) = %q, want %q", tt.workspace, got, tt.want)
+		}
+	}
+}
+
+func TestTmuxEnterSanitizesSessionName(t *testing.T) {
+	if got, want := sanitizeTmuxSessionName("dev:main.with spaces!"), "dev-main-withspaces"; got != want {
+		t.Fatalf("sanitizeTmuxSessionName() = %q, want %q", got, want)
+	}
+}
+
+func TestTmuxEnterUsesRestartArgsWithResume(t *testing.T) {
+	m := newTestModel()
+	m.session = &session.Session{ID: "session-for-tmux"}
+	args := m.buildRestartArgs()
+	found := false
+	for i, a := range args {
+		if a == "--resume" && i+1 < len(args) && args[i+1] == "session-for-tmux" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected tmux enter restart args to include --resume current session, got %v", args)
+	}
+}
+
 func TestRestartCommandPreservesSessionInArgs(t *testing.T) {
 	m := newTestModel()
 	// Set up a fake session so buildRestartArgs includes --resume.

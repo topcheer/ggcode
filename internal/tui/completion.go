@@ -196,7 +196,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
 	"/image", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/status", "/stats", "/knight", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
+	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -246,6 +246,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/status":      "Show current status",
 	"/stats":       "Open session stats panel",
 	"/knight":      "Knight auto-evolution commands",
+	"/tmux":        "Manage tmux session and panes",
 	"/update":      "Update ggcode to the latest release",
 	"/restart":     "Restart ggcode (picks up latest binary)",
 	"/lang":        "Switch interface language",
@@ -266,6 +267,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
 	"/knight":      "<on|off|status|run|skills|budget|...>",
+	"/tmux":        "<enter|status|split|test|build|verify|popup|list|layouts|layout|setup|save-layout|refresh|restore|prune|capture|close|focus>",
 	"/resume":      "<session-id>",
 	"/lang":        "<en|zh-CN>",
 	"/memory":      "<subcommand>",
@@ -344,14 +346,7 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
-	// Clamp cursor to a valid byte boundary (may land mid-UTF8 if caller
-	// uses rune offsets). Walk backwards past any continuation bytes.
-	for cursor < len(value) && value[cursor]&0xC0 == 0x80 {
-		cursor++
-	}
-	if cursor > len(value) {
-		cursor = len(value)
-	}
+	cursor = clampUTF8Cursor(value, cursor)
 	if cursor < 1 {
 		return false, ""
 	}
@@ -401,6 +396,10 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 // DetectMention returns true if the cursor is immediately after a "@" with a path fragment.
 // It returns the path fragment after "@" for completion.
 func DetectMention(value string, cursor int) (active bool, prefix string) {
+	cursor = clampUTF8Cursor(value, cursor)
+	if cursor <= 0 {
+		return false, ""
+	}
 	// Find "@" before cursor
 	for i := cursor - 1; i >= 0; i-- {
 		if value[i] == '@' {
@@ -415,4 +414,17 @@ func DetectMention(value string, cursor int) (active bool, prefix string) {
 		}
 	}
 	return false, ""
+}
+
+func clampUTF8Cursor(value string, cursor int) int {
+	if cursor < 0 {
+		return 0
+	}
+	if cursor > len(value) {
+		return len(value)
+	}
+	for cursor < len(value) && value[cursor]&0xC0 == 0x80 {
+		cursor++
+	}
+	return cursor
 }

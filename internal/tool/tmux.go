@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/topcheer/ggcode/internal/tmux"
 )
@@ -14,33 +13,24 @@ import (
 // TmuxTool lets the agent manage tmux panes when ggcode is running inside tmux.
 type TmuxTool struct {
 	WorkingDir string
-	Client     *tmux.Client
-
-	mu    sync.Mutex
-	panes map[string]tmux.Pane
+	Manager    *tmux.Manager
 }
 
 func NewTmuxTool(workingDir string) *TmuxTool {
-	return &TmuxTool{WorkingDir: workingDir, Client: tmux.NewClient(), panes: make(map[string]tmux.Pane)}
+	return &TmuxTool{WorkingDir: workingDir, Manager: tmux.SharedManager(workingDir)}
 }
 
 func (t *TmuxTool) Clone() Tool {
 	if t == nil {
 		return NewTmuxTool("")
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	panes := make(map[string]tmux.Pane, len(t.panes))
-	for id, pane := range t.panes {
-		panes[id] = pane
-	}
-	return &TmuxTool{WorkingDir: t.WorkingDir, Client: t.Client, panes: panes}
+	return &TmuxTool{WorkingDir: t.WorkingDir, Manager: t.manager()}
 }
 
 func (t *TmuxTool) Name() string { return "tmux" }
 
 func (t *TmuxTool) Description() string {
-	return "Manage tmux panes from inside a tmux session: inspect status, create panes, capture pane output, refresh managed pane state, focus panes, and close panes. Use this when the user asks to run or inspect work in tmux rather than ordinary shell commands."
+	return "Manage tmux panes and workspace layouts from inside a tmux session: inspect status, create panes, setup/save layouts, capture pane output, refresh managed pane state, focus panes, and close panes. Use this when the user asks to run or inspect work in tmux rather than ordinary shell commands."
 }
 
 func (t *TmuxTool) Parameters() json.RawMessage {
@@ -49,8 +39,8 @@ func (t *TmuxTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["status", "split", "popup", "list", "refresh", "capture", "focus", "close"],
-				"description": "tmux action to perform. Use capture to read output from a pane; refresh before relying on stale managed pane state."
+				"enum": ["status", "split", "popup", "list", "layouts", "layout", "setup", "save_layout", "refresh", "restore", "prune", "capture", "focus", "close"],
+				"description": "tmux action to perform. Use setup to create missing panes from a workspace layout; save_layout to save managed panes as a layout; capture to read output from a pane; restore to recreate stale panes from persisted metadata; prune to remove stale metadata."
 			},
 			"command": {
 				"type": "string",
@@ -80,9 +70,9 @@ func (t *TmuxTool) Parameters() json.RawMessage {
 				"type": "string",
 				"description": "For popup: popup width. Defaults to 90%."
 			},
-			"height": {
+			"layout": {
 				"type": "string",
-				"description": "For popup: popup height. Defaults to 80%."
+				"description": "Layout preset name for layouts/layout/setup/save_layout actions. Defaults to default."
 			},
 			"description": {
 				"type": "string",
@@ -104,18 +94,10 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		Lines      int    `json:"lines"`
 		Width      string `json:"width"`
 		Height     string `json:"height"`
+		Layout     string `json:"layout"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
-	}
-	if t == nil {
-		t = NewTmuxTool("")
-	}
-	if t.Client == nil {
-		t.Client = tmux.NewClient()
-	}
-	if t.panes == nil {
-		t.panes = make(map[string]tmux.Pane)
 	}
 
 	action := strings.ToLower(strings.TrimSpace(args.Action))
@@ -123,9 +105,10 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "action is required"}, nil
 	}
 
-	env, err := t.Client.Detect(ctx)
+	mgr := t.manager()
+	env, err := mgr.Detect(ctx)
 	if action == "status" {
-		return t.statusResult(env, err), nil
+		return t.statusResult(mgr, env, err), nil
 	}
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux detect failed: %v", err)}, nil
@@ -136,25 +119,37 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	switch action {
 	case "split":
-		return t.executeSplit(ctx, args.Command, args.Purpose, args.Horizontal, args.Size), nil
+		return t.executeSplit(ctx, mgr, args.Command, args.Purpose, args.Horizontal, args.Size), nil
 	case "popup":
-		return t.executePopup(ctx, args.Command, args.Width, args.Height), nil
+		return t.executePopup(ctx, mgr, args.Command, args.Width, args.Height), nil
 	case "list":
-		return Result{Content: t.managedPaneText()}, nil
+		return Result{Content: mgr.ManagedPaneText()}, nil
+	case "layouts":
+		return t.executeLayouts(mgr), nil
+	case "layout":
+		return t.executeLayout(mgr, args.Layout), nil
+	case "setup":
+		return t.executeSetup(ctx, mgr, args.Layout), nil
+	case "save_layout":
+		return t.executeSaveLayout(mgr, args.Layout), nil
 	case "refresh":
-		return t.executeRefresh(ctx), nil
+		return t.executeRefresh(ctx, mgr), nil
+	case "restore":
+		return t.executeRestore(ctx, mgr, args.PaneID, args.Purpose), nil
+	case "prune":
+		return t.executePrune(mgr, args.PaneID, args.Purpose), nil
 	case "capture":
-		return t.executeCapture(ctx, args.PaneID, args.Lines), nil
+		return t.executeCapture(ctx, mgr, args.PaneID, args.Lines), nil
 	case "focus":
-		return t.executeFocus(ctx, args.PaneID), nil
+		return t.executeFocus(ctx, mgr, args.PaneID), nil
 	case "close":
-		return t.executeClose(ctx, args.PaneID), nil
+		return t.executeClose(ctx, mgr, args.PaneID), nil
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported tmux action %q", args.Action)}, nil
 	}
 }
 
-func (t *TmuxTool) statusResult(env *tmux.Environment, detectErr error) Result {
+func (t *TmuxTool) statusResult(mgr *tmux.Manager, env *tmux.Environment, detectErr error) Result {
 	if detectErr != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux detect failed: %v", detectErr)}
 	}
@@ -167,13 +162,10 @@ func (t *TmuxTool) statusResult(env *tmux.Environment, detectErr error) Result {
 	if !env.InTmux {
 		return Result{Content: fmt.Sprintf("tmux: available (%s), not inside a tmux session", env.Version)}
 	}
-	t.mu.Lock()
-	managed := len(t.panes)
-	t.mu.Unlock()
-	return Result{Content: fmt.Sprintf("tmux: %s\nversion: %s\nworkspace: %s\nmanaged panes: %d", env.Label(), env.Version, t.workspace(), managed)}
+	return Result{Content: fmt.Sprintf("tmux: %s\nversion: %s\nworkspace: %s\nmanaged panes: %d", env.Label(), env.Version, mgr.Workspace(), mgr.Count())}
 }
 
-func (t *TmuxTool) executeSplit(ctx context.Context, command, purpose string, horizontal *bool, size string) Result {
+func (t *TmuxTool) executeSplit(ctx context.Context, mgr *tmux.Manager, command, purpose string, horizontal *bool, size string) Result {
 	isHorizontal := true
 	if horizontal != nil {
 		isHorizontal = *horizontal
@@ -187,8 +179,8 @@ func (t *TmuxTool) executeSplit(ctx context.Context, command, purpose string, ho
 	if strings.TrimSpace(size) == "" {
 		size = "35%"
 	}
-	pane, err := t.Client.Split(ctx, tmux.SplitRequest{
-		Workspace:  t.workspace(),
+	pane, err := mgr.Split(ctx, tmux.SplitRequest{
+		Workspace:  mgr.Workspace(),
 		Command:    command,
 		Purpose:    purpose,
 		Horizontal: isHorizontal,
@@ -197,35 +189,115 @@ func (t *TmuxTool) executeSplit(ctx context.Context, command, purpose string, ho
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux split failed: %v", err)}
 	}
-	t.mu.Lock()
-	t.panes[pane.ID] = *pane
-	t.mu.Unlock()
 	return Result{Content: fmt.Sprintf("tmux pane created: %s (%s)", pane.ID, purpose)}
 }
 
-func (t *TmuxTool) executePopup(ctx context.Context, command, width, height string) Result {
-	if err := t.Client.Popup(ctx, tmux.PopupRequest{Workspace: t.workspace(), Command: command, Width: width, Height: height}); err != nil {
+func (t *TmuxTool) executePopup(ctx context.Context, mgr *tmux.Manager, command, width, height string) Result {
+	if err := mgr.Popup(ctx, tmux.PopupRequest{Workspace: mgr.Workspace(), Command: command, Width: width, Height: height}); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux popup failed: %v", err)}
 	}
 	return Result{Content: "tmux popup opened"}
 }
 
-func (t *TmuxTool) executeRefresh(ctx context.Context) Result {
-	t.mu.Lock()
-	if len(t.panes) == 0 {
-		t.mu.Unlock()
+func (t *TmuxTool) executeRefresh(ctx context.Context, mgr *tmux.Manager) Result {
+	if !mgr.HasPanes() {
 		return Result{Content: "tmux managed panes: none"}
 	}
-	t.mu.Unlock()
-	aliveIDs, err := t.Client.ListPaneIDs(ctx)
+	alive, stale, err := mgr.Refresh(ctx)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux refresh failed: %v", err)}
 	}
-	alive, stale := t.updateAliveState(aliveIDs)
-	return Result{Content: fmt.Sprintf("tmux panes refreshed: %d alive, %d stale\n%s", alive, stale, t.managedPaneText())}
+	return Result{Content: fmt.Sprintf("tmux panes refreshed: %d alive, %d stale\n%s", alive, stale, mgr.ManagedPaneText())}
 }
 
-func (t *TmuxTool) executeCapture(ctx context.Context, paneID string, lines int) Result {
+func (t *TmuxTool) executeLayouts(mgr *tmux.Manager) Result {
+	names := mgr.ListLayoutNames()
+	if len(names) == 0 {
+		return Result{Content: "tmux layouts: none"}
+	}
+	return Result{Content: "tmux layouts:\n- " + strings.Join(names, "\n- ")}
+}
+
+func (t *TmuxTool) executeLayout(mgr *tmux.Manager, name string) Result {
+	layoutName := toolTmuxLayoutName(name)
+	layout := mgr.Layout(layoutName)
+	if len(layout) == 0 {
+		return Result{Content: fmt.Sprintf("tmux layout %q: empty or not found", layoutName)}
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("tmux layout %q:\n", layoutName))
+	for _, pane := range layout {
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", pane.Purpose, pane.Command))
+	}
+	return Result{Content: strings.TrimSpace(b.String())}
+}
+
+func (t *TmuxTool) executeSetup(ctx context.Context, mgr *tmux.Manager, name string) Result {
+	layoutName := toolTmuxLayoutName(name)
+	created, err := mgr.SetupLayout(ctx, layoutName)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux setup failed: %v", err)}
+	}
+	if len(created) == 0 {
+		return Result{Content: fmt.Sprintf("tmux setup %q: no missing panes", layoutName)}
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("tmux setup %q created panes:\n", layoutName))
+	for _, pane := range created {
+		b.WriteString(fmt.Sprintf("- %s [%s] %s\n", pane.ID, pane.Purpose, pane.Command))
+	}
+	return Result{Content: strings.TrimSpace(b.String())}
+}
+
+func (t *TmuxTool) executeSaveLayout(mgr *tmux.Manager, name string) Result {
+	layoutName := toolTmuxLayoutName(name)
+	if err := mgr.SaveLayout(layoutName); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux save_layout failed: %v", err)}
+	}
+	return Result{Content: fmt.Sprintf("tmux layout %q saved", layoutName)}
+}
+
+func toolTmuxLayoutName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
+func (t *TmuxTool) executeRestore(ctx context.Context, mgr *tmux.Manager, paneID, purpose string) Result {
+	selector := strings.TrimSpace(paneID)
+	if selector == "" {
+		selector = strings.TrimSpace(purpose)
+	}
+	results, err := mgr.Restore(ctx, selector)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux restore failed: %v", err)}
+	}
+	if len(results) == 0 {
+		return Result{Content: "tmux restore: no matching stale panes with commands"}
+	}
+	var b strings.Builder
+	b.WriteString("tmux restored panes:\n")
+	for _, res := range results {
+		b.WriteString(fmt.Sprintf("- %s -> %s [%s] %s\n", res.Old.ID, res.New.ID, res.New.Purpose, res.New.Command))
+	}
+	return Result{Content: strings.TrimSpace(b.String())}
+}
+
+func (t *TmuxTool) executePrune(mgr *tmux.Manager, paneID, purpose string) Result {
+	selector := strings.TrimSpace(paneID)
+	if selector == "" {
+		selector = strings.TrimSpace(purpose)
+	}
+	removed := mgr.Prune(selector)
+	if removed == 0 {
+		return Result{Content: "tmux prune: no matching stale panes"}
+	}
+	return Result{Content: fmt.Sprintf("tmux pruned %d stale pane(s)\n%s", removed, mgr.ManagedPaneText())}
+}
+
+func (t *TmuxTool) executeCapture(ctx context.Context, mgr *tmux.Manager, paneID string, lines int) Result {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
 		return Result{IsError: true, Content: "pane_id is required for capture"}
@@ -233,93 +305,51 @@ func (t *TmuxTool) executeCapture(ctx context.Context, paneID string, lines int)
 	if lines <= 0 {
 		lines = 200
 	}
-	out, err := t.Client.Capture(ctx, paneID, lines)
+	out, err := mgr.Capture(ctx, paneID, lines)
 	if err != nil {
-		t.markPaneAlive(paneID, false)
 		return Result{IsError: true, Content: fmt.Sprintf("tmux capture failed: %v", err)}
 	}
 	out = strings.TrimRight(out, "\n")
 	if out == "" {
 		out = "(no output)"
 	}
-	t.markPaneAlive(paneID, true)
 	return Result{Content: fmt.Sprintf("tmux capture %s (last %d lines):\n%s", paneID, lines, out)}
 }
 
-func (t *TmuxTool) executeFocus(ctx context.Context, paneID string) Result {
+func (t *TmuxTool) executeFocus(ctx context.Context, mgr *tmux.Manager, paneID string) Result {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
 		return Result{IsError: true, Content: "pane_id is required for focus"}
 	}
-	if err := t.Client.Focus(ctx, paneID); err != nil {
+	if err := mgr.Focus(ctx, paneID); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux focus failed: %v", err)}
 	}
-	t.markPaneAlive(paneID, true)
 	return Result{Content: fmt.Sprintf("tmux focused pane: %s", paneID)}
 }
 
-func (t *TmuxTool) executeClose(ctx context.Context, paneID string) Result {
+func (t *TmuxTool) executeClose(ctx context.Context, mgr *tmux.Manager, paneID string) Result {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
 		return Result{IsError: true, Content: "pane_id is required for close"}
 	}
-	if err := t.Client.KillPane(ctx, paneID); err != nil {
-		t.markPaneAlive(paneID, false)
+	if err := mgr.Close(ctx, paneID); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux close failed: %v", err)}
 	}
-	t.mu.Lock()
-	delete(t.panes, paneID)
-	t.mu.Unlock()
 	return Result{Content: fmt.Sprintf("tmux pane closed: %s", paneID)}
 }
 
-func (t *TmuxTool) managedPaneText() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if len(t.panes) == 0 {
-		return "tmux managed panes: none"
+func (t *TmuxTool) manager() *tmux.Manager {
+	if t == nil {
+		return tmux.SharedManager("")
 	}
-	var b strings.Builder
-	b.WriteString("tmux managed panes:\n")
-	for _, pane := range t.panes {
-		state := "stale"
-		if pane.Alive {
-			state = "alive"
-		}
-		b.WriteString(fmt.Sprintf("- %s [%s/%s] %s\n", pane.ID, pane.Purpose, state, pane.Command))
+	if t.Manager == nil {
+		t.Manager = tmux.SharedManager(t.workspace())
 	}
-	return strings.TrimSpace(b.String())
-}
-
-func (t *TmuxTool) updateAliveState(aliveIDs map[string]struct{}) (int, int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	alive := 0
-	stale := 0
-	for id, pane := range t.panes {
-		_, ok := aliveIDs[id]
-		pane.Alive = ok
-		t.panes[id] = pane
-		if ok {
-			alive++
-		} else {
-			stale++
-		}
-	}
-	return alive, stale
-}
-
-func (t *TmuxTool) markPaneAlive(paneID string, alive bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if pane, ok := t.panes[paneID]; ok {
-		pane.Alive = alive
-		t.panes[paneID] = pane
-	}
+	return t.Manager
 }
 
 func (t *TmuxTool) workspace() string {
-	if strings.TrimSpace(t.WorkingDir) != "" {
+	if t != nil && strings.TrimSpace(t.WorkingDir) != "" {
 		return t.WorkingDir
 	}
 	wd, err := os.Getwd()

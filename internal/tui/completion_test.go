@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/textinput"
@@ -178,6 +179,24 @@ func TestDetectMention(t *testing.T) {
 	}
 }
 
+func TestDetectMentionWithMultibytePrefix(t *testing.T) {
+	value := "修复 @internal/"
+	active, prefix := DetectMention(value, len(value))
+	if !active {
+		t.Fatal("expected mention to be detected after multibyte prefix")
+	}
+	if prefix != "internal/" {
+		t.Errorf("expected prefix 'internal/', got %q", prefix)
+	}
+}
+
+func TestDetectMentionNoPanicOnMidUTF8Cursor(t *testing.T) {
+	value := "修复 @internal/"
+	for cursor := -2; cursor <= len(value)+2; cursor++ {
+		DetectMention(value, cursor)
+	}
+}
+
 func TestCompleteSlashCommandOnlyIncludesLegacyCommands(t *testing.T) {
 	matches := CompleteSlashCommand("/de", map[string]*commands.Command{
 		"deploy": {
@@ -201,6 +220,19 @@ func TestCompleteSlashCommandIncludesHarness(t *testing.T) {
 	matches := CompleteSlashCommand("/har", nil)
 	if len(matches) != 1 || matches[0] != "/harness" {
 		t.Fatalf("matches = %v, want [/harness]", matches)
+	}
+}
+
+func TestCompleteSlashCommandIncludesTmux(t *testing.T) {
+	matches := CompleteSlashCommand("/tm", nil)
+	if len(matches) != 1 || matches[0] != "/tmux" {
+		t.Fatalf("matches = %v, want [/tmux]", matches)
+	}
+	if got := SlashCommandDescriptions["/tmux"]; got == "" {
+		t.Fatal("expected /tmux description")
+	}
+	if got := SlashCommandPlaceholders["/tmux"]; !strings.Contains(got, "enter") || !strings.Contains(got, "capture") {
+		t.Fatalf("expected /tmux placeholder to mention subcommands, got %q", got)
 	}
 }
 
