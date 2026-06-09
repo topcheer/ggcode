@@ -29,7 +29,7 @@ func TestBundledSkillsIncludeOperationalSkills(t *testing.T) {
 	}
 }
 
-func TestBundledDebugSkillUsesForkedContext(t *testing.T) {
+func TestBundledDebugSkillLoadsInline(t *testing.T) {
 	var debug *Command
 	for _, skill := range bundledSkills() {
 		if skill.Name == "debug" {
@@ -40,11 +40,14 @@ func TestBundledDebugSkillUsesForkedContext(t *testing.T) {
 	if debug == nil {
 		t.Fatal("missing debug skill")
 	}
-	if debug.Context != "fork" {
-		t.Fatalf("debug context = %q, want fork", debug.Context)
+	if debug.Context == "fork" {
+		t.Fatalf("debug skill should load inline; fork context starts a sub-agent and blocks until completion")
 	}
-	if len(debug.AllowedTools) == 0 {
-		t.Fatal("debug skill should constrain its sub-agent tools")
+	if len(debug.AllowedTools) != 0 {
+		t.Fatalf("debug skill should not define sub-agent-only allowed tools when loaded inline")
+	}
+	if !strings.Contains(debug.Template, "Debug systematically") || !strings.Contains(debug.Template, "root cause") {
+		t.Fatalf("debug template should still contain debugging guidance, got %q", debug.Template)
 	}
 }
 
