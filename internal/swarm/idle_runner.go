@@ -214,6 +214,9 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		if onEvent != nil {
+			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
+		}
 
 		// Build prompt from the claimed task.
 		prompt := buildTaskPrompt(claimed)
@@ -241,11 +244,17 @@ func tryClaimPendingTask(
 			pending := task.StatusPending
 			owner := ""
 			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+			if onEvent != nil {
+				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
+			}
 			tm.setStatus(TeammateShuttingDown)
 			return
 		}
 		completed := task.StatusCompleted
 		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+		if onEvent != nil {
+			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
+		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
 		tm.mu.Lock()
