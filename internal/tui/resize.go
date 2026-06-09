@@ -72,7 +72,7 @@ func composerCursorEnd(ta *textarea.Model) {
 	ta.SetValue(val)
 }
 
-// inputCursor returns the absolute character offset of the cursor in the textarea.
+// inputCursor returns the absolute byte offset of the cursor in the textarea value.
 func inputCursor(ta *textarea.Model) int {
 	line := ta.Line()
 	col := ta.Column()
@@ -85,7 +85,17 @@ func inputCursor(ta *textarea.Model) int {
 	for i := 0; i < line && i < len(lines); i++ {
 		pos += len(lines[i]) + 1 // +1 for newline
 	}
-	pos += col
+	if line >= len(lines) {
+		return len(val)
+	}
+	runes := []rune(lines[line])
+	if col < 0 {
+		col = 0
+	}
+	if col > len(runes) {
+		col = len(runes)
+	}
+	pos += len(string(runes[:col]))
 	return pos
 }
 
