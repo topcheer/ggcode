@@ -84,6 +84,7 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	created := tm.Create(args.Subject, args.Description, "", metadata)
+	t.Manager.EmitBoardUpdated(args.TeamID)
 
 	// If an assignee is specified, push the task directly into their inbox
 	// for immediate execution (bypasses the polling delay).
@@ -267,6 +268,7 @@ func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (R
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	t.Manager.EmitBoardUpdated(args.TeamID)
 	out, _ := json.Marshal(updated)
 	return Result{Content: string(out) + "\n"}, nil
 }
@@ -331,5 +333,6 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	t.Manager.EmitBoardUpdated(args.TeamID)
 	return Result{Content: fmt.Sprintf("Task %s completed.\n", updated.ID)}, nil
 }

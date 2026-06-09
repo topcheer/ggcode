@@ -189,6 +189,17 @@ const en = {
   'files.imagePreview': 'Image Preview',
   'files.noPreview': 'No preview available',
   'files.openInEditor': 'Open in Editor',
+
+  // DebugConsole
+  'debug.title': 'Debug Console',
+  'debug.start': 'Start',
+  'debug.stop': 'Stop',
+  'debug.clear': 'Clear',
+  'debug.lines': 'lines',
+  'debug.live': '● LIVE',
+  'debug.allCategories': 'All categories',
+  'debug.filterPlaceholder': 'Filter...',
+  'debug.empty': 'Click "Start" to begin capturing debug logs',
 } as const
 
 export type TranslationKey = keyof typeof en

@@ -143,22 +143,28 @@ func (t *Teammate) getResults() string {
 // incurring O(maxTeammateEvents) copy overhead or contending the Teammate.mu
 // lock that the runner uses for appendEvent.
 type TeammateStatusInfo struct {
-	ID     string
-	Name   string
-	Status TeammateStatus
+	ID          string
+	Name        string
+	Color       string
+	Status      TeammateStatus
+	CurrentTask string
+	LastResult  string
 }
 
 // statusInfo returns a lightweight copy with only identity + status.
 // It acquires Teammate.mu briefly to read the Status field.
 func (t *Teammate) statusInfo() TeammateStatusInfo {
 	t.mu.Lock()
-	s := t.Status
-	t.mu.Unlock()
-	return TeammateStatusInfo{
-		ID:     t.ID,
-		Name:   t.Name,
-		Status: s,
+	info := TeammateStatusInfo{
+		ID:          t.ID,
+		Name:        t.Name,
+		Color:       t.Color,
+		Status:      t.Status,
+		CurrentTask: t.CurrentTask,
+		LastResult:  t.LastResult,
 	}
+	t.mu.Unlock()
+	return info
 }
 
 // TeammateSnapshot is a read-only copy of a Teammate for external consumption.
@@ -254,6 +260,62 @@ func (t *Team) snapshot() TeamSnapshot {
 		LeaderID:  t.LeaderID,
 		Teammates: mates,
 		TaskCount: taskCount,
+		CreatedAt: t.CreatedAt,
+	}
+}
+
+func (t *Team) boardSnapshot() TeamBoardSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	mates := make([]TeamBoardTeammate, 0, len(t.Teammates))
+	for _, m := range t.Teammates {
+		snap := m.statusInfo()
+		mates = append(mates, TeamBoardTeammate{
+			ID:          snap.ID,
+			Name:        snap.Name,
+			Color:       snap.Color,
+			Status:      string(snap.Status),
+			CurrentTask: snap.CurrentTask,
+			LastResult:  snap.LastResult,
+		})
+	}
+	sort.Slice(mates, func(i, j int) bool { return mates[i].ID < mates[j].ID })
+
+	tasks := []TeamBoardTask{}
+	if t.Tasks != nil {
+		taskSnapshots := t.Tasks.List()
+		tasks = make([]TeamBoardTask, 0, len(taskSnapshots))
+		for _, taskSnap := range taskSnapshots {
+			metadata := taskSnap.Metadata
+			assignee := ""
+			if metadata != nil {
+				assignee = metadata["assignee"]
+			}
+			tasks = append(tasks, TeamBoardTask{
+				ID:          taskSnap.ID,
+				Subject:     taskSnap.Subject,
+				Description: taskSnap.Description,
+				ActiveForm:  taskSnap.ActiveForm,
+				Status:      string(taskSnap.Status),
+				Owner:       taskSnap.Owner,
+				Assignee:    assignee,
+				Blocks:      taskSnap.Blocks,
+				BlockedBy:   taskSnap.BlockedBy,
+				Metadata:    metadata,
+				CreatedAt:   taskSnap.CreatedAt,
+				UpdatedAt:   taskSnap.UpdatedAt,
+			})
+		}
+		sort.Slice(tasks, func(i, j int) bool { return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt) })
+	}
+
+	return TeamBoardSnapshot{
+		ID:        t.ID,
+		Name:      t.Name,
+		LeaderID:  t.LeaderID,
+		Teammates: mates,
+		Tasks:     tasks,
 		CreatedAt: t.CreatedAt,
 	}
 }

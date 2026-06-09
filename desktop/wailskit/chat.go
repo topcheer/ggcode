@@ -139,6 +139,22 @@ func NewChatBridge() (*ChatBridge, error) {
 	}, nil
 }
 
+func (b *ChatBridge) GetTeamBoard() []swarm.TeamBoardSnapshot {
+	if b == nil || b.swarmMgr == nil {
+		return []swarm.TeamBoardSnapshot{}
+	}
+	return b.swarmMgr.ListTeamBoards()
+}
+
+func shouldEmitSwarmBoardUpdate(eventType string) bool {
+	switch eventType {
+	case "team_created", "team_deleted", "teammate_spawned", "teammate_working", "teammate_idle", "teammate_shutdown", "teammate_error", "team_board_updated":
+		return true
+	default:
+		return false
+	}
+}
+
 // SetTunnelHost sets the unified tunnel host from InteractiveRuntimeCore.Tunnel.
 func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 	b.tunnelHost = th
@@ -677,6 +693,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
 		// Push to frontend
 		if b.OnStreamEvent != nil {
+			if ev.TeamID != "" && shouldEmitSwarmBoardUpdate(ev.Type) {
+				raw, _ := json.Marshal(map[string]string{"teamID": ev.TeamID})
+				b.OnStreamEvent("swarm_board_updated", raw)
+			}
 			switch ev.Type {
 			case "teammate_text":
 				raw, _ := json.Marshal(map[string]string{

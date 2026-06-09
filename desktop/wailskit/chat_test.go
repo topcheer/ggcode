@@ -93,6 +93,19 @@ func TestEmitToolCallUsesSharedPresentation(t *testing.T) {
 	}
 }
 
+func TestShouldEmitSwarmBoardUpdateFiltersHighFrequencyText(t *testing.T) {
+	for _, eventType := range []string{"team_created", "teammate_spawned", "teammate_working", "teammate_idle", "team_board_updated"} {
+		if !shouldEmitSwarmBoardUpdate(eventType) {
+			t.Fatalf("expected %s to refresh team board", eventType)
+		}
+	}
+	for _, eventType := range []string{"teammate_text", "teammate_reasoning", "teammate_tool_call", "teammate_tool_result"} {
+		if shouldEmitSwarmBoardUpdate(eventType) {
+			t.Fatalf("expected %s not to refresh team board", eventType)
+		}
+	}
+}
+
 func TestEmitBuildsLiveSessionHistory(t *testing.T) {
 	bridge := &ChatBridge{
 		currentSes: &session.Session{},

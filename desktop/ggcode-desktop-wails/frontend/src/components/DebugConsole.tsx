@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { Terminal, Search, Trash2, Play, Pause } from 'lucide-react'
+import { useTranslation } from '../i18n'
 
 interface LogEntry {
   seq: number
@@ -50,6 +51,7 @@ const catColors: Record<string, string> = {
 }
 
 export default function DebugConsole() {
+  const { t } = useTranslation()
   const [lines, setLines] = useState<LogEntry[]>(() => persistentLines)
   const [enabled, setEnabled] = useState(() => persistentEnabled)
   const [filter, setFilter] = useState('')
@@ -157,14 +159,14 @@ export default function DebugConsole() {
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
         <Terminal size={16} style={{ color: '#58a6ff' }} />
-        <span style={{ fontWeight: 600, color: '#58a6ff', fontSize: 13 }}>Debug Console</span>
+        <span style={{ fontWeight: 600, color: '#58a6ff', fontSize: 13 }}>{t('debug.title')}</span>
 
         <button onClick={toggle} style={{
           marginLeft: 8, padding: '4px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
           background: enabled ? '#da3633' : '#238636', color: '#fff', fontSize: 11, fontWeight: 600,
           display: 'flex', alignItems: 'center', gap: 4,
         }}>
-          {enabled ? <><Pause size={12} /> Stop</> : <><Play size={12} /> Start</>}
+          {enabled ? <><Pause size={12} /> {t('debug.stop')}</> : <><Play size={12} /> {t('debug.start')}</>}
         </button>
 
         <button onClick={clear} style={{
@@ -172,12 +174,12 @@ export default function DebugConsole() {
           background: 'transparent', color: '#8b949e', fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 4,
         }}>
-          <Trash2 size={12} /> Clear
+          <Trash2 size={12} /> {t('debug.clear')}
         </button>
 
         <span style={{ marginLeft: 8, color: '#8b949e', fontSize: 11 }}>
-          {filtered.length} / {lines.length} lines
-          {enabled && <span style={{ color: '#3fb950', marginLeft: 6 }}>● LIVE</span>}
+          {filtered.length} / {lines.length} {t('debug.lines')}
+          {enabled && <span style={{ color: '#3fb950', marginLeft: 6 }}>{t('debug.live')}</span>}
         </span>
 
         <div style={{ flex: 1 }} />
@@ -187,14 +189,14 @@ export default function DebugConsole() {
           padding: '3px 6px', borderRadius: 4, border: '1px solid #30363d',
           background: '#161b22', color: '#c9d1d9', fontSize: 11,
         }}>
-          <option value="">All categories</option>
+          <option value="">{t('debug.allCategories')}</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
 
         {/* Search */}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <Search size={12} style={{ position: 'absolute', left: 6, color: '#484f58' }} />
-          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter..." style={{
+          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('debug.filterPlaceholder')} style={{
             padding: '3px 6px 3px 22px', borderRadius: 4, border: '1px solid #30363d',
             background: '#161b22', color: '#c9d1d9', fontSize: 11, width: 140,
             outline: 'none',
@@ -213,7 +215,7 @@ export default function DebugConsole() {
         ))}
         {!enabled && lines.length === 0 && (
           <div style={{ padding: 24, textAlign: 'center', color: '#484f58' }}>
-            Click "Start" to begin capturing debug logs
+            {t('debug.empty')}
           </div>
         )}
         <div ref={bottomRef} />

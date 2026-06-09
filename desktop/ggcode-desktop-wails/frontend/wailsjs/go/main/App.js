@@ -98,6 +98,10 @@ export function GetSessionHistory() {
   return window['go']['main']['App']['GetSessionHistory']();
 }
 
+export function GetTeamBoard() {
+  return window['go']['main']['App']['GetTeamBoard']();
+}
+
 export function GetVendorPresets() {
   return window['go']['main']['App']['GetVendorPresets']();
 }
@@ -158,6 +162,10 @@ export function NewSession() {
   return window['go']['main']['App']['NewSession']();
 }
 
+export function ReadClipboardImage() {
+  return window['go']['main']['App']['ReadClipboardImage']();
+}
+
 export function ReadFileAsBase64(arg1) {
   return window['go']['main']['App']['ReadFileAsBase64'](arg1);
 }
@@ -214,6 +222,10 @@ export function SendMessage(arg1) {
   return window['go']['main']['App']['SendMessage'](arg1);
 }
 
+export function SendMessageWithImages(arg1, arg2) {
+  return window['go']['main']['App']['SendMessageWithImages'](arg1, arg2);
+}
+
 export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
@@ -222,12 +234,12 @@ export function SetMCPServerEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
 }
 
-export function StartMCPOAuth(arg1) {
-  return window['go']['main']['App']['StartMCPOAuth'](arg1);
-}
-
 export function SetPermissionMode(arg1) {
   return window['go']['main']['App']['SetPermissionMode'](arg1);
+}
+
+export function StartMCPOAuth(arg1) {
+  return window['go']['main']['App']['StartMCPOAuth'](arg1);
 }
 
 export function StartShare() {

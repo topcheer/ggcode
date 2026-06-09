@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/task"
 )
 
 // mockAgent is a minimal AgentRunner that records calls.
@@ -351,6 +352,49 @@ func TestManager_OnUpdate(t *testing.T) {
 	mu.Unlock()
 	if !found {
 		t.Error("expected team_created event")
+	}
+}
+
+func TestManager_ListTeamBoardsIncludesTasksAndTeammates(t *testing.T) {
+	m, _ := testManager(t)
+	defer m.Shutdown()
+
+	team := m.CreateTeam("board-team", "leader-1")
+	if _, err := m.SpawnTeammate(team.ID, "coder", "32", nil); err != nil {
+		t.Fatalf("spawn teammate: %v", err)
+	}
+	tmMgr, err := m.EnsureTaskManager(team.ID)
+	if err != nil {
+		t.Fatalf("ensure task manager: %v", err)
+	}
+	taskSnap := tmMgr.Create("Implement board", "Render shared work", "Implementing", map[string]string{"assignee": "tm-1", "priority": "high"})
+
+	boards := m.ListTeamBoards()
+	if len(boards) != 1 {
+		t.Fatalf("expected 1 board, got %d: %+v", len(boards), boards)
+	}
+	board := boards[0]
+	if board.ID != team.ID || board.Name != "board-team" || board.LeaderID != "leader-1" {
+		t.Fatalf("unexpected board identity: %+v", board)
+	}
+	if len(board.Teammates) != 1 {
+		t.Fatalf("expected 1 teammate, got %d: %+v", len(board.Teammates), board.Teammates)
+	}
+	if board.Teammates[0].Name != "coder" || board.Teammates[0].Color != "32" || board.Teammates[0].Status != string(TeammateIdle) {
+		t.Fatalf("unexpected teammate snapshot: %+v", board.Teammates[0])
+	}
+	if len(board.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d: %+v", len(board.Tasks), board.Tasks)
+	}
+	gotTask := board.Tasks[0]
+	if gotTask.ID != taskSnap.ID || gotTask.Subject != "Implement board" || gotTask.Description != "Render shared work" {
+		t.Fatalf("unexpected task snapshot: %+v", gotTask)
+	}
+	if gotTask.ActiveForm != "Implementing" || gotTask.Status != string(task.StatusPending) || gotTask.Assignee != "tm-1" {
+		t.Fatalf("unexpected task status/assignee: %+v", gotTask)
+	}
+	if gotTask.Metadata["priority"] != "high" {
+		t.Fatalf("expected metadata to be copied, got %+v", gotTask.Metadata)
 	}
 }
 
