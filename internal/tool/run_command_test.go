@@ -7,6 +7,21 @@ import (
 	"time"
 )
 
+func TestRunCommandDescriptionClarifiesQuickVsBackground(t *testing.T) {
+	tool := RunCommand{}
+	for _, want := range []string{"quick one-shot", "prefer start_command", "interactive commands"} {
+		if !containsAny(tool.Description(), want) {
+			t.Fatalf("run_command description should mention %q, got %q", want, tool.Description())
+		}
+	}
+	params := string(tool.Parameters())
+	for _, want := range []string{"quick one-shot commands", "prefer start_command", "# Run tests"} {
+		if !containsAny(params, want) {
+			t.Fatalf("run_command schema should mention %q, got %s", want, params)
+		}
+	}
+}
+
 func TestRunCommand_Basic(t *testing.T) {
 	rc := RunCommand{WorkingDir: "/tmp"}
 	input := json.RawMessage(`{"command": "echo hello"}`)

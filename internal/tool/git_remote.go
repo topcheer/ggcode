@@ -13,7 +13,7 @@ type GitRemote struct{ WorkingDir string }
 func (t GitRemote) Name() string { return "git_remote" }
 
 func (t GitRemote) Description() string {
-	return "List remote repositories and their URLs."
+	return "List configured Git remotes and their URLs. Read-only inspection tool; useful before fetch/push workflows or when confirming which upstream repository this checkout targets."
 }
 
 func (t GitRemote) Parameters() json.RawMessage {

@@ -20,8 +20,7 @@ type TaskCreateTool struct {
 
 func (t TaskCreateTool) Name() string { return "task_create" }
 func (t TaskCreateTool) Description() string {
-	return "Create a structured task to track work within the session. " +
-		"Returns the task ID for use with task_update, task_get, etc."
+	return "Create a structured task to track work within the session. Use for meaningful multi-step work, dependencies, or handoff-ready follow-up; use todo_write for a lightweight personal checklist and swarm_task_create for assigning work to teammates. Returns the task ID for task_update, task_get, or dependency links."
 }
 func (t TaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -325,7 +324,7 @@ type TaskStopTool struct {
 
 func (t TaskStopTool) Name() string { return "task_stop" }
 func (t TaskStopTool) Description() string {
-	return "Stop a running task, resetting its status from in_progress to pending."
+	return "Stop a running tracked task by resetting its status from in_progress to pending. This updates task-board state only; it does not cancel a shell command, sub-agent, teammate, or other running process."
 }
 func (t TaskStopTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -385,8 +384,7 @@ type TaskOutputTool struct {
 
 func (t TaskOutputTool) Name() string { return "task_output" }
 func (t TaskOutputTool) Description() string {
-	return "Get the output of a background task (subagent or shell command) by its task ID. " +
-		"Returns the result if the task has completed, or partial output if still running."
+	return "Get the output of a background task (subagent or shell command) by its task ID. This is for background execution IDs, not structured session task IDs from task_create. Returns the result if completed, or partial output if still running; for shell jobs, prefer read_command_output or wait_command when you have the command job ID."
 }
 func (t TaskOutputTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

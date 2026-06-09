@@ -12,22 +12,20 @@ type SleepTool struct{}
 
 func (t SleepTool) Name() string { return "sleep" }
 func (t SleepTool) Description() string {
-	return "Sleep for a specified duration. Use this when waiting for a specified time to pass, " +
-		"such as when checking back in an hour, or waiting for a process to finish. " +
-		"Prefer this tool over using run_command to sleep."
+	return "Sleep for a specified duration (maximum 30 minutes). Use when waiting for time to pass, such as checking back later or giving an external system time to update. Prefer wait_command/read_command_output when you have a background job ID, and prefer sleep over run_command for plain delays."
 }
 func (t SleepTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"seconds": {
-			"type": "integer",
-			"description": "Seconds to sleep"
-		},
-		"milliseconds": {
-			"type": "integer",
-			"description": "Additional milliseconds to sleep (combined with seconds)"
-		},
+			"seconds": {
+				"type": "integer",
+				"description": "Seconds to sleep (combined with milliseconds). Total duration must not exceed 30 minutes."
+			},
+			"milliseconds": {
+				"type": "integer",
+				"description": "Additional milliseconds to sleep (combined with seconds). Total duration must not exceed 30 minutes."
+			},
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."

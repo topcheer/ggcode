@@ -9,6 +9,29 @@ import (
 	"github.com/topcheer/ggcode/internal/cron"
 )
 
+func TestCronToolDescriptionsClarifyPersistenceAndLoadedState(t *testing.T) {
+	createDesc := CronCreateTool{}.Description()
+	for _, want := range []string{"recurring=false", "Only recurring jobs are persisted", "one-shot reminders are in-memory"} {
+		if !strings.Contains(createDesc, want) {
+			t.Fatalf("cron_create description should mention %q, got %q", want, createDesc)
+		}
+	}
+
+	deleteDesc := CronDeleteTool{}.Description()
+	for _, want := range []string{"future schedule only", "does not cancel prompts", "already started"} {
+		if !strings.Contains(deleteDesc, want) {
+			t.Fatalf("cron_delete description should mention %q, got %q", want, deleteDesc)
+		}
+	}
+
+	listDesc := CronListTool{}.Description()
+	for _, want := range []string{"currently loaded", "for this workspace", "recurring and one-shot"} {
+		if !strings.Contains(listDesc, want) {
+			t.Fatalf("cron_list description should mention %q, got %q", want, listDesc)
+		}
+	}
+}
+
 func TestCronCreateTool_Execute(t *testing.T) {
 	s := cron.NewScheduler(nil, "")
 	defer s.Shutdown()

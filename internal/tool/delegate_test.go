@@ -114,8 +114,11 @@ func TestDelegateToolDescription(t *testing.T) {
 	if !strings.Contains(desc, "copilot") {
 		t.Error("description should mention copilot")
 	}
-	if !strings.Contains(desc, "droid") {
-		t.Error("description should mention droid")
+	if !strings.Contains(desc, "wait_agent or list_agents") {
+		t.Error("description should mention how to follow async delegate runs")
+	}
+	if !strings.Contains(desc, "Avoid this for quick shell commands") {
+		t.Error("description should discourage trivial local-tool work")
 	}
 }
 
@@ -142,6 +145,15 @@ func TestDelegateToolParameters(t *testing.T) {
 	}
 	if _, ok := props["prompt"]; !ok {
 		t.Error("expected 'prompt' property")
+	}
+
+	promptProp, ok := props["prompt"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected prompt property schema")
+	}
+	promptDesc, _ := promptProp["description"].(string)
+	if !strings.Contains(promptDesc, "may not accept follow-up instructions reliably") {
+		t.Fatalf("prompt schema should require complete context, got %q", promptDesc)
 	}
 
 	required, ok := schema["required"].([]interface{})

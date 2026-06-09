@@ -9,6 +9,29 @@ import (
 	"github.com/topcheer/ggcode/internal/task"
 )
 
+func TestTaskToolDescriptionsClarifyScope(t *testing.T) {
+	createTool := TaskCreateTool{}
+	for _, want := range []string{"todo_write", "swarm_task_create", "meaningful multi-step work"} {
+		if !containsAny(createTool.Description(), want) {
+			t.Fatalf("task_create description should mention %q, got %q", want, createTool.Description())
+		}
+	}
+
+	stopTool := TaskStopTool{}
+	for _, want := range []string{"task-board state only", "does not cancel"} {
+		if !containsAny(stopTool.Description(), want) {
+			t.Fatalf("task_stop description should mention %q, got %q", want, stopTool.Description())
+		}
+	}
+
+	outputTool := TaskOutputTool{}
+	for _, want := range []string{"not structured session task IDs", "read_command_output or wait_command"} {
+		if !containsAny(outputTool.Description(), want) {
+			t.Fatalf("task_output description should mention %q, got %q", want, outputTool.Description())
+		}
+	}
+}
+
 func TestTaskCreate_Basic(t *testing.T) {
 	mgr := task.NewManager()
 	tk := TaskCreateTool{Manager: mgr}

@@ -15,6 +15,15 @@ import (
 
 // --- web_fetch tests ---
 
+func TestWebFetchDescriptionClarifiesNonInteractiveUse(t *testing.T) {
+	desc := WebFetch{}.Description()
+	for _, want := range []string{"does not summarize or transform", "interactive or login-required", "browser automation"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("web_fetch description should mention %q, got %q", want, desc)
+		}
+	}
+}
+
 func TestWebFetch_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "<html><body><h1>Hello</h1><p>World</p></body></html>")

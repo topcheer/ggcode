@@ -202,7 +202,7 @@ func (t MultiFileEdit) Parameters() json.RawMessage {
 							"properties": {
 								"old_text": {
 									"type": "string",
-									"description": "Text to find. Best practice: paste the numbered lines directly from multi_file_read/read_file, including the line-number prefixes. Without those anchors, old_text must still closely match the file content."
+									"description": "Text to find. Best practice: paste the numbered lines directly from multi_file_read/read_file, including the line-number prefixes. Without those anchors, old_text must match the file content and be unique for that file."
 								},
 								"new_text": {
 									"type": "string",

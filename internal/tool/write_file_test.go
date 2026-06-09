@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func TestWriteFileSchemaWarnsOverwriteAndAbsolutePath(t *testing.T) {
+	params := string(WriteFile{}.Parameters())
+	for _, want := range []string{"Prefer an absolute path", "fully replaced", "use edit_file for targeted changes"} {
+		if !containsAny(params, want) {
+			t.Fatalf("write_file schema should mention %q, got %s", want, params)
+		}
+	}
+}
+
 func TestWriteFileBasic(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "output.txt")

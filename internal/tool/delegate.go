@@ -153,13 +153,15 @@ func (t DelegateTool) Description() string {
 Available agents (auto-detected from your system):
 %s
 
-The agent will execute the task autonomously in the current working directory and return the result.
+The agent executes autonomously in the current working directory. It may run asynchronously as a delegated sub-agent; use wait_agent or list_agents to follow an async run when the result says one was started.
 Each agent uses its own API key and billing — no additional configuration needed.
 
 Use this when:
 - The user explicitly asks a specific agent to do something (e.g. "let copilot analyze this")
 - You want a second opinion from a different AI model
-- You want to leverage agent-specific capabilities`, strings.Join(descs, "\n"))
+- You want to leverage agent-specific capabilities
+
+Avoid this for quick shell commands, direct file edits, or simple repository inspection that the current agent can do with local tools. Include all context the delegate needs in the prompt.`, strings.Join(descs, "\n"))
 }
 
 func (t DelegateTool) Parameters() json.RawMessage {
@@ -178,7 +180,7 @@ func (t DelegateTool) Parameters() json.RawMessage {
 			},
 			"prompt": {
 				"type": "string",
-				"description": "The task description to send to the agent. Be specific and include all necessary context — the agent has access to the current working directory."
+				"description": "The task description to send to the agent. Be specific and include all necessary context; the agent may not accept follow-up instructions reliably. The agent has access to the current working directory."
 			},
 			"description": {
 				"type": "string",

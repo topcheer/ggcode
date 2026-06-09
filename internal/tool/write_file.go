@@ -27,11 +27,11 @@ func (t WriteFile) Parameters() json.RawMessage {
 	"properties": {
 		"path": {
 			"type": "string",
-			"description": "Path to the file to write. Parent directories are created automatically."
+			"description": "Path to the file to write. Parent directories are created automatically. Prefer an absolute path when available."
 		},
 		"content": {
 			"type": "string",
-			"description": "Content to write. Existing file contents at this path will be fully replaced."
+			"description": "Content to write. Existing file contents at this path will be fully replaced; use edit_file for targeted changes to existing files."
 		},
 		"description": {
 			"type": "string",
