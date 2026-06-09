@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func TestEditFileSchemaWarnsOldTextUniqueness(t *testing.T) {
+	params := string(EditFile{}.Parameters())
+	for _, want := range []string{"line-number prefixes", "byte-for-byte", "unique in the file"} {
+		if !containsAny(params, want) {
+			t.Fatalf("edit_file schema should mention %q, got %s", want, params)
+		}
+	}
+}
+
 func TestEditFile_Basic(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "test.go")

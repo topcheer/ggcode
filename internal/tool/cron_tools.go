@@ -93,7 +93,7 @@ type CronDeleteTool struct {
 
 func (t CronDeleteTool) Name() string { return "cron_delete" }
 func (t CronDeleteTool) Description() string {
-	return "Delete a scheduled job by ID."
+	return "Delete a scheduled cron job by ID. This removes the future schedule only; it does not cancel prompts that have already been enqueued or undo work already started."
 }
 func (t CronDeleteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -141,7 +141,7 @@ type CronListTool struct {
 
 func (t CronListTool) Name() string { return "cron_list" }
 func (t CronListTool) Description() string {
-	return "List all scheduled cron jobs."
+	return "List currently loaded scheduled cron jobs for this workspace. Shows in-memory active jobs, including recurring and one-shot jobs that have not fired yet."
 }
 func (t CronListTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

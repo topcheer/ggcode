@@ -119,7 +119,7 @@ type GetMCPPromptTool struct {
 
 func (t GetMCPPromptTool) Name() string { return "get_mcp_prompt" }
 func (t GetMCPPromptTool) Description() string {
-	return "Fetch a prompt template from a connected MCP server."
+	return "Fetch a prompt template from a connected MCP server. Call list_mcp_capabilities first to confirm the server, prompt name, and required arguments. This returns template messages; it does not execute the prompt through the LLM."
 }
 func (t GetMCPPromptTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -193,7 +193,7 @@ type ReadMCPResourceTool struct {
 
 func (t ReadMCPResourceTool) Name() string { return "read_mcp_resource" }
 func (t ReadMCPResourceTool) Description() string {
-	return "Read a resource exposed by a connected MCP server."
+	return "Read a resource exposed by a connected MCP server. Call list_mcp_capabilities first to discover valid server names and resource URIs. Returns raw resource text/blob content; it does not summarize or transform the resource."
 }
 func (t ReadMCPResourceTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

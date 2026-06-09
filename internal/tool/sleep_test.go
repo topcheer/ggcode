@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+func TestSleepToolDescriptionClarifiesDelayUse(t *testing.T) {
+	tool := SleepTool{}
+	for _, want := range []string{"maximum 30 minutes", "prefer sleep over run_command", "wait_command/read_command_output"} {
+		if !containsAny(tool.Description(), want) {
+			t.Fatalf("sleep description should mention %q, got %q", want, tool.Description())
+		}
+	}
+	params := string(tool.Parameters())
+	if !containsAny(params, "Total duration must not exceed 30 minutes") {
+		t.Fatalf("sleep schema should mention max duration, got %s", params)
+	}
+}
+
 func TestSleep_Basic(t *testing.T) {
 	s := SleepTool{}
 	input, _ := json.Marshal(map[string]interface{}{

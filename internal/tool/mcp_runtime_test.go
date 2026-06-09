@@ -38,6 +38,18 @@ func (f fakeMCPRuntime) ReadResource(ctx context.Context, server, uri string) (*
 	}, nil
 }
 
+func TestMCPRuntimeToolDescriptions(t *testing.T) {
+	promptTool := GetMCPPromptTool{Runtime: fakeMCPRuntime{}}
+	if !containsAny(promptTool.Description(), "list_mcp_capabilities first") || !containsAny(promptTool.Description(), "does not execute") {
+		t.Fatalf("get_mcp_prompt description should clarify discovery and non-execution, got %q", promptTool.Description())
+	}
+
+	resourceTool := ReadMCPResourceTool{Runtime: fakeMCPRuntime{}}
+	if !containsAny(resourceTool.Description(), "list_mcp_capabilities first") || !containsAny(resourceTool.Description(), "does not summarize") {
+		t.Fatalf("read_mcp_resource description should clarify discovery and raw output, got %q", resourceTool.Description())
+	}
+}
+
 func TestListMCPCapabilitiesTool(t *testing.T) {
 	tool := ListMCPCapabilitiesTool{Runtime: fakeMCPRuntime{}}
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))

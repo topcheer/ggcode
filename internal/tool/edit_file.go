@@ -36,7 +36,7 @@ func (t EditFile) Parameters() json.RawMessage {
 		},
 		"old_text": {
 			"type": "string",
-			"description": "Text to find. Recommended: paste the numbered lines directly from read_file; the tool understands line-number prefixes and uses them as anchors. Without line numbers, old_text must match the file byte-for-byte (indentation, line endings)."
+			"description": "Text to find. Recommended: paste the numbered lines directly from read_file; the tool understands line-number prefixes and uses them as anchors. Without line numbers, old_text must match the file byte-for-byte (indentation, line endings) and be unique in the file."
 		},
 		"new_text": {
 			"type": "string",

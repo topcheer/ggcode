@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestGitReadOnlyDescriptionsClarifyInspectionUse(t *testing.T) {
+	cases := []struct {
+		name string
+		desc string
+		want []string
+	}{
+		{"git_log", GitLog{}.Description(), []string{"Read-only inspection", "recent changes", "before editing"}},
+		{"git_branch_list", GitBranchList{}.Description(), []string{"Read-only inspection", "remote=true", "expected branch"}},
+		{"git_remote", GitRemote{}.Description(), []string{"Read-only inspection", "fetch/push", "upstream repository"}},
+	}
+	for _, tc := range cases {
+		for _, want := range tc.want {
+			if !strings.Contains(tc.desc, want) {
+				t.Fatalf("%s description should mention %q, got %q", tc.name, want, tc.desc)
+			}
+		}
+	}
+}
+
+func TestGitDiffDescriptionRemindsInspection(t *testing.T) {
+	desc := GitDiff{}.Description()
+	for _, want := range []string{"inspect exactly what changed", "before staging or committing", "specific file diffs"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("git_diff description should mention %q, got %q", want, desc)
+		}
+	}
+}
+
 func TestGitStatusBasic(t *testing.T) {
 	gs := GitStatus{}
 	// Running in the project repo — should work
@@ -153,8 +181,11 @@ func TestGitToolDescriptionsDiscourageBroadOrDestructiveActions(t *testing.T) {
 	if !strings.Contains(gs.Description(), "pop and drop are destructive") {
 		t.Fatalf("git_stash description should warn about destructive actions, got %q", gs.Description())
 	}
+	if !strings.Contains(gs.Description(), "tracked changes only") {
+		t.Fatalf("git_stash description should mention tracked-only push behavior, got %q", gs.Description())
+	}
 	params := string(gs.Parameters())
-	for _, want := range []string{"drop removes an entry without applying", "Confirm the desired entry with git_stash_list"} {
+	for _, want := range []string{"drop removes an entry without applying", "Confirm the desired entry with git_stash_list", "untracked files are not included"} {
 		if !strings.Contains(params, want) {
 			t.Fatalf("git_stash schema should mention %q, got %s", want, params)
 		}

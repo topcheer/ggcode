@@ -562,6 +562,34 @@ git push origin vX.Y.Z
 
 - re-monitor all workflows until every one reaches `completed` / `success`
 
+### 12.6 Tag was moved after workflows already started
+
+Symptom:
+
+- a tag-triggered workflow fails with a message like `tag 'vX.Y.Z' does not point to the expected commit`
+- release assets or package workflows were started from the wrong commit
+
+Cause:
+
+- the tag was deleted/re-created or force-moved while older tag workflows were still running
+
+Fix:
+
+- do not force-push `main` to chase the old workflow
+- create a normal follow-up commit on `main` that fixes the bad release content
+- move the tag only after `main` contains the fix:
+
+```bash
+git fetch origin main --prune
+git reset --hard origin/main
+# apply or commit the release-content fix here
+git push origin main
+git tag -f vX.Y.Z HEAD
+git push origin vX.Y.Z
+```
+
+- treat failures from the superseded workflow run as expected; monitor only the newest run for the final tag commit
+
 ## 13. Manual packaging runs
 
 The `Release` workflow supports `workflow_dispatch` with `package_version`.

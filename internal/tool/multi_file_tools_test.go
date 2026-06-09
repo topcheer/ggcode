@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestMultiFileToolDescriptionsClarifyAnchorsAndAtomicity(t *testing.T) {
+	readDesc := MultiFileRead{}.Description()
+	for _, want := range []string{"copy/paste anchors", "paths absolute and unique", "offset/limit"} {
+		if !strings.Contains(readDesc, want) {
+			t.Fatalf("multi_file_read description should mention %q, got %q", want, readDesc)
+		}
+	}
+
+	editTool := MultiFileEdit{}
+	editDesc := editTool.Description()
+	for _, want := range []string{"Use multi_edit_file instead", "ORIGINAL file content", "Default mode is atomic"} {
+		if !strings.Contains(editDesc, want) {
+			t.Fatalf("multi_file_edit description should mention %q, got %q", want, editDesc)
+		}
+	}
+
+	params := string(editTool.Parameters())
+	for _, want := range []string{"unique for that file", "including the line-number prefixes", "partial_success writes successful files"} {
+		if !strings.Contains(params, want) {
+			t.Fatalf("multi_file_edit schema should mention %q, got %s", want, params)
+		}
+	}
+}
+
 func TestMultiFileRead_BasicAndOrdered(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.go")

@@ -13,7 +13,7 @@ type GitDiff struct{ WorkingDir string }
 func (t GitDiff) Name() string { return "git_diff" }
 
 func (t GitDiff) Description() string {
-	return "Show git diff. Supports staged (--cached) and specific file diffs."
+	return "Show git diff. Use this to inspect exactly what changed before staging or committing. Supports staged (--cached) and specific file diffs."
 }
 
 func (t GitDiff) Parameters() json.RawMessage {

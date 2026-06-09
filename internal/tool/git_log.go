@@ -14,7 +14,7 @@ type GitLog struct{ WorkingDir string }
 func (t GitLog) Name() string { return "git_log" }
 
 func (t GitLog) Description() string {
-	return "Show git commit history in oneline format."
+	return "Show git commit history in oneline format. Read-only inspection tool; use it to understand recent changes before editing, debugging, or preparing a commit."
 }
 
 func (t GitLog) Parameters() json.RawMessage {
