@@ -43,6 +43,18 @@ func TestInputCursor(t *testing.T) {
 		t.Errorf("inputCursor after 3 lines = %d, want 17", got)
 	}
 
+	ta.SetValue("你好 @internal/")
+	got = inputCursor(&ta)
+	if got != len("你好 @internal/") {
+		t.Errorf("inputCursor with multibyte chars = %d, want %d", got, len("你好 @internal/"))
+	}
+
+	ta.SetValue("first\n你好 /help")
+	got = inputCursor(&ta)
+	if got != len("first\n你好 /help") {
+		t.Errorf("inputCursor with multibyte multiline input = %d, want %d", got, len("first\n你好 /help"))
+	}
+
 	ta.SetValue("")
 	got = inputCursor(&ta)
 	if got != 0 {
