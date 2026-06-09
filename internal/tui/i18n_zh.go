@@ -990,7 +990,7 @@ func zhCatalog(key string) string {
 	case "image.attached_hint":
 		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
 	case "image.clipboard_failed":
-		return "从剪贴板粘贴图片失败：%v"
+		return "无法从剪贴板粘贴图片：%v"
 	case "cron.firing":
 		return "⏰ 定时任务触发"
 	case "agents.none":
