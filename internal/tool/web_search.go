@@ -37,14 +37,14 @@ func (t WebSearch) Parameters() json.RawMessage {
 			"items": {
 				"type": "string"
 			},
-			"description": "Only include results from these domains"
+			"description": "Only include results from these domains. Matches the exact host and its subdomains (e.g. example.com also matches docs.example.com)."
 		},
 		"blocked_domains": {
 			"type": "array",
 			"items": {
 				"type": "string"
 			},
-			"description": "Never include results from these domains"
+			"description": "Never include results from these domains. Matches the exact host and its subdomains."
 		},
 		"description": {
 			"type": "string",
@@ -134,29 +134,52 @@ func filterByDomain(results []searchResult, allowedDomains, blockedDomains []str
 		return results
 	}
 
-	allowedSet := make(map[string]bool, len(allowedDomains))
-	for _, d := range allowedDomains {
-		allowedSet[strings.ToLower(d)] = true
-	}
-	blockedSet := make(map[string]bool, len(blockedDomains))
-	for _, d := range blockedDomains {
-		blockedSet[strings.ToLower(d)] = true
-	}
+	allowed := normalizeDomains(allowedDomains)
+	blocked := normalizeDomains(blockedDomains)
 
 	var filtered []searchResult
 	for _, r := range results {
-		host := domainFromURL(r.URL)
-		hostLower := strings.ToLower(host)
+		host := strings.ToLower(domainFromURL(r.URL))
 
-		if len(blockedSet) > 0 && blockedSet[hostLower] {
+		if len(blocked) > 0 && domainMatchesAny(host, blocked) {
 			continue
 		}
-		if len(allowedSet) > 0 && !allowedSet[hostLower] {
+		if len(allowed) > 0 && !domainMatchesAny(host, allowed) {
 			continue
 		}
 		filtered = append(filtered, r)
 	}
 	return filtered
+}
+
+func normalizeDomains(domains []string) []string {
+	out := make([]string, 0, len(domains))
+	seen := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		d = strings.TrimSpace(strings.ToLower(d))
+		d = strings.TrimPrefix(d, "http://")
+		d = strings.TrimPrefix(d, "https://")
+		d = strings.TrimSuffix(strings.Split(d, "/")[0], ".")
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+func domainMatchesAny(host string, domains []string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" {
+		return false
+	}
+	for _, d := range domains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
 }
 
 // domainFromURL extracts the hostname from a URL string.

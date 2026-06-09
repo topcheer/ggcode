@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/commands"
@@ -211,5 +212,19 @@ func TestSkillToolExecuteMCPPromptSkill(t *testing.T) {
 	}
 	if result.Content == "" {
 		t.Fatal("expected MCP prompt content")
+	}
+}
+
+func TestSkillToolDescriptionRejectsBuiltInCommands(t *testing.T) {
+	tool := SkillTool{}
+	desc := tool.Description()
+	for _, want := range []string{"listed skill clearly matches", "Do not use this for built-in CLI commands"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("skill description should mention %q, got %q", want, desc)
+		}
+	}
+	params := string(tool.Parameters())
+	if !strings.Contains(params, "do not pass built-in CLI/slash commands") {
+		t.Fatalf("skill schema should reject built-in CLI/slash commands, got %s", params)
 	}
 }

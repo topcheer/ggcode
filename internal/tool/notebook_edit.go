@@ -18,7 +18,8 @@ func (t NotebookEdit) Name() string { return "notebook_edit" }
 
 func (t NotebookEdit) Description() string {
 	return "Edit a Jupyter Notebook (.ipynb) file by replacing, adding, or deleting cells. " +
-		"Always use this tool for editing .ipynb files instead of edit_file or write_file."
+		"Always use this tool for editing .ipynb files instead of edit_file or write_file. " +
+		"Replacing or adding code cells creates fresh cells with no outputs and null execution_count; it does not preserve prior execution results."
 }
 
 func (t NotebookEdit) Parameters() json.RawMessage {
@@ -44,7 +45,7 @@ func (t NotebookEdit) Parameters() json.RawMessage {
 		},
 		"source": {
 			"type": "string",
-			"description": "New cell source content (for replace and add operations)"
+			"description": "New cell source content (for replace and add operations). Replaced or added code cells are written without outputs and with null execution_count."
 		},
 		"cell_type": {
 			"type": "string",

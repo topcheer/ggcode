@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -50,6 +51,13 @@ func nextReasoningEffort(current string) string {
 		}
 	}
 	return reasoningEffortCycle[1]
+}
+
+type MCPOAuthStartResult struct {
+	ServerName     string `json:"serverName"`
+	AuthorizeURL   string `json:"authorizeUrl"`
+	DeviceUserCode string `json:"deviceUserCode,omitempty"`
+	OpenError      string `json:"openError,omitempty"`
 }
 
 // ChatBridge manages the full agent chat loop for the Wails frontend,
@@ -799,6 +807,104 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	})
 	b.EnsureSession()               // mirrors Fyne setupAgent line 743
 	b.bindTunnelProjectionSession() // record events even before Share (mirrors Fyne line 303)
+	return nil
+}
+
+func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openURL func(string) error) (*MCPOAuthStartResult, error) {
+	if b == nil || b.mcpManager == nil {
+		return nil, fmt.Errorf("MCP manager not initialized")
+	}
+	oauthErr := b.mcpManager.PendingOAuth()
+	if oauthErr == nil || oauthErr.Handler == nil || oauthErr.ServerName != serverName {
+		return nil, fmt.Errorf("MCP server %q is not waiting for OAuth login", serverName)
+	}
+
+	handler := oauthErr.Handler
+	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if handler.SupportsDCR() {
+		if err := handler.RegisterClient(startCtx); err != nil {
+			debug.Log("mcp-oauth", "desktop_dcr_failed server=%s error=%v, continuing", serverName, err)
+		}
+	}
+
+	result := &MCPOAuthStartResult{ServerName: serverName}
+	if handler.SupportsDeviceFlow() {
+		scopes := handler.GetScopes()
+		if len(scopes) > 4 {
+			scopes = scopes[:4]
+		}
+		devResp, err := handler.StartDeviceFlow(startCtx, scopes)
+		if err == nil {
+			result.AuthorizeURL = devResp.VerificationURI
+			result.DeviceUserCode = devResp.UserCode
+			if openURL != nil {
+				if err := openURL(result.AuthorizeURL); err != nil {
+					result.OpenError = err.Error()
+				}
+			}
+			return result, nil
+		}
+		debug.Log("mcp-oauth", "desktop_device_flow_failed server=%s error=%v, falling back", serverName, err)
+	}
+
+	authorizeURL, err := handler.StartAuthFlow(startCtx)
+	if err != nil {
+		return nil, err
+	}
+	result.AuthorizeURL = authorizeURL
+	if openURL != nil {
+		if err := openURL(authorizeURL); err != nil {
+			result.OpenError = err.Error()
+		}
+	}
+	return result, nil
+}
+
+func (b *ChatBridge) CompleteMCPOAuth(ctx context.Context, serverName string) error {
+	if b == nil || b.mcpManager == nil {
+		return fmt.Errorf("MCP manager not initialized")
+	}
+	oauthErr := b.mcpManager.PendingOAuth()
+	if oauthErr == nil || oauthErr.Handler == nil || oauthErr.ServerName != serverName {
+		return fmt.Errorf("MCP server %q is not waiting for OAuth login", serverName)
+	}
+
+	handler := oauthErr.Handler
+	completeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	var tokenRespErr error
+	if handler.HasPendingDeviceFlow() {
+		tokenResp, err := handler.PollDeviceToken(completeCtx)
+		if err != nil {
+			tokenRespErr = err
+		} else {
+			tokenRespErr = handler.SaveToken(tokenResp)
+		}
+	} else {
+		code, err := handler.WaitForCallback(completeCtx)
+		if err != nil {
+			tokenRespErr = err
+		} else {
+			tokenResp, err := handler.ExchangeCode(completeCtx, code)
+			if err != nil {
+				tokenRespErr = err
+			} else {
+				tokenRespErr = handler.SaveToken(tokenResp)
+			}
+		}
+	}
+	if tokenRespErr != nil {
+		return tokenRespErr
+	}
+
+	handler.ShutdownCallbackServer()
+	b.mcpManager.ClearPendingOAuth()
+	if !b.mcpManager.Retry(serverName) {
+		return fmt.Errorf("MCP server %q not found for reconnect", serverName)
+	}
 	return nil
 }
 

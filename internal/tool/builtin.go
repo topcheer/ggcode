@@ -1,6 +1,12 @@
 package tool
 
-import "github.com/topcheer/ggcode/internal/permission"
+import (
+	"context"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/tmux"
+)
 
 // RegisterBuiltinTools registers all built-in tools.
 // If policy is nil, no sandbox path checking is enforced (permissive mode).
@@ -74,10 +80,25 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		NewAskUserTool(),
 		NewWorkspaceTodoWrite(workingDir),
 	)
-	for _, t := range tools {
-		if err := registry.Register(t); err != nil {
+	for _, tool := range tools {
+		if err := registry.Register(tool); err != nil {
+			return err
+		}
+	}
+	if shouldRegisterTmuxTool(tmux.NewClient()) {
+		if err := registry.Register(NewTmuxTool(workingDir)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func shouldRegisterTmuxTool(client *tmux.Client) bool {
+	if client == nil {
+		client = tmux.NewClient()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	env, err := client.Detect(ctx)
+	return err == nil && env != nil && env.Available && env.InTmux
 }

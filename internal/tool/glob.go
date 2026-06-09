@@ -17,7 +17,7 @@ type Glob struct {
 func (t Glob) Name() string { return "glob" }
 
 func (t Glob) Description() string {
-	return "Find files matching a glob pattern in a directory. Supports ** for recursive matching."
+	return "Find files matching a glob pattern in a directory. Supports ** for recursive matching. Use this when you only need file paths; use search_files or grep when you need to search file contents."
 }
 
 func (t Glob) Parameters() json.RawMessage {
@@ -26,7 +26,7 @@ func (t Glob) Parameters() json.RawMessage {
 	"properties": {
 		"pattern": {
 			"type": "string",
-			"description": "Glob pattern (e.g., '**/*.go', 'src/**/*.js')"
+			"description": "Glob pattern for path matching only (e.g., '**/*.go', 'src/**/*.js'). Use search_files or grep for content search."
 		},
 		"directory": {
 			"type": "string",

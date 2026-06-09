@@ -30,7 +30,8 @@ func (t Grep) Description() string {
 	return "A powerful search tool built on ripgrep (with Go fallback). " +
 		"Prefer this for code/content search that needs context lines, pagination, file-type filtering, or large-repository performance. " +
 		"Use glob when you only need file paths, and search_files for simple content searches. " +
-		"Supports regex, glob filtering, file type filtering, context lines, multiple output modes, multiline matching, and pagination."
+		"Supports regex, glob filtering, file type filtering, context lines, multiple output modes, multiline matching, and pagination. " +
+		"Defaults to files_with_matches; set output_mode=content when you need matching lines."
 }
 
 func (t Grep) Parameters() json.RawMessage {

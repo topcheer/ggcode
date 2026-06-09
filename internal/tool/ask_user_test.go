@@ -88,3 +88,17 @@ func TestAskUserToolExecutesWithNormalizedRequest(t *testing.T) {
 		t.Fatalf("expected answered_count=2, got %d", response.AnsweredCount)
 	}
 }
+
+func TestAskUserToolDescriptionDiscouragesUnnecessaryQuestions(t *testing.T) {
+	tool := NewAskUserTool()
+	desc := tool.Description()
+	for _, want := range []string{"material clarification", "answer will change what you do next", "no safe best guess"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("ask_user description should mention %q, got %q", want, desc)
+		}
+	}
+	params := string(tool.Parameters())
+	if !strings.Contains(params, "only ask material clarifications") {
+		t.Fatalf("ask_user schema should discourage unnecessary questions, got %s", params)
+	}
+}

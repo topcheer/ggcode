@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -184,6 +185,21 @@ func TestSourceToLines(t *testing.T) {
 			if got[i] != tt.expected[i] {
 				t.Errorf("sourceToLines(%q)[%d]: expected %q, got %q", tt.input, i, tt.expected[i], got[i])
 			}
+		}
+	}
+}
+
+func TestNotebookEditDescriptionClarifiesOutputsAreNotPreserved(t *testing.T) {
+	tool := NotebookEdit{}
+	for _, want := range []string{"Always use this tool for editing .ipynb files", "no outputs", "null execution_count"} {
+		if !strings.Contains(tool.Description(), want) {
+			t.Fatalf("notebook_edit description should mention %q, got %q", want, tool.Description())
+		}
+	}
+	params := string(tool.Parameters())
+	for _, want := range []string{"without outputs", "null execution_count"} {
+		if !strings.Contains(params, want) {
+			t.Fatalf("notebook_edit schema should mention %q, got %s", want, params)
 		}
 	}
 }

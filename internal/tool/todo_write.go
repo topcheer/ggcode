@@ -51,7 +51,7 @@ func NewWorkspaceTodoWrite(workspace string) *TodoWrite {
 
 func (t *TodoWrite) Name() string { return "todo_write" }
 func (t *TodoWrite) Description() string {
-	return "Track work progress with a persistent todo list. IMPORTANT: Once you create todos, you MUST update their status as work progresses — mark tasks `in_progress` when starting, and `done` when completed. Do NOT create todos and then forget to update them. Keep the list current at every meaningful milestone."
+	return "Track work progress with a persistent todo list. Use for genuinely multi-step work, not every micro-step. IMPORTANT: Once you create todos, you MUST update their status as work progresses — mark tasks `in_progress` when starting, and `done` when completed. Do NOT create todos and then forget to update them. Keep the list current at every meaningful milestone."
 }
 
 func (t *TodoWrite) Parameters() json.RawMessage {
@@ -79,7 +79,7 @@ func (t *TodoWrite) Parameters() json.RawMessage {
 					},
 					"required": ["id", "content", "status"]
 				},
-				"description": "Array of todo items to write. Existing todos not in this list are removed."
+				"description": "Array of todo items to write. Existing todos not in this list are removed; include the full desired current list. Use for multi-step work, not every micro-step."
 			}
 		},
 		"required": ["todos"]

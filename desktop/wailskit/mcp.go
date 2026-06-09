@@ -10,17 +10,18 @@ import (
 
 // MCPServerInfo is a frontend-friendly representation of an MCP server config.
 type MCPServerInfo struct {
-	Name      string            `json:"name"`
-	Type      string            `json:"type,omitempty"`
-	Command   string            `json:"command,omitempty"`
-	Args      []string          `json:"args,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	URL       string            `json:"url,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Status    string            `json:"status,omitempty"`
-	Error     string            `json:"error,omitempty"`
-	Disabled  bool              `json:"disabled,omitempty"`
-	Connected bool              `json:"connected,omitempty"`
+	Name          string            `json:"name"`
+	Type          string            `json:"type,omitempty"`
+	Command       string            `json:"command,omitempty"`
+	Args          []string          `json:"args,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	URL           string            `json:"url,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Status        string            `json:"status,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	Disabled      bool              `json:"disabled,omitempty"`
+	Connected     bool              `json:"connected,omitempty"`
+	OAuthRequired bool              `json:"oauthRequired,omitempty"`
 }
 
 // ListMCPServers returns all configured MCP servers.
@@ -64,6 +65,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 			result[i].Error = info.Error
 			result[i].Disabled = info.Disabled
 			result[i].Connected = info.Status == plugin.MCPStatusConnected
+			result[i].OAuthRequired = info.OAuthRequired
 		}
 	}
 	return result, nil

@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func TestGrepDescriptionClarifiesDefaultOutputMode(t *testing.T) {
+	tool := Grep{}
+	for _, want := range []string{"Defaults to files_with_matches", "output_mode=content", "matching lines"} {
+		if !containsAny(tool.Description(), want) {
+			t.Fatalf("grep description should mention %q, got %q", want, tool.Description())
+		}
+	}
+}
+
 func setupGrepTestDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

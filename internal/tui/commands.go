@@ -386,6 +386,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleConfigCommand(parts)
 		case "/status":
 			return m.handleStatusCommand()
+		case "/tmux":
+			return m.handleTmuxCommand(parts)
 		case "/knight":
 			return m.handleKnightCommand(parts)
 		case "/update":

@@ -113,3 +113,15 @@ func TestGlobRecursivePattern(t *testing.T) {
 		t.Errorf("expected nested.go in output: %s", result.Content)
 	}
 }
+
+func TestGlobDescriptionClarifiesPathOnlyUse(t *testing.T) {
+	tool := Glob{}
+	for _, want := range []string{"only need file paths", "search_files or grep", "search file contents"} {
+		if !containsStr(tool.Description(), want) {
+			t.Fatalf("glob description should mention %q, got %q", want, tool.Description())
+		}
+	}
+	if !containsStr(string(tool.Parameters()), "path matching only") {
+		t.Fatalf("glob schema should clarify path-only matching, got %s", string(tool.Parameters()))
+	}
+}

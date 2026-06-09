@@ -55,7 +55,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Load a reusable skill workflow or prompt. Use this when a listed skill clearly matches the user's task, then continue the task using the returned guidance."
+	return "Load a reusable skill workflow or prompt. Use this when a listed skill clearly matches the user's task, then continue the task using the returned guidance. Do not use this for built-in CLI commands like /help or /clear."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {
@@ -64,7 +64,7 @@ func (t SkillTool) Parameters() json.RawMessage {
 	"properties": {
 		"skill": {
 			"type": "string",
-			"description": "Skill name to load"
+			"description": "Skill name to load. Must match a listed reusable skill; do not pass built-in CLI/slash commands."
 		},
 		"args": {
 			"type": "string",
