@@ -165,6 +165,18 @@ func TestConfigPolicy_DangerousCommand(t *testing.T) {
 	}
 }
 
+func TestConfigPolicy_DangerousTmuxCommand(t *testing.T) {
+	rules := map[string]Decision{"tmux": Allow}
+	p := NewConfigPolicy(rules, nil)
+	d, err := p.Check("tmux", json.RawMessage(`{"action":"split","command":"rm -rf /"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Deny {
+		t.Errorf("expected Deny for dangerous tmux command, got %s", d)
+	}
+}
+
 func TestConfigPolicy_SetOverride(t *testing.T) {
 	p := NewConfigPolicy(nil, nil)
 	if p.GetDecision("read_file") != Ask {

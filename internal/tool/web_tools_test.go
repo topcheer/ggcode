@@ -238,9 +238,9 @@ func TestWebSearch_DDGMock(t *testing.T) {
 
 func TestWebSearch_DDGRedirectURLNormalization(t *testing.T) {
 	html := `<div class="result">
-<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs%3Fa%3D1%26b%3D2">Example Docs</a>
-<a class="result__snippet">Example snippet</a>
-</div>`
+	<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs%3Fa%3D1%26b%3D2">Example Docs</a>
+	<a class="result__snippet">Example snippet</a>
+	</div>`
 
 	results := parseDDGResults(html, 1)
 	if len(results) != 1 {
@@ -248,6 +248,24 @@ func TestWebSearch_DDGRedirectURLNormalization(t *testing.T) {
 	}
 	if results[0].URL != "https://example.com/docs?a=1&b=2" {
 		t.Fatalf("expected normalized uddg target URL, got %q", results[0].URL)
+	}
+}
+
+func TestWebSearchDomainFiltersMatchSubdomains(t *testing.T) {
+	results := []searchResult{
+		{Title: "Docs", URL: "https://docs.example.com/page"},
+		{Title: "API", URL: "https://api.example.com/page"},
+		{Title: "Other", URL: "https://other.test/page"},
+	}
+
+	allowed := filterByDomain(results, []string{"https://example.com/"}, nil)
+	if len(allowed) != 2 || allowed[0].Title != "Docs" || allowed[1].Title != "API" {
+		t.Fatalf("expected example.com and subdomains to be allowed, got %+v", allowed)
+	}
+
+	blocked := filterByDomain(results, nil, []string{"example.com"})
+	if len(blocked) != 1 || blocked[0].Title != "Other" {
+		t.Fatalf("expected example.com and subdomains to be blocked, got %+v", blocked)
 	}
 }
 

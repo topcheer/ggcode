@@ -18,6 +18,7 @@ interface MCPServerConfig {
   error?: string
   disabled?: boolean
   connected?: boolean
+  oauthRequired?: boolean
 }
 
 const TRANSPORTS: { value: TransportType; label: string; icon: React.ReactNode; desc: string }[] = [
@@ -74,6 +75,8 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   const [addUrl, setAddUrl] = useState('')
   const [addHeaders, setAddHeaders] = useState('')
   const [addError, setAddError] = useState('')
+  const [oauthBusy, setOauthBusy] = useState<string | null>(null)
+  const [oauthMessage, setOauthMessage] = useState<Record<string, string>>({})
 
   const loadServers = async () => {
     setLoading(true)
@@ -162,6 +165,28 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
       await App.ReconnectMCPServer(name)
       await loadServers()
     } catch {}
+  }
+
+  const handleOAuthLogin = async (name: string) => {
+    setOauthBusy(name)
+    setOauthMessage(prev => ({ ...prev, [name]: 'Opening browser for MCP login...' }))
+    try {
+      const result = await App.StartMCPOAuth(name)
+      if (result?.openError) {
+        setOauthMessage(prev => ({ ...prev, [name]: `Open this URL manually: ${result.authorizeUrl}` }))
+      } else if (result?.deviceUserCode) {
+        setOauthMessage(prev => ({ ...prev, [name]: `Enter code ${result.deviceUserCode} in the browser, then return here.` }))
+      } else {
+        setOauthMessage(prev => ({ ...prev, [name]: 'Complete login in your browser, then return here.' }))
+      }
+      await App.CompleteMCPOAuth(name)
+      setOauthMessage(prev => ({ ...prev, [name]: 'Login complete. Reconnecting MCP server...' }))
+      await loadServers()
+    } catch (e: any) {
+      setOauthMessage(prev => ({ ...prev, [name]: e?.message || 'OAuth login failed' }))
+    } finally {
+      setOauthBusy(null)
+    }
   }
 
   const inputStyle: React.CSSProperties = {
@@ -360,11 +385,30 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                     </span>
                   </div>
                 )}
-                {server.error && !server.disabled && (
+                {server.oauthRequired && !server.disabled && (
+                  <div style={{ marginTop: 6, padding: 8, borderRadius: 'var(--radius-sm)', background: 'rgba(234,179,8,0.10)', border: '1px solid rgba(234,179,8,0.25)' }}>
+                    <div style={{ fontSize: 11, color: '#facc15', fontWeight: 600 }}>OAuth login required</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>
+                      Sign in with your browser to authorize this MCP server.
+                    </div>
+                    {oauthMessage[server.name] && (
+                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4, wordBreak: 'break-all' }}>
+                        {oauthMessage[server.name]}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {server.error && !server.disabled && !server.oauthRequired && (
                   <div style={{ marginTop: 4, fontSize: 10, color: '#f87171' }}>{server.error}</div>
                 )}
               </div>
               <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                {server.oauthRequired && !server.disabled && (
+                  <button onClick={() => handleOAuthLogin(server.name)} disabled={oauthBusy === server.name} title="Login" style={{
+                    background: 'rgba(234,179,8,0.14)', border: '1px solid rgba(234,179,8,0.35)', cursor: oauthBusy === server.name ? 'default' : 'pointer',
+                    color: '#facc15', padding: '3px 8px', borderRadius: 'var(--radius-sm)', fontSize: 11, fontWeight: 600,
+                  }}>{oauthBusy === server.name ? 'Waiting...' : 'Login'}</button>
+                )}
                 <button onClick={() => handleToggleEnabled(server.name, !!server.disabled)} title={server.disabled ? 'Enable' : 'Disable'} style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: server.disabled ? '#3FB950' : 'var(--text-tertiary)', padding: 4,

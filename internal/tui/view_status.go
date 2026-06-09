@@ -124,6 +124,12 @@ func (m Model) renderStatusBar() string {
 			sb.WriteString(toolLabel)
 		}
 	}
+	if tmuxLabel := m.tmuxLabel(); tmuxLabel != "" {
+		if sb.Len() > 0 {
+			sb.WriteString(" │ ")
+		}
+		sb.WriteString(tmuxLabel)
+	}
 
 	return m.renderContextBox("", sb.String(), lipgloss.Color("6"))
 }
@@ -218,7 +224,9 @@ func (m Model) renderComposerPanel() string {
 	}
 
 	var inputPart string
-	if m.subAgentFollow.isActive() {
+	if m.tmuxMenuOpen {
+		inputPart = m.renderTmuxMenu()
+	} else if m.subAgentFollow.isActive() {
 		kind := "agent"
 		if m.subAgentFollow.activeID != "" && len(m.subAgentFollow.activeID) >= 3 && m.subAgentFollow.activeID[:3] == "tm-" {
 			kind = "teammate"

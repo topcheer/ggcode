@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func TestSearchFilesDescriptionPointsToGrepForAdvancedSearch(t *testing.T) {
+	tool := SearchFiles{}
+	for _, want := range []string{"Prefer grep", "context lines", "large-repository performance"} {
+		if !containsStr(tool.Description(), want) {
+			t.Fatalf("search_files description should mention %q, got %q", want, tool.Description())
+		}
+	}
+	if !containsStr(string(tool.Parameters()), "use glob instead") {
+		t.Fatalf("search_files schema should clarify path-only discovery, got %s", string(tool.Parameters()))
+	}
+}
+
 func TestSearchFilesBasic(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main\nfunc hello() {}\n"), 0o644)

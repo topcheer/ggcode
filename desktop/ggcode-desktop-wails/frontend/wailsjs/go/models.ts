@@ -297,6 +297,7 @@ export namespace wailskit {
 	    error?: string;
 	    disabled?: boolean;
 	    connected?: boolean;
+	    oauthRequired?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MCPServerInfo(source);
@@ -315,6 +316,25 @@ export namespace wailskit {
 	        this.error = source["error"];
 	        this.disabled = source["disabled"];
 	        this.connected = source["connected"];
+	        this.oauthRequired = source["oauthRequired"];
+	    }
+	}
+	export class MCPOAuthStartResult {
+	    serverName: string;
+	    authorizeUrl: string;
+	    deviceUserCode?: string;
+	    openError?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MCPOAuthStartResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverName = source["serverName"];
+	        this.authorizeUrl = source["authorizeUrl"];
+	        this.deviceUserCode = source["deviceUserCode"];
+	        this.openError = source["openError"];
 	    }
 	}
 	export class ResolvedEndpointInfo {

@@ -805,6 +805,18 @@ func (h *OAuthHandler) Close() {
 	}
 }
 
+// ShutdownCallbackServer stops the local OAuth callback server if it is running.
+func (h *OAuthHandler) ShutdownCallbackServer() {
+	h.Close()
+}
+
+// HasPendingDeviceFlow reports whether a device authorization flow is waiting for polling.
+func (h *OAuthHandler) HasPendingDeviceFlow() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.state != nil && h.state.deviceCode != ""
+}
+
 // SupportsDeviceFlow returns true if we can attempt device flow for this server.
 // Checks for a known device code endpoint or a device_authorization_endpoint in metadata.
 func (h *OAuthHandler) SupportsDeviceFlow() bool {

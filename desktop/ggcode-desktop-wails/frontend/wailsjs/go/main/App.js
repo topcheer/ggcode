@@ -26,6 +26,10 @@ export function CheckForUpdates() {
   return window['go']['main']['App']['CheckForUpdates']();
 }
 
+export function CompleteMCPOAuth(arg1) {
+  return window['go']['main']['App']['CompleteMCPOAuth'](arg1);
+}
+
 export function CompleteOnboard(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CompleteOnboard'](arg1, arg2, arg3, arg4);
 }
@@ -216,6 +220,10 @@ export function SetIMAdapterEnabled(arg1, arg2) {
 
 export function SetMCPServerEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
+}
+
+export function StartMCPOAuth(arg1) {
+  return window['go']['main']['App']['StartMCPOAuth'](arg1);
 }
 
 export function SetPermissionMode(arg1) {

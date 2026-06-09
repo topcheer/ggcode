@@ -37,6 +37,7 @@ type MCPServerInfo struct {
 	Error         string
 	Migrated      bool
 	Disabled      bool
+	OAuthRequired bool
 }
 
 // MCPOAuthRequiredError signals that OAuth is needed for an MCP server.
@@ -327,11 +328,16 @@ func (m *MCPManager) ClearPendingOAuth() {
 func (m *MCPManager) Snapshot() []MCPServerInfo {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	pendingOAuthName := ""
+	if m.pendingOAuth != nil {
+		pendingOAuthName = m.pendingOAuth.ServerName
+	}
 	m.mu.RUnlock()
 	out := make([]MCPServerInfo, 0, len(plugins))
 	for _, plugin := range plugins {
 		info := plugin.Info()
 		info.Disabled = MCPDisabled(plugin.Name())
+		info.OAuthRequired = info.Name == pendingOAuthName
 		out = append(out, info)
 	}
 	return out

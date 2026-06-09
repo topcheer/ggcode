@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -148,5 +149,25 @@ func TestCommandJobManagerWriteInputFailsForStoppedJob(t *testing.T) {
 	}
 	if _, err := mgr.Write(started.ID, "late input", true); err == nil {
 		t.Fatal("expected write to completed command job to fail")
+	}
+}
+
+func TestCommandJobToolDescriptionsGuideInteractiveUse(t *testing.T) {
+	start := StartCommandTool{}
+	for _, want := range []string{"long-running, streaming, or interactive", "prefer run_command for quick one-shot commands", "write_command_input to answer prompts"} {
+		if !strings.Contains(start.Description(), want) {
+			t.Fatalf("start_command description should mention %q, got %q", want, start.Description())
+		}
+	}
+	if !strings.Contains(string(start.Parameters()), "prefer run_command for quick one-shot commands") {
+		t.Fatalf("start_command schema should guide quick commands, got %s", string(start.Parameters()))
+	}
+
+	writeInput := WriteCommandInputTool{}
+	if !strings.Contains(writeInput.Description(), "does not start a new command") {
+		t.Fatalf("write_command_input description should clarify stdin-only behavior, got %q", writeInput.Description())
+	}
+	if !strings.Contains(string(writeInput.Parameters()), "not a new shell command") {
+		t.Fatalf("write_command_input schema should clarify stdin-only behavior, got %s", string(writeInput.Parameters()))
 	}
 }

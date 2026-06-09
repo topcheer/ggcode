@@ -24,7 +24,7 @@ type SearchFiles struct {
 func (t SearchFiles) Name() string { return "search_files" }
 
 func (t SearchFiles) Description() string {
-	return "Search for a regex pattern in files within a directory. Returns matching lines with file paths and line numbers."
+	return "Search for a regex pattern in files within a directory. Returns matching lines with file paths and line numbers. Prefer grep when you need context lines, pagination, file-type filters, or large-repository performance."
 }
 
 func (t SearchFiles) Parameters() json.RawMessage {
@@ -41,7 +41,7 @@ func (t SearchFiles) Parameters() json.RawMessage {
 		},
 		"include_pattern": {
 			"type": "string",
-			"description": "Glob pattern to filter files (e.g., '*.go')"
+			"description": "Glob pattern to filter files (e.g., '*.go'). For path-only discovery without content matching, use glob instead."
 		},
 		"max_results": {
 			"type": "integer",

@@ -521,6 +521,23 @@ func (a *App) ReconnectMCPServer(name string) bool {
 	return wailskit.ReconnectMCPServer(name)
 }
 
+func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) {
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not initialized")
+	}
+	return a.chat.StartMCPOAuth(a.ctx, name, func(url string) error {
+		runtime.BrowserOpenURL(a.ctx, url)
+		return nil
+	})
+}
+
+func (a *App) CompleteMCPOAuth(name string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not initialized")
+	}
+	return a.chat.CompleteMCPOAuth(a.ctx, name)
+}
+
 // AddMCPServer adds a new MCP server.
 func (a *App) AddMCPServer(values map[string]string) error {
 	return wailskit.AddMCPServer(values)

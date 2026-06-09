@@ -37,6 +37,7 @@ import (
 	"github.com/topcheer/ggcode/internal/stream"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/tmux"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
@@ -213,14 +214,18 @@ type Model struct {
 	pendingHarnessPromote *harness.Task
 
 	// Status bar state
-	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
-	statusToolName  string // current executing tool name
-	statusToolArg   string // current tool argument summary (truncated)
-	statusToolCount int    // tool calls executed this iteration
-	todoSnapshot    map[string]todoStateItem
-	todoOrder       []string // preserves original insertion order from todo_write
-	activeTodo      *todoStateItem
-	activeMCPTools  map[string]ToolStatusMsg
+	statusActivity   string // "Thinking...", "Writing...", "Executing: tool_name"
+	statusToolName   string // current executing tool name
+	statusToolArg    string // current tool argument summary (truncated)
+	statusToolCount  int    // tool calls executed this iteration
+	tmuxClient       *tmux.Client
+	tmuxEnv          *tmux.Environment
+	tmuxManagedPanes map[string]tmux.Pane
+	tmuxMenuOpen     bool
+	todoSnapshot     map[string]todoStateItem
+	todoOrder        []string // preserves original insertion order from todo_write
+	activeTodo       *todoStateItem
+	activeMCPTools   map[string]ToolStatusMsg
 
 	// Slash command autocomplete
 	autoCompleteItems    []string
@@ -457,6 +462,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 			Foreground(lipgloss.Color("6")),
 	}
 
+	tmuxClient, tmuxEnv := detectTmuxForTUI()
+
 	return Model{
 		input:                ta,
 		chatList:             chat.NewList(80, 20),
@@ -484,6 +491,9 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		tunnelShareBootstrap: &tunnelShareBootstrapState{},
 		streamViewState:      &streamViewStateData{},
 		terminalTitleWriter:  newTerminalTitleWriter(),
+		tmuxClient:           tmuxClient,
+		tmuxEnv:              tmuxEnv,
+		tmuxManagedPanes:     make(map[string]tmux.Pane),
 	}
 }
 

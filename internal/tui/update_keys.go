@@ -26,6 +26,13 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.resetExitConfirm()
 	}
 	debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, util.Truncate(m.input.Value(), 80))
+	if m.tmuxMenuOpen {
+		return m.handleTmuxMenuKey(msg.String())
+	}
+	if msg.String() == "ctrl+x" {
+		m.openTmuxMenu()
+		return m, nil
+	}
 	if msg.String() == "ctrl+r" {
 		m.sidebarVisible = !m.sidebarVisible
 		if m.config != nil {

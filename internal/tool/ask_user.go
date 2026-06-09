@@ -80,7 +80,7 @@ func NewAskUserTool() *AskUserTool {
 func (t *AskUserTool) Name() string { return "ask_user" }
 
 func (t *AskUserTool) Description() string {
-	return "Ask the user one or more structured clarification questions in the interactive TUI and wait for a unified response."
+	return "Ask the user one or more structured clarification questions in the interactive TUI and wait for a unified response. Use only when a material clarification is needed, the answer will change what you do next, and there is no safe best guess from the current context."
 }
 
 func (t *AskUserTool) Parameters() json.RawMessage {
@@ -89,7 +89,7 @@ func (t *AskUserTool) Parameters() json.RawMessage {
 		"properties": {
 			"title": {
 				"type": "string",
-				"description": "Optional questionnaire title shown above the question tabs."
+				"description": "Optional questionnaire title shown above the question tabs. Keep it brief and only ask material clarifications."
 			},
 			"questions": {
 				"type": "array",

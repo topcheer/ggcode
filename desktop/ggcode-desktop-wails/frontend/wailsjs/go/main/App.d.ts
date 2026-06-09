@@ -15,6 +15,8 @@ export function CancelMessage():Promise<void>;
 
 export function CheckForUpdates():Promise<Record<string, any>>;
 
+export function CompleteMCPOAuth(arg1:string):Promise<void>;
+
 export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function CycleReasoningEffort():Promise<Record<string, any>>;
@@ -110,6 +112,8 @@ export function SendMessage(arg1:string):Promise<void>;
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:boolean):Promise<boolean>;
+
+export function StartMCPOAuth(arg1:string):Promise<wailskit.MCPOAuthStartResult>;
 
 export function SetPermissionMode(arg1:string):Promise<void>;
 
