@@ -982,7 +982,7 @@ func enCatalog(key string) string {
 	case "image.attached_hint":
 		return "Send a message to include the image, or /image to attach another.\n\n"
 	case "image.clipboard_failed":
-		return "pasting image from clipboard failed: %v"
+		return "Could not paste an image from the clipboard: %v"
 	case "agents.unavailable":
 		return "Sub-agent manager not configured.\n\n"
 	case "agents.none":
