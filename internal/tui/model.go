@@ -85,6 +85,8 @@ type Model struct {
 	quitting                        bool
 	restartRequested                bool
 	restartDebug                    bool
+	tmuxExecRequested               bool
+	tmuxExecSession                 string
 	width                           int
 	height                          int
 	styles                          styles
@@ -214,18 +216,18 @@ type Model struct {
 	pendingHarnessPromote *harness.Task
 
 	// Status bar state
-	statusActivity   string // "Thinking...", "Writing...", "Executing: tool_name"
-	statusToolName   string // current executing tool name
-	statusToolArg    string // current tool argument summary (truncated)
-	statusToolCount  int    // tool calls executed this iteration
-	tmuxClient       *tmux.Client
-	tmuxEnv          *tmux.Environment
-	tmuxManagedPanes map[string]tmux.Pane
-	tmuxMenuOpen     bool
-	todoSnapshot     map[string]todoStateItem
-	todoOrder        []string // preserves original insertion order from todo_write
-	activeTodo       *todoStateItem
-	activeMCPTools   map[string]ToolStatusMsg
+	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
+	statusToolName  string // current executing tool name
+	statusToolArg   string // current tool argument summary (truncated)
+	statusToolCount int    // tool calls executed this iteration
+	tmuxClient      *tmux.Client
+	tmuxManager     *tmux.Manager
+	tmuxEnv         *tmux.Environment
+	tmuxMenuOpen    bool
+	todoSnapshot    map[string]todoStateItem
+	todoOrder       []string // preserves original insertion order from todo_write
+	activeTodo      *todoStateItem
+	activeMCPTools  map[string]ToolStatusMsg
 
 	// Slash command autocomplete
 	autoCompleteItems    []string
@@ -463,6 +465,10 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	}
 
 	tmuxClient, tmuxEnv := detectTmuxForTUI()
+	tmuxWorkspace := ""
+	if a != nil {
+		tmuxWorkspace = a.WorkingDir()
+	}
 
 	return Model{
 		input:                ta,
@@ -492,8 +498,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		streamViewState:      &streamViewStateData{},
 		terminalTitleWriter:  newTerminalTitleWriter(),
 		tmuxClient:           tmuxClient,
+		tmuxManager:          tmux.SharedManager(tmuxWorkspace),
 		tmuxEnv:              tmuxEnv,
-		tmuxManagedPanes:     make(map[string]tmux.Pane),
 	}
 }
 

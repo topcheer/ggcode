@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/topcheer/ggcode/internal/tmux"
 )
 
 func TestTmuxToolSchemaExposesLifecycleActions(t *testing.T) {
@@ -20,7 +18,7 @@ func TestTmuxToolSchemaExposesLifecycleActions(t *testing.T) {
 		}
 	}
 	params := string(tool.Parameters())
-	for _, want := range []string{"status", "split", "popup", "list", "refresh", "capture", "focus", "close", "pane_id"} {
+	for _, want := range []string{"status", "split", "popup", "list", "layouts", "layout", "setup", "save_layout", "refresh", "restore", "prune", "capture", "focus", "close", "pane_id"} {
 		if !strings.Contains(params, want) {
 			t.Fatalf("Parameters() should mention %q, got %s", want, params)
 		}
@@ -39,9 +37,9 @@ func TestTmuxToolRequiresAction(t *testing.T) {
 	}
 }
 
-func TestTmuxToolCloneCopiesManagedPaneState(t *testing.T) {
-	tool := NewTmuxTool("/tmp/workspace")
-	tool.panes["%1"] = tmuxPaneForTest("%1", true)
+func TestTmuxToolCloneSharesManager(t *testing.T) {
+	workspace := t.TempDir()
+	tool := NewTmuxTool(workspace)
 
 	clone, ok := tool.Clone().(*TmuxTool)
 	if !ok {
@@ -50,9 +48,8 @@ func TestTmuxToolCloneCopiesManagedPaneState(t *testing.T) {
 	if clone.WorkingDir != tool.WorkingDir {
 		t.Fatalf("clone WorkingDir = %q, want %q", clone.WorkingDir, tool.WorkingDir)
 	}
-	clone.panes["%1"] = tmuxPaneForTest("%1", false)
-	if !tool.panes["%1"].Alive {
-		t.Fatal("clone mutation should not mutate original pane state")
+	if clone.Manager != tool.Manager {
+		t.Fatal("clone should share tmux manager so tool state is process-wide")
 	}
 }
 
@@ -65,8 +62,4 @@ func TestRegisterBuiltinToolsSkipsTmuxOutsideTmuxSession(t *testing.T) {
 	if _, ok := registry.Get("tmux"); ok {
 		t.Fatal("tmux tool should not be registered outside a tmux session")
 	}
-}
-
-func tmuxPaneForTest(id string, alive bool) tmux.Pane {
-	return tmux.Pane{ID: id, Purpose: "test", Command: "go test ./...", Workspace: "/tmp/workspace", Alive: alive}
 }

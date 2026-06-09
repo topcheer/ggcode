@@ -50,12 +50,14 @@ func (e *Environment) Label() string {
 
 // Pane is a tmux pane known to ggcode.
 type Pane struct {
-	ID        string
-	Purpose   string
-	Command   string
-	Workspace string
-	Alive     bool
-	CreatedAt time.Time
+	ID         string    `json:"id"`
+	Purpose    string    `json:"purpose"`
+	Command    string    `json:"command"`
+	Workspace  string    `json:"workspace"`
+	Alive      bool      `json:"alive"`
+	Horizontal bool      `json:"horizontal"`
+	Size       string    `json:"size"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type SplitRequest struct {
@@ -154,7 +156,7 @@ func (c *Client) Split(ctx context.Context, req SplitRequest) (*Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Pane{ID: strings.TrimSpace(out), Purpose: req.Purpose, Command: cmd, Workspace: req.Workspace, Alive: true, CreatedAt: time.Now()}, nil
+	return &Pane{ID: strings.TrimSpace(out), Purpose: req.Purpose, Command: cmd, Workspace: req.Workspace, Alive: true, Horizontal: req.Horizontal, Size: req.Size, CreatedAt: time.Now()}, nil
 }
 
 func (c *Client) Popup(ctx context.Context, req PopupRequest) error {

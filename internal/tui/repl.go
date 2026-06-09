@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -828,6 +829,16 @@ func (r *REPL) Run() error {
 		finalModel = m
 	}
 
+	if m, ok := finalModel.(Model); ok && m.tmuxExecRequested {
+		sid := ""
+		if m.session != nil {
+			sid = m.session.ID
+		}
+		debug.Log("tmux", "finalModel: tmuxExecRequested=%v sessionID=%q tmuxSession=%q", m.tmuxExecRequested, sid, m.tmuxExecSession)
+		r.model = m
+		return r.execTmuxEnter()
+	}
+
 	// Check if the final model requested a self-restart.
 	// program.Run() returns the final model state, but r.model is a
 	// snapshot from before Run() — we must read from finalModel.
@@ -930,4 +941,29 @@ func (r *REPL) execRestart() error {
 	}
 
 	return restart.ExecSelf(binary, args, env)
+}
+
+func (r *REPL) execTmuxEnter() error {
+	binary, err := restart.ResolveBinary()
+	if err != nil {
+		return fmt.Errorf("tmux enter: resolve binary: %w", err)
+	}
+	args := r.model.buildRestartArgs()
+	sessionName := sanitizeTmuxSessionName(r.model.tmuxExecSession)
+	if sessionName == "" {
+		sessionName = defaultTmuxSessionName(r.model.tmuxWorkspace())
+	}
+	wd := r.model.tmuxWorkspace()
+	cmdArgs := append([]string{"new-session", "-A", "-s", sessionName, "-c", wd, binary}, args...)
+	debug.Log("tmux", "exec tmux session=%q binary=%s args=%v wd=%s", sessionName, binary, args, wd)
+	cmd := exec.Command("tmux", cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	cmd.Dir = wd
+	if r.model.restartDebug {
+		cmd.Env = append(cmd.Env, "GGCODE_DEBUG=1")
+	}
+	return cmd.Run()
 }
