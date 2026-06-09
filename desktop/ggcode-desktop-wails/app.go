@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,10 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	imgpkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
@@ -301,6 +305,27 @@ func (a *App) GetVendorPresets() []wailskit.VendorPresetInfo {
 
 // ─── Chat ─────────────────────────────────────────────────
 
+type PastedImage struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+	Name     string `json:"name,omitempty"`
+}
+
+func (a *App) ReadClipboardImage() (*PastedImage, error) {
+	img, err := imgpkg.ReadClipboard()
+	if err != nil {
+		if errors.Is(err, imgpkg.ErrClipboardImageUnavailable) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &PastedImage{
+		MimeType: img.MIME,
+		Data:     imgpkg.EncodeBase64(img),
+		Name:     "clipboard-image",
+	}, nil
+}
+
 // SendMessage sends a user message to the agent.
 func (a *App) SendMessage(userMsg string) error {
 	if a.chat == nil {
@@ -309,6 +334,42 @@ func (a *App) SendMessage(userMsg string) error {
 	text := userMsg
 	safego.Go("wails-send-message", func() {
 		if err := a.chat.SendMessage(text); err != nil {
+			raw, _ := json.Marshal(map[string]string{"message": err.Error()})
+			a.emitStreamEvent("error", raw)
+		}
+	})
+	return nil
+}
+
+func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {
+	if a.chat == nil {
+		return nil
+	}
+	text := strings.TrimSpace(userMsg)
+	imgs := append([]PastedImage(nil), images...)
+	safego.Go("wails-send-message-images", func() {
+		content := make([]provider.ContentBlock, 0, 1+len(imgs))
+		if text != "" {
+			content = append(content, provider.TextBlock(text))
+		}
+		for _, img := range imgs {
+			mime := strings.TrimSpace(img.MimeType)
+			if mime == "" {
+				mime = "image/png"
+			}
+			data := strings.TrimSpace(img.Data)
+			if idx := strings.Index(data, ","); strings.HasPrefix(data, "data:") && idx >= 0 {
+				data = data[idx+1:]
+			}
+			if data == "" {
+				continue
+			}
+			content = append(content, provider.ImageBlock(mime, data))
+		}
+		if len(content) == 0 {
+			return
+		}
+		if err := a.chat.SendContent(content); err != nil {
 			raw, _ := json.Marshal(map[string]string{"message": err.Error()})
 			a.emitStreamEvent("error", raw)
 		}
@@ -337,6 +398,13 @@ func (a *App) CycleReasoningEffort() (map[string]interface{}, error) {
 	}
 	effort, supported := a.chat.CycleReasoningEffort()
 	return map[string]interface{}{"effort": effort, "supported": supported}, nil
+}
+
+func (a *App) GetTeamBoard() []swarm.TeamBoardSnapshot {
+	if a.chat == nil {
+		return []swarm.TeamBoardSnapshot{}
+	}
+	return a.chat.GetTeamBoard()
 }
 
 // IsWorking reports whether the agent loop is currently running.

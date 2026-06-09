@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
+import { ClipboardGetText } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
+import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
 
 // Configure marked — no special mermaid handling, we split manually.
 marked.setOptions({ gfm: true, breaks: true })
@@ -79,10 +81,19 @@ function MessageContent({ content }: { content: string }) {
 
 type ChatRole = 'user' | 'assistant' | 'system' | 'tool' | 'reasoning' | 'error'
 
+interface PastedImageAttachment {
+  id: string
+  mimeType: string
+  data: string
+  previewUrl: string
+  name?: string
+}
+
 interface ChatMessage {
   id: string
   role: ChatRole
   content: string
+  images?: PastedImageAttachment[]
   toolName?: string
   toolID?: string
   toolArgs?: string
@@ -113,7 +124,7 @@ interface AgentPanel {
 interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done' | 'system'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result' | 'subagent_done'
-    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'usage_update' | 'user_message'
+    | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'swarm_board_updated' | 'usage_update' | 'user_message'
   data: string // JSON-encoded payload
 }
 
@@ -227,6 +238,41 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   })
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [teamBoard, setTeamBoard] = useState<TeamBoardSnapshot[]>([])
+  const [teamBoardOpen, setTeamBoardOpen] = useState(false)
+  const teamBoardDismissedRef = useRef(false)
+
+  const refreshTeamBoard = useCallback(async () => {
+    try {
+      const getter = (App as unknown as { GetTeamBoard?: () => Promise<TeamBoardSnapshot[]> }).GetTeamBoard
+      if (!getter) return
+      const board = await getter()
+      const teams = board || []
+      setTeamBoard(teams)
+      if (teams.length > 0 && !teamBoardDismissedRef.current) {
+        setTeamBoardOpen(true)
+      }
+    } catch {
+      // Team board is an auxiliary view; keep chat usable if the snapshot fails.
+    }
+  }, [])
+
+  const closeTeamBoard = useCallback(() => {
+    teamBoardDismissedRef.current = true
+    setTeamBoardOpen(false)
+  }, [])
+
+  const openTeamBoard = useCallback(() => {
+    teamBoardDismissedRef.current = false
+    setTeamBoardOpen(true)
+    void refreshTeamBoard()
+  }, [refreshTeamBoard])
+
+  const selectTeammatePanel = useCallback((teammateID: string) => {
+    if (agentPanels.has(teammateID)) {
+      setActiveTab(teammateID)
+    }
+  }, [agentPanels])
 
   // Helper: update an agent panel's messages
   const updateAgentPanel = useCallback((agentID: string, updater: (panel: AgentPanel) => AgentPanel) => {
@@ -541,6 +587,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }))
           break
         }
+        case 'swarm_board_updated': {
+          void refreshTeamBoard()
+          break
+        }
 
         // ── Sub-agent events ──
         // ── Sub-agent events → route to agent panel ──
@@ -687,7 +737,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
       }
-    }, [ensureAgentPanel, updateAgentPanel])
+    }, [ensureAgentPanel, refreshTeamBoard, updateAgentPanel])
 
   useEffect(() => {
     let cancelled = false
@@ -710,6 +760,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       window.clearInterval(id)
     }
   }, [handleStreamEvent])
+
+  useEffect(() => {
+    void refreshTeamBoard()
+  }, [refreshTeamBoard, sessionId])
 
   // ── Load model info on mount ──────────────────────────────────────────────
 
@@ -740,17 +794,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // ── Send message ──────────────────────────────────────────────────────────
 
+  const [pastedImages, setPastedImages] = useState<PastedImageAttachment[]>([])
+
   const markMessageDelivery = useCallback((id: string, deliveryStatus: ChatMessage['deliveryStatus']) => {
     setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, deliveryStatus } : msg))
   }, [])
 
-  const sendUserText = useCallback(async (text: string, existingID?: string) => {
+  const sendUserText = useCallback(async (text: string, existingID?: string, images: PastedImageAttachment[] = []) => {
     const messageID = existingID || nextID()
     if (!existingID) {
       const userMsg: ChatMessage = {
         id: messageID,
         role: 'user',
         content: text,
+        images,
         timestamp: Date.now(),
         deliveryStatus: 'pending',
       }
@@ -767,7 +824,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
 
     try {
-      await App.SendMessage(text)
+      if (images.length > 0) {
+        await App.SendMessageWithImages(text, images.map(img => ({
+          mimeType: img.mimeType,
+          data: img.data,
+          name: img.name,
+        })))
+      } else {
+        await App.SendMessage(text)
+      }
       markMessageDelivery(messageID, 'sent')
     } catch (err: any) {
       const message = err?.message ?? String(err)
@@ -789,14 +854,85 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
-    if (!text) return
+    if (!text && pastedImages.length === 0) return
 
+    const images = pastedImages
     setInput('')
-    await sendUserText(text)
-  }, [input, sendUserText])
+    setPastedImages([])
+    await sendUserText(text || 'Please analyze this image.', undefined, images)
+  }, [input, pastedImages, sendUserText])
 
-  const handleRetrySend = useCallback((id: string, text: string) => {
-    void sendUserText(text, id)
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    const imageFiles = items
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter((file): file is File => !!file)
+    if (imageFiles.length === 0) return
+
+    e.preventDefault()
+    void Promise.all(imageFiles.map(file => new Promise<PastedImageAttachment>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const previewUrl = String(reader.result || '')
+        const comma = previewUrl.indexOf(',')
+        resolve({
+          id: nextID(),
+          mimeType: file.type || 'image/png',
+          data: comma >= 0 ? previewUrl.slice(comma + 1) : previewUrl,
+          previewUrl,
+          name: file.name || 'pasted-image',
+        })
+      }
+      reader.onerror = () => reject(reader.error || new Error('Failed to read pasted image'))
+      reader.readAsDataURL(file)
+    }))).then(images => {
+      setPastedImages(prev => [...prev, ...images])
+    }).catch(err => {
+      showToast?.('error', err?.message || 'Failed to paste image')
+    })
+  }, [showToast])
+
+  const handlePasteButton = useCallback(async () => {
+    inputRef.current?.focus()
+
+    try {
+      if (document.queryCommandSupported?.('paste') && document.execCommand('paste')) {
+        return
+      }
+    } catch {
+      // Most WebViews/browsers block programmatic paste. Fall back to Wails clipboard APIs below.
+    }
+
+    try {
+      const readClipboardImage = (window as any)?.go?.main?.App?.ReadClipboardImage
+      if (typeof readClipboardImage === 'function') {
+        const image = await App.ReadClipboardImage()
+        if (image?.data) {
+          setPastedImages(prev => [...prev, {
+            id: nextID(),
+            mimeType: image.mimeType || 'image/png',
+            data: image.data,
+            previewUrl: `data:${image.mimeType || 'image/png'};base64,${image.data}`,
+            name: image.name || 'clipboard-image',
+          }])
+          return
+        }
+      }
+
+      const text = await ClipboardGetText()
+      if (text) {
+        setInput(prev => prev ? `${prev}${text}` : text)
+        return
+      }
+      showToast?.('info', 'Clipboard is empty or contains unsupported content')
+    } catch (err: any) {
+      showToast?.('error', err?.message || 'Failed to paste from clipboard')
+    }
+  }, [showToast])
+
+  const handleRetrySend = useCallback((id: string, text: string, images?: PastedImageAttachment[]) => {
+    void sendUserText(text, id, images || [])
   }, [sendUserText])
 
   // ── Cancel ────────────────────────────────────────────────────────────────
@@ -881,7 +1017,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
       {/* Top bar */}
       <div style={{
         height: 'var(--topbar-height)',
@@ -977,6 +1114,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             </div>
           )}
         </div>
+
+        {teamBoard.length > 0 && !teamBoardOpen && (
+          <button onClick={openTeamBoard} title="Open team board" style={{
+            padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-card)', border: '1px solid var(--color-border)',
+            fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            Team · {teamBoard.reduce((sum, team) => sum + (team.tasks?.length || 0), 0)}
+          </button>
+        )}
 
         {/* Context pill */}
         {statusBar.contextTotal > 0 && (
@@ -1111,16 +1259,48 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       </div>
 
       {/* Input area */}
+      {pastedImages.length > 0 && (
+        <div style={{
+          padding: '8px var(--spacing-lg) 0',
+          borderTop: '1px solid var(--color-border)',
+          display: 'flex', gap: 8, flexWrap: 'wrap', flexShrink: 0,
+        }}>
+          {pastedImages.map(img => (
+            <div key={img.id} style={{ position: 'relative' }}>
+              <img src={img.previewUrl} alt={img.name || 'pasted image'} style={{
+                width: 72, height: 72, objectFit: 'cover', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)', background: 'var(--color-card)',
+              }} />
+              <button type="button" onClick={() => setPastedImages(prev => prev.filter(x => x.id !== img.id))} title="Remove image" style={{
+                position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: 9,
+                border: '1px solid var(--color-border)', background: 'var(--color-card)',
+                color: 'var(--text-primary)', cursor: 'pointer', fontSize: 12, lineHeight: '16px', padding: 0,
+              }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{
         padding: 'var(--spacing-md) var(--spacing-lg)',
         borderTop: '1px solid var(--color-border)',
         display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center',
         flexShrink: 0,
       }}>
+        <button type="button" onClick={handlePasteButton} title="Paste from clipboard" style={{
+          width: 36, height: 36, borderRadius: 'var(--radius-lg)',
+          background: 'var(--color-surface)',
+          border: '1px solid var(--color-border)', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--text-tertiary)',
+          transition: 'background 0.15s',
+        }}>
+          <ClipboardPaste size={16} />
+        </button>
         <input
           ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
+          onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.agentWorking') : t('chat.placeholder')}
           style={{
@@ -1142,12 +1322,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <Square size={16} fill="currentColor" />
           </button>
         ) : null}
-        <button onClick={handleSend} disabled={!input.trim()} style={{
+        <button onClick={handleSend} disabled={!input.trim() && pastedImages.length === 0} style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
-            background: input.trim() ? 'var(--color-primary)' : 'var(--color-surface)',
-            border: 'none', cursor: input.trim() ? 'pointer' : 'default',
+            background: input.trim() || pastedImages.length > 0 ? 'var(--color-primary)' : 'var(--color-surface)',
+            border: 'none', cursor: input.trim() || pastedImages.length > 0 ? 'pointer' : 'default',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: input.trim() ? '#fff' : 'var(--text-tertiary)',
+            color: input.trim() || pastedImages.length > 0 ? '#fff' : 'var(--text-tertiary)',
             transition: 'background 0.15s',
           }}>
             <ArrowUp size={18} strokeWidth={2.5} />
@@ -1164,6 +1344,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           to { transform: rotate(360deg); }
         }
       `}</style>
+      </div>
+      {teamBoardOpen && (
+        <TeamBoard teams={teamBoard} onClose={closeTeamBoard} onSelectTeammate={selectTeammatePanel} />
+      )}
     </div>
   )
 }
@@ -1186,7 +1370,7 @@ function TabButton({ label, active, onClick, color }: { label: string; active: b
   )
 }
 
-function MessageCard({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string) => void }) {
+function MessageCard({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void }) {
   switch (msg.role) {
     case 'user':
       return <UserMessage msg={msg} onRetry={onRetry} />
@@ -1249,7 +1433,7 @@ function ReasoningMessage({ msg }: { msg: ChatMessage }) {
   )
 }
 
-function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string) => void }) {
+function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void }) {
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
   return (
@@ -1267,6 +1451,16 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
         color: failed ? '#fecaca' : '#fff',
         lineHeight: 1.6,
       }}>
+        {msg.images && msg.images.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: msg.content ? 8 : 0 }}>
+            {msg.images.map(img => (
+              <img key={img.id} src={img.previewUrl} alt={img.name || 'pasted image'} style={{
+                maxWidth: 180, maxHeight: 180, objectFit: 'cover', borderRadius: 'var(--radius-md)',
+                border: '1px solid rgba(255,255,255,0.25)',
+              }} />
+            ))}
+          </div>
+        )}
         {msg.content}
       </div>
       {(pending || failed) && (
@@ -1275,7 +1469,7 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           {failed && onRetry && (
             <button
               type="button"
-              onClick={() => onRetry(msg.id, msg.content)}
+              onClick={() => onRetry(msg.id, msg.content, msg.images)}
               style={{
                 border: 'none',
                 background: 'transparent',

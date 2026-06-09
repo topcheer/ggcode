@@ -191,6 +191,17 @@ const zh: Record<TranslationKey, string> = {
   'files.imagePreview': '图片预览',
   'files.noPreview': '无预览',
   'files.openInEditor': '在编辑器中打开',
+
+  // DebugConsole
+  'debug.title': '调试控制台',
+  'debug.start': '开始',
+  'debug.stop': '停止',
+  'debug.clear': '清空',
+  'debug.lines': '行',
+  'debug.live': '● 实时',
+  'debug.allCategories': '全部分类',
+  'debug.filterPlaceholder': '过滤...',
+  'debug.empty': '点击“开始”捕获调试日志',
 }
 
 export default zh

@@ -71,6 +71,7 @@ func (t countingTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 
 // mockProvider is a simple mock for testing agent basics.
 type mockProvider struct {
+	mu            sync.Mutex
 	chatResp      *provider.ChatResponse
 	chatResponses []*provider.ChatResponse
 	chatErr       error
@@ -251,6 +252,8 @@ func (t releaseCompactTool) Execute(ctx context.Context, input json.RawMessage) 
 }
 
 func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.chatCalls++
 	if len(m.chatResponses) > 0 {
 		resp := m.chatResponses[0]
@@ -261,14 +264,17 @@ func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, to
 }
 
 func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	m.mu.Lock()
 	m.streamCalls++
 	if m.streamErr != nil {
-		return nil, m.streamErr
+		err := m.streamErr
+		m.mu.Unlock()
+		return nil, err
 	}
 	var events []provider.StreamEvent
 	switch {
 	case len(m.streamEvents) > 0:
-		events = m.streamEvents[0]
+		events = append([]provider.StreamEvent(nil), m.streamEvents[0]...)
 		m.streamEvents = m.streamEvents[1:]
 	case len(m.chatResponses) > 0:
 		resp := m.chatResponses[0]
@@ -277,6 +283,7 @@ func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Messa
 	case m.chatResp != nil:
 		events = streamEventsFromResponse(m.chatResp)
 	}
+	m.mu.Unlock()
 	ch := make(chan provider.StreamEvent, len(events))
 	for _, event := range events {
 		ch <- event
@@ -286,6 +293,8 @@ func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Messa
 }
 
 func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Message) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.tokenCount, nil
 }
 

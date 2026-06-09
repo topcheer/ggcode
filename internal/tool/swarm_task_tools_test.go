@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/task"
 )
 
@@ -29,6 +30,59 @@ func TestSwarmTaskCreateTool(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
+	}
+}
+
+func TestSwarmTaskToolsEmitBoardUpdatedEvents(t *testing.T) {
+	mgr := swarmTestManager(t)
+	team := mgr.CreateTeam("test", "leader")
+	var events []swarm.Event
+	mgr.SetOnUpdate(func(ev swarm.Event) {
+		if ev.Type == "team_board_updated" {
+			events = append(events, ev)
+		}
+	})
+
+	createTool := SwarmTaskCreateTool{Manager: mgr}
+	input, _ := json.Marshal(map[string]interface{}{
+		"team_id": team.ID,
+		"subject": "Emit events",
+	})
+	createResult, err := createTool.Execute(context.Background(), input)
+	if err != nil || createResult.IsError {
+		t.Fatalf("create failed: result=%+v err=%v", createResult, err)
+	}
+	var created task.Task
+	if err := json.Unmarshal([]byte(createResult.Content), &created); err != nil {
+		t.Fatalf("unmarshal created task: %v", err)
+	}
+
+	claimTool := SwarmTaskClaimTool{Manager: mgr}
+	claimInput, _ := json.Marshal(map[string]string{
+		"team_id": team.ID,
+		"task_id": created.ID,
+		"owner":   "tm-1",
+	})
+	if result, err := claimTool.Execute(context.Background(), claimInput); err != nil || result.IsError {
+		t.Fatalf("claim failed: result=%+v err=%v", result, err)
+	}
+
+	completeTool := SwarmTaskCompleteTool{Manager: mgr}
+	completeInput, _ := json.Marshal(map[string]string{
+		"team_id": team.ID,
+		"task_id": created.ID,
+	})
+	if result, err := completeTool.Execute(context.Background(), completeInput); err != nil || result.IsError {
+		t.Fatalf("complete failed: result=%+v err=%v", result, err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("expected create/claim/complete board events, got %d: %+v", len(events), events)
+	}
+	for _, ev := range events {
+		if ev.TeamID != team.ID {
+			t.Fatalf("board event TeamID = %q, want %q", ev.TeamID, team.ID)
+		}
 	}
 }
 

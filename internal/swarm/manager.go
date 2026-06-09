@@ -3,6 +3,8 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/task"
-	"strings"
 )
 
 // AgentFactory creates an agent with the given provider, tool set, system prompt, and max turns.
@@ -240,6 +241,64 @@ func (m *Manager) ListTeams() []TeamSnapshot {
 		out = append(out, t.snapshot())
 	}
 	return out
+}
+
+// TeamBoardSnapshot is a lightweight read-only snapshot for desktop/team board UIs.
+type TeamBoardSnapshot struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	LeaderID  string              `json:"leaderID"`
+	Teammates []TeamBoardTeammate `json:"teammates"`
+	Tasks     []TeamBoardTask     `json:"tasks"`
+	CreatedAt time.Time           `json:"createdAt"`
+}
+
+// TeamBoardTeammate summarizes a teammate for board display without copying event logs.
+type TeamBoardTeammate struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color,omitempty"`
+	Status      string `json:"status"`
+	CurrentTask string `json:"currentTask,omitempty"`
+	LastResult  string `json:"lastResult,omitempty"`
+}
+
+// TeamBoardTask summarizes a shared team-board task for desktop display.
+type TeamBoardTask struct {
+	ID          string            `json:"id"`
+	Subject     string            `json:"subject"`
+	Description string            `json:"description,omitempty"`
+	ActiveForm  string            `json:"activeForm,omitempty"`
+	Status      string            `json:"status"`
+	Owner       string            `json:"owner,omitempty"`
+	Assignee    string            `json:"assignee,omitempty"`
+	Blocks      []string          `json:"blocks,omitempty"`
+	BlockedBy   []string          `json:"blockedBy,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+}
+
+// ListTeamBoards returns snapshots of all teams with teammate status and task board state.
+func (m *Manager) ListTeamBoards() []TeamBoardSnapshot {
+	m.mu.Lock()
+	teams := make([]*Team, 0, len(m.teams))
+	for _, t := range m.teams {
+		teams = append(teams, t)
+	}
+	m.mu.Unlock()
+
+	out := make([]TeamBoardSnapshot, 0, len(teams))
+	for _, t := range teams {
+		out = append(out, t.boardSnapshot())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// EmitBoardUpdated notifies UI subscribers that a team's shared task board changed.
+func (m *Manager) EmitBoardUpdated(teamID string) {
+	m.emit(Event{Type: "team_board_updated", TeamID: teamID, Timestamp: time.Now()})
 }
 
 // SpawnTeammate creates a new teammate in the given team and starts its idle loop.
