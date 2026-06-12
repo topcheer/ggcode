@@ -723,7 +723,7 @@ class _WorkspaceCacheSqlStore {
   }
 
   void dispose() {
-    _db.dispose();
+    _db.close();
   }
 
   bool _isBetterStoredSnapshot({
