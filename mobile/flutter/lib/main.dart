@@ -214,6 +214,8 @@ class _AppShellState extends ConsumerState<AppShell>
                 ref.read(connectionProvider.notifier).lastAppliedEventId,
             authoritative:
                 ref.read(connectionProvider.notifier).canPersistLiveProjection,
+            sessionUrl:
+                ref.read(connectionProvider.notifier).liveSessionUrl,
           );
     }
 

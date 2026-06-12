@@ -124,6 +124,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _resumeOverrideEventId = '';
   String _shareRoomId = '';
   String _shareRenewToken = '';
+  String _liveUrl = '';
   bool _hasAuthoritativeProjection = false;
   int _relayAuthorityEpoch = 0;
   final List<String> _recentEventIds = <String>[];
@@ -158,6 +159,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   String get currentSessionId => _sessionId;
   String get lastAppliedEventId => _lastAppliedEventId;
+  String get liveSessionUrl => _liveUrl;
   List<String> get recentEventIds => List.unmodifiable(_recentEventIds);
   bool get canPersistLiveProjection =>
       _hasAuthoritativeProjection &&
@@ -286,6 +288,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       return;
     }
     service = localService;
+    _liveUrl = url;
     debugPrint(
       '[connection] provider connect url=${descriptor.publicUrl} clearState=$clearState '
       'savedSession=$_sessionId lastEvent=$_lastAppliedEventId client=${_clientId.isNotEmpty}',
@@ -374,6 +377,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _disposeActiveService();
     _clearRelaySyncState();
     _relayAuthorityEpoch = 0;
+    _liveUrl = '';
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(
       status: ConnectionStatus.disconnected,
