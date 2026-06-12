@@ -168,7 +168,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, color: 'var(--color-info)',
             textDecoration: 'none',
-          }}><ExternalLink size={12} /> iOS (TestFlight)</a>
+          }}><ExternalLink size={12} /> iOS (App Store)</a>
           <a href="https://play.google.com/apps/testing/gg.ai.ggcode.mobile" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, color: 'var(--color-info)',
