@@ -452,115 +452,84 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _openWorkspaceSwitcher() async {
     final cache = ref.read(workspaceCacheProvider);
     final notifier = ref.read(workspaceCacheProvider.notifier);
+    final bgConn = ref.read(backgroundConnectionProvider.notifier);
+    final connNotifier = ref.read(connectionProvider.notifier);
     final workspaces = notifier.sortedWorkspaces();
-    final sessionList = notifier.sortedSessions();
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF141421),
       showDragHandle: true,
       builder: (ctx) {
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 24),
-            children: [
-              Text(
-                t('workspace.switcher_title'),
-                style: TextStyle(
-                  color: AppColors.textPrimary.withValues(alpha: 0.95),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 24),
+                children: [
+                  Text(
+                    t('workspace.switcher_title'),
+                    style: TextStyle(
+                      color: AppColors.textPrimary.withValues(alpha: 0.95),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  for (final workspace in workspaces) ...[
+                    _WorkspaceGroup(
+                      workspace: workspace,
+                      sessions:
+                          notifier.sessionsForWorkspace(workspace.key),
+                      isActiveWorkspace:
+                          workspace.key == cache.selectedWorkspaceKey,
+                      liveSessionId: connNotifier.currentSessionId,
+                      liveSessionIds: bgConn.liveSessionIds,
+                      onSessionTap: (session) async {
+                        Navigator.of(ctx).pop();
+                        if (session.sessionId ==
+                            connNotifier.currentSessionId) {
+                          return;
+                        }
+                        // If session has a URL, connect to it
+                        if (session.url.isNotEmpty) {
+                          // Check if it's a background connection we can promote
+                          final bgService =
+                              bgConn.takeService(session.url);
+                          if (bgService != null) {
+                            // Demote current connection to background
+                            final currentUrl = connNotifier.liveSessionUrl;
+                            final currentSessionId =
+                                connNotifier.currentSessionId;
+                            if (currentUrl.isNotEmpty &&
+                                currentSessionId.isNotEmpty) {
+                              final currentService = connNotifier.service;
+                              if (currentService != null) {
+                                bgConn.registerService(
+                                  currentUrl,
+                                  currentSessionId,
+                                  currentService,
+                                );
+                              }
+                            }
+                          }
+                          await ref
+                              .read(connectionProvider.notifier)
+                              .connect(session.url);
+                        } else {
+                          // No URL — just show cached snapshot
+                          await ref
+                              .read(workspaceCacheProvider.notifier)
+                              .selectSession(session.sessionId);
+                        }
+                      },
+                    ),
+                    SizedBox(height: 6),
+                  ],
+                ],
               ),
-              SizedBox(height: 8),
-              for (final workspace in workspaces)
-                ListTile(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  tileColor:
-                      AppColors.backgroundElevated.withValues(alpha: 0.5),
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    workspace.key == cache.liveWorkspaceKey
-                        ? Icons.radio_button_checked
-                        : Icons.folder_open,
-                    color: workspace.key == cache.selectedWorkspaceKey
-                        ? Colors.blueAccent
-                        : AppColors.textSecondary,
-                  ),
-                  title: Text(
-                    workspace.displayName,
-                    style: TextStyle(color: AppColors.textPrimary),
-                  ),
-                  subtitle: workspace.lastSessionId.isNotEmpty
-                      ? Text(
-                          'Session ${workspace.lastSessionId.substring(0, workspace.lastSessionId.length > 8 ? 8 : workspace.lastSessionId.length)}',
-                          style: TextStyle(color: AppColors.textMuted),
-                        )
-                      : null,
-                  trailing: workspace.key == cache.selectedWorkspaceKey
-                      ? const Icon(Icons.check, color: Colors.blueAccent)
-                      : null,
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    await ref
-                        .read(connectionProvider.notifier)
-                        .connectWorkspace(workspace.key);
-                  },
-                ),
-              if (sessionList.isNotEmpty) ...[
-                SizedBox(height: 16),
-                Text(
-                  'Sessions',
-                  style: TextStyle(
-                    color: AppColors.textPrimary.withValues(alpha: 0.95),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                SizedBox(height: 8),
-                for (final session in sessionList)
-                  ListTile(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    tileColor:
-                        AppColors.backgroundElevated.withValues(alpha: 0.5),
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      session.sessionId == cache.liveSessionId
-                          ? Icons.bolt
-                          : Icons.history,
-                      color: session.sessionId == cache.selectedSessionId
-                          ? Colors.blueAccent
-                          : AppColors.textSecondary,
-                    ),
-                    title: Text(
-                      session.title,
-                      style: TextStyle(color: AppColors.textPrimary),
-                    ),
-                    subtitle: Text(
-                      session.workspacePath.isNotEmpty
-                          ? _workspaceDisplayName(session.workspacePath)
-                          : (session.model.isNotEmpty
-                              ? '${session.provider} / ${session.model}'
-                              : session.provider),
-                      style: TextStyle(color: AppColors.textMuted),
-                    ),
-                    trailing: session.sessionId == cache.selectedSessionId
-                        ? const Icon(Icons.check, color: Colors.blueAccent)
-                        : null,
-                    onTap: () async {
-                      Navigator.of(ctx).pop();
-                      await ref
-                          .read(workspaceCacheProvider.notifier)
-                          .selectSession(session.sessionId);
-                    },
-                  ),
-              ],
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -1328,10 +1297,211 @@ class _ConnectionStatusIcon extends StatelessWidget {
   }
 }
 
-/// Extract the project directory name from a workspace path.
-/// e.g. "/Users/zanchen/projects/my-app" → "my-app"
-String _workspaceDisplayName(String workspacePath) {
-  if (workspacePath.isEmpty) return '';
-  final parts = workspacePath.split('/');
-  return parts.isNotEmpty ? parts.last : workspacePath;
+
+/// A collapsible workspace group with its sessions underneath.
+class _WorkspaceGroup extends StatefulWidget {
+  final WorkspaceRecord workspace;
+  final List<CachedSessionRecord> sessions;
+  final bool isActiveWorkspace;
+  final String liveSessionId;
+  final Set<String> liveSessionIds;
+  final void Function(CachedSessionRecord) onSessionTap;
+
+  const _WorkspaceGroup({
+    required this.workspace,
+    required this.sessions,
+    required this.isActiveWorkspace,
+    required this.liveSessionId,
+    required this.liveSessionIds,
+    required this.onSessionTap,
+  });
+
+  @override
+  State<_WorkspaceGroup> createState() => _WorkspaceGroupState();
+}
+
+class _WorkspaceGroupState extends State<_WorkspaceGroup> {
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-expand the active workspace
+    _expanded = widget.isActiveWorkspace;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasLiveSession = widget.sessions.any(
+        (s) => s.sessionId == widget.liveSessionId);
+    final hasBackgroundLive = widget.sessions.any(
+        (s) => widget.liveSessionIds.contains(s.sessionId));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Workspace header
+        ListTile(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          tileColor: AppColors.backgroundElevated.withValues(alpha: 0.5),
+          contentPadding: EdgeInsets.zero,
+          leading: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _expanded ? Icons.folder_open : Icons.folder,
+                color: widget.isActiveWorkspace
+                    ? Colors.blueAccent
+                    : AppColors.textSecondary,
+                size: 20,
+              ),
+              if (hasLiveSession)
+                Container(
+                  margin: EdgeInsets.only(left: 2),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: Colors.greenAccent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              if (!hasLiveSession && hasBackgroundLive)
+                Container(
+                  margin: EdgeInsets.only(left: 2),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: Colors.orangeAccent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+            ],
+          ),
+          title: Text(
+            widget.workspace.displayName,
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontWeight: widget.isActiveWorkspace
+                  ? FontWeight.w600
+                  : FontWeight.normal,
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.isActiveWorkspace)
+                Padding(
+                  padding: EdgeInsets.only(right: 4),
+                  child: const Icon(Icons.check, color: Colors.blueAccent,
+                      size: 18),
+                ),
+              Icon(
+                _expanded ? Icons.expand_less : Icons.expand_more,
+                color: AppColors.textSecondary,
+                size: 20,
+              ),
+            ],
+          ),
+          onTap: () => setState(() => _expanded = !_expanded),
+        ),
+        // Sessions underneath
+        if (_expanded && widget.sessions.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(left: 16),
+            child: Column(
+              children: [
+                for (final session in widget.sessions)
+                  ListTile(
+                    dense: true,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    tileColor: AppColors.backgroundElevated
+                        .withValues(alpha: 0.25),
+                    contentPadding: EdgeInsets.only(left: 8, right: 8),
+                    leading: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          session.sessionId == widget.liveSessionId
+                              ? Icons.bolt
+                              : Icons.chat_bubble_outline,
+                          color: session.sessionId == widget.liveSessionId
+                              ? Colors.greenAccent
+                              : (widget.liveSessionIds
+                                      .contains(session.sessionId)
+                                  ? Colors.orangeAccent
+                                  : AppColors.textMuted),
+                          size: 16,
+                        ),
+                        if (session.sessionId == widget.liveSessionId ||
+                            widget.liveSessionIds
+                                .contains(session.sessionId))
+                          Container(
+                            margin: EdgeInsets.only(left: 2),
+                            width: 5,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: session.sessionId == widget.liveSessionId
+                                  ? Colors.greenAccent
+                                  : Colors.orangeAccent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                      ],
+                    ),
+                    title: Text(
+                      session.title.isNotEmpty
+                          ? session.title
+                          : 'Session ${session.sessionId.length > 8 ? session.sessionId.substring(0, 8) : session.sessionId}',
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 13,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      session.model.isNotEmpty
+                          ? '${session.provider} / ${session.model}'
+                          : session.provider,
+                      style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+                    ),
+                    trailing: session.sessionId == widget.liveSessionId
+                        ? Text('LIVE',
+                            style: TextStyle(
+                              color: Colors.greenAccent,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ))
+                        : (widget.liveSessionIds.contains(session.sessionId)
+                            ? Text('online',
+                                style: TextStyle(
+                                  color: Colors.orangeAccent,
+                                  fontSize: 10,
+                                ))
+                            : Text(_formatTimeAgo(session.lastUpdatedAt),
+                                style: TextStyle(
+                                  color: AppColors.textMuted,
+                                  fontSize: 10,
+                                ))),
+                    onTap: () => widget.onSessionTap(session),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _formatTimeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${(diff.inDays / 7).floor()}w ago';
+  }
 }

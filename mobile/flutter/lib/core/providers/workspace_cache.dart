@@ -75,6 +75,7 @@ class CachedSessionRecord {
   final String lastEventId;
   final int authorityEpoch;
   final DateTime lastUpdatedAt;
+  final String url; // relay URL with token for this specific session
 
   const CachedSessionRecord({
     required this.workspaceKey,
@@ -88,6 +89,7 @@ class CachedSessionRecord {
     required this.lastEventId,
     this.authorityEpoch = 0,
     required this.lastUpdatedAt,
+    this.url = '',
   });
 
   CachedSessionRecord copyWith({
@@ -100,6 +102,7 @@ class CachedSessionRecord {
     String? lastEventId,
     int? authorityEpoch,
     DateTime? lastUpdatedAt,
+    String? url,
   }) =>
       CachedSessionRecord(
         workspaceKey: workspaceKey,
@@ -113,6 +116,7 @@ class CachedSessionRecord {
         lastEventId: lastEventId ?? this.lastEventId,
         authorityEpoch: authorityEpoch ?? this.authorityEpoch,
         lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
+        url: url ?? this.url,
       );
 
   Map<String, dynamic> toJson() => {
@@ -127,6 +131,7 @@ class CachedSessionRecord {
         'last_event_id': lastEventId,
         'authority_epoch': authorityEpoch,
         'last_updated_at': lastUpdatedAt.toIso8601String(),
+        'url': url,
       };
 
   factory CachedSessionRecord.fromJson(Map<String, dynamic> json) =>
@@ -143,6 +148,7 @@ class CachedSessionRecord {
         lastUpdatedAt:
             DateTime.tryParse(json['last_updated_at'] as String? ?? '') ??
                 DateTime.fromMillisecondsSinceEpoch(0),
+        url: json['url'] as String? ?? '',
       );
 }
 
@@ -383,6 +389,16 @@ class _WorkspaceCacheSqlStore {
         rethrow;
       }
     }
+    try {
+      _db.execute(
+        'ALTER TABLE cache_sessions ADD COLUMN url TEXT NOT NULL DEFAULT \'\';',
+      );
+    } on SqliteException catch (err) {
+      final message = err.message.toLowerCase();
+      if (!message.contains('duplicate column name')) {
+        rethrow;
+      }
+    }
   }
 
   void _ensureVersion({
@@ -561,9 +577,9 @@ class _WorkspaceCacheSqlStore {
       '''
       INSERT INTO cache_sessions(
         workspace_key, session_id, title, model, provider, mode, version,
-        workspace_path, last_event_id, authority_epoch, last_updated_at
+        workspace_path, last_event_id, authority_epoch, last_updated_at, url
       )
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(workspace_key, session_id) DO UPDATE SET
         title = excluded.title,
         model = excluded.model,
@@ -573,7 +589,8 @@ class _WorkspaceCacheSqlStore {
         workspace_path = excluded.workspace_path,
         last_event_id = excluded.last_event_id,
         authority_epoch = excluded.authority_epoch,
-        last_updated_at = excluded.last_updated_at
+        last_updated_at = excluded.last_updated_at,
+        url = excluded.url
       ''',
       [
         record.workspaceKey,
@@ -587,6 +604,7 @@ class _WorkspaceCacheSqlStore {
         record.lastEventId,
         record.authorityEpoch,
         record.lastUpdatedAt.toIso8601String(),
+        record.url,
       ],
     );
   }
@@ -1037,6 +1055,39 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
   }
 
+  /// Cache a background event from a non-active session relay connection.
+  /// This persists the event for later viewing without updating the UI.
+  void cacheBackgroundEvent({
+    required String sessionId,
+    required String eventType,
+    required Map<String, dynamic> eventData,
+  }) {
+    // Find the session record to get its workspace key
+    CachedSessionRecord? record;
+    for (final r in state.sessions.values) {
+      if (r.sessionId == sessionId) {
+        record = r;
+        break;
+      }
+    }
+    if (record == null) return;
+
+    // Update lastEventId if present
+    final eventId = eventData['event_id'] as String? ?? '';
+    if (eventId.isNotEmpty) {
+      final updated = record.copyWith(
+        lastEventId: eventId,
+        lastUpdatedAt: DateTime.now(),
+      );
+      final sessions = Map<String, CachedSessionRecord>.from(state.sessions);
+      final key = _sessionCacheKey(updated.workspaceKey, updated.sessionId);
+      sessions[key] = updated;
+      state = state.copyWith(sessions: sessions);
+      _dirtySessions.add(key);
+      _scheduleFlush();
+    }
+  }
+
   Future<bool> attachSessionToActiveWorkspace(String sessionId) async {
     if (sessionId.isEmpty) return false;
     await initialize();
@@ -1228,6 +1279,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String lastEventId,
     int authorityEpoch = 0,
     bool authoritative = true,
+    String sessionUrl = '',
   }) async {
     await initialize();
     if (!ref.mounted) return;
@@ -1274,6 +1326,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 lastEventId: lastEventId,
                 authorityEpoch: authorityEpoch,
                 lastUpdatedAt: now,
+                url: sessionUrl,
               ))
           .copyWith(
         title: _sessionTitle(sessionInfo, sessionId),
