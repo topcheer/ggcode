@@ -162,6 +162,10 @@ export function NewSession() {
   return window['go']['main']['App']['NewSession']();
 }
 
+export function ReadClipboardAttachments() {
+  return window['go']['main']['App']['ReadClipboardAttachments']();
+}
+
 export function ReadClipboardImage() {
   return window['go']['main']['App']['ReadClipboardImage']();
 }

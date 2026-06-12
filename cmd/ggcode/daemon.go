@@ -20,7 +20,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/a2a"
-	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -30,7 +29,6 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
-	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/restart"
@@ -139,10 +137,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	workingDir, _ := os.Getwd()
-	mode := permission.ParsePermissionMode(cfg.DefaultMode)
-	if bypass {
-		mode = permission.BypassMode
-	}
+	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 
 	// Tools
@@ -158,9 +153,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	saveMemoryTool := core.SaveMemoryTool
 	startupAssets := core.StartupAssets
 	commandMgr := startupAssets.CommandManager
-	projectMemoryLoader := func() (string, []string, error) {
-		return memory.LoadProjectMemory(workingDir)
-	}
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 		a.SetWorkingDir(ag.WorkingDir())
@@ -204,22 +196,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	_ = registry.Register(skillTool)
 	var subMgr *subagent.Manager
-	acpClientMgr := acpclient.NewClientManager(workingDir, policy)
+	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
+		return permission.Allow
+	})
+	agentruntime.RegisterDelegateTool(registry, acpClientMgr, func() *subagent.Manager { return subMgr }, workingDir, func() string {
+		if ag != nil {
+			return ag.WorkingDir()
+		}
+		return workingDir
+	})
 	if len(acpClientMgr.Available()) > 0 {
-		acpClientMgr.SetApprovalHandler(func(_ context.Context, _ string, _ string) permission.Decision {
-			return permission.Allow
-		})
-		_ = registry.Register(tool.DelegateTool{
-			Manager:           acpClientMgr,
-			SubAgentManagerFn: func() *subagent.Manager { return subMgr },
-			WorkingDir:        workingDir,
-			WorkingDirFn: func() string {
-				if ag != nil {
-					return ag.WorkingDir()
-				}
-				return workingDir
-			},
-		})
 		defer acpClientMgr.CloseAll()
 	}
 
@@ -591,18 +577,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 
 	// Load project memory synchronously (daemon mode has no TUI event loop)
-	if projectMemoryLoader != nil {
-		content, memFiles, err := projectMemoryLoader()
-		if err == nil && content != "" {
-			ag.AddMessage(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
-			})
-		}
-		if len(memFiles) > 0 {
-			ag.SetProjectMemoryFiles(memFiles)
-		}
-	}
+	_, _ = agentruntime.ApplyProjectMemoryToAgent(ag, workingDir)
 
 	// Start Knight background agent (if enabled)
 	homeDir, _ := os.UserHomeDir()
@@ -1640,13 +1615,7 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 
 	// Filter to current workspace only
 	workingDir, _ := os.Getwd()
-	normalizedWD := session.NormalizeWorkspacePath(workingDir)
-	var filtered []*session.Session
-	for _, s := range sessions {
-		if s.Workspace == normalizedWD {
-			filtered = append(filtered, s)
-		}
-	}
+	filtered := agentruntime.FilterWorkspaceSessions(sessions, workingDir)
 	if len(filtered) == 0 {
 		fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.resume.empty"))
 		return ""

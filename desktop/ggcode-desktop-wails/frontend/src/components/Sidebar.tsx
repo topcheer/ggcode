@@ -89,8 +89,10 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
 
   const handleNew = async () => {
     try {
-      await App.NewSession()
-      onSessionSelect?.('')
+      const id = await App.NewSession()
+      const list = await App.ListSessions()
+      setSessions(list || [])
+      onSessionSelect?.(id || '')
     } catch (e) {
       showToast?.('error', `Failed to create session: ${e instanceof Error ? e.message : String(e)}`)
     }

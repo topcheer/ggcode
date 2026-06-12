@@ -8,6 +8,9 @@ class WsMessage {
   final String? messageId;
   final int? generation;
   final int? authorityEpoch;
+  final int? barrierOrdinal;
+  final String? barrierEventId;
+  final String? projectionHash;
   final String type;
   final Map<String, dynamic>? data;
 
@@ -18,6 +21,9 @@ class WsMessage {
     this.messageId,
     this.generation,
     this.authorityEpoch,
+    this.barrierOrdinal,
+    this.barrierEventId,
+    this.projectionHash,
     required this.type,
     this.data,
   });
@@ -29,12 +35,16 @@ class WsMessage {
         'message_id': messageId,
         'generation': generation,
         'authority_epoch': authorityEpoch,
+        'barrier_ordinal': barrierOrdinal,
+        'barrier_event_id': barrierEventId,
+        'projection_hash': projectionHash,
         'type': type,
         'data': data,
       });
 
   static WsMessage fromJson(String jsonStr) {
     final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+    final data = map['data'] as Map<String, dynamic>?;
     return WsMessage(
       sessionId: map['session_id'] as String?,
       eventId: map['event_id'] as String?,
@@ -42,8 +52,15 @@ class WsMessage {
       messageId: map['message_id'] as String?,
       generation: (map['generation'] as num?)?.toInt(),
       authorityEpoch: (map['authority_epoch'] as num?)?.toInt(),
+      barrierOrdinal:
+          ((map['barrier_ordinal'] ?? data?['barrier_ordinal']) as num?)
+              ?.toInt(),
+      barrierEventId: map['barrier_event_id'] as String? ??
+          data?['barrier_event_id'] as String?,
+      projectionHash: map['projection_hash'] as String? ??
+          data?['projection_hash'] as String?,
       type: map['type'] as String,
-      data: map['data'] as Map<String, dynamic>?,
+      data: data,
     );
   }
 }

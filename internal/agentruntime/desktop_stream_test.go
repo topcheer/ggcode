@@ -175,3 +175,35 @@ func TestHandleDesktopStreamEventErrorFlushesAndMirrors(t *testing.T) {
 		t.Fatalf("unexpected mirrored errors: %+v", mirror.errors)
 	}
 }
+
+func TestDesktopSemanticPreservesToolCallIDForResult(t *testing.T) {
+	var round IMRoundState
+	emitter := &testDesktopEmitter{}
+	mirror := &testDesktopMirror{}
+	callID := "call-same-id"
+	tool := provider.ToolCallDelta{ID: callID, Name: "read_file", Arguments: []byte(`{"path":"/tmp/a"}`)}
+
+	callSem, ok := HandleDesktopStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolCallDone,
+		Tool: tool,
+	}, &round, emitter, mirror)
+	if !ok || callSem.ToolCall == nil {
+		t.Fatalf("expected tool call semantic")
+	}
+	if callSem.ToolCall.ID != callID {
+		t.Fatalf("tool call id = %q, want %q", callSem.ToolCall.ID, callID)
+	}
+
+	resultSem, ok := HandleDesktopStreamEvent(provider.StreamEvent{
+		Type:    provider.StreamEventToolResult,
+		Tool:    tool,
+		Result:  "ok",
+		IsError: false,
+	}, &round, emitter, mirror)
+	if !ok || resultSem.ToolResult == nil {
+		t.Fatalf("expected tool result semantic")
+	}
+	if resultSem.ToolResult.ID != callID {
+		t.Fatalf("tool result id = %q, want %q", resultSem.ToolResult.ID, callID)
+	}
+}

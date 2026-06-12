@@ -400,8 +400,13 @@ func TestScenario_UserCancelsRunningTask(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m = updated.(Model)
+	if cancelCalled {
+		t.Error("first ctrl+c should only ask for cancel confirmation")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
+	m = updated.(Model)
 	if !cancelCalled {
-		t.Error("expected cancelFunc to be called")
+		t.Error("expected cancelFunc to be called after second ctrl+c")
 	}
 	if m.exitConfirmPending {
 		t.Error("should not prompt exit confirm when cancelling run")
@@ -416,8 +421,13 @@ func TestScenario_UserCancelsWithEsc(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
+	if cancelCalled {
+		t.Error("first esc should only ask for cancel confirmation")
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = updated.(Model)
 	if !cancelCalled {
-		t.Error("esc should also cancel running task")
+		t.Error("esc should cancel running task after second press")
 	}
 }
 

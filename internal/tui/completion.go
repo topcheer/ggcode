@@ -267,7 +267,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
 	"/knight":      "<on|off|status|run|skills|budget|...>",
-	"/tmux":        "<enter|status|split|test|build|verify|popup|list|layouts|layout|setup|save-layout|refresh|restore|prune|capture|close|focus>",
+	"/tmux":        "<enter [session] [--setup [layout]]|status|split|test|build|verify|popup|list|logs|layouts|layout|setup|save-layout|delete-layout|rename-layout|refresh|restore|rerun|prune|capture|stop|close|focus>",
 	"/resume":      "<session-id>",
 	"/lang":        "<en|zh-CN>",
 	"/memory":      "<subcommand>",

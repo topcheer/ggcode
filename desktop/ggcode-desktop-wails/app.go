@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -48,6 +52,7 @@ type App struct {
 
 	streamEvents chan uiEvent
 	streamOnce   sync.Once
+	shutdownOnce sync.Once
 
 	// Runtime debug log stream
 	logStream   *wailskit.LogStream
@@ -134,6 +139,9 @@ func (a *App) initWorkspace(dir string) {
 	}
 	chat.OnStreamEvent = func(eventType string, data json.RawMessage) {
 		a.emitStreamEvent(eventType, data)
+	}
+	chat.OnSessionChanged = func() {
+		a.bindCurrentIMSession()
 	}
 	chat.EmitEvent = func(name string, payload ...interface{}) {
 		if a.ctx != nil {
@@ -246,11 +254,13 @@ func (a *App) switchWorkspace(dir string) error {
 
 // shutdown is called when the app is closing.
 func (a *App) shutdown(_ context.Context) {
-	a.stopShare()
-	a.stopIMAdapters()
-	if a.chat != nil {
-		a.chat.Cancel()
-	}
+	a.shutdownOnce.Do(func() {
+		a.stopShare()
+		a.stopIMAdapters()
+		if a.chat != nil {
+			a.chat.Cancel()
+		}
+	})
 }
 
 // ─── Workspace Init ──────────────────────────────────────
@@ -311,6 +321,19 @@ type PastedImage struct {
 	Name     string `json:"name,omitempty"`
 }
 
+type ClipboardAttachment struct {
+	Path     string `json:"path,omitempty"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	MimeType string `json:"mimeType,omitempty"`
+	Kind     string `json:"kind"`
+	Content  string `json:"content,omitempty"`
+	Data     string `json:"data,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+const maxClipboardFileBytes int64 = 10 * 1024 * 1024
+
 func (a *App) ReadClipboardImage() (*PastedImage, error) {
 	img, err := imgpkg.ReadClipboard()
 	if err != nil {
@@ -324,6 +347,140 @@ func (a *App) ReadClipboardImage() (*PastedImage, error) {
 		Data:     imgpkg.EncodeBase64(img),
 		Name:     "clipboard-image",
 	}, nil
+}
+
+func (a *App) ReadClipboardAttachments() ([]ClipboardAttachment, error) {
+	paths, err := clipboardFilePaths()
+	if err != nil {
+		return nil, err
+	}
+	attachments := make([]ClipboardAttachment, 0, len(paths))
+	seen := map[string]struct{}{}
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			attachments = append(attachments, ClipboardAttachment{Path: path, Name: filepath.Base(path), Kind: "binary", Error: fmt.Sprintf("resolve path: %v", err)})
+			continue
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		attachments = append(attachments, readClipboardFileAttachment(abs))
+	}
+	return attachments, nil
+}
+
+func clipboardFilePaths() ([]string, error) {
+	script := `use framework "AppKit"
+use scripting additions
+set pb to current application's NSPasteboard's generalPasteboard()
+set urls to pb's readObjectsForClasses:{current application's NSURL} options:{NSPasteboardURLReadingFileURLsOnlyKey:true}
+set out to {}
+if urls is not missing value then
+	repeat with u in urls
+		set p to (u's |path|()) as text
+		if p is not missing value then set end of out to p
+	end repeat
+end if
+return out as text`
+	cmd := exec.Command("osascript", "-e", script)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, nil
+	}
+	return parseClipboardPathOutput(string(output)), nil
+}
+
+func parseClipboardPathOutput(output string) []string {
+	var paths []string
+	for _, part := range strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n") {
+		for _, item := range strings.Split(part, ", ") {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if strings.HasPrefix(item, "file://") {
+				if u, err := url.Parse(item); err == nil {
+					item = u.Path
+				}
+			}
+			paths = append(paths, item)
+		}
+	}
+	return paths
+}
+
+func readClipboardFileAttachment(path string) ClipboardAttachment {
+	att := ClipboardAttachment{
+		Path: path,
+		Name: filepath.Base(path),
+		Kind: "binary",
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		att.Error = fmt.Sprintf("stat file: %v", err)
+		return att
+	}
+	att.Size = info.Size()
+	if info.IsDir() {
+		att.Error = "Directories are not supported yet"
+		return att
+	}
+	if info.Size() > maxClipboardFileBytes {
+		att.Error = "File is larger than 10MB"
+		return att
+	}
+
+	if img, err := imgpkg.ReadFile(path); err == nil {
+		att.Kind = "image"
+		att.MimeType = img.MIME
+		att.Data = imgpkg.EncodeBase64(img)
+		return att
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		att.Error = fmt.Sprintf("read file: %v", err)
+		return att
+	}
+	att.MimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	if looksLikeText(data) {
+		att.Kind = "text"
+		if att.MimeType == "" {
+			att.MimeType = "text/plain; charset=utf-8"
+		}
+		att.Content = string(data)
+		return att
+	}
+	if att.MimeType == "" {
+		att.MimeType = "application/octet-stream"
+	}
+	att.Error = "Binary files are not pasted as text"
+	return att
+}
+
+func looksLikeText(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	if !utf8.Valid(data) {
+		return false
+	}
+	controls := 0
+	for _, b := range data {
+		if b == 0 {
+			return false
+		}
+		if b < 0x20 && b != '\n' && b != '\r' && b != '\t' {
+			controls++
+		}
+	}
+	return controls*100/len(data) < 5
 }
 
 // SendMessage sends a user message to the agent.
@@ -524,19 +681,21 @@ func (a *App) DeleteSession(id string) error {
 	return wailskit.DeleteSession(id)
 }
 
-// NewSession creates a fresh session, cancelling any current work.
-func (a *App) NewSession() error {
-	if a.chat != nil {
-		a.chat.Cancel()
-		a.chat.ClearCurrentSession()
+// NewSession creates a fresh initialized session, cancelling any current work.
+func (a *App) NewSession() (string, error) {
+	if a.chat == nil {
+		return "", nil
 	}
-	return nil
+	a.chat.Cancel()
+	a.stopShareForSessionChange()
+	return a.chat.StartNewSession()
 }
 
 // LoadSession loads an existing session by ID.
 func (a *App) LoadSession(id string) error {
 	if a.chat != nil {
 		a.chat.Cancel()
+		a.stopShareForSessionChange()
 		return a.chat.LoadSession(id)
 	}
 	return fmt.Errorf("chat not initialized")
@@ -964,6 +1123,18 @@ func (a *App) RemoveIMAdapter(name string) error {
 }
 
 // imStartAdapter starts a single adapter by name in the background.
+func (a *App) bindCurrentIMSession() {
+	if a.imManager == nil || a.chat == nil {
+		return
+	}
+	if ses := a.chat.CurrentSession(); ses != nil {
+		a.imManager.BindSession(im.SessionBinding{
+			SessionID: ses.ID,
+			Workspace: a.workDir,
+		})
+	}
+}
+
 func (a *App) imStartAdapter(name string) {
 	if a.imManager == nil {
 		debug.Log("desktop", "IM start %s: manager not initialized", name)
@@ -975,14 +1146,7 @@ func (a *App) imStartAdapter(name string) {
 		return
 	}
 	// Ensure session is bound so pairing and inbound work
-	if a.chat != nil {
-		if ses := a.chat.CurrentSession(); ses != nil {
-			a.imManager.BindSession(im.SessionBinding{
-				SessionID: ses.ID,
-				Workspace: a.workDir,
-			})
-		}
-	}
+	a.bindCurrentIMSession()
 	debug.Log("desktop", "IM start: starting adapter %s", name)
 	if err := im.StartNamedAdapter(context.Background(), cfg.IM, name, a.imManager); err != nil {
 		debug.Log("desktop", "IM start %s failed: %v", name, err)
@@ -1099,6 +1263,25 @@ func (a *App) currentTunnelBroker() *tunnel.Broker {
 	a.tunnelMu.RLock()
 	defer a.tunnelMu.RUnlock()
 	return a.tunnelBroker
+}
+
+func (a *App) isSharing() bool {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelSession != nil || a.tunnelBroker != nil
+}
+
+func (a *App) stopShareForSessionChange() {
+	if !a.isSharing() {
+		return
+	}
+	a.stopShare()
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
+		runtime.EventsEmit(a.ctx, "tunnel:session_changed", map[string]string{
+			"message": "Mobile sharing was stopped because the session changed. Scan again to reconnect.",
+		})
+	}
 }
 
 func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {

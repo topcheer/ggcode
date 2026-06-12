@@ -44,6 +44,14 @@ function LayoutInner() {
     setToast({ id: Date.now(), type, message })
   }, [])
 
+  const dismissToast = useCallback(() => {
+    setToast(null)
+  }, [])
+
+  useEffect(() => {
+    setToast(null)
+  }, [view])
+
   // Shared status bar data
   const [statusBarData, setStatusBarData] = useState<StatusBarData>({
     vendor: '...',
@@ -189,8 +197,11 @@ function LayoutInner() {
     const offAskUserCancel = EventsOn('ask_user:cancel', () => {
       setAskUserRequest(null)
     })
+    const offTunnelSessionChanged = EventsOn('tunnel:session_changed', (data: any) => {
+      showToast('info', data?.message || 'Mobile sharing stopped. Scan again to reconnect.')
+    })
     return () => {
-      for (const off of [offApprovalRequest, offAskUserRequest, offPairing, offPairingDone, offApprovalCancel, offAskUserCancel]) {
+      for (const off of [offApprovalRequest, offAskUserRequest, offPairing, offPairingDone, offApprovalCancel, offAskUserCancel, offTunnelSessionChanged]) {
         if (typeof off === 'function') off()
       }
     }
@@ -292,7 +303,7 @@ function LayoutInner() {
       {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
       {pairingRequest && <PairingCodeDialog request={pairingRequest} onClose={() => setPairingRequest(null)} />}
-      <Toast toast={toast} onClose={() => setToast(null)} />
+      <Toast toast={toast} onClose={dismissToast} />
     </div>
   )
 }

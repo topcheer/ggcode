@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -961,6 +962,10 @@ func (r *REPL) execTmuxEnter() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
+	cmd.Env = removeEnv(cmd.Env, "GGCODE_TMUX_SETUP_LAYOUT")
+	if strings.TrimSpace(r.model.tmuxExecSetupLayout) != "" {
+		cmd.Env = append(cmd.Env, "GGCODE_TMUX_SETUP_LAYOUT="+r.model.tmuxExecSetupLayout)
+	}
 	cmd.Dir = wd
 	if r.model.restartDebug {
 		cmd.Env = append(cmd.Env, "GGCODE_DEBUG=1")

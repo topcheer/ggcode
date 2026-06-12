@@ -235,7 +235,6 @@ func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 	switch ev.Type {
 	case provider.StreamEventText:
 		msgID := h.ensureMsgID(broker)
-		h.rollover(broker, false)
 		h.markActive()
 		broker.PushReasoningDone(TunnelReasoningMsgID(msgID))
 		broker.PushText(msgID, ev.Text)

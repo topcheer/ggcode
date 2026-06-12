@@ -155,3 +155,20 @@ func TestEmitBuildsLiveSessionHistory(t *testing.T) {
 		t.Fatalf("unexpected tool entry: %+v", history[3])
 	}
 }
+
+func TestBuildSessionHistorySkipsSystemMessages(t *testing.T) {
+	history := buildSessionHistoryFromMessages([]provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "Turn #1 · TTFT 1s · Dur 2s · Tools 0"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "answer"}}},
+	})
+	if len(history) != 2 {
+		t.Fatalf("expected system message to be skipped, got %d entries: %+v", len(history), history)
+	}
+	if history[0].Role != "user" || history[0].Content != "hello" {
+		t.Fatalf("unexpected first entry: %+v", history[0])
+	}
+	if history[1].Role != "assistant" || history[1].Content != "answer" {
+		t.Fatalf("unexpected second entry: %+v", history[1])
+	}
+}

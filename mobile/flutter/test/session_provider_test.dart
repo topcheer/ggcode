@@ -186,6 +186,8 @@ class _ManualConnectionService extends _FakeConnectionService {
   int connectCalls = 0;
   int disposeCalls = 0;
   int disconnectCalls = 0;
+  String? resumeLastEventId;
+  String? resumeMessageType;
 
   @override
   Stream<ConnectionStatus> get statusStream => _status.stream;
@@ -215,6 +217,18 @@ class _ManualConnectionService extends _FakeConnectionService {
 
   void emitStatus(ConnectionStatus status) => _status.add(status);
   void emitError(String error) => _errors.add(error);
+  void emit(proto.WsMessage msg) => _messages.add(msg);
+
+  @override
+  void sendResumeHello({
+    required String clientId,
+    String? sessionId,
+    String? lastEventId,
+    String messageType = 'resume_hello',
+  }) {
+    resumeLastEventId = lastEventId;
+    resumeMessageType = messageType;
+  }
 
   @override
   void disconnect() {
@@ -394,6 +408,97 @@ void main() {
     expect(reasoning.streaming, isFalse);
     expect(reasoning.reasoningCollapsed, isTrue);
     expect(answer.text, 'answer');
+  });
+
+  test(
+      'ConnectionNotifier renders shared user message and assistant text stream',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-shared',
+        eventId: 'ev-000000001',
+        type: 'user_message',
+        data: {
+          'text': 'hello',
+          'message_id': 'user-host-1',
+        },
+      ),
+    );
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-shared',
+        eventId: 'ev-000000002',
+        type: 'text',
+        data: {
+          'id': 'msg-1',
+          'chunk': 'Hi! What would ',
+        },
+      ),
+    );
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-shared',
+        eventId: 'ev-000000003',
+        type: 'text',
+        data: {
+          'id': 'msg-1',
+          'chunk': 'you like to work on?',
+        },
+      ),
+    );
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-shared',
+        eventId: 'ev-000000004',
+        type: 'text_done',
+        data: {
+          'id': 'msg-1',
+          'done': true,
+        },
+      ),
+    );
+
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(2));
+    expect(messages[0].isUser, isTrue);
+    expect(messages[0].id, 'ev-000000001');
+    expect(messages[0].text, 'hello');
+    expect(messages[1].isUser, isFalse);
+    expect(messages[1].id, 'msg-1');
+    expect(messages[1].text, 'Hi! What would you like to work on?');
+    expect(messages[1].streaming, isFalse);
+  });
+
+  test('ConnectionNotifier binds echoed local mobile user message to remote id',
+      () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final chat = container.read(chatProvider.notifier);
+    chat.addUserMessage('hello');
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(
+      proto.WsMessage(
+        sessionId: 'sess-shared',
+        eventId: 'ev-000000001',
+        type: 'user_message',
+        data: {
+          'text': 'hello',
+          'message_id': 'user-local-1',
+        },
+      ),
+    );
+
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(1));
+    expect(messages.single.isUser, isTrue);
+    expect(messages.single.id, 'ev-000000001');
+    expect(messages.single.text, 'hello');
   });
 
   test('ConnectionNotifier projects subagent reasoning into agent tab', () {
@@ -1004,6 +1109,43 @@ void main() {
         container.read(displayedMessagesProvider).single.text, 'old session');
   });
 
+  test('live session view uses live chat provider messages', () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=live');
+    await cache.registerLiveSession('sess-live', info, lastEventId: 'ev-0001');
+
+    container.read(chatProvider.notifier).set([
+      ChatMessage(
+        id: 'live-user',
+        text: 'hello',
+        isUser: true,
+        time: DateTime.parse('2026-01-01T00:00:00Z'),
+      ),
+      ChatMessage(
+        id: 'live-answer',
+        text: 'Hi! What would you like to work on?',
+        time: DateTime.parse('2026-01-01T00:00:01Z'),
+      ),
+    ]);
+
+    expect(container.read(isHistoricalViewProvider), isFalse);
+    expect(container.read(displayedMessagesProvider).map((m) => m.text), [
+      'hello',
+      'Hi! What would you like to work on?',
+    ]);
+  });
+
   test('displayed agent status uses cached snapshot for historical session',
       () async {
     final info = proto.SessionInfoData(
@@ -1407,6 +1549,94 @@ void main() {
     expect(container.read(connectionProvider).relaySync, isNull);
   });
 
+  test(
+      'active_session barrier keeps session not ready until target ordinal applies',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+    final service = _CaptureResumeHelloService();
+    _TestConnectionNotifier.factory = (_) => service;
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-1', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.restoreSelectedWorkspace();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    service.emit(proto.WsMessage(
+      type: 'active_session',
+      sessionId: 'sess-1',
+      barrierEventId: 'ev-000000122',
+      barrierOrdinal: 122,
+      data: {'session_id': 'sess-1'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    service.emit(proto.WsMessage(
+      type: 'resume_ack',
+      sessionId: 'sess-1',
+      data: {
+        'session_id': 'sess-1',
+        'resume_mode': 'incremental',
+        'replay_count': 0,
+      },
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).sessionReady, isFalse);
+    expect(container.read(connectionProvider).relaySync, isNotNull);
+
+    service.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000121',
+      data: {'text': 'sync-1'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).sessionReady, isFalse);
+
+    service.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000122',
+      data: {'text': 'sync-2'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(container.read(connectionProvider).sessionReady, isTrue);
+    expect(container.read(connectionProvider).relaySync, isNull);
+  });
+
   test('resume_ack with zero replay count clears relay sync state', () async {
     final info = proto.SessionInfoData(
       workspace: '/tmp/demo',
@@ -1500,6 +1730,68 @@ void main() {
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
     expect(state.url, 'wss://example.test/ws?token=room-b');
+  });
+
+  test('event ordinal gap applies events but schedules reconnect recovery',
+      () async {
+    final serviceA = _ManualConnectionService();
+    final serviceB = _ManualConnectionService();
+    final services = [serviceA, serviceB];
+    var factoryCalls = 0;
+    _TestConnectionNotifier.factory = (_) => services[factoryCalls++];
+    final container = ProviderContainer(
+      overrides: [
+        connectionProvider.overrideWith(_TestConnectionNotifier.new),
+      ],
+    );
+    addTearDown(() {
+      _TestConnectionNotifier.factory = null;
+      container.dispose();
+    });
+
+    final notifier = container.read(connectionProvider.notifier);
+    await notifier.connect('wss://example.test/ws?token=room-a');
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    serviceA.emit(proto.WsMessage(
+      type: 'active_session',
+      sessionId: 'sess-1',
+      data: {'session_id': 'sess-1'},
+    ));
+    serviceA.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000001',
+      data: {'text': 'first'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(notifier.lastAppliedEventId, 'ev-000000001');
+
+    // Send event with a large ordinal gap — the event should still be applied
+    serviceA.emit(proto.WsMessage(
+      type: 'system_message',
+      sessionId: 'sess-1',
+      eventId: 'ev-000000050',
+      data: {'text': 'gap-event'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    // Event was applied despite the gap
+    // lastAppliedEventId gets reset by the reconnect microtask,
+    // so we verify the event was not dropped by checking it was processed.
+    // The microtask reconnect resets lastAppliedEventId, so we check
+    // that the gap event ordinal was recorded at the point of apply.
+    expect(notifier.recentEventIds, contains('ev-000000050'));
+
+    // Recovery reconnect was scheduled
+    expect(factoryCalls, 2);
+    expect(serviceA.disposeCalls, 1);
+    expect(serviceB.connectCalls, 1);
+    // Resume from last known contiguous event, not the gap event
+    expect(serviceB.resumeMessageType, 'resume_from');
+    expect(serviceB.resumeLastEventId, 'ev-000000001');
+    expect(container.read(connectionProvider).relaySync, isNotNull);
+    expect(container.read(connectionProvider).sessionReady, isFalse);
   });
 
   test('connect accepts share v3 url without public crypto key', () async {

@@ -2,9 +2,9 @@ package wailskit
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -33,31 +33,16 @@ func ListSessions(workingDir string) ([]SessionInfo, error) {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 
-	// Normalize workspace for comparison (resolve symlinks, clean path).
-	normalizedWS := session.NormalizeWorkspacePath(workingDir)
-
-	// Filter to only show sessions matching the current workspace.
-	var filtered []*session.Session
-	for _, s := range sessions {
-		if s.Workspace == workingDir || s.Workspace == normalizedWS {
-			filtered = append(filtered, s)
-		}
-	}
-
-	// Sort by UpdatedAt descending (most recent first).
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
-	})
-
-	result := make([]SessionInfo, 0, len(filtered))
-	for _, s := range filtered {
+	summaries := agentruntime.SummarizeWorkspaceSessions(sessions, workingDir)
+	result := make([]SessionInfo, 0, len(summaries))
+	for _, s := range summaries {
 		result = append(result, SessionInfo{
 			ID:        s.ID,
 			Title:     s.Title,
 			Workspace: s.Workspace,
 			Vendor:    s.Vendor,
 			Model:     s.Model,
-			MsgCount:  len(s.Messages),
+			MsgCount:  s.MsgCount,
 			UpdatedAt: s.UpdatedAt.Format(time.DateTime),
 		})
 	}
@@ -103,6 +88,8 @@ func LoadSession(id string) error {
 
 // SessionMessage is a message from session history for the frontend.
 type SessionMessage struct {
+	ID          string `json:"id,omitempty"`
+	TurnID      string `json:"turn_id,omitempty"`
 	Role        string `json:"role"`
 	Content     string `json:"content"`
 	ToolName    string `json:"toolName,omitempty"`
@@ -117,6 +104,9 @@ type SessionMessage struct {
 func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 	result := make([]SessionMessage, 0, len(msgs))
 	for _, m := range msgs {
+		if m.Role == "system" {
+			continue
+		}
 		for _, block := range m.Content {
 			switch block.Type {
 			case "text":

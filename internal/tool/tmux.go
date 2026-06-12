@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -39,8 +40,8 @@ func (t *TmuxTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["status", "split", "popup", "list", "layouts", "layout", "setup", "save_layout", "refresh", "restore", "prune", "capture", "focus", "close"],
-				"description": "tmux action to perform. Use setup to create missing panes from a workspace layout; save_layout to save managed panes as a layout; capture to read output from a pane; restore to recreate stale panes from persisted metadata; prune to remove stale metadata."
+				"enum": ["status", "split", "popup", "list", "logs", "layouts", "layout", "setup", "save_layout", "delete_layout", "rename_layout", "refresh", "restore", "rerun", "prune", "capture", "focus", "stop", "close"],
+				"description": "tmux action to perform. Use logs to capture recent output from all alive managed panes; setup to create missing panes from a workspace layout; save_layout/delete_layout/rename_layout to manage layouts; capture to read output from a pane; stop to kill a pane but keep metadata for restore/rerun; close to kill and forget a pane; restore to recreate stale panes from persisted metadata; rerun to restart a managed pane command; prune to remove stale metadata."
 			},
 			"command": {
 				"type": "string",
@@ -48,7 +49,7 @@ func (t *TmuxTool) Parameters() json.RawMessage {
 			},
 			"pane_id": {
 				"type": "string",
-				"description": "Target tmux pane id for capture, focus, or close (for example %3)."
+				"description": "Target tmux pane id or managed pane purpose for capture, focus, stop, close, restore, rerun, or prune (for example %3 or test)."
 			},
 			"purpose": {
 				"type": "string",
@@ -72,7 +73,11 @@ func (t *TmuxTool) Parameters() json.RawMessage {
 			},
 			"layout": {
 				"type": "string",
-				"description": "Layout preset name for layouts/layout/setup/save_layout actions. Defaults to default."
+				"description": "Layout preset name for layouts/layout/setup/save_layout/delete_layout/rename_layout actions. Defaults to default."
+			},
+			"new_layout": {
+				"type": "string",
+				"description": "New layout preset name for rename_layout."
 			},
 			"description": {
 				"type": "string",
@@ -95,6 +100,7 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		Width      string `json:"width"`
 		Height     string `json:"height"`
 		Layout     string `json:"layout"`
+		NewLayout  string `json:"new_layout"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -124,6 +130,8 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return t.executePopup(ctx, mgr, args.Command, args.Width, args.Height), nil
 	case "list":
 		return Result{Content: mgr.ManagedPaneText()}, nil
+	case "logs":
+		return t.executeLogs(ctx, mgr, args.Lines), nil
 	case "layouts":
 		return t.executeLayouts(mgr), nil
 	case "layout":
@@ -132,16 +140,24 @@ func (t *TmuxTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return t.executeSetup(ctx, mgr, args.Layout), nil
 	case "save_layout":
 		return t.executeSaveLayout(mgr, args.Layout), nil
+	case "delete_layout":
+		return t.executeDeleteLayout(mgr, args.Layout), nil
+	case "rename_layout":
+		return t.executeRenameLayout(mgr, args.Layout, args.NewLayout), nil
 	case "refresh":
 		return t.executeRefresh(ctx, mgr), nil
 	case "restore":
 		return t.executeRestore(ctx, mgr, args.PaneID, args.Purpose), nil
+	case "rerun":
+		return t.executeRerun(ctx, mgr, args.PaneID, args.Purpose), nil
 	case "prune":
 		return t.executePrune(mgr, args.PaneID, args.Purpose), nil
 	case "capture":
 		return t.executeCapture(ctx, mgr, args.PaneID, args.Lines), nil
 	case "focus":
 		return t.executeFocus(ctx, mgr, args.PaneID), nil
+	case "stop":
+		return t.executeStop(ctx, mgr, args.PaneID), nil
 	case "close":
 		return t.executeClose(ctx, mgr, args.PaneID), nil
 	default:
@@ -199,6 +215,23 @@ func (t *TmuxTool) executePopup(ctx context.Context, mgr *tmux.Manager, command,
 	return Result{Content: "tmux popup opened"}
 }
 
+func (t *TmuxTool) executeDeleteLayout(mgr *tmux.Manager, name string) Result {
+	layoutName := toolTmuxLayoutName(name)
+	if !mgr.DeleteLayout(layoutName) {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux layout %q not found", layoutName)}
+	}
+	return Result{Content: fmt.Sprintf("tmux layout %q deleted", layoutName)}
+}
+
+func (t *TmuxTool) executeRenameLayout(mgr *tmux.Manager, oldName, newName string) Result {
+	oldLayout := toolTmuxLayoutName(oldName)
+	newLayout := toolTmuxLayoutName(newName)
+	if err := mgr.RenameLayout(oldLayout, newLayout); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux rename_layout failed: %v", err)}
+	}
+	return Result{Content: fmt.Sprintf("tmux layout %q renamed to %q", oldLayout, newLayout)}
+}
+
 func (t *TmuxTool) executeRefresh(ctx context.Context, mgr *tmux.Manager) Result {
 	if !mgr.HasPanes() {
 		return Result{Content: "tmux managed panes: none"}
@@ -208,6 +241,14 @@ func (t *TmuxTool) executeRefresh(ctx context.Context, mgr *tmux.Manager) Result
 		return Result{IsError: true, Content: fmt.Sprintf("tmux refresh failed: %v", err)}
 	}
 	return Result{Content: fmt.Sprintf("tmux panes refreshed: %d alive, %d stale\n%s", alive, stale, mgr.ManagedPaneText())}
+}
+
+func (t *TmuxTool) executeLogs(ctx context.Context, mgr *tmux.Manager, lines int) Result {
+	if lines <= 0 {
+		lines = 50
+	}
+	captures := mgr.CaptureAll(ctx, lines)
+	return Result{Content: tmux.FormatCaptures(captures, lines)}
 }
 
 func (t *TmuxTool) executeLayouts(mgr *tmux.Manager) Result {
@@ -252,6 +293,9 @@ func (t *TmuxTool) executeSetup(ctx context.Context, mgr *tmux.Manager, name str
 func (t *TmuxTool) executeSaveLayout(mgr *tmux.Manager, name string) Result {
 	layoutName := toolTmuxLayoutName(name)
 	if err := mgr.SaveLayout(layoutName); err != nil {
+		if errors.Is(err, tmux.ErrNoAlivePanes) {
+			return Result{Content: "tmux save_layout: no alive panes to save"}
+		}
 		return Result{IsError: true, Content: fmt.Sprintf("tmux save_layout failed: %v", err)}
 	}
 	return Result{Content: fmt.Sprintf("tmux layout %q saved", layoutName)}
@@ -285,6 +329,21 @@ func (t *TmuxTool) executeRestore(ctx context.Context, mgr *tmux.Manager, paneID
 	return Result{Content: strings.TrimSpace(b.String())}
 }
 
+func (t *TmuxTool) executeRerun(ctx context.Context, mgr *tmux.Manager, paneID, purpose string) Result {
+	selector := strings.TrimSpace(paneID)
+	if selector == "" {
+		selector = strings.TrimSpace(purpose)
+	}
+	if selector == "" {
+		return Result{IsError: true, Content: "pane_id or purpose is required for rerun"}
+	}
+	res, err := mgr.RerunPane(ctx, selector)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux rerun failed: %v", err)}
+	}
+	return Result{Content: fmt.Sprintf("tmux reran pane: %s -> %s [%s] %s", res.Old.ID, res.New.ID, res.New.Purpose, res.New.Command)}
+}
+
 func (t *TmuxTool) executePrune(mgr *tmux.Manager, paneID, purpose string) Result {
 	selector := strings.TrimSpace(paneID)
 	if selector == "" {
@@ -297,15 +356,15 @@ func (t *TmuxTool) executePrune(mgr *tmux.Manager, paneID, purpose string) Resul
 	return Result{Content: fmt.Sprintf("tmux pruned %d stale pane(s)\n%s", removed, mgr.ManagedPaneText())}
 }
 
-func (t *TmuxTool) executeCapture(ctx context.Context, mgr *tmux.Manager, paneID string, lines int) Result {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return Result{IsError: true, Content: "pane_id is required for capture"}
+func (t *TmuxTool) executeCapture(ctx context.Context, mgr *tmux.Manager, selector string, lines int) Result {
+	pane, ok := mgr.ResolvePaneSelector(selector)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux capture failed: no managed pane matches %q", selector)}
 	}
 	if lines <= 0 {
 		lines = 200
 	}
-	out, err := mgr.Capture(ctx, paneID, lines)
+	out, err := mgr.Capture(ctx, pane.ID, lines)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux capture failed: %v", err)}
 	}
@@ -313,29 +372,37 @@ func (t *TmuxTool) executeCapture(ctx context.Context, mgr *tmux.Manager, paneID
 	if out == "" {
 		out = "(no output)"
 	}
-	return Result{Content: fmt.Sprintf("tmux capture %s (last %d lines):\n%s", paneID, lines, out)}
+	return Result{Content: fmt.Sprintf("tmux capture %s (last %d lines):\n%s", pane.ID, lines, out)}
 }
 
-func (t *TmuxTool) executeFocus(ctx context.Context, mgr *tmux.Manager, paneID string) Result {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return Result{IsError: true, Content: "pane_id is required for focus"}
+func (t *TmuxTool) executeFocus(ctx context.Context, mgr *tmux.Manager, selector string) Result {
+	pane, ok := mgr.ResolvePaneSelector(selector)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux focus failed: no managed pane matches %q", selector)}
 	}
-	if err := mgr.Focus(ctx, paneID); err != nil {
+	if err := mgr.Focus(ctx, pane.ID); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux focus failed: %v", err)}
 	}
-	return Result{Content: fmt.Sprintf("tmux focused pane: %s", paneID)}
+	return Result{Content: fmt.Sprintf("tmux focused pane: %s", pane.ID)}
 }
 
-func (t *TmuxTool) executeClose(ctx context.Context, mgr *tmux.Manager, paneID string) Result {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return Result{IsError: true, Content: "pane_id is required for close"}
+func (t *TmuxTool) executeStop(ctx context.Context, mgr *tmux.Manager, selector string) Result {
+	pane, err := mgr.StopPane(ctx, selector)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux stop failed: %v", err)}
 	}
-	if err := mgr.Close(ctx, paneID); err != nil {
+	return Result{Content: fmt.Sprintf("tmux pane stopped: %s [%s] (metadata kept)", pane.ID, pane.Purpose)}
+}
+
+func (t *TmuxTool) executeClose(ctx context.Context, mgr *tmux.Manager, selector string) Result {
+	pane, ok := mgr.ResolvePaneSelector(selector)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("tmux close failed: no managed pane matches %q", selector)}
+	}
+	if err := mgr.Close(ctx, pane.ID); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("tmux close failed: %v", err)}
 	}
-	return Result{Content: fmt.Sprintf("tmux pane closed: %s", paneID)}
+	return Result{Content: fmt.Sprintf("tmux pane closed: %s", pane.ID)}
 }
 
 func (t *TmuxTool) manager() *tmux.Manager {

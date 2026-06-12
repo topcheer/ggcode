@@ -621,6 +621,8 @@ func enCatalog(key string) string {
 
 	case "exit.confirm":
 		return "Press Ctrl-C again to exit.\n\n"
+	case "cancel.confirm":
+		return "Press Ctrl-C or Esc again to cancel the running agent.\n\n"
 	case "interrupted":
 		return "[interrupted]\n\n"
 	case "lang.current":
@@ -974,7 +976,7 @@ func enCatalog(key string) string {
 	case "mcp.more":
 		return "… %d more • /mcp"
 	case "image.usage":
-		return "Usage: /image <path/to/file.png>\n"
+		return "Usage: /image <path/to/file.png> or /image paste\n"
 	case "image.formats":
 		return "Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
 	case "image.attached":

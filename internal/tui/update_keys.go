@@ -25,6 +25,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	if msg.String() != "ctrl+c" {
 		m.resetExitConfirm()
 	}
+	if msg.String() != "ctrl+c" && msg.String() != "esc" {
+		m.resetCancelConfirm()
+	}
+	if (msg.String() == "ctrl+c" || msg.String() == "esc") && m.hasActivePanel() {
+		m.resetCancelConfirm()
+	}
 	debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, util.Truncate(m.input.Value(), 80))
 	if m.tmuxMenuOpen {
 		return m.handleTmuxMenuKey(msg.String())
@@ -64,7 +70,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handlePreviewKey(msg)
 	}
 
-	if msg.String() == "ctrl+c" && !m.loading && len(m.langOptions) == 0 && m.closeActivePanel() {
+	if msg.String() == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
 		return m, nil
 	}
 
@@ -192,7 +198,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		case "ctrl+c":
 			if m.loading {
 				m.resetExitConfirm()
-				m.cancelActiveRun()
+				if m.cancelConfirmPending {
+					m.cancelActiveRun()
+				} else {
+					m.promptCancelConfirm()
+				}
 				return m, nil
 			}
 			if m.exitConfirmPending {
@@ -335,7 +345,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") && !m.subAgentFollow.isActive() {
 		m.resetExitConfirm()
-		m.cancelActiveRun()
+		if m.cancelConfirmPending {
+			m.cancelActiveRun()
+		} else {
+			m.promptCancelConfirm()
+		}
 		return m, nil
 	}
 

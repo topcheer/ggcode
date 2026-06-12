@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -640,6 +641,34 @@ func TestTmuxEnterSanitizesSessionName(t *testing.T) {
 	}
 }
 
+func TestRemoveEnvRemovesMatchingKeyOnly(t *testing.T) {
+	env := []string{"A=1", "GGCODE_TMUX_SETUP_LAYOUT=default", "GGCODE_TMUX_SETUP_LAYOUT_EXTRA=keep", "B=2"}
+	got := removeEnv(env, "GGCODE_TMUX_SETUP_LAYOUT")
+	want := []string{"A=1", "GGCODE_TMUX_SETUP_LAYOUT_EXTRA=keep", "B=2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("removeEnv() = %v, want %v", got, want)
+	}
+}
+
+func TestTmuxEnterParsesSetupArgs(t *testing.T) {
+	tests := []struct {
+		args        []string
+		wantSession string
+		wantLayout  string
+	}{
+		{args: []string{"dev", "--setup"}, wantSession: "dev", wantLayout: "default"},
+		{args: []string{"dev", "--setup", "work"}, wantSession: "dev", wantLayout: "work"},
+		{args: []string{"--setup=ci"}, wantSession: "", wantLayout: "ci"},
+		{args: []string{"setup", "mobile"}, wantSession: "", wantLayout: "mobile"},
+	}
+	for _, tt := range tests {
+		session, layout := parseTmuxEnterArgs(tt.args)
+		if session != tt.wantSession || layout != tt.wantLayout {
+			t.Fatalf("parseTmuxEnterArgs(%v) = (%q, %q), want (%q, %q)", tt.args, session, layout, tt.wantSession, tt.wantLayout)
+		}
+	}
+}
+
 func TestTmuxEnterUsesRestartArgsWithResume(t *testing.T) {
 	m := newTestModel()
 	m.session = &session.Session{ID: "session-for-tmux"}
@@ -950,6 +979,95 @@ func TestMCPPanelReconnectKeyRetriesSelectedServer(t *testing.T) {
 	}
 	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Reconnecting web-reader") {
 		t.Fatal("expected reconnect status message in MCP panel")
+	}
+}
+
+func TestBusyCtrlCAndEscRequireSecondPressToCancel(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+
+	next, _ := m.handleKeyPress(tea.KeyPressMsg{Text: "ctrl+c"}, nil)
+	m = next.(Model)
+	if m.runCanceled {
+		t.Fatal("first ctrl+c while busy should ask for confirmation, not cancel")
+	}
+	if !m.cancelConfirmPending {
+		t.Fatal("first ctrl+c while busy should set cancel confirmation")
+	}
+
+	next, _ = m.handleKeyPress(tea.KeyPressMsg{Text: "esc"}, nil)
+	m = next.(Model)
+	if !m.runCanceled {
+		t.Fatal("second esc while busy should cancel after confirmation")
+	}
+	if m.cancelConfirmPending {
+		t.Fatal("cancel confirmation should reset after cancellation")
+	}
+}
+
+func TestBusyCancelConfirmationResetsOnOtherKey(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+
+	next, _ := m.handleKeyPress(tea.KeyPressMsg{Text: "esc"}, nil)
+	m = next.(Model)
+	if m.runCanceled || !m.cancelConfirmPending {
+		t.Fatalf("first esc should only arm cancel confirmation, runCanceled=%v pending=%v", m.runCanceled, m.cancelConfirmPending)
+	}
+
+	next, _ = m.handleKeyPress(tea.KeyPressMsg{Text: "a"}, nil)
+	m = next.(Model)
+	if m.cancelConfirmPending {
+		t.Fatal("non-cancel key should reset pending cancel confirmation")
+	}
+
+	next, _ = m.handleKeyPress(tea.KeyPressMsg{Text: "ctrl+c"}, nil)
+	m = next.(Model)
+	if m.runCanceled {
+		t.Fatal("ctrl+c after unrelated key should require confirmation again")
+	}
+	if !m.cancelConfirmPending {
+		t.Fatal("ctrl+c after reset should re-arm cancel confirmation")
+	}
+}
+
+func TestBusyPanelCtrlCClosesPanelWithoutCancelingRun(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.cancelConfirmPending = true
+	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http"}}
+	m.openMCPPanel()
+
+	next, _ := m.handleKeyPress(tea.KeyPressMsg{Text: "ctrl+c"}, nil)
+	m = next.(Model)
+	if m.mcpPanel != nil {
+		t.Fatal("ctrl+c should close the active panel first")
+	}
+	if m.runCanceled {
+		t.Fatal("ctrl+c with an active panel should not cancel the running agent")
+	}
+	if m.cancelConfirmPending {
+		t.Fatal("closing a panel should clear pending cancel confirmation")
+	}
+}
+
+func TestBusyPanelEscClosesPanelWithoutCancelingRun(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.cancelConfirmPending = true
+	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http"}}
+	m.openMCPPanel()
+
+	next, _ := m.handleKeyPress(tea.KeyPressMsg{Text: "esc"}, nil)
+	m = next.(Model)
+	if m.mcpPanel != nil {
+		t.Fatal("esc should close the active panel first")
+	}
+	if m.runCanceled {
+		t.Fatal("esc with an active panel should not cancel the running agent")
+	}
+	if m.cancelConfirmPending {
+		t.Fatal("closing a panel should clear pending cancel confirmation")
 	}
 }
 
@@ -1267,6 +1385,32 @@ func TestProviderPanelVendorSwitchRefreshesModels(t *testing.T) {
 	}
 	if m2.providerPanel == nil || !strings.Contains(m2.providerPanel.message, "Refreshed 1 endpoint") {
 		t.Fatalf("expected provider refresh success message, got %+v", m2.providerPanel)
+	}
+}
+
+func TestImagePasteCommandUsesClipboardLoader(t *testing.T) {
+	m := newTestModel()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		img := image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 12, Height: 8}
+		return imageAttachedMsg{
+			placeholder: image.Placeholder("ggcode-image-cafe.png", img),
+			img:         img,
+			filename:    "ggcode-image-cafe.png",
+			sourcePath:  "clipboard",
+		}, nil
+	}
+
+	cmd := m.handleImageCommand([]string{"/image", "paste"})
+	if cmd == nil {
+		t.Fatal("expected paste command")
+	}
+	msg := cmd()
+	attached, ok := msg.(imageAttachedMsg)
+	if !ok {
+		t.Fatalf("expected imageAttachedMsg, got %T", msg)
+	}
+	if attached.filename != "ggcode-image-cafe.png" {
+		t.Fatalf("filename = %q", attached.filename)
 	}
 }
 

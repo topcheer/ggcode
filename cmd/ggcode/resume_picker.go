@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -67,20 +68,7 @@ func pickResumeSession(store session.Store, currentWorkspace string) (string, er
 }
 
 func groupResumePickerSessions(sessions []*session.Session, currentWorkspace string) ([]*session.Session, []*session.Session) {
-	currentWorkspace = session.NormalizeWorkspacePath(currentWorkspace)
-	current := make([]*session.Session, 0, len(sessions))
-	others := make([]*session.Session, 0, len(sessions))
-	for _, ses := range sessions {
-		if ses == nil {
-			continue
-		}
-		if currentWorkspace != "" && session.NormalizeWorkspacePath(ses.Workspace) == currentWorkspace {
-			current = append(current, ses)
-			continue
-		}
-		others = append(others, ses)
-	}
-	return current, others
+	return agentruntime.GroupWorkspaceSessions(sessions, currentWorkspace)
 }
 
 func newResumePickerModel(current, others []*session.Session, currentWorkspace string) resumePickerModel {

@@ -29,7 +29,8 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
       TunnelConnectionState(status: ConnectionStatus.disconnected);
 
   @override
-  Future<void> connect(String url, {bool clearState = true}) async {}
+  Future<void> connect(String url,
+      {bool clearState = true, bool force = false}) async {}
 
   @override
   Future<void> restoreSelectedWorkspace() async {

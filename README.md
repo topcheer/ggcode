@@ -317,6 +317,7 @@ either a normal release base URL or a full-URL proxy prefix.
 | `/feishu` or `/lark` | Open Feishu panel |
 | `/dingtalk` or `/ding` | Open DingTalk panel |
 | `/todo` | View or manage todo state |
+| `/tmux` | Manage tmux panes for the current workspace: enter tmux with optional `--setup`, list/logs/capture/focus/stop/close/rerun panes by pane id or purpose, save/setup/delete/rename workspace layouts, restore stale panes |
 | `/image` | Attach an image |
 | `/bug` | Report a bug |
 | `/init` | Generate `GGCODE.md` for the current project |

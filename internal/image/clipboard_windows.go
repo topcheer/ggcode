@@ -26,21 +26,7 @@ func ReadClipboard() (Image, error) {
 }
 
 func writeWindowsClipboardImage(outPath string) error {
-	script := strings.Join([]string{
-		"Add-Type -AssemblyName System.Windows.Forms",
-		"Add-Type -AssemblyName System.Drawing",
-		"if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { exit 3 }",
-		"$img = [System.Windows.Forms.Clipboard]::GetImage()",
-		"if ($null -eq $img) { exit 3 }",
-		fmt.Sprintf("$path = '%s'", escapePowerShellSingleQuoted(outPath)),
-		"try {",
-		"  $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)",
-		"} finally {",
-		"  $img.Dispose()",
-		"}",
-	}, "; ")
-
-	output, err := runPowerShell(script)
+	output, err := runPowerShell(windowsClipboardImageScript(outPath))
 	if err == nil {
 		return nil
 	}
@@ -49,6 +35,36 @@ func writeWindowsClipboardImage(outPath string) error {
 		return ErrClipboardImageUnavailable
 	}
 	return commandOutputError("reading clipboard image", err, output)
+}
+
+func windowsClipboardImageScript(outPath string) string {
+	quotedOutPath := escapePowerShellSingleQuoted(outPath)
+	return strings.Join([]string{
+		"Add-Type -AssemblyName System.Windows.Forms",
+		"Add-Type -AssemblyName System.Drawing",
+		"if ([System.Windows.Forms.Clipboard]::ContainsImage()) {",
+		"  $img = [System.Windows.Forms.Clipboard]::GetImage()",
+		"  if ($null -eq $img) { exit 3 }",
+		fmt.Sprintf("  $path = '%s'", quotedOutPath),
+		"  try {",
+		"    $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)",
+		"  } finally {",
+		"    $img.Dispose()",
+		"  }",
+		"  exit 0",
+		"}",
+		"if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {",
+		"  foreach ($file in [System.Windows.Forms.Clipboard]::GetFileDropList()) {",
+		"    if ([string]::IsNullOrWhiteSpace($file)) { continue }",
+		"    $ext = [System.IO.Path]::GetExtension($file).ToLowerInvariant()",
+		"    if (@('.png', '.jpg', '.jpeg', '.gif', '.webp') -contains $ext) {",
+		fmt.Sprintf("      Copy-Item -LiteralPath $file -Destination '%s' -Force", quotedOutPath),
+		"      exit 0",
+		"    }",
+		"  }",
+		"}",
+		"exit 3",
+	}, "; ")
 }
 
 func runPowerShell(script string) ([]byte, error) {

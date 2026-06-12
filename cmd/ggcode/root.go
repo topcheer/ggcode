@@ -16,20 +16,17 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/topcheer/ggcode/internal/a2a"
-	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
-	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -381,10 +378,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	workingDir, _ := os.Getwd()
 	trace.Mark("working directory")
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
-	mode := permission.ParsePermissionMode(cfg.DefaultMode)
-	if bypass {
-		mode = permission.BypassMode
-	}
+	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")
 
 	var ag *agent.Agent // declared early so closures can capture it
@@ -454,19 +448,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var subMgr *subagent.Manager
 
 	// Discover and register ACP agent clients (delegate tool)
-	acpClientMgr := acpclient.NewClientManager(workingDir, policy)
+	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, nil)
+	agentruntime.RegisterDelegateTool(registry, acpClientMgr, func() *subagent.Manager { return subMgr }, workingDir, func() string {
+		if ag != nil {
+			return ag.WorkingDir()
+		}
+		return workingDir
+	})
 	if len(acpClientMgr.Available()) > 0 {
-		_ = registry.Register(tool.DelegateTool{
-			Manager:           acpClientMgr,
-			SubAgentManagerFn: func() *subagent.Manager { return subMgr },
-			WorkingDir:        workingDir,
-			WorkingDirFn: func() string {
-				if ag != nil {
-					return ag.WorkingDir()
-				}
-				return workingDir
-			},
-		})
 		debug.Log("startup", "discovered ACP agents: %v", acpClientMgr.Available())
 	}
 	trace.Mark("register acp client delegate tool")
@@ -686,9 +675,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
 
-	cronStorePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
-	cronScheduler := cron.NewScheduler(nil, cronStorePath) // enqueue callback wired by SetCronScheduler
-	cronScheduler.Load(ag.WorkingDir())
+	cronScheduler := agentruntime.NewWorkspaceCronScheduler(ag.WorkingDir(), nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)

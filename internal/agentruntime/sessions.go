@@ -2,12 +2,81 @@ package agentruntime
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
+
+type SessionSummary struct {
+	ID        string
+	Title     string
+	Workspace string
+	Vendor    string
+	Endpoint  string
+	Model     string
+	MsgCount  int
+	UpdatedAt time.Time
+}
+
+func WorkspaceMatches(sessionWorkspace, workingDir string) bool {
+	normalizedWorkingDir := session.NormalizeWorkspacePath(workingDir)
+	if normalizedWorkingDir == "" {
+		return false
+	}
+	return session.NormalizeWorkspacePath(sessionWorkspace) == normalizedWorkingDir
+}
+
+func GroupWorkspaceSessions(sessions []*session.Session, workingDir string) ([]*session.Session, []*session.Session) {
+	current := make([]*session.Session, 0, len(sessions))
+	others := make([]*session.Session, 0, len(sessions))
+	for _, ses := range sessions {
+		if ses == nil {
+			continue
+		}
+		if WorkspaceMatches(ses.Workspace, workingDir) {
+			current = append(current, ses)
+			continue
+		}
+		others = append(others, ses)
+	}
+	return current, others
+}
+
+func FilterWorkspaceSessions(sessions []*session.Session, workingDir string) []*session.Session {
+	filtered, _ := GroupWorkspaceSessions(sessions, workingDir)
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+	return filtered
+}
+
+func SummarizeSession(ses *session.Session) SessionSummary {
+	if ses == nil {
+		return SessionSummary{}
+	}
+	return SessionSummary{
+		ID:        ses.ID,
+		Title:     ses.Title,
+		Workspace: ses.Workspace,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
+		Model:     ses.Model,
+		MsgCount:  len(ses.Messages),
+		UpdatedAt: ses.UpdatedAt,
+	}
+}
+
+func SummarizeWorkspaceSessions(sessions []*session.Session, workingDir string) []SessionSummary {
+	filtered := FilterWorkspaceSessions(sessions, workingDir)
+	summaries := make([]SessionSummary, 0, len(filtered))
+	for _, ses := range filtered {
+		summaries = append(summaries, SummarizeSession(ses))
+	}
+	return summaries
+}
 
 type SessionState struct {
 	Session              *session.Session

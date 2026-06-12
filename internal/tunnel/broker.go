@@ -550,18 +550,30 @@ func (b *Broker) AnnounceActiveSession(sessionID string) {
 	b.markRelayReady()
 }
 
+func (b *Broker) activeSessionBarrier() (string, int64, string) {
+	b.flushAllText()
+	ordinal := b.nextEvent.Load()
+	eventID := ""
+	if ordinal > 0 {
+		eventID = fmt.Sprintf("ev-%09d", ordinal)
+	}
+	return eventID, ordinal, ""
+}
+
 func (b *Broker) sendActiveSession(sessionID string) {
 	if b == nil || b.session == nil {
 		return
 	}
-	_ = b.session.SendActiveSession(sessionID, b.AuthorityEpoch())
+	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
+	_ = b.session.SendActiveSession(sessionID, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash)
 }
 
 func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
 	if b == nil || b.session == nil {
 		return
 	}
-	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch())
+	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
+	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash)
 }
 
 func (b *Broker) markRelayReady() {

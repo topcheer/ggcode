@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -45,9 +46,22 @@ type Manager struct {
 	layouts map[string][]LayoutPane
 }
 
+var ErrNoAlivePanes = errors.New("no alive tmux panes to save")
+
 type RestoreResult struct {
 	Old Pane
 	New Pane
+}
+
+type RerunResult struct {
+	Old Pane
+	New Pane
+}
+
+type PaneCapture struct {
+	Pane   Pane
+	Output string
+	Error  error
 }
 
 func NewManager(client *Client, workspace string) *Manager {
@@ -117,6 +131,35 @@ func (m *Manager) Capture(ctx context.Context, paneID string, lines int) (string
 	return out, err
 }
 
+func (m *Manager) CaptureAll(ctx context.Context, lines int) []PaneCapture {
+	panes := m.List()
+	captures := make([]PaneCapture, 0, len(panes))
+	for _, pane := range panes {
+		if !pane.Alive {
+			continue
+		}
+		out, err := m.Capture(ctx, pane.ID, lines)
+		captures = append(captures, PaneCapture{Pane: pane, Output: out, Error: err})
+	}
+	return captures
+}
+
+func (m *Manager) StopPane(ctx context.Context, selector string) (Pane, error) {
+	pane, ok := m.ResolvePaneSelector(selector)
+	if !ok {
+		return Pane{}, fmt.Errorf("no managed pane matches %q", strings.TrimSpace(selector))
+	}
+	if pane.Alive {
+		if err := m.Client().KillPane(ctx, pane.ID); err != nil {
+			m.MarkAlive(pane.ID, false)
+			return pane, err
+		}
+	}
+	m.MarkAlive(pane.ID, false)
+	pane.Alive = false
+	return pane, nil
+}
+
 func (m *Manager) Close(ctx context.Context, paneID string) error {
 	if err := m.Client().KillPane(ctx, paneID); err != nil {
 		m.MarkAlive(paneID, false)
@@ -127,6 +170,38 @@ func (m *Manager) Close(ctx context.Context, paneID string) error {
 	m.mu.Unlock()
 	_ = m.Save()
 	return nil
+}
+
+func (m *Manager) RerunPane(ctx context.Context, selector string) (*RerunResult, error) {
+	old, ok := m.ResolvePaneSelector(selector)
+	if !ok {
+		return nil, fmt.Errorf("no managed pane matches %q", strings.TrimSpace(selector))
+	}
+	if strings.TrimSpace(old.Command) == "" {
+		return nil, fmt.Errorf("pane %s has no command to rerun", old.ID)
+	}
+	if old.Alive {
+		if err := m.Client().KillPane(ctx, old.ID); err != nil {
+			m.MarkAlive(old.ID, false)
+			return nil, err
+		}
+	}
+	pane, err := m.Client().Split(ctx, SplitRequest{
+		Workspace:  m.Workspace(),
+		Command:    old.Command,
+		Purpose:    old.Purpose,
+		Horizontal: old.Horizontal,
+		Size:       old.Size,
+	})
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	delete(m.panes, old.ID)
+	m.panes[pane.ID] = *pane
+	m.mu.Unlock()
+	_ = m.Save()
+	return &RerunResult{Old: old, New: *pane}, nil
 }
 
 func (m *Manager) Refresh(ctx context.Context) (int, int, error) {
@@ -208,7 +283,13 @@ func (m *Manager) SaveLayout(name string) error {
 	panes := m.List()
 	layout := make([]LayoutPane, 0, len(panes))
 	for _, pane := range panes {
+		if !pane.Alive {
+			continue
+		}
 		layout = append(layout, LayoutPane{Purpose: pane.Purpose, Command: pane.Command, Horizontal: pane.Horizontal, Size: pane.Size})
+	}
+	if len(layout) == 0 {
+		return ErrNoAlivePanes
 	}
 	m.mu.Lock()
 	if m.layouts == nil {
@@ -217,6 +298,44 @@ func (m *Manager) SaveLayout(name string) error {
 	m.layouts[name] = layout
 	m.mu.Unlock()
 	return m.Save()
+}
+
+func (m *Manager) DeleteLayout(name string) bool {
+	name = normalizeLayoutName(name)
+	m.mu.Lock()
+	_, ok := m.layouts[name]
+	if ok {
+		delete(m.layouts, name)
+	}
+	m.mu.Unlock()
+	if ok {
+		_ = m.Save()
+	}
+	return ok
+}
+
+func (m *Manager) RenameLayout(oldName, newName string) error {
+	oldName = normalizeLayoutName(oldName)
+	newName = normalizeLayoutName(newName)
+	m.mu.Lock()
+	layout, ok := m.layouts[oldName]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("layout %q not found", oldName)
+	}
+	if oldName == newName {
+		m.mu.Unlock()
+		return nil
+	}
+	if _, exists := m.layouts[newName]; exists {
+		m.mu.Unlock()
+		return fmt.Errorf("layout %q already exists", newName)
+	}
+	m.layouts[newName] = append([]LayoutPane(nil), layout...)
+	delete(m.layouts, oldName)
+	m.mu.Unlock()
+	_ = m.Save()
+	return nil
 }
 
 func (m *Manager) ListLayoutNames() []string {
@@ -244,7 +363,18 @@ func (m *Manager) Layout(name string) []LayoutPane {
 }
 
 func (m *Manager) SetupLayout(ctx context.Context, name string) ([]Pane, error) {
-	layout := m.Layout(name)
+	layoutName := normalizeLayoutName(name)
+	layout := m.Layout(layoutName)
+	if len(layout) == 0 && layoutName == "default" {
+		layout = InferDefaultLayout(m.Workspace())
+		m.mu.Lock()
+		if m.layouts == nil {
+			m.layouts = make(map[string][]LayoutPane)
+		}
+		m.layouts[layoutName] = append([]LayoutPane(nil), layout...)
+		m.mu.Unlock()
+		_ = m.Save()
+	}
 	created := make([]Pane, 0, len(layout))
 	for _, spec := range layout {
 		if m.hasAlivePaneForSpec(spec) {
@@ -337,6 +467,66 @@ func (m *Manager) UpdateAliveState(aliveIDs map[string]struct{}) (int, int) {
 		}
 	}
 	return alive, stale
+}
+
+func (m *Manager) ResolvePaneSelector(selector string) (Pane, bool) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return Pane{}, false
+	}
+	panes := m.List()
+	for _, pane := range panes {
+		if pane.ID == selector {
+			return pane, true
+		}
+	}
+	matches := make([]Pane, 0, 1)
+	for _, pane := range panes {
+		if pane.Purpose == selector {
+			matches = append(matches, pane)
+		}
+	}
+	if len(matches) == 0 {
+		return Pane{}, false
+	}
+	for _, pane := range matches {
+		if pane.Alive {
+			return pane, true
+		}
+	}
+	return matches[0], true
+}
+
+func FormatCaptures(captures []PaneCapture, lines int) string {
+	if lines <= 0 {
+		lines = 200
+	}
+	if len(captures) == 0 {
+		return "tmux logs: no alive managed panes"
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("tmux logs (last %d lines)", lines))
+	for _, capture := range captures {
+		pane := capture.Pane
+		b.WriteString(fmt.Sprintf("\n\n== %s [%s] ==", pane.ID, pane.Purpose))
+		if strings.TrimSpace(pane.Command) != "" {
+			b.WriteString(" ")
+			b.WriteString(pane.Command)
+		}
+		if capture.Error != nil {
+			b.WriteString("\n")
+			b.WriteString("capture failed: ")
+			b.WriteString(capture.Error.Error())
+			continue
+		}
+		out := strings.TrimRight(capture.Output, "\n")
+		if out == "" {
+			out = "(no output)"
+		}
+		b.WriteString("\n")
+		b.WriteString(out)
+	}
+	return b.String()
 }
 
 func (m *Manager) ManagedPaneText() string {

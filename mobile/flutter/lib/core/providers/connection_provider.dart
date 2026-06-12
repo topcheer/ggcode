@@ -140,6 +140,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   Timer? _relaySyncTimeout;
   int _pendingReplayCount = 0;
   String _pendingResumeMode = '';
+  int? _pendingActiveSessionBarrierOrdinal;
+  String _pendingActiveSessionBarrierEventId = '';
+  bool _gapRecoveryScheduled = false;
+  bool _gapRecoveryDeferred = false;
 
   @override
   TunnelConnectionState build() {
@@ -154,6 +158,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   String get currentSessionId => _sessionId;
   String get lastAppliedEventId => _lastAppliedEventId;
+  List<String> get recentEventIds => List.unmodifiable(_recentEventIds);
   bool get canPersistLiveProjection =>
       _hasAuthoritativeProjection &&
       !_awaitingSnapshotProjection &&
@@ -199,10 +204,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           ShareConnectionDescriptor descriptor) =>
       ConnectionService(descriptor: descriptor);
 
-  Future<void> connect(String url, {bool clearState = true}) async {
+  Future<void> connect(String url,
+      {bool clearState = true, bool force = false}) async {
     url = normalizeTunnelUrl(url);
     final activeUrl = normalizeTunnelUrl(state.url ?? '');
-    if (service != null &&
+    if (!force &&
+        service != null &&
         activeUrl == url &&
         (state.status == ConnectionStatus.connecting ||
             state.status == ConnectionStatus.connected)) {
@@ -255,14 +262,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final uiSessionId = _sessionId;
     // Check for actual rendered content, not just sessionInfo.
     // sessionInfo can survive a disconnect that cleared the chat UI.
-    final uiHasContent =
-        ref.read(chatProvider).isNotEmpty;
+    final uiHasContent = ref.read(chatProvider).isNotEmpty;
 
+    final forcedResumeOverrideEventId = _resumeOverrideEventId;
     await _loadResumeState();
     if (!_isConnectionGenerationCurrent(generation)) return;
     await _resetResumeIdentityForSparseSnapshot();
     if (!_isConnectionGenerationCurrent(generation)) return;
     await _prepareResumeOverrideForCursorSkew();
+    if (forcedResumeOverrideEventId.isNotEmpty) {
+      _resumeOverrideEventId = forcedResumeOverrideEventId;
+    }
     if (!_isConnectionGenerationCurrent(generation)) return;
     if (descriptor.isV2 &&
         _shareRoomId.isNotEmpty &&
@@ -287,9 +297,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // When clearState is true (e.g. scanned from chat screen), always do a
     // fresh restore from local cache. When false (e.g. reconnecting), keep
     // existing UI if it matches the session being reconnected.
-    final keepExistingUi = !clearState &&
-        uiHasContent &&
-        uiSessionId == savedSessionId;
+    final keepExistingUi =
+        !clearState && uiHasContent && uiSessionId == savedSessionId;
 
     if (keepExistingUi) {
       // UI already renders this session — keep it. Ordinal dedup will skip
@@ -436,11 +445,27 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         _sessionId = sessionId;
         _noteAuthorityEpoch(msg);
+        final barrierOrdinal = msg.barrierOrdinal ??
+            ((msg.data?['barrier_ordinal']) as num?)?.toInt();
+        final barrierEventId = msg.barrierEventId ??
+            msg.data?['barrier_event_id'] as String? ??
+            '';
+        if (barrierOrdinal != null &&
+            barrierOrdinal > (_parseEventOrdinal(_lastAppliedEventId) ?? 0)) {
+          _pendingActiveSessionBarrierOrdinal = barrierOrdinal;
+          _pendingActiveSessionBarrierEventId = barrierEventId;
+          _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+        } else {
+          _pendingActiveSessionBarrierOrdinal = null;
+          _pendingActiveSessionBarrierEventId = '';
+        }
         // Do not re-enter relaySync waiting after resume_ack has already
         // completed the resume cycle. The active_session arriving here is
         // triggered by handleRelayConnected(client) on the host side and its
         // snapshot_reset + replayCanonicalEvents will drive the sync instead.
-        if (state.relaySync == null && !_resumeCompleted) {
+        if (state.relaySync == null &&
+            !_resumeCompleted &&
+            _pendingActiveSessionBarrierOrdinal == null) {
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
@@ -519,7 +544,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           // network loss), clear the flag so the UI doesn't stay stuck on
           // the loading screen forever.
           if (_awaitingSnapshotProjection) {
-            debugPrint('[connection] snapshot projection timeout — clearing awaitingSnapshotProjection');
+            debugPrint(
+                '[connection] snapshot projection timeout — clearing awaitingSnapshotProjection');
             _awaitingSnapshotProjection = false;
             _syncSessionReady();
           }
@@ -750,6 +776,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _setAgentStatus(normalized, '');
           if (normalized == 'idle') {
             _setAgentActivity('');
+            _runDeferredGapRecoveryIfIdle();
           } else if (data.message.isNotEmpty) {
             // Backward compatibility with older tunnel senders that packed the
             // transient activity text into status.message.
@@ -1084,6 +1111,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _setAgentStatus('idle', '');
     _setAgentActivity('');
     _hasAuthoritativeProjection = false;
+    _pendingActiveSessionBarrierOrdinal = null;
+    _pendingActiveSessionBarrierEventId = '';
+    _gapRecoveryScheduled = false;
   }
 
   void _setAgentStatus(String status, String message) {
@@ -1292,6 +1322,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       if (ord != null && last != null && ord <= last) {
         return false;
       }
+      // Gap detection: when we see a gap in event ordinals, we still apply
+      // the event (streaming text/reasoning chunks are incremental and safe to
+      // append even with a gap).  We trigger a background reconnect recovery
+      // to backfill, but never drop events on the floor — doing so would
+      // cause visible content loss in the UI.
+      if (ord != null && last != null && ord > last + 1) {
+        debugPrint(
+          '[connection] ordinal gap detected last=$last incoming=$ord eventId=$eventId — applying event, scheduling recovery',
+        );
+        _scheduleGapRecovery(msg, lastOrdinal: last, incomingOrdinal: ord);
+        // Do NOT return false — we still apply the event.
+      }
     }
     return true;
   }
@@ -1317,6 +1359,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _noteReplayProgress(eventId);
     _lastAppliedEventId = eventId;
+    _maybeCompleteActiveSessionBarrier();
     _recentEventSet.add(eventId);
     _recentEventIds.add(eventId);
     if (_recentEventIds.length > 1000) {
@@ -1324,6 +1367,66 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _recentEventSet.remove(evicted);
     }
     _captureLiveProjectionForDurableResume();
+  }
+
+  void _maybeCompleteActiveSessionBarrier() {
+    final target = _pendingActiveSessionBarrierOrdinal;
+    if (target == null) return;
+    final applied = _parseEventOrdinal(_lastAppliedEventId) ?? 0;
+    if (applied < target) return;
+    debugPrint(
+      '[connection] active_session barrier reached target=$target event=$_pendingActiveSessionBarrierEventId',
+    );
+    _pendingActiveSessionBarrierOrdinal = null;
+    _pendingActiveSessionBarrierEventId = '';
+    _clearRelaySyncState();
+  }
+
+  void _scheduleGapRecovery(
+    proto.WsMessage msg, {
+    required int lastOrdinal,
+    required int incomingOrdinal,
+  }) {
+    if (_gapRecoveryScheduled) return;
+    _gapRecoveryScheduled = true;
+    final lastEvent = _lastAppliedEventId;
+    debugPrint(
+      '[connection] event gap detected last=$lastOrdinal incoming=$incomingOrdinal lastEvent=$lastEvent incomingEvent=${msg.eventId}',
+    );
+    _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+    final status = _normalizeAgentStatus(ref.read(agentStatusProvider));
+    if (status == 'busy') {
+      _gapRecoveryDeferred = true;
+      _resumeOverrideEventId = lastEvent;
+      debugPrint('[connection] deferring gap recovery reconnect until idle');
+      return;
+    }
+    Future<void>.microtask(() => _runScheduledGapRecovery(lastEvent));
+  }
+
+  void _runDeferredGapRecoveryIfIdle() {
+    if (!_gapRecoveryDeferred || !_gapRecoveryScheduled) return;
+    final status = _normalizeAgentStatus(ref.read(agentStatusProvider));
+    if (status == 'busy') return;
+    final lastEvent = _resumeOverrideEventId;
+    _gapRecoveryDeferred = false;
+    unawaited(_runScheduledGapRecovery(lastEvent));
+  }
+
+  Future<void> _runScheduledGapRecovery(String lastEvent) async {
+    final url = state.url;
+    if (url == null || url.isEmpty) {
+      _gapRecoveryScheduled = false;
+      _gapRecoveryDeferred = false;
+      return;
+    }
+    try {
+      _resumeOverrideEventId = lastEvent;
+      await connect(url, clearState: false, force: true);
+    } finally {
+      _gapRecoveryScheduled = false;
+      _gapRecoveryDeferred = false;
+    }
   }
 
   int? _parseEventOrdinal(String? eventId) {
@@ -1777,6 +1880,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   void _syncSessionReady() {
     final ready = state.status == ConnectionStatus.connected &&
         !_awaitingSnapshotProjection &&
+        _pendingActiveSessionBarrierOrdinal == null &&
         state.relaySync == null;
     if (state.sessionReady != ready) {
       state = state.copyWith(sessionReady: ready);
@@ -1806,7 +1910,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _pendingResumeMode = '';
     _relaySyncTimeout?.cancel();
     _relaySyncTimeout = null;
-    if (state.relaySync != null) {
+    if (state.relaySync != null &&
+        _pendingActiveSessionBarrierOrdinal == null) {
       state = state.copyWith(relaySync: null);
     }
     _syncSessionReady();

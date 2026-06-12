@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -15,6 +19,13 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
+	shutdownSignals := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-shutdownSignals
+		app.shutdown(context.Background())
+		os.Exit(0)
+	}()
 
 	err := wails.Run(&options.App{
 		Title:     "GGCode Desktop",

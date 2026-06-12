@@ -66,6 +66,24 @@ Skill body`
 	}
 }
 
+func TestInteractivePermissionMode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DefaultMode = ""
+	if got := InteractivePermissionMode(cfg, false); got != permission.SupervisedMode {
+		t.Fatalf("empty mode = %v, want supervised", got)
+	}
+	if got := InteractivePermissionModeWithDefault(cfg, false, "auto"); got != permission.AutoMode {
+		t.Fatalf("default auto mode = %v, want auto", got)
+	}
+	cfg.DefaultMode = "plan"
+	if got := InteractivePermissionMode(cfg, false); got != permission.PlanMode {
+		t.Fatalf("plan mode = %v, want plan", got)
+	}
+	if got := InteractivePermissionMode(cfg, true); got != permission.BypassMode {
+		t.Fatalf("bypass mode = %v, want bypass", got)
+	}
+}
+
 func TestBuildInteractivePermissionPolicyMatchesConfigToolPerms(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.AllowedDirs = []string{"."}
