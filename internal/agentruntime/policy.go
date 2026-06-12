@@ -5,6 +5,22 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
+func InteractivePermissionMode(cfg *config.Config, bypass bool) permission.PermissionMode {
+	return InteractivePermissionModeWithDefault(cfg, bypass, "")
+}
+
+func InteractivePermissionModeWithDefault(cfg *config.Config, bypass bool, defaultMode string) permission.PermissionMode {
+	modeStr := defaultMode
+	if cfg != nil && cfg.DefaultMode != "" {
+		modeStr = cfg.DefaultMode
+	}
+	mode := permission.ParsePermissionMode(modeStr)
+	if bypass {
+		mode = permission.BypassMode
+	}
+	return mode
+}
+
 func BuildInteractivePermissionPolicy(cfg *config.Config, workingDir string, bypass bool) permission.PermissionPolicy {
 	if cfg == nil {
 		return nil
@@ -21,9 +37,6 @@ func BuildInteractivePermissionPolicy(cfg *config.Config, workingDir string, byp
 			rules[toolName] = permission.Ask
 		}
 	}
-	mode := permission.ParsePermissionMode(cfg.DefaultMode)
-	if bypass {
-		mode = permission.BypassMode
-	}
+	mode := InteractivePermissionMode(cfg, bypass)
 	return permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 }

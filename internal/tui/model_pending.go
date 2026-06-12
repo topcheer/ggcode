@@ -15,6 +15,15 @@ func (m *Model) resetExitConfirm() {
 	m.exitConfirmPending = false
 }
 
+func (m *Model) promptCancelConfirm() {
+	m.cancelConfirmPending = true
+	m.chatWriteSystem(nextSystemID(), m.t("cancel.confirm"))
+}
+
+func (m *Model) resetCancelConfirm() {
+	m.cancelConfirmPending = false
+}
+
 func (m *Model) promptExitConfirm() {
 	m.input.SetValue("")
 	m.exitConfirmPending = true
@@ -58,6 +67,7 @@ func (m *Model) pendingSubmissionSnapshot() []string {
 }
 
 func (m *Model) cancelActiveRun() {
+	m.resetCancelConfirm()
 	if m.runCanceled {
 		return
 	}

@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -50,6 +51,25 @@ func TestManagerUpdateAliveState(t *testing.T) {
 	}
 }
 
+func TestManagerResolvePaneSelectorByIDAndPurpose(t *testing.T) {
+	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
+	mgr.panes["%1"] = Pane{ID: "%1", Purpose: "test", Alive: false}
+	mgr.panes["%2"] = Pane{ID: "%2", Purpose: "test", Alive: true}
+
+	pane, ok := mgr.ResolvePaneSelector("%1")
+	if !ok || pane.ID != "%1" {
+		t.Fatalf("ResolvePaneSelector by id = %+v, %v", pane, ok)
+	}
+	pane, ok = mgr.ResolvePaneSelector("test")
+	if !ok || pane.ID != "%2" {
+		t.Fatalf("ResolvePaneSelector by purpose should prefer alive pane, got %+v, %v", pane, ok)
+	}
+	_, ok = mgr.ResolvePaneSelector("missing")
+	if ok {
+		t.Fatal("ResolvePaneSelector should not match missing selector")
+	}
+}
+
 func TestManagerPruneRemovesMatchingStalePanesOnly(t *testing.T) {
 	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
 	mgr.panes["%1"] = Pane{ID: "%1", Purpose: "test", Alive: false}
@@ -79,6 +99,63 @@ func TestManagerRestoreCandidatesSelectsStaleWithSelector(t *testing.T) {
 	candidates := mgr.restoreCandidates("test")
 	if len(candidates) != 1 || candidates[0].ID != "%1" {
 		t.Fatalf("restoreCandidates(test) = %+v, want only stale test pane", candidates)
+	}
+}
+
+func TestManagerDeleteAndRenameLayout(t *testing.T) {
+	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
+	mgr.layouts["default"] = []LayoutPane{{Purpose: "test", Command: "go test"}}
+	if err := mgr.RenameLayout("default", "ci"); err != nil {
+		t.Fatalf("RenameLayout() error = %v", err)
+	}
+	if len(mgr.Layout("default")) != 0 || len(mgr.Layout("ci")) != 1 {
+		t.Fatalf("layouts after rename = %+v", mgr.ListLayouts())
+	}
+	if !mgr.DeleteLayout("ci") {
+		t.Fatal("DeleteLayout() should report deleted layout")
+	}
+	if len(mgr.Layout("ci")) != 0 {
+		t.Fatalf("layout ci still exists: %+v", mgr.Layout("ci"))
+	}
+	if mgr.DeleteLayout("missing") {
+		t.Fatal("DeleteLayout() should return false for missing layout")
+	}
+}
+
+func TestFormatCapturesGroupsPaneOutput(t *testing.T) {
+	text := FormatCaptures([]PaneCapture{
+		{Pane: Pane{ID: "%1", Purpose: "test", Command: "go test"}, Output: "ok\n"},
+		{Pane: Pane{ID: "%2", Purpose: "dev"}, Error: errors.New("missing pane")},
+	}, 20)
+	for _, want := range []string{"tmux logs (last 20 lines)", "== %1 [test] == go test", "ok", "== %2 [dev] ==", "capture failed: missing pane"} {
+		if !contains(text, want) {
+			t.Fatalf("FormatCaptures() = %q, want to contain %q", text, want)
+		}
+	}
+}
+
+func TestManagerStopPaneRequiresMatch(t *testing.T) {
+	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
+	_, err := mgr.StopPane(nil, "missing")
+	if err == nil || !contains(err.Error(), "no managed pane matches") {
+		t.Fatalf("StopPane() error = %v, want missing selector error", err)
+	}
+}
+
+func TestManagerRerunPaneRequiresCommand(t *testing.T) {
+	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
+	mgr.panes["%1"] = Pane{ID: "%1", Purpose: "shell", Command: "", Alive: true}
+	_, err := mgr.RerunPane(nil, "shell")
+	if err == nil || !contains(err.Error(), "no command to rerun") {
+		t.Fatalf("RerunPane() error = %v, want no command error", err)
+	}
+}
+
+func TestManagerSaveLayoutRequiresAlivePanes(t *testing.T) {
+	mgr := NewManagerWithStorePath(NewClient(), t.TempDir(), filepath.Join(t.TempDir(), "tmux-panes.json"))
+	mgr.panes["%1"] = Pane{ID: "%1", Purpose: "test", Command: "go test", Alive: false}
+	if err := mgr.SaveLayout("default"); !errors.Is(err, ErrNoAlivePanes) {
+		t.Fatalf("SaveLayout() error = %v, want ErrNoAlivePanes", err)
 	}
 }
 

@@ -56,6 +56,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case imRuntimeUpdatedMsg:
 		return m, nil
 
+	case tmuxStartupSetupMsg:
+		if m.tmuxAvailable() {
+			m.setupTmuxLayout(msg.Layout)
+		}
+		return m, nil
+
 	case providerChangedMsg:
 		// Config tool changed provider — refresh model state from config.
 		if m.config != nil {

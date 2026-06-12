@@ -123,7 +123,10 @@ type SessionInfoData struct {
 // ActiveSessionData declares the authoritative TUI/GUI session bound to the
 // current tunnel room.
 type ActiveSessionData struct {
-	SessionID string `json:"session_id"`
+	SessionID      string `json:"session_id"`
+	BarrierEventID string `json:"barrier_event_id,omitempty"`
+	BarrierOrdinal int64  `json:"barrier_ordinal,omitempty"`
+	ProjectionHash string `json:"projection_hash,omitempty"`
 }
 
 // LanguageChangeData carries a language preference change (bidirectional sync).

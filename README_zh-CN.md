@@ -297,6 +297,7 @@ ggcode
 | `/feishu` 或 `/lark` | 打开飞书面板 |
 | `/dingtalk` 或 `/ding` | 打开钉钉面板 |
 | `/todo` | 查看或管理 todo 状态 |
+| `/tmux` | 管理当前 workspace 的 tmux pane：进入 tmux（可加 `--setup`）、按 pane id 或 purpose 列出/logs/捕获/聚焦/停止/关闭/重跑 pane、保存/启动/删除/重命名 workspace layout、恢复 stale pane |
 | `/image` | 附加图片 |
 | `/bug` | 报告 bug |
 | `/init` | 为当前项目生成 `GGCODE.md` |

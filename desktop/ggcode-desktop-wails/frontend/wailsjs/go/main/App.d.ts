@@ -82,9 +82,11 @@ export function MuteIMAdapter(arg1:string,arg2:boolean):Promise<void>;
 
 export function NeedsOnboard():Promise<boolean>;
 
-export function NewSession():Promise<void>;
+export function NewSession():Promise<string>;
 
-export function ReadClipboardImage():Promise<main.PastedImage | null>;
+export function ReadClipboardAttachments():Promise<Array<main.ClipboardAttachment>>;
+
+export function ReadClipboardImage():Promise<main.PastedImage>;
 
 export function ReadFileAsBase64(arg1:string):Promise<main.FileBinaryData>;
 

@@ -160,6 +160,48 @@ func TestBrokerAnnounceActiveSessionMarksRelayReady(t *testing.T) {
 	}
 }
 
+func TestBrokerAnnounceActiveSessionIncludesBarrier(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	live := mustTestRelayClient("wss://test.local")
+	defer live.Close()
+	b.session.client = live
+
+	b.BindSession("sess-1")
+	b.PushStatus("working", "testing")
+	d.drain()
+
+	b.AnnounceActiveSession("sess-1")
+
+	select {
+	case raw := <-live.sendCh:
+		var msg struct {
+			Type           string `json:"type"`
+			SessionID      string `json:"session_id"`
+			BarrierEventID string `json:"barrier_event_id"`
+			BarrierOrdinal int64  `json:"barrier_ordinal"`
+			Data           struct {
+				BarrierEventID string `json:"barrier_event_id"`
+				BarrierOrdinal int64  `json:"barrier_ordinal"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != EventActiveSession || msg.SessionID != "sess-1" {
+			t.Fatalf("unexpected active_session payload: %+v", msg)
+		}
+		if msg.BarrierEventID == "" || msg.BarrierOrdinal != 1 {
+			t.Fatalf("missing active_session barrier: %+v", msg)
+		}
+		if msg.Data.BarrierEventID != msg.BarrierEventID || msg.Data.BarrierOrdinal != msg.BarrierOrdinal {
+			t.Fatalf("data barrier mismatch: %+v", msg)
+		}
+	default:
+		t.Fatal("expected active_session to be sent")
+	}
+}
+
 func TestBrokerSwitchSessionMarksRelayReady(t *testing.T) {
 	b, _ := newBrokerForTest()
 	defer b.Stop()

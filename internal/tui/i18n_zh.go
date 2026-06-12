@@ -629,6 +629,8 @@ func zhCatalog(key string) string {
 
 	case "exit.confirm":
 		return "再按一次 Ctrl-C 退出。\n\n"
+	case "cancel.confirm":
+		return "再按一次 Ctrl-C 或 Esc 取消正在运行的 agent。\n\n"
 	case "interrupted":
 		return "[已中断]\n\n"
 	case "lang.current":
@@ -982,7 +984,7 @@ func zhCatalog(key string) string {
 	case "mcp.more":
 		return "… 还有 %d 个，使用 /mcp 查看"
 	case "image.usage":
-		return "用法：/image <path/to/file.png>\n"
+		return "用法：/image <path/to/file.png> 或 /image paste\n"
 	case "image.formats":
 		return "支持格式：PNG、JPEG、GIF、WebP（最大 20MB）\n\n"
 	case "image.attached":

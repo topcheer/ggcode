@@ -18,7 +18,7 @@ func TestTmuxToolSchemaExposesLifecycleActions(t *testing.T) {
 		}
 	}
 	params := string(tool.Parameters())
-	for _, want := range []string{"status", "split", "popup", "list", "layouts", "layout", "setup", "save_layout", "refresh", "restore", "prune", "capture", "focus", "close", "pane_id"} {
+	for _, want := range []string{"status", "split", "popup", "list", "logs", "layouts", "layout", "setup", "save_layout", "delete_layout", "rename_layout", "refresh", "restore", "rerun", "prune", "capture", "focus", "stop", "close", "pane_id"} {
 		if !strings.Contains(params, want) {
 			t.Fatalf("Parameters() should mention %q, got %s", want, params)
 		}

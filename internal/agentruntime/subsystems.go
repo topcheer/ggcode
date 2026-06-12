@@ -2,15 +2,33 @@ package agentruntime
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 )
+
+func NewWorkspaceCronScheduler(workingDir string, enqueue func(string)) *cron.Scheduler {
+	storePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
+	scheduler := cron.NewScheduler(enqueue, storePath)
+	scheduler.Load(workingDir)
+	return scheduler
+}
+
+func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {
+	if registry == nil || scheduler == nil {
+		return
+	}
+	_ = registry.Register(tool.CronCreateTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronDeleteTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronListTool{Scheduler: scheduler})
+}
 
 func NewACPClientManager(
 	workingDir string,

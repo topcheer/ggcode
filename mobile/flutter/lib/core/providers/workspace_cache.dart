@@ -1134,7 +1134,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         provider: sessionInfo?.provider ?? state.sessions[sessionKey]?.provider,
         mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
         version: sessionInfo?.version ?? state.sessions[sessionKey]?.version,
-        workspacePath: sessionInfo?.workspace ?? state.sessions[sessionKey]?.workspacePath,
+        workspacePath:
+            sessionInfo?.workspace ?? state.sessions[sessionKey]?.workspacePath,
         lastEventId: lastEventId ?? state.sessions[sessionKey]?.lastEventId,
         authorityEpoch:
             authorityEpoch ?? state.sessions[sessionKey]?.authorityEpoch,
@@ -1142,18 +1143,19 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
-    final displayName = _workspaceDisplayName(workspace?.url ?? '', sessionInfo);
+    final displayName =
+        _workspaceDisplayName(workspace?.url ?? '', sessionInfo);
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
-        displayName: displayName.isNotEmpty ? displayName : workspace.displayName,
+        displayName:
+            displayName.isNotEmpty ? displayName : workspace.displayName,
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
     } else if (displayName.isNotEmpty) {
       // Workspace doesn't exist yet — create it now that we have sessionInfo.
-      final url = state.workspaces[workspaceKey]?.url ??
-          _pendingWorkspaceUrl ??
-          '';
+      final url =
+          state.workspaces[workspaceKey]?.url ?? _pendingWorkspaceUrl ?? '';
       _pendingWorkspaceUrl = null;
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
@@ -1469,8 +1471,7 @@ final displayedMessagesProvider = Provider<List<ChatMessage>>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return const [];
   }
-  final snapshot =
-      ref.watch(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+  final snapshot = cache.snapshots[sessionId];
   if (snapshot == null) {
     return const [];
   }
@@ -1486,8 +1487,7 @@ final displayedSubagentProvider = Provider<Map<String, SubagentInfo>>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return const {};
   }
-  final snapshot =
-      ref.watch(workspaceCacheProvider.notifier).snapshotFor(sessionId);
+  final snapshot = cache.snapshots[sessionId];
   if (snapshot == null) {
     return const {};
   }
@@ -1503,10 +1503,7 @@ final displayedSessionInfoProvider = Provider<proto.SessionInfoData?>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return null;
   }
-  return ref
-      .watch(workspaceCacheProvider.notifier)
-      .snapshotFor(sessionId)
-      ?.sessionInfo;
+  return cache.snapshots[sessionId]?.sessionInfo;
 });
 
 final displayedAgentStatusProvider = Provider<String>((ref) {
@@ -1518,11 +1515,9 @@ final displayedAgentStatusProvider = Provider<String>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return 'idle';
   }
-  return _normalizedCachedAgentStatus(ref
-          .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(sessionId)
-          ?.agentStatus ??
-      'idle');
+  return _normalizedCachedAgentStatus(
+    cache.snapshots[sessionId]?.agentStatus ?? 'idle',
+  );
 });
 
 final displayedAgentStatusMessageProvider = Provider<String>((ref) {
@@ -1534,11 +1529,7 @@ final displayedAgentStatusMessageProvider = Provider<String>((ref) {
   if (sessionId == null || sessionId.isEmpty) {
     return '';
   }
-  return ref
-          .watch(workspaceCacheProvider.notifier)
-          .snapshotFor(sessionId)
-          ?.agentStatusMessage ??
-      '';
+  return cache.snapshots[sessionId]?.agentStatusMessage ?? '';
 });
 
 final isHistoricalViewProvider = Provider<bool>((ref) {

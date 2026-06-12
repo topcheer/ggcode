@@ -87,6 +87,8 @@ type Model struct {
 	restartDebug                    bool
 	tmuxExecRequested               bool
 	tmuxExecSession                 string
+	tmuxExecSetupLayout             string
+	tmuxStartupSetupLayout          string
 	width                           int
 	height                          int
 	styles                          styles
@@ -244,6 +246,7 @@ type Model struct {
 	sidebarVisible       bool
 
 	exitConfirmPending    bool
+	cancelConfirmPending  bool
 	pending               *pendingQueue
 	sessionMu             *sync.Mutex
 	projectMemoryLoading  bool
@@ -469,37 +472,42 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	if a != nil {
 		tmuxWorkspace = a.WorkingDir()
 	}
+	tmuxStartupSetupLayout := strings.TrimSpace(os.Getenv("GGCODE_TMUX_SETUP_LAYOUT"))
+	if tmuxStartupSetupLayout != "" {
+		_ = os.Unsetenv("GGCODE_TMUX_SETUP_LAYOUT")
+	}
 
 	return Model{
-		input:                ta,
-		chatList:             chat.NewList(80, 20),
-		chatStyles:           chat.DefaultStyles(),
-		styles:               s,
-		agent:                a,
-		language:             LangEnglish,
-		policy:               policy,
-		spinner:              NewToolSpinner(),
-		history:              make([]string, 0, 100),
-		viewport:             NewViewportModel(80, 20),
-		mode:                 policyMode(policy),
-		startedAt:            time.Time{}, // set on first WindowSizeMsg
-		startupBannerVisible: false,
-		sidebarVisible:       false,
-		activeMCPTools:       make(map[string]ToolStatusMsg),
-		clipboardLoader:      loadClipboardImage,
-		clipboardWriter:      copyTextToClipboard,
-		urlOpener:            openSystemURL,
-		pending:              &pendingQueue{},
-		sessionMu:            &sync.Mutex{},
-		imRuntimeState:       &imRuntimeState{},
-		a2aEventState:        &a2aEventBufferState{},
-		tunnelMainStream:     &tunnelMainStreamState{},
-		tunnelShareBootstrap: &tunnelShareBootstrapState{},
-		streamViewState:      &streamViewStateData{},
-		terminalTitleWriter:  newTerminalTitleWriter(),
-		tmuxClient:           tmuxClient,
-		tmuxManager:          tmux.SharedManager(tmuxWorkspace),
-		tmuxEnv:              tmuxEnv,
+		input:                  ta,
+		chatList:               chat.NewList(80, 20),
+		chatStyles:             chat.DefaultStyles(),
+		styles:                 s,
+		agent:                  a,
+		language:               LangEnglish,
+		policy:                 policy,
+		spinner:                NewToolSpinner(),
+		history:                make([]string, 0, 100),
+		viewport:               NewViewportModel(80, 20),
+		mode:                   policyMode(policy),
+		startedAt:              time.Time{}, // set on first WindowSizeMsg
+		startupBannerVisible:   false,
+		sidebarVisible:         false,
+		activeMCPTools:         make(map[string]ToolStatusMsg),
+		clipboardLoader:        loadClipboardImage,
+		clipboardWriter:        copyTextToClipboard,
+		urlOpener:              openSystemURL,
+		pending:                &pendingQueue{},
+		sessionMu:              &sync.Mutex{},
+		imRuntimeState:         &imRuntimeState{},
+		a2aEventState:          &a2aEventBufferState{},
+		tunnelMainStream:       &tunnelMainStreamState{},
+		tunnelShareBootstrap:   &tunnelShareBootstrapState{},
+		streamViewState:        &streamViewStateData{},
+		terminalTitleWriter:    newTerminalTitleWriter(),
+		tmuxClient:             tmuxClient,
+		tmuxManager:            tmux.SharedManager(tmuxWorkspace),
+		tmuxEnv:                tmuxEnv,
+		tmuxStartupSetupLayout: tmuxStartupSetupLayout,
 	}
 }
 
@@ -602,6 +610,10 @@ func (m Model) Init() tea.Cmd {
 	if m.updateSvc != nil {
 		cmds = append(cmds, m.checkForUpdateCmd())
 		cmds = append(cmds, m.scheduleUpdateCheckCmd())
+	}
+	if m.tmuxStartupSetupLayout != "" {
+		layout := m.tmuxStartupSetupLayout
+		cmds = append(cmds, func() tea.Msg { return tmuxStartupSetupMsg{Layout: layout} })
 	}
 	return tea.Batch(cmds...)
 }
@@ -875,6 +887,38 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 	}
 }
 
+func (m *Model) hasActivePanel() bool {
+	return m.fileBrowser != nil ||
+		m.previewPanel != nil ||
+		m.modelPanel != nil ||
+		m.providerPanel != nil ||
+		m.tgPanel != nil ||
+		m.qqPanel != nil ||
+		m.pcPanel != nil ||
+		m.discordPanel != nil ||
+		m.feishuPanel != nil ||
+		m.slackPanel != nil ||
+		m.dingtalkPanel != nil ||
+		m.wechatPanel != nil ||
+		m.wecomPanel != nil ||
+		m.matrixPanel != nil ||
+		m.mattermostPanel != nil ||
+		m.signalPanel != nil ||
+		m.ircPanel != nil ||
+		m.nostrPanel != nil ||
+		m.twitchPanel != nil ||
+		m.whatsappPanel != nil ||
+		m.mcpPanel != nil ||
+		m.imPanel != nil ||
+		m.inspectorPanel != nil ||
+		m.harnessContextPrompt != nil ||
+		m.harnessPanel != nil ||
+		m.impersonatePanel != nil ||
+		m.skillsPanel != nil ||
+		m.streamPanel != nil ||
+		len(m.langOptions) > 0
+}
+
 func (m *Model) closeActivePanel() bool {
 	switch {
 	case m.modelPanel != nil:
@@ -942,6 +986,7 @@ func (m *Model) closeActivePanel() bool {
 		return false
 	}
 	m.resetExitConfirm()
+	m.resetCancelConfirm()
 	return true
 }
 

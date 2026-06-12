@@ -548,7 +548,7 @@ jobs:
             desc "AI coding agent with a native desktop interface."
             homepage "https://github.com/${REPO}"
 
-            depends_on macos: ">= :ventura"
+            depends_on macos: :ventura
 
             app "GGCode-Desktop.app"
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +93,10 @@ type ChatBridge struct {
 	usageTurnIndex       int
 	lastMetricDigestTurn int
 	pendingDigests       []provider.Message
+	desktopTurnCounter   int64
+	desktopTurnID        string
+	desktopAssistantID   string
+	desktopTextSeq       int
 
 	// UI event emitter — set by app.go via SetEmitEvent
 	EmitEvent func(name string, payload ...interface{})
@@ -115,6 +118,9 @@ type ChatBridge struct {
 
 	// Callback for emitting events to frontend.
 	OnStreamEvent func(eventType string, data json.RawMessage)
+
+	// Callback fired after current session changes so the host can bind IM/runtime state.
+	OnSessionChanged func()
 
 	liveHistory []SessionMessage
 }
@@ -158,6 +164,26 @@ func shouldEmitSwarmBoardUpdate(eventType string) bool {
 // SetTunnelHost sets the unified tunnel host from InteractiveRuntimeCore.Tunnel.
 func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 	b.tunnelHost = th
+}
+
+func (b *ChatBridge) startDesktopTurnLocked() (turnID, assistantID string) {
+	b.desktopTurnCounter++
+	turnID = fmt.Sprintf("turn-%d", b.desktopTurnCounter)
+	assistantID = fmt.Sprintf("assistant-%s", turnID)
+	b.desktopTurnID = turnID
+	b.desktopAssistantID = assistantID
+	b.desktopTextSeq = 0
+	return turnID, assistantID
+}
+
+func (b *ChatBridge) desktopTurnSnapshot() (turnID, assistantID string, seq int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.desktopTurnID == "" {
+		b.startDesktopTurnLocked()
+	}
+	b.desktopTextSeq++
+	return b.desktopTurnID, b.desktopAssistantID, b.desktopTextSeq
 }
 
 // SendMessage sends a user message and streams events to the frontend.
@@ -230,12 +256,8 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		return nil
 	}
 
-	// Notify frontend about non-desktop user messages (IM/mobile).
+	// Non-desktop user messages are emitted after turn identity is allocated below.
 	// Desktop UI already adds its own messages via handleSend; skip to avoid duplicates.
-	if b.OnStreamEvent != nil && source != "desktop" {
-		raw, _ := json.Marshal(map[string]string{"text": userMsg, "source": source})
-		b.OnStreamEvent("user_message", raw)
-	}
 
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -252,6 +274,11 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.cancel = cancel
 	b.cancelled = false
 	b.usageTurnIndex++
+	turnID, _ := b.startDesktopTurnLocked()
+	if b.OnStreamEvent != nil && source != "desktop" {
+		raw, _ := json.Marshal(map[string]string{"turn_id": turnID, "message_id": fmt.Sprintf("user-%s", turnID), "text": userMsg, "source": source})
+		b.OnStreamEvent("user_message", raw)
+	}
 	b.mu.Unlock()
 
 	defer func() {
@@ -342,10 +369,19 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	}
 
 	// Signal run complete (the entire agent run, not just one turn)
+	if b.metricCollector != nil {
+		b.metricCollector.Flush()
+	}
+	b.emitTurnDigest()
+	b.resetTunnelRoundState()
 	if b.OnStreamEvent != nil {
-		raw, _ := json.Marshal(map[string]interface{}{"error": ""})
+		b.mu.Lock()
+		turnID := b.desktopTurnID
+		assistantID := b.desktopAssistantID
+		b.mu.Unlock()
+		raw, _ := json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": ""})
 		if err != nil {
-			raw, _ = json.Marshal(map[string]interface{}{"error": err.Error()})
+			raw, _ = json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": err.Error()})
 		}
 		b.OnStreamEvent("run_done", raw)
 	}
@@ -387,7 +423,6 @@ func (b *ChatBridge) ClearCurrentSession() {
 	state := agentruntime.ClearSession()
 	b.ResetAgent()
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.currentSes = state.Session
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
@@ -396,6 +431,42 @@ func (b *ChatBridge) ClearCurrentSession() {
 	b.pendingDigests = nil
 	if b.tunnelHost != nil {
 		b.tunnelHost.ResetStreamState()
+	}
+	b.mu.Unlock()
+	b.bindSessionIntegrations(nil)
+}
+
+func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
+	b.mu.Lock()
+	b.currentSes = state.Session
+	b.usageTurnIndex = state.UsageTurnIndex
+	b.lastMetricDigestTurn = state.LastMetricDigestTurn
+	b.liveHistory = nil
+	b.metricEvents = nil
+	b.pendingDigests = nil
+	if b.currentSes != nil {
+		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
+	}
+	if b.tunnelHost != nil {
+		b.tunnelHost.ResetStreamState()
+	}
+	ses := b.currentSes
+	b.mu.Unlock()
+	b.bindSessionIntegrations(ses)
+}
+
+func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
+	b.mu.Lock()
+	store := b.sessionStore
+	tunnelHost := b.tunnelHost
+	onSessionChanged := b.OnSessionChanged
+	b.mu.Unlock()
+
+	if tunnelHost != nil && ses != nil && store != nil {
+		tunnelHost.BindSession(ses, store)
+	}
+	if onSessionChanged != nil {
+		onSessionChanged()
 	}
 }
 
@@ -413,20 +484,11 @@ func (b *ChatBridge) LoadSession(id string) error {
 		return fmt.Errorf("load session: %w", err)
 	}
 	b.ResetAgent()
-	b.mu.Lock()
-	b.currentSes = state.Session
-	b.usageTurnIndex = state.UsageTurnIndex
-	b.lastMetricDigestTurn = state.LastMetricDigestTurn
-	b.metricEvents = nil
-	b.pendingDigests = nil
-	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
-	b.mu.Unlock()
+	b.setSessionState(state)
 	if err := b.InitAgent(context.Background()); err != nil {
 		return fmt.Errorf("init agent for session load: %w", err)
 	}
 	agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
-	// Rebind projection session for the loaded session
-	b.bindTunnelProjectionSession()
 	return nil
 }
 
@@ -451,13 +513,9 @@ func (b *ChatBridge) ensureSession() error {
 	if err != nil {
 		return fmt.Errorf("save new session: %w", err)
 	}
-	if !created {
-		return nil
+	if created {
+		b.setSessionState(state)
 	}
-	b.currentSes = state.Session
-	b.usageTurnIndex = state.UsageTurnIndex
-	b.lastMetricDigestTurn = state.LastMetricDigestTurn
-	b.liveHistory = buildSessionHistoryFromMessages(state.Session.Messages)
 	return nil
 }
 
@@ -479,6 +537,19 @@ func (b *ChatBridge) saveSession() {
 		msgs = append(msgs, digests...)
 	}
 	_ = agentruntime.SaveSessionMessages(store, ses, msgs)
+}
+
+func (b *ChatBridge) StartNewSession() (string, error) {
+	b.ClearCurrentSession()
+	if err := b.ensureSession(); err != nil {
+		return "", err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.currentSes == nil {
+		return "", fmt.Errorf("new session was not initialized")
+	}
+	return b.currentSes.ID, nil
 }
 
 // CurrentSessionID returns the current session ID.
@@ -511,22 +582,14 @@ func (b *ChatBridge) EnsureSession() {
 	if err != nil || !created {
 		return
 	}
-	b.mu.Lock()
-	b.currentSes = state.Session
-	b.usageTurnIndex = state.UsageTurnIndex
-	b.lastMetricDigestTurn = state.LastMetricDigestTurn
-	b.mu.Unlock()
+	b.setSessionState(state)
 }
 
 // InitAgent sets up provider, tools, and agent — full parity with Fyne bridge.
 // Called on startup or before the first message if not yet initialized.
 func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// Permission policy (auto mode)
-	modeStr := b.cfg.DefaultMode
-	if modeStr == "" {
-		modeStr = "auto"
-	}
-	mode := permission.ParsePermissionMode(modeStr)
+	mode := agentruntime.InteractivePermissionModeWithDefault(b.cfg, false, "auto")
 	b.permissionMode = mode
 	policy := agentruntime.BuildInteractivePermissionPolicy(b.cfg, b.workingDir, false)
 
@@ -550,15 +613,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	b.registry = core.Registry
 
 	// Cron tools
-	cronStorePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
-	b.cronScheduler = cron.NewScheduler(nil, cronStorePath)
-	b.cronScheduler.Load(b.workingDir)
-	b.cronScheduler.SetEnqueue(func(prompt string) {
+	b.cronScheduler = agentruntime.NewWorkspaceCronScheduler(b.workingDir, func(prompt string) {
 		log.Printf("[cron] enqueued prompt: %s", prompt)
 	})
-	_ = b.registry.Register(tool.CronCreateTool{Scheduler: b.cronScheduler})
-	_ = b.registry.Register(tool.CronDeleteTool{Scheduler: b.cronScheduler})
-	_ = b.registry.Register(tool.CronListTool{Scheduler: b.cronScheduler})
+	agentruntime.RegisterCronTools(b.registry, b.cronScheduler)
 	mcpMgr := core.MCPManager
 	b.mcpManager = mcpMgr
 	// Push MCP server status changes to frontend via stream events
@@ -578,6 +636,9 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	// Set unified tunnel host for mobile streaming
 	b.tunnelHost = core.Tunnel
+	if b.currentSes != nil {
+		b.bindSessionIntegrations(b.currentSes)
+	}
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
 	commandMgr := core.CommandManager
@@ -1000,11 +1061,14 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 		switch semantic.Type {
 		case provider.StreamEventText:
 			eventType = "text"
-			data = map[string]string{"content": semantic.Text}
+			turnID, assistantID, seq := b.desktopTurnSnapshot()
+			data = map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "seq": seq, "content": semantic.Text}
 		case provider.StreamEventToolCallDone:
 			eventType = "tool_call_done"
 			data = map[string]interface{}{
 				"id":          semantic.ToolCall.ID,
+				"toolID":      semantic.ToolCall.ID,
+				"tool_id":     semantic.ToolCall.ID,
 				"name":        semantic.ToolCall.Name,
 				"arguments":   semantic.ToolCall.RawArgs,
 				"displayName": semantic.ToolCall.DisplayName,
@@ -1014,20 +1078,25 @@ func (b *ChatBridge) emit(ev provider.StreamEvent) {
 			eventType = "tool_result"
 			data = map[string]interface{}{
 				"id":      semantic.ToolResult.ID,
+				"toolID":  semantic.ToolResult.ID,
+				"tool_id": semantic.ToolResult.ID,
 				"name":    semantic.ToolResult.Name,
 				"result":  semantic.ToolResult.Preview,
 				"isError": semantic.ToolResult.IsError,
 			}
 		case provider.StreamEventDone:
 			eventType = "done"
-			data = semantic.UsageData
-			b.resetTunnelRoundState()
-			// Flush pending metrics before generating the digest.
-			if b.metricCollector != nil {
-				b.metricCollector.Flush()
-			}
-			// Emit turn metrics digest as a system message.
-			b.emitTurnDigest()
+			b.mu.Lock()
+			turnID := b.desktopTurnID
+			assistantID := b.desktopAssistantID
+			b.mu.Unlock()
+			data = map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "usage": semantic.UsageData}
+			// Advance assistantID so the next LLM iteration creates a new
+			// assistant message instead of appending to the previous one.
+			b.mu.Lock()
+			b.desktopTextSeq++
+			b.desktopAssistantID = fmt.Sprintf("assistant-turn-%d-iter-%d", b.desktopTurnCounter, b.desktopTextSeq)
+			b.mu.Unlock()
 		case provider.StreamEventError:
 			eventType = "error"
 			data = map[string]string{"message": semantic.ErrorText}
@@ -1074,6 +1143,8 @@ func (b *ChatBridge) appendLiveUserMessage(text string) {
 		b.liveHistory = buildSessionHistoryFromMessages(b.currentSes.Messages)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
+		ID:      fmt.Sprintf("user-%s", b.desktopTurnID),
+		TurnID:  b.desktopTurnID,
 		Role:    "user",
 		Content: text,
 	})
@@ -1116,11 +1187,21 @@ func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStr
 		})
 	case provider.StreamEventText:
 		b.finalizeLiveReasoningLocked()
-		if n := len(b.liveHistory); n > 0 && b.liveHistory[n-1].Role == "assistant" && b.liveHistory[n-1].Streaming {
-			b.liveHistory[n-1].Content += semantic.Text
-			return
+		assistantID := b.desktopAssistantID
+		turnID := b.desktopTurnID
+		if assistantID == "" {
+			turnID, assistantID = b.startDesktopTurnLocked()
+		}
+		for i := len(b.liveHistory) - 1; i >= 0; i-- {
+			if b.liveHistory[i].ID == assistantID && b.liveHistory[i].Role == "assistant" {
+				b.liveHistory[i].Content += semantic.Text
+				b.liveHistory[i].Streaming = true
+				return
+			}
 		}
 		b.liveHistory = append(b.liveHistory, SessionMessage{
+			ID:        assistantID,
+			TurnID:    turnID,
 			Role:      "assistant",
 			Content:   semantic.Text,
 			Streaming: true,
@@ -1294,9 +1375,7 @@ func (b *ChatBridge) bindTunnelProjectionSession() {
 	b.mu.Lock()
 	currentSes := b.currentSes
 	b.mu.Unlock()
-	if b.tunnelHost != nil {
-		b.tunnelHost.BindSession(currentSes, b.sessionStore)
-	}
+	b.bindSessionIntegrations(currentSes)
 }
 
 func (b *ChatBridge) CurrentTunnelStatus() tunnel.StatusData {

@@ -2604,6 +2604,18 @@ func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
 	m.cancelFunc = func() { cancelled = true }
 
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
+	m = model.(Model)
+	if cmd != nil {
+		t.Error("expected nil cmd when asking to cancel active work")
+	}
+	if cancelled {
+		t.Error("first ctrl+c should not call cancel func")
+	}
+	if !m.cancelConfirmPending {
+		t.Fatal("first ctrl+c should arm cancel confirmation")
+	}
+
+	model, cmd = m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2636,6 +2648,18 @@ func TestEscLoadingCancelsCurrentActivity(t *testing.T) {
 	m.cancelFunc = func() { cancelled = true }
 
 	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = model.(Model)
+	if cmd != nil {
+		t.Error("expected nil cmd when asking to cancel active work with esc")
+	}
+	if cancelled {
+		t.Error("first esc should not call cancel func")
+	}
+	if !m.cancelConfirmPending {
+		t.Fatal("first esc should arm cancel confirmation")
+	}
+
+	model, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2947,6 +2971,8 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	m.pending.items = []pendingSubmission{{Text: "first question"}, {Text: "second question"}}
 	m.input.SetValue("draft")
 
+	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
+	m = model.(Model)
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m = model.(Model)
 
@@ -2976,6 +3002,8 @@ func TestCtrlCCancelDoesNotRestoreHiddenPendingSubmission(t *testing.T) {
 	}
 	m.input.SetValue("draft")
 
+	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
+	m = model.(Model)
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m = model.(Model)
 

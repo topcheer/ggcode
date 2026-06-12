@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { ClipboardGetText } from '../../wailsjs/runtime/runtime'
+import { ClipboardGetText, EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
+import { appendAssistantChunk, appendReasoningChunk, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
 
 // Configure marked — no special mermaid handling, we split manually.
 marked.setOptions({ gfm: true, breaks: true })
@@ -125,7 +126,7 @@ interface StreamEvent {
   type: 'text' | 'tool_call_chunk' | 'tool_call_done' | 'tool_result' | 'done' | 'error' | 'reasoning' | 'reasoning_done' | 'run_done' | 'system'
     | 'subagent_text' | 'subagent_reasoning' | 'subagent_tool_call' | 'subagent_tool_result' | 'subagent_done'
     | 'swarm_text' | 'swarm_tool_call' | 'swarm_tool_result' | 'swarm_spawned' | 'swarm_idle' | 'swarm_board_updated' | 'usage_update' | 'user_message'
-  data: string // JSON-encoded payload
+  data: unknown
 }
 
 interface TextPayload { content: string }
@@ -161,12 +162,8 @@ function nextID(): string {
   return `msg-${Date.now()}-${++idCounter}`
 }
 
-function parseJSON<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return null
-  }
+function parseJSON<T>(raw: unknown): T | null {
+  return parseStreamData<T>(raw)
 }
 
 function formatTokens(n: number): string {
@@ -190,7 +187,7 @@ function sameMessageShape(a: ChatMessage, b: ChatMessage): boolean {
 function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessage[] {
   const next = history.map((h: any, index: number) => {
     const candidate: ChatMessage = {
-      id: previous[index]?.id || nextID(),
+      id: h.id || h.ID || previous[index]?.id || nextID(),
       role: (h.role || 'assistant') as ChatRole,
       content: h.content || '',
       toolName: h.toolName,
@@ -221,6 +218,24 @@ function isNearBottom(el: HTMLElement | null, threshold = 48): boolean {
 
 function getTabAutoScroll(state: Record<string, boolean>, tab: string): boolean {
   return state[tab] ?? true
+}
+
+function imageFromClipboardAttachment(att: any): PastedImageAttachment | null {
+  if (att?.kind !== 'image' || !att.data) return null
+  const mimeType = att.mimeType || 'image/png'
+  return {
+    id: nextID(),
+    mimeType,
+    data: att.data,
+    previewUrl: `data:${mimeType};base64,${att.data}`,
+    name: att.name || 'clipboard-image',
+  }
+}
+
+function formatTextAttachment(att: any): string {
+  const name = att?.name || 'clipboard-file'
+  const path = att?.path ? ` (${att.path})` : ''
+  return `\n\n--- ${name}${path} ---\n${att.content || ''}\n--- end ${name} ---`
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -298,7 +313,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   const messagesRef = useRef<ChatMessage[]>([])
 
-  // Load session history when sessionId changes
+  // Load session history when sessionId changes.
+  // Do not let an async history response overwrite an active live stream.
   useEffect(() => {
     if (!sessionId) {
       setMessages([])
@@ -309,21 +325,31 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       })
       return
     }
+    let cancelled = false
     App.GetSessionHistory().then((history: any[]) => {
+      if (cancelled || runActiveRef.current) return
       if (!history || history.length === 0) {
         // Don't clear existing messages — backend may not have loaded yet
         return
       }
       autoScrollByTabRef.current.main = true
       const loaded = materializeHistory(history, messagesRef.current)
+      if (cancelled || runActiveRef.current) return
       messagesRef.current = loaded
       setMessages(loaded)
       setThinking(false)
     }).catch(() => {})
+    return () => { cancelled = true }
   }, [sessionId])
 
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
+  const isStreamingRef = useRef(false)
+  const runActiveRef = useRef(false)
+
+  useEffect(() => {
+    isStreamingRef.current = isStreaming
+  }, [isStreaming])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -408,7 +434,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       }
     })()
     return () => { cancelled = true }
-  }, [messages])
+  }, [sessionId])
 
   // ── Event stream handler (follows Fyne chat_view.go handleEvent) ────────
 
@@ -417,41 +443,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
       switch (evt.type) {
         case 'text': {
-          const p = parseJSON<{ content: string }>(raw)
+          const p = parseJSON<{ content: string; message_id?: string }>(raw)
           if (!p || !p.content) break
           setMessages(prev => {
-            const msgs = [...prev]
-            const idx = msgs.findIndex(m => m.role === 'assistant' && m.streaming)
-            if (idx >= 0) {
-              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
-            } else {
-              msgs.push({
-                id: nextID(), role: 'assistant' as const,
-                content: p.content, streaming: true,
-                timestamp: Date.now(),
-              })
-            }
-            return msgs
+            const result = appendAssistantChunk(prev, streamingMsgID.current, p.content, nextID, undefined, p.message_id)
+            streamingMsgID.current = result.streamingMessageID
+            return result.messages
           })
           break
         }
         case 'reasoning': {
-          const p = parseJSON<{ content: string }>(raw)
+          const p = parseJSON<{ content: string; message_id?: string }>(raw)
           if (!p || !p.content) break
-          setMessages(prev => {
-            const msgs = [...prev]
-            const idx = msgs.findIndex(m => m.role === 'reasoning' && m.streaming)
-            if (idx >= 0) {
-              msgs[idx] = { ...msgs[idx], content: msgs[idx].content + p.content }
-            } else {
-              msgs.push({
-                id: nextID(), role: 'reasoning' as const,
-                content: p.content, streaming: true,
-                timestamp: Date.now(),
-              })
-            }
-            return msgs
-          })
+          setMessages(prev => appendReasoningChunk(prev, p.content, nextID, undefined, p.message_id))
           break
         }
         case 'reasoning_done': {
@@ -461,8 +465,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
         case 'tool_call_done': {
-          const p = parseJSON<{ id: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
-          if (!p) break
+          const p = parseJSON<{ id?: string; toolID?: string; tool_id?: string; name: string; arguments?: string; displayName?: string; detail?: string }>(raw)
+          const toolID = p?.toolID || p?.tool_id || p?.id
+          if (!p?.name || !toolID) break
 
           // exit_plan_mode: render plan as markdown, skip tool call UI
           if (p.name === 'exit_plan_mode') {
@@ -488,13 +493,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }
 
           setMessages(prev => {
+            const exists = prev.some(m => m.role === 'tool' && m.toolID === toolID)
+            if (exists) return prev
             // Close streaming for text/reasoning only, not other tool calls
             const msgs = prev.map(m =>
               m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
             )
             msgs.push({
-              id: nextID(), role: 'tool' as const, content: '',
-              toolName: p.name, toolID: p.id,
+              id: nextID(), role: 'tool' as const,
+              content: '', toolName: p.name, toolID,
               toolArgs: p.arguments, toolDisplayName: p.displayName,
               toolDetail: p.detail, streaming: true,
               timestamp: Date.now(),
@@ -504,44 +511,46 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
         case 'tool_result': {
-          const p = parseJSON<{ id: string; result: string; isError?: boolean }>(raw)
-          if (!p) break
-          setMessages(prev => {
-            const msgs = [...prev]
-            const idx = msgs.findIndex(m => m.role === 'tool' && m.toolID === p.id)
-            if (idx >= 0) {
-              msgs[idx] = { ...msgs[idx], content: p.result, isError: p.isError, streaming: false }
-            }
-            return msgs
-          })
+          const p = parseJSON<{ id?: string; toolID?: string; tool_id?: string; result?: string; isError?: boolean; displayName?: string; detail?: string }>(raw)
+          const toolID = p?.toolID || p?.tool_id || p?.id
+          if (!toolID) break
+          setMessages(prev => prev.map(m =>
+            m.role === 'tool' && m.toolID === toolID
+              ? { ...m, content: p.result || '', isError: !!p.isError, toolDisplayName: p.displayName || m.toolDisplayName, toolDetail: p.detail || m.toolDetail, streaming: false }
+              : m
+          ))
           break
         }
         case 'done': {
-          // Close streaming for text/reasoning messages only.
+          const p = parseJSON<{ message_id?: string }>(raw)
+          setThinking(false)
+          streamingMsgID.current = null
+          // Close streaming for text/reasoning messages only. The overall run
+          // remains busy until run_done because done only marks one model
+          // iteration, and tools or follow-up model iterations may still run.
           // Tool messages stay streaming until their tool_result arrives.
-          setMessages(prev => prev.map(m =>
-            m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
-          ))
+          setMessages(prev => finishAssistantMessage(prev, p?.message_id))
           break
         }
         case 'error': {
           const p = parseJSON<{ message: string }>(raw)
           setMessages(prev => [...prev, {
             id: nextID(), role: 'error' as const,
-            content: p?.message || raw, timestamp: Date.now(),
+            content: p?.message || 'Error', timestamp: Date.now(),
           }])
           break
         }
         case 'user_message': {
           const p = parseJSON<{ text: string; source: string }>(raw)
           if (p?.text) {
-            setMessages(prev => [...prev, {
+            streamingMsgID.current = null
+            setMessages(prev => appendUserMessage(prev, {
               id: nextID(), role: 'user' as const,
               content: p.text,
               timestamp: Date.now(),
               // Show source badge for non-UI messages
               ...(p.source ? { source: p.source } : {}),
-            }])
+            }))
           }
           break
         }
@@ -557,8 +566,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }
         case 'run_done': {
           setIsStreaming(false)
+          runActiveRef.current = false
           setThinking(false)
+          streamingMsgID.current = null
           setStatusBar(s => ({ ...s, status: 'idle' }))
+          setMessages(prev => finishAssistantRun(prev))
           // Clear completed agent panels
           setAgentPanels(prev => {
             const next = new Map<string, AgentPanel>()
@@ -740,30 +752,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }, [ensureAgentPanel, refreshTeamBoard, updateAgentPanel])
 
   useEffect(() => {
-    let cancelled = false
-    const pump = async () => {
-      if (cancelled) return
+    const off = EventsOn('chat:stream', (evt: StreamEvent) => {
+      if (!evt?.type) return
       try {
-        const events = await App.DrainStreamEvents() as StreamEvent[] | undefined
-        if (!cancelled && events && events.length > 0) {
-          for (const evt of events) {
-            if (!evt?.type) continue
-            handleStreamEvent(evt)
-          }
-        }
-      } catch {}
-    }
-    void pump()
-    const id = window.setInterval(() => { void pump() }, 150)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
+        handleStreamEvent(evt)
+      } catch (err) {
+        console.error('[chat] handle stream event failed', err, evt)
+      }
+    })
+    return () => { off() }
   }, [handleStreamEvent])
 
   useEffect(() => {
     void refreshTeamBoard()
-  }, [refreshTeamBoard, sessionId])
+  }, [])
 
   // ── Load model info on mount ──────────────────────────────────────────────
 
@@ -811,13 +813,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         timestamp: Date.now(),
         deliveryStatus: 'pending',
       }
-      setMessages(prev => [...prev, userMsg])
+      streamingMsgID.current = null
+      setMessages(prev => appendUserMessage(prev, userMsg))
     } else {
       markMessageDelivery(messageID, 'pending')
     }
 
     const wasStreaming = isStreaming
     if (!wasStreaming) {
+      runActiveRef.current = true
       setIsStreaming(true)
       setThinking(true)
       setStatusBar(s => ({ ...s, status: 'working' }))
@@ -839,6 +843,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       markMessageDelivery(messageID, 'failed')
       showToast?.('error', `Failed to send message: ${message}`)
       if (!wasStreaming) {
+        runActiveRef.current = false
         setIsStreaming(false)
         setThinking(false)
         setStatusBar(s => ({ ...s, status: 'error' }))
@@ -905,6 +910,28 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
 
     try {
+      const readClipboardAttachments = (window as any)?.go?.main?.App?.ReadClipboardAttachments
+      if (typeof readClipboardAttachments === 'function') {
+        const attachments = await App.ReadClipboardAttachments()
+        if (attachments?.length) {
+          const images = attachments.map(imageFromClipboardAttachment).filter((img): img is PastedImageAttachment => !!img)
+          if (images.length > 0) {
+            setPastedImages(prev => [...prev, ...images])
+          }
+          const textBlocks = attachments.filter(att => att.kind === 'text' && att.content).map(formatTextAttachment)
+          if (textBlocks.length > 0) {
+            setInput(prev => `${prev}${textBlocks.join('')}`)
+          }
+          const unsupported = attachments.filter(att => att.kind !== 'text' && att.kind !== 'image')
+          if (unsupported.length > 0) {
+            showToast?.('info', unsupported.map(att => `${att.name}: ${att.error || 'unsupported file'}`).join('\n'))
+          }
+          if (images.length > 0 || textBlocks.length > 0 || unsupported.length > 0) {
+            return
+          }
+        }
+      }
+
       const readClipboardImage = (window as any)?.go?.main?.App?.ReadClipboardImage
       if (typeof readClipboardImage === 'function') {
         const image = await App.ReadClipboardImage()
@@ -943,26 +970,32 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     } catch { /* ignore */ }
   }, [])
 
+  const cycleReasoningEffort = useCallback(async () => {
+    try {
+      const result = await App.CycleReasoningEffort() as Record<string, any>
+      if (result?.supported) {
+        setStatusBar(s => ({ ...s, effort: result.effort ?? 'auto' }))
+      } else {
+        showToast?.('info', 'Reasoning effort is not supported by the current model')
+      }
+    } catch (err: any) {
+      showToast?.('error', err?.message || 'Failed to switch reasoning effort')
+    }
+  }, [showToast])
+
   // ── Key handler ───────────────────────────────────────────────────────────
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
       e.preventDefault()
-      void (async () => {
-        try {
-          const result = await App.CycleReasoningEffort() as Record<string, any>
-          if (result?.supported) {
-            setStatusBar(s => ({ ...s, effort: result.effort ?? 'auto' }))
-          }
-        } catch {}
-      })()
+      void cycleReasoningEffort()
       return
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
-  }, [handleSend])
+  }, [cycleReasoningEffort, handleSend])
 
   // ── Status bar label ──────────────────────────────────────────────────────
 
@@ -1013,6 +1046,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       }
     } catch {}
   }
+
+  const effortValue = (statusBar.effort || 'auto').toLowerCase()
+  const effortTone = effortValue === 'high'
+    ? { background: 'rgba(239, 68, 68, 0.12)', border: 'rgba(239, 68, 68, 0.28)', color: 'rgb(248, 113, 113)' }
+    : effortValue === 'medium'
+      ? { background: 'rgba(234, 179, 8, 0.12)', border: 'rgba(234, 179, 8, 0.28)', color: 'rgb(250, 204, 21)' }
+      : effortValue === 'low'
+        ? { background: 'rgba(59, 130, 246, 0.11)', border: 'rgba(59, 130, 246, 0.26)', color: 'rgb(96, 165, 250)' }
+        : { background: 'var(--color-card)', border: 'var(--color-border)', color: 'var(--text-secondary)' }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1070,9 +1112,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
           {statusLabel}
         </span>
-        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+        <button
+          type="button"
+          onClick={cycleReasoningEffort}
+          title={`Reasoning effort: ${statusBar.effort || 'auto'}. Click to switch. Shortcut: Cmd/Ctrl+G.`}
+          style={{
+            padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+            background: effortTone.background,
+            border: `1px solid ${effortTone.border}`,
+            fontSize: 12, fontWeight: 500, color: effortTone.color,
+            cursor: 'pointer',
+            transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+          }}
+        >
           Effort: {statusBar.effort || 'auto'}
-        </span>
+        </button>
         <div style={{ flex: 1 }} />
 
         {/* Model picker */}

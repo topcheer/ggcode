@@ -495,8 +495,8 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 	}
 }
 
-func (rc *RelayClient) SendActiveSession(sessionID string, authorityEpoch uint64) error {
-	return rc.SendActiveSessionWithMode(sessionID, "", authorityEpoch)
+func (rc *RelayClient) SendActiveSession(sessionID string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string) error {
+	return rc.SendActiveSessionWithMode(sessionID, "", authorityEpoch, barrierEventID, barrierOrdinal, projectionHash)
 }
 
 func (rc *RelayClient) SendServerReady(authorityEpoch uint64) error {
@@ -519,7 +519,7 @@ func (rc *RelayClient) SendServerReady(authorityEpoch uint64) error {
 	return rc.enqueueRaw(data)
 }
 
-func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64) error {
+func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string) error {
 	rc.closeMu.Lock()
 	if rc.closed {
 		rc.closeMu.Unlock()
@@ -534,13 +534,24 @@ func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authori
 		SessionID      string          `json:"session_id,omitempty"`
 		AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
 		ResumeMode     string          `json:"resume_mode,omitempty"`
+		BarrierEventID string          `json:"barrier_event_id,omitempty"`
+		BarrierOrdinal int64           `json:"barrier_ordinal,omitempty"`
+		ProjectionHash string          `json:"projection_hash,omitempty"`
 		Data           json.RawMessage `json:"data,omitempty"`
 	}{
 		Type:           EventActiveSession,
 		SessionID:      sessionID,
 		AuthorityEpoch: authorityEpoch,
 		ResumeMode:     mode,
-		Data:           mustRawJSON(ActiveSessionData{SessionID: sessionID}),
+		BarrierEventID: barrierEventID,
+		BarrierOrdinal: barrierOrdinal,
+		ProjectionHash: projectionHash,
+		Data: mustRawJSON(ActiveSessionData{
+			SessionID:      sessionID,
+			BarrierEventID: barrierEventID,
+			BarrierOrdinal: barrierOrdinal,
+			ProjectionHash: projectionHash,
+		}),
 	})
 	if err != nil {
 		return err

@@ -242,6 +242,9 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("image.formats"))
 		return nil
 	}
+	if strings.EqualFold(parts[1], "paste") {
+		return m.handleClipboardPaste()
+	}
 	path := parts[1]
 	return func() tea.Msg {
 		img, err := image.ReadFile(path)

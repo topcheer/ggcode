@@ -346,3 +346,7 @@ type harnessPanelRefreshResultMsg struct {
 type knightStartupHintMsg struct {
 	Hint string
 }
+
+type tmuxStartupSetupMsg struct {
+	Layout string
+}

@@ -1,13 +1,39 @@
 export namespace main {
-
+	
+	export class ClipboardAttachment {
+	    path?: string;
+	    name: string;
+	    size: number;
+	    mimeType?: string;
+	    kind: string;
+	    content?: string;
+	    data?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClipboardAttachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mimeType = source["mimeType"];
+	        this.kind = source["kind"];
+	        this.content = source["content"];
+	        this.data = source["data"];
+	        this.error = source["error"];
+	    }
+	}
 	export class FileBinaryData {
 	    mimeType: string;
 	    data: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FileBinaryData(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mimeType = source["mimeType"];
@@ -18,11 +44,11 @@ export namespace main {
 	    mimeType: string;
 	    data: string;
 	    name?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PastedImage(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mimeType = source["mimeType"];
@@ -33,11 +59,11 @@ export namespace main {
 	export class ShareInfo {
 	    connectURL: string;
 	    qrCodeBase64: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ShareInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connectURL = source["connectURL"];
@@ -47,11 +73,11 @@ export namespace main {
 	export class StreamEventEnvelope {
 	    type: string;
 	    data: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StreamEventEnvelope(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -62,7 +88,7 @@ export namespace main {
 }
 
 export namespace swarm {
-
+	
 	export class TeamBoardTask {
 	    id: string;
 	    subject: string;
@@ -78,11 +104,11 @@ export namespace swarm {
 	    createdAt: any;
 	    // Go type: time
 	    updatedAt: any;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TeamBoardTask(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -98,7 +124,7 @@ export namespace swarm {
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -124,11 +150,11 @@ export namespace swarm {
 	    status: string;
 	    currentTask?: string;
 	    lastResult?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TeamBoardTeammate(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -147,11 +173,11 @@ export namespace swarm {
 	    tasks: TeamBoardTask[];
 	    // Go type: time
 	    createdAt: any;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TeamBoardSnapshot(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -161,7 +187,7 @@ export namespace swarm {
 	        this.tasks = this.convertValues(source["tasks"], TeamBoardTask);
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -180,12 +206,12 @@ export namespace swarm {
 		    return a;
 		}
 	}
-
+	
 
 }
 
 export namespace wailskit {
-
+	
 	export class EndpointDetails {
 	    displayName: string;
 	    protocol: string;
@@ -196,11 +222,11 @@ export namespace wailskit {
 	    models: string[];
 	    contextWindow: number;
 	    supportsVision: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EndpointDetails(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.displayName = source["displayName"];
@@ -217,11 +243,11 @@ export namespace wailskit {
 	export class EndpointInfo {
 	    key: string;
 	    displayName: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EndpointInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];
@@ -233,11 +259,11 @@ export namespace wailskit {
 	    displayName: string;
 	    models: string[];
 	    defaultEndpoint: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EndpointPresetInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -279,11 +305,11 @@ export namespace wailskit {
 	    sidebarVisible?: boolean;
 	    workDir: string;
 	    needsSetup: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new FullConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.vendor = source["vendor"];
@@ -332,11 +358,11 @@ export namespace wailskit {
 	    targets?: string[];
 	    workspace?: string;
 	    isCurrent: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new IMAdapterInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -357,11 +383,11 @@ export namespace wailskit {
 	    label: string;
 	    placeholder: string;
 	    secret?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new IMPlatformField(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];
@@ -375,11 +401,11 @@ export namespace wailskit {
 	    displayName: string;
 	    fields: IMPlatformField[];
 	    qrAuth: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new IMPlatformMeta(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -387,7 +413,7 @@ export namespace wailskit {
 	        this.fields = this.convertValues(source["fields"], IMPlatformField);
 	        this.qrAuth = source["qrAuth"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -411,11 +437,11 @@ export namespace wailskit {
 	    displayName: string;
 	    defaultVersion: string;
 	    extraHeaders?: Record<string, string>;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ImpersonationPresetInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -429,11 +455,11 @@ export namespace wailskit {
 	    authorizeUrl: string;
 	    deviceUserCode?: string;
 	    openError?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MCPOAuthStartResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.serverName = source["serverName"];
@@ -455,11 +481,11 @@ export namespace wailskit {
 	    disabled?: boolean;
 	    connected?: boolean;
 	    oauthRequired?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MCPServerInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -489,11 +515,11 @@ export namespace wailskit {
 	    models: string[];
 	    contextWindow: number;
 	    supportsVision: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ResolvedEndpointInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.vendorId = source["vendorId"];
@@ -518,11 +544,11 @@ export namespace wailskit {
 	    model: string;
 	    msgCount: number;
 	    updatedAt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SessionInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -535,6 +561,8 @@ export namespace wailskit {
 	    }
 	}
 	export class SessionMessage {
+	    id?: string;
+	    turn_id?: string;
 	    role: string;
 	    content: string;
 	    toolName?: string;
@@ -544,13 +572,15 @@ export namespace wailskit {
 	    toolDetail?: string;
 	    isError?: boolean;
 	    streaming?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SessionMessage(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.turn_id = source["turn_id"];
 	        this.role = source["role"];
 	        this.content = source["content"];
 	        this.toolName = source["toolName"];
@@ -567,11 +597,11 @@ export namespace wailskit {
 	    message: string;
 	    models?: string[];
 	    modelCount: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TestEndpointResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
@@ -584,18 +614,18 @@ export namespace wailskit {
 	    id: string;
 	    displayName: string;
 	    endpoints: EndpointPresetInfo[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new VendorPresetInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.displayName = source["displayName"];
 	        this.endpoints = this.convertValues(source["endpoints"], EndpointPresetInfo);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
