@@ -1,0 +1,245 @@
+name: Mobile Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.3.16)'
+        required: false
+        type: string
+      platform:
+        description: 'Platform (both, ios, android)'
+        required: false
+        type: string
+        default: 'both'
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.38.7'
+
+jobs:
+  # ── Verify ──────────────────────────────────────────────────
+  verify:
+    name: Verify mobile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/flutter
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+  # ── Android ─────────────────────────────────────────────────
+  build-android:
+    name: Build & deploy Android
+    needs: verify
+    runs-on: ubuntu-latest
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'android' || inputs.platform == '' || inputs.platform == null }}
+    defaults:
+      run:
+        working-directory: mobile/flutter
+    env:
+      PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: mobile/flutter/android
+
+      - name: Setup Android signing
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload.jks
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=upload.jks
+          EOF
+
+      - name: Show version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == v* ]]; then
+              VERSION="${REF#v}"
+            fi
+          fi
+          echo "Version: ${VERSION}"
+          grep '^version:' pubspec.yaml
+          # Version numbers are synced by pre-push hook; no CI bump
+
+      - name: Build AAB
+        run: flutter build appbundle --release
+
+      - name: Deploy to Google Play
+        id: deploy_android
+        run: |
+          cd android
+          bundle install --jobs 4 --retry 3
+          bundle exec fastlane deploy
+
+
+  # ── iOS ─────────────────────────────────────────────────────
+  build-ios:
+    name: Build & deploy iOS
+    needs: verify
+    runs-on: macos-15
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'ios' || inputs.platform == '' || inputs.platform == null }}
+    defaults:
+      run:
+        working-directory: mobile/flutter
+    env:
+      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+      APP_STORE_PRIVATE_KEY: ${{ secrets.APP_STORE_PRIVATE_KEY }}
+    steps:
+      - name: Setup Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26'
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: mobile/flutter/ios
+
+      - name: Install Apple Distribution certificate & provisioning profile
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          PP_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          PP_PATH="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          # Install certificate
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$P12_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$P12_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$P12_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          # Install provisioning profile
+          mkdir -p "$PP_PATH"
+          PP_FILE=$(echo -n "$PP_BASE64" | base64 --decode -o "$RUNNER_TEMP/profile.mobileprovision" && echo "$RUNNER_TEMP/profile.mobileprovision")
+          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PP_FILE")")
+          PP_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< "$(security cms -D -i "$PP_FILE")")
+          cp "$PP_FILE" "$PP_PATH/$PP_UUID.mobileprovision"
+          echo "Installed profile: $PP_NAME ($PP_UUID)"
+
+          # Save for later steps
+          echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
+          echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
+
+      - name: Show version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == v* ]]; then
+              VERSION="${REF#v}"
+            fi
+          fi
+          echo "Version: ${VERSION}"
+          grep '^version:' pubspec.yaml
+          # Version numbers are synced by pre-push hook; no CI bump
+
+      - name: Install iOS dependencies
+        run: |
+          cd ios
+          pod install || true
+
+      - name: Build IPA
+        shell: bash
+        run: |
+          # Override Xcode project to Manual signing
+          PBX=ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";/g' "$PBX"
+          # Set provisioning profile UUID
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \"\";/PROVISIONING_PROFILE_SPECIFIER = \"${PP_UUID}\";/g" "$PBX" || true
+          # Add PROVISIONING_PROFILE_SPECIFIER if not present
+          grep -q "PROVISIONING_PROFILE_SPECIFIER" "$PBX" || \
+            sed -i '' 's/DEVELOPMENT_TEAM = EGZFS7M525;/DEVELOPMENT_TEAM = EGZFS7M525; PROVISIONING_PROFILE_SPECIFIER = "'"$PP_UUID"'";/g' "$PBX"
+
+          # Create ExportOptions.plist
+          cat > ios/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>EGZFS7M525</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>gg.ai.ggcode.mobile</key>
+              <string>${PP_NAME}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+
+      - name: Upload to TestFlight & promote
+        run: |
+          cd ios
+          bundle install --jobs 4 --retry 3
+          bundle exec fastlane deploy_external
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+

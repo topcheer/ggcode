@@ -1,0 +1,113 @@
+package agentruntime
+
+import (
+	"context"
+	"path/filepath"
+
+	"github.com/topcheer/ggcode/internal/acpclient"
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/tool"
+)
+
+func NewWorkspaceCronScheduler(workingDir string, enqueue func(string)) *cron.Scheduler {
+	storePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
+	scheduler := cron.NewScheduler(enqueue, storePath)
+	scheduler.Load(workingDir)
+	return scheduler
+}
+
+func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {
+	if registry == nil || scheduler == nil {
+		return
+	}
+	_ = registry.Register(tool.CronCreateTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronDeleteTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronListTool{Scheduler: scheduler})
+}
+
+func NewACPClientManager(
+	workingDir string,
+	policy permission.PermissionPolicy,
+	approvalHandler func(context.Context, string, string) permission.Decision,
+) *acpclient.ClientManager {
+	mgr := acpclient.NewClientManager(workingDir, policy)
+	if approvalHandler != nil {
+		mgr.SetApprovalHandler(approvalHandler)
+	}
+	return mgr
+}
+
+func RegisterDelegateTool(
+	registry *tool.Registry,
+	mgr *acpclient.ClientManager,
+	subMgrFn func() *subagent.Manager,
+	workingDir string,
+	workingDirFn func() string,
+) {
+	if registry == nil || mgr == nil || len(mgr.Available()) == 0 {
+		return
+	}
+	_ = registry.Register(tool.DelegateTool{
+		Manager:           mgr,
+		SubAgentManagerFn: subMgrFn,
+		WorkingDir:        workingDir,
+		WorkingDirFn:      workingDirFn,
+	})
+}
+
+func NewSubAgentManager(
+	subCfg config.SubAgentConfig,
+	registry *tool.Registry,
+	prov provider.Provider,
+	workingDir string,
+	onUsage func(provider.TokenUsage),
+	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
+) *subagent.Manager {
+	mgr := subagent.NewManager(subCfg)
+	if registry == nil || prov == nil || agentFactory == nil {
+		return mgr
+	}
+	_ = registry.Register(tool.SpawnAgentTool{
+		Manager:      mgr,
+		Provider:     prov,
+		Tools:        registry,
+		AgentFactory: agentFactory,
+		WorkingDir:   workingDir,
+		OnUsage:      onUsage,
+	})
+	_ = registry.Register(tool.WaitAgentTool{Manager: mgr})
+	_ = registry.Register(tool.ListAgentsTool{Manager: mgr})
+	return mgr
+}
+
+func NewSwarmManager(
+	cfg config.SwarmConfig,
+	prov provider.Provider,
+	registry *tool.Registry,
+	onUsage func(provider.TokenUsage),
+	factory func(provider.Provider, interface{}, string, int) swarm.AgentRunner,
+	toolBuilder func([]string) interface{},
+) *swarm.Manager {
+	mgr := swarm.NewManager(cfg, prov, factory, toolBuilder)
+	if onUsage != nil {
+		mgr.SetUsageHandler(onUsage)
+	}
+	if registry != nil {
+		_ = registry.Register(tool.TeamCreateTool{Manager: mgr})
+		_ = registry.Register(tool.TeamDeleteTool{Manager: mgr})
+		_ = registry.Register(tool.TeammateSpawnTool{Manager: mgr})
+		_ = registry.Register(tool.TeammateListTool{Manager: mgr})
+		_ = registry.Register(tool.TeammateShutdownTool{Manager: mgr})
+		_ = registry.Register(tool.TeammateResultsTool{Manager: mgr})
+		_ = registry.Register(tool.SwarmTaskCreateTool{Manager: mgr})
+		_ = registry.Register(tool.SwarmTaskListTool{Manager: mgr})
+		_ = registry.Register(tool.SwarmTaskClaimTool{Manager: mgr})
+		_ = registry.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
+	}
+	return mgr
+}

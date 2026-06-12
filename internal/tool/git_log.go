@@ -1,0 +1,75 @@
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// GitLog implements the git_log tool.
+type GitLog struct{ WorkingDir string }
+
+func (t GitLog) Name() string { return "git_log" }
+
+func (t GitLog) Description() string {
+	return "Show git commit history in oneline format. Read-only inspection tool; use it to understand recent changes before editing, debugging, or preparing a commit."
+}
+
+func (t GitLog) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"count": {
+			"type": "integer",
+			"description": "Number of commits to show (default: 10)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
+}
+
+func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		Path  string `json:"path"`
+		Count int    `json:"count"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if args.Count <= 0 || args.Count > 100 {
+		args.Count = 10
+	}
+
+	cmd := gitCommand(ctx, "log", "--oneline", "-"+strconv.Itoa(args.Count))
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("git log failed: %v\n%s", err, out)}, nil
+	}
+
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return Result{Content: "No commits found."}, nil
+	}
+
+	return Result{Content: trimmed}, nil
+}
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitLog) Clone() Tool {
+	return &GitLog{WorkingDir: t.WorkingDir}
+}

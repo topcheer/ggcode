@@ -1,0 +1,762 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: "Version label for manual packaging runs"
+        required: false
+        default: "v0.0.0"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify release inputs
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go build -tags goolm -o /tmp/ggcode-release ./cmd/ggcode
+      - run: go test -tags goolm -timeout 5m $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)
+      - run: go vet -tags goolm $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)
+
+  release:
+    name: Build & Release
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: ubuntu-latest
+    needs: verify
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions
+          df -h /
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+          version: latest
+      - name: Validate GoReleaser config
+        run: goreleaser check || true
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - name: Render release notes
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          chmod +x ./scripts/release/render-notes.sh
+          ./scripts/release/render-notes.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" > /tmp/release-notes.md
+      - name: Apply release notes
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md
+      - name: Upload GoReleaser dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist/
+
+
+
+  release-macos-pkg:
+    name: Build macOS pkg
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: macos-latest
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build macOS installer package
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-macos-pkg.sh
+          ./scripts/release/build-macos-pkg.sh "${GGCODE_VERSION}" dist
+      - name: Upload macOS package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist/*.pkg
+
+  release-windows-msi:
+    name: Build Windows msi
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: windows-latest
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          wix --version
+      - name: Capture build date
+        shell: pwsh
+        run: |
+          $date = git show -s --format=%cI $env:GITHUB_SHA
+          Add-Content -Path $env:GITHUB_ENV -Value "GGCODE_DATE=$date"
+      - name: Build Windows MSI packages
+        shell: pwsh
+        run: .\scripts\release\build-windows-msi.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload Windows MSI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: dist/*.msi
+
+  build-desktop-darwin:
+    name: Build desktop macOS
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: macos-latest
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Prepare Apple signing credentials
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [[ -n "${APPLE_DEVELOPER_ID_P12}" && -n "${APPLE_API_KEY_P8}" ]]; then
+            echo "APPLE_SIGN_IDENTITY=Developer ID Application: Junjun Zhang (EGZFS7M525)" >> "${GITHUB_ENV}"
+            P12_FILE="${RUNNER_TEMP}/cert.p12"
+            printf '%s' "${APPLE_DEVELOPER_ID_P12}" | base64 -d > "${P12_FILE}"
+            echo "APPLE_DEVELOPER_ID_P12_PATH=${P12_FILE}" >> "${GITHUB_ENV}"
+            printf '%s\n' "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
+
+            KEY_FILE="${RUNNER_TEMP}/AuthKey.p8"
+            printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > "${KEY_FILE}"
+            echo "APPLE_API_KEY_PATH=${KEY_FILE}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_KEY_ID=${APPLE_API_KEY_ID}" >> "${GITHUB_ENV}"
+            echo "APPLE_API_ISSUER_ID=${APPLE_API_ISSUER_ID}" >> "${GITHUB_ENV}"
+            echo "Apple signing credentials prepared"
+          else
+            echo "No Apple signing credentials found — building unsigned"
+          fi
+      - name: Build desktop macOS DMG
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-darwin.sh
+          ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin
+          path: |
+            dist/*.dmg
+            dist/ggcode-desktop_*_darwin_*
+
+  build-desktop-windows:
+    name: Build desktop Windows
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: windows-latest
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install GCC (MinGW)
+        shell: pwsh
+        run: choco install mingw --yes
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          wix --version
+      - name: Install Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Capture build date
+        shell: pwsh
+        run: |
+          $date = git show -s --format=%cI $env:GITHUB_SHA
+          Add-Content -Path $env:GITHUB_ENV -Value "GGCODE_DATE=$date"
+      - name: Build desktop Windows
+        shell: pwsh
+        run: |
+          .\scripts\release\build-desktop-windows.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload desktop Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/ggcode-desktop_*
+
+  build-desktop-linux-amd64:
+    name: Build desktop Linux amd64
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: ubuntu-22.04
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick libgtk-3-dev libwebkit2gtk-4.0-dev patchelf squashfs-tools desktop-file-utils
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build desktop Linux
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-linux.sh
+          ./scripts/release/build-desktop-linux.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-amd64
+          path: dist/ggcode-desktop_*
+
+  build-desktop-linux-arm64:
+    name: Build desktop Linux arm64
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || needs.verify.result == 'success') }}
+    runs-on: ubuntu-22.04-arm
+    needs:
+      - verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+      TARGET_ARCH: arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick libgtk-3-dev libwebkit2gtk-4.0-dev patchelf squashfs-tools desktop-file-utils
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build desktop Linux
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-linux.sh
+          ./scripts/release/build-desktop-linux.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: dist/ggcode-desktop_*
+
+  upload-release-assets:
+    name: Upload release assets
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - release-macos-pkg
+      - release-windows-msi
+      - build-desktop-darwin
+      - build-desktop-windows
+      - build-desktop-linux-amd64
+      - build-desktop-linux-arm64
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist/macos-pkg
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: dist/windows-msi
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist/desktop-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/desktop-windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-amd64
+          path: dist/desktop-linux-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: dist/desktop-linux-arm64
+      - name: Upload all extra assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Upload each asset group separately so one failure doesn't block others
+          for pattern in \
+            "dist/macos-pkg/*.pkg" \
+            "dist/windows-msi/*.msi" \
+            "dist/desktop-darwin/*.dmg" \
+            "dist/desktop-darwin/ggcode-desktop_*_darwin_*" \
+            "dist/desktop-windows/*" \
+            "dist/desktop-linux-amd64/ggcode-desktop_*" \
+            "dist/desktop-linux-arm64/ggcode-desktop_*"; do
+            files=( $pattern )
+            if [ ${#files[@]} -gt 0 ] && [ -e "${files[0]}" ]; then
+              echo "Uploading: $pattern (${#files[@]} file(s))"
+              gh release upload "${GITHUB_REF_NAME}" $pattern --clobber || echo "WARN: failed to upload $pattern"
+            else
+              echo "SKIP: no files matching $pattern"
+            fi
+          done
+
+  publish-winget:
+    name: Publish desktop to winget
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    needs:
+      - upload-release-assets
+    permissions:
+      contents: read
+    env:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+      WINGET_PACKAGE_ID: gg.ai.ggcode-desktop
+    steps:
+      - uses: actions/checkout@v6
+      - name: Submit or skip winget update
+        shell: pwsh
+        run: |
+          if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN not configured; skipping winget submission."
+            exit 0
+          }
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ggcode-desktop_${packageVersion}_windows_x64.msi"
+          .\scripts\release\publish-winget.ps1 `
+            -PackageId $env:WINGET_PACKAGE_ID `
+            -Version "${{ github.ref_name }}" `
+            -InstallerUrl $installerUrl `
+            -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
+
+  publish-winget-cli:
+    name: Publish CLI to winget
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    needs:
+      - upload-release-assets
+    permissions:
+      contents: read
+    env:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+      WINGET_PACKAGE_ID: gg.ai.ggcode-cli
+    steps:
+      - uses: actions/checkout@v6
+      - name: Submit or skip winget update
+        shell: pwsh
+        run: |
+          if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN not configured; skipping winget submission."
+            exit 0
+          }
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          $installerUrlX64 = "${baseUrl}/ggcode_${packageVersion}_windows_x64.msi"
+          $installerUrlArm64 = "${baseUrl}/ggcode_${packageVersion}_windows_arm64.msi"
+          .\scripts\release\publish-winget.ps1 `
+            -PackageId $env:WINGET_PACKAGE_ID `
+            -Version "${{ github.ref_name }}" `
+            -InstallerUrl "${installerUrlX64}" `
+            -InstallerUrlArm64 "${installerUrlArm64}" `
+            -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
+
+  publish-homebrew-desktop:
+    name: Publish desktop to Homebrew Cask
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - upload-release-assets
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    steps:
+      - name: Update Cask in homebrew-ggcode tap
+        shell: bash
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured; skipping homebrew cask update."
+            exit 0
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="$GITHUB_REF_NAME"
+          TAP_REPO="topcheer/homebrew-ggcode"
+          CASK_PATH="Casks/ggcode-desktop.rb"
+          API="https://api.github.com/repos/$TAP_REPO/contents/$CASK_PATH"
+
+          # Download DMG and compute SHA256
+          DMG_URL="https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_darwin_universal.dmg"
+          DMG_SHA256=$(curl -sL "$DMG_URL" | sha256sum | awk '{print $1}')
+
+          if [ -z "$DMG_SHA256" ]; then
+            echo "ERROR: Failed to download DMG or compute SHA256"
+            exit 1
+          fi
+
+          echo "DMG SHA256: $DMG_SHA256"
+
+          # Build Cask content
+          CASK=$(cat <<CASKFILE
+          # This file is auto-generated. DO NOT EDIT.
+          cask "ggcode-desktop" do
+            version "${VERSION}"
+
+            url "https://github.com/${REPO}/releases/download/v#{version}/ggcode-desktop_#{version}_darwin_universal.dmg"
+            sha256 "${DMG_SHA256}"
+
+            name "GGCode Desktop"
+            desc "AI coding agent with a native desktop interface."
+            homepage "https://github.com/${REPO}"
+
+            depends_on macos: :ventura
+
+            app "GGCode-Desktop.app"
+
+            zap trash: [
+              "~/Library/Application Support/ggcode-desktop",
+              "~/Library/Caches/ggcode-desktop",
+              "~/Library/Preferences/com.ggcode.desktop.plist",
+            ]
+          end
+          CASKFILE
+          )
+
+          # Get current file SHA (for update)
+          FILE_SHA=$(curl -s -H "Authorization: token $HOMEBREW_TAP_TOKEN" "$API" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha',''))")
+
+          # Push updated Cask
+          PAYLOAD=$(python3 -c "
+          import json, base64
+          content = base64.b64encode(open('/dev/stdin','rb').read()).decode()
+          payload = {
+            'message': 'Update ggcode-desktop Cask to v${VERSION}',
+            'content': content,
+            'branch': 'main'
+          }
+          if '${FILE_SHA}':
+            payload['sha'] = '${FILE_SHA}'
+          print(json.dumps(payload))
+          " <<< "$CASK")
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$API")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "GitHub API response: HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Cask updated successfully to v${VERSION}"
+          else
+            echo "ERROR: Failed to update Cask"
+            echo "$RESPONSE" | head -20
+            exit 1
+          fi
+
+      - name: Update desktop Formula (macOS + Linux)
+        shell: bash
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured; skipping desktop Formula update."
+            exit 0
+          fi
+
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="$GITHUB_REF_NAME"
+          TAP_REPO="topcheer/homebrew-ggcode"
+          FORMULA_PATH="Formula/ggcode-desktop.rb"
+          API="https://api.github.com/repos/$TAP_REPO/contents/$FORMULA_PATH"
+
+          # Download and compute SHA256 for each platform
+          echo "Computing SHA256 for desktop binaries..."
+          MACOS_ARM64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_darwin_arm64" | sha256sum | awk '{print $1}')
+          MACOS_AMD64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_darwin_amd64" | sha256sum | awk '{print $1}')
+          LINUX_ARM64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_arm64" | sha256sum | awk '{print $1}')
+          LINUX_AMD64_SHA=$(curl -sL "https://github.com/$REPO/releases/download/$TAG/ggcode-desktop_${VERSION}_linux_amd64" | sha256sum | awk '{print $1}')
+
+          echo "darwin_arm64:  $MACOS_ARM64_SHA"
+          echo "darwin_amd64:  $MACOS_AMD64_SHA"
+          echo "linux_arm64:   $LINUX_ARM64_SHA"
+          echo "linux_amd64:   $LINUX_AMD64_SHA"
+
+          FORMULA=$(cat <<'FORMULAFILE'
+          # This file is auto-generated. DO NOT EDIT.
+          class GgcodeDesktop < Formula
+            desc "AI coding agent with a native desktop interface."
+            homepage "https://github.com/topcheer/ggcode"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
+
+            on_macos do
+              on_intel do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_darwin_amd64"
+                sha256 "MACOS_AMD64_SHA_PLACEHOLDER"
+              end
+              on_arm do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_darwin_arm64"
+                sha256 "MACOS_ARM64_SHA_PLACEHOLDER"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_linux_amd64"
+                sha256 "LINUX_AMD64_SHA_PLACEHOLDER"
+              end
+              on_arm do
+                url "https://github.com/topcheer/ggcode/releases/download/v#{version}/ggcode-desktop_#{version}_linux_arm64"
+                sha256 "LINUX_ARM64_SHA_PLACEHOLDER"
+              end
+            end
+
+            def install
+              bin.install Dir["ggcode-desktop_*"].first => "ggcode-desktop"
+            end
+          end
+          FORMULAFILE
+          )
+
+          # Replace placeholders
+          FORMULA="${FORMULA//VERSION_PLACEHOLDER/$VERSION}"
+          FORMULA="${FORMULA//MACOS_AMD64_SHA_PLACEHOLDER/$MACOS_AMD64_SHA}"
+          FORMULA="${FORMULA//MACOS_ARM64_SHA_PLACEHOLDER/$MACOS_ARM64_SHA}"
+          FORMULA="${FORMULA//LINUX_AMD64_SHA_PLACEHOLDER/$LINUX_AMD64_SHA}"
+          FORMULA="${FORMULA//LINUX_ARM64_SHA_PLACEHOLDER/$LINUX_ARM64_SHA}"
+
+          # Get current file SHA (for update)
+          FILE_SHA=$(curl -s -H "Authorization: token $HOMEBREW_TAP_TOKEN" "$API" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha','') if isinstance(d, dict) and 'sha' in d else '')")
+
+          PAYLOAD=$(python3 -c "
+          import json, base64
+          content = base64.b64encode(open('/dev/stdin','rb').read()).decode()
+          payload = {
+            'message': 'Update ggcode-desktop Formula to v${VERSION}',
+            'content': content,
+            'branch': 'main'
+          }
+          if '${FILE_SHA}':
+            payload['sha'] = '${FILE_SHA}'
+          print(json.dumps(payload))
+          " <<< "$FORMULA")
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$API")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          echo "GitHub API response: HTTP $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Desktop Formula updated successfully to v${VERSION}"
+          else
+            echo "ERROR: Failed to update desktop Formula"
+            echo "$RESPONSE" | head -20
+            exit 1
+          fi
+
+  publish-site-release-branch:
+    name: Publish site release branch
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - upload-release-assets
+      - publish-winget
+      - publish-winget-cli
+    permissions:
+      contents: write
+    env:
+      TARGET_BRANCH: copilot/site-release-update
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist-site/macos-pkg
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: dist-site/windows-msi
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist-site/desktop-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist-site/desktop-windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-amd64
+          path: dist-site/desktop-linux-amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-arm64
+          path: dist-site/desktop-linux-arm64
+      - name: Publish release assets into deployment branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/publish-site-branch.sh
+          ./scripts/release/publish-site-branch.sh \
+            --target-branch "${TARGET_BRANCH}" \
+            --asset-dir dist \
+            --asset-dir dist-site/macos-pkg \
+            --asset-dir dist-site/windows-msi \
+            --asset-dir dist-site/desktop-darwin \
+            --asset-dir dist-site/desktop-windows \
+            --asset-dir dist-site/desktop-linux-amd64 \
+            --asset-dir dist-site/desktop-linux-arm64 \
+            --source-label "${GITHUB_REF_NAME}"

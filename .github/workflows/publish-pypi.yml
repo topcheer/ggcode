@@ -1,0 +1,71 @@
+name: Publish PyPI
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish Python wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check PyPI release version
+        id: release
+        run: |
+          python3 <<'PY'
+          import os
+          import tomllib
+          import urllib.error
+          import urllib.request
+
+          with open("python/pyproject.toml", "rb") as fh:
+              version = tomllib.load(fh)["project"]["version"]
+
+          if version.startswith("0.0.0"):
+              publish = "false"
+              print(f"ggcode {version} is a development placeholder; skipping publish.")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write(f"version={version}\n")
+                  fh.write(f"publish={publish}\n")
+              raise SystemExit(0)
+
+          url = f"https://pypi.org/pypi/ggcode/{version}/json"
+
+          try:
+              with urllib.request.urlopen(url) as response:
+                  response.read()
+              publish = "false"
+              print(f"ggcode {version} already exists on PyPI; skipping publish.")
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              publish = "true"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+              fh.write(f"publish={publish}\n")
+          PY
+      - name: Install build tooling
+        if: steps.release.outputs.publish == 'true'
+        run: python3 -m pip install --upgrade build
+      - name: Build Python package
+        if: steps.release.outputs.publish == 'true'
+        working-directory: python
+        run: python3 -m build
+      - name: Publish to PyPI
+        if: steps.release.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist

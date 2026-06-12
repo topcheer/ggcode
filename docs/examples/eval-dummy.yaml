@@ -1,0 +1,29 @@
+# Example configuration for Knight evaluation using the dummy IM adapter.
+# Usage: Copy to .ggcode/config.yaml and run: ggcode daemon
+
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
+
+knight:
+  enabled: true
+  trust_level: staged
+  model: glm-5-air
+  idle_delay_sec: 60
+  capabilities:
+    - skill_creation
+    - skill_validation
+    - regression_testing
+    - doc_sync
+
+im:
+  enabled: true
+  adapters:
+    dummy:
+      enabled: true
+      platform: dummy
+      extra:
+        listen_addr: "127.0.0.1:0"
+        metrics_path: ".tmp/knight-eval/metrics.json"
+        sse_buffer_size: "1024"
+        port_file: ".tmp/dummy-adapter-port"

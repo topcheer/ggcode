@@ -1,0 +1,73 @@
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// SleepTool pauses execution for a specified duration.
+type SleepTool struct{}
+
+func (t SleepTool) Name() string { return "sleep" }
+func (t SleepTool) Description() string {
+	return "Sleep for a specified duration (maximum 30 minutes). Use when waiting for time to pass, such as checking back later or giving an external system time to update. Prefer wait_command/read_command_output when you have a background job ID, and prefer sleep over run_command for plain delays."
+}
+func (t SleepTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+			"seconds": {
+				"type": "integer",
+				"description": "Seconds to sleep (combined with milliseconds). Total duration must not exceed 30 minutes."
+			},
+			"milliseconds": {
+				"type": "integer",
+				"description": "Additional milliseconds to sleep (combined with seconds). Total duration must not exceed 30 minutes."
+			},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"seconds",
+		"description"
+	]
+}`)
+}
+func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		Seconds      int `json:"seconds"`
+		Milliseconds int `json:"milliseconds"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if args.Seconds < 0 {
+		return Result{IsError: true, Content: "seconds must be non-negative"}, nil
+	}
+	if args.Milliseconds < 0 {
+		return Result{IsError: true, Content: "milliseconds must be non-negative"}, nil
+	}
+
+	d := time.Duration(args.Seconds)*time.Second + time.Duration(args.Milliseconds)*time.Millisecond
+	if d <= 0 {
+		return Result{Content: "Slept for 0s"}, nil
+	}
+	if d > 30*time.Minute {
+		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %s exceeds maximum of 30m", d)}, nil
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return Result{Content: fmt.Sprintf("Sleep for %s ... Done", d)}, nil
+	case <-ctx.Done():
+		return Result{Content: fmt.Sprintf("Sleep interrupted after context cancellation")}, ctx.Err()
+	}
+}

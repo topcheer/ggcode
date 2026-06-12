@@ -1,0 +1,75 @@
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// GitBranchList implements the git_branch_list tool.
+type GitBranchList struct{ WorkingDir string }
+
+func (t GitBranchList) Name() string { return "git_branch_list" }
+
+func (t GitBranchList) Description() string {
+	return "List local Git branches in a repository. Read-only inspection tool; set remote=true to show remote-tracking branches. Use this before branch-sensitive work or when checking whether you are on the expected branch."
+}
+
+func (t GitBranchList) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"remote": {
+			"type": "boolean",
+			"description": "Show remote-tracking branches (default: false, local only)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
+}
+
+func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		Path   string `json:"path"`
+		Remote bool   `json:"remote"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	gitArgs := []string{"branch", "--list"}
+	if args.Remote {
+		gitArgs = []string{"branch", "--list", "--remotes"}
+	}
+
+	cmd := gitCommand(ctx, gitArgs...)
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("git branch failed: %v\n%s", err, out)}, nil
+	}
+
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return Result{Content: "No branches found."}, nil
+	}
+
+	return Result{Content: trimmed}, nil
+}
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitBranchList) Clone() Tool {
+	return &GitBranchList{WorkingDir: t.WorkingDir}
+}

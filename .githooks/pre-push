@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${GGCODE_SKIP_CI_HOOK:-0}" == "1" ]]; then
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+# Check gofmt cleanliness
+unformatted=$(gofmt -l .)
+if [[ -n "${unformatted}" ]]; then
+  echo "[pre-push] ERROR: unformatted files:"
+  echo "${unformatted}"
+  echo "Run: gofmt -w <files>"
+  exit 1
+fi
+
+echo "[pre-push] running go vet"
+go vet -tags goolm ./...
+
+echo "[pre-push] running go build"
+CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode
+
+echo "[pre-push] checks passed"

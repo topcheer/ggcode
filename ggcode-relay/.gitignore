@@ -1,0 +1,5 @@
+/relay
+*.exe
+relay.db
+relay.db-*
+ggcode-relay

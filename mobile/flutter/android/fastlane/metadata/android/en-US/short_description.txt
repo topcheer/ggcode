@@ -1,0 +1,1 @@
+Remote control for GGCode AI coding agent — chat & review on the go.

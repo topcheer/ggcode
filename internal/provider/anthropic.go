@@ -1,0 +1,458 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+)
+
+// AnthropicProvider implements Provider using the Anthropic SDK.
+type AnthropicProvider struct {
+	client    anthropic.Client
+	model     string
+	maxTokens int
+	cap       *adaptiveCap
+}
+
+// SetAdaptiveCap installs the adaptive max-output-tokens cap.
+func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+// probeChat sends a single messages request without retry or adaptive
+// cap tracking. Used by context window probing.
+func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
+	params := p.buildParams(messages, nil)
+	_, err := p.client.Messages.New(ctx, params)
+	return err
+}
+
+func (p *AnthropicProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
+}
+
+// NewAnthropicProvider creates a new Anthropic provider.
+func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
+	opts := anthropicProviderOptions(apiKey, "")
+	client := anthropic.NewClient(opts...)
+	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d", model, maxTokens)
+	return &AnthropicProvider{
+		client:    client,
+		model:     model,
+		maxTokens: maxTokens,
+	}
+}
+
+// NewAnthropicProviderWithBaseURL creates a new Anthropic provider with a custom base URL.
+func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *AnthropicProvider {
+	opts := anthropicProviderOptions(apiKey, baseURL)
+	client := anthropic.NewClient(opts...)
+	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
+	return &AnthropicProvider{
+		client:    client,
+		model:     model,
+		maxTokens: maxTokens,
+	}
+}
+
+func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
+	opts := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(0), // retry handled by our outer loop, not SDK
+	}
+	// Inject identity headers from impersonation state or protocol defaults.
+	headers := BuildHeadersForProvider("anthropic")
+	for key, values := range vendorSpecificAuthHeaders(baseURL, apiKey) {
+		for _, value := range values {
+			opts = append(opts, option.WithHeader(key, value))
+		}
+	}
+	for k, vals := range headers {
+		for _, v := range vals {
+			opts = append(opts, option.WithHeader(k, v))
+		}
+	}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	return opts
+}
+
+func (p *AnthropicProvider) Name() string {
+	return "anthropic"
+}
+
+func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
+	params := p.buildParams(messages, tools)
+
+	resp, err := p.client.Messages.New(ctx, params)
+	if err != nil {
+		if rejected, parsed := maxTokensRejection(err); rejected {
+			p.cap.OnRejected(parsed)
+		}
+		return nil, err
+	}
+	if string(resp.StopReason) == "max_tokens" {
+		p.cap.OnTruncated()
+	}
+
+	msg := convertAnthropicResponse(resp.Content)
+	usage := anthropicUsage(resp.Usage)
+
+	return &ChatResponse{
+		Message: Message{Role: "assistant", Content: msg},
+		Usage:   usage,
+	}, nil
+}
+
+func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
+	params := p.buildParams(messages, tools)
+
+	ch := make(chan StreamEvent, 64)
+
+	safego.Go("provider.anthropic.streamRead", func() {
+		defer close(ch)
+
+		var usage *TokenUsage
+		var outputChars int
+
+		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			if attempt > 0 {
+				debug.Log("anthropic", "Stream retry attempt %d", attempt)
+			}
+
+			toolCalls := make(map[int]*ToolCallDelta)
+			var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
+			emitted := false
+			retry := false
+
+			func() {
+				stream := p.client.Messages.NewStreaming(ctx, params)
+				defer func() {
+					// The Anthropic SDK stream doesn't expose a Close method;
+					// it drains automatically when the loop exits.
+					_ = stream
+				}()
+
+				for stream.Next() {
+					event := stream.Current()
+
+					switch event.Type {
+					case "content_block_start":
+						cb := event.ContentBlock
+						switch cb.Type {
+						case "tool_use":
+							idx := int(event.Index)
+							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
+							toolCalls[idx] = tc
+							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
+						case "thinking":
+							debug.Log("anthropic", "content_block_start thinking idx=%d sig_len=%d", event.Index, len(cb.Signature))
+							toolCalls[int(event.Index)] = &ToolCallDelta{
+								Index: int(event.Index),
+								ID:    cb.Signature, // carries signature for echo-back
+							}
+							// Emit reasoning event with signature so agent can store it
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: cb.Signature}
+						case "redacted_thinking":
+							debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
+							toolCalls[int(event.Index)] = &ToolCallDelta{
+								Index: int(event.Index),
+								Name:  "__redacted_thinking__", // sentinel
+								ID:    cb.Data,                 // carries redacted data for echo-back
+							}
+							// Emit reasoning event with redacted data for echo-back
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, Text: "__redacted_thinking__", ThinkingSignature: cb.Data}
+						}
+
+					case "content_block_delta":
+						delta := event.Delta
+						switch delta.Type {
+						case "text_delta":
+							debug.Log("anthropic", "chunk text=%q", delta.Text)
+							outputChars += len(delta.Text)
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventText, Text: delta.Text}
+						case "input_json_delta":
+							tc, ok := toolCalls[int(event.Index)]
+							if !ok {
+								tc = &ToolCallDelta{Index: int(event.Index)}
+								toolCalls[int(event.Index)] = tc
+							}
+							tc.Arguments = append(tc.Arguments, delta.PartialJSON...)
+						case "thinking_delta":
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.Thinking}
+						}
+
+					case "content_block_stop":
+						idx := int(event.Index)
+						if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
+							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+							outputChars += len(tc.Name) + len(tc.Arguments)
+							emitted = true
+							ch <- StreamEvent{
+								Type: StreamEventToolCallDone,
+								Tool: *tc,
+							}
+							delete(toolCalls, idx)
+						}
+
+					case "message_delta":
+						outputTokens = int(event.Usage.OutputTokens)
+						inputTokens = int(event.Usage.InputTokens)
+						cacheWriteTokens = int(event.Usage.CacheCreationInputTokens)
+						cacheReadTokens = int(event.Usage.CacheReadInputTokens)
+						// Check stop_reason for truncation / policy errors.
+						if stopReason := string(event.Delta.StopReason); stopReason != "" {
+							debug.Log("anthropic", "stop_reason=%s", stopReason)
+							if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
+								if stopReason == "max_tokens" {
+									p.cap.OnTruncated()
+								}
+								ch <- StreamEvent{Type: StreamEventError, Error: stopErr}
+								return
+							}
+						}
+
+					case "message_start":
+						inputTokens = int(event.Message.Usage.InputTokens)
+						cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
+						cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
+					}
+				}
+
+				if err := stream.Err(); err != nil {
+					debug.Log("anthropic", "Stream ERROR: %v", err)
+					if rejected, parsed := maxTokensRejection(err); rejected {
+						p.cap.OnRejected(parsed)
+					}
+					// Retry if no content has been emitted yet and the error is retryable.
+					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
+						// Notify user about retry
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
+						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							return
+						}
+						retry = true
+						return
+					}
+					ch <- StreamEvent{Type: StreamEventError, Error: err}
+					return
+				}
+			}()
+
+			if retry {
+				continue
+			}
+
+			// Stream completed successfully.
+			usage = &TokenUsage{
+				InputTokens:       inputTokens,
+				OutputTokens:      outputTokens,
+				CacheRead:         cacheReadTokens,
+				CacheWrite:        cacheWriteTokens,
+				PromptTokensTotal: inputTokens + cacheReadTokens + cacheWriteTokens,
+			}
+			debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d", usage.InputTokens, usage.OutputTokens, usage.CacheRead, usage.CacheWrite)
+			break
+		}
+
+		// If the loop exited without a successful stream (all retries exhausted),
+		// report the failure instead of sending a Done event with empty usage.
+		if usage == nil && outputChars == 0 {
+			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("anthropic stream: %d retry attempts exhausted", providerRetryAttempts)}
+			return
+		}
+
+		if usage == nil {
+			usage = &TokenUsage{
+				OutputTokens: estimateTokensFromChars(outputChars),
+			}
+		}
+		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+	})
+
+	return ch, nil
+}
+
+func anthropicUsage(usage anthropic.Usage) TokenUsage {
+	return TokenUsage{
+		InputTokens:       int(usage.InputTokens),
+		OutputTokens:      int(usage.OutputTokens),
+		CacheRead:         int(usage.CacheReadInputTokens),
+		CacheWrite:        int(usage.CacheCreationInputTokens),
+		PromptTokensTotal: int(usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens),
+	}
+}
+
+func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
+	return estimateTokensForMessages(messages), nil
+}
+
+func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
+	var msgParams []anthropic.MessageParam
+	// Collect system messages to embed into first user message (zai Anthropic rejects 'system' role)
+	var systemTexts []string
+	for _, m := range messages {
+		if m.Role == "system" {
+			for _, b := range m.Content {
+				if b.Type == "text" {
+					systemTexts = append(systemTexts, b.Text)
+				}
+			}
+			continue
+		}
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
+		for _, b := range m.Content {
+			switch b.Type {
+			case "text":
+				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+			case "image":
+				blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
+			case "tool_use":
+				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
+			case "tool_result":
+				if len(b.Images) > 0 && !b.IsError {
+					var content []anthropic.ToolResultBlockParamContentUnion
+					for _, img := range b.Images {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfImage: &anthropic.ImageBlockParam{
+								Source: anthropic.ImageBlockParamSourceUnion{
+									OfBase64: &anthropic.Base64ImageSourceParam{
+										Data:      img.Base64,
+										MediaType: anthropic.Base64ImageSourceMediaType(img.MIME),
+									},
+								},
+							},
+						})
+					}
+					if b.Output != "" {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfText: &anthropic.TextBlockParam{Text: b.Output},
+						})
+					}
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfToolResult: &anthropic.ToolResultBlockParam{
+							ToolUseID: b.ToolID,
+							Content:   content,
+						},
+					})
+				} else {
+					blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
+				}
+			case "thinking":
+				// Anthropic extended thinking: must echo back with signature
+				if b.ThinkingSignature != "" {
+					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
+				}
+			case "redacted_thinking":
+				// Anthropic redacted thinking: must echo back with data
+				if b.ThinkingData != "" {
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
+				}
+			}
+		}
+		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
+		// Prepend system text into first user message
+		if m.Role == "user" && len(systemTexts) > 0 {
+			var sb strings.Builder
+			for i, st := range systemTexts {
+				if i > 0 {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(st)
+			}
+			systemTexts = nil
+			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+1)
+			newBlocks = append(newBlocks, anthropic.NewTextBlock("[System]\n"+sb.String()+"\n[End System]"))
+			newBlocks = append(newBlocks, blocks...)
+			param.Content = newBlocks
+		}
+		msgParams = append(msgParams, param)
+	}
+	params := anthropic.MessageNewParams{
+		Model:     p.model,
+		MaxTokens: int64(p.effectiveMaxTokens()),
+		Messages:  msgParams,
+	}
+
+	if len(tools) > 0 {
+		toolParams := make([]anthropic.ToolUnionParam, len(tools))
+		for i, t := range tools {
+			inputSchema := anthropic.ToolInputSchemaParam{
+				Type: "object",
+			}
+			if json.Unmarshal(t.Parameters, &inputSchema) == nil {
+				// populates Properties/Required/Type directly
+			}
+			desc := anthropic.String(t.Description)
+			toolParams[i] = anthropic.ToolUnionParamOfTool(inputSchema, t.Name)
+			if toolParams[i].OfTool != nil {
+				toolParams[i].OfTool.Description = desc
+			}
+		}
+		params.Tools = toolParams
+	}
+
+	// Dump full request JSON for debugging protocol violations.
+	// Covers both Chat() (e.g. summarization) and ChatStream() (normal flow).
+
+	return params
+}
+
+func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlock {
+	result := make([]ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			result = append(result, TextBlock(b.Text))
+		case "tool_use":
+			result = append(result, ToolUseBlock(b.ID, b.Name, b.Input))
+		case "thinking":
+			tb := b.AsThinking()
+			result = append(result, ContentBlock{
+				Type:              "thinking",
+				ReasoningContent:  tb.Thinking,
+				ThinkingSignature: tb.Signature,
+			})
+		case "redacted_thinking":
+			rb := b.AsRedactedThinking()
+			result = append(result, ContentBlock{
+				Type:         "redacted_thinking",
+				ThinkingData: rb.Data,
+			})
+		}
+	}
+	return result
+}
+
+// anthropicStopReasonError returns an error for stop reasons that indicate
+// truncation or policy issues. Returns nil for normal completion reasons.
+func anthropicStopReasonError(reason string) error {
+	switch reason {
+	case "end_turn", "tool_use", "stop_sequence", "pause_turn":
+		return nil
+	case "max_tokens":
+		return fmt.Errorf("anthropic stream ended with stop_reason=max_tokens (output truncated)")
+	case "refusal":
+		return fmt.Errorf("anthropic stream ended with stop_reason=refusal (content filtered)")
+	default:
+		return fmt.Errorf("anthropic stream ended with stop_reason=%s", reason)
+	}
+}

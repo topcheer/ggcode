@@ -1,0 +1,83 @@
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// GitAdd implements the git_add tool.
+type GitAdd struct {
+	WorkingDir string
+}
+
+func (t GitAdd) Name() string { return "git_add" }
+
+func (t GitAdd) Description() string {
+	return "Add file contents to the index (staging area). Stage only the intended files; avoid git_add files=[\".\"] unless the user explicitly wants all current changes staged."
+}
+
+func (t GitAdd) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"files": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "File paths to stage. Prefer explicit paths. Use [\".\"] only when the user explicitly wants all current changes staged."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"files",
+		"description"
+	]
+}`)
+}
+
+func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		Path  string   `json:"path"`
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if len(args.Files) == 0 {
+		return Result{IsError: true, Content: "files is required"}, nil
+	}
+
+	gitArgs := []string{"add", "--"}
+	gitArgs = append(gitArgs, args.Files...)
+
+	cmd := gitCommand(ctx, gitArgs...)
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("git add failed: %v\n%s", err, out)}, nil
+	}
+
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return Result{Content: fmt.Sprintf("Staged %d file(s).", len(args.Files))}, nil
+	}
+
+	return Result{Content: trimmed}, nil
+}
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitAdd) Clone() Tool {
+	return &GitAdd{WorkingDir: t.WorkingDir}
+}

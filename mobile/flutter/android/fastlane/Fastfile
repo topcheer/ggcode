@@ -1,0 +1,171 @@
+# Android Fastfile for GGCode Mobile
+default_platform(:android)
+
+def current_version_code
+  pubspec = File.expand_path("../../../pubspec.yaml", __FILE__)
+  content = File.read(pubspec)
+  if content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
+    $2.to_i
+  else
+    UI.user_error!("Cannot parse version from pubspec.yaml")
+  end
+end
+
+def play_credentials
+  # CI: use JSON from env var; local: use file from secrets/
+  if ENV["PLAY_STORE_SERVICE_ACCOUNT_JSON"]
+    { json_key_data: ENV["PLAY_STORE_SERVICE_ACCOUNT_JSON"] }
+  else
+    key_file = File.expand_path("../../secrets/playstore-service-account.json", __FILE__)
+    if File.exist?(key_file)
+      { json_key_file: key_file }
+    else
+      UI.user_error!("No Play Store credentials: set PLAY_STORE_SERVICE_ACCOUNT_JSON or place service account JSON in secrets/")
+    end
+  end
+end
+
+platform :android do
+  # ── Build ──────────────────────────────────────────────
+
+  desc "Build release AAB"
+  lane :build_aab do
+    sh("cd ../.. && flutter build appbundle --release")
+  end
+
+  desc "Build release APK"
+  lane :build_apk do
+    sh("cd ../.. && flutter build apk --release")
+  end
+
+  # ── Upload ─────────────────────────────────────────────
+
+  desc "Upload metadata + images only (no AAB)"
+  lane :upload_metadata do
+    upload_to_play_store(
+      **play_credentials,
+      package_name: "gg.ai.ggcode.mobile",
+      track: "internal",
+      skip_upload_metadata: false,
+      skip_upload_changelogs: true,
+      skip_upload_images: false,
+      skip_upload_screenshots: false,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
+  desc "Upload AAB to Internal Testing"
+  lane :upload_internal do
+    project_root = File.expand_path("../../..", __FILE__)
+    aab_path = File.join(project_root, "build/app/outputs/bundle/release/app-release.aab")
+    UI.user_error!("AAB not found at #{aab_path}") unless File.exist?(aab_path)
+
+    upload_to_play_store(
+      **play_credentials,
+      package_name: "gg.ai.ggcode.mobile",
+      aab: aab_path,
+      track: "internal",
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true
+    )
+  end
+
+  # ── Promote ─────────────────────────────────────────────
+
+  desc "Promote latest from internal to alpha (Closed Testing)"
+  lane :promote_alpha do
+    upload_to_play_store(
+      **play_credentials,
+      package_name: "gg.ai.ggcode.mobile",
+      track: "internal",
+      track_promote_to: "alpha",
+      version_code: current_version_code,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: false,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
+  desc "Promote latest from alpha to production"
+  lane :promote_production do
+    upload_to_play_store(
+      **play_credentials,
+      package_name: "gg.ai.ggcode.mobile",
+      track: "alpha",
+      track_promote_to: "production",
+      version_code: current_version_code,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: false,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
+  desc "Promote latest from alpha to beta (Open Testing)"
+  lane :promote_beta do
+    upload_to_play_store(
+      **play_credentials,
+      package_name: "gg.ai.ggcode.mobile",
+      track: "alpha",
+      track_promote_to: "beta",
+      version_code: current_version_code,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: false,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
+  # ── Full deploy pipelines ──────────────────────────────
+
+  desc "Build → Upload to Internal Testing → Wait → Promote to Closed Testing"
+  lane :deploy do
+    build_aab
+    upload_internal
+    UI.success("AAB uploaded to Internal Testing")
+
+    # Wait for Google Play to process
+    UI.message("Waiting 60s for Google Play to process the upload...")
+    sleep(60)
+
+    # Promote with retry
+    max_retries = 3
+    retry_count = 0
+
+    loop do
+      retry_count += 1
+      begin
+        promote_alpha
+        UI.success("Promoted to Closed Testing (alpha)")
+        break
+      rescue => e
+        if retry_count >= max_retries
+          UI.error("Failed to promote after #{max_retries} attempts: #{e.message}")
+          UI.error("You can manually promote from Google Play Console → Closed Testing.")
+          break
+        end
+        wait_secs = 30 * retry_count
+        UI.message("Promote failed (attempt #{retry_count}/#{max_retries}): #{e.message}")
+        UI.message("Retrying in #{wait_secs}s...")
+        sleep(wait_secs)
+      end
+    end
+  end
+
+  desc "Build → Upload to Internal Testing only (no promote)"
+  lane :deploy_internal do
+    build_aab
+    upload_internal
+  end
+end

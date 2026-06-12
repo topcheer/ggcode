@@ -1,0 +1,337 @@
+package tui
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// ============================================================
+// MouseWheelMsg → main conversation viewport
+// ============================================================
+
+func TestMouseWheelUpScrollsMainViewport(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	bottomOffset := m.chatList.YOffset()
+
+	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
+	m2 := model.(Model)
+
+	if m2.chatList.YOffset() >= bottomOffset {
+		t.Errorf("after MouseWheelUp: YOffset=%d, want < %d", m2.chatList.YOffset(), bottomOffset)
+	}
+}
+
+func TestMouseWheelDownFromScrolledPosition(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	m.chatList.ScrollUp(10)
+
+	offsetBeforeUpdate := m.chatList.YOffset()
+
+	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 10, Y: 10})
+	m2 := model.(Model)
+
+	if m2.chatList.YOffset() <= offsetBeforeUpdate {
+		t.Errorf("after MouseWheelDown: YOffset=%d, want > %d", m2.chatList.YOffset(), offsetBeforeUpdate)
+	}
+}
+
+func TestMouseWheelDownAtBottomEnablesAutoFollow(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	m.chatList.ScrollUp(5)
+
+	for !m.chatList.AtBottom() {
+		m.chatList.ScrollDown(3)
+	}
+	if !m.chatList.AtBottom() {
+		t.Fatal("expected to be at bottom")
+	}
+}
+
+func TestMouseWheelOnEmptyOutputDoesNotPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 0, Y: 0})
+	_ = model.(Model)
+
+	model, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 0, Y: 0})
+	_ = model.(Model)
+}
+
+// MouseWheelMsg must be dispatched before MouseMsg in the type switch,
+// because MouseWheelMsg implements the MouseMsg interface. This test
+// verifies that MouseWheelMsg reaches the scroll handler, not the click handler.
+func TestMouseWheelMsgNotCaughtByMouseMsgCase(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	bottomOffset := m.chatList.YOffset()
+
+	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
+	m2 := model.(Model)
+
+	if m2.chatList.YOffset() == bottomOffset {
+		t.Error("MouseWheelUp had no effect — likely caught by MouseMsg case instead of MouseWheelMsg case")
+	}
+}
+
+// ============================================================
+// MouseMsg → file browser preview viewport (wheel via MouseClickMsg)
+// ============================================================
+
+func TestFileBrowserMouseWheelScrollsPreview(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	dir := t.TempDir()
+	longFile := createTestFile(t, dir, "test.txt", strings.Repeat("line content\n", 50))
+
+	m.toggleFileBrowser()
+	if m.fileBrowser == nil {
+		t.Skip("file browser not available")
+	}
+	m.fileBrowser.rootPath = dir
+	m.fileBrowser.selectedPath = longFile
+	m.syncFileBrowser(true)
+
+	if m.fileBrowser.preview == nil {
+		t.Fatal("expected preview panel")
+	}
+	m.fileBrowser.preview.viewport.GotoBottom()
+	initialY := m.fileBrowser.preview.viewport.YOffset()
+	if initialY == 0 {
+		t.Skip("preview not scrollable with this content/size")
+	}
+
+	clickUp := tea.MouseClickMsg{Button: tea.MouseWheelUp, X: 10, Y: 10}
+	model, _ := m.Update(clickUp)
+	m2 := model.(Model)
+
+	if m2.fileBrowser == nil || m2.fileBrowser.preview == nil {
+		t.Fatal("file browser or preview lost after mouse event")
+	}
+	got := m2.fileBrowser.preview.viewport.YOffset()
+	want := initialY - 3
+	if got != want {
+		t.Errorf("preview YOffset = %d, want %d (initial was %d)", got, want, initialY)
+	}
+}
+
+func TestFileBrowserMouseWheelDownScrollsPreview(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	dir := t.TempDir()
+	longFile := createTestFile(t, dir, "test.txt", strings.Repeat("line content\n", 50))
+
+	m.toggleFileBrowser()
+	if m.fileBrowser == nil {
+		t.Skip("file browser not available")
+	}
+	m.fileBrowser.rootPath = dir
+	m.fileBrowser.selectedPath = longFile
+	m.syncFileBrowser(true)
+
+	if m.fileBrowser.preview == nil {
+		t.Fatal("expected preview panel")
+	}
+	m.fileBrowser.preview.viewport.ScrollUp(10)
+	initialY := m.fileBrowser.preview.viewport.YOffset()
+
+	clickDown := tea.MouseClickMsg{Button: tea.MouseWheelDown, X: 10, Y: 10}
+	model, _ := m.Update(clickDown)
+	m2 := model.(Model)
+
+	got := m2.fileBrowser.preview.viewport.YOffset()
+	want := initialY + 3
+	if got != want {
+		t.Errorf("preview YOffset = %d, want %d (initial was %d)", got, want, initialY)
+	}
+}
+
+func TestFileBrowserMouseAltModifierIgnored(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	dir := t.TempDir()
+	longFile := createTestFile(t, dir, "test.txt", strings.Repeat("line\n", 50))
+	m.toggleFileBrowser()
+	if m.fileBrowser == nil {
+		t.Skip("file browser not available")
+	}
+	m.fileBrowser.rootPath = dir
+	m.fileBrowser.selectedPath = longFile
+	m.syncFileBrowser(true)
+
+	if m.fileBrowser.preview == nil {
+		t.Fatal("expected preview")
+	}
+	m.fileBrowser.preview.viewport.GotoBottom()
+	initialY := m.fileBrowser.preview.viewport.YOffset()
+
+	// Alt+wheel should be ignored by handleFileBrowserMouse.
+	click := tea.MouseClickMsg{Button: tea.MouseWheelUp, X: 10, Y: 10, Mod: tea.ModAlt}
+	model, _ := m.Update(click)
+	m2 := model.(Model)
+
+	if m2.fileBrowser != nil && m2.fileBrowser.preview != nil {
+		if m2.fileBrowser.preview.viewport.YOffset() != initialY {
+			t.Errorf("Alt+mouse should be ignored, but YOffset changed from %d to %d",
+				initialY, m2.fileBrowser.preview.viewport.YOffset())
+		}
+	}
+}
+
+// ============================================================
+// MouseMsg → standalone preview panel viewport
+// ============================================================
+
+func TestPreviewPanelMouseWheelScrollsViewport(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	dir := t.TempDir()
+	longFile := createTestFile(t, dir, "preview.txt", strings.Repeat("content line here\n", 50))
+
+	m.previewPanel = buildPreviewPanelStateForPath(longFile, 0)
+	if m.previewPanel == nil {
+		t.Fatal("expected preview panel to be created")
+	}
+	m.syncPreviewViewport(true)
+
+	m.previewPanel.viewport.GotoBottom()
+	initialY := m.previewPanel.viewport.YOffset()
+	if initialY == 0 {
+		t.Skip("preview not scrollable")
+	}
+
+	clickUp := tea.MouseClickMsg{Button: tea.MouseWheelUp, X: 10, Y: 10}
+	model, _ := m.Update(clickUp)
+	m2 := model.(Model)
+
+	if m2.previewPanel == nil {
+		t.Fatal("preview panel lost after mouse event")
+	}
+	got := m2.previewPanel.viewport.YOffset()
+	want := initialY - 3
+	if got != want {
+		t.Errorf("preview YOffset = %d, want %d (initial was %d)", got, want, initialY)
+	}
+}
+
+func TestPreviewPanelMouseWheelDown(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	dir := t.TempDir()
+	longFile := createTestFile(t, dir, "preview.txt", strings.Repeat("content line here\n", 50))
+
+	m.previewPanel = buildPreviewPanelStateForPath(longFile, 0)
+	m.syncPreviewViewport(true)
+
+	m.previewPanel.viewport.ScrollUp(10)
+	initialY := m.previewPanel.viewport.YOffset()
+
+	clickDown := tea.MouseClickMsg{Button: tea.MouseWheelDown, X: 10, Y: 10}
+	model, _ := m.Update(clickDown)
+	m2 := model.(Model)
+
+	got := m2.previewPanel.viewport.YOffset()
+	want := initialY + 3
+	if got != want {
+		t.Errorf("preview YOffset = %d, want %d (initial was %d)", got, want, initialY)
+	}
+}
+
+// ============================================================
+// MouseMsg: Alt modifier pass-through / startup gate
+// ============================================================
+
+func TestMouseMsgWithAltIsIgnored(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 10, Y: 10, Mod: tea.ModAlt}
+	model, _ := m.Update(click)
+	m2 := model.(Model)
+	_ = m2.View() // should not panic
+}
+
+func TestViewSetsMouseModeCellMotion(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	v := m.View()
+	if v.MouseMode != tea.MouseModeCellMotion {
+		t.Errorf("View().MouseMode = %v, want MouseModeCellMotion", v.MouseMode)
+	}
+}
+
+func TestViewSetsAltScreen(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	v := m.View()
+	if !v.AltScreen {
+		t.Error("View().AltScreen = false, want true")
+	}
+}
+
+// ============================================================
+// Edge cases
+// ============================================================
+
+func TestMouseMsgWithNoPanelsDoesNotPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked: %v", r)
+		}
+	}()
+	m := newTestModel()
+	m.handleResize(120, 40)
+
+	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: 10, Y: 10}
+	model, _ := m.Update(click)
+	_ = model.(Model)
+}
+
+// ============================================================
+// helpers
+// ============================================================
+
+func createTestFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := dir + "/" + name
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("create test file: %v", err)
+	}
+	return path
+}

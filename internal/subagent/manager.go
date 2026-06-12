@@ -1,0 +1,813 @@
+package subagent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
+)
+
+// AgentEventType identifies the kind of event recorded during sub-agent execution.
+type AgentEventType int
+
+const (
+	AgentEventText       AgentEventType = iota // LLM text output
+	AgentEventToolCall                         // tool invocation started
+	AgentEventToolResult                       // tool execution result
+	AgentEventError                            // error encountered
+	AgentEventReasoning                        // LLM thinking/reasoning content
+)
+
+// AgentEvent is a single recorded event from a sub-agent's execution.
+type AgentEvent struct {
+	Type            AgentEventType
+	Text            string // AgentEventText / AgentEventError
+	ToolName        string // AgentEventToolCall / AgentEventToolResult
+	ToolID          string // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
+	ToolArgs        string // AgentEventToolCall / AgentEventToolResult
+	ToolDisplayName string // AgentEventToolCall / AgentEventToolResult
+	ToolDetail      string // AgentEventToolCall / AgentEventToolResult
+	Result          string // AgentEventToolResult
+	IsError         bool   // AgentEventToolResult / AgentEventError
+}
+
+const maxAgentEvents = 200
+
+// Status represents the lifecycle state of a sub-agent.
+type Status string
+
+const (
+	StatusPending   Status = "pending"
+	StatusRunning   Status = "running"
+	StatusCompleted Status = "completed"
+	StatusFailed    Status = "failed"
+	StatusCancelled Status = "cancelled"
+)
+
+// AgentMessage represents a message sent to a sub-agent.
+type AgentMessage struct {
+	From    string
+	Message string
+	Summary string
+}
+
+// SubAgent represents a spawned child agent.
+type SubAgent struct {
+	ID              string
+	Name            string // short, meaningful label (required)
+	Task            string
+	DisplayTask     string
+	Tools           []string
+	ToolCallCount   int
+	Status          Status
+	CurrentPhase    string
+	CurrentTool     string
+	CurrentArgs     string
+	ProgressSummary string
+	Result          string
+	Error           error
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	EndedAt         time.Time
+	Mailbox         chan AgentMessage
+	events          []AgentEvent
+	eventsDropped   int
+	cancel          context.CancelFunc
+	mu              sync.Mutex
+}
+
+type Snapshot struct {
+	ID              string
+	Name            string // short, meaningful label
+	Task            string
+	DisplayTask     string
+	Tools           []string
+	ToolCallCount   int
+	Status          Status
+	CurrentPhase    string
+	CurrentTool     string
+	CurrentArgs     string
+	ProgressSummary string
+	Result          string
+	Error           string
+	EventsDropped   int
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	EndedAt         time.Time
+	Events          []AgentEvent
+}
+
+// StatusInfo is a lightweight copy of a sub-agent's identity and status.
+// Unlike Snapshot, it does NOT copy events, making it safe for high-frequency
+// calls (e.g. strip display refresh) without O(maxAgentEvents) copy overhead.
+type StatusInfo struct {
+	ID           string
+	Name         string
+	Status       Status
+	CurrentPhase string
+	EndedAt      time.Time
+}
+
+// RecordEvent appends an event to the sub-agent's event log.
+// This is the exported version for external callers (e.g., tests).
+func (s *SubAgent) RecordEvent(ev AgentEvent) {
+	s.appendEvent(ev)
+}
+
+// AppendEvent adds an event to the sub-agent's history (thread-safe).
+// Used for testing and for external event injection.
+func (s *SubAgent) AppendEvent(ev AgentEvent) {
+	s.appendEvent(ev)
+}
+
+func (s *SubAgent) appendEvent(ev AgentEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) >= maxAgentEvents {
+		s.events = s.events[1:]
+		s.eventsDropped++
+	}
+	s.events = append(s.events, ev)
+}
+
+// Events returns a copy of the recorded events.
+func (s *SubAgent) Events() []AgentEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AgentEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+// EventsSince returns only events with index >= fromIdx.
+// This avoids copying the full event history when only incremental events
+// are needed (e.g. GUI agent panel updates). Returns the total event count
+// so callers can track the next fromIdx.
+func (s *SubAgent) EventsSince(fromIdx int) ([]AgentEvent, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := len(s.events)
+	if fromIdx >= total {
+		return nil, total
+	}
+	out := make([]AgentEvent, total-fromIdx)
+	copy(out, s.events[fromIdx:])
+	return out, total
+}
+
+func (s *SubAgent) IncrementToolCalls() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ToolCallCount++
+}
+
+func (s *SubAgent) setStatus(st Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Status = st
+}
+
+func (s *SubAgent) getStatus() Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Status
+}
+
+func (s *SubAgent) setActivity(phase, toolName, args string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CurrentPhase = phase
+	s.CurrentTool = toolName
+	s.CurrentArgs = args
+}
+
+func (s *SubAgent) setProgressSummary(summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ProgressSummary = summary
+}
+
+func (s *SubAgent) setStartedAt(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.StartedAt = t
+}
+
+func (s *SubAgent) snapshot() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap := Snapshot{
+		ID:              s.ID,
+		Name:            s.Name,
+		Task:            s.Task,
+		DisplayTask:     s.DisplayTask,
+		Tools:           append([]string(nil), s.Tools...),
+		ToolCallCount:   s.ToolCallCount,
+		Status:          s.Status,
+		CurrentPhase:    s.CurrentPhase,
+		CurrentTool:     s.CurrentTool,
+		CurrentArgs:     s.CurrentArgs,
+		ProgressSummary: s.ProgressSummary,
+		Result:          s.Result,
+		CreatedAt:       s.CreatedAt,
+		StartedAt:       s.StartedAt,
+		EndedAt:         s.EndedAt,
+		Events:          append([]AgentEvent(nil), s.events...),
+		EventsDropped:   s.eventsDropped,
+	}
+	if s.Error != nil {
+		snap.Error = s.Error.Error()
+	}
+	return snap
+}
+
+// statusInfo returns a lightweight copy with only identity + status.
+// Unlike snapshot(), it does NOT copy events.
+func (s *SubAgent) statusInfo() StatusInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return StatusInfo{
+		ID:           s.ID,
+		Name:         s.Name,
+		Status:       s.Status,
+		CurrentPhase: s.CurrentPhase,
+		EndedAt:      s.EndedAt,
+	}
+}
+
+// Manager manages spawning, tracking, and collecting results from sub-agents.
+// streamBatchInterval controls how often accumulated sub-agent stream text
+// and reasoning chunks are flushed to the TUI. Without batching, each LLM
+// token (~50-100/s per agent) triggers a separate program.Send → Bubble Tea
+// Update(), flooding the event loop and causing severe TUI stuttering.
+const streamBatchInterval = 80 * time.Millisecond
+
+type Manager struct {
+	agents       map[string]*SubAgent
+	mu           sync.Mutex
+	sem          chan struct{}
+	timeout      time.Duration
+	showOutput   bool
+	onUpdate     func(*SubAgent)
+	onComplete   func(*SubAgent)
+	onStreamText func(agentID, text string)                                                        // called on batched text
+	onReasoning  func(agentID, text string)                                                        // called on batched reasoning
+	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
+	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
+	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
+	nextID       int
+	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
+	// per-call/per-submit ctx so that sub-agents survive the parent agent
+	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+
+	// streamBatch accumulates text/reasoning chunks per agent and flushes
+	// them at streamBatchInterval. This prevents the TUI event loop from
+	// being flooded with per-token messages when multiple sub-agents stream
+	// concurrently. Guarded by streamBatchMu.
+	streamBatchMu   sync.Mutex
+	streamTextBuf   map[string]*strings.Builder // agentID → accumulated text
+	streamRsnBuf    map[string]*strings.Builder // agentID → accumulated reasoning
+	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
+}
+
+// NewManager creates a Manager with the given config.
+func NewManager(cfg config.SubAgentConfig) *Manager {
+	max := cfg.MaxConcurrent
+	if max <= 0 {
+		max = 5
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	return &Manager{
+		agents:          make(map[string]*SubAgent),
+		sem:             make(chan struct{}, max),
+		timeout:         timeout,
+		showOutput:      cfg.ShowOutput,
+		rootCtx:         rootCtx,
+		rootCancel:      rootCancel,
+		streamTextBuf:   make(map[string]*strings.Builder),
+		streamRsnBuf:    make(map[string]*strings.Builder),
+		streamBatchDone: make(chan struct{}),
+	}
+}
+
+// RootContext returns the manager's lifecycle context. spawn_agent uses this
+// (instead of the per-tool-call ctx) so that sub-agents are not cancelled the
+// moment the parent agent's current turn ends.
+func (m *Manager) RootContext() context.Context {
+	if m.rootCtx == nil {
+		return context.Background()
+	}
+	return m.rootCtx
+}
+
+// Shutdown cancels every running sub-agent. Call once during app shutdown.
+func (m *Manager) Shutdown() {
+	// Stop the stream batch ticker goroutine.
+	close(m.streamBatchDone)
+	// Flush any remaining buffered text before shutdown.
+	m.flushStreamBatch()
+	if m.rootCancel != nil {
+		m.rootCancel()
+	}
+}
+
+// Spawn creates a new sub-agent with the given task and returns its ID.
+func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx context.Context) string {
+	m.mu.Lock()
+	m.nextID++
+	id := fmt.Sprintf("sa-%d", m.nextID)
+	m.mu.Unlock()
+
+	sa := &SubAgent{
+		ID:           id,
+		Name:         name,
+		Task:         task,
+		DisplayTask:  displayTask,
+		Tools:        tools,
+		Status:       StatusPending,
+		CurrentPhase: "pending",
+		CreatedAt:    time.Now(),
+		Mailbox:      make(chan AgentMessage, 16),
+	}
+
+	m.mu.Lock()
+	m.agents[id] = sa
+	m.mu.Unlock()
+
+	return id
+}
+
+// Get retrieves a sub-agent by ID.
+func (m *Manager) Get(id string) (*SubAgent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sa, ok := m.agents[id]
+	return sa, ok
+}
+
+// SnapshotByID returns a stable copy of a sub-agent snapshot.
+func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
+	sa, ok := m.Get(id)
+	if !ok || sa == nil {
+		return Snapshot{}, false
+	}
+	return sa.snapshot(), true
+}
+
+// GetOutput returns the result of a completed (or in-progress) sub-agent.
+// Returns (result, true) if the agent exists, ("", false) otherwise.
+func (m *Manager) GetTaskOutput(id string) (string, bool) {
+	sa, ok := m.Get(id)
+	if !ok {
+		return "", false
+	}
+	snap := sa.snapshot()
+	if snap.Result != "" {
+		return snap.Result, true
+	}
+	if snap.ProgressSummary != "" {
+		return "[in progress] " + snap.ProgressSummary, true
+	}
+	if snap.Status == "running" {
+		return "[running, no output yet]", true
+	}
+	return "", true
+}
+
+// List returns all sub-agents.
+func (m *Manager) List() []*SubAgent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*SubAgent, 0, len(m.agents))
+	for _, sa := range m.agents {
+		out = append(out, sa)
+	}
+	return out
+}
+
+func (m *Manager) Snapshot(id string) (Snapshot, bool) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return Snapshot{}, false
+	}
+	return sa.snapshot(), true
+}
+
+// Statuses returns lightweight status info for all sub-agents.
+// Unlike List() + Snapshot(), this does NOT copy events and is safe to call
+// at high frequency (e.g. strip display refresh).
+func (m *Manager) Statuses() []StatusInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]StatusInfo, 0, len(m.agents))
+	for _, sa := range m.agents {
+		out = append(out, sa.statusInfo())
+	}
+	return out
+}
+
+// RunningCount returns the number of currently running agents.
+func (m *Manager) RunningCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, sa := range m.agents {
+		if sa.getStatus() == StatusRunning {
+			count++
+		}
+	}
+	return count
+}
+
+// Cancel cancels a running sub-agent.
+func (m *Manager) Cancel(id string) bool {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	sa.mu.Lock()
+	switch sa.Status {
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		sa.mu.Unlock()
+		return false
+	}
+	if sa.cancel != nil {
+		sa.cancel()
+		sa.cancel = nil
+	}
+	sa.Status = StatusCancelled
+	sa.CurrentPhase = "cancelled"
+	sa.Error = context.Canceled
+	sa.EndedAt = time.Now()
+	sa.mu.Unlock()
+	m.notifyUpdate(sa)
+	return true
+}
+
+// CancelAll cancels all pending or running sub-agents. Returns the number cancelled.
+func (m *Manager) CancelAll() int {
+	m.mu.Lock()
+	ids := make([]string, 0)
+	for id, sa := range m.agents {
+		status := sa.getStatus()
+		if status == StatusPending || status == StatusRunning {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+
+	cancelled := 0
+	for _, id := range ids {
+		if m.Cancel(id) {
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
+// SetCancel stores the cancel function for a sub-agent.
+// Returns false if the sub-agent is already terminal and must not be started.
+func (m *Manager) SetCancel(id string, cancel context.CancelFunc) bool {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		if cancel != nil {
+			cancel()
+		}
+		return false
+	}
+	sa.mu.Lock()
+	switch sa.Status {
+	case StatusCompleted, StatusFailed, StatusCancelled:
+		sa.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return false
+	}
+	sa.cancel = cancel
+	sa.Status = StatusRunning
+	if sa.StartedAt.IsZero() {
+		sa.StartedAt = time.Now()
+	}
+	sa.mu.Unlock()
+	m.notifyUpdate(sa)
+	return true
+}
+
+// Complete marks a sub-agent as completed or failed.
+func (m *Manager) Complete(id string, result string, err error) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	onComplete := m.onComplete
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.mu.Lock()
+	// Terminal state check: don't overwrite cancelled/completed/failed
+	switch sa.Status {
+	case StatusCancelled, StatusCompleted, StatusFailed:
+		sa.mu.Unlock()
+		return
+	}
+	if err != nil {
+		sa.Status = StatusFailed
+		sa.CurrentPhase = "failed"
+		sa.CurrentTool = ""
+		sa.CurrentArgs = ""
+		sa.Error = err
+	} else {
+		sa.Status = StatusCompleted
+		sa.CurrentPhase = "completed"
+		sa.CurrentTool = ""
+		sa.CurrentArgs = ""
+	}
+	sa.Result = result
+	sa.EndedAt = time.Now()
+	sa.mu.Unlock()
+
+	if onComplete != nil {
+		onComplete(sa)
+	}
+	m.notifyUpdate(sa)
+}
+
+func (m *Manager) UpdateProgress(id, summary string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.setProgressSummary(summary)
+	m.notifyUpdate(sa)
+}
+
+func (m *Manager) UpdateActivity(id, phase, toolName, args string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.setActivity(phase, toolName, args)
+	m.notifyUpdate(sa)
+}
+
+func (m *Manager) Notify(id string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if ok {
+		m.notifyUpdate(sa)
+	}
+}
+
+// SetOnStreamText sets a callback invoked on each text chunk from any sub-agent.
+// Unlike OnUpdate, this is NOT throttled.
+func (m *Manager) SetOnStreamText(fn func(agentID, text string)) {
+	m.mu.Lock()
+	m.onStreamText = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) SetOnReasoning(fn func(agentID, text string)) {
+	m.mu.Lock()
+	m.onReasoning = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) SetOnToolCall(fn func(agentID, toolID, toolName, displayName, args, detail string)) {
+	m.mu.Lock()
+	m.onToolCall = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) SetOnToolResult(fn func(agentID, toolID, toolName, displayName, detail, result string, isError bool)) {
+	m.mu.Lock()
+	m.onToolResult = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) NotifyToolCall(agentID, toolID, toolName, displayName, args, detail string) {
+	m.mu.Lock()
+	fn := m.onToolCall
+	m.mu.Unlock()
+	if fn != nil {
+		fn(agentID, toolID, toolName, displayName, args, detail)
+	}
+}
+
+func (m *Manager) NotifyToolResult(agentID, toolID, toolName, displayName, detail, result string, isError bool) {
+	m.mu.Lock()
+	fn := m.onToolResult
+	m.mu.Unlock()
+	if fn != nil {
+		fn(agentID, toolID, toolName, displayName, detail, result, isError)
+	}
+}
+
+// NotifyStreamText buffers a text chunk for batched delivery to the
+// onStreamText callback. Chunks are accumulated per-agent and flushed
+// at streamBatchInterval to avoid flooding the TUI event loop.
+func (m *Manager) NotifyStreamText(agentID, text string) {
+	m.mu.Lock()
+	fn := m.onStreamText
+	m.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	m.streamBatchMu.Lock()
+	buf, ok := m.streamTextBuf[agentID]
+	if !ok {
+		buf = &strings.Builder{}
+		m.streamTextBuf[agentID] = buf
+	}
+	buf.WriteString(text)
+	m.streamBatchMu.Unlock()
+}
+
+// NotifyReasoning buffers a reasoning chunk for batched delivery.
+func (m *Manager) NotifyReasoning(agentID, text string) {
+	m.mu.Lock()
+	fn := m.onReasoning
+	m.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	m.streamBatchMu.Lock()
+	buf, ok := m.streamRsnBuf[agentID]
+	if !ok {
+		buf = &strings.Builder{}
+		m.streamRsnBuf[agentID] = buf
+	}
+	buf.WriteString(text)
+	m.streamBatchMu.Unlock()
+}
+
+// StartStreamBatcher starts the background goroutine that periodically
+// flushes accumulated stream text/reasoning to the registered callbacks.
+// Must be called after SetOnStreamText/SetOnReasoning.
+func (m *Manager) StartStreamBatcher() {
+	go func() {
+		ticker := time.NewTicker(streamBatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.flushStreamBatch()
+			case <-m.streamBatchDone:
+				return
+			case <-m.rootCtx.Done():
+				m.flushStreamBatch()
+				return
+			}
+		}
+	}()
+}
+
+// flushStreamBatch delivers all accumulated text/reasoning chunks to
+// their respective callbacks in a single burst, then clears the buffers.
+func (m *Manager) flushStreamBatch() {
+	m.streamBatchMu.Lock()
+	textBufs := m.streamTextBuf
+	rsnBufs := m.streamRsnBuf
+	m.streamTextBuf = make(map[string]*strings.Builder)
+	m.streamRsnBuf = make(map[string]*strings.Builder)
+	m.streamBatchMu.Unlock()
+
+	if len(textBufs) == 0 && len(rsnBufs) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	onText := m.onStreamText
+	onRsn := m.onReasoning
+	m.mu.Unlock()
+
+	for id, buf := range textBufs {
+		if buf.Len() > 0 && onText != nil {
+			onText(id, buf.String())
+		}
+	}
+	for id, buf := range rsnBufs {
+		if buf.Len() > 0 && onRsn != nil {
+			onRsn(id, buf.String())
+		}
+	}
+}
+
+// FlushStreamBatch exports flushStreamBatch for use in tests that need
+// synchronous delivery of buffered stream events.
+func (m *Manager) FlushStreamBatch() {
+	m.flushStreamBatch()
+}
+
+// SetOnComplete sets a callback invoked when any sub-agent completes.
+func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
+	m.mu.Lock()
+	m.onComplete = fn
+	m.mu.Unlock()
+}
+
+// SendToAgent sends a message to a specific sub-agent's mailbox.
+func (m *Manager) SendToAgent(id string, msg AgentMessage) error {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("sub-agent %q not found", id)
+	}
+	select {
+	case sa.Mailbox <- msg:
+		return nil
+	default:
+		return fmt.Errorf("sub-agent %q mailbox is full", id)
+	}
+}
+
+// Broadcast sends a message to all running sub-agents.
+func (m *Manager) Broadcast(msg AgentMessage) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var sent []string
+	for _, sa := range m.agents {
+		if sa.getStatus() == StatusRunning {
+			select {
+			case sa.Mailbox <- msg:
+				sent = append(sent, sa.ID)
+			default:
+				// mailbox full, skip
+			}
+		}
+	}
+	return sent
+}
+
+// SetOnUpdate sets a callback invoked when any sub-agent activity changes.
+func (m *Manager) SetOnUpdate(fn func(*SubAgent)) {
+	m.mu.Lock()
+	m.onUpdate = fn
+	m.mu.Unlock()
+}
+
+// AcquireSemaphore blocks until a slot is available for a new sub-agent to run.
+func (m *Manager) AcquireSemaphore(ctx context.Context) error {
+	select {
+	case m.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ReleaseSemaphore releases a slot.
+func (m *Manager) ReleaseSemaphore() {
+	<-m.sem
+}
+
+// Timeout returns the configured timeout.
+func (m *Manager) Timeout() time.Duration {
+	return m.timeout
+}
+
+// ShowOutput returns whether to show sub-agent output.
+func (m *Manager) ShowOutput() bool {
+	return m.showOutput
+}
+
+// notifyUpdate invokes the onUpdate callback. This is called frequently
+// during streaming (every token), so we throttle to ~10 Hz to avoid
+// flooding Bubble Tea's unbuffered message channel, which would starve
+// the spinner and other UI updates.
+func (m *Manager) notifyUpdate(sa *SubAgent) {
+	m.mu.Lock()
+	fn := m.onUpdate
+	now := time.Now()
+	lastNotify := m.lastNotify
+	m.lastNotify = now
+	m.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Throttle: skip if we notified less than 100ms ago.
+	if !lastNotify.IsZero() && now.Sub(lastNotify) < 100*time.Millisecond {
+		return
+	}
+	fn(sa)
+}

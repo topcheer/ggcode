@@ -1,0 +1,470 @@
+# iOS Fastfile for GGCode Mobile
+default_platform(:ios)
+
+platform :ios do
+  # ── Helpers ────────────────────────────────────────────
+
+  def api_key
+    # Resolve key file: CI writes ENV["APP_STORE_PRIVATE_KEY"] to a temp file;
+    # local dev uses ENV["APP_STORE_KEY_PATH"] or falls back to secrets/ dir.
+    key_path = nil
+    if ENV["APP_STORE_PRIVATE_KEY"]
+      # CI mode: write P8 content to temp file
+      key_path = File.join(Dir.tmpdir, "appstore_auth_key.p8")
+      File.write(key_path, ENV["APP_STORE_PRIVATE_KEY"])
+    elsif ENV["APP_STORE_KEY_PATH"]
+      key_path = ENV["APP_STORE_KEY_PATH"]
+    else
+      # Local dev fallback
+      local_key = File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__)
+      key_path = local_key if File.exist?(local_key)
+    end
+
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: key_path,
+      in_house: false
+    )
+  end
+
+  desc "Fetch provisioning profiles for CI (sigh)"
+  lane :fetch_profiles do
+    setup_ci if ENV["CI"]
+    sigh(
+      api_key: api_key,
+      app_identifier: app_id,
+      readonly: false
+    )
+  end
+
+  def app_id
+    "gg.ai.ggcode.mobile"
+  end
+
+  def version_str
+    plist_path = File.expand_path("../Runner/Info.plist", __dir__)
+    `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '#{plist_path}' 2>/dev/null`.strip
+  end
+
+  # ── One-time: metadata + screenshots ──────────────────
+
+  desc "Upload metadata and screenshots (run once)"
+  lane :upload_metadata do
+    deliver(
+      api_key: api_key,
+      skip_binary_upload: true,
+      skip_screenshots: false,
+      submit_for_review: false,
+      force: true,
+      precheck_include_in_app_purchases: false,
+      overwrite_screenshots: true,
+      run_precheck_before_submit: false
+    )
+  end
+
+  # ── Simulator Framework Stripper ──────────────────────
+
+  def remove_simulator_frameworks(ipa_path)
+    require 'tmpdir'
+    Dir.mktmpdir do |tmp|
+      work = File.join(tmp, 'strip')
+      Dir.mkdir(work)
+      `unzip -q #{Shellwords.shellescape(ipa_path)} -d #{work} 2>/dev/null`
+      frameworks_dir = File.join(work, 'Payload', 'Runner.app', 'Frameworks')
+      unless Dir.exist?(frameworks_dir)
+        UI.message("No Frameworks/ found in IPA, skipping")
+        return ipa_path
+      end
+      removed = false
+      Dir.glob(File.join(frameworks_dir, '*.framework')).each do |fw|
+        exe = File.join(fw, File.basename(fw, '.framework'))
+        next unless File.exist?(exe)
+        vtool_out = `vtool -show #{Shellwords.shellescape(exe)} 2>/dev/null`
+        platforms = vtool_out.scan(/platform (\S+)/).flatten
+        has_sim = platforms.include?('IOSSIMULATOR')
+        has_device_ios = platforms.include?('IOS')
+        if has_sim && !has_device_ios
+          UI.message("Removing simulator-only framework: #{File.basename(fw)}")
+          FileUtils.rm_rf(fw)
+          removed = true
+        end
+      end
+      unless removed
+        UI.message("No simulator-only frameworks found, IPA is clean")
+        return ipa_path
+      end
+      # Re-sign the app after removing frameworks
+      app_path = File.join(work, 'Payload', 'Runner.app')
+      UI.message("Re-signing Runner.app after framework removal")
+      embedded_profile = File.join(app_path, 'embedded.mobileprovision')
+      entitlements_plist = File.join(tmp, 'entitlements.plist')
+      if File.exist?(embedded_profile)
+        `security cms -D -i #{Shellwords.shellescape(embedded_profile)} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist + '.full')}`
+        `/usr/libexec/PlistBuddy -x -c 'Print :Entitlements' #{Shellwords.shellescape(entitlements_plist + '.full')} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist)}`
+      end
+      sign_cmd = "codesign --force --sign \"Apple Distribution: Junjun Zhang (EGZFS7M525)\" --timestamp --generate-entitlement-der"
+      sign_cmd += " --entitlements #{Shellwords.shellescape(entitlements_plist)}" if File.exist?(entitlements_plist) && File.size(entitlements_plist) > 0
+      sign_cmd += " #{Shellwords.shellescape(app_path)}"
+      sign_output = `#{sign_cmd} 2>&1`
+      unless $?.success?
+        UI.error("Codesign failed: #{sign_output}")
+      end
+      cleaned_ipa = ipa_path.sub(/\.ipa$/, '.cleaned.ipa')
+      `cd #{work} && zip -q -r #{Shellwords.shellescape(cleaned_ipa)} Payload/ 2>/dev/null`
+      if File.exist?(cleaned_ipa) && File.size(cleaned_ipa) > 0
+        FileUtils.mv(cleaned_ipa, ipa_path, force: true)
+        UI.success("Removed simulator-only frameworks and re-packaged IPA")
+      end
+    end
+    ipa_path
+  end
+
+  # ── Build & Upload ────────────────────────────────────
+
+  desc "Upload pre-built IPA to TestFlight"
+  lane :upload_ipa do |options|
+    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)
+    UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
+
+    remove_simulator_frameworks(ipa_path)
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ipa_path,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+      distribute_only: false
+    )
+  end
+
+  desc "Upload to TestFlight (uses flutter-built IPA if available)"
+  lane :upload_testflight do
+    setup_ci if ENV["CI"]
+    sigh(api_key: api_key, app_identifier: app_id)
+
+    flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)
+    if File.exist?(flutter_ipa)
+      UI.message("Using flutter-built IPA: #{flutter_ipa}")
+      remove_simulator_frameworks(flutter_ipa)
+      upload_to_testflight(
+        api_key: api_key,
+        ipa: flutter_ipa,
+        skip_waiting_for_build_processing: true,
+        skip_submission: true,
+        distribute_only: false,
+        changelog: "Bug fixes and stability improvements.",
+        beta_app_review_info: {
+          contact_email: "support@ggcode.dev",
+          contact_first_name: "GGCode",
+          contact_last_name: "Team",
+          contact_phone: "+8613858128966",
+          demo_account_name: "",
+          demo_account_password: "",
+          notes: "Remote control client for GGCode AI coding agent. Test: Install desktop from ggcode.dev → Generate QR → Scan with this app → Chat with AI."
+        }
+      )
+    else
+      UI.message("No flutter IPA found, building with gym...")
+      gym(
+        scheme: "Runner",
+        configuration: "Release",
+        export_method: "app-store",
+        output_directory: "../../builds/ios",
+        output_name: "GGCode.ipa",
+        export_options: { signingStyle: "automatic" }
+      )
+      upload_to_testflight(
+        api_key: api_key,
+        skip_waiting_for_build_processing: true,
+        skip_submission: true,
+        distribute_only: false,
+        changelog: "Bug fixes and stability improvements.",
+        beta_app_review_info: {
+          contact_email: "support@ggcode.dev",
+          contact_first_name: "GGCode",
+          contact_last_name: "Team",
+          contact_phone: "+8613858128966",
+          demo_account_name: "",
+          demo_account_password: "",
+          notes: "Remote control client for GGCode AI coding agent. Test: Install desktop from ggcode.dev → Generate QR → Scan with this app → Chat with AI."
+        }
+      )
+    end
+  end
+
+  # ── Promote to External Testing ───────────────────────
+
+  desc "Wait for TestFlight processing, distribute to External Testing"
+  lane :promote_external do
+    api_key_obj = api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    build = _wait_for_valid_build(client, app)
+    _promote_to_external(client, app, build)
+  end
+
+  # ── Full Deploy (used by store_deploy.sh) ─────────────
+
+  desc "Full deploy: upload → wait for processing → External Testing → submit for review if needed"
+  lane :deploy_external do
+    upload_testflight
+
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    build = _wait_for_valid_build(client, app)
+    _promote_to_external(client, app, build)
+
+    # Check if there's an active review submission; if not, submit for review
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    active_submission = submissions.find { |s| %w[READY_FOR_REVIEW IN_REVIEW WAITING_FOR_REVIEW].include?(s.state) }
+
+    if active_submission
+      UI.message("Submission #{active_submission.id} is #{active_submission.state} — skipping App Store submission.")
+    else
+      UI.message("No active review submission — submitting latest build for App Store Review.")
+      _submit_build_for_review(client, app, build)
+    end
+  end
+
+  # ── App Store Review Submission ───────────────────────
+
+  desc "Submit latest build for App Store Review"
+  lane :submit do
+    api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    build = _wait_for_valid_build(client, app)
+
+    # Check existing submissions
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    active = submissions.find { |s| %w[READY_FOR_REVIEW IN_REVIEW WAITING_FOR_REVIEW].include?(s.state) }
+    if active
+      UI.message("Active submission #{active.id} (#{active.state}) — skipping.")
+      return
+    end
+
+    _submit_build_for_review(client, app, build)
+    UI.success("Done!")
+  end
+
+  # ── Private Methods ───────────────────────────────────
+
+  def _wait_for_valid_build(client, app)
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate", limit: 1,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models
+    build = builds.first
+    UI.user_error!("No builds found") if build.nil?
+    UI.message("Latest build: #{build.version} (#{build.processing_state})")
+
+    return build if build.processing_state == "VALID"
+
+    UI.message("Build still processing, waiting...")
+    40.times do |i|
+      sleep(30)
+      builds = client.get_builds(
+        filter: { app: app.id },
+        sort: "-uploadedDate", limit: 1,
+        includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+      ).to_models
+      build = builds.first
+      if build && build.processing_state == "VALID"
+        UI.success("Build #{build.version} is VALID (after #{(i + 1) * 30}s)")
+        return build
+      end
+      UI.message("  [#{i + 1}/40] Still #{build&.processing_state || 'unknown'}...")
+    end
+    UI.user_error!("Build did not become VALID in 20 minutes")
+  end
+
+  def _promote_to_external(client, app, build)
+    groups = client.get_beta_groups(filter: { app: app.id }).to_models
+    ext_group = groups.find { |g| g.name == "ext" }
+
+    if ext_group
+      client.add_beta_groups_to_build(build_id: build.id, beta_group_ids: [ext_group.id])
+      UI.success("Build #{build.version} added to 'ext' External Testing group!")
+
+      # Submit for Beta App Review (required for External Testing)
+      begin
+        existing_beta_subs = client.get_beta_app_review_submissions(filter: { build: build.id }).to_models
+        if existing_beta_subs.empty?
+          client.post_beta_app_review_submissions(build_id: build.id)
+          UI.success("Beta App Review submitted for build #{build.version}!")
+        else
+          UI.message("Beta App Review already exists: #{existing_beta_subs.first.beta_review_state}")
+        end
+      rescue => e
+        UI.error("Beta App Review submission failed: #{e.message}")
+      end
+    else
+      UI.message("'ext' beta group not found, distributing via pilot...")
+      pilot(
+        api_key: api_key,
+        skip_waiting_for_build_processing: true,
+        skip_submission: false,
+        distribute_only: true,
+        build_number: build.version,
+        changelog: "Bug fixes and stability improvements."
+      )
+    end
+  rescue => e
+    UI.message("External Testing: #{e.message}")
+  end
+
+  def _submit_build_for_review(client, app, build)
+    v = version_str
+    UI.user_error!("Could not read version") if v.empty?
+    UI.message("Version: #{v}")
+
+    # 1. Find or create IOS version
+    ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+    if ios_version.nil?
+      versions = app.get_app_store_versions
+      ios_version = versions.find { |ver| ver.platform == "IOS" && ver.app_store_state == "PREPARE_FOR_SUBMISSION" }
+    end
+    if ios_version.nil?
+      UI.message("Creating iOS version #{v}...")
+      client.post_app_store_version(app_id: app.id, attributes: { platform: Spaceship::ConnectAPI::Platform::IOS, versionString: v })
+      ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+      # Cleanup stale MAC_OS version if it blocks us
+      versions = app.get_app_store_versions
+      mac = versions&.find { |ver| ver.platform == "MAC_OS" }
+      if mac
+        begin
+          client.tunes_request_client.delete("v1/appStoreVersions/#{mac.id}")
+        rescue
+          nil
+        end
+      end
+    end
+    UI.user_error!("No editable iOS version") if ios_version.nil?
+    if ios_version.version_string != v
+      client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: v })
+    end
+    UI.success("Version: #{v} (#{ios_version.id})")
+
+    # 2. Associate build
+    ios_version.select_build(build_id: build.id)
+    UI.success("Build associated")
+
+    # 3. Set What's New (required by App Store)
+    begin
+      localizations = ios_version.get_app_store_version_localizations
+      en_loc = localizations.find { |l| l.locale == "en-US" }
+      whats_new_text = "Bug fixes and stability improvements."
+      if en_loc
+        en_loc.update(attributes: { whatsNew: whats_new_text })
+      else
+        ios_version.create_app_store_version_localization(attributes: { locale: "en-US", whatsNew: whats_new_text })
+      end
+      UI.success("What's New set")
+    rescue => e
+      UI.error("What's New: #{e.message}")
+    end
+
+    # 4. Set review notes
+    begin
+      review_detail = ios_version.fetch_app_store_review_detail
+      review_attrs = {
+        contactEmail: "support@ggcode.dev",
+        contactFirstName: "Guang",
+        contactLastName: "Guang",
+        contactPhone: "+8613858128966",
+        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+      }
+      if review_detail
+        review_detail.update(attributes: review_attrs)
+      else
+        ios_version.create_app_store_review_detail(attributes: review_attrs)
+      end
+      UI.success("Review notes set")
+    rescue => e
+      UI.error("Review notes: #{e.message}")
+    end
+
+    # 4. Submit — find or create submission
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    existing = submissions.first
+
+    if existing && (existing.state.nil? || existing.state.empty?)
+      UI.message("Adding version to existing submission #{existing.id}...")
+      client.post_review_submission_item(review_submission_id: existing.id, app_store_version_id: ios_version.id)
+      UI.success("Submitted #{existing.id}!")
+    elsif existing && existing.state == "COMPLETE"
+      UI.message("Previous submission #{existing.id} is COMPLETE, creating new one...")
+      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+      sub = resp.to_models.first
+      client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
+      UI.success("Submitted #{sub.id} with version #{v}!")
+    elsif existing
+      UI.error("Submission #{existing.id} state=#{existing.state} — manage in App Store Connect")
+    else
+      UI.message("Creating submission...")
+      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+      sub = resp.to_models.first
+      client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
+      UI.success("Submitted #{sub.id} with version #{v}!")
+    end
+  end
+
+  # ── Debug ─────────────────────────────────────────────
+
+  desc "Show App Store Connect state"
+  lane :inspect do
+    api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.message("App: #{app.name}")
+
+    versions = app.get_app_store_versions
+    UI.message("App Store Versions:")
+    versions.each { |v| UI.message("  #{v.version_string} | #{v.app_store_state} | #{v.platform} | #{v.id}") }
+
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    UI.message("Review Submissions (#{submissions.size}):")
+    submissions.each { |s| UI.message("  #{s.id} | #{s.state}") }
+
+    # Beta groups & builds
+    groups = client.get_beta_groups(filter: { app: app.id }).to_models
+    UI.message("Beta Groups (#{groups.size}):")
+    groups.each do |g|
+      UI.message("  #{g.name} | #{g.is_internal_group ? 'Internal' : 'External'} | #{g.id}")
+    end
+
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate", limit: 3,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models
+    UI.message("Recent Builds (#{builds.size}):")
+    builds.each do |b|
+      UI.message("  #{b.version} | #{b.processing_state} | #{b.id}")
+    end
+
+    # Check beta app review submissions for latest build
+    begin
+      latest = builds.first
+      if latest
+        beta_subs = client.get_beta_app_review_submissions(filter: { build: latest.id }).to_models
+        UI.message("Beta App Review (build #{latest.version}):")
+        if beta_subs.empty?
+          UI.message("  NO beta review submission found!")
+        else
+          beta_subs.each { |s| UI.message("  #{s.id} | #{s.beta_review_state}") }
+        end
+      end
+    rescue => e
+      UI.message("Beta submissions: #{e.message}")
+    end
+  end
+end

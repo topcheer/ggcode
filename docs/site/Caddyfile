@@ -1,0 +1,36 @@
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+:{$PORT:80} {
+	respond /health 200
+
+	root * /srv
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	@html {
+		path /
+		path *.html
+	}
+	header @html Cache-Control "public, max-age=0, must-revalidate"
+
+	@assets {
+		path *.css *.js *.png *.svg *.jpg *.jpeg *.webp *.gif *.ico
+	}
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	encode {
+		gzip
+		zstd
+	}
+
+	try_files {path} {path}.html {path}/index.html
+	file_server
+}

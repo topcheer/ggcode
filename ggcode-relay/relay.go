@@ -1,0 +1,1601 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+const (
+	defaultPendingRoomTTL        = 2 * time.Minute
+	defaultPendingRetryAfter     = 10 * time.Second
+	defaultRecoveryRetryAfter    = 15 * time.Second
+	defaultRecoveryRoomRetention = 5 * time.Minute
+	activeSessionModeReplace     = "replace_history"
+	relayRestartReason           = "relay_restarting"
+	relayShutdownNoticeDelay     = 150 * time.Millisecond
+	relayShutdownTimeout         = 5 * time.Second
+)
+
+// ─── Wire protocol ───
+
+type relayMessage struct {
+	Type           string          `json:"type"`
+	SessionID      string          `json:"session_id,omitempty"`
+	EventID        string          `json:"event_id,omitempty"`
+	StreamID       string          `json:"stream_id,omitempty"`
+	ClientID       string          `json:"client_id,omitempty"`
+	MessageID      string          `json:"message_id,omitempty"`
+	EventHash      string          `json:"event_hash,omitempty"`
+	ProjectionHash string          `json:"projection_hash,omitempty"`
+	Generation     uint64          `json:"generation,omitempty"`
+	AuthorityEpoch uint64          `json:"authority_epoch,omitempty"`
+	Role           string          `json:"role,omitempty"`
+	Reason         string          `json:"reason,omitempty"`
+	RetryAfterMS   int             `json:"retry_after_ms,omitempty"`
+	ResumeMode     string          `json:"resume_mode,omitempty"`
+	Count          int             `json:"count,omitempty"`
+	LastEventID    string          `json:"last_event_id,omitempty"`
+	Nonce          json.RawMessage `json:"nonce,omitempty"`
+	Ciphertext     json.RawMessage `json:"ciphertext,omitempty"`
+	Data           json.RawMessage `json:"data,omitempty"`
+}
+
+type roomEvent struct {
+	sessionID string
+	eventID   string
+	streamID  string
+	eventHash string
+	typ       string
+	raw       []byte
+}
+
+// ─── Room ───
+
+type room struct {
+	token           string
+	sessionID       string
+	authorityEpoch  uint64
+	protocolVersion int
+	upgradeReason   string
+	serverReady     bool
+	history         []roomEvent
+	bootstrap       map[string]roomEvent
+	server          *peer
+	clients         map[*peer]struct{}
+	clientsByID     map[string]*peer
+	lastEventAt     time.Time
+
+	mu           sync.RWMutex
+	sendMu       sync.Mutex
+	offlineTimer *time.Timer
+}
+
+func newRoom(token string) *room {
+	return &room{
+		token:       token,
+		bootstrap:   make(map[string]roomEvent),
+		clients:     make(map[*peer]struct{}),
+		clientsByID: make(map[string]*peer),
+	}
+}
+
+func (r *room) appendEvent(ev roomEvent) {
+	if ev.eventID == "" {
+		return
+	}
+	// Deduplicate the tail (idempotent upsert for retries).
+	for i := len(r.history) - 1; i >= 0 && i >= len(r.history)-50; i-- {
+		if r.history[i].eventID == ev.eventID {
+			r.history[i] = ev
+			return
+		}
+	}
+	r.history = append(r.history, ev)
+	r.lastEventAt = time.Now()
+}
+
+func (r *room) clearHistoryLocked() {
+	r.history = nil
+	r.bootstrap = make(map[string]roomEvent)
+	r.lastEventAt = time.Time{}
+}
+
+func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
+	if r.sessionID != "" || len(r.history) != 0 {
+		return false, 0
+	}
+	if state.sessionID == "" && len(state.history) == 0 {
+		return false, 0
+	}
+	r.sessionID = state.sessionID
+	r.authorityEpoch = state.authorityEpoch
+	r.history = append([]roomEvent(nil), state.history...)
+	r.bootstrap = make(map[string]roomEvent)
+	for _, ev := range r.history {
+		r.rememberBootstrap(ev)
+	}
+	if len(r.history) > 0 {
+		r.lastEventAt = time.Now()
+	}
+	return true, len(r.history)
+}
+
+func (r *room) rememberBootstrap(ev roomEvent) {
+	if ev.typ == "" || len(ev.raw) == 0 {
+		return
+	}
+	r.bootstrap[ev.typ] = ev
+}
+
+func (r *room) bootstrapEvents(sessionID string) []roomEvent {
+	order := []string{"session_info", "status", "activity"}
+	out := make([]roomEvent, 0, len(order))
+	for _, typ := range order {
+		ev, ok := r.bootstrap[typ]
+		if !ok {
+			continue
+		}
+		if sessionID != "" && ev.sessionID != "" && ev.sessionID != sessionID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+func (r *room) projectionHashLocked(limit int) string {
+	if len(r.history) == 0 || limit == 0 {
+		return ""
+	}
+	if limit < 0 || limit > len(r.history) {
+		limit = len(r.history)
+	}
+	hasher := sha256.New()
+	for i := 0; i < limit; i++ {
+		if strings.TrimSpace(r.history[i].eventHash) == "" {
+			return ""
+		}
+		_, _ = hasher.Write([]byte(r.history[i].eventHash))
+		_, _ = hasher.Write([]byte{'\n'})
+	}
+	return hexEncodeSum(hasher.Sum(nil))
+}
+
+func (r *room) snapshotClientsLocked(filter func(*peer) bool) []*peer {
+	clients := make([]*peer, 0, len(r.clients))
+	for client := range r.clients {
+		if filter != nil && !filter(client) {
+			continue
+		}
+		clients = append(clients, client)
+	}
+	return clients
+}
+
+func (r *room) ensureAuthorityEpochLocked() uint64 {
+	if r.authorityEpoch == 0 {
+		r.authorityEpoch = 1
+	}
+	return r.authorityEpoch
+}
+
+func (r *room) eventsAfter(cursor string) []roomEvent {
+	if cursor == "" {
+		out := make([]roomEvent, len(r.history))
+		copy(out, r.history)
+		return out
+	}
+	for i, ev := range r.history {
+		if ev.eventID == cursor {
+			out := make([]roomEvent, len(r.history)-i-1)
+			copy(out, r.history[i+1:])
+			return out
+		}
+	}
+	// Cursor not found in history — send everything.
+	out := make([]roomEvent, len(r.history))
+	copy(out, r.history)
+	return out
+}
+
+// ─── Peer ───
+
+type peer struct {
+	hub                *hub
+	room               *room
+	role               string // "server" or "client"
+	conn               *websocket.Conn
+	sendCh             chan []byte
+	done               chan struct{}
+	clientID           string
+	protocolVersion    int
+	ready              bool
+	waitingForKeyReady bool
+	cursor             string // relay-authoritative ACK cursor
+}
+
+func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
+	return &peer{
+		hub:    h,
+		room:   room,
+		role:   role,
+		conn:   conn,
+		sendCh: make(chan []byte, 10000),
+		done:   make(chan struct{}),
+	}
+}
+
+// send enqueues a message. Blocks if the send buffer is full (back-pressure).
+func (p *peer) send(msg relayMessage) {
+	if p.hub != nil && p.room != nil {
+		p.hub.traceRelayMessage("ws_send", p.room.token, p.clientID, msg, "peer_role="+p.role)
+	}
+	data, _ := json.Marshal(msg)
+	p.sendRaw(data)
+}
+
+func (p *peer) trySend(msg relayMessage) bool {
+	if p.hub != nil && p.room != nil {
+		p.hub.traceRelayMessage("ws_send", p.room.token, p.clientID, msg, "peer_role="+p.role)
+	}
+	data, _ := json.Marshal(msg)
+	select {
+	case p.sendCh <- data:
+		return true
+	case <-p.done:
+		return false
+	default:
+		return false
+	}
+}
+
+func (p *peer) sendRaw(raw []byte) {
+	select {
+	case p.sendCh <- raw:
+	case <-p.done:
+	}
+}
+
+func (p *peer) closeWithReason(code int, reason string) {
+	if p == nil || p.conn == nil {
+		return
+	}
+	_ = p.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(code, reason),
+		time.Now().Add(time.Second),
+	)
+	_ = p.conn.Close()
+}
+
+// writeLoop drains sendCh and writes to the WebSocket.
+func (p *peer) writeLoop() {
+	defer p.conn.Close()
+	for {
+		select {
+		case raw, ok := <-p.sendCh:
+			if !ok {
+				return
+			}
+			_ = p.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			if err := p.conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+// readLoop reads from WebSocket and dispatches messages.
+func (p *peer) readLoop(h *hub) {
+	roomDestroyed := false
+	defer func() {
+		close(p.done)
+		p.conn.Close()
+		p.detachFromRoom(roomDestroyed, h)
+	}()
+
+	p.conn.SetReadLimit(1 << 20)
+	p.conn.SetPongHandler(func(string) error {
+		p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
+	p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	for {
+		_, raw, err := p.conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+
+		var msg relayMessage
+		if json.Unmarshal(raw, &msg) != nil {
+			continue
+		}
+		h.traceRelayMessage("ws_recv", p.room.token, p.clientID, msg, "peer_role="+p.role)
+
+		switch msg.Type {
+		case "encrypted":
+			p.onEncrypted(raw, msg)
+		case "active_session":
+			p.onActiveSession(msg)
+		case "key_offer":
+			if p.role == "client" {
+				p.forwardKeyOffer(msg)
+			}
+		case "key_accept":
+			if p.role == "server" {
+				p.forwardKeyAccept(msg)
+			}
+		case "key_ready":
+			if p.role == "client" {
+				p.onKeyReady(msg, h)
+			}
+		case "stop_sharing":
+			roomDestroyed = p.onStopSharing(msg, h)
+		case "resume_hello", "resume_from":
+			if p.role == "client" {
+				h.trace("client_request", p.room.token, msg)
+				p.onResume(msg, h)
+			}
+		case "event_ack":
+			if p.role == "client" {
+				p.onAck(msg, h)
+			}
+		case "language_change":
+			p.relayToOthers(msg)
+		case "ping":
+			p.send(relayMessage{Type: "pong"})
+		case "server_ready":
+			p.onServerReady()
+		}
+	}
+}
+
+func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
+	p.room.mu.Lock()
+	if p.role == "server" {
+		p.room.server = nil
+		p.room.serverReady = false
+		token := p.room.token
+		sessionID := p.room.sessionID
+		p.room.mu.Unlock()
+		if !roomDestroyed {
+			h.scheduleRoomExpiry(token, defaultRecoveryRoomRetention)
+			h.notifyRoomRecovering(token, sessionID)
+		}
+	} else {
+		delete(p.room.clients, p)
+		if p.clientID != "" {
+			if p.room.clientsByID[p.clientID] == p {
+				delete(p.room.clientsByID, p.clientID)
+			}
+		}
+		p.room.mu.Unlock()
+		h.removeRoomIfEmpty(p.room)
+	}
+	if p.hub != nil && p.hub.stats != nil {
+		p.hub.stats.recordDisconnect(p.role)
+	}
+	log.Printf("[relay] %s disconnected: room=%s client=%s",
+		p.role, shortToken(p.room.token), p.clientID)
+}
+
+// ─── Message handlers ───
+
+func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
+	if p.role == "server" {
+		p.handleServerBroadcast(raw, msg)
+	} else {
+		// Client → Server (user input).
+		p.room.mu.RLock()
+		srv := p.room.server
+		p.room.mu.RUnlock()
+		if srv != nil {
+			srv.sendRaw(raw)
+		}
+	}
+}
+
+func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
+	p.room.sendMu.Lock()
+	defer p.room.sendMu.Unlock()
+
+	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
+	if msg.SessionID == "" {
+		p.room.mu.Lock()
+		msg.SessionID = p.room.sessionID
+		authorityEpoch = p.room.ensureAuthorityEpochLocked()
+		p.room.mu.Unlock()
+	}
+	msg.Generation = 0
+	msg.AuthorityEpoch = authorityEpoch
+	wire := mustJSON(msg)
+
+	if hydrated {
+		log.Printf("[relay] hydrate room=%s session=%s events=%d",
+			shortToken(p.room.token), msg.SessionID, loaded)
+		if p.hub.stats != nil {
+			p.hub.stats.recordActiveSession(changed, loaded)
+		}
+	}
+
+	p.room.mu.Lock()
+	switch msg.Type {
+	case "session_info", "status", "activity":
+		p.room.rememberBootstrap(roomEvent{
+			sessionID: msg.SessionID,
+			typ:       msg.Type,
+			raw:       append([]byte(nil), wire...),
+		})
+	}
+	ev := roomEvent{
+		sessionID: msg.SessionID,
+		eventID:   msg.EventID,
+		streamID:  msg.StreamID,
+		eventHash: msg.EventHash,
+		typ:       "encrypted",
+		raw:       append([]byte(nil), wire...),
+	}
+	p.room.appendEvent(ev)
+
+	clients := p.room.snapshotClientsLocked(func(c *peer) bool {
+		return c.ready
+	})
+	p.room.mu.Unlock()
+	for _, client := range clients {
+		client.sendRaw(wire)
+	}
+
+	p.hub.trace("server_broadcast", p.room.token, msg)
+
+	// Persist async.
+	if p.hub.store != nil && msg.SessionID != "" {
+		token := p.room.token
+		s := p.hub.store
+		go func() {
+			if err := s.persistEvent(token, msg, append([]byte(nil), wire...)); err != nil {
+				log.Printf("[relay] persist error: %v", err)
+			}
+		}()
+	}
+}
+
+func (p *peer) onActiveSession(msg relayMessage) {
+	if p.role != "server" {
+		return
+	}
+	p.hub.trace("server_request", p.room.token, msg)
+
+	sessionID := msg.SessionID
+	if sessionID == "" {
+		var data struct {
+			SessionID string `json:"session_id"`
+		}
+		if msg.Data != nil {
+			_ = json.Unmarshal(msg.Data, &data)
+		}
+		sessionID = data.SessionID
+	}
+	if sessionID == "" {
+		return
+	}
+
+	p.room.sendMu.Lock()
+	defer p.room.sendMu.Unlock()
+
+	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
+	msg.SessionID = sessionID
+	msg.Generation = 0
+	msg.AuthorityEpoch = authorityEpoch
+
+	p.room.mu.RLock()
+	clients := p.room.snapshotClientsLocked(nil)
+	p.room.mu.RUnlock()
+	for _, client := range clients {
+		client.send(msg)
+	}
+
+	if hydrated {
+		log.Printf("[relay] hydrate room=%s session=%s events=%d",
+			shortToken(p.room.token), sessionID, loaded)
+		if p.hub.stats != nil {
+			p.hub.stats.recordActiveSession(changed, loaded)
+		}
+	}
+
+	p.hub.trace("relay_push", p.room.token, msg)
+
+	if p.hub.store != nil {
+		go func() {
+			_ = p.hub.store.persistActiveSession(p.room.token, sessionID, authorityEpoch)
+		}()
+	}
+}
+
+func (p *peer) onServerReady() {
+	if p.role != "server" || p.room == nil {
+		return
+	}
+	p.room.mu.Lock()
+	if p.room.server != p {
+		p.room.mu.Unlock()
+		return
+	}
+	p.room.serverReady = true
+	sessionID := p.room.sessionID
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
+	p.room.mu.Unlock()
+	p.hub.trace("server_ready", p.room.token, relayMessage{Type: "server_ready", SessionID: sessionID, AuthorityEpoch: authorityEpoch})
+}
+
+func (p *peer) onResume(msg relayMessage, h *hub) {
+	if msg.ClientID == "" {
+		p.send(relayMessage{Type: "error", Reason: "missing client_id"})
+		return
+	}
+
+	// Relay persists the last ACKed cursor, but resume_from lets the client
+	// request an earlier durable cursor for targeted replay recovery.
+	loadedCursor := ""
+	if p.cursor == "" && h.store != nil {
+		cursor, err := h.store.loadClientCursor(hashToken(p.room.token), msg.ClientID)
+		if err != nil {
+			log.Printf("[relay] cursor load error: %v", err)
+		}
+		loadedCursor = cursor
+	}
+
+	p.room.sendMu.Lock()
+	p.room.mu.Lock()
+	p.clientID = msg.ClientID
+	p.room.clientsByID[msg.ClientID] = p
+	if msg.Type == "resume_from" {
+		p.cursor = msg.LastEventID
+	} else if p.cursor == "" {
+		p.cursor = loadedCursor
+	}
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
+	sessionID := p.room.sessionID
+	if msg.SessionID != "" && sessionID != "" && msg.SessionID != sessionID {
+		p.cursor = ""
+	}
+
+	// 1. Send active_session so mobile can load its cached snapshot.
+	activeSession := relayMessage{
+		Type:           "active_session",
+		SessionID:      sessionID,
+		ClientID:       msg.ClientID,
+		AuthorityEpoch: authorityEpoch,
+	}
+
+	p.ready = false
+	p.waitingForKeyReady = true
+	p.room.mu.Unlock()
+
+	p.send(activeSession)
+	p.room.sendMu.Unlock()
+
+	log.Printf("[relay] resume waiting for key exchange: room=%s client=%s cursor=%s authority_epoch=%d",
+		shortToken(p.room.token), msg.ClientID, p.cursor, authorityEpoch)
+}
+
+func (p *peer) prepareResumeLocked(clientID string) (relayMessage, []roomEvent, string) {
+	replay := p.room.eventsAfter(p.cursor)
+	mode := "incremental"
+	if p.cursor == "" {
+		mode = "full_history"
+	}
+	authorityEpoch := p.room.ensureAuthorityEpochLocked()
+	sessionID := p.room.sessionID
+
+	// 2. Send resume_ack.
+	ack := relayMessage{
+		Type:           "resume_ack",
+		SessionID:      sessionID,
+		ClientID:       clientID,
+		AuthorityEpoch: authorityEpoch,
+		Data:           mustJSON(map[string]interface{}{"resume_mode": mode, "replay_count": len(replay)}),
+	}
+
+	p.ready = true
+	p.waitingForKeyReady = false
+	return ack, replay, mode
+}
+
+func (p *peer) finishResume(clientID string, h *hub) {
+	p.room.sendMu.Lock()
+	p.room.mu.Lock()
+	if !p.waitingForKeyReady {
+		p.room.mu.Unlock()
+		p.room.sendMu.Unlock()
+		return
+	}
+	ack, replay, mode := p.prepareResumeLocked(clientID)
+	p.room.mu.Unlock()
+
+	p.send(ack)
+	for _, ev := range replay {
+		h.traceRoomEvent("replay_send", p.room.token, p.clientID, ev, "mode="+mode)
+		p.sendRaw(ev.raw)
+	}
+	p.room.notifyServerClientConnectedLocked(p.protocolVersion, true)
+	p.room.sendMu.Unlock()
+
+	if h.stats != nil {
+		h.stats.recordResume(mode, len(replay))
+	}
+	log.Printf("[relay] resume room=%s client=%s cursor=%s mode=%s replay=%d",
+		shortToken(p.room.token), clientID, p.cursor, mode, len(replay))
+}
+
+func (p *peer) onKeyReady(msg relayMessage, h *hub) {
+	p.room.mu.RLock()
+	waiting := p.waitingForKeyReady
+	clientID := p.clientID
+	p.room.mu.RUnlock()
+	if !waiting {
+		return
+	}
+	if msg.ClientID != "" && clientID != "" && msg.ClientID != clientID {
+		return
+	}
+	p.finishResume(clientID, h)
+}
+
+func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
+	if p.role != "server" || p.room == nil || h == nil {
+		return false
+	}
+	h.trace("server_request", p.room.token, msg)
+	h.destroyRoom(p.room.token)
+	return true
+}
+
+func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool, hydrated bool, loadedCount int) {
+	if sessionID == "" {
+		p.room.mu.Lock()
+		defer p.room.mu.Unlock()
+		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+	}
+	if authorityEpoch == 0 {
+		authorityEpoch = 1
+	}
+
+	p.room.mu.RLock()
+	expectedSessionID := p.room.sessionID
+	p.room.mu.RUnlock()
+
+	p.room.mu.Lock()
+	defer p.room.mu.Unlock()
+
+	if expectedSessionID != sessionID && p.room.sessionID != expectedSessionID && p.room.sessionID != sessionID {
+		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+	}
+
+	changed = p.room.sessionID != sessionID
+	authorityChanged := p.room.authorityEpoch != 0 && p.room.authorityEpoch != authorityEpoch
+	p.room.sessionID = sessionID
+	if changed || replaceHistory || authorityChanged {
+		p.room.clearHistoryLocked()
+	}
+	p.room.authorityEpoch = authorityEpoch
+	epoch = p.room.ensureAuthorityEpochLocked()
+	return epoch, changed || authorityChanged, hydrated, loadedCount
+}
+
+func (h *hub) hydrateRoomFromStore(r *room) (bool, int) {
+	if h.store == nil || r == nil {
+		return false, 0
+	}
+	state, err := h.store.loadRoom(r.token)
+	if err != nil {
+		log.Printf("[relay] load room error: room=%s err=%v", shortToken(r.token), err)
+		return false, 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hydrateLocked(state)
+}
+
+func (p *peer) onAck(msg relayMessage, h *hub) {
+	if msg.EventID == "" {
+		return
+	}
+	p.room.mu.Lock()
+	p.cursor = msg.EventID
+	p.room.mu.Unlock()
+
+	if h.store != nil {
+		th := hashToken(p.room.token)
+		sid := p.room.sessionID
+		s := h.store
+		cid := p.clientID
+		eid := msg.EventID
+		go func() {
+			if err := s.saveClientCursor(th, cid, sid, eid); err != nil {
+				log.Printf("[relay] cursor save error: %v", err)
+			}
+		}()
+	}
+}
+
+func (p *peer) relayToOthers(msg relayMessage) {
+	p.room.sendMu.Lock()
+	p.room.mu.RLock()
+	clients := p.room.snapshotClientsLocked(func(client *peer) bool {
+		return client != p
+	})
+	server := p.room.server
+	p.room.mu.RUnlock()
+	for _, client := range clients {
+		client.send(msg)
+	}
+	if server != nil && server != p {
+		server.send(msg)
+	}
+	p.room.sendMu.Unlock()
+}
+
+func (p *peer) forwardKeyOffer(msg relayMessage) {
+	p.room.sendMu.Lock()
+	p.room.mu.RLock()
+	server := p.room.server
+	p.room.mu.RUnlock()
+	if server == nil {
+		p.room.sendMu.Unlock()
+		return
+	}
+	msg.ClientID = p.clientID
+	server.send(msg)
+	p.room.sendMu.Unlock()
+}
+
+func (p *peer) forwardKeyAccept(msg relayMessage) {
+	if msg.ClientID == "" {
+		return
+	}
+	p.room.sendMu.Lock()
+	p.room.mu.RLock()
+	client := p.room.clientsByID[msg.ClientID]
+	p.room.mu.RUnlock()
+	if client != nil {
+		client.send(msg)
+	}
+	p.room.sendMu.Unlock()
+}
+
+// ─── Hub ───
+
+type hub struct {
+	rooms  map[string]*room
+	store  *relayStore
+	stats  *relayStats
+	tracer *relayTraceLogger
+	mu     sync.RWMutex
+}
+
+func newHub(store *relayStore) *hub {
+	return &hub{
+		rooms:  make(map[string]*room),
+		store:  store,
+		stats:  newRelayStats(),
+		tracer: newRelayTraceLogger(),
+	}
+}
+
+func (h *hub) getOrCreateRoom(token string) *room {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r, ok := h.rooms[token]; ok {
+		return r
+	}
+	r := newRoom(token)
+	h.rooms[token] = r
+	return r
+}
+
+func (h *hub) reserveIssuedRoom(token string, ttl time.Duration) *room {
+	room := h.getOrCreateRoom(token)
+	h.scheduleRoomExpiry(token, ttl)
+	return room
+}
+
+func (h *hub) removeRoomIfEmpty(r *room) {
+	h.mu.Lock()
+	current, ok := h.rooms[r.token]
+	if !ok || current != r {
+		h.mu.Unlock()
+		return
+	}
+	r.mu.Lock()
+	empty := r.server == nil && len(r.clients) == 0
+	retained := r.offlineTimer != nil
+	if !empty || retained {
+		r.mu.Unlock()
+		h.mu.Unlock()
+		return
+	}
+	stopOfflineTimerLocked(r)
+	delete(h.rooms, r.token)
+	r.mu.Unlock()
+	h.mu.Unlock()
+
+	if h.store != nil {
+		go func() { _ = h.store.destroyRoom(r.token) }()
+	}
+	if h.stats != nil {
+		h.stats.recordRoomDestroy()
+	}
+	log.Printf("[relay] empty room destroyed: room=%s", shortToken(r.token))
+}
+
+func (h *hub) notifyRoomRecovering(token, sessionID string) {
+	h.mu.RLock()
+	r := h.rooms[token]
+	h.mu.RUnlock()
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	clients := len(r.clients)
+	waitingClients := make([]*peer, 0, clients)
+	for client := range r.clients {
+		waitingClients = append(waitingClients, client)
+	}
+	state := roomRecoveryStateLocked(r)
+	r.mu.RUnlock()
+	if len(waitingClients) > 0 {
+		notice := relayServerOfflineMessage(sessionID, state, retryAfterForState(state))
+		for _, client := range waitingClients {
+			client.send(notice)
+		}
+	}
+	log.Printf("[relay] server offline: room=%s clients=%d state=%s", shortToken(token), clients, state)
+}
+
+func (h *hub) notifyRelayRestarting() {
+	h.mu.RLock()
+	rooms := make([]*room, 0, len(h.rooms))
+	for _, room := range h.rooms {
+		rooms = append(rooms, room)
+	}
+	h.mu.RUnlock()
+	if len(rooms) == 0 {
+		return
+	}
+
+	peers := make([]*peer, 0, len(rooms)*2)
+	clientNotices := 0
+	for _, room := range rooms {
+		room.sendMu.Lock()
+		room.mu.RLock()
+		state := roomRecoveryStateLocked(room)
+		notice := relayServerOfflineMessageWithReason(
+			room.sessionID,
+			state,
+			retryAfterForState(state),
+			relayRestartReason,
+		)
+		clients := room.snapshotClientsLocked(nil)
+		server := room.server
+		room.mu.RUnlock()
+
+		for _, client := range clients {
+			if client.trySend(notice) {
+				clientNotices++
+			}
+			peers = append(peers, client)
+		}
+		if server != nil {
+			peers = append(peers, server)
+		}
+		room.sendMu.Unlock()
+	}
+
+	log.Printf("[relay] restart notice: rooms=%d peers=%d notified_clients=%d", len(rooms), len(peers), clientNotices)
+	time.Sleep(relayShutdownNoticeDelay)
+	for _, peer := range peers {
+		peer.closeWithReason(websocket.CloseServiceRestart, relayRestartReason)
+	}
+}
+
+func (h *hub) scheduleRoomExpiry(token string, delay time.Duration) {
+	h.mu.Lock()
+	r := h.rooms[token]
+	if r == nil {
+		h.mu.Unlock()
+		return
+	}
+	r.mu.Lock()
+	stopOfflineTimerLocked(r)
+	r.offlineTimer = time.AfterFunc(delay, func() {
+		h.expireRoom(token)
+	})
+	r.mu.Unlock()
+	h.mu.Unlock()
+}
+
+func (h *hub) expireRoom(token string) {
+	h.mu.Lock()
+	r, ok := h.rooms[token]
+	if !ok {
+		h.mu.Unlock()
+		return
+	}
+	r.mu.Lock()
+	hasServer := r.server != nil
+	if hasServer {
+		r.mu.Unlock()
+		h.mu.Unlock()
+		return
+	}
+	stopOfflineTimerLocked(r)
+	delete(h.rooms, token)
+	r.mu.Unlock()
+	h.mu.Unlock()
+
+	notice := relayMessage{Type: "sharing_stopped"}
+	r.sendMu.Lock()
+	r.mu.RLock()
+	clients := r.snapshotClientsLocked(nil)
+	r.mu.RUnlock()
+	for _, client := range clients {
+		client.send(notice)
+	}
+	r.sendMu.Unlock()
+
+	if h.store != nil {
+		go func() { _ = h.store.destroyRoom(token) }()
+	}
+	if h.stats != nil {
+		h.stats.recordRoomDestroy()
+	}
+	log.Printf("[relay] room expired: room=%s", shortToken(token))
+}
+
+func (h *hub) evictStaleRooms(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	h.mu.RLock()
+	var stale []string
+	for token, r := range h.rooms {
+		r.mu.RLock()
+		if !r.lastEventAt.IsZero() && r.lastEventAt.Before(cutoff) {
+			stale = append(stale, token)
+		}
+		r.mu.RUnlock()
+	}
+	h.mu.RUnlock()
+	for _, token := range stale {
+		h.expireRoom(token)
+	}
+	if len(stale) > 0 {
+		log.Printf("[relay] evicted %d stale rooms (no events for %s)", len(stale), maxAge)
+	}
+}
+
+func (h *hub) destroyRoom(token string) {
+	h.mu.Lock()
+	r, ok := h.rooms[token]
+	if !ok {
+		h.mu.Unlock()
+		return
+	}
+	delete(h.rooms, token)
+	h.mu.Unlock()
+
+	notice := relayMessage{Type: "sharing_stopped"}
+	r.sendMu.Lock()
+	r.mu.Lock()
+	stopOfflineTimerLocked(r)
+	clients := r.snapshotClientsLocked(nil)
+	srv := r.server
+	r.server = nil
+	r.mu.Unlock()
+	for _, client := range clients {
+		client.send(notice)
+	}
+
+	if srv != nil {
+		srv.send(notice)
+	}
+	r.sendMu.Unlock()
+	if h.store != nil {
+		go func() { _ = h.store.destroyRoom(token) }()
+	}
+	if h.stats != nil {
+		h.stats.recordRoomDestroy()
+	}
+	log.Printf("[relay] room destroyed: room=%s", shortToken(token))
+}
+
+func stopOfflineTimerLocked(r *room) {
+	if r.offlineTimer != nil {
+		r.offlineTimer.Stop()
+		r.offlineTimer = nil
+	}
+}
+
+// trace is a convenience wrapper.
+func (h *hub) trace(route, roomToken string, msg relayMessage) {
+	h.traceRelayMessage(route, roomToken, "", msg, "")
+}
+
+// ─── WebSocket handler ───
+
+var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+
+func (h *hub) handleShareSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	requestedProtocol, err := requestedShareProtocolVersion(r)
+	if err != nil {
+		http.Error(w, "invalid proto", http.StatusBadRequest)
+		return
+	}
+	issued, err := issueShareSession(loadShareAuthConfig(), requestedProtocol)
+	if err != nil {
+		if errors.Is(err, errShareUpgradeRequired) {
+			http.Error(w, err.Error(), http.StatusGone)
+			return
+		}
+		if err.Error() == "share v3 unavailable" {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.reserveIssuedRoom(issued.RoomID, defaultPendingRoomTTL)
+	log.Printf("[relay] issued share session: room=%s proto=%d share=%s",
+		shortToken(issued.RoomID), issued.ProtocolVersion, issued.ShareMode)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(issued)
+}
+
+func (h *hub) handleRefreshShareSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	var req refreshShareSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid refresh request", http.StatusBadRequest)
+		return
+	}
+	roomID := strings.TrimSpace(req.RoomID)
+	h.mu.RLock()
+	room := h.rooms[roomID]
+	h.mu.RUnlock()
+	if room == nil {
+		http.Error(w, "room not live", http.StatusGone)
+		return
+	}
+	room.mu.RLock()
+	serverConnected := room.server != nil
+	protocolVersion := room.protocolVersion
+	shareMode := shareModeV3
+	if protocolVersion >= shareProtocolV3 {
+		shareMode = shareModeV3
+	}
+	room.mu.RUnlock()
+	if !serverConnected {
+		http.Error(w, "room not live", http.StatusGone)
+		return
+	}
+	refreshed, err := refreshShareSession(loadShareAuthConfig(), req, protocolVersion, shareMode)
+	if err != nil {
+		switch err.Error() {
+		case "share v3 unavailable":
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		case "ticket scope mismatch":
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		case "missing room refresh token":
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
+		return
+	}
+	log.Printf("[relay] refreshed share session: room=%s proto=%d share=%s",
+		shortToken(refreshed.RoomID), refreshed.ProtocolVersion, refreshed.ShareMode)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(refreshed)
+}
+
+func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
+	handshake, status, reason := validateShareHandshake(r, loadShareAuthConfig())
+	if handshake == nil {
+		logRejectedHandshake(r, status, reason)
+		http.Error(w, reason, status)
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+
+	token := handshake.roomKey
+	role := handshake.role
+	clientID := r.URL.Query().Get("client_id")
+
+	var room *room
+	if role == "client" {
+		// Clients may only join existing rooms; they must not create one.
+		h.mu.RLock()
+		var ok bool
+		room, ok = h.rooms[token]
+		h.mu.RUnlock()
+		if !ok {
+			// Send an error frame so the client recognises this as a
+			// permanent failure (room not found) rather than a transient
+			// disconnect that triggers reconnect.
+			_ = conn.WriteJSON(relayMessage{
+				Type:   "error",
+				Reason: "Room not found: stale or expired share token",
+			})
+			conn.Close()
+			log.Printf("[relay] client rejected: room=%s not found", shortToken(token))
+			return
+		}
+		room.mu.RLock()
+		serverMissing := room.server == nil
+		serverReady := room.serverReady
+		retained := room.offlineTimer != nil
+		sessionID := room.sessionID
+		upgradeReason := room.upgradeReason
+		state := roomRecoveryStateLocked(room)
+		room.mu.RUnlock()
+		if (serverMissing || !serverReady) && handshake.postConnectErr == "" {
+			if upgradeReason != "" {
+				_ = conn.WriteJSON(relayMessage{
+					Type:   "error",
+					Reason: upgradeReason,
+				})
+				log.Printf("[relay] client rejected: room=%s requires upgrade", shortToken(token))
+			} else if retained || !serverMissing {
+				_ = conn.WriteJSON(relayServerOfflineMessage(sessionID, state, retryAfterForState(state)))
+				log.Printf("[relay] client waiting: room=%s state=%s server_ready=%t", shortToken(token), state, serverReady)
+			} else {
+				_ = conn.WriteJSON(relayMessage{
+					Type:   "error",
+					Reason: "Room not found: stale or expired share token",
+				})
+				log.Printf("[relay] client rejected: room=%s unavailable without broker", shortToken(token))
+			}
+			conn.Close()
+			return
+		}
+	} else {
+		room = h.getOrCreateRoom(token)
+		if hydrated, loaded := h.hydrateRoomFromStore(room); hydrated {
+			log.Printf("[relay] restored room=%s session=%s events=%d before server attach", shortToken(token), room.sessionID, loaded)
+		}
+	}
+	p := newPeer(h, room, role, conn)
+	p.clientID = clientID
+	p.protocolVersion = handshake.protocolVersion
+	if handshake.postConnectErr != "" && role == "client" {
+		logUpgradedClientReject(r, handshake.postConnectErr)
+		upgradeErr := relayMessage{
+			Type:   "error",
+			Reason: handshake.postConnectErr,
+		}
+		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.WriteJSON(upgradeErr)
+		conn.Close()
+		return
+	}
+
+	room.mu.RLock()
+	tail := ""
+	if n := len(room.history); n > 0 {
+		tail = room.history[n-1].eventID
+	}
+	sessionID := room.sessionID
+	buffered := len(room.history)
+	projectionHash := room.projectionHashLocked(buffered)
+	authorityEpoch := room.authorityEpoch
+	if authorityEpoch == 0 {
+		authorityEpoch = 1
+	}
+	room.mu.RUnlock()
+	initialConnected := relayMessage{
+		Type:           "connected",
+		SessionID:      sessionID,
+		Generation:     0,
+		AuthorityEpoch: authorityEpoch,
+		Count:          buffered,
+		LastEventID:    tail,
+		ProjectionHash: projectionHash,
+		Data:           mustJSON(connectedShareMetadata(handshake)),
+	}
+	h.traceRelayMessage("ws_write", token, clientID, initialConnected, "peer_role="+role+" initial=true")
+	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	if err := conn.WriteJSON(initialConnected); err != nil {
+		room.mu.Lock()
+		if role == "server" {
+			if room.server == p {
+				room.server = nil
+			}
+		} else {
+			delete(room.clients, p)
+			if p.clientID != "" && room.clientsByID[p.clientID] == p {
+				delete(room.clientsByID, p.clientID)
+			}
+		}
+
+		room.mu.Unlock()
+		conn.Close()
+		return
+	}
+	if handshake.postConnectErr != "" {
+		room.mu.Lock()
+		room.upgradeReason = handshake.postConnectErr
+		room.mu.Unlock()
+		h.scheduleRoomExpiry(token, defaultPendingRoomTTL)
+		logUpgradedClientReject(r, handshake.postConnectErr)
+		upgradeErr := relayMessage{
+			Type:   "error",
+			Reason: handshake.postConnectErr,
+		}
+		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.WriteJSON(upgradeErr)
+		conn.Close()
+		return
+	}
+
+	room.mu.Lock()
+	room.upgradeReason = ""
+	if handshake.protocolVersion > room.protocolVersion {
+		room.protocolVersion = handshake.protocolVersion
+	}
+	if role == "server" {
+		if room.server != nil {
+			// Kick old server.
+			old := room.server
+			room.server = nil
+			room.serverReady = false
+			room.mu.Unlock()
+			old.send(relayMessage{Type: "sharing_stopped"})
+			room.mu.Lock()
+		}
+		room.server = p
+		room.serverReady = false
+		stopOfflineTimerLocked(room)
+	} else {
+		room.clients[p] = struct{}{}
+	}
+	clients := len(room.clients)
+	room.mu.Unlock()
+
+	if h.stats != nil {
+		h.stats.recordConnect(role)
+	}
+	log.Printf("[relay] %s connected: room=%s session=%s clients=%d buffered=%d proto=%d share=%s connect=%s client=%s client_kind=%s client_version=%s",
+		role, shortToken(token), sessionID, clients, buffered,
+		handshake.protocolVersion, handshake.shareMode, handshake.connectMode, clientID, handshake.clientKind, handshake.clientVersion)
+
+	// Notify server that a client connected.
+	if role == "client" {
+		p.notifyServerClientConnected(false)
+	}
+
+	go p.writeLoop()
+	p.readLoop(h) // blocks until disconnect
+}
+
+func logRejectedHandshake(r *http.Request, status int, reason string) {
+	q := r.URL.Query()
+	roomID := strings.TrimSpace(q.Get("room_id"))
+	role := strings.TrimSpace(q.Get("role"))
+	proto := strings.TrimSpace(q.Get("proto"))
+	clientKind := strings.TrimSpace(q.Get("client"))
+	clientVersion := strings.TrimSpace(q.Get("client_version"))
+	caps := strings.TrimSpace(q.Get("caps"))
+	log.Printf("[relay] handshake rejected: status=%d reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
+		status, reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
+}
+
+func logUpgradedClientReject(r *http.Request, reason string) {
+	q := r.URL.Query()
+	roomID := strings.TrimSpace(q.Get("room_id"))
+	role := strings.TrimSpace(q.Get("role"))
+	proto := strings.TrimSpace(q.Get("proto"))
+	clientKind := strings.TrimSpace(q.Get("client"))
+	clientVersion := strings.TrimSpace(q.Get("client_version"))
+	caps := strings.TrimSpace(q.Get("caps"))
+	log.Printf("[relay] upgraded client rejected: reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
+		reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
+}
+
+func (p *peer) notifyServerClientConnected(resumeComplete bool) {
+	if p == nil || p.room == nil {
+		return
+	}
+	p.room.notifyServerClientConnected(p.protocolVersion, resumeComplete)
+}
+
+func (r *room) notifyServerClientConnected(protocolVersion int, resumeComplete bool) {
+	r.sendMu.Lock()
+	defer r.sendMu.Unlock()
+	r.notifyServerClientConnectedLocked(protocolVersion, resumeComplete)
+}
+
+func (r *room) notifyServerClientConnectedLocked(protocolVersion int, resumeComplete bool) {
+	r.mu.Lock()
+	server := r.server
+	if server == nil {
+		r.mu.Unlock()
+		return
+	}
+	authorityEpoch := r.ensureAuthorityEpochLocked()
+	sessionID := r.sessionID
+	count := len(r.history)
+	tail := ""
+	if count > 0 {
+		n := count
+		tail = r.history[n-1].eventID
+	}
+	projectionHash := r.projectionHashLocked(count)
+	r.mu.Unlock()
+	server.send(relayMessage{
+		Type:           "connected",
+		Generation:     0,
+		AuthorityEpoch: authorityEpoch,
+		Role:           "client",
+		SessionID:      sessionID,
+		Count:          count,
+		LastEventID:    tail,
+		ProjectionHash: projectionHash,
+		Data: mustJSON(map[string]any{
+			"protocol_version": protocolVersion,
+			"resume_complete":  resumeComplete,
+		}),
+	})
+}
+
+func hexEncodeSum(sum []byte) string {
+	if len(sum) == 0 {
+		return ""
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, len(sum)*2)
+	for i, b := range sum {
+		out[i*2] = hex[b>>4]
+		out[i*2+1] = hex[b&0x0f]
+	}
+	return string(out)
+}
+
+// ─── Main ───
+
+const relayAdminTokenEnv = "GGCODE_RELAY_ADMIN_TOKEN"
+
+func mustJSON(v interface{}) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return data
+}
+
+func roomRecoveryStateLocked(r *room) string {
+	if r.sessionID == "" {
+		return "pending"
+	}
+	return "recovering"
+}
+
+func retryAfterForState(state string) time.Duration {
+	if state == "pending" {
+		return defaultPendingRetryAfter
+	}
+	return defaultRecoveryRetryAfter
+}
+
+func relayServerOfflineMessage(sessionID, state string, retryAfter time.Duration) relayMessage {
+	return relayServerOfflineMessageWithReason(sessionID, state, retryAfter, "")
+}
+
+func relayServerOfflineMessageWithReason(sessionID, state string, retryAfter time.Duration, reason string) relayMessage {
+	data := map[string]interface{}{
+		"state":          state,
+		"retry_after_ms": retryAfter.Milliseconds(),
+	}
+	if strings.TrimSpace(reason) != "" {
+		data["reason"] = reason
+	}
+	return relayMessage{
+		Type:      "server_offline",
+		SessionID: sessionID,
+		Data:      mustJSON(data),
+	}
+}
+
+func constantTimeMatch(provided, expected string) bool {
+	if provided == "" || expected == "" {
+		return false
+	}
+	providedHash := sha256.Sum256([]byte(provided))
+	expectedHash := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) == 1
+}
+
+func relayAdminAuthorized(r *http.Request, expectedToken string) bool {
+	if expectedToken == "" {
+		return false
+	}
+	token := strings.TrimSpace(r.Header.Get("X-GGCode-Admin-Token"))
+	if token == "" {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			token = strings.TrimSpace(auth[7:])
+		}
+	}
+	return constantTimeMatch(token, expectedToken)
+}
+
+func newNukeHandler(store *relayStore, h *hub, adminToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		if adminToken == "" {
+			http.Error(w, "nuke disabled", http.StatusServiceUnavailable)
+			return
+		}
+		if !relayAdminAuthorized(r, adminToken) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="ggcode-relay"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := store.nukeAll(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		h.mu.Lock()
+		rooms := make([]*room, 0, len(h.rooms))
+		for token, room := range h.rooms {
+			rooms = append(rooms, room)
+			delete(h.rooms, token)
+		}
+		h.mu.Unlock()
+		notice := relayMessage{Type: "sharing_stopped"}
+		for _, room := range rooms {
+			room.sendMu.Lock()
+			room.mu.Lock()
+			stopOfflineTimerLocked(room)
+			clients := room.snapshotClientsLocked(nil)
+			server := room.server
+			room.mu.Unlock()
+			for _, client := range clients {
+				client.send(notice)
+			}
+			if server != nil {
+				server.send(notice)
+			}
+			room.sendMu.Unlock()
+		}
+		w.WriteHeader(200)
+	}
+}
+
+func newStatsHandler(h *hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snap, err := h.stats.snapshot(h)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
+	}
+}
+
+func main() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	dbPath := relayDBPath()
+	store, err := openRelayStore(dbPath, 72*time.Hour)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	h := newHub(store)
+	catalogManager, err := newModelCatalogManager(store)
+	if err != nil {
+		log.Fatalf("open model catalog manager: %v", err)
+	}
+	adminToken := strings.TrimSpace(os.Getenv(relayAdminTokenEnv))
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	catalogManager.start(bgCtx)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/share/session", h.handleShareSession)
+	mux.HandleFunc("/share/session/refresh", h.handleRefreshShareSession)
+	mux.HandleFunc("/ws", h.handleWS)
+	mux.HandleFunc("/model-catalog/resolve", newModelCatalogResolveHandler(catalogManager))
+	mux.HandleFunc("/model-catalog/status", newModelCatalogStatusHandler(catalogManager))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	})
+	mux.HandleFunc("/stats", newStatsHandler(h))
+	if adminToken == "" {
+		log.Printf("[relay] /nuke disabled: %s is not set", relayAdminTokenEnv)
+	}
+	mux.HandleFunc("/nuke", newNukeHandler(store, h, adminToken))
+
+	// Background tasks.
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			h.logStats()
+			h.flushTraceLogs()
+		}
+	}()
+	go func() {
+		for range time.Tick(time.Hour) {
+			_ = store.cleanupExpired(time.Now())
+		}
+	}()
+	go func() {
+		for range time.Tick(time.Hour) {
+			h.evictStaleRooms(12 * time.Hour)
+		}
+	}()
+
+	log.Printf("[relay] listening on :%s", port)
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case sig := <-sigCh:
+		log.Printf("[relay] shutting down after signal %s", sig)
+		bgCancel()
+		h.notifyRelayRestarting()
+		ctx, cancel := context.WithTimeout(context.Background(), relayShutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[relay] shutdown error: %v", err)
+		}
+		if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case err := <-errCh:
+		bgCancel()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}
+}

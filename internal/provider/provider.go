@@ -1,0 +1,204 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"math"
+)
+
+// Message represents a single message in the conversation.
+type Message struct {
+	Role    string         `json:"role"` // "user", "assistant", "system"
+	Content []ContentBlock `json:"content"`
+}
+
+// ContentBlock is a union type: text, image, tool call, or tool result.
+type ContentBlock struct {
+	Type              string          `json:"type"` // "text", "image", "tool_use", "tool_result"
+	Text              string          `json:"text,omitempty"`
+	ImageMIME         string          `json:"image_mime,omitempty"` // MIME type for image blocks
+	ImageData         string          `json:"image_data,omitempty"` // base64-encoded image data
+	ToolName          string          `json:"tool_name,omitempty"`
+	ToolID            string          `json:"tool_id,omitempty"`
+	Input             json.RawMessage `json:"input,omitempty"`
+	Output            string          `json:"output,omitempty"`
+	IsError           bool            `json:"is_error,omitempty"`
+	Images            []ContentImage  `json:"images,omitempty"`             // images within a tool_result
+	ReasoningContent  string          `json:"reasoning_content,omitempty"`  // DeepSeek reasoning content (must be echoed back)
+	ThinkingSignature string          `json:"thinking_signature,omitempty"` // Anthropic extended thinking signature (must be echoed back)
+	ThinkingData      string          `json:"thinking_data,omitempty"`      // Anthropic redacted thinking data (must be echoed back)
+}
+
+// ImageBlock creates an image content block with base64-encoded data.
+func ImageBlock(mime, base64Data string) ContentBlock {
+	return ContentBlock{Type: "image", ImageMIME: mime, ImageData: base64Data}
+}
+
+// TextBlock creates a text content block.
+func TextBlock(text string) ContentBlock {
+	return ContentBlock{Type: "text", Text: text}
+}
+
+// ToolUseBlock creates a tool call content block.
+func ToolUseBlock(id, name string, input json.RawMessage) ContentBlock {
+	return ContentBlock{Type: "tool_use", ToolID: id, ToolName: name, Input: input}
+}
+
+// ToolResultBlock creates a tool result content block.
+func ToolResultBlock(id, output string, isError bool) ContentBlock {
+	return ContentBlock{Type: "tool_result", ToolID: id, Output: output, IsError: isError}
+}
+
+// ToolResultNamedBlock creates a tool result content block with the originating tool name.
+func ToolResultNamedBlock(id, name, output string, isError bool) ContentBlock {
+	return ContentBlock{Type: "tool_result", ToolID: id, ToolName: name, Output: output, IsError: isError}
+}
+
+// ContentImage represents an image within a tool_result block.
+type ContentImage struct {
+	MIME   string `json:"mime"`
+	Base64 string `json:"base64"`
+}
+
+// ToolResultWithImages creates a tool result that carries both text and images.
+func ToolResultWithImages(id, name, textOutput string, images []ContentImage, isError bool) ContentBlock {
+	return ContentBlock{
+		Type:     "tool_result",
+		ToolID:   id,
+		ToolName: name,
+		Output:   textOutput,
+		Images:   images,
+		IsError:  isError,
+	}
+}
+
+// TokenUsage records token consumption for a single API call.
+type TokenUsage struct {
+	InputTokens       int `json:"input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	CacheRead         int `json:"cache_read_tokens"`
+	CacheWrite        int `json:"cache_write_tokens"`
+	PromptTokensTotal int `json:"prompt_tokens_total,omitempty"`
+}
+
+func (u TokenUsage) Add(delta TokenUsage) TokenUsage {
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheRead += delta.CacheRead
+	u.CacheWrite += delta.CacheWrite
+	u.PromptTokensTotal += delta.PromptTokensTotal
+	return u
+}
+
+func (u TokenUsage) DisplayInputTokens() int {
+	if u.CacheRead <= 0 {
+		return u.InputTokens
+	}
+	if u.PromptTokensTotal > 0 {
+		normalized := u.PromptTokensTotal - u.CacheRead
+		if normalized >= 0 {
+			if normalized < u.InputTokens {
+				return normalized
+			}
+			return u.InputTokens
+		}
+	}
+	return u.InputTokens
+}
+
+func (u TokenUsage) TotalInputTokens() int {
+	if u.PromptTokensTotal > 0 {
+		return u.PromptTokensTotal
+	}
+	return u.InputTokens
+}
+
+func (u TokenUsage) Total() int {
+	return u.TotalInputTokens() + u.OutputTokens
+}
+
+func (u TokenUsage) CacheHitPercent() int {
+	totalPromptTokens := u.PromptTokensTotal
+	if totalPromptTokens <= 0 || totalPromptTokens < u.CacheRead {
+		fallbackTotal := u.InputTokens
+		if u.CacheWrite > 0 || u.CacheRead > u.InputTokens {
+			fallbackTotal = u.InputTokens + u.CacheRead + u.CacheWrite
+		}
+		if fallbackTotal > totalPromptTokens {
+			totalPromptTokens = fallbackTotal
+		}
+	}
+	if totalPromptTokens <= 0 || u.CacheRead <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(u.CacheRead) * 100 / float64(totalPromptTokens)))
+}
+
+// StreamEvent is sent over a channel during streaming responses.
+type StreamEvent struct {
+	Type              StreamEventType
+	Text              string        // for TextChunk, Reasoning
+	ThinkingSignature string        // for Reasoning (Anthropic extended thinking signature)
+	Tool              ToolCallDelta // for ToolCallChunk / ToolCallDone
+	Result            string        // for ToolResult
+	IsError           bool          // for ToolResult
+	Usage             *TokenUsage   // for Done (nil if not final)
+	Error             error         // for Error
+}
+
+type StreamEventType int
+
+const (
+	StreamEventText StreamEventType = iota
+	StreamEventToolCallChunk
+	StreamEventToolCallDone
+	StreamEventToolResult
+	StreamEventDone
+	StreamEventError
+	StreamEventReasoning // thinking/reasoning content (DeepSeek, etc.)
+	StreamEventSystem    // system notification (retry status, etc.)
+)
+
+// ToolCallDelta represents a (possibly partial) tool call from a streaming response.
+type ToolCallDelta struct {
+	ID        string          // tool call ID (stable across chunks)
+	Index     int             // position in the tool call list
+	Name      string          // tool name (may be empty in early chunks)
+	Arguments json.RawMessage // accumulated arguments so far
+}
+
+// ToolDefinition describes a tool to the LLM provider.
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
+}
+
+// Provider is the interface every LLM backend must implement.
+type Provider interface {
+	// Name returns the provider identifier (e.g., "anthropic", "openai", "gemini").
+	Name() string
+
+	// Chat sends a non-streaming request and returns the complete response.
+	// Used for token counting, summarization, and cost estimation.
+	Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error)
+
+	// ChatStream sends a streaming request and returns a channel of events.
+	// The channel is closed when the stream ends.
+	ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error)
+
+	// CountTokens returns the token count for the given messages.
+	// Returns an error if the provider does not support counting.
+	CountTokens(ctx context.Context, messages []Message) (int, error)
+}
+
+type ReasoningEffortProvider interface {
+	SetReasoningEffort(effort string)
+	ReasoningEffort() string
+}
+
+// ChatResponse is the complete response from a non-streaming Chat call.
+type ChatResponse struct {
+	Message Message
+	Usage   TokenUsage
+}
