@@ -168,6 +168,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String get currentSessionId => _sessionId;
   String get lastAppliedEventId => _lastAppliedEventId;
   String get liveSessionUrl => _liveUrl;
+  ConnectionStore get connectionStore => _connectionStore;
+  /// Current active connection's stored state (workspace info, etc.)
+  StoredConnection? get currentConnection => _currentConnection;
   List<String> get recentEventIds => List.unmodifiable(_recentEventIds);
   bool get canPersistLiveProjection =>
       _hasAuthoritativeProjection &&
@@ -501,6 +504,20 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             'fromActiveSession=${sessionInfo != null} '
             'workspace="${sessionInfo?.workspace}" '
             'activeSessionDataKeys=${msg.data?.keys.toList()}');
+        // Update StoredConnection with workspace info for the list UI
+        if (_currentConnection != null && sessionInfo != null) {
+          final display = sessionInfo.workspace.isNotEmpty
+              ? sessionInfo.workspace.split('/').last
+              : _currentConnection!.displayName ?? '';
+          _currentConnection = _currentConnection!.copyWith(
+            workspacePath: sessionInfo.workspace,
+            displayName: display,
+            providerName: sessionInfo.provider,
+            modelName: sessionInfo.model,
+            sessionId: sessionId,
+          );
+          _connectionStore.update(_currentConnection!.id, _currentConnection!);
+        }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, sessionInfo,
             lastEventId: _lastAppliedEventId,
