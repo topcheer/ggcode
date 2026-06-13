@@ -145,6 +145,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _pendingActiveSessionBarrierEventId = '';
   bool _gapRecoveryScheduled = false;
   bool _gapRecoveryDeferred = false;
+  int _gapRecoveryAttemptCount = 0;
 
   @override
   TunnelConnectionState build() {
@@ -1392,11 +1393,25 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     required int incomingOrdinal,
   }) {
     if (_gapRecoveryScheduled) return;
-    _gapRecoveryScheduled = true;
+    _gapRecoveryAttemptCount++;
     final lastEvent = _lastAppliedEventId;
     debugPrint(
-      '[connection] event gap detected last=$lastOrdinal incoming=$incomingOrdinal lastEvent=$lastEvent incomingEvent=${msg.eventId}',
+      '[connection] event gap detected last=$lastOrdinal incoming=$incomingOrdinal lastEvent=$lastEvent incomingEvent=${msg.eventId} attempt=$_gapRecoveryAttemptCount',
     );
+    // After 2 attempts, give up on gap recovery. The relay has likely
+    // compacted its history via snapshot — the missing events no longer
+    // exist. Accept the gap and move on.
+    if (_gapRecoveryAttemptCount > 2) {
+      debugPrint(
+        '[connection] giving up gap recovery after $_gapRecoveryAttemptCount attempts — accepting gap and resuming from incoming event',
+      );
+      _lastAppliedEventId = msg.eventId ?? _lastAppliedEventId;
+      _gapRecoveryScheduled = false;
+      _gapRecoveryAttemptCount = 0;
+      _clearRelaySyncState();
+      return;
+    }
+    _gapRecoveryScheduled = true;
     _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
     final status = _normalizeAgentStatus(ref.read(agentStatusProvider));
     if (status == 'busy') {
