@@ -57,11 +57,6 @@ class BackgroundConnectionManager extends Notifier<void> {
     if (_services.containsKey(url)) return;
 
     final descriptor = ShareConnectionDescriptor.parse(url);
-    if (!descriptor.isV3 && descriptor.cryptoMaterial.isEmpty) {
-      debugPrint('[bg-conn] invalid URL for session $sessionId');
-      return;
-    }
-
     final service = ConnectionService(descriptor: descriptor);
     _services[url] = service;
     _sessionIdToUrl[sessionId] = url;

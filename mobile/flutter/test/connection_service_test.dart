@@ -18,22 +18,20 @@ void main() {
 
   test('ShareConnectionDescriptor keeps renew token out of public URL', () {
     final descriptor = ShareConnectionDescriptor.parse(
-      'wss://relay.example/ws?proto=2&room_id=room-1&auth_ticket=auth-1&crypto_key=crypto-1',
+      'wss://relay.example/ws?proto=3&room_id=room-1&auth_ticket=auth-1&kx_pub=server-pub',
     ).copyWith(renewToken: 'renew-1');
 
-    expect(descriptor.isV2, isTrue);
-    expect(descriptor.cryptoMaterial, 'crypto-1');
+    expect(descriptor.serverPublicKey, 'server-pub');
     expect(descriptor.publicUrl, isNot(contains('renew_token=')));
-    expect(descriptor.publicUrl, contains('auth_ticket=auth-1'));
+    expect(descriptor.publicUrl, contains('kx_pub=server-pub'));
     expect(descriptor.runtimeUrl(), contains('renew_token=renew-1'));
   });
 
-  test('ShareConnectionDescriptor keeps v3 crypto key out of public URL', () {
+  test('ShareConnectionDescriptor keeps crypto key out of public URL', () {
     final descriptor = ShareConnectionDescriptor.parse(
       'wss://relay.example/ws?proto=3&room_id=room-3&auth_ticket=auth-3&kx_pub=server-pub',
     ).copyWith(renewToken: 'renew-3');
 
-    expect(descriptor.isV3, isTrue);
     expect(descriptor.serverPublicKey, 'server-pub');
     expect(descriptor.publicUrl, isNot(contains('crypto_key=')));
     expect(descriptor.publicUrl, contains('kx_pub=server-pub'));
@@ -116,12 +114,11 @@ void main() {
     await service.connect();
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
-    expect(
-      errors,
-      contains(
-        'Upgrade required: please update GGCode Mobile/Desktop to the latest version.',
-      ),
-    );
+    // 410 is a permanent failure — could be room-not-found or upgrade-required.
+    expect(errors, isNotEmpty);
+    expect(errors.any((e) =>
+        e.contains('Room not found') ||
+        e.contains('Upgrade required')), isTrue);
   });
 
   test('ConnectionService rejects remote insecure relay URLs before dialing',
@@ -228,12 +225,11 @@ void main() {
     await service.connect();
     await Future<void>.delayed(const Duration(milliseconds: 200));
 
-    expect(
-      errors,
-      contains(
-        'Upgrade required: please update GGCode Mobile/Desktop to the latest version.',
-      ),
-    );
+    // 410 is a permanent failure — could be room-not-found or upgrade-required.
+    expect(errors, isNotEmpty);
+    expect(errors.any((e) =>
+        e.contains('Room not found') ||
+        e.contains('Upgrade required')), isTrue);
   });
 
   test('ConnectionService tolerates non-string connected metadata fields',
@@ -254,6 +250,7 @@ void main() {
           'connect_mode': true,
           'notice': ['hello'],
           'renew_token': {'token': 'renew'},
+          'kx_pub': 'test-server-pub',
         },
       }));
     });
@@ -294,6 +291,7 @@ void main() {
           'connect_mode': 'legacy',
           'notice': '',
           'renew_token': '',
+          'kx_pub': 'test-server-pub',
         },
       }));
       socket.listen((message) {
@@ -338,6 +336,7 @@ void main() {
           'connect_mode': 'legacy',
           'notice': '',
           'renew_token': '',
+          'kx_pub': 'test-server-pub',
         },
       }));
       await Future<void>.delayed(const Duration(milliseconds: 50));

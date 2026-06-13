@@ -17,15 +17,10 @@ import (
 )
 
 const (
-	ShareProtocolLegacy          = 1
-	ShareProtocolV2              = 2
 	ShareProtocolV3              = 3
 	RequiredShareProtocolVersion = ShareProtocolV3
 
-	ShareModeLegacy = "legacy"
-	ShareModeV2     = "v2"
-	ShareModeV3     = "v3"
-	ShareModeCompat = "compat"
+	ShareModeV3 = "v3"
 
 	shareProtocolEnv        = "GGCODE_SHARE_PROTOCOL"
 	shareSessionPath        = "/share/session"
@@ -34,15 +29,12 @@ const (
 )
 
 var defaultShareCapabilities = []string{
-	"share_v2",
 	"share_v3",
 	"share_notice",
 	"share_renew",
-	"tunnel_messages_v1",
 }
 
 type ShareRuntimeConfig struct {
-	EnableV2 bool
 	EnableV3 bool
 }
 
@@ -97,43 +89,16 @@ type relayRefreshedShareSessionResponse struct {
 
 func loadShareRuntimeConfig() ShareRuntimeConfig {
 	return ShareRuntimeConfig{
-		EnableV2: true,
 		EnableV3: true,
 	}
-}
-
-func (cfg ShareRuntimeConfig) v2Enabled() bool {
-	return cfg.EnableV2
-}
-
-func (cfg ShareRuntimeConfig) v3Enabled() bool {
-	return cfg.EnableV3
 }
 
 func (cfg ShareRuntimeConfig) issuedProtocolVersion() int {
 	return RequiredShareProtocolVersion
 }
 
-func (d ShareDescriptor) IsV2() bool {
-	return d.ProtocolVersion >= ShareProtocolV2 && d.RoomID != ""
-}
-
 func (d ShareDescriptor) IsV3() bool {
 	return d.ProtocolVersion >= ShareProtocolV3 && d.RoomID != ""
-}
-
-func (d ShareDescriptor) CryptoMaterial() string {
-	if strings.TrimSpace(d.CryptoKey) != "" {
-		return d.CryptoKey
-	}
-	return d.Token
-}
-
-func (d ShareDescriptor) SessionToken() string {
-	if d.Token != "" {
-		return d.Token
-	}
-	return d.RoomID
 }
 
 func (d ShareDescriptor) PublicConnectURL(relayURL string) string {
@@ -161,22 +126,15 @@ func buildShareURL(relayURL string, d ShareDescriptor, role string, meta RelayCl
 	if caps := encodeCapabilities(meta.Capabilities); caps != "" {
 		q.Set("caps", caps)
 	}
-	if d.IsV2() {
-		q.Set("proto", strconv.Itoa(d.ProtocolVersion))
-		q.Set("room_id", d.RoomID)
-		if cryptoKey := strings.TrimSpace(d.CryptoKey); cryptoKey != "" && !d.IsV3() {
-			q.Set("crypto_key", cryptoKey)
-		}
-		if serverPublicKey := strings.TrimSpace(d.ServerPublicKey); serverPublicKey != "" {
-			q.Set("kx_pub", serverPublicKey)
-		}
-		if preferRenew && strings.TrimSpace(d.RenewToken) != "" {
-			q.Set("renew_token", d.RenewToken)
-		} else if strings.TrimSpace(d.AuthTicket) != "" {
-			q.Set("auth_ticket", d.AuthTicket)
-		}
-	} else {
-		q.Set("token", d.Token)
+	q.Set("proto", strconv.Itoa(d.ProtocolVersion))
+	q.Set("room_id", d.RoomID)
+	if serverPublicKey := strings.TrimSpace(d.ServerPublicKey); serverPublicKey != "" {
+		q.Set("kx_pub", serverPublicKey)
+	}
+	if preferRenew && strings.TrimSpace(d.RenewToken) != "" {
+		q.Set("renew_token", d.RenewToken)
+	} else if strings.TrimSpace(d.AuthTicket) != "" {
+		q.Set("auth_ticket", d.AuthTicket)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -257,7 +215,7 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	}
 	shareMode := strings.TrimSpace(issued.ShareMode)
 	if shareMode == "" {
-		shareMode = ShareModeV2
+		shareMode = ShareModeV3
 	}
 	base := ShareDescriptor{
 		ProtocolVersion: issued.ProtocolVersion,
@@ -271,16 +229,12 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, err
 	}
-	if issued.ProtocolVersion >= ShareProtocolV3 {
-		publicKey, privateKey, err := generateShareKeyExchangeKeyPair()
-		if err != nil {
-			return ShareDescriptor{}, ShareDescriptor{}, err
-		}
-		base.ServerPublicKey = publicKey
-		base.ServerPrivateKey = privateKey
-	} else {
-		base.CryptoKey = cryptoKey
+	publicKey, privateKey, err := generateShareKeyExchangeKeyPair()
+	if err != nil {
+		return ShareDescriptor{}, ShareDescriptor{}, err
 	}
+	base.ServerPublicKey = publicKey
+	base.ServerPrivateKey = privateKey
 	server = base
 	server.CryptoKey = cryptoKey
 	server.AuthTicket = issued.ServerAuthTicket
@@ -393,10 +347,8 @@ func publicShareDescriptorFromServer(server ShareDescriptor, clientAuthTicket st
 	client := server
 	client.AuthTicket = clientAuthTicket
 	client.RenewToken = ""
-	if client.ProtocolVersion >= ShareProtocolV3 {
-		client.ServerPrivateKey = ""
-		client.CryptoKey = ""
-	}
+	client.ServerPrivateKey = ""
+	client.CryptoKey = ""
 	return client
 }
 

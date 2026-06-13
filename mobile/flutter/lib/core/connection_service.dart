@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'crypto.dart';
 import 'models/protocol.dart' as proto;
 
-/// Normalize tunnel URL schemes (ggcode:// → wss://, http:// → ws://, etc).
+/// Normalize tunnel URL schemes (ggcode:// -> wss://, http:// -> ws://, etc).
 String normalizeTunnelUrl(String raw) {
   String url = raw.trim();
   if (url.startsWith('ggcode://')) {
@@ -79,7 +79,6 @@ bool isPermanentRoomFailureMessage(String error) {
       lower.contains('stale or expired share token') ||
       lower.contains('upgrade required') ||
       lower.contains('please upgrade ggcode') ||
-      lower.contains('http status code: 410') ||
       lower.contains('status code: 410');
 }
 
@@ -138,65 +137,33 @@ Duration relayRestartRecoveryDelay({String? closeReason}) {
   return _defaultRelayRestartReconnectDelay;
 }
 
+/// Parsed share URL descriptor. All connections are v3 (encrypted key exchange).
 class ShareConnectionDescriptor {
   final String relayUrl;
-  final int protocolVersion;
-  final String shareMode;
-  final String token;
   final String roomId;
   final String authTicket;
   final String renewToken;
-  final String cryptoKey;
   final String serverPublicKey;
 
   const ShareConnectionDescriptor({
     required this.relayUrl,
-    required this.protocolVersion,
-    required this.shareMode,
-    required this.token,
     required this.roomId,
     required this.authTicket,
     required this.renewToken,
-    required this.cryptoKey,
     required this.serverPublicKey,
   });
 
   factory ShareConnectionDescriptor.parse(String raw) {
     final normalized = normalizeTunnelUrl(raw);
     final uri = Uri.parse(normalized);
-    final proto = int.tryParse(uri.queryParameters['proto'] ?? '') ?? 1;
-    final roomId = uri.queryParameters['room_id'] ?? '';
-    final authTicket = uri.queryParameters['auth_ticket'] ?? '';
-    final renewToken = uri.queryParameters['renew_token'] ?? '';
-    final token = uri.queryParameters['token'] ?? '';
-    final cryptoKey = uri.queryParameters['crypto_key'] ?? '';
-    final serverPublicKey = uri.queryParameters['kx_pub'] ?? '';
-    final isV2 = proto >= 2 ||
-        roomId.isNotEmpty ||
-        authTicket.isNotEmpty ||
-        renewToken.isNotEmpty;
-    final protocolVersion = isV2 ? (proto >= 3 ? 3 : 2) : 1;
     return ShareConnectionDescriptor(
       relayUrl: '${uri.scheme}://${uri.authority}${uri.path}',
-      protocolVersion: protocolVersion,
-      shareMode: protocolVersion >= 3
-          ? 'v3'
-          : isV2
-              ? 'v2'
-              : 'legacy',
-      token: token,
-      roomId: roomId,
-      authTicket: authTicket,
-      renewToken: renewToken,
-      cryptoKey: cryptoKey,
-      serverPublicKey: serverPublicKey,
+      roomId: uri.queryParameters['room_id'] ?? '',
+      authTicket: uri.queryParameters['auth_ticket'] ?? '',
+      renewToken: uri.queryParameters['renew_token'] ?? '',
+      serverPublicKey: uri.queryParameters['kx_pub'] ?? '',
     );
   }
-
-  bool get isV2 => protocolVersion >= 2 && roomId.isNotEmpty;
-  bool get isV3 => protocolVersion >= 3 && roomId.isNotEmpty;
-
-  String get cryptoMaterial => cryptoKey.isNotEmpty ? cryptoKey : token;
 
   String get publicUrl => _buildUrl(publicOnly: true);
 
@@ -204,58 +171,37 @@ class ShareConnectionDescriptor {
 
   ShareConnectionDescriptor copyWith({
     String? relayUrl,
-    int? protocolVersion,
-    String? shareMode,
-    String? token,
     String? roomId,
     String? authTicket,
     String? renewToken,
-    String? cryptoKey,
     String? serverPublicKey,
   }) {
     return ShareConnectionDescriptor(
       relayUrl: relayUrl ?? this.relayUrl,
-      protocolVersion: protocolVersion ?? this.protocolVersion,
-      shareMode: shareMode ?? this.shareMode,
-      token: token ?? this.token,
       roomId: roomId ?? this.roomId,
       authTicket: authTicket ?? this.authTicket,
       renewToken: renewToken ?? this.renewToken,
-      cryptoKey: cryptoKey ?? this.cryptoKey,
       serverPublicKey: serverPublicKey ?? this.serverPublicKey,
     );
   }
 
   String _buildUrl({required bool publicOnly}) {
     final uri = Uri.parse(relayUrl);
-    final query = <String, String>{};
-    if (isV2) {
-      query['proto'] = protocolVersion.toString();
-      query['room_id'] = roomId;
-      if (serverPublicKey.isNotEmpty) {
-        query['kx_pub'] = serverPublicKey;
-      }
-      if (!isV3 && cryptoKey.isNotEmpty) {
-        query['crypto_key'] = cryptoKey;
-      }
-      if (!publicOnly) {
-        query['role'] = 'client';
-        query['client'] = 'mobile';
-        query['caps'] =
-            'share_v2,share_v3,share_notice,share_renew,tunnel_messages_v1';
-      }
-      if (!publicOnly && renewToken.isNotEmpty) {
+    final query = <String, String>{
+      'proto': '3',
+      'room_id': roomId,
+    };
+    if (serverPublicKey.isNotEmpty) {
+      query['kx_pub'] = serverPublicKey;
+    }
+    if (!publicOnly) {
+      query['role'] = 'client';
+      query['client'] = 'mobile';
+      query['caps'] = 'share_v3,share_notice,share_renew';
+      if (renewToken.isNotEmpty) {
         query['renew_token'] = renewToken;
       } else if (authTicket.isNotEmpty) {
         query['auth_ticket'] = authTicket;
-      }
-    } else {
-      query['token'] = token;
-      if (!publicOnly) {
-        query['role'] = 'client';
-        query['client'] = 'mobile';
-        query['caps'] =
-            'share_v2,share_v3,share_notice,share_renew,tunnel_messages_v1';
       }
     }
     return uri.replace(queryParameters: query).toString();
@@ -263,8 +209,6 @@ class ShareConnectionDescriptor {
 }
 
 class ShareConnectionMetadata {
-  final int protocolVersion;
-  final String shareMode;
   final String roomId;
   final String connectMode;
   final String notice;
@@ -274,8 +218,6 @@ class ShareConnectionMetadata {
   final DateTime? renewExpiresAt;
 
   const ShareConnectionMetadata({
-    required this.protocolVersion,
-    required this.shareMode,
     required this.roomId,
     required this.connectMode,
     required this.notice,
@@ -293,10 +235,6 @@ class ShareConnectionMetadata {
     }
 
     return ShareConnectionMetadata(
-      protocolVersion: map['protocol_version'] is int
-          ? map['protocol_version'] as int
-          : int.tryParse('${map['protocol_version'] ?? ''}') ?? 1,
-      shareMode: stringValue(map['share_mode']),
       roomId: stringValue(map['room_id']),
       connectMode: stringValue(map['connect_mode']),
       notice: stringValue(map['notice']),
@@ -353,9 +291,8 @@ class ConnectionService {
 
   ConnectionService({required ShareConnectionDescriptor descriptor})
       : _descriptor = descriptor {
-    if (!descriptor.isV3) {
-      _crypto = TunnelCrypto(descriptor.cryptoMaterial);
-    }
+    // v3: crypto key is established via key exchange, not set at construction.
+    _keyExchangeReady = Completer<void>();
   }
 
   Future<void> connect() async {
@@ -368,7 +305,6 @@ class ConnectionService {
     final runtimeUri = Uri.tryParse(runtimeUrl);
     debugPrint(
       '[connection] connect start host=${runtimeUri?.host ?? ''} path=${runtimeUri?.path ?? ''} '
-      'proto=${_descriptor.protocolVersion} share=${_descriptor.shareMode} '
       'room=${_descriptor.roomId} hasAuth=${_descriptor.authTicket.isNotEmpty} '
       'hasRenew=${_descriptor.renewToken.isNotEmpty}',
     );
@@ -418,9 +354,6 @@ class ConnectionService {
     _socketSub = _socket!.listen(
       (data) {
         if (data is! String) return;
-        // Enqueue for sequential processing. Catch errors to prevent a
-        // single bad message from breaking the entire chain — all subsequent
-        // messages would be silently dropped otherwise.
         _queue = _queue.then((_) => _handleRelayMessage(data)).catchError(
           (error, stackTrace) {
             debugPrint('[connection] failed to handle relay message: $error');
@@ -519,7 +452,6 @@ class ConnectionService {
     _reconnectTimer = null;
   }
 
-  /// Reconnect after relay/server recovery notices.
   void _scheduleServerOfflineReconnect([Duration? delay]) {
     _cancelReconnect();
     _serverOfflineReconnect = true;
@@ -545,8 +477,6 @@ class ConnectionService {
                 ? Map<String, dynamic>.from(map['data'] as Map)
                 : null;
         var metadata = const ShareConnectionMetadata(
-          protocolVersion: 1,
-          shareMode: '',
           roomId: '',
           connectMode: '',
           notice: '',
@@ -561,12 +491,6 @@ class ConnectionService {
             renewToken: metadata.renewToken.isNotEmpty
                 ? metadata.renewToken
                 : _descriptor.renewToken,
-            shareMode: metadata.shareMode.isNotEmpty
-                ? metadata.shareMode
-                : _descriptor.shareMode,
-            protocolVersion: metadata.protocolVersion > 0
-                ? metadata.protocolVersion
-                : _descriptor.protocolVersion,
             roomId: metadata.roomId.isNotEmpty
                 ? metadata.roomId
                 : _descriptor.roomId,
@@ -580,17 +504,15 @@ class ConnectionService {
         }
         _everConnected = true;
         _serverOfflineReconnect = false;
-        if (_descriptor.isV3 &&
-            _descriptor.serverPublicKey.isEmpty &&
-            metadata.protocolVersion >= 3) {
+        if (_descriptor.serverPublicKey.isEmpty) {
           _handlePermanentRelayFailure('Missing share v3 server public key');
           break;
         }
         _statusController.add(ConnectionStatus.connected);
         _metadataController.add(metadata);
         debugPrint(
-          '[connection] relay connected proto=${metadata.protocolVersion} share=${metadata.shareMode} '
-          'connect=${metadata.connectMode} room=${metadata.roomId} notice=${metadata.notice}',
+          '[connection] relay connected room=${metadata.roomId} '
+          'connect=${metadata.connectMode} notice=${metadata.notice}',
         );
         _flushPendingResumeHello();
         _startHeartbeat();
@@ -600,7 +522,8 @@ class ConnectionService {
         break;
 
       case 'active_session':
-        if (_descriptor.isV3 && !_keyOfferSent) {
+        // Trigger key exchange if not yet started.
+        if (!_keyOfferSent) {
           try {
             await _beginKeyExchange();
           } catch (error) {
@@ -646,7 +569,6 @@ class ConnectionService {
         break;
 
       case 'relay_ack':
-        // Relay confirmed receipt of our encrypted message.
         final ackId = map['message_id'] as String? ?? '';
         if (ackId.isNotEmpty) {
           _ackController.add(AckEvent(type: 'relay_ack', messageId: ackId));
@@ -654,7 +576,6 @@ class ConnectionService {
         break;
 
       case 'server_ack':
-        // Desktop confirmed processing of our message (plaintext, unencrypted).
         final sackId = map['message_id'] as String? ?? '';
         if (sackId.isNotEmpty) {
           _ackController.add(AckEvent(type: 'server_ack', messageId: sackId));
@@ -666,7 +587,6 @@ class ConnectionService {
         break;
 
       case 'sharing_stopped':
-        // User explicitly stopped sharing — permanent disconnect.
         _cleanup();
         if (!_disposed) {
           _disposed = true;
@@ -763,22 +683,17 @@ class ConnectionService {
     _keyOfferSent = false;
     _resumeHelloSent = false;
     _keyExchangeState = null;
-    if (_descriptor.isV3) {
-      _crypto = null;
-      _keyExchangeReady = Completer<void>();
-    } else {
-      _crypto = TunnelCrypto(_descriptor.cryptoMaterial);
-      _keyExchangeReady = null;
-    }
+    _crypto = null;
+    _keyExchangeReady = Completer<void>();
   }
 
   Future<void> _beginKeyExchange() async {
-    if (!_descriptor.isV3 || _keyOfferSent) return;
+    if (_keyOfferSent) return;
     if (_descriptor.serverPublicKey.isEmpty) {
       throw StateError('missing share v3 server public key');
     }
     if (_clientId.isEmpty) {
-      throw StateError('missing client id for share v3 key exchange');
+      throw StateError('missing client id for key exchange');
     }
     _keyExchangeState = await ShareKeyExchangeState.create();
     _keyOfferSent = true;
@@ -792,7 +707,6 @@ class ConnectionService {
   }
 
   Future<void> _handleKeyAccept(Map<String, dynamic> map) async {
-    if (!_descriptor.isV3) return;
     try {
       final data = map['data'] is Map<String, dynamic>
           ? map['data'] as Map<String, dynamic>
@@ -830,8 +744,7 @@ class ConnectionService {
 
   String _formatConnectError(Object error) {
     final raw = error.toString();
-    if (isUpgradeRequiredMessage(raw) ||
-        (_descriptor.protocolVersion >= 3 && isHttpGoneConnectError(raw))) {
+    if (isUpgradeRequiredMessage(raw)) {
       return 'Upgrade required: please update GGCode Mobile/Desktop to the latest version.';
     }
     if (isPermanentRoomFailureMessage(raw)) {
@@ -960,7 +873,7 @@ class ConnectionService {
     });
   }
 
-  /// ACK an event — tells the relay to advance the cursor.
+  /// ACK an event - tells the relay to advance the cursor.
   void sendAck({
     required String clientId,
     required String eventId,
@@ -987,11 +900,9 @@ class ConnectionService {
   }
 
   Future<void> sendEncrypted(proto.WsMessage msg) async {
-    if (_descriptor.isV3) {
-      final ready = _keyExchangeReady;
-      if (ready != null && !ready.isCompleted) {
-        await ready.future;
-      }
+    final ready = _keyExchangeReady;
+    if (ready != null && !ready.isCompleted) {
+      await ready.future;
     }
     final crypto = _crypto;
     if (crypto == null) {

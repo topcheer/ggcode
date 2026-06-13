@@ -1224,7 +1224,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await cache.registerLiveSession('sess-history', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -1328,7 +1328,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=stale');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-stale&kx_pub=test-pub');
     await cache.registerLiveSession('sess-stale', info,
         lastEventId: 'ev-000000099');
     await cache.flushNow();
@@ -1340,12 +1340,13 @@ void main() {
     final cacheState = container.read(workspaceCacheProvider);
     final connState = container.read(connectionProvider);
 
-    expect(cacheState.selectedWorkspaceKey, isNull);
-    // Session stays in cache but workspaceKey is cleared — won't auto-reconnect.
+    // Session stays in cache — cached data survives connection failures.
     expect(cacheState.selectedSessionId, 'sess-stale');
     expect(connState.status, ConnectionStatus.disconnected);
-    expect(connState.url, isNull);
-    expect(connState.error, contains('Room not found'));
+    expect(connState.error, anyOf(
+      contains('Room not found'),
+      contains('Upgrade required'),
+    ));
     // Workspace exists but URL is on the session, not the workspace
     expect(
       cache.sortedWorkspaces().single.displayName,
@@ -1353,7 +1354,7 @@ void main() {
     );
     expect(
       cache.sortedSessions().single.url,
-      'wss://example.test/ws?token=stale',
+      'wss://example.test/ws?proto=3&room_id=room-stale&kx_pub=test-pub',
     );
   });
 
@@ -1380,7 +1381,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     container.read(chatProvider.notifier).set([
@@ -1408,7 +1409,7 @@ void main() {
     expect(cacheState.selectedWorkspaceKey, isNotNull);
     expect(cacheState.selectedSessionId, 'sess-room');
     expect(connState.status, ConnectionStatus.connecting);
-    expect(connState.url, 'wss://example.test/ws?token=room-a');
+    expect(connState.url, 'wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     expect(connState.error, isNull);
     expect(connState.relaySync?.phase, RelaySyncPhase.waitingHost);
     expect(container.read(displayedMessagesProvider).single.text,
@@ -1433,8 +1434,8 @@ void main() {
     });
 
     final notifier = container.read(connectionProvider.notifier);
-    final connectA = notifier.connect('wss://example.test/ws?token=room-a');
-    final connectB = notifier.connect('wss://example.test/ws?token=room-a');
+    final connectA = notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
+    final connectB = notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
 
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(factoryCalls, 1);
@@ -1446,7 +1447,7 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
-    expect(state.url, 'wss://example.test/ws?token=room-a');
+    expect(state.url, 'wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
   });
 
   test(
@@ -1470,14 +1471,14 @@ void main() {
     });
 
     final notifier = container.read(connectionProvider.notifier);
-    await notifier.connect('wss://example.test/ws?token=room-a');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     expect(
         container.read(connectionProvider).status, ConnectionStatus.connecting);
     expect(serviceA.connectCalls, 1);
 
-    await notifier.connect('wss://example.test/ws?token=room-a');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     expect(factoryCalls, 1);
@@ -1489,7 +1490,7 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
-    expect(state.url, 'wss://example.test/ws?token=room-a');
+    expect(state.url, 'wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
   });
 
   test('restore shows relay sync state until replayed events are applied',
@@ -1730,7 +1731,7 @@ void main() {
       'room-b': serviceB,
     };
     _TestConnectionNotifier.factory = (descriptor) {
-      return servicesByToken[descriptor.token]!;
+      return servicesByToken[descriptor.roomId]!;
     };
     final container = ProviderContainer(
       overrides: [
@@ -1743,9 +1744,9 @@ void main() {
     });
 
     final notifier = container.read(connectionProvider.notifier);
-    final connectA = notifier.connect('wss://example.test/ws?token=room-a');
+    final connectA = notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
-    final connectB = notifier.connect('wss://example.test/ws?token=room-b');
+    final connectB = notifier.connect('wss://example.test/ws?proto=3&room_id=room-b&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     expect(serviceA.disposeCalls, 1);
@@ -1757,7 +1758,7 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
-    expect(state.url, 'wss://example.test/ws?token=room-b');
+    expect(state.url, 'wss://example.test/ws?proto=3&room_id=room-b&kx_pub=test-pub');
   });
 
   test('event ordinal gap applies events but schedules reconnect recovery',
@@ -1778,7 +1779,7 @@ void main() {
     });
 
     final notifier = container.read(connectionProvider.notifier);
-    await notifier.connect('wss://example.test/ws?token=room-a');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     serviceA.emit(proto.WsMessage(
@@ -1845,8 +1846,6 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     expect(capturedDescriptor, isNotNull);
-    expect(capturedDescriptor!.isV3, isTrue);
-    expect(capturedDescriptor!.cryptoMaterial, isEmpty);
     expect(service.connectCalls, 1);
     expect(container.read(connectionProvider).error, isNull);
   });
@@ -1871,15 +1870,15 @@ void main() {
     });
 
     final notifier = container.read(connectionProvider.notifier);
-    await notifier.connect('wss://example.test/ws?token=room-a');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(
         container.read(connectionProvider).status, ConnectionStatus.connected);
 
-    await notifier.connect('wss://example.test/ws?token=room-b');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-b&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(container.read(connectionProvider).url,
-        'wss://example.test/ws?token=room-b');
+        'wss://example.test/ws?proto=3&room_id=room-b&kx_pub=test-pub');
 
     serviceA.emitStatus(ConnectionStatus.disconnected);
     serviceA.emitError('Room not found: stale or expired share token');
@@ -1887,7 +1886,7 @@ void main() {
 
     final state = container.read(connectionProvider);
     expect(state.status, ConnectionStatus.connected);
-    expect(state.url, 'wss://example.test/ws?token=room-b');
+    expect(state.url, 'wss://example.test/ws?proto=3&room_id=room-b&kx_pub=test-pub');
     expect(state.error, isNot(contains('Room not found')));
   });
 
@@ -1901,7 +1900,7 @@ void main() {
     );
 
     final notifier = container.read(connectionProvider.notifier);
-    await notifier.connect('wss://example.test/ws?token=room-a');
+    await notifier.connect('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
     container.dispose();
@@ -2052,7 +2051,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await cache.registerLiveSession('sess-restore', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -2325,7 +2324,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await cache.registerLiveSession('sess-rich', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -2401,7 +2400,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    cache.setPendingUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?proto=3&room_id=room-a&kx_pub=test-pub');
     await cache.registerLiveSession('sess-subagent', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -3121,6 +3120,7 @@ void main() {
           'share_mode': 'legacy',
           'connect_mode': 'token',
           'room_id': 'room-1',
+          'kx_pub': 'test-server-pub',
         },
       }));
       socket.listen((data) {

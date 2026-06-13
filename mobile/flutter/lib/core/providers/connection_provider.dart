@@ -255,14 +255,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         relaySync: null,
         sessionReady: false);
 
-    if (!descriptor.isV3 && descriptor.cryptoMaterial.isEmpty) {
-      if (!_isConnectionGenerationCurrent(generation)) return;
-      state = state.copyWith(
-          status: ConnectionStatus.disconnected,
-          error: 'Invalid URL: missing crypto material');
-      return;
-    }
-
     // Snapshot current UI state before loading persisted values.
     final uiSessionId = _sessionId;
     final uiHasContent = ref.read(chatProvider).isNotEmpty;
