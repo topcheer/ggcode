@@ -238,7 +238,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
     if (!_isConnectionGenerationCurrent(generation)) return;
-    await cache.activateWorkspaceUrl(url);
+    cache.setPendingUrl(url);
     if (!_isConnectionGenerationCurrent(generation)) return;
 
     // Disconnect previous if any

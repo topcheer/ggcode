@@ -983,20 +983,18 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   String? urlForWorkspace(String workspaceKey) =>
       state.workspaces[workspaceKey]?.url;
 
+  /// Store the URL for [registerLiveSession] to use when session_info arrives.
+  /// Must NOT be called from [registerLiveSession] as it is set before
+  /// connecting.  No workspace or session state is touched here — all
+  /// workspace registration happens inside [registerLiveSession] once the
+  /// host sends session_info with the real workspace path.
+  void setPendingUrl(String url) {
+    final normalized = normalizeTunnelUrl(url);
+    _pendingWorkspaceUrl = normalized;
+  }
+
   CachedSessionRecord? sessionForId(String sessionId) =>
       state.sessions[sessionId];
-
-  Future<void> activateWorkspaceUrl(String url) async {
-    await initialize();
-    if (!ref.mounted) return;
-    final normalized = normalizeTunnelUrl(url);
-    final key = _workspaceKeyForUrl(normalized);
-    // Store the URL for registerLiveSession to use when creating the
-    // workspace record. Don't create the workspace itself yet — we need
-    // sessionInfo for the display name.
-    _pendingWorkspaceUrl = normalized;
-    state = state.copyWith(selectedWorkspaceKey: key);
-  }
 
   Future<void> clearSelection() async {
     await initialize();
@@ -1152,7 +1150,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (sessionId.isEmpty) return;
     await initialize();
     if (!ref.mounted) return;
-    final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    // Derive workspace key: prefer the live/selected key (set when reconnecting
+    // to a known workspace), otherwise compute from the pending URL (first scan).
+    String? workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    if ((workspaceKey == null || workspaceKey.isEmpty) &&
+        _pendingWorkspaceUrl != null) {
+      workspaceKey = _workspaceKeyForUrl(_pendingWorkspaceUrl!);
+    }
     if (workspaceKey == null || workspaceKey.isEmpty) return;
     final now = DateTime.now();
     final previousLiveSessionId = state.liveSessionId;
@@ -1191,6 +1195,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         authorityEpoch:
             authorityEpoch ?? state.sessions[sessionKey]?.authorityEpoch,
         lastUpdatedAt: now,
+        url: _pendingWorkspaceUrl ?? state.sessions[sessionKey]?.url ?? '',
       );
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
