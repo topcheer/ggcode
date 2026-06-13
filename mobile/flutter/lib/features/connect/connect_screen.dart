@@ -242,14 +242,13 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   border: Border.all(color: AppColors.borderStrong),
                   boxShadow: AppShadows.panel,
                 ),
-                child: Center(
-                  child: Text(
-                    'GG',
-                    style: TextStyle(
-                      color: AppColors.accent,
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                    ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Image.asset(
+                    'assets/icon.png',
+                    width: 72,
+                    height: 72,
+                    fit: BoxFit.contain,
                   ),
                 ),
               ),
