@@ -16,6 +16,7 @@ class StoredConnection {
   final String clientId;
   final String? sessionId;
   final String? lastEventId;
+  final String? durableEventId;
   final String? workspacePath;
   final String? displayName;
   final String? providerName;
@@ -33,6 +34,7 @@ class StoredConnection {
     required this.clientId,
     this.sessionId,
     this.lastEventId,
+    this.durableEventId,
     this.workspacePath,
     this.displayName,
     this.providerName,
@@ -69,6 +71,7 @@ class StoredConnection {
   StoredConnection copyWith({
     String? sessionId,
     String? lastEventId,
+    String? durableEventId,
     String? workspacePath,
     String? displayName,
     String? providerName,
@@ -85,6 +88,7 @@ class StoredConnection {
       clientId: clientId,
       sessionId: sessionId ?? this.sessionId,
       lastEventId: lastEventId ?? this.lastEventId,
+      durableEventId: durableEventId ?? this.durableEventId,
       workspacePath: workspacePath ?? this.workspacePath,
       displayName: displayName ?? this.displayName,
       providerName: providerName ?? this.providerName,
@@ -104,6 +108,7 @@ class StoredConnection {
         'clientId': clientId,
         'sessionId': sessionId,
         'lastEventId': lastEventId,
+        'durableEventId': durableEventId,
         'workspacePath': workspacePath,
         'displayName': displayName,
         'providerName': providerName,
@@ -123,6 +128,7 @@ class StoredConnection {
       clientId: json['clientId'] as String? ?? StoredConnection.generateClientId(),
       sessionId: json['sessionId'] as String?,
       lastEventId: json['lastEventId'] as String?,
+      durableEventId: json['durableEventId'] as String?,
       workspacePath: json['workspacePath'] as String?,
       displayName: json['displayName'] as String?,
       providerName: json['providerName'] as String?,
