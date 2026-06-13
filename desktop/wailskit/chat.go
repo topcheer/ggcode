@@ -1316,18 +1316,10 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		return
 	}
 
-	// Delegate all negotiation to TunnelHost:
-	// AttachOnlineBroker, BindSession, PrepareOnlineShare (SetEventRecorder(nil),
-	// SetReplayProvider, BindSession, SetAuthorityEpoch, AnnounceActiveSession)
-	if b.tunnelHost != nil {
-		b.tunnelHost.AttachOnlineBroker(broker)
-		if currentSes != nil {
-			b.tunnelHost.BindSession(currentSes, b.sessionStore)
-		}
-		_ = b.tunnelHost.PrepareOnlineShare(broker)
-	}
-
-	// Send initial control messages so mobile has session info, status, and activity
+	// Send session_info BEFORE AttachOnlineBroker so that cachedSessionInfo
+	// is populated when AnnounceActiveSession fires inside AttachOnlineBroker.
+	// The active_session message carries workspace metadata to the relay,
+	// which the mobile client needs to create the workspace record.
 	if working && cfg != nil {
 		resolved, _ := cfg.ResolveActiveEndpoint()
 		model := ""
@@ -1343,6 +1335,21 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 			Mode:      cfg.DefaultMode,
 			Language:  cfg.Language,
 		})
+	}
+
+	// Delegate all negotiation to TunnelHost:
+	// AttachOnlineBroker, BindSession, PrepareOnlineShare (SetEventRecorder(nil),
+	// SetReplayProvider, BindSession, SetAuthorityEpoch, AnnounceActiveSession)
+	if b.tunnelHost != nil {
+		b.tunnelHost.AttachOnlineBroker(broker)
+		if currentSes != nil {
+			b.tunnelHost.BindSession(currentSes, b.sessionStore)
+		}
+		_ = b.tunnelHost.PrepareOnlineShare(broker)
+	}
+
+	// Send status and activity after AttachOnlineBroker
+	if working && cfg != nil {
 		status := b.CurrentTunnelStatus()
 		broker.PushStatus(status.Status, status.Message)
 		activity := b.CurrentTunnelActivity()
