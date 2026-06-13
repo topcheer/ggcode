@@ -769,6 +769,11 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			b.bumpNextEvent(info.LastEventID)
 		}
 		b.markRelayReady()
+		// Always send active_session on server reconnect so the relay
+		// has up-to-date workspace metadata. Even when the relay's
+		// history is trusted, the room may have been restored from
+		// SQLite without workspace fields (e.g. after relay restart).
+		b.sendActiveSession(currentSessionID)
 		return
 	}
 	b.snapshotMu.RLock()
