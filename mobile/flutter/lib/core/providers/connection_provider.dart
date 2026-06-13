@@ -13,6 +13,7 @@ import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
 
 import 'chat_provider.dart';
+import 'connection_store.dart';
 import 'background_connection_manager.dart';
 import 'ui_providers.dart';
 import 'workspace_cache.dart';
@@ -126,6 +127,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   String _shareRoomId = '';
   String _shareRenewToken = '';
   String _liveUrl = '';
+
+  /// The active connection's persistent state (resume cursor, workspace info).
+  /// Null for background connections — each has its own ConnectionService.
+  StoredConnection? _currentConnection;
+  final ConnectionStore _connectionStore = ConnectionStore();
   bool _hasAuthoritativeProjection = false;
   int _relayAuthorityEpoch = 0;
   final List<String> _recentEventIds = <String>[];
@@ -265,42 +271,32 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
     // Snapshot current UI state before loading persisted values.
     final uiSessionId = _sessionId;
-    // Check for actual rendered content, not just sessionInfo.
-    // sessionInfo can survive a disconnect that cleared the chat UI.
     final uiHasContent = ref.read(chatProvider).isNotEmpty;
 
-    final forcedResumeOverrideEventId = _resumeOverrideEventId;
-    await _loadResumeState();
-    if (!_isConnectionGenerationCurrent(generation)) return;
-    // If the persisted resume state is for a different room, discard it.
-    // This happens when scanning a new QR code — the old session/event data
-    // belongs to a different relay room and must not be sent as resume_from.
-    if (_shareRoomId.isNotEmpty &&
-        descriptor.roomId.isNotEmpty &&
-        _shareRoomId != descriptor.roomId) {
-      debugPrint(
-        '[connection] resume state room mismatch saved=$_shareRoomId current=${descriptor.roomId} — clearing',
-      );
-      _sessionId = '';
-      _lastAppliedEventId = '';
-      _lastDurableEventId = '';
-      _relayAuthorityEpoch = 0;
-      _shareRoomId = '';
-      _shareRenewToken = '';
+    // Use StoredConnection for per-connection resume state.
+    // New scan (clearState=true): create fresh connection, empty resume state.
+    // Reconnect (clearState=false): look up existing by roomId.
+    await _connectionStore.load();
+    StoredConnection? conn = _connectionStore.findByRoomId(descriptor.roomId);
+    if (clearState && (conn == null || conn.url != url)) {
+      // New connection from user scan — create fresh.
+      conn = StoredConnection.forUrl(url, descriptor.roomId, active: true);
+      await _connectionStore.add(conn);
+    } else if (conn != null) {
+      // Reconnecting to existing room — mark active.
+      await _connectionStore.setActive(conn.id);
     }
-    await _resetResumeIdentityForSparseSnapshot();
-    if (!_isConnectionGenerationCurrent(generation)) return;
-    await _prepareResumeOverrideForCursorSkew();
-    if (forcedResumeOverrideEventId.isNotEmpty) {
-      _resumeOverrideEventId = forcedResumeOverrideEventId;
-    }
-    if (!_isConnectionGenerationCurrent(generation)) return;
-    if (descriptor.isV2 &&
-        _shareRoomId.isNotEmpty &&
-        _shareRoomId == descriptor.roomId &&
-        _shareRenewToken.isNotEmpty) {
-      descriptor = descriptor.copyWith(renewToken: _shareRenewToken);
-    }
+    _currentConnection = conn;
+
+    // Set resume state from StoredConnection — each connection is independent.
+    _sessionId = conn?.sessionId ?? '';
+    _lastAppliedEventId = conn?.lastEventId ?? '';
+    _lastDurableEventId = _lastAppliedEventId;
+    _shareRoomId = conn?.roomId ?? '';
+    _clientId = conn?.clientId ?? '';
+    _resumeOverrideEventId = '';
+    _relayAuthorityEpoch = 0;
+    _shareRenewToken = '';
     final localService = createConnectionService(descriptor);
     if (!_isConnectionGenerationCurrent(generation)) {
       localService.dispose();
@@ -2053,28 +2049,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _persistResumeStateNow() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_resumeClientIdKey, _clientId);
-    await prefs.setString(_resumeSessionIdKey, _sessionId);
-    if (_lastDurableEventId.isNotEmpty) {
-      await prefs.setString(_resumeEventIdKey, _lastDurableEventId);
-    } else {
-      await prefs.remove(_resumeEventIdKey);
-    }
-    if (_relayAuthorityEpoch > 0) {
-      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
-    } else {
-      await prefs.remove(_resumeAuthorityEpochKey);
-    }
-    if (_shareRoomId.isNotEmpty) {
-      await prefs.setString(_resumeRoomIdKey, _shareRoomId);
-    } else {
-      await prefs.remove(_resumeRoomIdKey);
-    }
-    if (_shareRenewToken.isNotEmpty) {
-      await prefs.setString(_resumeRenewTokenKey, _shareRenewToken);
-    } else {
-      await prefs.remove(_resumeRenewTokenKey);
+    // Save to StoredConnection (per-connection resume state)
+    if (_currentConnection != null) {
+      _currentConnection = _currentConnection!.copyWith(
+        sessionId: _sessionId,
+        lastEventId: _lastDurableEventId.isNotEmpty
+            ? _lastDurableEventId
+            : _lastAppliedEventId,
+        lastConnectedAt: DateTime.now(),
+      );
+      await _connectionStore.update(
+          _currentConnection!.id, _currentConnection!);
     }
   }
 
