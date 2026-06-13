@@ -4,7 +4,6 @@ import 'dart:developer';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
 import '../connection_service.dart';
 export '../connection_service.dart' show ConnectionStatus, normalizeTunnelUrl;
@@ -112,20 +111,12 @@ class TunnelConnectionState {
 
 class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   ConnectionService? service;
-  static const _resumeClientIdKey = 'ggcode_tunnel_client_id';
-  static const _resumeSessionIdKey = 'ggcode_tunnel_session_id';
-  static const _resumeEventIdKey = 'ggcode_tunnel_last_event_id';
-  static const _resumeAuthorityEpochKey = 'ggcode_tunnel_authority_epoch';
-  static const _resumeRoomIdKey = 'ggcode_tunnel_room_id';
-  static const _resumeRenewTokenKey = 'ggcode_tunnel_renew_token';
 
   String _clientId = '';
   String _sessionId = '';
   String _lastAppliedEventId = '';
   String _lastDurableEventId = '';
   String _resumeOverrideEventId = '';
-  String _shareRoomId = '';
-  String _shareRenewToken = '';
   String _liveUrl = '';
 
   /// The active connection's persistent state (resume cursor, workspace info).
@@ -294,12 +285,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // Set resume state from StoredConnection — each connection is independent.
     _sessionId = conn?.sessionId ?? '';
     _lastAppliedEventId = conn?.lastEventId ?? '';
-    _lastDurableEventId = _lastAppliedEventId;
-    _shareRoomId = conn?.roomId ?? '';
+    _lastDurableEventId = conn?.durableEventId ?? _lastAppliedEventId;
     _clientId = conn?.clientId ?? '';
-    _resumeOverrideEventId = '';
+    if (clearState) {
+      _resumeOverrideEventId = '';
+    }
     _relayAuthorityEpoch = 0;
-    _shareRenewToken = '';
     final localService = createConnectionService(descriptor);
     if (!_isConnectionGenerationCurrent(generation)) {
       localService.dispose();
@@ -500,24 +491,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // workspace metadata embedded in the active_session message by relay.
         final sessionInfo = ref.read(sessionInfoProvider) ??
             _sessionInfoFromActiveSession(msg.data);
-        debugPrint('[connection] active_session workspace: sessionInfoProvider=${ref.read(sessionInfoProvider) != null} '
-            'fromActiveSession=${sessionInfo != null} '
-            'workspace="${sessionInfo?.workspace}" '
-            'activeSessionDataKeys=${msg.data?.keys.toList()}');
-        // Update StoredConnection with workspace info for the list UI
-        if (_currentConnection != null && sessionInfo != null) {
-          final display = sessionInfo.workspace.isNotEmpty
-              ? sessionInfo.workspace.split('/').last
-              : _currentConnection!.displayName ?? '';
-          _currentConnection = _currentConnection!.copyWith(
-            workspacePath: sessionInfo.workspace,
-            displayName: display,
-            providerName: sessionInfo.provider,
-            modelName: sessionInfo.model,
-            sessionId: sessionId,
-          );
-          _connectionStore.update(_currentConnection!.id, _currentConnection!);
-        }
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, sessionInfo,
             lastEventId: _lastAppliedEventId,
@@ -1220,25 +1193,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return prefs.getStringList('ggcode_history') ?? [];
   }
 
-  Future<void> _loadResumeState() async {
-    final prefs = await SharedPreferences.getInstance();
-    _clientId = prefs.getString(_resumeClientIdKey) ?? '';
-    if (_clientId.isEmpty) {
-      _clientId = Uuid().v4();
-      await prefs.setString(_resumeClientIdKey, _clientId);
-    }
-    _sessionId = prefs.getString(_resumeSessionIdKey) ?? _sessionId;
-    _lastAppliedEventId =
-        prefs.getString(_resumeEventIdKey) ?? _lastAppliedEventId;
-    _lastDurableEventId = _lastAppliedEventId;
-    _relayAuthorityEpoch =
-        prefs.getInt(_resumeAuthorityEpochKey) ?? _relayAuthorityEpoch;
-    _shareRoomId = prefs.getString(_resumeRoomIdKey) ?? _shareRoomId;
-    _shareRenewToken =
-        prefs.getString(_resumeRenewTokenKey) ?? _shareRenewToken;
-    _resumeOverrideEventId = '';
-  }
-
   Future<void> _handlePermanentRoomFailure(
     String failedUrl,
     String error, {
@@ -1417,6 +1371,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _recentEventSet.remove(evicted);
     }
     _captureLiveProjectionForDurableResume();
+    _persistResumeState();
   }
 
   void _maybeCompleteActiveSessionBarrier() {
@@ -1584,8 +1539,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             sessionId: _sessionId.isNotEmpty ? _sessionId : null,
             lastEventId: _resumeOverrideEventId.isNotEmpty
                 ? _resumeOverrideEventId
-                : null,
-            messageType: _resumeOverrideEventId.isNotEmpty
+                : (_lastDurableEventId.isNotEmpty
+                    ? _lastDurableEventId
+                    : null),
+            messageType: (_resumeOverrideEventId.isNotEmpty ||
+                    _lastDurableEventId.isNotEmpty)
                 ? 'resume_from'
                 : 'resume_hello',
           );
@@ -1627,11 +1585,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       }),
       localService.metadataStream.listen((metadata) {
         if (!_isActiveConnection(localService, generation)) return;
-        if (metadata.roomId.isNotEmpty) {
-          _shareRoomId = metadata.roomId;
-        }
         if (metadata.renewToken.isNotEmpty) {
-          _shareRenewToken = metadata.renewToken;
           _persistResumeState();
         }
         if (metadata.notice.isNotEmpty) {
@@ -1674,75 +1628,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     return snapshot.sessionInfo == null &&
         snapshot.lastEventId.isNotEmpty &&
         snapshot.messages.length <= 8;
-  }
-
-  Future<void> _resetResumeIdentityForSparseSnapshot() async {
-    final cacheState = ref.read(workspaceCacheProvider);
-    final sessionId = cacheState.selectedSessionId;
-    if (sessionId == null || sessionId.isEmpty) {
-      return;
-    }
-    final snapshot =
-        ref.read(workspaceCacheProvider.notifier).snapshotFor(sessionId);
-    if (snapshot == null || !_isSparseResumeSnapshot(snapshot)) {
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    _clientId = const Uuid().v4();
-    _sessionId = sessionId;
-    _lastAppliedEventId = '';
-    _lastDurableEventId = '';
-    _resumeOverrideEventId = '';
-    _relayAuthorityEpoch = snapshot.authorityEpoch;
-    _shareRoomId = '';
-    _shareRenewToken = '';
-    await prefs.setString(_resumeClientIdKey, _clientId);
-    await prefs.setString(_resumeSessionIdKey, _sessionId);
-    await prefs.remove(_resumeEventIdKey);
-    if (_relayAuthorityEpoch > 0) {
-      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
-    } else {
-      await prefs.remove(_resumeAuthorityEpochKey);
-    }
-    await prefs.remove(_resumeRoomIdKey);
-    await prefs.remove(_resumeRenewTokenKey);
-  }
-
-  Future<void> _prepareResumeOverrideForCursorSkew() async {
-    final cacheState = ref.read(workspaceCacheProvider);
-    final sessionId = cacheState.selectedSessionId;
-    if (sessionId == null ||
-        sessionId.isEmpty ||
-        _sessionId.isEmpty ||
-        _sessionId != sessionId ||
-        _lastAppliedEventId.isEmpty) {
-      return;
-    }
-    final snapshot =
-        ref.read(workspaceCacheProvider.notifier).snapshotFor(sessionId);
-    final snapshotCursor = snapshot?.lastEventId ?? '';
-    final persistedOrdinal = _parseEventOrdinal(_lastAppliedEventId);
-    final snapshotOrdinal = _parseEventOrdinal(snapshotCursor);
-    if (snapshot == null ||
-        snapshotCursor.isEmpty ||
-        persistedOrdinal == null ||
-        snapshotOrdinal == null ||
-        persistedOrdinal <= snapshotOrdinal) {
-      return;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    _sessionId = sessionId;
-    _lastAppliedEventId = snapshotCursor;
-    _lastDurableEventId = snapshotCursor;
-    _resumeOverrideEventId = snapshotCursor;
-    _relayAuthorityEpoch = snapshot.authorityEpoch;
-    await prefs.setString(_resumeSessionIdKey, _sessionId);
-    await prefs.setString(_resumeEventIdKey, _lastDurableEventId);
-    if (_relayAuthorityEpoch > 0) {
-      await prefs.setInt(_resumeAuthorityEpochKey, _relayAuthorityEpoch);
-    } else {
-      await prefs.remove(_resumeAuthorityEpochKey);
-    }
   }
 
   void _captureLiveProjectionForDurableResume() {
@@ -2066,11 +1951,21 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   void _persistResumeState() {
-    unawaited(_persistResumeStateNow());
+    // Update _currentConnection synchronously so reconnects read fresh state.
+    if (_currentConnection != null) {
+      _currentConnection = _currentConnection!.copyWith(
+        sessionId: _sessionId,
+        lastEventId: _lastDurableEventId.isNotEmpty
+            ? _lastDurableEventId
+            : _lastAppliedEventId,
+        lastConnectedAt: DateTime.now(),
+      );
+      unawaited(_connectionStore.update(
+          _currentConnection!.id, _currentConnection!));
+    }
   }
 
   Future<void> _persistResumeStateNow() async {
-    // Save to StoredConnection (per-connection resume state)
     if (_currentConnection != null) {
       _currentConnection = _currentConnection!.copyWith(
         sessionId: _sessionId,
@@ -2085,14 +1980,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _clearPersistedResumeState([SharedPreferences? prefs]) async {
-    final store = prefs ?? await SharedPreferences.getInstance();
-    await store.remove(_resumeSessionIdKey);
-    await store.remove(_resumeEventIdKey);
-    await store.remove(_resumeAuthorityEpochKey);
-    await store.remove(_resumeRoomIdKey);
-    await store.remove(_resumeRenewTokenKey);
-    _shareRoomId = '';
-    _shareRenewToken = '';
+    // Resume state is now per-connection in ConnectionStore.
   }
 
   /// Construct a SessionInfoData from the workspace metadata embedded in
