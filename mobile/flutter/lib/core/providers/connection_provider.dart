@@ -2083,9 +2083,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// Returns null if no workspace info is available.
   proto.SessionInfoData? _sessionInfoFromActiveSession(Map<String, dynamic>? data) {
     if (data == null) return null;
-    final wsPath = data['workspace_path'] as String? ?? '';
-    final prov = data['provider_name'] as String? ?? '';
-    final mdl = data['model_name'] as String? ?? '';
+    // Relay sends workspace info in a nested "data" field:
+    // {"authority_epoch": 1, "data": {"workspace_path": "...", ...}}
+    final inner = data['data'] is Map<String, dynamic>
+        ? data['data'] as Map<String, dynamic>
+        : data['data'] is Map
+            ? Map<String, dynamic>.from(data['data'] as Map)
+            : null;
+    final source = inner ?? data;
+    final wsPath = source['workspace_path'] as String? ?? '';
+    final prov = source['provider_name'] as String? ?? '';
+    final mdl = source['model_name'] as String? ?? '';
     if (wsPath.isEmpty && prov.isEmpty && mdl.isEmpty) return null;
     return proto.SessionInfoData(
       workspace: wsPath,
