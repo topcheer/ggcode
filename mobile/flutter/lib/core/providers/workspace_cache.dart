@@ -1241,7 +1241,6 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     } else if (displayName.isNotEmpty) {
       // Workspace doesn't exist yet — create it now that we have sessionInfo.
-      // URL is NOT stored on the workspace — it belongs to the session.
       _pendingWorkspaceUrl = null;
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
