@@ -130,8 +130,10 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 		return nil
 
 	case "", "start", "on":
+		// Always stop any existing share first — each share must create
+		// a brand-new room so mobile clients never reconnect to a stale room.
 		if m.tunnelSession != nil {
-			return m.refreshTunnelInvite(m.tunnelGeneration, m.tunnelSession)
+			m.closeTunnelGracefullyAsync(5 * time.Second)
 		}
 		if m.tunnelStarting {
 			return nil
