@@ -1305,13 +1305,22 @@ func (a *App) IsSharing() bool {
 
 // StartShare starts a tunnel session and returns connection info for the frontend.
 func (a *App) StartShare() (*ShareInfo, error) {
-	// Always stop any existing share first — each share must create a
-	// brand-new room so mobile clients never reconnect to a stale room.
+	// If already sharing, try to refresh the invite (same room, new ticket).
+	// This allows mobile to reconnect seamlessly after a brief relay hiccup.
 	if sess := a.currentTunnelSession(); sess != nil {
-		debug.Log("share", "stopping existing share before starting new one")
-		a.stopShare()
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "tunnel:disconnected", nil)
+		info, err := sess.RefreshInvite(context.Background())
+		if err != nil {
+			// Stale session (room not live, relay restarted, etc.) — discard
+			// and create a fresh one below.
+			debug.Log("share", "refresh invite failed, starting new session: %v", err)
+			a.tunnelMu.Lock()
+			a.tunnelSession = nil
+			a.tunnelMu.Unlock()
+		} else {
+			return &ShareInfo{
+				ConnectURL:   info.ConnectURL,
+				QRCodeBase64: encodeQRBase64(info.QRCodePNG),
+			}, nil
 		}
 	}
 
