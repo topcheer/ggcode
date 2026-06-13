@@ -63,7 +63,6 @@ class _PreloadedWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
         workspaces: {
           'workspace-1': WorkspaceRecord(
             key: 'workspace-1',
-            url: 'wss://example.test/ws?token=abc',
             displayName: 'example.test',
             lastSessionId: '',
             lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
@@ -85,7 +84,6 @@ class _SelectedSessionWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
         workspaces: {
           'workspace-1': WorkspaceRecord(
             key: 'workspace-1',
-            url: 'wss://example.test/ws?token=abc',
             displayName: 'example.test',
             lastSessionId: 'sess-1',
             lastOpenedAt: DateTime.fromMillisecondsSinceEpoch(0),
