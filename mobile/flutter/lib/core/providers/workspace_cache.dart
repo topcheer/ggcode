@@ -1150,12 +1150,22 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (sessionId.isEmpty) return;
     await initialize();
     if (!ref.mounted) return;
-    // Derive workspace key: prefer the live/selected key (set when reconnecting
-    // to a known workspace), otherwise compute from the pending URL (first scan).
-    String? workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    // Derive workspace key from the host-provided workspace path.
+    // This ensures multiple host instances sharing the same workspace directory
+    // map to the same key on mobile, regardless of their relay URL/token.
+    final workspacePath = sessionInfo?.workspace ?? '';
+    String? workspaceKey;
+    if (workspacePath.isNotEmpty) {
+      workspaceKey = _workspaceKeyForPath(workspacePath);
+    }
+    // Fallback: reconnecting to a known workspace, or sparse resume without sessionInfo
+    if (workspaceKey == null || workspaceKey.isEmpty) {
+      workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    }
+    // Last resort: derive from pending URL (first scan, sessionInfo not yet available)
     if ((workspaceKey == null || workspaceKey.isEmpty) &&
         _pendingWorkspaceUrl != null) {
-      workspaceKey = _workspaceKeyForUrl(_pendingWorkspaceUrl!);
+      workspaceKey = _workspaceKeyForPath(_pendingWorkspaceUrl!);
     }
     if (workspaceKey == null || workspaceKey.isEmpty) return;
     final now = DateTime.now();
@@ -1625,8 +1635,10 @@ String _normalizedCachedAgentStatus(String status) {
   }
 }
 
-String _workspaceKeyForUrl(String url) =>
-    base64UrlEncode(utf8.encode(url)).replaceAll('=', '');
+/// Derive a stable workspace key from the host-provided workspace path.
+/// Same path on different host instances → same key on mobile.
+String _workspaceKeyForPath(String path) =>
+    base64UrlEncode(utf8.encode(path)).replaceAll('=', '');
 
 String _sessionCacheKey(String workspaceKey, String sessionId) =>
     '$workspaceKey::$sessionId';
