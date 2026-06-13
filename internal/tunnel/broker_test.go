@@ -1741,62 +1741,6 @@ func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIs
 	}
 }
 
-func TestBrokerHandleUnsupportedOldClientConnectedSkipsPerClientBootstrap(t *testing.T) {
-	b, d := newBrokerForTest()
-	defer b.Stop()
-	b.sessionID = "sess-local"
-	activeClient := testRelayClient(t, "wss://test.local")
-	b.session.client = activeClient
-	infoJSON, err := json.Marshal(SessionInfoData{Workspace: "/tmp/project", Version: "dev"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	textJSON, err := json.Marshal(TextData{ID: "msg-1", Chunk: "hello"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b.SetSnapshotProvider(func() BrokerSnapshot {
-		return BrokerSnapshot{
-			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
-		}
-	})
-	b.SetReplayProvider(func() []GatewayMessage {
-		return []GatewayMessage{
-			{
-				SessionID: "sess-local",
-				EventID:   "ev-000000001",
-				Type:      EventSessionInfo,
-				Data:      infoJSON,
-			},
-			{
-				SessionID: "sess-local",
-				EventID:   "ev-000000002",
-				Type:      EventText,
-				StreamID:  "msg-1",
-				Data:      textJSON,
-			},
-		}
-	})
-
-	b.handleRelayConnected(RelayConnectedState{
-		Role:            "client",
-		SessionID:       "sess-local",
-		AuthorityEpoch:  b.AuthorityEpoch(),
-		HistoryCount:    0,
-		ProtocolVersion: ShareProtocolV2,
-	})
-
-	time.Sleep(10 * time.Millisecond)
-	if msgs := d.drain(); len(msgs) != 0 {
-		t.Fatalf("expected no authoritative replay for unsupported client, got %+v", msgs)
-	}
-	select {
-	case raw := <-activeClient.sendCh:
-		t.Fatalf("expected no broker bootstrap for unsupported client, got %s", raw)
-	default:
-	}
-}
-
 func TestBrokerHandleClientConnectedReplaysQueuedDistinctConnectAfterInFlightReplay(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

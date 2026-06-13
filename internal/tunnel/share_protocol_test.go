@@ -75,7 +75,7 @@ func TestRequestIssuedShareSession(t *testing.T) {
 	defer srv.Close()
 
 	relayURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV2: true, EnableV3: true})
+	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV3: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRequestIssuedShareSessionV3OmitsPublicCryptoKey(t *testing.T) {
 	defer srv.Close()
 
 	relayURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV2: true, EnableV3: true})
+	server, client, err := requestIssuedShareSession(context.Background(), relayURL, ShareRuntimeConfig{EnableV3: true})
 	if err != nil {
 		t.Fatal(err)
 	}

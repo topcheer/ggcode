@@ -95,7 +95,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.token = publicDesc.SessionToken()
+	s.token = publicDesc.RoomID
 
 	client, err := NewRelayClientWithDescriptor(s.relayURL, serverDesc, "server", s.meta)
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 
 	info := &SessionInfo{
 		ConnectURL:          connectURL,
-		Token:               publicDesc.SessionToken(),
+		Token:               publicDesc.RoomID,
 		QRCode:              qrStr,
 		QRCodePNG:           qrPNG,
 		QRLines:             qrLines,
@@ -248,7 +248,7 @@ func (s *Session) RefreshInvite(ctx context.Context) (*SessionInfo, error) {
 	qrPNG, _ := QRCodePNG(connectURL)
 	info := &SessionInfo{
 		ConnectURL:          connectURL,
-		Token:               publicDesc.SessionToken(),
+		Token:               publicDesc.RoomID,
 		QRCode:              qrStr,
 		QRCodePNG:           qrPNG,
 		QRLines:             qrLines,

@@ -99,7 +99,7 @@ func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role st
 	if !desc.IsV3() {
 		return nil, fmt.Errorf("share v3 descriptor required")
 	}
-	crypto, err := NewCrypto(desc.CryptoMaterial())
+	crypto, err := NewCrypto(desc.CryptoKey)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func NewRelayClientWithDescriptor(relayURL string, desc ShareDescriptor, role st
 	}
 	return &RelayClient{
 		relayURL:       strings.TrimSuffix(relayURL, "/"),
-		token:          desc.SessionToken(),
+		token:          desc.RoomID,
 		crypto:         crypto,
 		role:           role,
 		meta:           meta,
@@ -734,7 +734,7 @@ func (rc *RelayClient) updateShareDescriptor(fn func(desc *ShareDescriptor)) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	fn(&rc.desc)
-	rc.token = rc.desc.SessionToken()
+	rc.token = rc.desc.RoomID
 }
 
 func (rc *RelayClient) handleKeyOffer(clientID string, raw json.RawMessage) error {
