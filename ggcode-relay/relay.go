@@ -77,6 +77,9 @@ type room struct {
 	clients         map[*peer]struct{}
 	clientsByID     map[string]*peer
 	lastEventAt     time.Time
+	workspacePath   string
+	providerName    string
+	modelName       string
 
 	mu           sync.RWMutex
 	sendMu       sync.Mutex
@@ -122,6 +125,9 @@ func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
 	}
 	r.sessionID = state.sessionID
 	r.authorityEpoch = state.authorityEpoch
+	r.workspacePath = state.workspacePath
+	r.providerName = state.providerName
+	r.modelName = state.modelName
 	r.history = append([]roomEvent(nil), state.history...)
 	r.bootstrap = make(map[string]roomEvent)
 	for _, ev := range r.history {
@@ -482,14 +488,23 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	p.hub.trace("server_request", p.room.token, msg)
 
 	sessionID := msg.SessionID
-	if sessionID == "" {
+	var wsPath, provName, mdlName string
+	if sessionID == "" || true {
 		var data struct {
-			SessionID string `json:"session_id"`
+			SessionID     string `json:"session_id"`
+			WorkspacePath string `json:"workspace_path"`
+			ProviderName  string `json:"provider_name"`
+			ModelName     string `json:"model_name"`
 		}
 		if msg.Data != nil {
 			_ = json.Unmarshal(msg.Data, &data)
 		}
-		sessionID = data.SessionID
+		if sessionID == "" {
+			sessionID = data.SessionID
+		}
+		wsPath = data.WorkspacePath
+		provName = data.ProviderName
+		mdlName = data.ModelName
 	}
 	if sessionID == "" {
 		return
@@ -497,6 +512,17 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
+
+	// Update room workspace metadata
+	if wsPath != "" {
+		p.room.workspacePath = wsPath
+	}
+	if provName != "" {
+		p.room.providerName = provName
+	}
+	if mdlName != "" {
+		p.room.modelName = mdlName
+	}
 
 	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
@@ -522,7 +548,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 
 	if p.hub.store != nil {
 		go func() {
-			_ = p.hub.store.persistActiveSession(p.room.token, sessionID, authorityEpoch)
+			_ = p.hub.store.persistActiveSession(p.room.token, sessionID, authorityEpoch, wsPath, provName, mdlName)
 		}()
 	}
 }
@@ -581,6 +607,21 @@ func (p *peer) onResume(msg relayMessage, h *hub) {
 		SessionID:      sessionID,
 		ClientID:       msg.ClientID,
 		AuthorityEpoch: authorityEpoch,
+	}
+	// Attach workspace metadata so mobile can create workspace
+	// immediately without waiting for session_info replay.
+	if p.room.workspacePath != "" || p.room.providerName != "" || p.room.modelName != "" {
+		activeSession.Data, _ = json.Marshal(struct {
+			SessionID     string `json:"session_id"`
+			WorkspacePath string `json:"workspace_path"`
+			ProviderName  string `json:"provider_name"`
+			ModelName     string `json:"model_name"`
+		}{
+			SessionID:     sessionID,
+			WorkspacePath: p.room.workspacePath,
+			ProviderName:  p.room.providerName,
+			ModelName:     p.room.modelName,
+		})
 	}
 
 	p.ready = false

@@ -496,7 +496,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 }
 
 func (rc *RelayClient) SendActiveSession(sessionID string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string) error {
-	return rc.SendActiveSessionWithMode(sessionID, "", authorityEpoch, barrierEventID, barrierOrdinal, projectionHash)
+	return rc.SendActiveSessionWithMode(sessionID, "", authorityEpoch, barrierEventID, barrierOrdinal, projectionHash, "", "", "")
 }
 
 func (rc *RelayClient) SendServerReady(authorityEpoch uint64) error {
@@ -519,7 +519,7 @@ func (rc *RelayClient) SendServerReady(authorityEpoch uint64) error {
 	return rc.enqueueRaw(data)
 }
 
-func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string) error {
+func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string, workspacePath string, providerName string, modelName string) error {
 	rc.closeMu.Lock()
 	if rc.closed {
 		rc.closeMu.Unlock()
@@ -551,6 +551,9 @@ func (rc *RelayClient) SendActiveSessionWithMode(sessionID, mode string, authori
 			BarrierEventID: barrierEventID,
 			BarrierOrdinal: barrierOrdinal,
 			ProjectionHash: projectionHash,
+			WorkspacePath:  workspacePath,
+			ProviderName:   providerName,
+			ModelName:      modelName,
 		}),
 	})
 	if err != nil {

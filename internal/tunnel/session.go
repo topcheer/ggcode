@@ -195,11 +195,18 @@ func (s *Session) SendActiveSession(sessionID string, authorityEpoch uint64, bar
 	return s.client.SendActiveSession(sessionID, authorityEpoch, barrierEventID, barrierOrdinal, projectionHash)
 }
 
-func (s *Session) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string) error {
+func (s *Session) SendActiveSessionWithParams(sessionID string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string, workspacePath, providerName, modelName string) error {
 	if s.client == nil {
 		return fmt.Errorf("tunnel session: no relay client")
 	}
-	return s.client.SendActiveSessionWithMode(sessionID, mode, authorityEpoch, barrierEventID, barrierOrdinal, projectionHash)
+	return s.client.SendActiveSessionWithMode(sessionID, "", authorityEpoch, barrierEventID, barrierOrdinal, projectionHash, workspacePath, providerName, modelName)
+}
+
+func (s *Session) SendActiveSessionWithMode(sessionID, mode string, authorityEpoch uint64, barrierEventID string, barrierOrdinal int64, projectionHash string, workspacePath, providerName, modelName string) error {
+	if s.client == nil {
+		return fmt.Errorf("tunnel session: no relay client")
+	}
+	return s.client.SendActiveSessionWithMode(sessionID, mode, authorityEpoch, barrierEventID, barrierOrdinal, projectionHash, workspacePath, providerName, modelName)
 }
 
 func (s *Session) SendServerReady(authorityEpoch uint64) error {

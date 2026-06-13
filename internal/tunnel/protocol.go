@@ -127,6 +127,9 @@ type ActiveSessionData struct {
 	BarrierEventID string `json:"barrier_event_id,omitempty"`
 	BarrierOrdinal int64  `json:"barrier_ordinal,omitempty"`
 	ProjectionHash string `json:"projection_hash,omitempty"`
+	WorkspacePath  string `json:"workspace_path,omitempty"`
+	ProviderName   string `json:"provider_name,omitempty"`
+	ModelName      string `json:"model_name,omitempty"`
 }
 
 // LanguageChangeData carries a language preference change (bidirectional sync).

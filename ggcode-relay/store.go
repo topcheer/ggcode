@@ -30,6 +30,9 @@ type persistedRoomState struct {
 	sessionID      string
 	authorityEpoch uint64
 	history        []roomEvent
+	workspacePath  string
+	providerName   string
+	modelName      string
 }
 
 func openRelayStore(dbPath string, retention time.Duration) (*relayStore, error) {
@@ -58,6 +61,9 @@ CREATE TABLE IF NOT EXISTS relay_rooms (
   token_hash TEXT PRIMARY KEY,
   current_session_id TEXT NOT NULL DEFAULT '',
   current_authority_epoch INTEGER NOT NULL DEFAULT 1,
+  workspace_path TEXT NOT NULL DEFAULT '',
+  provider_name TEXT NOT NULL DEFAULT '',
+  model_name TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMP NOT NULL
 );
 
@@ -146,6 +152,15 @@ CREATE INDEX IF NOT EXISTS idx_relay_model_catalog_model
 	if _, err := db.Exec(`ALTER TABLE relay_rooms ADD COLUMN current_authority_epoch INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return fmt.Errorf("add relay room authority epoch column: %w", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE relay_rooms ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return fmt.Errorf("add relay room workspace_path column: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE relay_rooms ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return fmt.Errorf("add relay room provider_name column: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE relay_rooms ADD COLUMN model_name TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return fmt.Errorf("add relay room model_name column: %w", err)
+	}
 	return nil
 }
 
@@ -163,9 +178,9 @@ func (s *relayStore) loadRoom(token string) (persistedRoomState, error) {
 	tokenHash := hashToken(token)
 	var state persistedRoomState
 	err := s.db.QueryRow(
-		`SELECT current_session_id, current_authority_epoch FROM relay_rooms WHERE token_hash = ?`,
+		`SELECT current_session_id, current_authority_epoch, workspace_path, provider_name, model_name FROM relay_rooms WHERE token_hash = ?`,
 		tokenHash,
-	).Scan(&state.sessionID, &state.authorityEpoch)
+	).Scan(&state.sessionID, &state.authorityEpoch, &state.workspacePath, &state.providerName, &state.modelName)
 	if err == sql.ErrNoRows {
 		return persistedRoomState{}, nil
 	}
@@ -264,7 +279,7 @@ func (s *relayStore) persistEvent(token string, msg relayMessage, raw []byte) er
 	return nil
 }
 
-func (s *relayStore) persistActiveSession(token, sessionID string, authorityEpoch uint64) error {
+func (s *relayStore) persistActiveSession(token, sessionID string, authorityEpoch uint64, workspacePath, providerName, modelName string) error {
 	if s == nil || sessionID == "" {
 		return nil
 	}
@@ -283,13 +298,16 @@ func (s *relayStore) persistActiveSession(token, sessionID string, authorityEpoc
 		}
 	}()
 	if _, err = tx.Exec(
-		`INSERT INTO relay_rooms(token_hash, current_session_id, current_authority_epoch, updated_at)
-		 VALUES(?, ?, ?, ?)
+		`INSERT INTO relay_rooms(token_hash, current_session_id, current_authority_epoch, workspace_path, provider_name, model_name, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(token_hash) DO UPDATE SET
 		   current_session_id = excluded.current_session_id,
 		   current_authority_epoch = excluded.current_authority_epoch,
+		   workspace_path = CASE WHEN excluded.workspace_path != '' THEN excluded.workspace_path ELSE relay_rooms.workspace_path END,
+		   provider_name = CASE WHEN excluded.provider_name != '' THEN excluded.provider_name ELSE relay_rooms.provider_name END,
+		   model_name = CASE WHEN excluded.model_name != '' THEN excluded.model_name ELSE relay_rooms.model_name END,
 		   updated_at = excluded.updated_at`,
-		tokenHash, sessionID, authorityEpoch, now,
+		tokenHash, sessionID, authorityEpoch, workspacePath, providerName, modelName, now,
 	); err != nil {
 		return fmt.Errorf("upsert active room: %w", err)
 	}

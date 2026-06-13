@@ -36,6 +36,7 @@ type Broker struct {
 	sessionID         string
 	sessionGeneration uint64
 	nextEvent         atomic.Int64
+	cachedSessionInfo SessionInfoData
 
 	// Send queue: all outbound messages go here.
 	// The sender goroutine drains it continuously (no ACK blocking).
@@ -439,6 +440,7 @@ func (b *Broker) resetSession() string {
 // ─── Session lifecycle ───
 
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
+	b.cachedSessionInfo = data
 	b.enqueue(EventSessionInfo, data)
 }
 
@@ -565,7 +567,8 @@ func (b *Broker) sendActiveSession(sessionID string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
-	_ = b.session.SendActiveSession(sessionID, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash)
+	info := b.cachedSessionInfo
+	_ = b.session.SendActiveSessionWithParams(sessionID, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash, info.Workspace, info.Provider, info.Model)
 }
 
 func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
@@ -573,7 +576,8 @@ func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
-	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash)
+	info := b.cachedSessionInfo
+	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash, info.Workspace, info.Provider, info.Model)
 }
 
 func (b *Broker) markRelayReady() {

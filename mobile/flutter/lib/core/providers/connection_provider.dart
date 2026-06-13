@@ -358,13 +358,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
 
     _bindService(localService, generation, url);
+    // Determine resume strategy:
+    // - resume_from: we have state (sessionId + lastEventId) → incremental sync
+    // - resume_hello: fresh connect or no state → full sync
+    final hasState = _sessionId.isNotEmpty && _lastAppliedEventId.isNotEmpty;
+    final effectiveEventId = _resumeOverrideEventId.isNotEmpty
+        ? _resumeOverrideEventId
+        : (hasState ? _lastAppliedEventId : null);
+    final effectiveType = effectiveEventId != null ? 'resume_from' : 'resume_hello';
     localService.armResumeHello(
       clientId: _clientId,
       sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-      lastEventId:
-          _resumeOverrideEventId.isNotEmpty ? _resumeOverrideEventId : null,
-      messageType:
-          _resumeOverrideEventId.isNotEmpty ? 'resume_from' : 'resume_hello',
+      lastEventId: effectiveEventId,
+      messageType: effectiveType,
     );
 
     try {
@@ -491,8 +497,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             _pendingActiveSessionBarrierOrdinal == null) {
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
+        // Register workspace — prefer session_info event data, fall back to
+        // workspace metadata embedded in the active_session message by relay.
+        final sessionInfo = ref.read(sessionInfoProvider) ??
+            _sessionInfoFromActiveSession(msg.data);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
-            sessionId, ref.read(sessionInfoProvider),
+            sessionId, sessionInfo,
             lastEventId: _lastAppliedEventId,
             authorityEpoch: _relayAuthorityEpoch));
         _restoreSessionProjectionIfAvailable(sessionId);
@@ -2077,6 +2087,26 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await store.remove(_resumeRenewTokenKey);
     _shareRoomId = '';
     _shareRenewToken = '';
+  }
+
+  /// Construct a SessionInfoData from the workspace metadata embedded in
+  /// active_session by the relay (workspace_path, provider_name, model_name).
+  /// Returns null if no workspace info is available.
+  proto.SessionInfoData? _sessionInfoFromActiveSession(Map<String, dynamic>? data) {
+    if (data == null) return null;
+    final wsPath = data['workspace_path'] as String? ?? '';
+    final prov = data['provider_name'] as String? ?? '';
+    final mdl = data['model_name'] as String? ?? '';
+    if (wsPath.isEmpty && prov.isEmpty && mdl.isEmpty) return null;
+    return proto.SessionInfoData(
+      workspace: wsPath,
+      provider: prov,
+      model: mdl,
+      mode: '',
+      version: '',
+      language: '',
+      theme: '',
+    );
   }
 }
 
