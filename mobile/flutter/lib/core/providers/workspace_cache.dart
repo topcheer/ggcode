@@ -16,28 +16,24 @@ import 'ui_providers.dart';
 
 class WorkspaceRecord {
   final String key;
-  final String url;
   final String displayName;
   final String lastSessionId;
   final DateTime lastOpenedAt;
 
   const WorkspaceRecord({
     required this.key,
-    required this.url,
     required this.displayName,
     required this.lastSessionId,
     required this.lastOpenedAt,
   });
 
   WorkspaceRecord copyWith({
-    String? url,
     String? displayName,
     String? lastSessionId,
     DateTime? lastOpenedAt,
   }) =>
       WorkspaceRecord(
         key: key,
-        url: url ?? this.url,
         displayName: displayName ?? this.displayName,
         lastSessionId: lastSessionId ?? this.lastSessionId,
         lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
@@ -45,7 +41,6 @@ class WorkspaceRecord {
 
   Map<String, dynamic> toJson() => {
         'key': key,
-        'url': url,
         'display_name': displayName,
         'last_session_id': lastSessionId,
         'last_opened_at': lastOpenedAt.toIso8601String(),
@@ -54,7 +49,6 @@ class WorkspaceRecord {
   factory WorkspaceRecord.fromJson(Map<String, dynamic> json) =>
       WorkspaceRecord(
         key: json['key'] as String? ?? '',
-        url: json['url'] as String? ?? '',
         displayName: json['display_name'] as String? ?? '',
         lastSessionId: json['last_session_id'] as String? ?? '',
         lastOpenedAt:
@@ -330,7 +324,6 @@ class _WorkspaceCacheSqlStore {
 
       CREATE TABLE IF NOT EXISTS cache_workspaces (
         key TEXT PRIMARY KEY,
-        url TEXT NOT NULL,
         display_name TEXT NOT NULL,
         last_session_id TEXT NOT NULL,
         last_opened_at TEXT NOT NULL
@@ -451,7 +444,7 @@ class _WorkspaceCacheSqlStore {
 
   List<WorkspaceRecord> loadWorkspaces() {
     final rows = _db.select('''
-      SELECT key, url, display_name, last_session_id, last_opened_at
+      SELECT key, display_name, last_session_id, last_opened_at
       FROM cache_workspaces
       ORDER BY last_opened_at DESC
     ''');
@@ -459,7 +452,6 @@ class _WorkspaceCacheSqlStore {
         .map(
           (row) => WorkspaceRecord(
             key: row['key'] as String? ?? '',
-            url: row['url'] as String? ?? '',
             displayName: row['display_name'] as String? ?? '',
             lastSessionId: row['last_session_id'] as String? ?? '',
             lastOpenedAt: DateTime.tryParse(
@@ -550,17 +542,15 @@ class _WorkspaceCacheSqlStore {
   void upsertWorkspace(WorkspaceRecord record) {
     _db.execute(
       '''
-      INSERT INTO cache_workspaces(key, url, display_name, last_session_id, last_opened_at)
-      VALUES(?, ?, ?, ?, ?)
+      INSERT INTO cache_workspaces(key, display_name, last_session_id, last_opened_at)
+      VALUES(?, ?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET
-        url = excluded.url,
         display_name = excluded.display_name,
         last_session_id = excluded.last_session_id,
         last_opened_at = excluded.last_opened_at
       ''',
       [
         record.key,
-        record.url,
         record.displayName,
         record.lastSessionId,
         record.lastOpenedAt.toIso8601String(),
@@ -945,7 +935,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
           var updated = record;
           if (record.displayName.isEmpty && record.lastSessionId.isNotEmpty) {
             final snap = _store!.loadSnapshot(record.lastSessionId);
-            final name = _workspaceDisplayName(record.url, snap?.sessionInfo);
+            final name = _workspaceDisplayName(snap?.sessionInfo);
             if (name.isNotEmpty) {
               updated = record.copyWith(displayName: name);
             }
@@ -980,8 +970,15 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     );
   }
 
-  String? urlForWorkspace(String workspaceKey) =>
-      state.workspaces[workspaceKey]?.url;
+  /// Find a reconnectable URL for a workspace by looking at its sessions.
+  /// Returns the URL of the most recently updated session that has a URL.
+  String? urlForWorkspace(String workspaceKey) {
+    final sessions = state.sessions.values
+        .where((s) => s.workspaceKey == workspaceKey && s.url.isNotEmpty)
+        .toList()
+      ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    return sessions.isNotEmpty ? sessions.first.url : null;
+  }
 
   /// Store the URL for [registerLiveSession] to use when session_info arrives.
   /// Must NOT be called from [registerLiveSession] as it is set before
@@ -1210,7 +1207,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
     final displayName =
-        _workspaceDisplayName(workspace?.url ?? '', sessionInfo);
+        _workspaceDisplayName(sessionInfo);
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
         displayName:
@@ -1220,12 +1217,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     } else if (displayName.isNotEmpty) {
       // Workspace doesn't exist yet — create it now that we have sessionInfo.
-      final url =
-          state.workspaces[workspaceKey]?.url ?? _pendingWorkspaceUrl ?? '';
+      // URL is NOT stored on the workspace — it belongs to the session.
       _pendingWorkspaceUrl = null;
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
-        url: url,
         displayName: displayName,
         lastSessionId: sessionId,
         lastOpenedAt: now,
@@ -1358,7 +1353,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final workspace = workspaces[workspaceKey];
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
-        displayName: _workspaceDisplayName(workspace.url, sessionInfo),
+        displayName: _workspaceDisplayName(sessionInfo),
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
@@ -1509,13 +1504,14 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<void> _persistIndex() async {
     _prefs ??= await SharedPreferences.getInstance();
     if (!ref.mounted) return;
-    final selectedWorkspace = state.selectedWorkspaceKey == null
+    final selectedSession = state.selectedSessionId == null
         ? null
-        : state.workspaces[state.selectedWorkspaceKey!];
+        : state.sessions[_sessionCacheKey(
+            state.selectedWorkspaceKey ?? '', state.selectedSessionId!)];
     final payload = {
       'selected_workspace_key': state.selectedWorkspaceKey,
       'selected_session_id': state.selectedSessionId,
-      _workspaceCacheIndexSelectedWorkspaceUrlKey: selectedWorkspace?.url,
+      _workspaceCacheIndexSelectedWorkspaceUrlKey: selectedSession?.url,
     };
     try {
       await _prefs!.setString(_workspaceCacheIndexKey, jsonEncode(payload));
@@ -1714,7 +1710,7 @@ proto.SessionInfoData? _sessionInfoFromJson(Map<String, dynamic>? json) {
 /// working directory path, e.g. "/Users/zanchen/projects/my-app" → "my-app").
 /// Returns empty string if sessionInfo or workspace is unavailable — the caller
 /// should load from cached snapshot instead of guessing from the relay URL.
-String _workspaceDisplayName(String url, proto.SessionInfoData? sessionInfo) {
+String _workspaceDisplayName(proto.SessionInfoData? sessionInfo) {
   final workspace = sessionInfo?.workspace ?? '';
   if (workspace.isNotEmpty) {
     final parts = workspace.split('/');

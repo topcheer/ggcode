@@ -1318,8 +1318,13 @@ void main() {
     expect(connState.status, ConnectionStatus.disconnected);
     expect(connState.url, isNull);
     expect(connState.error, contains('Room not found'));
+    // Workspace exists but URL is on the session, not the workspace
     expect(
-      cache.sortedWorkspaces().single.url,
+      cache.sortedWorkspaces().single.displayName,
+      isNotEmpty,
+    );
+    expect(
+      cache.sortedSessions().single.url,
       'wss://example.test/ws?token=stale',
     );
     expect(prefs.getString('ggcode_tunnel_session_id'), anyOf(isNull, isEmpty));
