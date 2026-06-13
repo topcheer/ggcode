@@ -492,31 +492,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             connNotifier.currentSessionId) {
                           return;
                         }
-                        // If session has a URL, connect to it
+                        // Always demote current active connection to background
+                        final currentUrl = connNotifier.liveSessionUrl;
+                        if (currentUrl.isNotEmpty &&
+                            connNotifier.service != null) {
+                          final currentSessionId =
+                              connNotifier.currentSessionId;
+                          bgConn.registerService(
+                            currentUrl,
+                            currentSessionId,
+                            connNotifier.service!,
+                          );
+                          // Cancel subscriptions but don't dispose the service
+                          connNotifier.demoteToBackground();
+                        }
+                        // If session has a URL, connect or adopt
                         if (session.url.isNotEmpty) {
                           // Check if it's a background connection we can promote
                           final bgService =
                               bgConn.takeService(session.url);
                           if (bgService != null) {
-                            // Demote current connection to background
-                            final currentUrl = connNotifier.liveSessionUrl;
-                            final currentSessionId =
-                                connNotifier.currentSessionId;
-                            if (currentUrl.isNotEmpty &&
-                                currentSessionId.isNotEmpty) {
-                              final currentService = connNotifier.service;
-                              if (currentService != null) {
-                                bgConn.registerService(
-                                  currentUrl,
-                                  currentSessionId,
-                                  currentService,
-                                );
-                              }
-                            }
+                            connNotifier.adoptService(
+                              bgService,
+                              session.sessionId,
+                              session.url,
+                            );
+                          } else {
+                            await connNotifier.connect(session.url);
                           }
-                          await ref
-                              .read(connectionProvider.notifier)
-                              .connect(session.url);
                         } else {
                           // No URL — just show cached snapshot
                           await ref

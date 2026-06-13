@@ -13,6 +13,7 @@ import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
 
 import 'chat_provider.dart';
+import 'background_connection_manager.dart';
 import 'ui_providers.dart';
 import 'workspace_cache.dart';
 
@@ -242,8 +243,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     cache.setPendingUrl(url);
     if (!_isConnectionGenerationCurrent(generation)) return;
 
-    // Disconnect previous if any
-    _disposeActiveService();
+    // Demote previous connection to background (keeps WebSocket alive)
+    // instead of disconnecting it outright.
+    demoteToBackground();
 
     var descriptor = ShareConnectionDescriptor.parse(url);
     state = state.copyWith(
@@ -1809,6 +1811,51 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final current = service;
     service = null;
     current?.dispose();
+  }
+
+  /// Move the current active service to background instead of disposing it.
+  /// The WebSocket stays alive; events are routed to cache silently via
+  /// [BackgroundConnectionManager].
+  void demoteToBackground() {
+    if (service == null) return;
+    final url = _liveUrl;
+    final sessionId = _sessionId;
+    _cancelServiceSubscriptions();
+    if (url.isNotEmpty && sessionId.isNotEmpty) {
+      final bgConn = ref.read(backgroundConnectionProvider.notifier);
+      bgConn.registerService(url, sessionId, service!);
+      debugPrint(
+        '[connection] demoted to background url=$url session=$sessionId',
+      );
+    } else {
+      service!.dispose();
+    }
+    service = null;
+  }
+
+  /// Promote a background service to foreground without reconnecting.
+  /// The service's streams are rebound to this notifier so events flow
+  /// into the UI again.
+  void adoptService(ConnectionService svc, String sessionId, String url) {
+    _disposeActiveService();
+    service = svc;
+    _sessionId = sessionId;
+    _liveUrl = url;
+    _lastAppliedEventId = '';
+    _gapRecoveryAttemptCount = 0;
+    _gapRecoveryScheduled = false;
+    _gapRecoveryDeferred = false;
+    state = state.copyWith(
+      status: ConnectionStatus.connected,
+      url: url,
+      error: null,
+      relaySync: null,
+      sessionReady: true,
+    );
+    _bindService(svc, _connectionGeneration, url);
+    debugPrint(
+      '[connection] adopted background service session=$sessionId url=$url',
+    );
   }
 
   void _beginLocalRestoreSync() {
