@@ -1203,7 +1203,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		upgradeReason := room.upgradeReason
 		state := roomRecoveryStateLocked(room)
 		room.mu.RUnlock()
-		if (serverMissing || !serverReady) && handshake.postConnectErr == "" {
+		if serverMissing || !serverReady {
 			if upgradeReason != "" {
 				_ = conn.WriteJSON(relayMessage{
 					Type:   "error",
@@ -1232,19 +1232,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	p := newPeer(h, room, role, conn)
 	p.clientID = clientID
 	p.protocolVersion = handshake.protocolVersion
-	if handshake.postConnectErr != "" && role == "client" {
-		logUpgradedClientReject(r, handshake.postConnectErr)
-		upgradeErr := relayMessage{
-			Type:   "error",
-			Reason: handshake.postConnectErr,
-		}
-		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
-		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		_ = conn.WriteJSON(upgradeErr)
-		conn.Close()
-		return
-	}
-
 	room.mu.RLock()
 	tail := ""
 	if n := len(room.history); n > 0 {
@@ -1287,23 +1274,6 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	if handshake.postConnectErr != "" {
-		room.mu.Lock()
-		room.upgradeReason = handshake.postConnectErr
-		room.mu.Unlock()
-		h.scheduleRoomExpiry(token, defaultPendingRoomTTL)
-		logUpgradedClientReject(r, handshake.postConnectErr)
-		upgradeErr := relayMessage{
-			Type:   "error",
-			Reason: handshake.postConnectErr,
-		}
-		h.traceRelayMessage("ws_write", token, clientID, upgradeErr, "peer_role="+role+" initial=false upgrade_error=true")
-		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		_ = conn.WriteJSON(upgradeErr)
-		conn.Close()
-		return
-	}
-
 	room.mu.Lock()
 	room.upgradeReason = ""
 	if handshake.protocolVersion > room.protocolVersion {
