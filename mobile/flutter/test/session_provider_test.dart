@@ -1788,9 +1788,9 @@ void main() {
     // that the gap event ordinal was recorded at the point of apply.
     expect(notifier.recentEventIds, contains('ev-000000050'));
 
-    // Recovery reconnect was scheduled
+    // Recovery reconnect was scheduled (old service demoted to background, not disposed)
     expect(factoryCalls, 2);
-    expect(serviceA.disposeCalls, 1);
+    expect(serviceA.disposeCalls, 0);
     expect(serviceB.connectCalls, 1);
     // Resume from last known contiguous event, not the gap event
     expect(serviceB.resumeMessageType, 'resume_from');
