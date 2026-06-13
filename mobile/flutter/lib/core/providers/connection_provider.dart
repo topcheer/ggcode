@@ -272,6 +272,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final forcedResumeOverrideEventId = _resumeOverrideEventId;
     await _loadResumeState();
     if (!_isConnectionGenerationCurrent(generation)) return;
+    // If the persisted resume state is for a different room, discard it.
+    // This happens when scanning a new QR code — the old session/event data
+    // belongs to a different relay room and must not be sent as resume_from.
+    if (_shareRoomId.isNotEmpty &&
+        descriptor.roomId.isNotEmpty &&
+        _shareRoomId != descriptor.roomId) {
+      debugPrint(
+        '[connection] resume state room mismatch saved=$_shareRoomId current=${descriptor.roomId} — clearing',
+      );
+      _sessionId = '';
+      _lastAppliedEventId = '';
+      _lastDurableEventId = '';
+      _relayAuthorityEpoch = 0;
+      _shareRoomId = '';
+      _shareRenewToken = '';
+    }
     await _resetResumeIdentityForSparseSnapshot();
     if (!_isConnectionGenerationCurrent(generation)) return;
     await _prepareResumeOverrideForCursorSkew();
