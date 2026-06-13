@@ -256,7 +256,7 @@ const _workspaceCacheSentinel = Object();
 const _workspaceCacheIndexKey = 'ggcode_workspace_cache_v1';
 const _workspaceCacheIndexSelectedWorkspaceUrlKey = 'selected_workspace_url';
 const _workspaceSnapshotPrefix = 'ggcode_workspace_snapshot_v1_';
-const _workspaceCacheStorageSchemaVersion = 1;
+const _workspaceCacheStorageSchemaVersion = 2;
 const _workspaceCacheProjectionVersion = 2;
 String? debugWorkspaceCacheDatabasePathOverride;
 
@@ -352,6 +352,7 @@ class _WorkspaceCacheSqlStore {
         PRIMARY KEY (workspace_key, session_id)
       );
     ''');
+    _migrateDropWorkspaceUrl();
     _ensureVersion(
       key: 'storage_schema_version',
       expected: '$_workspaceCacheStorageSchemaVersion',
@@ -392,6 +393,29 @@ class _WorkspaceCacheSqlStore {
         rethrow;
       }
     }
+  }
+
+  /// Migrate cache_workspaces: drop the legacy `url` column (v1 → v2).
+  /// SQLite doesn't support DROP COLUMN before 3.35.0, so we recreate the
+  /// table.  This runs once when the storage schema version bumps from 1→2.
+  void _migrateDropWorkspaceUrl() {
+    final current = _metaValue('storage_schema_version');
+    if (current != null && current != '1') return; // only migrate from v1
+    _db.execute('ALTER TABLE cache_workspaces RENAME TO cache_workspaces_old;');
+    _db.execute('''
+      CREATE TABLE cache_workspaces (
+        key TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        last_session_id TEXT NOT NULL,
+        last_opened_at TEXT NOT NULL
+      );
+    ''');
+    _db.execute('''
+      INSERT INTO cache_workspaces(key, display_name, last_session_id, last_opened_at)
+        SELECT key, display_name, last_session_id, last_opened_at
+        FROM cache_workspaces_old;
+    ''');
+    _db.execute('DROP TABLE cache_workspaces_old;');
   }
 
   void _ensureVersion({
