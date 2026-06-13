@@ -220,7 +220,7 @@ void main() {
         container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
     final cache = container.read(workspaceCacheProvider.notifier);
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     notifier.emit(TunnelConnectionState(
       status: ConnectionStatus.connecting,
       url: 'wss://example.test/ws?token=abc',
@@ -253,7 +253,7 @@ void main() {
 
     expect(notifier.restoreCalls, 0);
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await tester.pump();
     await tester.pump();
 

@@ -455,20 +455,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final bgConn = ref.read(backgroundConnectionProvider.notifier);
     final connNotifier = ref.read(connectionProvider.notifier);
     final workspaces = notifier.sortedWorkspaces();
-    final sessions = notifier.sortedSessions();
     final liveSessionId = connNotifier.currentSessionId;
-    final liveWorkspaceKey = cache.liveWorkspaceKey ?? cache.selectedWorkspaceKey;
-    // Build session-to-workspace mapping from all sessions
-    final workspaceSessions = <String, List<CachedSessionRecord>>{};
-    for (final s in sessions) {
-      workspaceSessions.putIfAbsent(s.workspaceKey, () => []).add(s);
-    }
-    // If active workspace isn't in the persisted list yet (first scan),
-    // create a synthetic entry with its sessions
-    final allWorkspaceKeys = <String>{
-      ...workspaces.map((w) => w.key),
-      if (liveWorkspaceKey != null) liveWorkspaceKey,
-    };
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF141421),
@@ -490,22 +477,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     ),
                   ),
                   SizedBox(height: 8),
-                  for (final wsKey in allWorkspaceKeys) ...[
+                  for (final workspace in workspaces) ...[
                     _WorkspaceGroup(
-                      workspace: workspaces.firstWhere(
-                        (w) => w.key == wsKey,
-                        orElse: () => WorkspaceRecord(
-                          key: wsKey,
-                          url: '',
-                          displayName: wsKey.length > 12
-                              ? wsKey.substring(0, 12)
-                              : wsKey,
-                          lastSessionId: '',
-                          lastOpenedAt: DateTime.now(),
-                        ),
-                      ),
-                      sessions: workspaceSessions[wsKey] ?? [],
-                      isActiveWorkspace: wsKey == liveWorkspaceKey,
+                      workspace: workspace,
+                      sessions:
+                          notifier.sessionsForWorkspace(workspace.key),
+                      isActiveWorkspace:
+                          workspace.key == cache.selectedWorkspaceKey,
                       liveSessionId: liveSessionId,
                       liveSessionIds: bgConn.liveSessionIds,
                       onSessionTap: (session) async {

@@ -927,7 +927,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info, lastEventId: 'ev-0001');
     await cache.captureLiveProjection(
       messages: [
@@ -975,7 +975,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=full-cache');
+    cache.setPendingUrl('wss://example.test/ws?token=full-cache');
     await cache.registerLiveSession('sess-full', info, lastEventId: 'ev-0400');
     final messages = List<ChatMessage>.generate(
       400,
@@ -1023,7 +1023,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=flush-now');
+    cache.setPendingUrl('wss://example.test/ws?token=flush-now');
     await cache.registerLiveSession('sess-flush', info, lastEventId: 'ev-0002');
     await cache.captureLiveProjection(
       messages: [
@@ -1065,7 +1065,7 @@ void main() {
     addTearDown(container.dispose);
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
 
     await cache.registerLiveSession('sess-old', info, lastEventId: 'ev-0001');
     container.read(chatProvider.notifier).set([
@@ -1122,7 +1122,7 @@ void main() {
     addTearDown(container.dispose);
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=live');
+    cache.setPendingUrl('wss://example.test/ws?token=live');
     await cache.registerLiveSession('sess-live', info, lastEventId: 'ev-0001');
 
     container.read(chatProvider.notifier).set([
@@ -1160,7 +1160,7 @@ void main() {
     addTearDown(container.dispose);
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info, lastEventId: 'ev-0001');
     await cache.captureLiveProjection(
       messages: const [],
@@ -1191,7 +1191,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?token=room-a');
     await cache.registerLiveSession('sess-history', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -1299,7 +1299,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=stale');
+    cache.setPendingUrl('wss://example.test/ws?token=stale');
     await cache.registerLiveSession('sess-stale', info,
         lastEventId: 'ev-000000099');
     await cache.flushNow();
@@ -1352,7 +1352,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?token=room-a');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     container.read(chatProvider.notifier).set([
@@ -1487,7 +1487,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -1573,7 +1573,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -1659,7 +1659,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -1906,7 +1906,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-1', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -1961,7 +1961,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-live', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2024,7 +2024,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?token=room-a');
     await cache.registerLiveSession('sess-restore', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -2090,7 +2090,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-live', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2136,7 +2136,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-live', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2187,7 +2187,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    cache.setPendingUrl('wss://example.test/ws?token=old-room');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2206,7 +2206,7 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 450));
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    cache.setPendingUrl('wss://example.test/ws?token=new-room');
     final adopted = await cache.attachSessionToActiveWorkspace('sess-room');
 
     expect(adopted, isTrue);
@@ -2234,7 +2234,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    cache.setPendingUrl('wss://example.test/ws?token=old-room');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2253,7 +2253,7 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 450));
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    cache.setPendingUrl('wss://example.test/ws?token=new-room');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     expect(await cache.attachSessionToActiveWorkspace('sess-room'), isTrue);
@@ -2297,7 +2297,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?token=room-a');
     await cache.registerLiveSession('sess-rich', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -2373,7 +2373,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=room-a');
+    cache.setPendingUrl('wss://example.test/ws?token=room-a');
     await cache.registerLiveSession('sess-subagent', info,
         lastEventId: 'ev-000000100');
     await cache.captureLiveProjection(
@@ -2447,7 +2447,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    cache.setPendingUrl('wss://example.test/ws?token=old-room');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2466,7 +2466,7 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 450));
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    cache.setPendingUrl('wss://example.test/ws?token=new-room');
     container.read(chatProvider.notifier).clearMessages();
     container.read(sessionInfoProvider.notifier).set(null);
 
@@ -2508,7 +2508,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=old-room');
+    cache.setPendingUrl('wss://example.test/ws?token=old-room');
     await cache.registerLiveSession('sess-room', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2527,7 +2527,7 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 450));
 
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=new-room');
+    cache.setPendingUrl('wss://example.test/ws?token=new-room');
     container.read(chatProvider.notifier).clearMessages();
     container.read(sessionInfoProvider.notifier).set(null);
 
@@ -2724,7 +2724,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-live', info,
         lastEventId: 'ev-000000860');
     await cache.captureLiveProjection(
@@ -2810,7 +2810,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    cache.setPendingUrl('wss://example.test/ws?token=abc');
     await cache.registerLiveSession('sess-old', info,
         lastEventId: 'ev-000000860');
     await cache.captureLiveProjection(
@@ -2905,7 +2905,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    cache.setPendingUrl('ws://example.test/ws?token=test-token');
     await cache.registerLiveSession('sess-live', info,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
@@ -2968,7 +2968,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    cache.setPendingUrl('ws://example.test/ws?token=test-token');
     await cache.registerLiveSession('sess-live', info, lastEventId: '');
 
     final notifier = container.read(connectionProvider.notifier);
@@ -3034,7 +3034,7 @@ void main() {
 
     final cache = container.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    await cache.activateWorkspaceUrl('ws://example.test/ws?token=test-token');
+    cache.setPendingUrl('ws://example.test/ws?token=test-token');
     await cache.registerLiveSession('sess-sparse', null,
         lastEventId: 'ev-000000120');
     await cache.captureLiveProjection(
