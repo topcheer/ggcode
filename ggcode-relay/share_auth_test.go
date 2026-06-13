@@ -58,7 +58,7 @@ func TestValidateShareHandshakeAcceptsIssuedTickets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps="+requiredTunnelCapability+"&crypto_key=abc123&kx_pub=server-pub", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=server&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps=share_v3&crypto_key=abc123&kx_pub=server-pub", nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake == nil || status != http.StatusSwitchingProtocols || reason != "" {
 		t.Fatalf("unexpected handshake: handshake=%+v status=%d reason=%q", handshake, status, reason)
@@ -91,7 +91,7 @@ func TestValidateShareHandshakeRejectsIssuedTicketScopeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps="+requiredTunnelCapability, nil)
+	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ServerAuthTicket+"&caps=share_v3", nil)
 	handshake, status, reason := validateShareHandshake(req, cfg)
 	if handshake != nil || status != http.StatusUnauthorized || reason != "ticket scope mismatch" {
 		t.Fatalf("unexpected mismatch result: handshake=%+v status=%d reason=%q", handshake, status, reason)
@@ -105,32 +105,9 @@ func TestValidateShareHandshakeRejectsLegacyProtocol(t *testing.T) {
 		RenewTTL:   time.Hour,
 	}
 	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&token=legacy-token", nil)
-	handshake, status, reason := validateShareHandshake(req, cfg)
-	if handshake != nil || status != http.StatusGone || reason != shareUpgradeRequiredMessage {
-		t.Fatalf("unexpected legacy result: handshake=%+v status=%d reason=%q", handshake, status, reason)
-	}
-}
-
-func TestValidateShareHandshakeMissingTunnelCapabilityRequiresUpgrade(t *testing.T) {
-	cfg := shareAuthConfig{
-		Secret:     "relay-secret",
-		ConnectTTL: time.Minute,
-		RenewTTL:   time.Hour,
-	}
-	issued, err := issueShareSession(cfg, shareProtocolV3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/ws?role=client&proto=3&room_id="+issued.RoomID+"&auth_ticket="+issued.ClientAuthTicket+"&caps=share_v2,share_v3", nil)
-	handshake, status, reason := validateShareHandshake(req, cfg)
-	if handshake == nil || status != http.StatusSwitchingProtocols || reason != "" {
-		t.Fatalf("unexpected capability gate result: handshake=%+v status=%d reason=%q", handshake, status, reason)
-	}
-	if handshake.postConnectErr != shareUpgradeRequiredMessage {
-		t.Fatalf("postConnectErr = %q, want %q", handshake.postConnectErr, shareUpgradeRequiredMessage)
-	}
-	if handshake.notice != shareUpgradeRequiredMessage {
-		t.Fatalf("notice = %q, want %q", handshake.notice, shareUpgradeRequiredMessage)
+	handshake, status, _ := validateShareHandshake(req, cfg)
+	if handshake != nil || status != http.StatusBadRequest {
+		t.Fatalf("unexpected legacy result: handshake=%+v status=%d", handshake, status)
 	}
 }
 
@@ -315,7 +292,7 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
 		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
 		"&auth_ticket=" + issued.ClientAuthTicket +
-		"&caps=" + requiredTunnelCapability
+		"&caps=share_v3"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -344,125 +321,5 @@ func TestHandleWSPendingIssuedRoomReturnsServerOffline(t *testing.T) {
 	h.mu.RUnlock()
 	if room == nil {
 		t.Fatal("pending room should remain reserved after client wait notice")
-	}
-}
-
-func TestHandleWSMissingTunnelCapabilityClientBehavesLikeNormalV3Client(t *testing.T) {
-	t.Setenv(shareSecretEnv, "relay-secret")
-	h := newHub(nil)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/share/session", h.handleShareSession)
-	mux.HandleFunc("/ws", h.handleWS)
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/share/session", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("share session status = %d", resp.StatusCode)
-	}
-	var issued issuedShareSessionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
-		t.Fatal(err)
-	}
-
-	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=server&proto=3&room_id=" + issued.RoomID +
-		"&auth_ticket=" + issued.ServerAuthTicket +
-		"&caps=" + requiredTunnelCapability +
-		"&crypto_key=test-crypto"
-	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverConn.Close()
-	if err := serverConn.ReadJSON(&relayMessage{}); err != nil {
-		t.Fatal(err)
-	}
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
-		"&auth_ticket=" + issued.ClientAuthTicket +
-		"&caps=share_v2,share_v3"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	var msg relayMessage
-	if err := conn.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("expected upgrade error, got %+v", msg)
-	}
-}
-
-func TestHandleWSMissingTunnelCapabilityServerDoesNotPoisonRoom(t *testing.T) {
-	t.Setenv(shareSecretEnv, "relay-secret")
-	h := newHub(nil)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/share/session", h.handleShareSession)
-	mux.HandleFunc("/ws", h.handleWS)
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/share/session", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("share session status = %d", resp.StatusCode)
-	}
-	var issued issuedShareSessionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&issued); err != nil {
-		t.Fatal(err)
-	}
-
-	serverURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=server&proto=3&room_id=" + issued.RoomID +
-		"&auth_ticket=" + issued.ServerAuthTicket +
-		"&caps=share_v2,share_v3" +
-		"&crypto_key=test-crypto"
-	serverConn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverConn.Close()
-	var msg relayMessage
-	if err := serverConn.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "connected" {
-		t.Fatalf("expected connected, got %+v", msg)
-	}
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) +
-		"/ws?role=client&proto=3&room_id=" + issued.RoomID +
-		"&auth_ticket=" + issued.ClientAuthTicket +
-		"&caps=" + requiredTunnelCapability
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if err := conn.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
-	if msg.Type != "error" || msg.Reason != shareUpgradeRequiredMessage {
-		t.Fatalf("expected upgrade error, got %+v", msg)
 	}
 }

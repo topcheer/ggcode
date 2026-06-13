@@ -17,16 +17,10 @@ import (
 )
 
 const (
-	shareProtocolLegacy          = 1
-	shareProtocolV2              = 2
 	shareProtocolV3              = 3
 	requiredShareProtocolVersion = shareProtocolV3
-	requiredTunnelCapability     = "tunnel_messages_v1"
 
-	shareModeLegacy = "legacy"
-	shareModeV2     = "v2"
-	shareModeV3     = "v3"
-	shareModeCompat = "compat"
+	shareModeV3 = "v3"
 
 	shareTicketKindConnect = "connect"
 	shareTicketKindRenew   = "renew"
@@ -94,11 +88,9 @@ type shareHandshake struct {
 	protocolVersion int
 	shareMode       string
 	connectMode     string
-	postConnectErr  string
 	authExpiresAt   time.Time
 	renewToken      string
 	renewExpiresAt  time.Time
-	notice          string
 	clientKind      string
 	clientVersion   string
 	capabilities    []string
@@ -148,12 +140,8 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 		protocolVersion = value
 	}
 
-	hasV2Params := roomID != "" || authTicket != "" || renewToken != "" || protocolVersion >= shareProtocolV2
-	if !hasV2Params {
-		if rawToken == "" {
-			return nil, http.StatusBadRequest, "missing token"
-		}
-		return nil, http.StatusGone, shareUpgradeRequiredMessage
+	if roomID == "" {
+		return nil, http.StatusBadRequest, "missing room_id"
 	}
 
 	if protocolVersion < requiredShareProtocolVersion {
@@ -204,21 +192,15 @@ func validateShareHandshake(r *http.Request, cfg shareAuthConfig) (*shareHandsha
 	if err != nil {
 		return nil, http.StatusInternalServerError, "mint renew token"
 	}
-	postConnectErr := ""
-	if !hasCapability(capabilities, requiredTunnelCapability) {
-		postConnectErr = shareUpgradeRequiredMessage
-	}
 	return &shareHandshake{
 		role:            role,
 		roomKey:         roomID,
 		protocolVersion: protocolVersion,
 		shareMode:       shareModeV3,
 		connectMode:     connectMode,
-		postConnectErr:  postConnectErr,
 		authExpiresAt:   exp,
 		renewToken:      nextRenewToken,
 		renewExpiresAt:  renewExp,
-		notice:          postConnectErr,
 		clientKind:      clientKind,
 		clientVersion:   clientVersion,
 		capabilities:    capabilities,
@@ -238,9 +220,6 @@ func connectedShareMetadata(handshake *shareHandshake) map[string]any {
 	}
 	if handshake.roomKey != "" {
 		data["room_id"] = handshake.roomKey
-	}
-	if handshake.notice != "" {
-		data["notice"] = handshake.notice
 	}
 	if handshake.serverPublicKey != "" {
 		data["kx_pub"] = handshake.serverPublicKey
