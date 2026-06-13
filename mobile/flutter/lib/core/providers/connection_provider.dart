@@ -497,6 +497,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // workspace metadata embedded in the active_session message by relay.
         final sessionInfo = ref.read(sessionInfoProvider) ??
             _sessionInfoFromActiveSession(msg.data);
+        debugPrint('[connection] active_session workspace: sessionInfoProvider=${ref.read(sessionInfoProvider) != null} '
+            'fromActiveSession=${sessionInfo != null} '
+            'workspace="${sessionInfo?.workspace}" '
+            'activeSessionDataKeys=${msg.data?.keys.toList()}');
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, sessionInfo,
             lastEventId: _lastAppliedEventId,
