@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -353,6 +354,10 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		msg.info.QRCode,
 		msg.info.ConnectURL,
 	)
+	// Copy share URL to clipboard so the user can paste it elsewhere
+	if msg.info.ConnectURL != "" {
+		_ = clipboard.WriteAll(msg.info.ConnectURL)
+	}
 
 	return m, m.bootstrapTunnelShare(msg.generation)
 }
@@ -381,6 +386,10 @@ func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd
 		msg.info.QRCode,
 		msg.info.ConnectURL,
 	)
+	// Copy refreshed share URL to clipboard
+	if msg.info.ConnectURL != "" {
+		_ = clipboard.WriteAll(msg.info.ConnectURL)
+	}
 	return m, nil
 }
 
