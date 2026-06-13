@@ -450,12 +450,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Future<void> _openWorkspaceSwitcher() async {
-    final cache = ref.read(workspaceCacheProvider);
-    final notifier = ref.read(workspaceCacheProvider.notifier);
-    final bgConn = ref.read(backgroundConnectionProvider.notifier);
     final connNotifier = ref.read(connectionProvider.notifier);
-    final workspaces = notifier.sortedWorkspaces();
-    final liveSessionId = connNotifier.currentSessionId;
+    final store = connNotifier.connectionStore;
+    final connections = store.alive;
+    final activeConn = store.active;
+    final bgConn = ref.read(backgroundConnectionProvider.notifier);
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF141421),
@@ -477,22 +476,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     ),
                   ),
                   SizedBox(height: 8),
-                  for (final workspace in workspaces) ...[
-                    _WorkspaceGroup(
-                      workspace: workspace,
-                      sessions:
-                          notifier.sessionsForWorkspace(workspace.key),
-                      isActiveWorkspace:
-                          workspace.key == cache.selectedWorkspaceKey,
-                      liveSessionId: liveSessionId,
-                      liveSessionIds: bgConn.liveSessionIds,
-                      onSessionTap: (session) async {
+                  for (final conn in connections) ...[
+                    _ConnectionTile(
+                      displayName: conn.displayName ??
+                          conn.workspacePath?.split('/').last ??
+                          'Unknown',
+                      workspacePath: conn.workspacePath ?? '',
+                      isActive: conn.id == activeConn?.id,
+                      isLive: conn.sessionId != null,
+                      onTap: () async {
                         Navigator.of(ctx).pop();
-                        if (session.sessionId ==
-                            connNotifier.currentSessionId) {
-                          return;
-                        }
-                        // Always demote current active connection to background
+                        if (conn.id == activeConn?.id) return;
+                        // Demote current to background
                         final currentUrl = connNotifier.liveSessionUrl;
                         if (currentUrl.isNotEmpty &&
                             connNotifier.service != null) {
@@ -503,28 +498,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             currentSessionId,
                             connNotifier.service!,
                           );
-                          // Cancel subscriptions but don't dispose the service
                           connNotifier.demoteToBackground();
                         }
-                        // If session has a URL, connect or adopt
-                        if (session.url.isNotEmpty) {
-                          // Check if it's a background connection we can promote
-                          final bgService =
-                              bgConn.takeService(session.url);
-                          if (bgService != null) {
-                            connNotifier.adoptService(
-                              bgService,
-                              session.sessionId,
-                              session.url,
-                            );
-                          } else {
-                            await connNotifier.connect(session.url);
-                          }
+                        // Promote or connect
+                        final bgService = bgConn.takeService(conn.url);
+                        if (bgService != null) {
+                          connNotifier.adoptService(
+                            bgService,
+                            conn.sessionId ?? '',
+                            conn.url,
+                          );
                         } else {
-                          // No URL — just show cached snapshot
-                          await ref
-                              .read(workspaceCacheProvider.notifier)
-                              .selectSession(session.sessionId);
+                          await connNotifier.connect(conn.url);
                         }
                       },
                     ),
@@ -1507,5 +1492,76 @@ class _WorkspaceGroupState extends State<_WorkspaceGroup> {
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     if (diff.inDays < 7) return '${diff.inDays}d ago';
     return '${(diff.inDays / 7).floor()}w ago';
+  }
+}
+
+class _ConnectionTile extends StatelessWidget {
+  final String displayName;
+  final String workspacePath;
+  final bool isActive;
+  final bool isLive;
+  final VoidCallback onTap;
+
+  const _ConnectionTile({
+    required this.displayName,
+    required this.workspacePath,
+    required this.isActive,
+    required this.isLive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      tileColor: isActive
+          ? AppColors.accent.withValues(alpha: 0.12)
+          : AppColors.backgroundElevated.withValues(alpha: 0.5),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      leading: Icon(
+        isLive ? Icons.circle : Icons.circle_outlined,
+        color: isLive ? Colors.green : AppColors.textSecondary,
+        size: 12,
+      ),
+      title: Text(
+        displayName,
+        style: TextStyle(
+          color: isActive ? AppColors.accent : AppColors.textPrimary,
+          fontSize: 14,
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+        ),
+      ),
+      subtitle: workspacePath.isNotEmpty
+          ? Text(
+              workspacePath,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 11,
+              ),
+            )
+          : null,
+      trailing: isActive
+          ? Container(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'Active',
+                style: TextStyle(
+                  color: AppColors.accent,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )
+          : null,
+      onTap: onTap,
+    );
   }
 }
