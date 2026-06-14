@@ -40,11 +40,11 @@ func linuxClipboardToolsMissingError() error {
 	sessionType := strings.ToLower(strings.TrimSpace(os.Getenv("XDG_SESSION_TYPE")))
 	switch sessionType {
 	case "wayland":
-		return fmt.Errorf("clipboard image paste on Wayland requires wl-paste. Install wl-clipboard, then try again")
+		return fmt.Errorf("clipboard image paste on Wayland requires the wl-clipboard package (wl-paste). Install wl-clipboard, then try again")
 	case "x11":
 		return fmt.Errorf("clipboard image paste on X11 requires xclip. Install xclip, then try again")
 	default:
-		return fmt.Errorf("clipboard image paste on Linux requires wl-paste (Wayland) or xclip (X11). Install wl-clipboard or xclip, then try again")
+		return fmt.Errorf("clipboard image paste on Linux requires the wl-clipboard package (Wayland) or xclip (X11). Install wl-clipboard or xclip, then try again")
 	}
 }
 

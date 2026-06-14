@@ -278,7 +278,12 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 			if errors.Is(err, image.ErrClipboardImageUnavailable) {
 				return nil // no-op, don't interrupt anything
 			}
-			return errMsg{err: fmt.Errorf(m.t("image.clipboard_failed"), err)}
+			// Use systemNotifyMsg instead of errMsg so the actual clipboard
+			// error (e.g. "Install wl-clipboard or xclip") is shown as-is.
+			// errMsg routes through provider.UserFacingError() which strips
+			// clipboard errors to a generic "请求失败，请稍后重试" and kills
+			// any active agent run via handleErrMsg.
+			return systemNotifyMsg{Text: fmt.Sprintf(m.t("image.clipboard_failed"), err)}
 		}
 		return msg
 	}

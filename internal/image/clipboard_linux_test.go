@@ -27,7 +27,7 @@ func TestLinuxClipboardToolsMissingErrorWayland(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "Wayland") || !strings.Contains(msg, "wl-paste") || !strings.Contains(msg, "wl-clipboard") {
+	if !strings.Contains(msg, "Wayland") || !strings.Contains(msg, "wl-clipboard") {
 		t.Fatalf("unexpected Wayland missing-tool message: %q", msg)
 	}
 }

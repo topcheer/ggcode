@@ -1453,6 +1453,30 @@ func TestCtrlVPastesClipboardImage(t *testing.T) {
 	}
 }
 
+func TestCtrlVClipboardErrorReturnsSystemNotify(t *testing.T) {
+	m := newTestModel()
+	clipboardErr := fmt.Errorf("clipboard image paste on Linux requires the wl-clipboard package (Wayland) or xclip (X11). Install wl-clipboard or xclip, then try again")
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		return imageAttachedMsg{}, clipboardErr
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+v"})
+	if cmd == nil {
+		t.Fatal("expected ctrl-v to schedule clipboard image loading")
+	}
+	msg := cmd()
+
+	// Must be systemNotifyMsg, NOT errMsg — errMsg would kill the agent run
+	// and swallow the message via provider.UserFacingError.
+	notify, ok := msg.(systemNotifyMsg)
+	if !ok {
+		t.Fatalf("expected systemNotifyMsg, got %T: %v", msg, msg)
+	}
+	if !strings.Contains(notify.Text, "wl-clipboard") {
+		t.Fatalf("expected systemNotify text to contain the actual clipboard error, got %q", notify.Text)
+	}
+}
+
 func TestProviderPanelShowsCopilotConnectedState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := auth.DefaultStore().Save(&auth.Info{
