@@ -1153,9 +1153,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'server_offline':
-        // Relay told us the room is temporarily offline. Keep the current
-        // projection and selection so reconnect stays pinned to this room.
-        ref.read(workspaceCacheProvider.notifier).markDisconnected();
+        // Relay told us the room is temporarily offline. Keep live session
+        // and selection intact — the connection will resume when host
+        // rebuilds the room. Clearing liveSessionId would make all sessions
+        // appear as "historical/offline" in the UI.
         final recoveryState = msg.data?['state'] as String? ?? '';
         _beginRelaySyncWaitingForHost(
           recoveryState: recoveryState,
