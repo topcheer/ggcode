@@ -141,7 +141,7 @@ class BackgroundConnectionManager extends Notifier<void> {
     final allConnections = store.all;
     debugPrint('[bg-conn] connectAllCachedSessions: ${allConnections.length} connections after dedup selected=${cacheState.selectedSessionId}');
     for (final conn in allConnections) {
-      debugPrint('[bg-conn]   conn: session=${conn.sessionId ?? ""} alive=$conn.alive failed=${conn.permanentlyFailed} url=${conn.url.isNotEmpty ? "yes" : "no"}');
+      debugPrint('[bg-conn]   conn: session=${conn.sessionId ?? ""} alive=${conn.alive} failed=${conn.permanentlyFailed} url=${conn.url.isNotEmpty ? "yes" : "no"}');
 
       if (!conn.alive || conn.permanentlyFailed) continue;
       final sessionId = conn.sessionId ?? '';

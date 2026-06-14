@@ -197,16 +197,28 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await cache.initialize();
     final cacheState = ref.read(workspaceCacheProvider);
     final selectedSessionId = cacheState.selectedSessionId;
+    debugPrint('[connection] restoreSelectedWorkspace: selected=$selectedSessionId sessions=${cacheState.sessions.length}');
     if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
       final session = cache.sessionForId(selectedSessionId);
       if (session != null && session.workspaceKey.isNotEmpty) {
+        debugPrint('[connection] restoreSelectedWorkspace: found session in cache, connecting workspace=${session.workspaceKey}');
         await connectWorkspace(session.workspaceKey, clearState: false);
-        // Restore cached agent status AFTER connect, because _connectImpl
-        // clears the projection. This ensures displayed status reflects
-        // the cached snapshot while the connection is being established.
         _restoreCachedAgentStatus(sessionId: selectedSessionId);
         return;
       }
+      // Session not in cache yet (hasn't been registered via registerLiveSession).
+      // Try to connect directly from ConnectionStore URL.
+      await _connectionStore.load();
+      final conn = _connectionStore.findBySessionId(selectedSessionId);
+      if (conn != null && conn.url.isNotEmpty) {
+        debugPrint('[connection] restoreSelectedWorkspace: session not in cache, connecting directly from store url');
+        await _connectImpl(
+          conn.url,
+          clearState: false,
+        );
+        return;
+      }
+      debugPrint('[connection] restoreSelectedWorkspace: no URL found for selected session, clearing selection');
     }
     final workspaceKey = cacheState.selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return;
