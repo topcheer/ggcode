@@ -17,24 +17,28 @@ import 'ui_providers.dart';
 class WorkspaceRecord {
   final String key;
   final String displayName;
+  final String? parentPath;
   final String lastSessionId;
   final DateTime lastOpenedAt;
 
   const WorkspaceRecord({
     required this.key,
     required this.displayName,
+    this.parentPath,
     required this.lastSessionId,
     required this.lastOpenedAt,
   });
 
   WorkspaceRecord copyWith({
     String? displayName,
+    String? parentPath,
     String? lastSessionId,
     DateTime? lastOpenedAt,
   }) =>
       WorkspaceRecord(
         key: key,
         displayName: displayName ?? this.displayName,
+        parentPath: parentPath ?? this.parentPath,
         lastSessionId: lastSessionId ?? this.lastSessionId,
         lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
       );
@@ -1524,12 +1528,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
-    final displayName =
-        _workspaceDisplayName(sessionInfo);
+    final displayName = _workspaceDisplayName(sessionInfo);
+    final parentPath = _workspaceParentPath(workspacePath);
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
         displayName:
             displayName.isNotEmpty ? displayName : workspace.displayName,
+        parentPath: parentPath ?? workspace.parentPath,
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
@@ -1539,6 +1544,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
         displayName: displayName,
+        parentPath: parentPath,
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
@@ -2038,6 +2044,16 @@ String _workspaceDisplayName(proto.SessionInfoData? sessionInfo) {
     return parts.isNotEmpty ? parts.last : workspace;
   }
   return '';
+}
+
+/// Extract parent directory path for display when workspace names collide.
+/// e.g. "/Users/zanchen/projects/gn-audiobook-mobile" → "~/projects"
+String? _workspaceParentPath(String workspacePath) {
+  if (workspacePath.isEmpty) return null;
+  final parts = workspacePath.split('/').where((s) => s.isNotEmpty).toList();
+  if (parts.length < 2) return null;
+  // Show parent directory name
+  return '/${parts[parts.length - 2]}';
 }
 
 String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {

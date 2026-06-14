@@ -1549,15 +1549,34 @@ class _WorkspaceGroupState extends State<_WorkspaceGroup> {
                 ),
             ],
           ),
-          title: Text(
-            widget.workspace.displayName,
-            style: TextStyle(
-              color: AppColors.textPrimary,
-              fontWeight: widget.isActiveWorkspace
-                  ? FontWeight.w600
-                  : FontWeight.normal,
-            ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.workspace.displayName,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: widget.isActiveWorkspace
+                      ? FontWeight.w600
+                      : FontWeight.normal,
+                ),
+              ),
+              // Show parent dir when display name might be ambiguous
+              if (widget.workspace.parentPath != null &&
+                  widget.workspace.parentPath!.isNotEmpty)
+                Text(
+                  widget.workspace.parentPath!,
+                  style: TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 11,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+            ],
           ),
+          // trailing removed — status dots are inline in leading
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
