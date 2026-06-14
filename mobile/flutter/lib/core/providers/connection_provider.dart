@@ -1635,6 +1635,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         );
         if (status == ConnectionStatus.connected) {
           // Mark connection as alive for app-restart recovery
+          debugPrint('[connection] markAlive check: _currentConnection=${_currentConnection?.id} session=${_currentConnection?.sessionId}');
           if (_currentConnection != null) {
             unawaited(_connectionStore.markAlive(_currentConnection!.id));
           }
@@ -2111,6 +2112,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             ? _lastDurableEventId
             : _lastAppliedEventId,
         lastConnectedAt: DateTime.now(),
+        alive: true, // connection is alive if we're persisting resume state
       );
       unawaited(_connectionStore.update(
           _currentConnection!.id, _currentConnection!));
