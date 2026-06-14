@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../connection_service.dart';
 export '../connection_service.dart' show ConnectionStatus, normalizeTunnelUrl;
+import 'session_context.dart';
 import '../l10n/app_localizations.dart';
 import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
@@ -112,38 +113,61 @@ class TunnelConnectionState {
 class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   ConnectionService? service;
 
-  String _clientId = '';
-  String _sessionId = '';
-  String _lastAppliedEventId = '';
-  String _lastDurableEventId = '';
-  String _resumeOverrideEventId = '';
-  String _liveUrl = '';
+  /// Single source of truth for per-connection mutable state.
+  /// Replaced with a fresh instance on every new QR scan.
+  SessionContext _ctx = SessionContext();
+
+  // Delegates for backwards compat with existing code
+  String get _clientId => _ctx.clientId;
+  set _clientId(String v) => _ctx.clientId = v;
+  String get _sessionId => _ctx.sessionId;
+  set _sessionId(String v) => _ctx.sessionId = v;
+  String get _lastAppliedEventId => _ctx.lastAppliedEventId;
+  set _lastAppliedEventId(String v) => _ctx.lastAppliedEventId = v;
+  String get _lastDurableEventId => _ctx.lastDurableEventId;
+  set _lastDurableEventId(String v) => _ctx.lastDurableEventId = v;
+  String get _resumeOverrideEventId => _ctx.resumeOverrideEventId;
+  set _resumeOverrideEventId(String v) => _ctx.resumeOverrideEventId = v;
+  String get _liveUrl => _ctx.liveUrl;
+  set _liveUrl(String v) => _ctx.liveUrl = v;
+  bool get _hasAuthoritativeProjection => _ctx.hasAuthoritativeProjection;
+  set _hasAuthoritativeProjection(bool v) => _ctx.hasAuthoritativeProjection = v;
+  int get _relayAuthorityEpoch => _ctx.relayAuthorityEpoch;
+  set _relayAuthorityEpoch(int v) => _ctx.relayAuthorityEpoch = v;
+  List<String> get _recentEventIds => _ctx.recentEventIds;
+  Set<String> get _recentEventSet => _ctx.recentEventSet;
+  bool get _awaitingSnapshotProjection => _ctx.awaitingSnapshotProjection;
+  set _awaitingSnapshotProjection(bool v) => _ctx.awaitingSnapshotProjection = v;
+  Timer? get _snapshotProjectionTimeout => _ctx.snapshotProjectionTimeout;
+  set _snapshotProjectionTimeout(Timer? v) => _ctx.snapshotProjectionTimeout = v;
+  bool get _resumeCompleted => _ctx.resumeCompleted;
+  set _resumeCompleted(bool v) => _ctx.resumeCompleted = v;
+  int get _pendingReplayCount => _ctx.pendingReplayCount;
+  set _pendingReplayCount(int v) => _ctx.pendingReplayCount = v;
+  String get _pendingResumeMode => _ctx.pendingResumeMode;
+  set _pendingResumeMode(String v) => _ctx.pendingResumeMode = v;
+  int? get _pendingActiveSessionBarrierOrdinal => _ctx.pendingActiveSessionBarrierOrdinal;
+  set _pendingActiveSessionBarrierOrdinal(int? v) => _ctx.pendingActiveSessionBarrierOrdinal = v;
+  String get _pendingActiveSessionBarrierEventId => _ctx.pendingActiveSessionBarrierEventId;
+  set _pendingActiveSessionBarrierEventId(String v) => _ctx.pendingActiveSessionBarrierEventId = v;
+  bool get _gapRecoveryScheduled => _ctx.gapRecoveryScheduled;
+  set _gapRecoveryScheduled(bool v) => _ctx.gapRecoveryScheduled = v;
+  bool get _gapRecoveryDeferred => _ctx.gapRecoveryDeferred;
+  set _gapRecoveryDeferred(bool v) => _ctx.gapRecoveryDeferred = v;
+  int get _gapRecoveryAttemptCount => _ctx.gapRecoveryAttemptCount;
+  set _gapRecoveryAttemptCount(int v) => _ctx.gapRecoveryAttemptCount = v;
 
   /// The active connection's persistent state (resume cursor, workspace info).
   /// Null for background connections — each has its own ConnectionService.
   StoredConnection? _currentConnection;
   final ConnectionStore _connectionStore = ConnectionStore();
-  bool _hasAuthoritativeProjection = false;
-  int _relayAuthorityEpoch = 0;
-  final List<String> _recentEventIds = <String>[];
-  final Set<String> _recentEventSet = <String>{};
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
-  bool _awaitingSnapshotProjection = false;
-  Timer? _snapshotProjectionTimeout;
-  bool _resumeCompleted = false;
   int _connectionGeneration = 0;
   final List<StreamSubscription<dynamic>> _serviceSubscriptions =
       <StreamSubscription<dynamic>>[];
   final Map<String, Timer> _subagentCleanupTimers = <String, Timer>{};
   Timer? _relaySyncTimeout;
-  int _pendingReplayCount = 0;
-  String _pendingResumeMode = '';
-  int? _pendingActiveSessionBarrierOrdinal;
-  String _pendingActiveSessionBarrierEventId = '';
-  bool _gapRecoveryScheduled = false;
-  bool _gapRecoveryDeferred = false;
-  int _gapRecoveryAttemptCount = 0;
 
   @override
   TunnelConnectionState build() {
@@ -250,7 +274,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     var descriptor = ShareConnectionDescriptor.parse(url);
     state = state.copyWith(
         status: ConnectionStatus.connecting,
-        url: descriptor.publicUrl,
+        url: url,  // Store full URL (with auth) for correct dedup and reconnection
         error: null,
         relaySync: null,
         sessionReady: false);
@@ -274,13 +298,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     _currentConnection = conn;
 
-    // Set resume state from StoredConnection — each connection is independent.
-    _sessionId = conn?.sessionId ?? '';
-    _lastAppliedEventId = conn?.lastEventId ?? '';
-    _lastDurableEventId = conn?.durableEventId ?? _lastAppliedEventId;
+    // clientId is device-level, not session-level — always restore it.
     _clientId = conn?.clientId ?? '';
-    if (clearState) {
-      _resumeOverrideEventId = '';
+
+    // If we have a StoredConnection for THIS room with a session ID, treat
+    // it as a reconnect — use the stored session/event IDs for resume_from.
+    // If conn is null or has no session, it's a fresh scan of a new room.
+    final isReconnect =
+        conn != null && (conn.sessionId?.isNotEmpty ?? false) && conn.roomId == descriptor.roomId;
+    if (isReconnect) {
+      _sessionId = conn.sessionId ?? '';
+      _lastAppliedEventId = conn.lastEventId ?? '';
+      _lastDurableEventId = conn.durableEventId ?? _lastAppliedEventId;
     }
     _relayAuthorityEpoch = 0;
     final localService = createConnectionService(descriptor);
@@ -309,51 +338,49 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       // relay replay events we already have rendered.
       _beginRelaySyncWaiting(hasLocalState: true);
     } else {
-      // Different session or fresh connect — clear UI, restore from SQLite.
+      // Different session or fresh connect.
       _clearUiProjection();
-      _sessionId = savedSessionId;
-      _lastAppliedEventId =
-          savedSessionId.isNotEmpty ? _lastAppliedEventId : '';
-      _lastDurableEventId =
-          savedSessionId.isNotEmpty ? _lastDurableEventId : '';
-      _relayAuthorityEpoch = 0;
-      _awaitingSnapshotProjection = false;
-      _snapshotProjectionTimeout?.cancel();
-      _snapshotProjectionTimeout = null;
-      _recentEventIds.clear();
-      _recentEventSet.clear();
-      final hadSavedSession = savedSessionId.isNotEmpty;
+      // Clear live workspace/session so registerLiveSession doesn't
+      // fall back to the previous connection's workspace key.
+      ref.read(workspaceCacheProvider.notifier).markDisconnected();
+
+      if (!isReconnect && clearState) {
+        // Fresh QR scan of a NEW room: dispose old context, start completely clean.
+        // No variables from the previous workspace can leak.
+        final savedClientId = _ctx.clientId;
+        _ctx.dispose();
+        _ctx = SessionContext();
+        // Preserve clientId (device-level ID, not workspace-scoped).
+        _ctx.clientId = savedClientId;
+        _relaySyncTimeout?.cancel();
+        _relaySyncTimeout = null;
+      } else {
+        // Reconnect: preserve session + event IDs for resume_from.
+        _snapshotProjectionTimeout?.cancel();
+        _snapshotProjectionTimeout = null;
+        _recentEventIds.clear();
+        _recentEventSet.clear();
+        _gapRecoveryScheduled = false;
+        _gapRecoveryDeferred = false;
+        _gapRecoveryAttemptCount = 0;
+      }
+
+      final hadSavedSession = _sessionId.isNotEmpty;
       if (hadSavedSession) {
         _beginLocalRestoreSync();
-      }
-      final restoredProjection = _restoreProjectionFromCache(
-        adoptCursor: false,
-        seedCursorIfUnset: true,
-      );
-      if (restoredProjection || hadSavedSession) {
-        _beginRelaySyncWaiting(
-          hasLocalState: restoredProjection || hadSavedSession,
+        final restoredProjection = _restoreProjectionFromCache(
+          adoptCursor: false,
+          seedCursorIfUnset: true,
         );
+        _beginRelaySyncWaiting(hasLocalState: restoredProjection || hadSavedSession);
       } else {
         _beginRelaySyncWaiting(hasLocalState: false);
       }
     }
 
     _bindService(localService, generation, url);
-    // Determine resume strategy:
-    // - resume_from: we have state (sessionId + lastEventId) → incremental sync
-    // - resume_hello: fresh connect or no state → full sync
-    final hasState = _sessionId.isNotEmpty && _lastAppliedEventId.isNotEmpty;
-    final effectiveEventId = _resumeOverrideEventId.isNotEmpty
-        ? _resumeOverrideEventId
-        : (hasState ? _lastAppliedEventId : null);
-    final effectiveType = effectiveEventId != null ? 'resume_from' : 'resume_hello';
-    localService.armResumeHello(
-      clientId: _clientId,
-      sessionId: _sessionId.isNotEmpty ? _sessionId : null,
-      lastEventId: effectiveEventId,
-      messageType: effectiveType,
-    );
+    // Resume strategy is handled in _bindService() when the service
+    // reaches connected status — single source of truth, no double send.
 
     try {
       // dart:io WebSocket.connect properly awaits handshake
@@ -370,12 +397,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// Reconnect using the last known URL (e.g. after app resumes from background).
   /// Preserves existing chat state — server will replay recent messages.
   Future<void> reconnect() async {
-    final url = state.url;
-    if (url == null || url.isEmpty) {
+    // Use _liveUrl (full URL with auth_ticket) instead of state.url (publicUrl).
+    if (_liveUrl.isEmpty) {
       await restoreSelectedWorkspace();
       return;
     }
-    await connect(url, clearState: false);
+    await connect(_liveUrl, clearState: false);
   }
 
   void disconnect() {
@@ -386,6 +413,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _relayAuthorityEpoch = 0;
     _liveUrl = '';
     ref.read(workspaceCacheProvider.notifier).markDisconnected();
+    // Mark this connection as dead — user explicitly disconnected
+    if (_currentConnection != null) {
+      unawaited(_connectionStore.markDead(_currentConnection!.id));
+    }
     state = state.copyWith(
       status: ConnectionStatus.disconnected,
       sessionReady: false,
@@ -410,6 +441,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final prefs = await SharedPreferences.getInstance();
     await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearSelection();
+    // User is leaving the session — mark connection as dead
+    if (_currentConnection != null) {
+      unawaited(_connectionStore.markDead(_currentConnection!.id));
+    }
     state = TunnelConnectionState(
       status: ConnectionStatus.disconnected,
       sessionReady: false,
@@ -479,14 +514,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             _pendingActiveSessionBarrierOrdinal == null) {
           _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
         }
-        // Register workspace — prefer session_info event data, fall back to
-        // workspace metadata embedded in the active_session message by relay.
-        final sessionInfo = ref.read(sessionInfoProvider) ??
-            _sessionInfoFromActiveSession(msg.data);
-        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
-            sessionId, sessionInfo,
-            lastEventId: _lastAppliedEventId,
-            authorityEpoch: _relayAuthorityEpoch));
+        // Register workspace from the active_session message — this carries
+        // the correct workspace_path for THIS room. If absent, skip; the
+        // session_info event (encrypted, from host) will register it.
+        final sessionInfo = _sessionInfoFromActiveSession(msg.data);
+        if (sessionInfo != null) {
+          ref.read(sessionInfoProvider.notifier).set(sessionInfo);
+          debugPrint('[connection] active_session sessionId=$sessionId workspace=${sessionInfo.workspace}');
+          unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
+              sessionId, sessionInfo,
+              lastEventId: _lastAppliedEventId,
+              authorityEpoch: _relayAuthorityEpoch));
+        }
         _restoreSessionProjectionIfAvailable(sessionId);
         _persistResumeState();
         break;
@@ -501,11 +540,23 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _noteAuthorityEpoch(msg);
         final replayCount = (msg.data?['replay_count'] as num?)?.toInt() ?? 0;
         final resumeMode = msg.data?['resume_mode'] as String? ?? 'incremental';
+        final resumeFromEventId =
+            msg.data?['resume_from_event_id'] as String? ?? '';
         debugPrint(
           '[connection] resume_ack session=$sessionId replay=$replayCount mode=$resumeMode',
         );
         _resumeOverrideEventId = '';
         _resumeCompleted = true;
+        // Cancel any pending gap recovery — the relay has acknowledged our
+        // resume point. If replay_count is 0, there's nothing to backfill.
+        _gapRecoveryScheduled = false;
+        _gapRecoveryDeferred = false;
+        _gapRecoveryAttemptCount = 0;
+        // Reset ordinal tracking so we don't re-detect the same gap.
+        // The relay will send events starting from its current position.
+        if (replayCount == 0 && resumeFromEventId.isNotEmpty) {
+          _lastAppliedEventId = resumeFromEventId;
+        }
         _beginResumeReplaySync(
           replayCount: replayCount,
           resumeMode: resumeMode,
@@ -552,6 +603,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _lastAppliedEventId = '';
         _recentEventIds.clear();
         _recentEventSet.clear();
+        // Reset ordinal cursor — snapshot_reset means the host is sending a
+        // fresh authoritative view. Any previous _lastAppliedEventId is from
+        // a different snapshot/resume and must not be used for gap detection
+        // against the incoming snapshot events.
+        _lastAppliedEventId = '';
+        _lastDurableEventId = '';
         _awaitingSnapshotProjection = true;
         _snapshotProjectionTimeout?.cancel();
         _snapshotProjectionTimeout = Timer(const Duration(seconds: 15), () {
@@ -1312,7 +1369,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // the host is sending a complete fresh view — accept all events regardless
     // of ordinal to avoid dropping replayCanonicalEvents data that arrives
     // before (or interleaved with) the snapshot_reset message.
-    if (!_awaitingSnapshotProjection) {
+    // Suppress ordinal checks during authoritative snapshot replay and
+    // while replay events are in flight (pendingReplayCount > 0).
+    // The host controls the event stream during these phases.
+    if (!_awaitingSnapshotProjection && _pendingReplayCount == 0) {
       final ord = _parseEventOrdinal(eventId);
       final last = _parseEventOrdinal(_lastAppliedEventId);
       if (ord != null && last != null && ord <= last) {
@@ -1320,15 +1380,35 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       }
       // Gap detection: when we see a gap in event ordinals, we still apply
       // the event (streaming text/reasoning chunks are incremental and safe to
-      // append even with a gap).  We trigger a background reconnect recovery
-      // to backfill, but never drop events on the floor — doing so would
-      // cause visible content loss in the UI.
+      // append even with a gap).
+      //
+      // Small gaps (<=100): likely a network blip. Schedule reconnect recovery
+      // to backfill missing events via resume_from.
+      //
+      // Large gaps (>100): the relay has already told us via resume_ack what
+      // it can replay. Reconnecting would trigger a massive SQLite replay
+      // from relay (e.g. 190k events = 500MB). Instead, accept the gap:
+      // update our cursor so live streaming continues without looping.
+      // The user may see missing history but won't lose the live stream.
       if (ord != null && last != null && ord > last + 1) {
-        debugPrint(
-          '[connection] ordinal gap detected last=$last incoming=$ord eventId=$eventId — applying event, scheduling recovery',
-        );
-        _scheduleGapRecovery(msg, lastOrdinal: last, incomingOrdinal: ord);
-        // Do NOT return false — we still apply the event.
+        if (ord - last <= 100) {
+          debugPrint(
+            '[connection] ordinal gap detected last=$last incoming=$ord eventId=$eventId — scheduling recovery',
+          );
+          _scheduleGapRecovery(msg,
+              lastOrdinal: last, incomingOrdinal: ord);
+          // Do NOT return false — we still apply the event.
+        } else {
+          debugPrint(
+            '[connection] large ordinal gap ($last -> $ord, ${ord - last} events) — accepting gap, updating cursor to continue live stream',
+          );
+          // Update cursor to incoming event so we don't re-detect this gap
+          // on every subsequent event. Live streaming continues.
+          _lastAppliedEventId = eventId;
+          _captureLiveProjectionForDurableResume();
+          _persistResumeState();
+          return true;
+        }
       }
     }
     return true;
@@ -1338,6 +1418,17 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   void _ackSkippedEvent(proto.WsMessage msg) {
     final eventId = msg.eventId;
     _noteReplayProgress(eventId);
+    // Incremental persistence: write every message to this session's cache
+    // so switching sessions or restarting the app preserves all data.
+    if (_sessionId.isNotEmpty && msg.type != 'server_ack') {
+      ref.read(workspaceCacheProvider.notifier).appendSessionEvent(
+            sessionId: _sessionId,
+            eventType: msg.type,
+            eventData: Map<String, dynamic>.from(msg.data ?? {}),
+            eventId: eventId,
+          );
+    }
+
     if (eventId != null && eventId.isNotEmpty && _clientId.isNotEmpty) {
       service?.sendAck(clientId: _clientId, eventId: eventId);
     }
@@ -1425,15 +1516,26 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   Future<void> _runScheduledGapRecovery(String lastEvent) async {
-    final url = state.url;
-    if (url == null || url.isEmpty) {
+    final svc = service;
+    if (svc == null) {
       _gapRecoveryScheduled = false;
       _gapRecoveryDeferred = false;
       return;
     }
     try {
       _resumeOverrideEventId = lastEvent;
-      await connect(url, clearState: false, force: true);
+      // Re-arm resume_hello with the gap-recovery event ID so the service
+      // sends resume_from (not resume_hello) after reconnecting.
+      svc.armResumeHello(
+        clientId: _clientId,
+        sessionId: _sessionId.isNotEmpty ? _sessionId : null,
+        lastEventId: lastEvent,
+        messageType: 'resume_from',
+      );
+      // Reconnect the EXISTING service directly — do NOT call connect()
+      // which would demote to background and create a ping-pong loop.
+      _beginRelaySyncWaiting(hasLocalState: _hasLocalSessionState());
+      await svc.connect();
     } finally {
       _gapRecoveryScheduled = false;
       _gapRecoveryDeferred = false;
@@ -1525,7 +1627,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               status == ConnectionStatus.connected && state.sessionReady,
         );
         if (status == ConnectionStatus.connected) {
-          _saveUrl(localService.publicUrl);
+          // Mark this connection as alive for app-restart recovery
+          if (_currentConnection != null) {
+            unawaited(_connectionStore.markAlive(_currentConnection!.id));
+          }
+          _saveUrl(connectUrl);  // full URL with auth, not publicUrl
           localService.sendResumeHello(
             clientId: _clientId,
             sessionId: _sessionId.isNotEmpty ? _sessionId : null,
@@ -1743,7 +1849,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _cancelServiceSubscriptions();
     if (url.isNotEmpty && sessionId.isNotEmpty) {
       final bgConn = ref.read(backgroundConnectionProvider.notifier);
-      bgConn.registerService(url, sessionId, service!);
+      bgConn.registerService(
+        sessionId: sessionId,
+        svc: service!,
+        url: url,
+      );
       debugPrint(
         '[connection] demoted to background url=$url session=$sessionId',
       );
@@ -1754,17 +1864,46 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   }
 
   /// Promote a background service to foreground without reconnecting.
-  /// The service's streams are rebound to this notifier so events flow
-  /// into the UI again.
+  /// The old foreground service is demoted to background (not disposed).
+  /// Messages from cache are loaded into UI immediately.
   void adoptService(ConnectionService svc, String sessionId, String url) {
-    _disposeActiveService();
+    // Demote current foreground service to background (not dispose!)
+    demoteToBackground();
+
     service = svc;
     _sessionId = sessionId;
     _liveUrl = url;
-    _lastAppliedEventId = '';
+
+    // Restore last known event ID from workspace cache for this session
+    final cache = ref.read(workspaceCacheProvider);
+    final snapshot = ref.read(workspaceCacheProvider.notifier).getSessionSnapshot(sessionId);
+    String? sessionRecordKey;
+    for (final entry in cache.sessions.entries) {
+      if (entry.value.sessionId == sessionId) {
+        sessionRecordKey = entry.key;
+        break;
+      }
+    }
+    final sessionRecord =
+        sessionRecordKey != null ? cache.sessions[sessionRecordKey] : null;
+    final lastEvent = snapshot?.lastEventId ??
+        sessionRecord?.lastEventId ??
+        '';
+    _lastAppliedEventId = lastEvent;
+    _lastDurableEventId = lastEvent;
     _gapRecoveryAttemptCount = 0;
     _gapRecoveryScheduled = false;
     _gapRecoveryDeferred = false;
+
+    // Load cached messages into chat provider for immediate display
+    if (snapshot != null && snapshot.messages.isNotEmpty) {
+      ref.read(chatProvider.notifier).loadCachedMessages(snapshot.messages);
+      debugPrint(
+        '[connection] loaded ${snapshot.messages.length} cached messages for session=$sessionId',
+      );
+    }
+
+    // Session is already connected and synced — mark ready immediately.
     state = state.copyWith(
       status: ConnectionStatus.connected,
       url: url,
@@ -1773,8 +1912,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       sessionReady: true,
     );
     _bindService(svc, _connectionGeneration, url);
+
+    // Tell workspace cache we selected this session
+    ref.read(workspaceCacheProvider.notifier).selectSession(sessionId);
+
     debugPrint(
-      '[connection] adopted background service session=$sessionId url=$url',
+      '[connection] adopted background service session=$sessionId url=$url lastEvent=$lastEvent',
     );
   }
 

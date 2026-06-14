@@ -1074,6 +1074,22 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
   }
 
+  /// Clear all cached workspaces, sessions, and snapshots from device.
+  Future<void> clearAll() async {
+    await _initializeFuture;
+    _store?.clearAll();
+    _dirtySnapshots.clear();
+    _dirtySessions.clear();
+    _dirtyWorkspaces.clear();
+    state = const WorkspaceCacheState(
+      initialized: true,
+      workspaces: {},
+      sessions: {},
+      snapshots: {},
+    );
+    _scheduleFlush();
+  }
+
   /// Cache a background event from a non-active session relay connection.
   /// This persists the event for later viewing without updating the UI.
   void cacheBackgroundEvent({
@@ -1105,6 +1121,255 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       _dirtySessions.add(key);
       _scheduleFlush();
     }
+  }
+
+  // ─── Per-session incremental message persistence ───
+  // Used by both foreground and background connections to ensure
+  // every message is persisted to the correct session immediately.
+
+  /// Append a message event to a session's cached snapshot.
+  /// Works for streaming text (merge), new messages (append),
+  /// and control events (status update).
+  void appendSessionEvent({
+    required String sessionId,
+    required String eventType,
+    required Map<String, dynamic> eventData,
+    String? eventId,
+  }) {
+    // Find snapshot key for this session
+    String? snapshotKey;
+    for (final entry in state.sessions.entries) {
+      if (entry.value.sessionId == sessionId) {
+        snapshotKey = entry.key;
+        break;
+      }
+    }
+    if (snapshotKey == null) return;
+
+    final existing = state.snapshots[snapshotKey];
+
+    List<ChatMessage> messages = List.from(existing?.messages ?? []);
+    Map<String, SubagentInfo> subagents =
+        Map<String, SubagentInfo>.from(existing?.subagents ?? {});
+    String agentStatus = existing?.agentStatus ?? 'idle';
+    String agentStatusMessage = existing?.agentStatusMessage ?? '';
+    proto.SessionInfoData? sessionInfo = existing?.sessionInfo;
+
+    switch (eventType) {
+      case 'session_info':
+        final si = proto.SessionInfoData.fromJson(eventData);
+        if (si.workspace.isNotEmpty) sessionInfo = si;
+        break;
+
+      case 'text':
+      case 'stream_text':
+        final data = proto.TextData.fromJson(eventData);
+        final msgId = data.id.isNotEmpty
+            ? data.id
+            : 'msg-${DateTime.now().millisecondsSinceEpoch}';
+        final idx = messages.indexWhere(
+            (m) => m.id == msgId || ((m.sourceId?.isEmpty ?? true) && m.streaming && !m.isUser));
+        if (idx >= 0) {
+          messages[idx] = ChatMessage(
+            id: messages[idx].id,
+            sourceId: messages[idx].sourceId,
+            sourceName: messages[idx].sourceName,
+            kind: messages[idx].kind,
+            text: messages[idx].text + data.chunk,
+            streaming: data.done ? false : messages[idx].streaming,
+            time: messages[idx].time,
+            status: messages[idx].status,
+          );
+        } else {
+          messages.add(ChatMessage(
+            id: msgId,
+            text: data.chunk,
+            streaming: !data.done,
+            kind: data.kind,
+            time: DateTime.now(),
+          ));
+        }
+        break;
+
+      case 'tool_call_done':
+        final data = proto.ToolCallData.fromJson(eventData);
+        final toolId = data.toolId.isNotEmpty
+            ? data.toolId
+            : 'tool-${DateTime.now().millisecondsSinceEpoch}';
+        messages.add(ChatMessage(
+          id: toolId,
+          toolId: data.toolId,
+          toolName: data.toolName,
+          toolDisplayName: data.displayName,
+          text: data.detail,
+          streaming: true,
+          time: DateTime.now(),
+        ));
+        break;
+
+      case 'tool_result':
+        final data = proto.ToolResultData.fromJson(eventData);
+        final idx = data.toolId.isNotEmpty
+            ? messages.indexWhere((m) => m.id == data.toolId)
+            : -1;
+        if (idx >= 0) {
+          messages[idx] = ChatMessage(
+            id: messages[idx].id,
+            sourceId: messages[idx].sourceId,
+            sourceName: messages[idx].sourceName,
+            kind: messages[idx].kind,
+            text: messages[idx].text,
+            toolId: messages[idx].toolId,
+            toolName: messages[idx].toolName,
+            toolDisplayName: messages[idx].toolDisplayName,
+            toolResult: data.result,
+            toolCompleted: true,
+            time: messages[idx].time,
+            status: messages[idx].status,
+          );
+        } else {
+          messages.add(ChatMessage(
+            id: data.toolId.isNotEmpty
+                ? data.toolId
+                : 'tool-${DateTime.now().millisecondsSinceEpoch}',
+            toolId: data.toolId,
+            toolResult: data.result,
+            toolCompleted: true,
+            text: '',
+            time: DateTime.now(),
+          ));
+        }
+        break;
+
+      case 'user_message':
+        final text = eventData['text'] as String? ?? '';
+        final msgId = eventData['message_id'] as String? ??
+            'user-${DateTime.now().millisecondsSinceEpoch}';
+        messages.add(ChatMessage(
+          id: msgId,
+          isUser: true,
+          text: text,
+          time: DateTime.now(),
+          status: MessageStatus.acknowledged,
+        ));
+        break;
+
+      case 'agent_status':
+        agentStatus = eventData['status'] as String? ?? agentStatus;
+        agentStatusMessage =
+            eventData['message'] as String? ?? agentStatusMessage;
+        break;
+
+      case 'done':
+        messages = messages
+            .map((m) => m.streaming
+                ? ChatMessage(
+                    id: m.id,
+                    sourceId: m.sourceId,
+                    sourceName: m.sourceName,
+                    kind: m.kind,
+                    text: m.text,
+                    streaming: false,
+                    isUser: m.isUser,
+                    toolId: m.toolId,
+                    toolName: m.toolName,
+                    toolDisplayName: m.toolDisplayName,
+                    toolDetail: m.toolDetail,
+                    toolResult: m.toolResult,
+                    toolPayload: m.toolPayload,
+                    toolPayloadMode: m.toolPayloadMode,
+                    toolCompleted: m.toolCompleted,
+                    isToolError: m.isToolError,
+                    reasoningCollapsed: m.reasoningCollapsed,
+                    time: m.time,
+                    status: m.status,
+                  )
+                : m)
+            .toList();
+        agentStatus = 'idle';
+        agentStatusMessage = '';
+        break;
+
+      case 'subagent_text':
+      case 'subagent_stream_text':
+        final data = proto.SubagentTextData.fromJson(eventData);
+        final agentId = data.agentId;
+        subagents[agentId] ??=
+            SubagentInfo(agentId: agentId, name: agentId, task: '');
+        break;
+
+      case 'subagent_tool_call_done':
+        final agentId = eventData['agent_id'] as String? ?? '';
+        if (agentId.isNotEmpty) {
+          subagents[agentId] ??=
+              SubagentInfo(agentId: agentId, name: agentId, task: '');
+        }
+        break;
+
+      case 'subagent_done':
+        final data = proto.SubagentCompleteData.fromJson(eventData);
+        final agentId = data.agentId;
+        final prev = subagents[agentId] ??
+            SubagentInfo(agentId: agentId, name: data.name, task: '');
+        subagents[agentId] = prev.copyWith(
+          status: 'completed',
+          completed: true,
+          success: data.success,
+        );
+        break;
+
+      case 'error':
+        messages.add(ChatMessage(
+          id: 'error-${DateTime.now().millisecondsSinceEpoch}',
+          text: (eventData['error'] as String?) ?? 'Unknown error',
+          time: DateTime.now(),
+        ));
+        agentStatus = 'idle';
+        break;
+
+      default:
+        break;
+    }
+
+    // Build and store updated snapshot
+    final newSnapshot = CachedSessionSnapshot(
+      messages: messages,
+      subagents: subagents,
+      sessionInfo: sessionInfo,
+      agentStatus: agentStatus,
+      agentStatusMessage: agentStatusMessage,
+      lastEventId: eventId ?? existing?.lastEventId ?? '',
+      authorityEpoch: existing?.authorityEpoch ?? 0,
+    );
+
+    final newSnapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots);
+    newSnapshots[snapshotKey] = newSnapshot;
+    state = state.copyWith(snapshots: newSnapshots);
+
+    // Update session record's lastEventId
+    if (eventId != null && eventId.isNotEmpty) {
+      final newSessions = Map<String, CachedSessionRecord>.from(state.sessions);
+      final sr = newSessions[snapshotKey];
+      if (sr != null) {
+        newSessions[snapshotKey] =
+            sr.copyWith(lastEventId: eventId, lastUpdatedAt: DateTime.now());
+        state = state.copyWith(sessions: newSessions);
+        _dirtySessions.add(snapshotKey);
+      }
+    }
+
+    _dirtySnapshots.add(snapshotKey);
+    _scheduleFlush();
+  }
+
+  /// Get the cached snapshot for a specific session by sessionId.
+  CachedSessionSnapshot? getSessionSnapshot(String sessionId) {
+    for (final entry in state.sessions.entries) {
+      if (entry.value.sessionId == sessionId) {
+        return state.snapshots[entry.key];
+      }
+    }
+    return null;
   }
 
   Future<bool> attachSessionToActiveWorkspace(String sessionId) async {
@@ -1175,20 +1440,8 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     // This ensures multiple host instances sharing the same workspace directory
     // map to the same key on mobile, regardless of their relay URL/token.
     final workspacePath = sessionInfo?.workspace ?? '';
-    String? workspaceKey;
-    if (workspacePath.isNotEmpty) {
-      workspaceKey = _workspaceKeyForPath(workspacePath);
-    }
-    // Fallback: reconnecting to a known workspace, or sparse resume without sessionInfo
-    if (workspaceKey == null || workspaceKey.isEmpty) {
-      workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
-    }
-    // Last resort: derive from pending URL (first scan, sessionInfo not yet available)
-    if ((workspaceKey == null || workspaceKey.isEmpty) &&
-        _pendingWorkspaceUrl != null) {
-      workspaceKey = _workspaceKeyForPath(_pendingWorkspaceUrl!);
-    }
-    if (workspaceKey == null || workspaceKey.isEmpty) return;
+    if (workspacePath.isEmpty) return; // Wait for active_session
+    final workspaceKey = _workspaceKeyForPath(workspacePath);
     final now = DateTime.now();
     final previousLiveSessionId = state.liveSessionId;
     final lastKnownLiveSessionId =
@@ -1552,7 +1805,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 final displayedMessagesProvider = Provider<List<ChatMessage>>((ref) {
   final cache = ref.watch(workspaceCacheProvider);
   if (_isViewingLive(cache)) {
-    return ref.watch(chatProvider);
+    final liveChat = ref.watch(chatProvider);
+    if (liveChat.isNotEmpty) return liveChat;
+    // Live chat is empty (e.g. just switched sessions, waiting for replay).
+    // Fall through to snapshot if available.
   }
   final sessionId = cache.selectedSessionId;
   if (sessionId == null || sessionId.isEmpty) {

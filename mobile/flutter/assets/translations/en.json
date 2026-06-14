@@ -26,6 +26,9 @@
   "status.approval_needed": "Approval needed",
   "status.waiting_for_input": "Waiting for input",
   "workspace.switcher_title": "Workspaces",
+  "workspace.clear_cache": "Clear all cached data",
+  "workspace.clear_cache_confirm_title": "Clear all cached data?",
+  "workspace.clear_cache_confirm_body": "This will remove all cached workspaces, sessions, and message history from this device. Active connections will be disconnected. This cannot be undone.",
   "workspace.current": "Current",
   "workspace.cached": "Cached",
   "workspace.no_workspaces": "No workspaces yet",
@@ -66,6 +69,9 @@
   "relay_sync.snapshot_detail": "Relay asked the client to rebuild the visible session state.",
   "relay_sync.stalled_title": "Relay sync is taking longer than expected",
   "relay_sync.stalled_detail": "{count} replayed updates are still pending.",
+  "sync.connecting_title": "Connecting",
+  "sync.connecting_detail": "Establishing secure connection to relay...",
+  "sync.syncing_title": "Synchronizing",
   "session.cached_banner": "Viewing cached history from {date}",
   "session.cached_input_disabled": "You are viewing a cached historical session. Input is disabled.",
   "workspace.scan_hint": "Scan the QR code displayed on GGCode desktop to switch workspace.",
@@ -73,5 +79,7 @@
   "approval.title": "Approval Required",
   "approval.deny": "Deny",
   "approval.allow": "Allow",
-  "approval.always_allow": "Always Allow"
+  "approval.always_allow": "Always Allow",
+  "common.cancel": "Cancel",
+  "common.clear": "Clear"
 }

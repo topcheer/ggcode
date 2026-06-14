@@ -22,6 +22,7 @@ class StoredConnection {
   final String? providerName;
   final String? modelName;
   final bool active;
+  final bool alive; // true = had live WebSocket (foreground or background) when app last ran
   final bool permanentlyFailed;
   final String? failReason;
   final DateTime createdAt;
@@ -40,6 +41,7 @@ class StoredConnection {
     this.providerName,
     this.modelName,
     this.active = false,
+    this.alive = false,
     this.permanentlyFailed = false,
     this.failReason,
     required this.createdAt,
@@ -77,6 +79,7 @@ class StoredConnection {
     String? providerName,
     String? modelName,
     bool? active,
+    bool? alive,
     bool? permanentlyFailed,
     String? failReason,
     DateTime? lastConnectedAt,
@@ -94,6 +97,7 @@ class StoredConnection {
       providerName: providerName ?? this.providerName,
       modelName: modelName ?? this.modelName,
       active: active ?? this.active,
+      alive: alive ?? this.alive,
       permanentlyFailed: permanentlyFailed ?? this.permanentlyFailed,
       failReason: failReason ?? this.failReason,
       createdAt: createdAt,
@@ -114,6 +118,7 @@ class StoredConnection {
         'providerName': providerName,
         'modelName': modelName,
         'active': active,
+        'alive': alive,
         'permanentlyFailed': permanentlyFailed,
         'failReason': failReason,
         'createdAt': createdAt.toIso8601String(),
@@ -134,6 +139,7 @@ class StoredConnection {
       providerName: json['providerName'] as String?,
       modelName: json['modelName'] as String?,
       active: json['active'] as bool? ?? false,
+      alive: json['alive'] as bool? ?? false,
       permanentlyFailed: json['permanentlyFailed'] as bool? ?? false,
       failReason: json['failReason'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
@@ -195,6 +201,43 @@ class ConnectionStore {
   /// Find a connection by ID.
   StoredConnection? findById(String id) {
     return _connections.where((c) => c.id == id).firstOrNull;
+  }
+
+  /// Find a connection by session ID.
+  StoredConnection? findBySessionId(String sessionId) {
+    return _connections
+        .where((c) => c.sessionId == sessionId && !c.permanentlyFailed)
+        .firstOrNull;
+  }
+
+  /// Connections that were alive (had live WebSocket) when the app last ran.
+  /// These are the ONLY ones that should be restored on app restart.
+  List<StoredConnection> get aliveConnections =>
+      _connections.where((c) => c.alive && !c.permanentlyFailed && c.sessionId != null && c.sessionId!.isNotEmpty).toList();
+
+  /// Mark a connection as alive (WebSocket established).
+  Future<void> markAlive(String id) async {
+    final idx = _connections.indexWhere((c) => c.id == id);
+    if (idx >= 0) {
+      _connections[idx] = _connections[idx].copyWith(alive: true);
+      await save();
+    }
+  }
+
+  /// Mark a connection as dead (WebSocket closed or user disconnected).
+  Future<void> markDead(String id) async {
+    final idx = _connections.indexWhere((c) => c.id == id);
+    if (idx >= 0) {
+      _connections[idx] = _connections[idx].copyWith(alive: false);
+      await save();
+    }
+  }
+
+  /// Mark all connections as dead. Called on graceful app shutdown so
+  /// they won't be auto-restored next time.
+  Future<void> markAllDead() async {
+    _connections = _connections.map((c) => c.copyWith(alive: false)).toList();
+    await save();
   }
 
   /// Add a new connection. If [active] is true, demotes all others.

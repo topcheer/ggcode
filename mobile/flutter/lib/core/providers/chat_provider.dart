@@ -156,6 +156,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   @override
   List<ChatMessage> build() => [];
 
+  /// Replace all messages with cached messages from a session snapshot.
+  /// Called when switching to a session that has cached data.
+  void loadCachedMessages(List<ChatMessage> cached) {
+    state = List.from(cached);
+  }
+
   /// Send a user message with ack tracking.
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.

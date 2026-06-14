@@ -247,7 +247,12 @@ class _AppShellState extends ConsumerState<AppShell>
           !_bootstrapReconnectIssued) {
         _bootstrapReconnectIssued = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
+          // Restore the foreground (selected) session
           ref.read(connectionProvider.notifier).restoreSelectedWorkspace();
+          // Restore all other cached sessions as background connections
+          ref
+              .read(backgroundConnectionProvider.notifier)
+              .connectAllCachedSessions();
         });
       }
     }

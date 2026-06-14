@@ -1,196 +1,202 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../connection_service.dart';
 import '../models/protocol.dart' as proto;
+import 'connection_store.dart';
 import 'workspace_cache.dart';
 
-/// Manages background relay connections for non-active sessions.
+/// Manages background WebSocket connections for non-active sessions.
 ///
-/// The active session is handled by [ConnectionNotifier]. This manager
-/// maintains WebSocket connections to all other paired sessions so their
-/// messages are cached locally and available for instant switching.
+/// Every connection (foreground or background) receives messages and
+/// persists them to the session's SQLite cache via [appendSessionEvent].
+/// When a background connection is promoted to foreground via [adoptService],
+/// the UI loads already-persisted messages from cache.
 class BackgroundConnectionManager extends Notifier<void> {
-  /// URL → ConnectionService for non-active sessions.
   final Map<String, ConnectionService> _services = {};
-
-  /// URL → subscriptions for each background service.
   final Map<String, List<StreamSubscription<dynamic>>> _subscriptions = {};
-
-  /// Session ID → URL mapping for quick lookup.
   final Map<String, String> _sessionIdToUrl = {};
-
-  /// Set of session IDs with live (connected) background connections.
   final Set<String> _liveSessionIds = {};
 
   @override
   void build() {
-    ref.onDispose(() {
-      disconnectAll();
+    ref.onDispose(_disposeAll);
+  }
+
+  /// Connect a new background session.
+  Future<void> connect({
+    required String url,
+    required String sessionId,
+  }) async {
+    if (_liveSessionIds.contains(sessionId)) {
+      debugPrint('[bg-conn] session $sessionId already connected');
+      return;
+    }
+
+    debugPrint('[bg-conn] connecting session=$sessionId');
+    final descriptor = ShareConnectionDescriptor.parse(url);
+    final svc = ConnectionService(descriptor: descriptor);
+    _services[sessionId] = svc;
+    _sessionIdToUrl[sessionId] = url;
+
+    _wireService(sessionId, svc);
+    await svc.connect();
+    _liveSessionIds.add(sessionId);
+  }
+
+  void _wireService(String sessionId, ConnectionService svc) {
+    _subscriptions[sessionId]?.forEach((s) => s.cancel());
+    _subscriptions[sessionId] = [
+      svc.messageStream.listen((msg) {
+        _handleBackgroundMessage(sessionId, msg);
+      }),
+      svc.statusStream.listen((status) {
+        debugPrint('[bg-conn] session=$sessionId status=$status');
+        if (status == ConnectionStatus.disconnected) {
+          _liveSessionIds.remove(sessionId);
+          _updateConnectionAlive(sessionId, false);
+        } else if (status == ConnectionStatus.connected) {
+          _liveSessionIds.add(sessionId);
+          _updateConnectionAlive(sessionId, true);
+        }
+      }),
+    ];
+  }
+
+  /// Update the stored connection's alive flag so app restart only
+  /// restores connections that were genuinely active.
+  void _updateConnectionAlive(String sessionId, bool alive) {
+    final store = ConnectionStore();
+    store.load().then((_) {
+      final conn = store.findBySessionId(sessionId);
+      if (conn != null) {
+        if (alive) {
+          store.markAlive(conn.id);
+        } else {
+          store.markDead(conn.id);
+        }
+      }
     });
   }
 
-  /// Session IDs that have a live background connection.
-  Set<String> get liveSessionIds => Set.unmodifiable(_liveSessionIds);
-
-  /// Whether a specific session has a live background connection.
-  bool isSessionLive(String sessionId) => _liveSessionIds.contains(sessionId);
-
-  /// Connect all cached sessions that have a URL, excluding [excludeUrl].
-  Future<void> connectAllCachedSessions({String? excludeUrl}) async {
+  /// Process a message from a background connection.
+  /// Persist it to the session's cache immediately.
+  void _handleBackgroundMessage(String sessionId, proto.WsMessage msg) {
     final cache = ref.read(workspaceCacheProvider.notifier);
-    await cache.initialize();
-    final sessions = ref.read(workspaceCacheProvider).sessions;
-
-    for (final record in sessions.values) {
-      final url = record.url;
-      if (url.isEmpty || url == excludeUrl) continue;
-      if (_services.containsKey(url)) continue;
-      await _connectBackground(url, record.sessionId);
-    }
-  }
-
-  /// Start a background connection for the given URL/session.
-  Future<void> _connectBackground(String url, String sessionId) async {
-    if (_services.containsKey(url)) return;
-
-    final descriptor = ShareConnectionDescriptor.parse(url);
-    final service = ConnectionService(descriptor: descriptor);
-    _services[url] = service;
-    _sessionIdToUrl[sessionId] = url;
-
-    final subs = <StreamSubscription<dynamic>>[];
-
-    subs.add(service.messageStream.listen((msg) {
-      _handleBackgroundMessage(url, sessionId, msg);
-    }));
-
-    subs.add(service.statusStream.listen((status) {
-      if (status == ConnectionStatus.disconnected) {
-        _liveSessionIds.remove(sessionId);
-      } else if (status == ConnectionStatus.connected) {
-        _liveSessionIds.add(sessionId);
-      }
-    }));
-
-    _subscriptions[url] = subs;
-
-    try {
-      await service.connect();
-      _liveSessionIds.add(sessionId);
-      debugPrint('[bg-conn] connected session $sessionId');
-    } catch (e) {
-      debugPrint('[bg-conn] connect failed for session $sessionId: $e');
-    }
-  }
-
-  /// Route background messages to workspace cache (no UI update).
-  void _handleBackgroundMessage(
-      String url, String sessionId, proto.WsMessage msg) {
-    // Background messages are silently cached — they don't update the UI.
-    final data = msg.data;
-    if (data == null) return;
-
-    final type = data['type'] as String? ?? msg.type;
-
-    // Cache events for offline viewing
-    final cache = ref.read(workspaceCacheProvider.notifier);
+    cache.appendSessionEvent(
+      sessionId: sessionId,
+      eventType: msg.type,
+      eventData: Map<String, dynamic>.from(msg.data ?? {}),
+      eventId: msg.eventId,
+    );
     cache.cacheBackgroundEvent(
       sessionId: sessionId,
-      eventType: type,
-      eventData: Map<String, dynamic>.from(data),
+      eventType: msg.type,
+      eventData: Map<String, dynamic>.from(msg.data ?? {}),
     );
   }
 
-  /// Take ownership of a background connection (returns the service).
-  /// The caller is responsible for subscribing to streams and managing lifecycle.
-  ConnectionService? takeService(String url) {
-    final service = _services.remove(url);
-    if (service == null) return null;
-
-    // Cancel background subscriptions — the new owner manages them
-    final subs = _subscriptions.remove(url);
-    if (subs != null) {
-      for (final sub in subs) {
-        sub.cancel();
-      }
+  /// Take ownership of a background connection.
+  ConnectionService? adoptService(String sessionId) {
+    final svc = _services.remove(sessionId);
+    if (svc != null) {
+      _subscriptions[sessionId]?.forEach((s) => s.cancel());
+      _subscriptions.remove(sessionId);
+      _liveSessionIds.remove(sessionId);
+      _sessionIdToUrl.remove(sessionId);
     }
-
-    // Clean up mappings
-    _sessionIdToUrl.removeWhere((_, u) => u == url);
-    // Remove any session IDs that pointed to this URL
-    _liveSessionIds.removeWhere(
-        (id) => _sessionIdToUrl[id] == null && !_services.values.any((s) => false));
-
-    return service;
+    return svc;
   }
 
-  /// Register a service as a background connection (e.g. when demoting
-  /// the active connection).
-  void registerService(
-      String url, String sessionId, ConnectionService service) {
-    if (_services.containsKey(url)) return;
-
-    _services[url] = service;
+  /// Register a foreground service as a background connection (demote).
+  void registerService({
+    required String sessionId,
+    required ConnectionService svc,
+    required String url,
+  }) {
+    _services[sessionId]?.dispose();
+    _services[sessionId] = svc;
     _sessionIdToUrl[sessionId] = url;
-
-    final subs = <StreamSubscription<dynamic>>[];
-
-    subs.add(service.messageStream.listen((msg) {
-      _handleBackgroundMessage(url, sessionId, msg);
-    }));
-
-    subs.add(service.statusStream.listen((status) {
-      if (status == ConnectionStatus.disconnected) {
-        _liveSessionIds.remove(sessionId);
-      } else if (status == ConnectionStatus.connected) {
-        _liveSessionIds.add(sessionId);
-      }
-    }));
-
-    _subscriptions[url] = subs;
+    _wireService(sessionId, svc);
+    _liveSessionIds.add(sessionId);
+    debugPrint('[bg-conn] demoted session=$sessionId to background');
   }
 
-  /// Disconnect a specific background session.
-  void disconnectSession(String sessionId) {
-    final url = _sessionIdToUrl.remove(sessionId);
-    if (url == null) return;
+  /// Reconnect sessions that were alive (had live WebSocket) when the app
+  /// last ran. NOT all cached sessions — only the ones that were actively
+  /// connected before the app died.
+  Future<void> connectAllCachedSessions() async {
+    final cache = ref.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    final cacheState = ref.read(workspaceCacheProvider);
 
-    final service = _services.remove(url);
-    service?.disconnect();
+    final prefs = await SharedPreferences.getInstance();
+    final storedJson = prefs.getString('ggcode_connections');
+    if (storedJson == null) return;
 
-    final subs = _subscriptions.remove(url);
-    if (subs != null) {
-      for (final sub in subs) {
-        sub.cancel();
+    try {
+      final decoded = jsonDecode(storedJson);
+      if (decoded is! List) return;
+      for (final connData in decoded) {
+        if (connData is! Map<String, dynamic>) continue;
+
+        // Only restore connections that were alive when app died
+        final alive = connData['alive'] as bool? ?? false;
+        if (!alive) continue;
+
+        // Skip permanently failed connections
+        final failed = connData['permanentlyFailed'] as bool? ?? false;
+        if (failed) continue;
+
+        // Must have session ID and URL
+        final sessionId = connData['sessionId'] as String? ?? '';
+        final url = connData['url'] as String? ?? '';
+        if (sessionId.isEmpty || url.isEmpty) continue;
+
+        // Skip the selected session — it will be connected as foreground
+        if (sessionId == cacheState.selectedSessionId) continue;
+
+        debugPrint('[bg-conn] restoring alive session=$sessionId');
+        await connect(url: url, sessionId: sessionId);
       }
+    } catch (e) {
+      debugPrint('[bg-conn] restore failed: $e');
     }
+  }
 
+  void disconnect(String sessionId) {
+    _subscriptions[sessionId]?.forEach((s) => s.cancel());
+    _subscriptions.remove(sessionId);
+    _services[sessionId]?.dispose();
+    _services.remove(sessionId);
     _liveSessionIds.remove(sessionId);
+    _sessionIdToUrl.remove(sessionId);
   }
 
-  /// Disconnect all background sessions.
-  void disconnectAll() {
-    for (final url in _services.keys.toList()) {
-      _services[url]?.disconnect();
-    }
+  bool isLive(String sessionId) => _liveSessionIds.contains(sessionId);
+  Set<String> get liveSessionIds => Set.unmodifiable(_liveSessionIds);
+  String? urlForSession(String sessionId) => _sessionIdToUrl[sessionId];
+
+  void _disposeAll() {
     for (final subs in _subscriptions.values) {
-      for (final sub in subs) {
-        sub.cancel();
+      for (final s in subs) {
+        s.cancel();
       }
     }
-    _services.clear();
+    for (final svc in _services.values) {
+      svc.dispose();
+    }
     _subscriptions.clear();
-    _sessionIdToUrl.clear();
+    _services.clear();
     _liveSessionIds.clear();
+    _sessionIdToUrl.clear();
   }
 
-  /// Get the URL for a session.
-  String? urlForSession(String sessionId) {
-    return _sessionIdToUrl[sessionId];
-  }
+  void disposeAll() => _disposeAll();
 }
 
 final backgroundConnectionProvider =

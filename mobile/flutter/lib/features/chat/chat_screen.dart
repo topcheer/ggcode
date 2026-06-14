@@ -382,49 +382,59 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               )
             : null,
       ),
-      body: Column(
+      body: Stack(
         children: [
-          const StatusBar(),
-          if (connState.relaySync != null)
-            _RelaySyncBanner(sync: connState.relaySync!),
-          if (isHistorical)
-            _HistoricalSessionBanner(
-              onReturnToLive: () async {
-                final liveWorkspaceKey = cache.liveWorkspaceKey;
-                final liveSessionId = cache.liveSessionId;
-                if (liveWorkspaceKey == null ||
-                    liveWorkspaceKey.isEmpty ||
-                    liveSessionId == null ||
-                    liveSessionId.isEmpty) {
-                  return;
-                }
-                await ref
-                    .read(workspaceCacheProvider.notifier)
-                    .selectSession(liveSessionId);
-              },
-            ),
-          Expanded(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) => _dismissComposerFocus(),
-              child: ListView.builder(
-                controller: _scrollController,
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final msg = messages[index];
-                  if (msg.toolName != null) {
-                    return _buildToolMessage(msg);
-                  }
-                  return MessageBubble(message: msg);
-                },
+          Column(
+            children: [
+              const StatusBar(),
+              if (connState.relaySync != null)
+                _RelaySyncBanner(sync: connState.relaySync!),
+              if (isHistorical)
+                _HistoricalSessionBanner(
+                  onReturnToLive: () async {
+                    final liveWorkspaceKey = cache.liveWorkspaceKey;
+                    final liveSessionId = cache.liveSessionId;
+                    if (liveWorkspaceKey == null ||
+                        liveWorkspaceKey.isEmpty ||
+                        liveSessionId == null ||
+                        liveSessionId.isEmpty) {
+                      return;
+                    }
+                    await ref
+                        .read(workspaceCacheProvider.notifier)
+                        .selectSession(liveSessionId);
+                  },
+                ),
+              Expanded(
+                child: Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (_) => _dismissComposerFocus(),
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = messages[index];
+                      if (msg.toolName != null) {
+                        return _buildToolMessage(msg);
+                      }
+                      return MessageBubble(message: msg);
+                    },
+                  ),
+                ),
               ),
-            ),
+              if (approval != null) ApprovalSheet(approval: approval),
+              InputBar(controller: _inputController),
+            ],
           ),
-          if (approval != null) ApprovalSheet(approval: approval),
-          InputBar(controller: _inputController),
+          if (!connState.sessionReady &&
+              connState.status != ConnectionStatus.disconnected)
+            _SyncingOverlay(
+              status: connState.status,
+              sync: connState.relaySync,
+            ),
         ],
       ),
     );
@@ -497,16 +507,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         if (currentUrl.isNotEmpty &&
                             connNotifier.service != null) {
                           bgConn.registerService(
-                            currentUrl,
-                            connNotifier.currentSessionId,
-                            connNotifier.service!,
+                            url: currentUrl,
+                            sessionId: connNotifier.currentSessionId,
+                            svc: connNotifier.service!,
                           );
                           connNotifier.demoteToBackground();
                         }
                         // If session has a URL, connect or adopt
                         if (session.url.isNotEmpty) {
                           final bgService =
-                              bgConn.takeService(session.url);
+                              bgConn.adoptService(session.sessionId);
                           if (bgService != null) {
                             connNotifier.adoptService(
                               bgService,
@@ -525,6 +535,59 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       },
                     ),
                     SizedBox(height: 6),
+                  ],
+                  if (workspaces.isNotEmpty) ...[
+                    SizedBox(height: 16),
+                    Divider(color: AppColors.surfaceElevated, height: 1),
+                    SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (dctx) => AlertDialog(
+                            backgroundColor: const Color(0xFF1A1A2E),
+                            title: Text(
+                              t('workspace.clear_cache_confirm_title'),
+                              style: TextStyle(color: AppColors.textPrimary),
+                            ),
+                            content: Text(
+                              t('workspace.clear_cache_confirm_body'),
+                              style:
+                                  TextStyle(color: AppColors.textSecondary),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(dctx).pop(false),
+                                child: Text(t('common.cancel')),
+                              ),
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(dctx).pop(true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: Text(t('common.clear')),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          bgConn.disposeAll();
+                          connNotifier.disconnect();
+                          await ref.read(workspaceCacheProvider.notifier).clearAll();
+                          setModalState(() {});
+                        }
+                      },
+                      icon: Icon(Icons.cleaning_services_outlined,
+                          size: 16, color: Colors.red.withValues(alpha: 0.7)),
+                      label: Text(
+                        t('workspace.clear_cache'),
+                        style: TextStyle(
+                          color: Colors.red.withValues(alpha: 0.7),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -1255,6 +1318,120 @@ class _ToolResultCardState extends State<_ToolResultCard> {
 }
 
 /// Connection status indicator shown in the AppBar.
+/// Full-screen overlay shown during connection handshake and history replay.
+/// Blocks all interaction until [TunnelConnectionState.sessionReady] is true.
+class _SyncingOverlay extends StatelessWidget {
+  final ConnectionStatus status;
+  final RelaySyncState? sync;
+
+  const _SyncingOverlay({required this.status, this.sync});
+
+  @override
+  Widget build(BuildContext context) {
+    final title = _title();
+    final detail = _detail();
+
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: Container(
+          color: AppColors.background.withValues(alpha: 0.92),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation(AppColors.accent),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    detail,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _title() {
+    if (status == ConnectionStatus.connecting) {
+      return t('sync.connecting_title');
+    }
+    if (sync == null) {
+      return t('sync.syncing_title');
+    }
+    if (sync!.stalled) {
+      return t('relay_sync.stalled_title');
+    }
+    switch (sync!.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_title');
+      case RelaySyncPhase.waitingHost:
+        return t(sync!.recoveryState == 'pending'
+            ? 'relay_sync.pending_title'
+            : 'relay_sync.waiting_host_title');
+      case RelaySyncPhase.waiting:
+        return t('relay_sync.waiting_title');
+      case RelaySyncPhase.replaying:
+        return t(sync!.resumeMode == 'full_history'
+            ? 'relay_sync.full_history_title'
+            : 'relay_sync.replaying_title');
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_title');
+    }
+  }
+
+  String _detail() {
+    if (status == ConnectionStatus.connecting) {
+      return t('sync.connecting_detail');
+    }
+    if (sync == null) return '';
+    if (sync!.stalled) {
+      return t('relay_sync.stalled_detail',
+          args: {'count': (sync!.remainingReplayCount ?? 0).toString()});
+    }
+    switch (sync!.phase) {
+      case RelaySyncPhase.restoringLocal:
+        return t('relay_sync.restoring_detail');
+      case RelaySyncPhase.waitingHost:
+        return t(sync!.recoveryState == 'pending'
+            ? 'relay_sync.pending_detail'
+            : sync!.hasLocalState
+                ? 'relay_sync.waiting_host_with_local_detail'
+                : 'relay_sync.waiting_host_detail');
+      case RelaySyncPhase.waiting:
+        return t('relay_sync.waiting_detail');
+      case RelaySyncPhase.replaying:
+        return t('relay_sync.replaying_detail');
+      case RelaySyncPhase.snapshot:
+        return t('relay_sync.snapshot_detail');
+    }
+  }
+}
+
+/// Connection status indicator in the AppBar:
 /// - connected: green dot
 /// - connecting: yellow spinner
 /// - disconnected: red broken link icon (tappable to disconnect)

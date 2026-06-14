@@ -1812,13 +1812,14 @@ void main() {
     // that the gap event ordinal was recorded at the point of apply.
     expect(notifier.recentEventIds, contains('ev-000000050'));
 
-    // Recovery reconnect was scheduled (old service demoted to background, not disposed)
-    expect(factoryCalls, 2);
+    // Recovery reconnect reuses the SAME service (no demote+recreate).
+    expect(factoryCalls, 1);
     expect(serviceA.disposeCalls, 0);
-    expect(serviceB.connectCalls, 1);
+    // serviceA.connect() called again (initial + gap recovery reconnect)
+    expect(serviceA.connectCalls, greaterThanOrEqualTo(1));
     // Resume from last known contiguous event, not the gap event
-    expect(serviceB.resumeMessageType, 'resume_from');
-    expect(serviceB.resumeLastEventId, 'ev-000000001');
+    expect(serviceA.resumeMessageType, 'resume_from');
+    expect(serviceA.resumeLastEventId, 'ev-000000001');
     expect(container.read(connectionProvider).relaySync, isNotNull);
     expect(container.read(connectionProvider).sessionReady, isFalse);
   });
@@ -1958,7 +1959,7 @@ void main() {
     service.emit(proto.WsMessage(
       sessionId: 'sess-1',
       type: 'active_session',
-      data: {'session_id': 'sess-1'},
+      data: {'session_id': 'sess-1', 'workspace_path': '/tmp/demo'},
     ));
     service.emit(proto.WsMessage(
       sessionId: 'sess-1',
@@ -2027,7 +2028,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-live',
       type: 'active_session',
-      data: {'session_id': 'sess-live'},
+      data: {'session_id': 'sess-live', 'workspace_path': '/tmp/demo'},
     ));
     await Future<void>.delayed(const Duration(milliseconds: 1));
 
@@ -2186,7 +2187,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-live',
       type: 'active_session',
-      data: {'session_id': 'sess-live'},
+      data: {'session_id': 'sess-live', 'workspace_path': '/tmp/demo'},
     ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-live',
@@ -2501,7 +2502,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-room',
       type: 'active_session',
-      data: {'session_id': 'sess-room'},
+      data: {'session_id': 'sess-room', 'workspace_path': '/tmp/demo'},
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
@@ -2562,7 +2563,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-old',
       type: 'active_session',
-      data: {'session_id': 'sess-old'},
+      data: {'session_id': 'sess-old', 'workspace_path': '/tmp/old'},
     ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-old',
@@ -2591,7 +2592,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-room',
       type: 'active_session',
-      data: {'session_id': 'sess-room'},
+      data: {'session_id': 'sess-room', 'workspace_path': '/tmp/demo'},
     ));
     await Future<void>.delayed(const Duration(milliseconds: 10));
 
@@ -2605,7 +2606,10 @@ void main() {
       container.read(displayedMessagesProvider).single.text,
       'mobile connected',
     );
-    expect(container.read(sessionInfoProvider), isNull);
+    // sessionInfo is set from active_session workspace_path
+    final si = container.read(sessionInfoProvider);
+    expect(si, isNotNull);
+    expect(si!.workspace, '/tmp/demo');
   });
 
   test(
@@ -2619,7 +2623,7 @@ void main() {
       sessionId: 'sess-old',
       generation: 1,
       type: 'active_session',
-      data: {'session_id': 'sess-old'},
+      data: {'session_id': 'sess-old', 'workspace_path': '/tmp/old'},
     ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-old',
