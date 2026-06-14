@@ -8,6 +8,7 @@ import 'package:ggcode_mobile/core/connection_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
+import 'package:ggcode_mobile/core/providers/connection_store.dart';
 
 /// Seed a StoredConnection into SharedPreferences mock so ConnectionStore.load()
 /// picks it up. This replaces the old global prefs keys (ggcode_tunnel_*).
@@ -289,6 +290,7 @@ void main() {
   late Directory cacheDir;
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    ConnectionStore.resetForTesting();
     cacheDir = Directory.systemTemp.createTempSync('ggcode_mobile_cache_test_');
     debugWorkspaceCacheDatabasePathOverride =
         '${cacheDir.path}/workspace_cache.sqlite';

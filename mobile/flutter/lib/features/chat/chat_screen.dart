@@ -502,18 +502,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             connNotifier.currentSessionId) {
                           return;
                         }
-                        // Demote current active connection to background
-                        final currentUrl = connNotifier.liveSessionUrl;
-                        if (currentUrl.isNotEmpty &&
-                            connNotifier.service != null) {
-                          bgConn.registerService(
-                            url: currentUrl,
-                            sessionId: connNotifier.currentSessionId,
-                            svc: connNotifier.service!,
-                          );
-                          connNotifier.demoteToBackground();
-                        }
-                        // If session has a URL, connect or adopt
+                        // If session has a background service, adopt it.
+                        // adoptService() internally demotes the current
+                        // foreground service to background — no need to
+                        // manually demote/register here.
                         if (session.url.isNotEmpty) {
                           final bgService =
                               bgConn.adoptService(session.sessionId);
@@ -524,6 +516,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               session.url,
                             );
                           } else {
+                            // No background service — fresh connect
                             await connNotifier.connect(session.url);
                           }
                         } else {

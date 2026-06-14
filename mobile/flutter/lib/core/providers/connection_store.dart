@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const _kConnectionsKey = 'ggcode_connections';
@@ -71,6 +72,7 @@ class StoredConnection {
   }
 
   StoredConnection copyWith({
+    String? url,
     String? sessionId,
     String? lastEventId,
     String? durableEventId,
@@ -86,7 +88,7 @@ class StoredConnection {
   }) {
     return StoredConnection(
       id: id,
-      url: url,
+      url: url ?? this.url,
       roomId: roomId,
       clientId: clientId,
       sessionId: sessionId ?? this.sessionId,
@@ -155,9 +157,24 @@ class StoredConnection {
 /// Each connection has fully independent resume state. On app start,
 /// [loadAll] returns every non-failed connection for reconnection.
 class ConnectionStore {
+  static ConnectionStore? _instance;
+  static ConnectionStore get instance {
+    _instance ??= ConnectionStore._();
+    return _instance!;
+  }
+  
+  ConnectionStore._();
+  
+  factory ConnectionStore() => instance;
+
+  /// Reset singleton state (for testing only).
+  static void resetForTesting() {
+    _instance = null;
+  }
+
   List<StoredConnection> _connections = [];
 
-  /// Load all connections from disk.
+  /// Load all connections from disk and deduplicate by sessionId.
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_kConnectionsKey);
@@ -170,8 +187,41 @@ class ConnectionStore {
       _connections = list
           .map((e) => StoredConnection.fromJson(e as Map<String, dynamic>))
           .toList();
+      _deduplicate();
     } catch (_) {
       _connections = [];
+    }
+  }
+
+  /// Remove duplicate connections for the same sessionId, keeping the
+  /// newest one (by createdAt, fallback to lastConnectedAt).
+  void _deduplicate() {
+    final bySession = <String, StoredConnection>{};
+    for (final c in _connections) {
+      final key = c.sessionId ?? c.id;
+      final existing = bySession[key];
+      if (existing == null) {
+        bySession[key] = c;
+      } else {
+        // Keep whichever has a renew_token URL (preferred for reconnect)
+        final cHasRenew = c.url.contains('renew_token');
+        final existingHasRenew = existing.url.contains('renew_token');
+        if (cHasRenew && !existingHasRenew) {
+          bySession[key] = c;
+        } else if (!cHasRenew && existingHasRenew) {
+          // keep existing
+        } else {
+          // Keep the newer one
+          if (c.createdAt.isAfter(existing.createdAt)) {
+            bySession[key] = c;
+          }
+        }
+      }
+    }
+    final before = _connections.length;
+    _connections = bySession.values.toList();
+    if (_connections.length < before) {
+      debugPrint('[store] deduplicated: $before -> ${_connections.length}');
     }
   }
 
@@ -221,6 +271,7 @@ class ConnectionStore {
     if (idx >= 0) {
       _connections[idx] = _connections[idx].copyWith(alive: true);
       await save();
+      debugPrint('[store] markAlive id=$id session=${_connections[idx].sessionId}');
     }
   }
 
@@ -228,6 +279,7 @@ class ConnectionStore {
   Future<void> markDead(String id) async {
     final idx = _connections.indexWhere((c) => c.id == id);
     if (idx >= 0) {
+      debugPrint('[store] markDead id=$id session=${_connections[idx].sessionId}');
       _connections[idx] = _connections[idx].copyWith(alive: false);
       await save();
     }
@@ -241,7 +293,44 @@ class ConnectionStore {
   }
 
   /// Add a new connection. If [active] is true, demotes all others.
+  /// If a connection for the same sessionId already exists, update it
+  /// instead of creating a duplicate.
   Future<StoredConnection> add(StoredConnection conn) async {
+    // Upsert by sessionId — don't create duplicates
+    if (conn.sessionId != null && conn.sessionId!.isNotEmpty) {
+      final idx = _connections.indexWhere((c) => c.sessionId == conn.sessionId);
+      if (idx >= 0) {
+        // Preserve original ID so markAlive/markDead can find it
+        final origId = _connections[idx].id;
+        _connections[idx] = conn.copyWith();
+        _connections[idx] = StoredConnection(
+          id: origId,
+          url: conn.url.isNotEmpty ? conn.url : _connections[idx].url,
+          roomId: _connections[idx].roomId,
+          clientId: _connections[idx].clientId,
+          sessionId: conn.sessionId ?? _connections[idx].sessionId,
+          lastEventId: conn.lastEventId ?? _connections[idx].lastEventId,
+          durableEventId: conn.durableEventId ?? _connections[idx].durableEventId,
+          workspacePath: conn.workspacePath ?? _connections[idx].workspacePath,
+          displayName: conn.displayName ?? _connections[idx].displayName,
+          providerName: conn.providerName ?? _connections[idx].providerName,
+          modelName: conn.modelName ?? _connections[idx].modelName,
+          active: conn.active,
+          alive: conn.alive,
+          permanentlyFailed: conn.permanentlyFailed,
+          failReason: conn.failReason ?? _connections[idx].failReason,
+          createdAt: _connections[idx].createdAt,
+          lastConnectedAt: conn.lastConnectedAt ?? _connections[idx].lastConnectedAt,
+        );
+        if (conn.active) {
+          _connections = _connections
+              .map((c) => c.id != conn.id && c.active ? c.copyWith(active: false) : c)
+              .toList();
+        }
+        await save();
+        return _connections[idx];
+      }
+    }
     if (conn.active) {
       _connections = _connections
           .map((c) => c.active ? c.copyWith(active: false) : c)

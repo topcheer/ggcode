@@ -70,7 +70,7 @@ class BackgroundConnectionManager extends Notifier<void> {
   /// Update the stored connection's alive flag so app restart only
   /// restores connections that were genuinely active.
   void _updateConnectionAlive(String sessionId, bool alive) {
-    final store = ConnectionStore();
+    final store = ConnectionStore.instance;
     store.load().then((_) {
       final conn = store.findBySessionId(sessionId);
       if (conn != null) {
@@ -136,29 +136,28 @@ class BackgroundConnectionManager extends Notifier<void> {
 
     final prefs = await SharedPreferences.getInstance();
     final storedJson = prefs.getString('ggcode_connections');
+    debugPrint('[bg-conn] connectAllCachedSessions: storedJson=${storedJson != null ? "${storedJson.length} chars" : "null"} selected=${cacheState.selectedSessionId}');
     if (storedJson == null) return;
 
     try {
       final decoded = jsonDecode(storedJson);
       if (decoded is! List) return;
+      debugPrint('[bg-conn] found ${decoded.length} stored connections');
       for (final connData in decoded) {
         if (connData is! Map<String, dynamic>) continue;
 
-        // Only restore connections that were alive when app died
         final alive = connData['alive'] as bool? ?? false;
-        if (!alive) continue;
-
-        // Skip permanently failed connections
         final failed = connData['permanentlyFailed'] as bool? ?? false;
-        if (failed) continue;
-
-        // Must have session ID and URL
         final sessionId = connData['sessionId'] as String? ?? '';
         final url = connData['url'] as String? ?? '';
-        if (sessionId.isEmpty || url.isEmpty) continue;
+        debugPrint('[bg-conn]   conn: session=$sessionId alive=$alive failed=$failed url=${url.isNotEmpty ? "yes" : "no"}');
 
-        // Skip the selected session — it will be connected as foreground
-        if (sessionId == cacheState.selectedSessionId) continue;
+        if (!alive || failed) continue;
+        if (sessionId.isEmpty || url.isEmpty) continue;
+        if (sessionId == cacheState.selectedSessionId) {
+          debugPrint('[bg-conn]   skipping selected (will be foreground)');
+          continue;
+        }
 
         debugPrint('[bg-conn] restoring alive session=$sessionId');
         await connect(url: url, sessionId: sessionId);

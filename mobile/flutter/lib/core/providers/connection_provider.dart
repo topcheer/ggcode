@@ -160,7 +160,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// The active connection's persistent state (resume cursor, workspace info).
   /// Null for background connections — each has its own ConnectionService.
   StoredConnection? _currentConnection;
-  final ConnectionStore _connectionStore = ConnectionStore();
+  final ConnectionStore _connectionStore = ConnectionStore.instance;
   Future<void>? _connectInFlight;
   String? _connectInFlightUrl;
   int _connectionGeneration = 0;
@@ -340,9 +340,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     } else {
       // Different session or fresh connect.
       _clearUiProjection();
-      // Clear live workspace/session so registerLiveSession doesn't
-      // fall back to the previous connection's workspace key.
-      ref.read(workspaceCacheProvider.notifier).markDisconnected();
+      // For new scans (clearState=true): clear all selection so the new
+      // session becomes selected+live unconditionally.
+      // For reconnects (clearState=false): only clear live so the same
+      // session reconnects without losing selection.
+      if (clearState) {
+        ref.read(workspaceCacheProvider.notifier).clearAllSelection();
+      } else {
+        ref.read(workspaceCacheProvider.notifier).markDisconnected();
+      }
 
       if (!isReconnect && clearState) {
         // Fresh QR scan of a NEW room: dispose old context, start completely clean.
@@ -1627,7 +1633,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               status == ConnectionStatus.connected && state.sessionReady,
         );
         if (status == ConnectionStatus.connected) {
-          // Mark this connection as alive for app-restart recovery
+          // Mark connection as alive for app-restart recovery
           if (_currentConnection != null) {
             unawaited(_connectionStore.markAlive(_currentConnection!.id));
           }
@@ -1684,6 +1690,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       localService.metadataStream.listen((metadata) {
         if (!_isActiveConnection(localService, generation)) return;
         if (metadata.renewToken.isNotEmpty) {
+          // Update stored URL with renew_token so reconnection uses
+          // the renewable URL instead of the short-lived auth_ticket URL.
+          final newUrl = localService.descriptor.runtimeUrl();
+          _liveUrl = newUrl;
+          if (_currentConnection != null) {
+            _currentConnection = _currentConnection!.copyWith(url: newUrl);
+            _connectionStore.update(_currentConnection!.id, _currentConnection!);
+          }
           _persistResumeState();
         }
         if (metadata.notice.isNotEmpty) {

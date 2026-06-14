@@ -1071,7 +1071,20 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   void markDisconnected() {
+    debugPrint('[cache] markDisconnected: selected=${state.selectedSessionId} live=${state.liveSessionId} -> clearing live');
     state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
+  }
+
+  /// Clear all selection state — used when user scans a NEW connection.
+  /// This ensures registerLiveSession will followLive unconditionally.
+  void clearAllSelection() {
+    debugPrint('[cache] clearAllSelection: selected=${state.selectedSessionId} live=${state.liveSessionId}');
+    state = state.copyWith(
+      liveWorkspaceKey: null,
+      liveSessionId: null,
+      selectedSessionId: null,
+      selectedWorkspaceKey: null,
+    );
   }
 
   /// Clear all cached workspaces, sessions, and snapshots from device.
@@ -1414,7 +1427,14 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<void> selectSession(String sessionId) async {
     await initialize();
     if (!ref.mounted) return;
-    final record = state.sessions[sessionId];
+    CachedSessionRecord? record;
+    for (final s in state.sessions.values) {
+      if (s.sessionId == sessionId) {
+        record = s;
+        break;
+      }
+    }
+    debugPrint('[cache] selectSession: sessionId=$sessionId found=${record != null} workspaceKey=${record?.workspaceKey} oldSelected=${state.selectedSessionId} live=${state.liveSessionId}');
     state = state.copyWith(
       selectedWorkspaceKey: record?.workspaceKey.isNotEmpty == true
           ? record!.workspaceKey
@@ -1431,7 +1451,14 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   /// to it). Called when adopting a background service to foreground, or
   /// when a new connection's session becomes active.
   void setLive(String sessionId) {
-    final record = state.sessions[sessionId];
+    CachedSessionRecord? record;
+    for (final s in state.sessions.values) {
+      if (s.sessionId == sessionId) {
+        record = s;
+        break;
+      }
+    }
+    debugPrint('[cache] setLive: sessionId=$sessionId found=${record != null} workspaceKey=${record?.workspaceKey} oldLive=${state.liveSessionId}');
     state = state.copyWith(
       liveSessionId: sessionId,
       liveWorkspaceKey: record?.workspaceKey.isNotEmpty == true
@@ -1464,6 +1491,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         state.selectedSessionId == previousLiveSessionId ||
         (previousLiveSessionId == null &&
             state.selectedSessionId == lastKnownLiveSessionId);
+    debugPrint('[cache] registerLiveSession: sessionId=$sessionId prevLive=$previousLiveSessionId selected=${state.selectedSessionId} lastKnown=$lastKnownLiveSessionId followLive=$selectionFollowedLive');
     final sessionKey = sessionId;
     final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
       ..[sessionKey] = (state.sessions[sessionKey] ??
