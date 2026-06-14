@@ -259,17 +259,51 @@ func (m *Model) closeTunnelGracefullyAsync(timeout time.Duration) {
 
 func (m *Model) startTunnel(generation uint64) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		if m.tunnelHost == nil {
+			return tunnelStartMsg{generation: generation, err: fmt.Errorf("tunnel host not initialized")}
+		}
 
-		sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("tui", version.Version))
-		info, err := sess.Start(ctx)
+		// Bind projection session BEFORE StartShare so PrepareOnlineShare
+		// can read replay events from the projection store.
+		m.bindTunnelProjectionSession()
+
+		// Forward-declare broker so OnCommand closure can reference it.
+		// result.Broker is set after StartShare returns, but OnCommand
+		// is invoked later (when mobile sends commands), so it's safe.
+		var shareResult *agentruntime.ShareResult
+		result, err := m.tunnelHost.StartShare(agentruntime.ShareConfig{
+			Workspace: m.fullWorkingDirectory(),
+			Model:     m.activeModel,
+			Provider:  m.activeVendor,
+			Mode:      m.mode.String(),
+			Version:   version.Version,
+			ClientTag: "tui",
+			SnapshotProvider: func() tunnel.BrokerSnapshot {
+				return m.tunnelSnapshot()
+			},
+			OnCommand: func(cmd tunnel.GatewayMessage) {
+				var b *tunnel.Broker
+				if shareResult != nil {
+					b = shareResult.Broker
+				}
+				m.handleTunnelClientCommand(generation, b, cmd)
+			},
+			OnConnected: func(info tunnel.RelayConnectedState) {
+				if info.Role == "client" && m.program != nil {
+					m.program.Send(tunnelClientConnectedMsg{generation: generation})
+				}
+			},
+		})
+		shareResult = result
 		if err != nil {
 			return tunnelStartMsg{generation: generation, err: err}
 		}
-
-		broker := tunnel.NewBroker(sess)
-		return tunnelStartMsg{generation: generation, info: info, session: sess, broker: broker}
+		return tunnelStartMsg{
+			generation: generation,
+			info:       &tunnel.SessionInfo{ConnectURL: result.ConnectURL, QRCode: result.QRCode, QRCodePNG: result.QRCodePNG},
+			session:    result.Session,
+			broker:     result.Broker,
+		}
 	}
 }
 
@@ -301,49 +335,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.bindTunnelProjectionSession()
+	// StartShare already did: session creation, broker setup, AttachOnlineBroker,
+	// SetSessionInfo, PrepareOnlineShare (replay, announce active_session).
+	// We just store refs and show the QR.
 	m.tunnelSession = msg.session
 	m.tunnelBroker = msg.broker
-
-	// Attach online broker to unified TunnelHost
-	if m.tunnelHost != nil {
-		m.tunnelHost.AttachOnlineBroker(msg.broker)
-	}
 	m.tunnelSpawned = make(map[string]bool)
 
-	// Register inbound command handler.
-	currentBroker := msg.broker
-	currentGeneration := msg.generation
-	msg.broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-		m.handleTunnelClientCommand(currentGeneration, currentBroker, cmd)
-	})
-	msg.broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
-		if info.Role == "client" && m.program != nil {
-			m.program.Send(tunnelClientConnectedMsg{generation: currentGeneration})
-		}
-	})
-
-	msg.broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
-		return m.tunnelSnapshot()
-	})
-	// A resumed session can carry a canonical tunnel ledger that only reflects
-	// the pre-restart projection. Revalidate it before the first mobile attach so
-	// broker replay falls back to the current chat snapshot when needed.
-	msg.broker.SetReplayProvider(func() []tunnel.GatewayMessage {
-		return m.currentSessionTunnelReplayEvents()
-	})
-	msg.broker.SetEventRecorder(nil)
-	if m.session != nil && m.session.ID != "" {
-		msg.broker.BindSession(m.session.ID)
-		msg.broker.SetAuthorityEpoch(m.currentSessionTunnelAuthorityEpoch())
-	}
-	m.beginTunnelShareBootstrapCapture(msg.generation)
-
-	// Fresh share rooms must contain canonical bootstrap history before older
-	// relay/mobile combinations attach, otherwise the client can stall waiting for
-	// session_info and later live events can reuse stale event ids. Keep canonical
-	// event recording on the projection path, but delay mirroring to the share
-	// broker until background bootstrap finishes so Update stays responsive.
 	subtitle := "Scan with GGCode Mobile to connect"
 	if msg.info.CompatibilityNotice != "" {
 		subtitle += " - " + msg.info.CompatibilityNotice
@@ -359,7 +357,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		_ = clipboard.WriteAll(msg.info.ConnectURL)
 	}
 
-	return m, m.bootstrapTunnelShare(msg.generation)
+	return m, nil
 }
 
 func (m *Model) handleTunnelRefreshMsg(msg tunnelRefreshMsg) (tea.Model, tea.Cmd) {
@@ -1255,7 +1253,7 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 	}
 	snapshot := tunnel.BrokerSnapshot{
 		SessionInfo: tunnel.SessionInfoData{
-			Workspace: m.sidebarWorkingDirectory(),
+			Workspace: m.fullWorkingDirectory(),
 			Model:     m.activeModel,
 			Provider:  m.activeVendor,
 			Mode:      m.mode.String(),
@@ -1514,10 +1512,18 @@ func errorString(err error) string {
 }
 
 func (m *Model) announceTunnelActiveSession() {
-	if m.tunnelBroker == nil || m.session == nil || m.session.ID == "" {
+	if m.tunnelBroker == nil || m.tunnelHost == nil || m.session == nil || m.session.ID == "" {
 		return
 	}
-	m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+	// Re-run the full canonical share flow to re-announce with latest session info.
+	m.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
+		Workspace: m.fullWorkingDirectory(),
+		Model:     m.activeModel,
+		Provider:  m.activeVendor,
+		Mode:      m.mode.String(),
+		Version:   version.Version,
+	})
+	m.tunnelHost.PrepareOnlineShare(m.tunnelBroker)
 }
 
 func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
@@ -1551,45 +1557,23 @@ func (m *Model) handleTunnelShareBootstrapMsg(msg tunnelShareBootstrapMsg) (tea.
 		return m, nil
 	}
 
-	epoch := m.currentSessionTunnelAuthorityEpoch()
-	if epoch != 0 {
-		m.tunnelBroker.SetAuthorityEpoch(epoch)
-	}
+	// Flush any events captured during the bootstrap goroutine into the
+	// projection store before PrepareOnlineShare replays them.
+	m.finishTunnelShareBootstrapCapture(msg.generation)
 
-	seen := make(map[string]struct{})
-	replayed := false
-	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
-		m.tunnelBroker.ReplayEvents(events, false)
-		replayed = true
-		for _, ev := range events {
-			if ev.EventID != "" {
-				seen[ev.EventID] = struct{}{}
-			}
-		}
-	}
-
-	pending := m.finishTunnelShareBootstrapCapture(msg.generation)
-	if len(seen) > 0 {
-		filtered := pending[:0]
-		for _, ev := range pending {
-			if ev.EventID != "" {
-				if _, ok := seen[ev.EventID]; ok {
-					continue
-				}
-			}
-			filtered = append(filtered, ev)
-		}
-		pending = filtered
-	}
-	if len(pending) > 0 {
-		m.tunnelBroker.ReplayEvents(pending, false)
-		replayed = true
-	}
-	if !replayed {
-		m.tunnelBroker.SendSnapshot(m.tunnelSnapshot())
-	}
-	if m.session != nil && m.session.ID != "" {
-		m.tunnelBroker.AnnounceActiveSession(m.session.ID)
+	// Cache session info for tunnel (workspace, model, provider, mode, version).
+	if m.tunnelHost != nil {
+		m.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
+			Workspace: m.fullWorkingDirectory(),
+			Model:     m.activeModel,
+			Provider:  m.activeVendor,
+			Mode:      m.mode.String(),
+			Version:   version.Version,
+		})
+		// PrepareOnlineShare is the canonical share bootstrap: it handles
+		// SendSessionInfo, BindSession, SetReplayProvider, SetAuthorityEpoch,
+		// Replay/Snapshot, and AnnounceActiveSession — in the correct order.
+		m.tunnelHost.PrepareOnlineShare(m.tunnelBroker)
 	}
 	return m, nil
 }

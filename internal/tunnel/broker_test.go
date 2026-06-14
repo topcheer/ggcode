@@ -2062,7 +2062,6 @@ func TestBrokerClientConnectedReplaysInFlightReasoningAfterSnapshot(t *testing.T
 	b.handleRelayConnected(RelayConnectedState{Role: "client", SessionID: "sess-local", AuthorityEpoch: b.AuthorityEpoch(), HistoryCount: 0})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
-
 	if len(msgs) < 6 || msgs[0].Type != EventSnapshotReset {
 		t.Fatalf("expected reset, snapshot, in-flight reasoning, and replay_done, got %+v", msgs)
 	}

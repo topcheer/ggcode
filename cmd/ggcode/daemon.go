@@ -398,32 +398,57 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Start mobile tunnel if requested
 	var tunnelSession *tunnel.Session
-	var tunnelBroker *tunnel.Broker
 	if startTunnel {
-		tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("daemon", version.Version))
-		info, err := tunnelSession.Start(context.Background())
+		sessionInfo := tunnel.SessionInfoData{
+			Workspace: workingDir,
+			Model:     resolved.Model,
+			Provider:  resolved.VendorName,
+			Mode:      mode.String(),
+			Version:   version.Version,
+		}
+		var shareResult *agentruntime.ShareResult
+		result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
+			Workspace: workingDir,
+			Model:     resolved.Model,
+			Provider:  resolved.VendorName,
+			Mode:      mode.String(),
+			Version:   version.Version,
+			ClientTag: "daemon",
+			SnapshotProvider: func() tunnel.BrokerSnapshot {
+				return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+			},
+			OnCommand: func(cmd tunnel.GatewayMessage) {
+				var b *tunnel.Broker
+				if shareResult != nil {
+					b = shareResult.Broker
+				}
+				ctrl := newDaemonTunnelShareController(b, bridge, sessionInfo, core.Tunnel)
+				ctrl.HandleCommand(bridge, cmd)
+			},
+			OnConnected: func(info tunnel.RelayConnectedState) {
+				if info.Role == "client" {
+					fmt.Fprintf(os.Stderr, "\r\n  [tunnel] Mobile connected\r\n")
+				}
+			},
+		})
+		shareResult = result
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tunnel failed: %v\n", err)
 		} else {
-			tunnelBroker = tunnel.NewBroker(tunnelSession)
-			shareController := newDaemonTunnelShareController(tunnelBroker, bridge, tunnel.SessionInfoData{
-				Workspace: workingDir,
-				Model:     resolved.Model,
-				Provider:  resolved.VendorName,
-				Mode:      mode.String(),
-				Version:   version.Version,
-			}, core.Tunnel)
-			bridge.SetRunStateHook(shareController.HandleRunState)
-			bridge.SetUserMessageHook(shareController.HandleUserMessage)
-			unsubscribeTunnel := bridge.Subscribe(shareController.HandleStreamEvent)
+			tunnelSession = result.Session
+
+			// Wire hooks for status/activity push
+			ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
+			bridge.SetRunStateHook(ctrl.HandleRunState)
+			bridge.SetUserMessageHook(ctrl.HandleUserMessage)
+			unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
 			defer unsubscribeTunnel()
 			defer bridge.SetRunStateHook(nil)
 			defer bridge.SetUserMessageHook(nil)
 
-			shareController.PrepareBroker(tunnelBroker, bridge, ses)
 			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
-			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", info.ConnectURL)
-			fmt.Fprintf(os.Stderr, "%s\n", info.QRCode)
+			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", result.ConnectURL)
+			fmt.Fprintf(os.Stderr, "%s\n", result.QRCode)
 			defer tunnelSession.Stop()
 		}
 	}
@@ -1089,6 +1114,66 @@ loop:
 						fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.unmute_all", count))
 					}
 				}
+			case 't': // toggle mobile tunnel share
+				if core.Tunnel.GetShareInfo() != nil {
+					// Already active: re-print QR code
+					info := core.Tunnel.GetShareInfo()
+					fmt.Fprintf(os.Stderr, "\r\n  Mobile Tunnel Active\r\n")
+					fmt.Fprintf(os.Stderr, "  URL: %s\r\n\r\n", info.ConnectURL)
+					fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(info.QRCode, "\n", "\r\n"))
+				} else {
+					// Create share controller once (before StartShare so OnCommand can use it)
+					sessionInfo := tunnel.SessionInfoData{
+						Workspace: workingDir,
+						Model:     resolved.Model,
+						Provider:  resolved.VendorName,
+						Mode:      mode.String(),
+						Version:   version.Version,
+					}
+					// Forward-declare broker ref so OnCommand closure can use it
+					var shareResult *agentruntime.ShareResult
+					// Start tunnel via unified StartShare
+					result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
+						Workspace: workingDir,
+						Model:     resolved.Model,
+						Provider:  resolved.VendorName,
+						Mode:      mode.String(),
+						Version:   version.Version,
+						ClientTag: "daemon",
+						SnapshotProvider: func() tunnel.BrokerSnapshot {
+							return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+						},
+						OnCommand: func(cmd tunnel.GatewayMessage) {
+							// Route inbound commands through a controller wired to the share broker
+							var broker *tunnel.Broker
+							if shareResult != nil {
+								broker = shareResult.Broker
+							}
+							ctrl := newDaemonTunnelShareController(broker, bridge, sessionInfo, core.Tunnel)
+							ctrl.HandleCommand(bridge, cmd)
+						},
+						OnConnected: func(info tunnel.RelayConnectedState) {
+							if info.Role == "client" {
+								fmt.Fprintf(os.Stderr, "\r\n  [tunnel] Mobile connected\r\n")
+							}
+						},
+					})
+					shareResult = result
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "\r\n  Tunnel failed: %v\r\n", err)
+					} else {
+						// Wire hooks for status/activity push
+						ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
+						bridge.SetRunStateHook(ctrl.HandleRunState)
+						bridge.SetUserMessageHook(ctrl.HandleUserMessage)
+						unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
+						_ = unsubscribeTunnel // cleaned up on daemon exit
+
+						fmt.Fprintf(os.Stderr, "\r\n  Mobile Tunnel Active\r\n")
+						fmt.Fprintf(os.Stderr, "  URL: %s\r\n\r\n", result.ConnectURL)
+						fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(result.QRCode, "\n", "\r\n"))
+					}
+				}
 			case 'r': // restart
 				daemonRestartRequested = true
 				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] restarting...")
@@ -1266,6 +1351,9 @@ func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, targe
 			}
 			// Recording is handled by TunnelHost's BindSession event recorder,
 			// forwarded to online broker via AttachOnlineBroker above.
+			// Cache session info and run canonical share bootstrap.
+			c.tunnelHost.SetSessionInfo(c.sessionInfo)
+			c.tunnelHost.PrepareOnlineShare(broker)
 		} else {
 			// Legacy fallback: create local projection store
 			if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
@@ -1285,8 +1373,10 @@ func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, targe
 				}
 			}
 		}
+	} else {
+		// Legacy path (no TunnelHost): use PublishShareState for broker setup.
+		agentruntime.PublishShareState(broker, sessionID, c.Snapshot(), replay, true)
 	}
-	agentruntime.PublishShareState(broker, sessionID, c.Snapshot(), replay, true)
 }
 
 func (c *daemonTunnelShareController) Snapshot() tunnel.BrokerSnapshot {
@@ -1299,6 +1389,37 @@ func (c *daemonTunnelShareController) Snapshot() tunnel.BrokerSnapshot {
 		if tail := c.currentIncompleteHistoryTail(); len(tail) > 0 {
 			history = append(history, tail...)
 		}
+		if len(history) > 0 {
+			snapshot.History = history
+		}
+	}
+	return snapshot
+}
+
+// daemonSnapshot builds a BrokerSnapshot from daemon bridge state for StartShare.
+func daemonSnapshot(bridge *im.DaemonBridge, workspace string, resolved *config.ResolvedEndpoint, mode string) tunnel.BrokerSnapshot {
+	snapshot := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{
+			Workspace: workspace,
+			Mode:      mode,
+		},
+	}
+	model := ""
+	vendorName := ""
+	if resolved != nil {
+		model = resolved.Model
+		vendorName = resolved.VendorName
+	}
+	snapshot.SessionInfo.Model = model
+	snapshot.SessionInfo.Provider = vendorName
+
+	if bridge != nil {
+		status := tunnel.StatusIdle
+		if bridge.HasActiveRun() {
+			status = tunnel.StatusBusy
+		}
+		snapshot.Status = tunnel.StatusData{Status: status}
+		history := daemonTunnelMessagesToHistory(bridge.Messages())
 		if len(history) > 0 {
 			snapshot.History = history
 		}

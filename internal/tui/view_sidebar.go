@@ -672,6 +672,17 @@ func (m Model) sidebarWorkingDirectory() string {
 	return shortenSidebarPath(cwd)
 }
 
+// fullWorkingDirectory returns the absolute working directory without
+// shortening. Used for tunnel/mobile data where the full path is needed
+// as a stable workspace key.
+func (m Model) fullWorkingDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(cwd))
+}
+
 // sidebarContextWindowLabel returns a human-readable label for the current
 // model's context window size, e.g. "128K" or "204.8K".
 func (m Model) sidebarContextWindowLabel() string {

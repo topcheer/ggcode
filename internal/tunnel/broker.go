@@ -478,6 +478,19 @@ func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	}
 }
 
+// SendSnapshotFromProvider calls the snapshot provider (if set) and sends the
+// resulting snapshot. Used by PrepareOnlineShare when there are no replay
+// events to send.
+func (b *Broker) SendSnapshotFromProvider() {
+	b.snapshotMu.RLock()
+	provider := b.snapshotProvider
+	b.snapshotMu.RUnlock()
+	if provider == nil {
+		return
+	}
+	b.SendSnapshot(provider())
+}
+
 func (b *Broker) ResetSession() {
 	b.resetSessionAndEnqueue(true)
 }

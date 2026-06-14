@@ -166,6 +166,11 @@ func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 	b.tunnelHost = th
 }
 
+// GetTunnelHost returns the tunnel host (for StartShare).
+func (b *ChatBridge) GetTunnelHost() *agentruntime.TunnelHost {
+	return b.tunnelHost
+}
+
 func (b *ChatBridge) startDesktopTurnLocked() (turnID, assistantID string) {
 	b.desktopTurnCounter++
 	turnID = fmt.Sprintf("turn-%d", b.desktopTurnCounter)
@@ -1298,8 +1303,8 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 // Full parity with Fyne AgentBridge tunnel logic.
 
 // AttachTunnelBroker connects the broker for outbound event push to mobile.
-// When TunnelHost is available, only the upper-level config (session info,
-// replay, status) is applied; projection/stream state is handled by TunnelHost.
+// All negotiation (session_info, replay, status, announce) is handled by
+// TunnelHost.PrepareOnlineShare — the canonical share bootstrap.
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	var (
 		currentSes *session.Session
@@ -1316,11 +1321,24 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		return
 	}
 
-	// Send session_info BEFORE AttachOnlineBroker so that cachedSessionInfo
-	// is populated when AnnounceActiveSession fires inside AttachOnlineBroker.
-	// The active_session message carries workspace metadata to the relay,
-	// which the mobile client needs to create the workspace record.
-	if working && cfg != nil {
+	// Set snapshot provider for the "no replay events" fallback.
+	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+		snapshot := tunnel.BrokerSnapshot{}
+		if working && cfg != nil {
+			status := b.CurrentTunnelStatus()
+			snapshot.Status = status
+			activity := b.CurrentTunnelActivity()
+			if activity != "" {
+				snapshot.Activity = tunnel.ActivityData{Activity: activity}
+			}
+		}
+		return snapshot
+	})
+
+	// Cache session info for PrepareOnlineShare (workspace, model, provider).
+	// Must be set unconditionally, not gated on "working" — workspace info
+	// is needed even when no agent run is active.
+	if cfg != nil {
 		resolved, _ := cfg.ResolveActiveEndpoint()
 		model := ""
 		vendorName := ""
@@ -1328,34 +1346,26 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 			model = resolved.Model
 			vendorName = resolved.VendorName
 		}
-		broker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: b.workingDir,
-			Model:     model,
-			Provider:  vendorName,
-			Mode:      cfg.DefaultMode,
-			Language:  cfg.Language,
-		})
+		if b.tunnelHost != nil {
+			b.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
+				Workspace: b.workingDir,
+				Model:     model,
+				Provider:  vendorName,
+				Mode:      cfg.DefaultMode,
+				Language:  cfg.Language,
+			})
+		}
 	}
 
-	// Delegate all negotiation to TunnelHost:
-	// AttachOnlineBroker, BindSession, PrepareOnlineShare (SetEventRecorder(nil),
-	// SetReplayProvider, BindSession, SetAuthorityEpoch, AnnounceActiveSession)
+	// Delegate ALL negotiation to TunnelHost.PrepareOnlineShare:
+	// SendSessionInfo, BindSession, SetReplayProvider, SetAuthorityEpoch,
+	// Replay/Snapshot, AnnounceActiveSession.
 	if b.tunnelHost != nil {
 		b.tunnelHost.AttachOnlineBroker(broker)
 		if currentSes != nil {
 			b.tunnelHost.BindSession(currentSes, b.sessionStore)
 		}
-		_ = b.tunnelHost.PrepareOnlineShare(broker)
-	}
-
-	// Send status and activity after AttachOnlineBroker
-	if working && cfg != nil {
-		status := b.CurrentTunnelStatus()
-		broker.PushStatus(status.Status, status.Message)
-		activity := b.CurrentTunnelActivity()
-		if activity != "" {
-			broker.PushActivity(activity)
-		}
+		b.tunnelHost.PrepareOnlineShare(broker)
 	}
 }
 

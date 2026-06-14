@@ -1,6 +1,8 @@
 package agentruntime
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,12 @@ type TunnelHost struct {
 	// Session reference for recording
 	session      *session.Session
 	sessionStore session.Store
+
+	// SessionInfo cached by the frontend for inclusion in active_session.
+	sessionInfo tunnel.SessionInfoData
+
+	// Active share session reference (set by StartShare, cleared by StopShare).
+	activeShare *tunnelSessionRef
 }
 
 // NewTunnelHost creates a new TunnelHost with an offline projection broker.
@@ -73,7 +81,167 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) Proj
 	return state
 }
 
-// AttachOnlineBroker connects an online tunnel broker (from a Share session).
+// ShareConfig holds frontend-specific inputs for starting a mobile share.
+type ShareConfig struct {
+	Workspace string // absolute working directory
+	Model     string
+	Provider  string
+	Mode      string
+	Version   string
+	Language  string
+
+	// SnapshotProvider supplies the current chat snapshot for the "no replay"
+	// fallback path. Frontends provide this to include their message history.
+	SnapshotProvider func() tunnel.BrokerSnapshot
+
+	// OnCommand is called when the mobile client sends a command (message,
+	// approval response, etc.). Frontends use this to handle inbound user input.
+	OnCommand func(cmd tunnel.GatewayMessage)
+
+	// OnConnected is called when a mobile client connects (role == "client").
+	OnConnected func(info tunnel.RelayConnectedState)
+
+	// ClientTag identifies the frontend for relay metadata ("tui", "wails", "daemon").
+	ClientTag string
+}
+
+// ShareResult holds the connection details returned by StartShare.
+type ShareResult struct {
+	ConnectURL string
+	QRCode     string
+	QRCodePNG  []byte
+	Token      string
+	RoomID     string
+
+	// Broker is the online tunnel broker. Frontends use this to register
+	// additional callbacks (OnCommand, OnRelayConnected, etc.) after StartShare.
+	Broker *tunnel.Broker
+
+	// Session is the tunnel session object. Frontends store it for cleanup
+	// and invite refresh.
+	Session *tunnel.Session
+}
+
+// tunnelSessionRef holds the active tunnel session + broker for cleanup.
+type tunnelSessionRef struct {
+	session *tunnel.Session
+	broker  *tunnel.Broker
+}
+
+// StartShare is the SINGLE ENTRY POINT for starting a mobile tunnel share.
+// It performs the complete sequence:
+//
+//  1. Create + start tunnel session (connect to relay)
+//  2. Create broker
+//  3. Wire snapshot provider + stream event forwarding
+//  4. Cache session info (workspace, model, provider)
+//  5. Full canonical share bootstrap (PrepareOnlineShare)
+//  6. Return connection details (URL + QR code)
+//
+// Frontends should call this and then display the QR code.
+// Call StopShare to tear down.
+func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
+	if cfg.Workspace == "" {
+		return nil, fmt.Errorf("tunnel: workspace is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 1. Create + start tunnel session
+	clientTag := cfg.ClientTag
+	if clientTag == "" {
+		clientTag = "ggcode"
+	}
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata(clientTag, cfg.Version))
+	info, err := sess.Start(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel start: %w", err)
+	}
+
+	// 2. Create broker
+	broker := tunnel.NewBroker(sess)
+
+	// 3. Wire frontend callbacks onto broker
+	if cfg.OnCommand != nil {
+		broker.OnCommand(cfg.OnCommand)
+	}
+	if cfg.OnConnected != nil {
+		broker.OnRelayConnected(cfg.OnConnected)
+	}
+	if cfg.SnapshotProvider != nil {
+		broker.SetSnapshotProvider(cfg.SnapshotProvider)
+	}
+
+	// 4. Wire stream event forwarding via AttachOnlineBroker
+	h.AttachOnlineBroker(broker)
+
+	// 5. Cache session info
+	h.SetSessionInfo(tunnel.SessionInfoData{
+		Workspace: cfg.Workspace,
+		Model:     cfg.Model,
+		Provider:  cfg.Provider,
+		Mode:      cfg.Mode,
+		Version:   cfg.Version,
+		Language:  cfg.Language,
+	})
+
+	// 6. Run full canonical share bootstrap
+	h.PrepareOnlineShare(broker)
+
+	// 7. Store ref for cleanup
+	h.mu.Lock()
+	h.activeShare = &tunnelSessionRef{session: sess, broker: broker}
+	h.mu.Unlock()
+
+	return &ShareResult{
+		ConnectURL: info.ConnectURL,
+		QRCode:     info.QRCode,
+		QRCodePNG:  info.QRCodePNG,
+		Token:      info.Token,
+		RoomID:     info.RoomID,
+		Broker:     broker,
+		Session:    sess,
+	}, nil
+}
+
+// StopShare tears down the active share session and broker.
+func (h *TunnelHost) StopShare() {
+	h.mu.Lock()
+	ref := h.activeShare
+	h.activeShare = nil
+	h.mu.Unlock()
+
+	h.DetachOnlineBroker()
+
+	if ref != nil {
+		if ref.session != nil {
+			ref.session.Stop()
+		}
+	}
+}
+
+// GetShareInfo returns the current share connection info (URL + QR), if active.
+func (h *TunnelHost) GetShareInfo() *ShareResult {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.activeShare == nil || h.activeShare.session == nil {
+		return nil
+	}
+	info := h.activeShare.session.Info()
+	if info == nil {
+		return nil
+	}
+	return &ShareResult{
+		ConnectURL: info.ConnectURL,
+		QRCode:     info.QRCode,
+		QRCodePNG:  info.QRCodePNG,
+		Token:      info.Token,
+		RoomID:     info.RoomID,
+	}
+}
+
+// attachOnlineBroker connects an online tunnel broker (from a Share session).
 // Events recorded by the projection broker will be forwarded to this broker.
 func (h *TunnelHost) AttachOnlineBroker(broker *tunnel.Broker) {
 	h.mu.Lock()
@@ -81,57 +249,67 @@ func (h *TunnelHost) AttachOnlineBroker(broker *tunnel.Broker) {
 	h.onlineBroker = broker
 }
 
-// PrepareOnlineShare configures an online broker for a fresh Share session.
-// This must be called after AttachOnlineBroker. It performs all the
-// negotiation steps that TUI's handleTunnelStartMsg does:
+// setSessionInfo caches session metadata (workspace, model, provider, etc.)
+// so prepareOnlineShare can include it in session_info and active_session.
+func (h *TunnelHost) SetSessionInfo(info tunnel.SessionInfoData) {
+	h.mu.Lock()
+	h.sessionInfo = info
+	h.mu.Unlock()
+}
+
+// prepareOnlineShare is the CANONICAL share bootstrap for ALL frontends.
+// It performs the complete sequence:
 //
-//   - SetEventRecorder(nil) — online broker should not record; projection broker does that
-//   - SetReplayProvider — provides canonical replay events from projection store
-//   - BindSession + SetAuthorityEpoch — binds online broker to current session
-//   - AnnounceActiveSession — tells relay which session is active
-//
-// Returns the replay events so the caller can also ReplayEvents() if needed.
-func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) []tunnel.GatewayMessage {
+//  1. SetEventRecorder(nil) — online broker should not record
+//  2. SendSessionInfo — cache workspace/model/provider so active_session includes workspace_path
+//  3. BindSession + SetAuthorityEpoch — bind online broker to session
+//  4. SetReplayProvider — provides canonical replay events from projection store
+//  5. Replay or Snapshot — send historical events to mobile
+//  6. AnnounceActiveSession — tell relay/mobile which session is active (LAST)
+func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) {
 	h.mu.Lock()
 	ses := h.session
 	projStore := h.projStore
 	broken := h.projBroken
+	info := h.sessionInfo
 	h.mu.Unlock()
 
 	if broker == nil || ses == nil || strings.TrimSpace(ses.ID) == "" {
-		return nil
+		return
 	}
 
-	// Online broker should NOT record events — projection broker handles that
+	// 1. Online broker should NOT record events — projection broker handles that
 	broker.SetEventRecorder(nil)
 
-	// Bind online broker to session
+	// 2. Cache session info FIRST so sendActiveSession has workspace_path
+	broker.SendSessionInfo(info)
+
+	// 3. Bind online broker to session
 	broker.BindSession(ses.ID)
 
-	// Set replay provider from projection store
+	// 4. Set replay provider from projection store
 	broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 		return h.TunnelEvents()
 	})
 
-	// Set authority epoch
+	// 5. Set authority epoch
 	if projStore != nil && !broken {
 		if epoch, err := ProjectionAuthorityEpoch(projStore, ses.ID); err == nil && epoch > 0 {
 			broker.SetAuthorityEpoch(epoch)
 		}
 	}
 
-	// Replay projection events to online broker first, then announce.
-	// Mobile expects: replay → session_info/status/activity → active_session.
+	// 6. Replay projection events or send snapshot if no events
 	replay := h.TunnelEvents()
 	if len(replay) > 0 {
 		broker.ReplayEvents(replay, false)
+	} else {
+		broker.SendSnapshotFromProvider()
 	}
 
-	// Announce active session LAST — after replay so mobile has all history
+	// 7. Announce active session LAST — after replay so mobile has all history
 	// before processing the active_session handshake.
 	broker.AnnounceActiveSession(ses.ID)
-
-	return replay
 }
 
 // DetachOnlineBroker disconnects the online broker (Share stopped).

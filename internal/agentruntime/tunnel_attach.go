@@ -17,6 +17,9 @@ func AttachTunnelBroker(broker *tunnel.Broker, cfg TunnelAttachConfig) {
 	}
 	broker.SetReplayProvider(cfg.ReplayProvider)
 	broker.SetEventRecorder(nil)
+	if cfg.SessionInfo != nil {
+		broker.SendSessionInfo(*cfg.SessionInfo)
+	}
 	if cfg.SessionID != "" {
 		broker.BindSession(cfg.SessionID)
 		if cfg.AuthorityEpoch == 0 {
@@ -24,9 +27,6 @@ func AttachTunnelBroker(broker *tunnel.Broker, cfg TunnelAttachConfig) {
 		}
 		broker.SetAuthorityEpoch(cfg.AuthorityEpoch)
 		broker.AnnounceActiveSession(cfg.SessionID)
-	}
-	if cfg.SessionInfo != nil {
-		broker.SendSessionInfo(*cfg.SessionInfo)
 	}
 	if cfg.Status != nil && cfg.Status.Status != "" {
 		broker.PushStatus(cfg.Status.Status, cfg.Status.Message)

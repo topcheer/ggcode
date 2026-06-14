@@ -1324,49 +1324,65 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		}
 	}
 
-	// Start new tunnel session
-	sess := tunnel.NewSession(tunnel.DefaultRelayURL, tunnel.WithClientMetadata("desktop-wails", a.GetVersion()))
-	info, err := sess.Start(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("start tunnel: %w", err)
+	// Resolve config for session info
+	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+	model := ""
+	vendorName := ""
+	mode := ""
+	if cfg != nil {
+		resolved, _ := cfg.ResolveActiveEndpoint()
+		if resolved != nil {
+			model = resolved.Model
+			vendorName = resolved.VendorName
+		}
+		mode = cfg.DefaultMode
 	}
 
-	broker := tunnel.NewBroker(sess)
+	// Use unified TunnelHost.StartShare — the single canonical entry point
+	// for all frontends. It handles session creation, broker setup,
+	// SetSessionInfo, PrepareOnlineShare, and AnnounceActiveSession.
+	th := a.chat.GetTunnelHost()
+	if th == nil {
+		return nil, fmt.Errorf("tunnel host not initialized")
+	}
 
-	// Notify frontend when mobile client connects (via broker.OnRelayConnected —
-	// does NOT override broker's internal handleRelayConnected).
-	// Only emit for client role — the initial server-role "connected" is just
-	// the host's own relay attachment, not a mobile device joining.
-	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
-		if info.Role == "client" {
-			runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
-				"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
-			})
-		}
+	result, err := th.StartShare(agentruntime.ShareConfig{
+		Workspace: a.workDir,
+		Model:     model,
+		Provider:  vendorName,
+		Mode:      mode,
+		Version:   a.GetVersion(),
+		ClientTag: "desktop-wails",
+		SnapshotProvider: func() tunnel.BrokerSnapshot {
+			return a.tunnelSnapshot()
+		},
+		OnConnected: func(info tunnel.RelayConnectedState) {
+			if info.Role == "client" {
+				runtime.EventsEmit(a.ctx, "tunnel:connected", map[string]interface{}{
+					"role": info.Role, "sessionID": info.SessionID, "generation": info.Generation,
+				})
+			}
+		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("start share: %w", err)
+	}
 
-	a.setTunnelState(sess, broker)
-
-	if a.chat != nil {
-		a.chat.BindShareCommands(broker, func(language string) {
-			cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
-			if cfg != nil {
-				_ = cfg.SaveLanguagePreference(language)
+	// Wire share commands (OnCommand handler, language switching, ask_user approval)
+	if a.chat != nil && result.Broker != nil {
+		a.chat.BindShareCommands(result.Broker, func(language string) {
+			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+			if c != nil {
+				_ = c.SaveLanguagePreference(language)
 			}
 		}, a.currentAskUserRequest, a.clearAskUserRequest)
-		a.chat.PrepareShareBroker(broker, func() tunnel.BrokerSnapshot {
-			return a.tunnelSnapshot()
-		})
-	} else {
-		// Set snapshot provider for handleRelayConnected callback
-		broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
-			return a.tunnelSnapshot()
-		})
 	}
 
+	a.setTunnelState(result.Session, result.Broker)
+
 	return &ShareInfo{
-		ConnectURL:   info.ConnectURL,
-		QRCodeBase64: encodeQRBase64(info.QRCodePNG),
+		ConnectURL:   result.ConnectURL,
+		QRCodeBase64: encodeQRBase64(result.QRCodePNG),
 	}, nil
 }
 
