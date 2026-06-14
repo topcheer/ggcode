@@ -65,6 +65,22 @@ class BackgroundConnectionManager extends Notifier<void> {
           _liveSessionIds.remove(sessionId);
         }
       }),
+      // Listen for metadata updates (renew_token) to persist the
+      // renewable URL so app restart uses it instead of expired auth_ticket.
+      svc.metadataStream.listen((metadata) {
+        if (metadata.renewToken.isNotEmpty) {
+          final newUrl = svc.descriptor.runtimeUrl();
+          _sessionIdToUrl[sessionId] = newUrl;
+          final store = ConnectionStore.instance;
+          store.load().then((_) {
+            final conn = store.findBySessionId(sessionId);
+            if (conn != null) {
+              store.update(conn.id, conn.copyWith(url: newUrl));
+              debugPrint('[bg-conn] session=$sessionId updated URL with renew_token');
+            }
+          });
+        }
+      }),
     ];
   }
 
