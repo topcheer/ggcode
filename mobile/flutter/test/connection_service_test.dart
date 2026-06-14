@@ -8,7 +8,7 @@ import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 
 void main() {
   test('relay recovery delay prefers retry_after_ms when present', () {
-    expect(relayRecoveryDelay(), const Duration(seconds: 60));
+    expect(relayRecoveryDelay(), const Duration(seconds: 30));
     expect(relayRecoveryDelay(1500), const Duration(milliseconds: 1500));
     expect(
       relayRetryAfterMs(const {'retry_after_ms': 60000}),
@@ -367,11 +367,11 @@ void main() {
     expect(statuses.last, ConnectionStatus.connecting);
     expect(
       errors,
-      contains('Relay restarting: reconnecting in 15s'),
+      contains('Relay restarting: reconnecting in 5s'),
     );
     final offline = messages.lastWhere((msg) => msg.type == 'server_offline');
     expect(offline.data?['state'], 'recovering');
     expect(offline.data?['reason'], 'relay_restarting');
-    expect(offline.data?['retry_after_ms'], 15000);
+    expect(offline.data?['retry_after_ms'], 5000);
   });
 }

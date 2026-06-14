@@ -20,12 +20,12 @@ import (
 
 const (
 	defaultPendingRoomTTL        = 2 * time.Minute
-	defaultPendingRetryAfter     = 10 * time.Second
-	defaultRecoveryRetryAfter    = 15 * time.Second
+	defaultPendingRetryAfter     = 5 * time.Second
+	defaultRecoveryRetryAfter    = 5 * time.Second
 	defaultRecoveryRoomRetention = 5 * time.Minute
 	activeSessionModeReplace     = "replace_history"
 	relayRestartReason           = "relay_restarting"
-	relayShutdownNoticeDelay     = 150 * time.Millisecond
+	relayShutdownNoticeDelay     = 500 * time.Millisecond
 	relayShutdownTimeout         = 5 * time.Second
 )
 

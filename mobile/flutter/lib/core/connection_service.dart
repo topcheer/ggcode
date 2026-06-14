@@ -68,8 +68,8 @@ enum ConnectionStatus {
   connected,
 }
 
-const Duration _defaultServerOfflineReconnectDelay = Duration(seconds: 60);
-const Duration _defaultRelayRestartReconnectDelay = Duration(seconds: 15);
+const Duration _defaultServerOfflineReconnectDelay = Duration(seconds: 30);
+const Duration _defaultRelayRestartReconnectDelay = Duration(seconds: 5);
 const int _webSocketCloseServiceRestart = 1012;
 const String _relayRestartReason = 'relay_restarting';
 
