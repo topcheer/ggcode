@@ -1913,8 +1913,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     );
     _bindService(svc, _connectionGeneration, url);
 
-    // Tell workspace cache we selected this session
-    ref.read(workspaceCacheProvider.notifier).selectSession(sessionId);
+    // Tell workspace cache we selected this session and it's now live
+    final cacheNotifier = ref.read(workspaceCacheProvider.notifier);
+    cacheNotifier.selectSession(sessionId);
+    cacheNotifier.setLive(sessionId);
 
     debugPrint(
       '[connection] adopted background service session=$sessionId url=$url lastEvent=$lastEvent',

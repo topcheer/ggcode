@@ -1427,6 +1427,19 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     _scheduleFlush();
   }
 
+  /// Mark a session as the live session (foreground WebSocket is connected
+  /// to it). Called when adopting a background service to foreground, or
+  /// when a new connection's session becomes active.
+  void setLive(String sessionId) {
+    final record = state.sessions[sessionId];
+    state = state.copyWith(
+      liveSessionId: sessionId,
+      liveWorkspaceKey: record?.workspaceKey.isNotEmpty == true
+          ? record!.workspaceKey
+          : state.liveWorkspaceKey,
+    );
+  }
+
   Future<void> registerLiveSession(
     String sessionId,
     proto.SessionInfoData? sessionInfo, {
@@ -1881,6 +1894,7 @@ final isHistoricalViewProvider = Provider<bool>((ref) {
   if (selectedSessionId == null || selectedSessionId.isEmpty) {
     return false;
   }
+  // Not historical if viewing the live session (foreground WebSocket)
   return !_isViewingLive(cache);
 });
 
