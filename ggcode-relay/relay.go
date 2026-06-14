@@ -1191,6 +1191,9 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 				Type:   "error",
 				Reason: "Room not found: stale or expired share token",
 			})
+			// Brief delay to ensure the client reads the error frame
+			// before the WebSocket close frame arrives.
+			time.Sleep(200 * time.Millisecond)
 			conn.Close()
 			log.Printf("[relay] client rejected: room=%s not found", shortToken(token))
 			return
