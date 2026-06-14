@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../connection_service.dart';
 import '../models/protocol.dart' as proto;
@@ -137,36 +135,25 @@ class BackgroundConnectionManager extends Notifier<void> {
     await cache.initialize();
     final cacheState = ref.read(workspaceCacheProvider);
 
-    final prefs = await SharedPreferences.getInstance();
-    final storedJson = prefs.getString('ggcode_connections');
-    debugPrint('[bg-conn] connectAllCachedSessions: storedJson=${storedJson != null ? "${storedJson.length} chars" : "null"} selected=${cacheState.selectedSessionId}');
-    if (storedJson == null) return;
+    // Use ConnectionStore singleton (with dedup) instead of raw SharedPreferences
+    final store = ConnectionStore.instance;
+    await store.load();
+    final allConnections = store.all;
+    debugPrint('[bg-conn] connectAllCachedSessions: ${allConnections.length} connections after dedup selected=${cacheState.selectedSessionId}');
+    for (final conn in allConnections) {
+      debugPrint('[bg-conn]   conn: session=${conn.sessionId ?? ""} alive=$conn.alive failed=${conn.permanentlyFailed} url=${conn.url.isNotEmpty ? "yes" : "no"}');
 
-    try {
-      final decoded = jsonDecode(storedJson);
-      if (decoded is! List) return;
-      debugPrint('[bg-conn] found ${decoded.length} stored connections');
-      for (final connData in decoded) {
-        if (connData is! Map<String, dynamic>) continue;
-
-        final alive = connData['alive'] as bool? ?? false;
-        final failed = connData['permanentlyFailed'] as bool? ?? false;
-        final sessionId = connData['sessionId'] as String? ?? '';
-        final url = connData['url'] as String? ?? '';
-        debugPrint('[bg-conn]   conn: session=$sessionId alive=$alive failed=$failed url=${url.isNotEmpty ? "yes" : "no"}');
-
-        if (!alive || failed) continue;
-        if (sessionId.isEmpty || url.isEmpty) continue;
-        if (sessionId == cacheState.selectedSessionId) {
-          debugPrint('[bg-conn]   skipping selected (will be foreground)');
-          continue;
-        }
-
-        debugPrint('[bg-conn] restoring alive session=$sessionId');
-        await connect(url: url, sessionId: sessionId);
+      if (!conn.alive || conn.permanentlyFailed) continue;
+      final sessionId = conn.sessionId ?? '';
+      final url = conn.url;
+      if (sessionId.isEmpty || url.isEmpty) continue;
+      if (sessionId == cacheState.selectedSessionId) {
+        debugPrint('[bg-conn]   skipping selected (will be foreground)');
+        continue;
       }
-    } catch (e) {
-      debugPrint('[bg-conn] restore failed: $e');
+
+      debugPrint('[bg-conn] restoring alive session=$sessionId');
+      await connect(url: url, sessionId: sessionId);
     }
   }
 
