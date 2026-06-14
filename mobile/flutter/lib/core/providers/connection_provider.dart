@@ -200,8 +200,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
       final session = cache.sessionForId(selectedSessionId);
       if (session != null && session.workspaceKey.isNotEmpty) {
-        _restoreCachedAgentStatus(sessionId: selectedSessionId);
         await connectWorkspace(session.workspaceKey, clearState: false);
+        // Restore cached agent status AFTER connect, because _connectImpl
+        // clears the projection. This ensures displayed status reflects
+        // the cached snapshot while the connection is being established.
+        _restoreCachedAgentStatus(sessionId: selectedSessionId);
         return;
       }
     }
@@ -342,12 +345,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _clearUiProjection();
       // For new scans (clearState=true): clear all selection so the new
       // session becomes selected+live unconditionally.
-      // For reconnects (clearState=false): only clear live so the same
-      // session reconnects without losing selection.
+      // For reconnects (clearState=false): DON'T clear live — keeping it
+      // lets registerLiveSession see selected==prevLive and followLive=true.
       if (clearState) {
         ref.read(workspaceCacheProvider.notifier).clearAllSelection();
-      } else {
-        ref.read(workspaceCacheProvider.notifier).markDisconnected();
       }
 
       if (!isReconnect && clearState) {
