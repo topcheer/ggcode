@@ -56,12 +56,15 @@ class BackgroundConnectionManager extends Notifier<void> {
       }),
       svc.statusStream.listen((status) {
         debugPrint('[bg-conn] session=$sessionId status=$status');
-        if (status == ConnectionStatus.disconnected) {
-          _liveSessionIds.remove(sessionId);
-          _updateConnectionAlive(sessionId, false);
-        } else if (status == ConnectionStatus.connected) {
+        if (status == ConnectionStatus.connected) {
           _liveSessionIds.add(sessionId);
           _updateConnectionAlive(sessionId, true);
+        } else if (status == ConnectionStatus.disconnected) {
+          // DON'T markDead here — WebSocket disconnect can happen due to
+          // network issues, app backgrounding, or relay restart. We only
+          // mark dead when the user explicitly disconnects.
+          // Keeping alive=true allows app restart to reconnect.
+          _liveSessionIds.remove(sessionId);
         }
       }),
     ];
