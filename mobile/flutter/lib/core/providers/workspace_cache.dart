@@ -1870,14 +1870,25 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     for (final key in pendingWorkspaces) {
       final workspace = state.workspaces[key];
       if (workspace == null) continue;
-      pendingWorkspaceRecords.add(workspace);
+      // ALWAYS override displayName from key before writing to SQLite.
+      // Prevents contaminated state from persisting.
+      final correctName = _displayNameFromKey(key);
+      pendingWorkspaceRecords.add(correctName.isNotEmpty
+          ? workspace.copyWith(displayName: correctName)
+          : workspace);
     }
     final pendingSessions = List<String>.from(_dirtySessions);
     final pendingSessionRecords = <CachedSessionRecord>[];
     for (final key in pendingSessions) {
       final session = state.sessions[key];
       if (session == null) continue;
-      pendingSessionRecords.add(session);
+      // Override title with workspaceKey-derived name + date
+      final wsName = _displayNameFromKey(session.workspaceKey);
+      final date = session.sessionId.length >= 8
+          ? session.sessionId.substring(0, 8)
+          : session.sessionId;
+      final correctTitle = '$wsName · $date';
+      pendingSessionRecords.add(session.copyWith(title: correctTitle));
     }
     final pendingSnapshotKeys = List<String>.from(_dirtySnapshots);
     final pendingSnapshotWrites = <_SnapshotWrite>[];
