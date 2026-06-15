@@ -1753,8 +1753,39 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   List<WorkspaceRecord> sortedWorkspaces() {
-    final items = state.workspaces.values.toList();
-    // Ensure displayName is never empty — fallback to key decode
+    // ALWAYS cross-check against SQLite. In-memory state can get lost during
+    // workspace switches (provider dispose/recreate races). SQLite is the
+    // persistent source of truth.
+    final List<WorkspaceRecord> items;
+    if (_store != null) {
+      final dbRecords = _store!.loadWorkspaces();
+      // Merge: SQLite is truth for workspace existence, memory has live status
+      final merged = <String, WorkspaceRecord>{};
+      for (final r in dbRecords) {
+        if (r.key.isEmpty) continue;
+        var name = r.displayName;
+        if (name.isEmpty) name = _displayNameFromKey(r.key);
+        merged[r.key] = r.copyWith(displayName: name);
+      }
+      // Overlay live session info from memory (may have fresher data)
+      for (final entry in state.workspaces.entries) {
+        if (merged.containsKey(entry.key)) {
+          final mem = entry.value;
+          final db = merged[entry.key]!;
+          // Keep DB displayName (always from key), but update lastSessionId if memory is newer
+          if (mem.lastSessionId.isNotEmpty && mem.lastSessionId != db.lastSessionId) {
+            merged[entry.key] = db.copyWith(
+              lastSessionId: mem.lastSessionId,
+              lastOpenedAt: mem.lastOpenedAt.isAfter(db.lastOpenedAt) ? mem.lastOpenedAt : db.lastOpenedAt,
+            );
+          }
+        }
+      }
+      items = merged.values.toList();
+    } else {
+      items = state.workspaces.values.toList();
+    }
+    // Ensure displayName is never empty
     for (var i = 0; i < items.length; i++) {
       if (items[i].displayName.isEmpty) {
         final name = _displayNameFromKey(items[i].key);
@@ -1764,7 +1795,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       }
     }
     items.sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
-    debugPrint('[cache] sortedWorkspaces: count=${items.length} keys=${items.map((w) => w.key).toList()} names=${items.map((w) => w.displayName).toList()}');
+    debugPrint('[cache] sortedWorkspaces: count=${items.length} names=${items.map((w) => w.displayName).toList()}');
     return items;
   }
 
@@ -1775,6 +1806,14 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   List<CachedSessionRecord> sessionsForWorkspace(String workspaceKey) {
+    // Read from SQLite directly — same reason as sortedWorkspaces
+    if (_store != null) {
+      final items = _store!.loadSessions()
+          .where((record) => record.workspaceKey == workspaceKey)
+          .toList()
+        ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+      return items;
+    }
     final items = state.sessions.values
         .where((record) => record.workspaceKey == workspaceKey)
         .toList()
