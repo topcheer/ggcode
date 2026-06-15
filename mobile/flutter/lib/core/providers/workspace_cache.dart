@@ -958,12 +958,21 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       if (!ref.mounted) return;
       for (final record in _store!.loadWorkspaces()) {
         if (record.key.isNotEmpty) {
-          // If displayName is missing (e.g. legacy data), try to recover it
-          // from the cached snapshot's sessionInfo.
+          // Recover displayName via 3 fallbacks:
+          // 1. Already set in DB
+          // 2. From snapshot's sessionInfo
+          // 3. Decode from workspaceKey (base64 workspace path)
           var updated = record;
-          if (record.displayName.isEmpty && record.lastSessionId.isNotEmpty) {
-            final snap = _store!.loadSnapshot(record.lastSessionId);
-            final name = _workspaceDisplayName(snap?.sessionInfo);
+          if (record.displayName.isEmpty) {
+            var name = '';
+            if (record.lastSessionId.isNotEmpty) {
+              final snap = _store!.loadSnapshot(record.lastSessionId);
+              name = _workspaceDisplayName(snap?.sessionInfo);
+            }
+            if (name.isEmpty) {
+              // Decode workspaceKey back to path and take last segment
+              name = _displayNameFromKey(record.key);
+            }
             if (name.isNotEmpty) {
               updated = record.copyWith(displayName: name);
             }
@@ -1486,6 +1495,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final workspacePath = sessionInfo?.workspace ?? '';
     if (workspacePath.isEmpty) return; // Wait for active_session
     final workspaceKey = _workspaceKeyForPath(workspacePath);
+    debugPrint('[cache] registerLiveSession: workspacePath=$workspacePath workspaceKey=$workspaceKey existing=${state.workspaces.containsKey(workspaceKey)} totalWorkspaces=${state.workspaces.length}');
     final now = DateTime.now();
     final previousLiveSessionId = state.liveSessionId;
     final lastKnownLiveSessionId =
@@ -1706,6 +1716,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   List<WorkspaceRecord> sortedWorkspaces() {
     final items = state.workspaces.values.toList()
       ..sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
+    debugPrint('[cache] sortedWorkspaces: count=${items.length} keys=${items.map((w) => w.key).toList()} names=${items.map((w) => w.displayName).toList()}');
     return items;
   }
 
@@ -1962,6 +1973,24 @@ String _normalizedCachedAgentStatus(String status) {
 /// Same path on different host instances → same key on mobile.
 String _workspaceKeyForPath(String path) =>
     base64UrlEncode(utf8.encode(path)).replaceAll('=', '');
+
+/// Reverse-decode workspaceKey to get display name when all other
+/// sources (DB display_name, snapshot sessionInfo) are unavailable.
+String _displayNameFromKey(String key) {
+  try {
+    // Restore base64 padding
+    var padded = key;
+    final remainder = padded.length % 4;
+    if (remainder != 0) {
+      padded += '=' * (4 - remainder);
+    }
+    final path = utf8.decode(base64Url.decode(padded));
+    final parts = path.split('/').where((s) => s.isNotEmpty).toList();
+    return parts.isNotEmpty ? parts.last : path;
+  } catch (_) {
+    return '';
+  }
+}
 
 String _sessionCacheKey(String workspaceKey, String sessionId) =>
     '$workspaceKey::$sessionId';
