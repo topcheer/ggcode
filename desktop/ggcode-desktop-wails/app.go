@@ -1425,7 +1425,97 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		return snapshot
 	}
 	snapshot.Status = a.chat.CurrentTunnelStatus()
+
+	// Populate history from agent messages — same as TUI does.
+	// Without this, mobile clients receive an empty snapshot for
+	// sessions whose projection store is empty.
+	msgs := a.chat.Messages()
+	if len(msgs) > 0 {
+		snapshot.History = messagesToTunnelHistory(msgs)
+	}
+
 	return snapshot
+}
+
+// messagesToTunnelHistory converts provider messages to tunnel history entries.
+// This mirrors the TUI's tunnelMessagesToHistory function so mobile clients
+// receive the same conversation snapshot regardless of host frontend.
+func messagesToTunnelHistory(msgs []provider.Message) []tunnel.HistoryEntry {
+	var history []tunnel.HistoryEntry
+	for _, msg := range msgs {
+		switch msg.Role {
+		case "user":
+			var textParts []string
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
+				case "tool_result":
+					result := truncateRunesDesktop(block.Output, 500, "...")
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   result,
+						IsError:  block.IsError,
+					})
+				}
+			}
+			if len(textParts) > 0 {
+				history = append(history, tunnel.HistoryEntry{
+					Role:    "user",
+					Content: strings.Join(textParts, "\n"),
+				})
+			}
+		case "assistant":
+			for _, block := range msg.Content {
+				if reasoning := tunnel.NormalizeReasoningChunk(block.ReasoningContent); reasoning != "" {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "reasoning",
+						Content: reasoning,
+					})
+				}
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "assistant",
+						Content: strings.TrimSpace(block.Text),
+					})
+				} else if block.Type == "tool_use" {
+					argsStr := truncateRunesDesktop(string(block.Input), 200, "...")
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_call",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						ToolArgs: argsStr,
+					})
+				}
+			}
+		case "tool":
+			for _, block := range msg.Content {
+				if block.Type == "tool_result" {
+					result := truncateRunesDesktop(block.Output, 500, "...")
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   result,
+						IsError:  block.IsError,
+					})
+				}
+			}
+		}
+	}
+	return history
+}
+
+func truncateRunesDesktop(s string, maxRunes int, suffix string) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + suffix
 }
 
 // ─── AskUser request state for mobile response mapping ─────────────

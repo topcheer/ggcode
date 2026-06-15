@@ -1665,6 +1665,16 @@ func (b *ChatBridge) CurrentAskUserRequest(requestID string) tool.AskUserRequest
 	return tool.AskUserRequest{}
 }
 
+// Messages returns the current conversation messages for snapshot/tunnel use.
+func (b *ChatBridge) Messages() []provider.Message {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.agent == nil {
+		return nil
+	}
+	return b.agent.Messages()
+}
+
 // SetApprovalOverride persists a tool-level permission override.
 func (b *ChatBridge) SetApprovalOverride(toolName string) {
 	if b.agent != nil {
