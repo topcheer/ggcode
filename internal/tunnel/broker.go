@@ -454,6 +454,13 @@ func (b *Broker) SendThemeChange(theme string) {
 
 func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	if snapshot.SessionInfo != (SessionInfoData{}) {
+		// Preserve Title from cached session info — snapshot providers
+		// (TUI/Desktop) don't always include Title, but PrepareOnlineShare
+		// already set it correctly. Without this, the empty Title in the
+		// snapshot overwrites the correct one.
+		if snapshot.SessionInfo.Title == "" && b.cachedSessionInfo.Title != "" {
+			snapshot.SessionInfo.Title = b.cachedSessionInfo.Title
+		}
 		b.SendSessionInfo(snapshot.SessionInfo)
 	}
 	if len(snapshot.History) > 0 {
