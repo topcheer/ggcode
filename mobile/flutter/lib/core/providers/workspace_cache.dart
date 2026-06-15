@@ -1763,9 +1763,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       final merged = <String, WorkspaceRecord>{};
       for (final r in dbRecords) {
         if (r.key.isEmpty) continue;
-        var name = r.displayName;
-        if (name.isEmpty) name = _displayNameFromKey(r.key);
-        merged[r.key] = r.copyWith(displayName: name);
+        // ALWAYS derive from key — ignore whatever display_name SQLite has.
+        // It could be empty, stale, or cross-contaminated from another workspace.
+        final name = _displayNameFromKey(r.key);
+        merged[r.key] = r.copyWith(displayName: name.isNotEmpty ? name : r.displayName);
       }
       // Overlay live session info from memory (may have fresher data)
       for (final entry in state.workspaces.entries) {

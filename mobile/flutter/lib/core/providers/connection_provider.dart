@@ -1973,6 +1973,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       debugPrint(
         '[connection] loaded ${snapshot.messages.length} cached messages for session=$sessionId',
       );
+    } else {
+      // No cached snapshot — clear chat and request replay from relay.
+      ref.read(chatProvider.notifier).clearMessages();
+      debugPrint('[connection] no snapshot for session=$sessionId, requesting replay');
+      // Send resume_hello to get replay events from relay.
+      svc.sendResumeHello(
+        clientId: _clientId,
+        sessionId: sessionId,
+        lastEventId: lastEvent.isEmpty ? null : lastEvent,
+      );
     }
 
     // Session is already connected and synced — mark ready immediately.
