@@ -1591,6 +1591,18 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 }
 
 func (b *Broker) enqueueRecorded(msg GatewayMessage) {
+	// When replaying old session_info events that lack Title (recorded
+	// before Title was added to the protocol), fill in the cached Title
+	// so mobile always receives the correct session title.
+	if msg.Type == EventSessionInfo && b.cachedSessionInfo.Title != "" {
+		var info SessionInfoData
+		if err := json.Unmarshal(msg.Data, &info); err == nil && info.Title == "" {
+			info.Title = b.cachedSessionInfo.Title
+			if dataBytes, err := json.Marshal(info); err == nil {
+				msg.Data = dataBytes
+			}
+		}
+	}
 	b.bumpNextEvent(msg.EventID)
 	b.enqueueOut(msg)
 }

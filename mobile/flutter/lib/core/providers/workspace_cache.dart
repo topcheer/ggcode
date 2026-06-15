@@ -1602,7 +1602,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 lastUpdatedAt: now,
               ))
           .copyWith(
-        title: _resolveTitle(sessionInfo, sessionId, state.sessions[sessionKey]?.title),
+        title: sessionInfo?.title.isNotEmpty == true
+            ? sessionInfo!.title
+            : (state.sessions[sessionKey]?.title ?? _sessionTitle(sessionInfo, sessionId)),
         model: sessionInfo?.model ?? state.sessions[sessionKey]?.model,
         provider: sessionInfo?.provider ?? state.sessions[sessionKey]?.provider,
         mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
@@ -1753,7 +1755,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 url: sessionUrl,
               ))
           .copyWith(
-        title: _resolveTitle(sessionInfo, sessionId, state.sessions[snapshotKey]?.title),
+        title: sessionInfo?.title.isNotEmpty == true
+            ? sessionInfo!.title
+            : (state.sessions[snapshotKey]?.title ?? _sessionTitle(sessionInfo, sessionId)),
         model: sessionInfo?.model ?? state.sessions[snapshotKey]?.model,
         provider:
             sessionInfo?.provider ?? state.sessions[snapshotKey]?.provider,
@@ -2239,18 +2243,3 @@ String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
   return '$label · $shortId';
 }
 
-/// Resolve session title: non-empty incoming title always wins.
-/// If incoming title is empty, use fallback (workspace · shortId).
-/// This is called on every session_info — host is authoritative.
-String _resolveTitle(
-  proto.SessionInfoData? sessionInfo,
-  String sessionId,
-  String? existingTitle,
-) {
-  // Non-empty host title always wins
-  if (sessionInfo?.title.isNotEmpty == true) {
-    return sessionInfo!.title;
-  }
-  // Empty incoming: generate fallback
-  return _sessionTitle(sessionInfo, sessionId);
-}
