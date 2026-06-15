@@ -532,14 +532,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             msg.sessionId ?? msg.data?['session_id'] as String? ?? '';
         log('[tunnel] active_session: session=$sessionId currentSession=$_sessionId lastEvent=$_lastAppliedEventId');
         if (sessionId.isEmpty) break;
+        // Save previous session before _acceptAuthorityEpoch may change _sessionId
+        final previousSessionId = _sessionId;
         if (!_acceptAuthorityEpoch(msg, sessionId: sessionId)) {
           break;
         }
-        if (_sessionId.isNotEmpty && _sessionId != sessionId) {
+        // Session switch: clear UI so replay can refill fresh content.
+        // _acceptAuthorityEpoch may have already set _sessionId, so
+        // compare against the saved previousSessionId.
+        if (previousSessionId.isNotEmpty && previousSessionId != sessionId) {
           _clearUiProjection();
-          _lastAppliedEventId = '';
-          _lastDurableEventId = '';
-          _resumeOverrideEventId = '';
           _hasAuthoritativeProjection = false;
           _recentEventIds.clear();
           _recentEventSet.clear();
@@ -1367,7 +1369,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   void _resetForAuthorityEpoch(String sessionId, int authorityEpoch) {
     final previousSessionId = _sessionId;
-    _clearUiProjection();
+    // Don't clear messages — just reset cursor and dedup.
+    // Messages should never be cleared by authority epoch changes.
     _hasAuthoritativeProjection = false;
     _lastAppliedEventId = '';
     _lastDurableEventId = '';

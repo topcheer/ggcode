@@ -434,8 +434,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ),
                 SizedBox(height: 8),
                 ...(_connections.map((conn) {
-                  // Determine display info
-                  final name = conn.displayName?.isNotEmpty == true
+                  // Determine display info — derive from workspacePath, or
+                  // fallback to 'Unknown' if no info available.
+                  String name = conn.displayName?.isNotEmpty == true
                       ? conn.displayName!
                       : (conn.workspacePath?.isNotEmpty == true
                           ? conn.workspacePath!.split('/').last
