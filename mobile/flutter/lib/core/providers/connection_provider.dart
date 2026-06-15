@@ -326,6 +326,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // Reconnect (clearState=false): look up existing by roomId.
     await _connectionStore.load();
     StoredConnection? conn = _connectionStore.findByRoomId(descriptor.roomId);
+    // ALWAYS prefer renew_token URL from ConnectionStore, regardless of clearState.
+    // The workspace_cache URL may have an expired auth_ticket (15min TTL).
+    // renew_token has 30-day TTL.
+    if (conn != null && conn.url.contains('renew_token') && !url.contains('renew_token')) {
+      debugPrint('[connection] using ConnectionStore URL with renew_token for room=${descriptor.roomId} (clearState=$clearState)');
+      url = conn.url;
+      descriptor = ShareConnectionDescriptor.parse(url);
+    }
     if (clearState && (conn == null || conn.url != url)) {
       // New connection from user scan — create fresh.
       conn = StoredConnection.forUrl(url, descriptor.roomId, active: true);
@@ -333,14 +341,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     } else if (conn != null) {
       // Reconnecting to existing room — mark active.
       await _connectionStore.setActive(conn.id);
-      // If the StoredConnection has a URL with renew_token, prefer it over
-      // the incoming URL (which may have an expired auth_ticket from
-      // workspace_cache SQLite).
-      if (!clearState && conn.url.contains('renew_token')) {
-        debugPrint('[connection] using ConnectionStore URL with renew_token for room=${descriptor.roomId}');
-        url = conn.url;
-        descriptor = ShareConnectionDescriptor.parse(url);
-      }
     }
     _currentConnection = conn;
 

@@ -497,9 +497,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       liveSessionId: liveSessionId,
                       liveSessionIds: bgConn.liveSessionIds,
                       onSessionTap: (session) async {
+                        debugPrint('[chat] onSessionTap: session=${session.sessionId} url=${session.url.substring(0, session.url.length > 60 ? 60 : session.url.length)}...');
                         Navigator.of(ctx).pop();
                         if (session.sessionId ==
                             connNotifier.currentSessionId) {
+                          debugPrint('[chat] onSessionTap: same session, skipping');
                           return;
                         }
                         // If session has a background service, adopt it.
