@@ -1733,7 +1733,21 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           final newUrl = localService.descriptor.runtimeUrl();
           _liveUrl = newUrl;
           if (_currentConnection != null) {
-            _currentConnection = _currentConnection!.copyWith(url: newUrl);
+            // Also persist workspacePath + displayName + sessionId so
+            // connectWorkspace can match by workspaceKey on restore.
+            final sessionInfo = ref.read(sessionInfoProvider);
+            _currentConnection = _currentConnection!.copyWith(
+              url: newUrl,
+              workspacePath: sessionInfo?.workspace.isNotEmpty == true
+                  ? sessionInfo!.workspace
+                  : _currentConnection!.workspacePath,
+              displayName: sessionInfo?.workspace.isNotEmpty == true
+                  ? sessionInfo!.workspace.split('/').where((s) => s.isNotEmpty).toList().last
+                  : _currentConnection!.displayName,
+              sessionId: _sessionId.isNotEmpty
+                  ? _sessionId
+                  : _currentConnection!.sessionId,
+            );
             _connectionStore.update(_currentConnection!.id, _currentConnection!);
           }
           _persistResumeState();
