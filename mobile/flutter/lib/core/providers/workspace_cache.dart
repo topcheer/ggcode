@@ -979,6 +979,10 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
             }
           }
           workspaces[record.key] = updated;
+          // Persist the recovered displayName back to SQLite
+          if (updated.displayName != record.displayName) {
+            _store!.upsertWorkspace(updated);
+          }
         }
       }
       for (final record in _store!.loadSessions()) {
@@ -1715,8 +1719,17 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   List<WorkspaceRecord> sortedWorkspaces() {
-    final items = state.workspaces.values.toList()
-      ..sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
+    final items = state.workspaces.values.toList();
+    // Ensure displayName is never empty — fallback to key decode
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].displayName.isEmpty) {
+        final name = _displayNameFromKey(items[i].key);
+        if (name.isNotEmpty) {
+          items[i] = items[i].copyWith(displayName: name);
+        }
+      }
+    }
+    items.sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
     debugPrint('[cache] sortedWorkspaces: count=${items.length} keys=${items.map((w) => w.key).toList()} names=${items.map((w) => w.displayName).toList()}');
     return items;
   }
