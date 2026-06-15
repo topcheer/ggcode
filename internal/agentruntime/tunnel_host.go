@@ -282,6 +282,15 @@ func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) {
 		return
 	}
 
+	// Populate Title from session if not already set (SetSessionInfo may
+	// have been called before BindSession, so h.session was nil at that time)
+	if info.Title == "" && ses.Title != "" {
+		info.Title = ses.Title
+		h.mu.Lock()
+		h.sessionInfo = info
+		h.mu.Unlock()
+	}
+
 	// 1. Online broker should NOT record events — projection broker handles that
 	broker.SetEventRecorder(nil)
 
