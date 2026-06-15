@@ -494,7 +494,7 @@ class _WorkspaceCacheSqlStore {
   List<CachedSessionRecord> loadSessions() {
     final rows = _db.select('''
       SELECT workspace_key, session_id, title, model, provider, mode, version,
-             workspace_path, last_event_id, authority_epoch, last_updated_at
+             workspace_path, last_event_id, authority_epoch, last_updated_at, url
       FROM cache_sessions
       ORDER BY last_updated_at DESC
     ''');
@@ -514,6 +514,7 @@ class _WorkspaceCacheSqlStore {
         lastUpdatedAt:
             DateTime.tryParse(row['last_updated_at'] as String? ?? '') ??
                 DateTime.fromMillisecondsSinceEpoch(0),
+        url: row['url'] as String? ?? '',
       );
       if (record.sessionId.isEmpty || deduped.containsKey(record.sessionId)) {
         continue;
