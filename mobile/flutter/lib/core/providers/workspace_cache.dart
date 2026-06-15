@@ -1494,6 +1494,38 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (sessionId.isEmpty) return;
     await initialize();
     if (!ref.mounted) return;
+    // If state was reset (e.g. provider dispose+recreate or clearAll),
+    // re-initialize from SQLite to restore previously cached workspaces.
+    if (state.workspaces.isEmpty && _store != null) {
+      debugPrint('[cache] registerLiveSession: state empty, reloading from SQLite');
+      final records = _store!.loadWorkspaces();
+      final wsMap = <String, WorkspaceRecord>{};
+      for (final record in records) {
+        if (record.key.isNotEmpty) {
+          var updated = record;
+          if (record.displayName.isEmpty) {
+            final name = _displayNameFromKey(record.key);
+            if (name.isNotEmpty) {
+              updated = record.copyWith(displayName: name);
+            }
+          }
+          wsMap[record.key] = updated;
+        }
+      }
+      final sessions = _store!.loadSessions();
+      final sessionMap = <String, CachedSessionRecord>{};
+      for (final s in sessions) {
+        final key = '${s.workspaceKey}|${s.sessionId}';
+        sessionMap[key] = s;
+      }
+      state = state.copyWith(
+        initialized: true,
+        workspaces: wsMap,
+        sessions: sessionMap,
+      );
+      _scheduleFlush();
+    }
+    if (!ref.mounted) return;
     // Derive workspace key from the host-provided workspace path.
     // This ensures multiple host instances sharing the same workspace directory
     // map to the same key on mobile, regardless of their relay URL/token.
