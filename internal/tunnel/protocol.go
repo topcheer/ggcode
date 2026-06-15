@@ -116,6 +116,7 @@ type SessionInfoData struct {
 	Provider  string `json:"provider"`
 	Mode      string `json:"mode"`
 	Version   string `json:"version"`
+	Title     string `json:"title,omitempty"`
 	Language  string `json:"language,omitempty"`
 	Theme     string `json:"theme,omitempty"`
 }

@@ -1709,8 +1709,11 @@ class _WorkspaceGroupState extends State<_WorkspaceGroup> {
                     ),
                     title: Text(
                       () {
-                        // Show workspace name + date, not host-provided title
-                        // (which can be stale/cross-contaminated).
+                        // Prefer host-provided session title
+                        if (session.title.isNotEmpty) {
+                          return session.title;
+                        }
+                        // Fallback: workspace name + date
                         final wsName = _displayNameFromKeyForSession(
                             widget.workspace.key, widget.workspace.displayName);
                         final date = session.sessionId.length >= 8

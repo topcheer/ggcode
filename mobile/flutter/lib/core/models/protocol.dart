@@ -75,6 +75,7 @@ class SessionInfoData {
   final String version;
   final String language;
   final String theme;
+  final String title;
 
   SessionInfoData({
     required this.workspace,
@@ -84,6 +85,7 @@ class SessionInfoData {
     required this.version,
     this.language = '',
     this.theme = '',
+    this.title = '',
   });
 
   factory SessionInfoData.fromJson(Map<String, dynamic> d) => SessionInfoData(
@@ -94,6 +96,7 @@ class SessionInfoData {
         version: d['version'] as String? ?? '',
         language: d['language'] as String? ?? '',
         theme: d['theme'] as String? ?? '',
+        title: d['title'] as String? ?? '',
       );
 }
 

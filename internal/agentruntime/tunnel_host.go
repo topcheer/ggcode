@@ -253,6 +253,10 @@ func (h *TunnelHost) AttachOnlineBroker(broker *tunnel.Broker) {
 // so prepareOnlineShare can include it in session_info and active_session.
 func (h *TunnelHost) SetSessionInfo(info tunnel.SessionInfoData) {
 	h.mu.Lock()
+	// Auto-populate Title from session if caller didn't provide one
+	if info.Title == "" && h.session != nil {
+		info.Title = h.session.Title
+	}
 	h.sessionInfo = info
 	h.mu.Unlock()
 }

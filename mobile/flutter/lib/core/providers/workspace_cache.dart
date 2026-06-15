@@ -2229,6 +2229,10 @@ String? _workspaceParentPath(String workspacePath) {
 }
 
 String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
+  // Prefer host-provided session title (first user message summary)
+  if (sessionInfo?.title.isNotEmpty == true) {
+    return sessionInfo!.title;
+  }
   final workspace = sessionInfo?.workspace ?? '';
   final label = workspace.isNotEmpty ? workspace.split('/').last : 'Session';
   final shortId = sessionId.length > 8 ? sessionId.substring(0, 8) : sessionId;
