@@ -320,6 +320,11 @@ func (h *TunnelHost) PrepareOnlineShare(broker *tunnel.Broker) {
 		broker.SendSnapshotFromProvider()
 	}
 
+	// 6.5. Re-send session info AFTER replay — replayed events may contain
+	// an old session_info (without Title) that overwrites the correct one.
+	// Re-sending ensures the last session_info mobile receives has the Title.
+	broker.SendSessionInfo(info)
+
 	// 7. Announce active session LAST — after replay so mobile has all history
 	// before processing the active_session handshake.
 	broker.AnnounceActiveSession(ses.ID)
