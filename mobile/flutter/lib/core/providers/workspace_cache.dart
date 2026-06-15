@@ -1158,6 +1158,48 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   // Used by both foreground and background connections to ensure
   // every message is persisted to the correct session immediately.
 
+  /// Replace all messages in a session's cached snapshot.
+  /// Called when demoting a foreground connection to background,
+  /// to ensure the snapshot has the complete conversation before
+  /// background incremental events start arriving.
+  void replaceSessionMessages({
+    required String sessionId,
+    required List<ChatMessage> messages,
+  }) {
+    if (sessionId.isEmpty) return;
+
+    // Find snapshot key by sessionId (same pattern as appendSessionEvent)
+    String? snapshotKey;
+    for (final entry in state.sessions.entries) {
+      if (entry.value.sessionId == sessionId) {
+        snapshotKey = entry.key;
+        break;
+      }
+    }
+    if (snapshotKey == null) return;
+
+    final existing = state.snapshots[snapshotKey] ?? CachedSessionSnapshot(
+      messages: [],
+      subagents: {},
+      sessionInfo: null,
+    );
+    final updated = CachedSessionSnapshot(
+      messages: List.from(messages),
+      subagents: existing.subagents,
+      sessionInfo: existing.sessionInfo,
+      agentStatus: existing.agentStatus,
+      agentStatusMessage: existing.agentStatusMessage,
+      lastEventId: existing.lastEventId,
+      authorityEpoch: existing.authorityEpoch,
+    );
+
+    final newSnapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots);
+    newSnapshots[snapshotKey] = updated;
+    state = state.copyWith(snapshots: newSnapshots);
+    _dirtySnapshots.add(snapshotKey);
+    _scheduleFlush();
+  }
+
   /// Append a message event to a session's cached snapshot.
   /// Works for streaming text (merge), new messages (append),
   /// and control events (status update).

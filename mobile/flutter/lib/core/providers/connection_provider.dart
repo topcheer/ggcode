@@ -1923,6 +1923,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (service == null) return;
     final url = _liveUrl;
     final sessionId = _sessionId;
+    // Sync current chat messages to snapshot before demoting.
+    // Foreground updates chatProvider (in-memory) but doesn't call
+    // appendSessionEvent. Without this sync, the snapshot is incomplete,
+    // causing empty bubbles when the session is promoted back.
+    if (sessionId.isNotEmpty) {
+      final currentMessages = ref.read(chatProvider);
+      if (currentMessages.isNotEmpty) {
+        ref.read(workspaceCacheProvider.notifier).replaceSessionMessages(
+          sessionId: sessionId,
+          messages: currentMessages,
+        );
+      }
+    }
     _cancelServiceSubscriptions();
     if (url.isNotEmpty && sessionId.isNotEmpty) {
       final bgConn = ref.read(backgroundConnectionProvider.notifier);
