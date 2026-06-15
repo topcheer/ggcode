@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1471,6 +1473,20 @@ class _ConnectionStatusIcon extends StatelessWidget {
 
 
 /// A collapsible workspace group with its sessions underneath.
+
+/// Derive display name from workspaceKey for session titles.
+String _displayNameFromKeyForSession(String key, String fallback) {
+  if (fallback.isNotEmpty) return fallback;
+  try {
+    final padded = key + '=' * (4 - key.length % 4);
+    final decoded = utf8.decode(base64Url.decode(padded));
+    final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
+    return parts.isNotEmpty ? parts.last : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 class _WorkspaceGroup extends StatefulWidget {
   final WorkspaceRecord workspace;
   final List<CachedSessionRecord> sessions;
@@ -1644,9 +1660,16 @@ class _WorkspaceGroupState extends State<_WorkspaceGroup> {
                       ],
                     ),
                     title: Text(
-                      session.title.isNotEmpty
-                          ? session.title
-                          : 'Session ${session.sessionId.length > 8 ? session.sessionId.substring(0, 8) : session.sessionId}',
+                      () {
+                        // Show workspace name + date, not host-provided title
+                        // (which can be stale/cross-contaminated).
+                        final wsName = _displayNameFromKeyForSession(
+                            widget.workspace.key, widget.workspace.displayName);
+                        final date = session.sessionId.length >= 8
+                            ? session.sessionId.substring(0, 8)
+                            : session.sessionId;
+                        return '$wsName · $date';
+                      }(),
                       style: TextStyle(
                         color: AppColors.textPrimary,
                         fontSize: 13,

@@ -1796,7 +1796,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       }
     }
     items.sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
-    debugPrint('[cache] sortedWorkspaces: count=${items.length} names=${items.map((w) => w.displayName).toList()}');
+    debugPrint('[cache] sortedWorkspaces: count=${items.length} items=${items.map((w) => "key=${w.key.substring(0, w.key.length > 30 ? 30 : w.key.length)} name=${w.displayName}").toList()}');
     return items;
   }
 
@@ -1809,10 +1809,12 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   List<CachedSessionRecord> sessionsForWorkspace(String workspaceKey) {
     // Read from SQLite directly — same reason as sortedWorkspaces
     if (_store != null) {
-      final items = _store!.loadSessions()
+      final allSessions = _store!.loadSessions();
+      final items = allSessions
           .where((record) => record.workspaceKey == workspaceKey)
           .toList()
         ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+      debugPrint('[cache] sessionsForWorkspace: key=$workspaceKey matchCount=${items.length} allSessions=${allSessions.map((s) => "wk=${s.workspaceKey.substring(0, s.workspaceKey.length > 30 ? 30 : s.workspaceKey.length)} sid=${s.sessionId}").toList()}');
       return items;
     }
     final items = state.sessions.values
