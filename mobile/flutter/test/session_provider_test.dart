@@ -2581,6 +2581,12 @@ void main() {
     ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-room',
+      authorityEpoch: 2,
+      type: 'active_session',
+      data: {'session_id': 'sess-room', 'workspace_path': '/tmp/demo'},
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-room',
       eventId: 'ev-000000121',
       type: 'system_message',
       data: {'text': 'mobile connected'},
@@ -2886,6 +2892,13 @@ void main() {
     // _clearUiProjection inside _shouldApplyEvent. With the fix,
     // _hasAuthoritativeProjection is re-set to true, preventing
     // _restoreSessionProjectionIfAvailable from reseeding cursor.
+    // active_session must precede events from a new session
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-new',
+      authorityEpoch: 2,
+      type: 'active_session',
+      data: {'session_id': 'sess-new', 'workspace_path': '/tmp/demo'},
+    ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-new',
       eventId: 'ev-000000001',

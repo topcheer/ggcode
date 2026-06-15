@@ -1395,34 +1395,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     final eventId = msg.eventId;
     final sessionId = msg.sessionId ?? _sessionId;
-    // If this event belongs to a DIFFERENT session than the one we're
-    // currently displaying, silently ignore it. Do NOT clear the UI.
-    // Messages should never be cleared by incoming events — only by
-    // explicit session switch via loadCachedMessages.
+    // Events from a different session are ALWAYS dropped.
+    // Session switching is handled exclusively by active_session messages.
+    // This prevents background service events from hijacking the active session.
     if (sessionId.isNotEmpty &&
         _sessionId.isNotEmpty &&
         sessionId != _sessionId) {
-      // If active_session already set a higher authority epoch, this is
-      // a stale event from an old session. Drop it silently.
-      final msgEpoch = msg.authorityEpoch ?? 0;
-      if (msgEpoch > 0 && msgEpoch < _relayAuthorityEpoch) {
-        return false;
-      }
-      // Session changed via event stream (not active_session).
-      // Update cursor + dedup, but DON'T clear messages.
-      debugPrint('[connection] session switch in _shouldApplyEvent: $_sessionId -> $sessionId');
-      final previousSessionId = _sessionId;
-      _recentEventIds.clear();
-      _recentEventSet.clear();
-      _lastAppliedEventId = '';
-      _lastDurableEventId = '';
-      _resumeOverrideEventId = '';
-      _hasAuthoritativeProjection = true;
-      _sessionId = sessionId;
-      unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
-          sessionId,
-          previousSessionId: previousSessionId,
-          sessionInfo: ref.read(sessionInfoProvider)));
+      return false;
     }
     if (eventId == null || eventId.isEmpty) {
       return true;
