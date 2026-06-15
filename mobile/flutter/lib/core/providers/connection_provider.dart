@@ -1756,6 +1756,12 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           // Update stored URL with renew_token so reconnection uses
           // the renewable URL instead of the short-lived auth_ticket URL.
           final newUrl = localService.descriptor.runtimeUrl();
+          // Verify the renew_token belongs to the same room as _currentConnection
+          final newDesc = ShareConnectionDescriptor.parse(newUrl);
+          if (_currentConnection != null && newDesc.roomId != _currentConnection!.roomId) {
+            debugPrint('[connection] metadata: renew_token room=${newDesc.roomId} != stored room=${_currentConnection!.roomId}, skipping update');
+            return;
+          }
           _liveUrl = newUrl;
           if (_currentConnection != null) {
             // Persist workspacePath + sessionId for restore matching.

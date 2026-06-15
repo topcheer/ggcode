@@ -542,8 +542,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             final stored = ConnectionStore.instance.findByRoomId(desc.roomId);
                             if (stored != null && stored.url.contains('renew_token') &&
                                 !connUrl.contains('renew_token')) {
-                              debugPrint('[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
-                              connUrl = stored.url;
+                              // Verify the renew_token actually belongs to this room
+                              final storedDesc = ShareConnectionDescriptor.parse(stored.url);
+                              if (storedDesc.roomId == desc.roomId) {
+                                debugPrint('[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
+                                connUrl = stored.url;
+                              } else {
+                                debugPrint('[chat] onSessionTap: renew_token room mismatch ${storedDesc.roomId} != ${desc.roomId}, ignoring');
+                              }
                             }
                           } catch (e) {
                             debugPrint('[chat] onSessionTap: URL lookup failed: $e');
