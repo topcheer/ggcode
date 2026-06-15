@@ -2624,6 +2624,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-old',
       generation: 1,
+      authorityEpoch: 1,
       type: 'active_session',
       data: {'session_id': 'sess-old', 'workspace_path': '/tmp/old'},
     ));
@@ -2640,6 +2641,7 @@ void main() {
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-new',
       generation: 2,
+      authorityEpoch: 2,
       type: 'active_session',
       data: {'session_id': 'sess-new'},
     ));
@@ -2650,6 +2652,7 @@ void main() {
       sessionId: 'sess-old',
       eventId: 'ev-000000002',
       generation: 1,
+      authorityEpoch: 1,
       type: 'system_message',
       data: {'text': 'stale replay'},
     ));
@@ -2657,6 +2660,7 @@ void main() {
       sessionId: 'sess-new',
       eventId: 'ev-000000003',
       generation: 2,
+      authorityEpoch: 2,
       type: 'system_message',
       data: {'text': 'fresh live'},
     ));

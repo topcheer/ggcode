@@ -1390,22 +1390,34 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     final eventId = msg.eventId;
     final sessionId = msg.sessionId ?? _sessionId;
+    // If this event belongs to a DIFFERENT session than the one we're
+    // currently displaying, silently ignore it. Do NOT clear the UI.
+    // Messages should never be cleared by incoming events — only by
+    // explicit session switch via loadCachedMessages.
     if (sessionId.isNotEmpty &&
         _sessionId.isNotEmpty &&
         sessionId != _sessionId) {
+      // If active_session already set a higher authority epoch, this is
+      // a stale event from an old session. Drop it silently.
+      final msgEpoch = msg.authorityEpoch ?? 0;
+      if (msgEpoch > 0 && msgEpoch < _relayAuthorityEpoch) {
+        return false;
+      }
+      // Session changed via event stream (not active_session).
+      // Update cursor + dedup, but DON'T clear messages.
+      debugPrint('[connection] session switch in _shouldApplyEvent: $_sessionId -> $sessionId');
       final previousSessionId = _sessionId;
-      _clearUiProjection();
-      _hasAuthoritativeProjection = true;
       _recentEventIds.clear();
       _recentEventSet.clear();
       _lastAppliedEventId = '';
+      _lastDurableEventId = '';
+      _resumeOverrideEventId = '';
+      _hasAuthoritativeProjection = true;
       _sessionId = sessionId;
       unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
           sessionId,
           previousSessionId: previousSessionId,
           sessionInfo: ref.read(sessionInfoProvider)));
-    } else if (sessionId.isNotEmpty) {
-      _sessionId = sessionId;
     }
     if (eventId == null || eventId.isEmpty) {
       return true;
@@ -1974,15 +1986,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         '[connection] loaded ${snapshot.messages.length} cached messages for session=$sessionId',
       );
     } else {
-      // No cached snapshot — clear chat and request replay from relay.
-      ref.read(chatProvider.notifier).clearMessages();
+      // No cached snapshot — request replay from relay to populate chat.
+      // Do NOT clear messages — they should never be cleared.
       debugPrint('[connection] no snapshot for session=$sessionId, requesting replay');
-      // Send resume_hello to get replay events from relay.
-      svc.sendResumeHello(
-        clientId: _clientId,
-        sessionId: sessionId,
-        lastEventId: lastEvent.isEmpty ? null : lastEvent,
-      );
+      try {
+        svc.sendResumeHello(
+          clientId: _clientId,
+          sessionId: sessionId,
+          lastEventId: lastEvent.isEmpty ? null : lastEvent,
+        );
+      } catch (e) {
+        debugPrint('[connection] sendResumeHello failed: $e');
+      }
     }
 
     // Session is already connected and synced — mark ready immediately.
