@@ -2240,8 +2240,8 @@ String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
 }
 
 /// Resolve session title: non-empty incoming title always wins.
-/// If incoming title is empty, preserve existing non-fallback title.
-/// If no existing title, generate fallback (workspace · shortId).
+/// If incoming title is empty, use fallback (workspace · shortId).
+/// This is called on every session_info — host is authoritative.
 String _resolveTitle(
   proto.SessionInfoData? sessionInfo,
   String sessionId,
@@ -2251,10 +2251,6 @@ String _resolveTitle(
   if (sessionInfo?.title.isNotEmpty == true) {
     return sessionInfo!.title;
   }
-  // Empty incoming title: keep existing if it's not a fallback
-  if (existingTitle != null && existingTitle.isNotEmpty) {
-    return existingTitle;
-  }
-  // No existing: generate fallback
+  // Empty incoming: generate fallback
   return _sessionTitle(sessionInfo, sessionId);
 }

@@ -440,6 +440,12 @@ func (b *Broker) resetSession() string {
 // ─── Session lifecycle ───
 
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
+	// Don't let an empty Title overwrite a non-empty cached Title.
+	// Replay events contain old session_info without Title; we must not
+	// let them clobber the correct Title set by PrepareOnlineShare.
+	if data.Title == "" && b.cachedSessionInfo.Title != "" {
+		data.Title = b.cachedSessionInfo.Title
+	}
 	b.cachedSessionInfo = data
 	b.enqueue(EventSessionInfo, data)
 }
