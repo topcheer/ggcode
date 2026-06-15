@@ -1666,13 +1666,18 @@ func (b *ChatBridge) CurrentAskUserRequest(requestID string) tool.AskUserRequest
 }
 
 // Messages returns the current conversation messages for snapshot/tunnel use.
+// When agent is nil (e.g. after loading a historical session but before
+// sending any message), falls back to the session's persisted messages.
 func (b *ChatBridge) Messages() []provider.Message {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.agent == nil {
-		return nil
+	if b.agent != nil {
+		return b.agent.Messages()
 	}
-	return b.agent.Messages()
+	if b.currentSes != nil {
+		return b.currentSes.Messages
+	}
+	return nil
 }
 
 // SetApprovalOverride persists a tool-level permission override.
