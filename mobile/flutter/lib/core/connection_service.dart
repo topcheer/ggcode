@@ -156,9 +156,31 @@ class ShareConnectionDescriptor {
   factory ShareConnectionDescriptor.parse(String raw) {
     final normalized = normalizeTunnelUrl(raw);
     final uri = Uri.parse(normalized);
+    // room_id may be in query params (renew_token URL) or inside
+    // auth_ticket/renew_token JWT payload (auth_ticket URL).
+    var roomId = uri.queryParameters['room_id'] ?? '';
+    if (roomId.isEmpty) {
+      // Try extracting from auth_ticket or renew_token JWT payload
+      final ticket = uri.queryParameters['auth_ticket'] ??
+          uri.queryParameters['renew_token'] ??
+          '';
+      if (ticket.isNotEmpty) {
+        try {
+          final parts = ticket.split('.');
+          if (parts.isNotEmpty) {
+            var payload = parts[0];
+            payload += '=' * (4 - payload.length % 4);
+            final decoded = jsonDecode(utf8.decode(base64Url.decode(payload)));
+            if (decoded is Map && decoded['room_id'] != null) {
+              roomId = decoded['room_id'] as String;
+            }
+          }
+        } catch (_) {}
+      }
+    }
     return ShareConnectionDescriptor(
       relayUrl: '${uri.scheme}://${uri.authority}${uri.path}',
-      roomId: uri.queryParameters['room_id'] ?? '',
+      roomId: roomId,
       authTicket: uri.queryParameters['auth_ticket'] ?? '',
       renewToken: uri.queryParameters['renew_token'] ?? '',
       serverPublicKey: uri.queryParameters['kx_pub'] ?? '',

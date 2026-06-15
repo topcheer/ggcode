@@ -272,6 +272,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   Future<void> connect(String url,
       {bool clearState = true, bool force = false}) async {
+    debugPrint('[connection] connect() called url=$url clearState=$clearState');
     url = normalizeTunnelUrl(url);
     final activeUrl = normalizeTunnelUrl(state.url ?? '');
     if (!force &&
@@ -299,9 +300,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
   Future<void> _connectImpl(String url, {required bool clearState}) async {
     final generation = _nextConnectionGeneration();
+    debugPrint('[connection] _connectImpl gen=$generation url=$url');
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    if (!_isConnectionGenerationCurrent(generation)) return;
+    if (!_isConnectionGenerationCurrent(generation)) {
+      debugPrint('[connection] _connectImpl gen=$generation STALE — aborted');
+      return;
+    }
     cache.setPendingUrl(url);
     if (!_isConnectionGenerationCurrent(generation)) return;
 
