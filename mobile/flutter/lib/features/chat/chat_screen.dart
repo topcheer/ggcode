@@ -8,6 +8,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/providers/connection_store.dart';
+import '../../core/connection_service.dart';
 import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
@@ -532,17 +534,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         // foreground service to background — no need to
                         // manually demote/register here.
                         if (session.url.isNotEmpty) {
+                          // Prefer renew_token URL from ConnectionStore.
+                          // session.url from SQLite may have expired auth_ticket.
+                          var connUrl = session.url;
+                          try {
+                            final desc = ShareConnectionDescriptor.parse(connUrl);
+                            final stored = ConnectionStore.instance.findByRoomId(desc.roomId);
+                            if (stored != null && stored.url.contains('renew_token') &&
+                                !connUrl.contains('renew_token')) {
+                              debugPrint('[chat] onSessionTap: using renew_token URL for room=${desc.roomId}');
+                              connUrl = stored.url;
+                            }
+                          } catch (e) {
+                            debugPrint('[chat] onSessionTap: URL lookup failed: $e');
+                          }
                           final bgService =
                               bgConn.adoptService(session.sessionId);
                           if (bgService != null) {
                             connNotifier.adoptService(
                               bgService,
                               session.sessionId,
-                              session.url,
+                              connUrl,
                             );
                           } else {
                             // No background service — fresh connect
-                            await connNotifier.connect(session.url);
+                            await connNotifier.connect(connUrl);
                           }
                         } else {
                           // No URL — just show cached snapshot
