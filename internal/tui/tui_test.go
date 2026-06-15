@@ -81,10 +81,21 @@ func TestSlashCommandsOpenInspectorPanels(t *testing.T) {
 }
 
 func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
-	store, err := session.NewJSONLStore(t.TempDir())
+	dir := t.TempDir()
+	store, err := session.NewJSONLStore(dir)
 	if err != nil {
 		t.Fatalf("new session store: %v", err)
 	}
+	// Pre-clean to avoid rare "directory not empty" race on Linux CI where
+	// the filesystem hasn't fully flushed rename operations from Save().
+	t.Cleanup(func() {
+		for i := 0; i < 5; i++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 	ses := &session.Session{
 		ID:        "sess-1",
 		Title:     "Saved chat",
