@@ -333,6 +333,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     } else if (conn != null) {
       // Reconnecting to existing room — mark active.
       await _connectionStore.setActive(conn.id);
+      // If the StoredConnection has a URL with renew_token, prefer it over
+      // the incoming URL (which may have an expired auth_ticket from
+      // workspace_cache SQLite).
+      if (!clearState && conn.url.contains('renew_token')) {
+        debugPrint('[connection] using ConnectionStore URL with renew_token for room=${descriptor.roomId}');
+        url = conn.url;
+        descriptor = ShareConnectionDescriptor.parse(url);
+      }
     }
     _currentConnection = conn;
 
