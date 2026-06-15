@@ -1575,18 +1575,20 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       );
     final workspace = state.workspaces[workspaceKey];
     final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
-    final displayName = _workspaceDisplayName(sessionInfo);
+    // ALWAYS derive displayName from workspaceKey — it's the only stable
+    // source. sessionInfo.workspace can be stale, missing, or cross-
+    // contaminated. workspaceKey is base64(path), always correct.
+    final displayName = _displayNameFromKey(workspaceKey);
     final parentPath = _workspaceParentPath(workspacePath);
     if (workspace != null) {
       workspaces[workspaceKey] = workspace.copyWith(
-        displayName:
-            displayName.isNotEmpty ? displayName : workspace.displayName,
+        displayName: displayName.isNotEmpty ? displayName : workspace.displayName,
         parentPath: parentPath ?? workspace.parentPath,
         lastSessionId: sessionId,
         lastOpenedAt: now,
       );
-    } else if (displayName.isNotEmpty) {
-      // Workspace doesn't exist yet — create it now that we have sessionInfo.
+    } else {
+      // New workspace — create from workspaceKey.
       _pendingWorkspaceUrl = null;
       workspaces[workspaceKey] = WorkspaceRecord(
         key: workspaceKey,
