@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer';
 
 import 'package:flutter/foundation.dart';
@@ -230,7 +231,29 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       {bool clearState = true}) async {
     final cache = ref.read(workspaceCacheProvider.notifier);
     await cache.initialize();
-    final url = cache.urlForWorkspace(workspaceKey);
+    // Prefer URL from ConnectionStore (has renew_token) over workspace_cache
+    // (may have expired auth_ticket). ConnectionStore is updated by
+    // metadataStream listener whenever relay issues a new renew_token.
+    var url = cache.urlForWorkspace(workspaceKey);
+    try {
+      final store = ConnectionStore.instance;
+      await store.load();
+      final conn = store.all
+          .where((c) =>
+              c.workspacePath != null &&
+              c.workspacePath!.isNotEmpty &&
+              base64Url.encode(utf8.encode(c.workspacePath!)).replaceAll('=', '') == workspaceKey &&
+              !c.permanentlyFailed)
+          .toList()
+        ..sort((a, b) => (b.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+      if (conn.isNotEmpty && conn.first.url.isNotEmpty) {
+        url = conn.first.url;
+        debugPrint('[connection] connectWorkspace: using ConnectionStore URL for workspace=$workspaceKey');
+      }
+    } catch (e) {
+      debugPrint('[connection] connectWorkspace: ConnectionStore lookup failed: $e');
+    }
     if (url == null || url.isEmpty) return;
     _restoreCachedAgentStatus(workspaceKey: workspaceKey);
     await connect(url, clearState: clearState);
