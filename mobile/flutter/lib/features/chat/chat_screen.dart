@@ -534,6 +534,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         // foreground service to background — no need to
                         // manually demote/register here.
                         if (session.url.isNotEmpty) {
+                          // Update selection immediately so displayedMessagesProvider
+                          // and header update right away, even before connection establishes.
+                          await ref
+                              .read(workspaceCacheProvider.notifier)
+                              .selectSession(session.sessionId);
                           // Prefer renew_token URL from ConnectionStore.
                           // session.url from SQLite may have expired auth_ticket.
                           var connUrl = session.url;
