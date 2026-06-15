@@ -1,40 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/l10n/app_localizations.dart';
-
+import '../../core/providers/connection_store.dart';
 import '../../core/providers/session_provider.dart';
 import '../../core/theme/app_theme.dart';
-
-class _SimpleNotifier<T> extends Notifier<T> {
-  late T _value;
-  late T Function() _init;
-
-  @override
-  T build() {
-    _value = _init();
-    return _value;
-  }
-
-  void set(T v) {
-    _value = v;
-    state = v;
-  }
-}
-
-NotifierProvider<_SimpleNotifier<T>, T> _simpleProvider<T>(T Function() init) {
-  return NotifierProvider<_SimpleNotifier<T>, T>(
-    () {
-      final n = _SimpleNotifier<T>();
-      n._init = init;
-      return n;
-    },
-  );
-}
-
-final _historyProvider = _simpleProvider<List<String>>(() => []);
 
 class ConnectScreen extends ConsumerStatefulWidget {
   const ConnectScreen({super.key});
@@ -46,33 +17,31 @@ class ConnectScreen extends ConsumerStatefulWidget {
 class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _urlController = TextEditingController();
   bool _showScanner = false;
+  List<StoredConnection> _connections = [];
 
   @override
   void initState() {
     super.initState();
-    _loadHistory();
+    _loadConnections();
   }
 
-  Future<void> _loadHistory() async {
-    final history = await ConnectionNotifier.loadHistory();
-    ref.read(_historyProvider.notifier).set(history);
-  }
-
-  Future<void> _saveToHistory(String url) async {
-    final prefs = await SharedPreferences.getInstance();
-    final history = prefs.getStringList('ggcode_history') ?? [];
-    if (!history.contains(url)) {
-      history.insert(0, url);
-      if (history.length > 10) history.removeLast();
-      await prefs.setStringList('ggcode_history', history);
-      ref.read(_historyProvider.notifier).set(history);
-    }
+  Future<void> _loadConnections() async {
+    final store = ConnectionStore.instance;
+    await store.load();
+    if (!mounted) return;
+    setState(() {
+      // Show non-failed connections first, sorted by most recent
+      _connections = store.all
+          .where((c) => !c.permanentlyFailed)
+          .toList()
+        ..sort((a, b) => (b.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.lastConnectedAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    });
   }
 
   void _connect() {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
-    _saveToHistory(url);
     ref.read(connectionProvider.notifier).connect(url);
   }
 
@@ -83,8 +52,11 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
       _showScanner = false;
       _urlController.text = url;
     });
-    _saveToHistory(url);
     ref.read(connectionProvider.notifier).connect(url);
+  }
+
+  void _reconnect(StoredConnection conn) {
+    ref.read(connectionProvider.notifier).connect(conn.url);
   }
 
   @override
@@ -155,10 +127,18 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     }
   }
 
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${diff.inDays}d ago';
+  }
+
   @override
   Widget build(BuildContext context) {
     final connState = ref.watch(connectionProvider);
-    final history = ref.watch(_historyProvider);
     final isConnecting = connState.status == ConnectionStatus.connecting;
     final errorMsg = connState.error;
     final showProgress = isConnecting || connState.relaySync != null;
@@ -224,48 +204,58 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo area
-              Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [AppColors.surfaceElevated, AppColors.surface],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: AppColors.borderStrong),
-                  boxShadow: AppShadows.panel,
+              // Logo area — centered
+              Center(
+                child: Column(
+                  children: [
+                    Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            AppColors.surfaceElevated,
+                            AppColors.surface
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: AppColors.borderStrong),
+                        boxShadow: AppShadows.panel,
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: Image.asset(
+                          'assets/icon.png',
+                          width: 72,
+                          height: 72,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      t('app.title'),
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      t('connect.scan_hint'),
+                      style: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 14),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: Image.asset(
-                    'assets/icon.png',
-                    width: 72,
-                    height: 72,
-                    fit: BoxFit.contain,
-                  ),
-                ),
-              ),
-              SizedBox(height: 16),
-              Text(
-                t('app.title'),
-                style: TextStyle(
-                  color: AppColors.textPrimary,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 8),
-              Text(
-                t('connect.scan_hint'),
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
-                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
 
@@ -431,42 +421,153 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ),
               ],
 
-              // History
-              if (history.isNotEmpty) ...[
-                SizedBox(height: 24),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    t('connect.recent_connections'),
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+              // Recent workspaces — workspace-organized instead of raw URLs
+              if (_connections.isNotEmpty) ...[
+                SizedBox(height: 32),
+                Text(
+                  'Recent Workspaces',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 SizedBox(height: 8),
-                ...history.map((url) => ListTile(
-                      shape: RoundedRectangleBorder(
+                ...(_connections.map((conn) {
+                  // Determine display info
+                  final name = conn.displayName?.isNotEmpty == true
+                      ? conn.displayName!
+                      : (conn.workspacePath?.isNotEmpty == true
+                          ? conn.workspacePath!.split('/').last
+                          : 'Unknown');
+                  final subtitle = [
+                    if (conn.sessionId != null &&
+                        conn.sessionId!.isNotEmpty)
+                      conn.sessionId!.substring(0,
+                          conn.sessionId!.length > 20
+                              ? 20
+                              : conn.sessionId!.length),
+                    if (conn.providerName != null &&
+                        conn.providerName!.isNotEmpty)
+                      conn.providerName,
+                  ].join(' · ');
+                  final timeStr = _formatTime(conn.lastConnectedAt);
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Material(
+                      color: AppColors.surface.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(AppRadii.sm),
+                      child: InkWell(
                         borderRadius: BorderRadius.circular(AppRadii.sm),
+                        onTap: isConnecting ? null : () => _reconnect(conn),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          child: Row(
+                            children: [
+                              // Workspace icon
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: AppColors.accent.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.folder_outlined,
+                                  color: AppColors.accent,
+                                  size: 20,
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              // Workspace name + subtitle
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: TextStyle(
+                                        color: AppColors.textPrimary,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (subtitle.isNotEmpty) ...[
+                                      SizedBox(height: 2),
+                                      Text(
+                                        subtitle,
+                                        style: TextStyle(
+                                          color: AppColors.textMuted,
+                                          fontSize: 11,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              // Status + time
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  if (conn.alive)
+                                    Container(
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.success
+                                            .withValues(alpha: 0.15),
+                                        borderRadius:
+                                            BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        'LIVE',
+                                        style: TextStyle(
+                                          color: AppColors.success,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    Text(
+                                      timeStr,
+                                      style: TextStyle(
+                                        color: AppColors.textMuted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  if (conn.alive && timeStr.isNotEmpty)
+                                    SizedBox(height: 2),
+                                  if (conn.alive && timeStr.isNotEmpty)
+                                    Text(
+                                      timeStr,
+                                      style: TextStyle(
+                                        color: AppColors.textMuted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              SizedBox(width: 4),
+                              Icon(
+                                Icons.chevron_right,
+                                color: AppColors.textMuted,
+                                size: 20,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      tileColor: AppColors.surface.withValues(alpha: 0.7),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                      dense: true,
-                      leading: Icon(Icons.history,
-                          color: AppColors.textMuted, size: 18),
-                      title: Text(
-                        url,
-                        style: TextStyle(
-                            color: AppColors.textSecondary, fontSize: 12),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () {
-                        _urlController.text = url;
-                        setState(() {});
-                      },
-                    )),
+                    ),
+                  );
+                })),
               ],
             ],
           ),
