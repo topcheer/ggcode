@@ -13,6 +13,19 @@ import 'approval_sheet.dart';
 import 'input_bar.dart';
 import '../status/status_bar.dart';
 
+/// Decode workspace display name from base64url workspaceKey.
+/// Always uses the key as source of truth — never host-provided title.
+String _decodeWorkspaceName(String key) {
+  try {
+    final padded = key + '=' * (4 - key.length % 4);
+    final decoded = utf8.decode(base64Url.decode(padded));
+    final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
+    return parts.isNotEmpty ? parts.last : decoded;
+  } catch (_) {
+    return key;
+  }
+}
+
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
 
@@ -178,9 +191,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           children: [
                             Flexible(
                               child: Text(
-                                currentWorkspace?.displayName ??
-                                    info?.workspace.split('/').last ??
-                                    'GGCode',
+                                currentWorkspace?.key != null
+                                    ? _decodeWorkspaceName(currentWorkspace!.key)
+                                    : info?.workspace.split('/').last ?? 'GGCode',
                                 style: const TextStyle(fontSize: 16),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -192,7 +205,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         ),
                         if (currentSession != null)
                           Text(
-                            currentSession.title,
+                            () {
+                              final wsName = currentSession.workspaceKey.isNotEmpty
+                                  ? _decodeWorkspaceName(currentSession.workspaceKey)
+                                  : '';
+                              final date = currentSession.sessionId.length >= 8
+                                  ? currentSession.sessionId.substring(0, 8)
+                                  : currentSession.sessionId;
+                              return wsName.isNotEmpty ? '$wsName · $date' : date;
+                            }(),
                             style: TextStyle(
                               fontSize: 11,
                               color: AppColors.textMuted,
