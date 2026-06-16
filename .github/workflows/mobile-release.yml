@@ -234,13 +234,16 @@ jobs:
           </plist>
           PLIST
 
-          # Build archive only (no export yet)
-          flutter build ios --release --no-codesign
+          # Build archive (not just build) so we get .xcarchive
+          flutter build ipa --release --no-codesign
 
           # Patch xcarchive App.framework MinimumOSVersion BEFORE export.
-          # Flutter generates App.framework with empty MinimumOSVersion.
-          # Patching before export preserves code signing in the final IPA.
+          # flutter build ipa --no-codesign creates the archive but skips export.
           ARCHIVE_PATH=$(find build/ios/archive -maxdepth 1 -name "*.xcarchive" | head -1)
+          if [ -z "$ARCHIVE_PATH" ]; then
+            # Try alternative location
+            ARCHIVE_PATH=$(find /Users/runner/Library/Developer/Xcode/Archives -maxdepth 3 -name "*.xcarchive" 2>/dev/null | head -1)
+          fi
           if [ -n "$ARCHIVE_PATH" ]; then
             echo "Patching xcarchive: $ARCHIVE_PATH"
             for plist in $(find "$ARCHIVE_PATH/Products/Applications/Runner.app/Frameworks" -name "Info.plist" 2>/dev/null); do
@@ -251,10 +254,12 @@ jobs:
               fi
             done
           else
-            echo "WARNING: No xcarchive found"
+            echo "WARNING: No xcarchive found, skipping patch"
           fi
 
-          # Now export the patched archive to IPA
+          # Export the patched archive to IPA with code signing
+          rm -rf build/ios/ipa
+          mkdir -p build/ios/ipa
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist ios/ExportOptions.plist \
