@@ -192,6 +192,9 @@ jobs:
           grep '^version:' pubspec.yaml
           # Version numbers are synced by pre-push hook; no CI bump
 
+      - name: Clean Flutter build cache
+        run: flutter clean
+
       - name: Install iOS dependencies
         run: |
           cd ios
