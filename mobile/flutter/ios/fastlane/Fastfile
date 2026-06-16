@@ -358,18 +358,24 @@ platform :ios do
     UI.success("Build associated")
 
     # 3. Set What's New (required by App Store)
+    whats_new_text = "Bug fixes and stability improvements."
     begin
       localizations = ios_version.get_app_store_version_localizations
       en_loc = localizations.find { |l| l.locale == "en-US" }
-      whats_new_text = "Bug fixes and stability improvements."
       if en_loc
         en_loc.update(attributes: { whatsNew: whats_new_text })
       else
         ios_version.create_app_store_version_localization(attributes: { locale: "en-US", whatsNew: whats_new_text })
       end
-      UI.success("What's New set")
+      # Verify it was actually set
+      verify_locs = ios_version.get_app_store_version_localizations
+      verify_en = verify_locs.find { |l| l.locale == "en-US" }
+      if verify_en.nil? || verify_en.whats_new.nil? || verify_en.whats_new.empty?
+        UI.user_error!("What's New verification failed — value is empty after set. Aborting submission.")
+      end
+      UI.success("What's New set: '#{whats_new_text}'")
     rescue => e
-      UI.error("What's New: #{e.message}")
+      UI.user_error!("Failed to set What's New: #{e.message}. Aborting submission — App Store will reject without it.")
     end
 
     # 4. Set review notes
