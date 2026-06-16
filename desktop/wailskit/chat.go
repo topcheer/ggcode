@@ -1348,6 +1348,7 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 		}
 		if b.tunnelHost != nil {
 			b.tunnelHost.SetSessionInfo(tunnel.SessionInfoData{
+				Title:     currentSes.Title,
 				Workspace: b.workingDir,
 				Model:     model,
 				Provider:  vendorName,
@@ -1462,6 +1463,7 @@ func (b *ChatBridge) pushTunnelSessionInfo(broker *tunnel.Broker) {
 		vendorName = resolved.VendorName
 	}
 	broker.SendSessionInfo(tunnel.SessionInfoData{
+		Title:     ses.Title,
 		Workspace: b.workingDir,
 		Model:     model,
 		Provider:  vendorName,

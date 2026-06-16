@@ -188,6 +188,10 @@ class ConnectionStore {
           .map((e) => StoredConnection.fromJson(e as Map<String, dynamic>))
           .toList();
       _deduplicate();
+      // Cleanup stale connections on load — remove anything older than 6 hours
+      // and permanently failed connections. Session data (CachedSessionRecord)
+      // is NOT touched.
+      await cleanupStale();
     } catch (_) {
       _connections = [];
     }
@@ -379,6 +383,35 @@ class ConnectionStore {
   /// Remove all permanently failed connections.
   Future<void> clearFailed() async {
     _connections.removeWhere((c) => c.permanentlyFailed);
+    await save();
+  }
+
+  /// Cleanup stale connections on startup.
+  /// Removes connections older than 6 hours.
+  /// Does NOT touch session data (CachedSessionRecord) — those may be shared.
+  Future<void> cleanupStale({Duration maxAge = const Duration(hours: 6)}) async {
+    final cutoff = DateTime.now().subtract(maxAge);
+    final before = _connections.length;
+    _connections.removeWhere((c) {
+      // Keep if permanently failed (already handled by clearFailed)
+      if (c.permanentlyFailed) return false; // will be cleaned separately
+      // Remove if last connected before cutoff
+      final lastConnected = c.lastConnectedAt ?? c.createdAt;
+      return lastConnected.isBefore(cutoff);
+    });
+    // Also remove permanently failed ones while we're at it
+    _connections.removeWhere((c) => c.permanentlyFailed);
+    final removed = before - _connections.length;
+    if (removed > 0) {
+      debugPrint('[store] cleanupStale: removed $removed stale connections (${_connections.length} remaining)');
+      await save();
+    }
+  }
+
+  /// Mark a connection as permanently failed and remove it immediately.
+  Future<void> markAndRemove(String id, String reason) async {
+    debugPrint('[store] markAndRemove id=$id reason=$reason');
+    _connections.removeWhere((c) => c.id == id);
     await save();
   }
 }

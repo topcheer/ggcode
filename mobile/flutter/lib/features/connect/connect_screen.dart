@@ -139,6 +139,14 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   @override
   Widget build(BuildContext context) {
     final connState = ref.watch(connectionProvider);
+    // Reload connections list when connection status changes (connected/disconnected)
+    ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
+      if (prev?.status != next.status) {
+        _loadConnections();
+      }
+    });
+    // Watch cache for session title updates
+    ref.watch(workspaceCacheProvider);
     final isConnecting = connState.status == ConnectionStatus.connecting;
     final errorMsg = connState.error;
     final showProgress = isConnecting || connState.relaySync != null;
@@ -434,25 +442,38 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ),
                 SizedBox(height: 8),
                 ...(_connections.map((conn) {
-                  // Determine display info — derive from workspacePath, or
-                  // fallback to 'Unknown' if no info available.
-                  String name = conn.displayName?.isNotEmpty == true
-                      ? conn.displayName!
-                      : (conn.workspacePath?.isNotEmpty == true
-                          ? conn.workspacePath!.split('/').last
-                          : 'Unknown');
+                  // Check workspace cache for session title
+                  final cacheState = ref.read(workspaceCacheProvider);
+                  String sessionTitle = '';
+                  if (conn.sessionId != null && conn.sessionId!.isNotEmpty) {
+                    final session = cacheState.sessions[conn.sessionId];
+                    if (session != null && session.title.isNotEmpty) {
+                      sessionTitle = session.title;
+                    }
+                  }
+                  // Determine display info — prefer session title, then
+                  // workspace name, then 'Unknown'
+                  String name = sessionTitle.isNotEmpty
+                      ? sessionTitle
+                      : (conn.displayName?.isNotEmpty == true
+                          ? conn.displayName!
+                          : (conn.workspacePath?.isNotEmpty == true
+                              ? conn.workspacePath!.split('/').last
+                              : 'Unknown'));
                   final subtitle = [
-                    if (conn.sessionId != null &&
-                        conn.sessionId!.isNotEmpty)
-                      conn.sessionId!.substring(0,
-                          conn.sessionId!.length > 20
-                              ? 20
-                              : conn.sessionId!.length),
+                    if (sessionTitle.isEmpty &&
+                        conn.displayName?.isNotEmpty == true)
+                      conn.displayName,
                     if (conn.providerName != null &&
                         conn.providerName!.isNotEmpty)
                       conn.providerName,
                   ].join(' · ');
                   final timeStr = _formatTime(conn.lastConnectedAt);
+                  // Live status: only when session is fully ready
+                  // (WebSocket connected AND room exists AND session active).
+                  // conn.alive is a stale snapshot from last run — not reliable.
+                  final isLive = connState.sessionReady &&
+                      conn.url == connState.url;
 
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -517,7 +538,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  if (conn.alive)
+                                  if (isLive)
                                     Container(
                                       padding: EdgeInsets.symmetric(
                                           horizontal: 6, vertical: 2),
@@ -544,9 +565,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                                         fontSize: 11,
                                       ),
                                     ),
-                                  if (conn.alive && timeStr.isNotEmpty)
+                                  if (isLive && timeStr.isNotEmpty)
                                     SizedBox(height: 2),
-                                  if (conn.alive && timeStr.isNotEmpty)
+                                  if (isLive && timeStr.isNotEmpty)
                                     Text(
                                       timeStr,
                                       style: TextStyle(

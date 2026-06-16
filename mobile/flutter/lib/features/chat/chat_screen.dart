@@ -208,6 +208,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         if (currentSession != null)
                           Text(
                             () {
+                              if (currentSession.title.isNotEmpty) {
+                                return currentSession.title;
+                              }
                               final wsName = currentSession.workspaceKey.isNotEmpty
                                   ? _decodeWorkspaceName(currentSession.workspaceKey)
                                   : '';

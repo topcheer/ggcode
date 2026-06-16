@@ -707,6 +707,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           break;
         }
         final data = proto.SessionInfoData.fromJson(msg.data!);
+        debugPrint('[session_info] title="${data.title}" workspace="${data.workspace}" sessionId=${msg.sessionId} eventID=${msg.eventId}');
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
         // Sync language from desktop
@@ -1328,6 +1329,14 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _clearRelaySyncState();
     _recentEventIds.clear();
     _recentEventSet.clear();
+    // Remove the failed connection from the store immediately
+    final failedConnId = _connectionStore.all
+        .where((c) => normalizeTunnelUrl(c.url) == normalizedFailedUrl)
+        .map((c) => c.id)
+        .firstOrNull;
+    if (failedConnId != null) {
+      await _connectionStore.markAndRemove(failedConnId, error);
+    }
     final prefs = await SharedPreferences.getInstance();
     await _clearPersistedResumeState(prefs);
     await ref.read(workspaceCacheProvider.notifier).clearReconnectTarget(
@@ -1985,33 +1994,41 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _gapRecoveryScheduled = false;
     _gapRecoveryDeferred = false;
 
-    // Load cached messages into chat provider for immediate display
+    // Load cached messages into chat provider — the snapshot was being
+    // incrementally updated by background events, so it's current.
     if (snapshot != null && snapshot.messages.isNotEmpty) {
       ref.read(chatProvider.notifier).loadCachedMessages(snapshot.messages);
       debugPrint(
         '[connection] loaded ${snapshot.messages.length} cached messages for session=$sessionId',
       );
     } else {
-      // No cached snapshot — request replay from relay to populate chat.
-      // Do NOT clear messages — they should never be cleared.
-      debugPrint('[connection] no snapshot for session=$sessionId, requesting replay');
-      try {
-        svc.sendResumeHello(
-          clientId: _clientId,
-          sessionId: sessionId,
-          lastEventId: lastEvent.isEmpty ? null : lastEvent,
-        );
-      } catch (e) {
-        debugPrint('[connection] sendResumeHello failed: $e');
-      }
+      ref.read(chatProvider.notifier).clearMessages();
+      debugPrint('[connection] no snapshot for session=$sessionId, cleared chat');
     }
 
-    // Session is already connected and synced — mark ready immediately.
+    // Set cursor so only events AFTER the cached snapshot are dispatched.
+    // This prevents re-processing events that are already in the snapshot.
+    _lastAppliedEventId = lastEvent;
+    _lastDurableEventId = lastEvent;
+
+    // Request incremental replay from host for any events after our cursor.
+    // This is cheap — host only sends events we haven't seen yet.
+    try {
+      svc.sendResumeHello(
+        clientId: _clientId,
+        sessionId: sessionId,
+        lastEventId: lastEvent.isEmpty ? null : lastEvent,
+      );
+      debugPrint('[connection] adoptService: incremental replay for session=$sessionId lastEvent=$lastEvent');
+    } catch (e) {
+      debugPrint('[connection] adoptService: sendResumeHello failed: $e');
+    }
+
+    // Session was already connected in background — mark ready immediately.
     state = state.copyWith(
       status: ConnectionStatus.connected,
       url: url,
       error: null,
-      relaySync: null,
       sessionReady: true,
     );
     _bindService(svc, _connectionGeneration, url);

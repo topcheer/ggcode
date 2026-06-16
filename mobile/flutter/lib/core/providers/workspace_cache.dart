@@ -697,6 +697,31 @@ class _WorkspaceCacheSqlStore {
     }
   }
 
+  /// Delete sessions (and their snapshots) older than maxAge.
+  /// Returns the number of deleted sessions.
+  int cleanupOldSessions({Duration maxAge = const Duration(days: 7)}) {
+    final cutoff = DateTime.now().subtract(maxAge).toIso8601String();
+    // Find sessions to delete
+    final rows = _db.select(
+      'SELECT session_id FROM cache_sessions WHERE last_updated_at < ?',
+      [cutoff],
+    );
+    final ids = rows.map((r) => r['session_id'] as String).toList();
+    if (ids.isEmpty) return 0;
+    _db.execute('BEGIN IMMEDIATE');
+    try {
+      for (final id in ids) {
+        _db.execute('DELETE FROM cache_snapshots WHERE session_id = ?', [id]);
+        _db.execute('DELETE FROM cache_sessions WHERE session_id = ?', [id]);
+      }
+      _db.execute('COMMIT');
+    } catch (e) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+    return ids.length;
+  }
+
   Future<void> importLegacyPreferences(SharedPreferences prefs) async {
     if (!isEmpty) {
       return;
@@ -955,6 +980,11 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     try {
       _store ??= await _WorkspaceCacheSqlStore.open();
       if (!ref.mounted) return;
+      // Cleanup sessions older than 7 days
+      final deleted = _store!.cleanupOldSessions();
+      if (deleted > 0) {
+        debugPrint('[cache] cleanupOldSessions: removed $deleted sessions older than 7 days');
+      }
       await _store!.importLegacyPreferences(_prefs!);
       if (!ref.mounted) return;
       for (final record in _store!.loadWorkspaces()) {
@@ -1459,22 +1489,30 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     if (targetRecord == null) {
       return false;
     }
-    final updatedRecord = targetRecord.workspaceKey == workspaceKey
-        ? targetRecord
-        : targetRecord.copyWith(lastUpdatedAt: DateTime.now());
+    // If the session already belongs to a workspace, keep it there.
+    // Do NOT reassign to the active workspace — that causes cross-workspace
+    // title contamination.
+    if (targetRecord.workspaceKey.isNotEmpty &&
+        targetRecord.workspaceKey != workspaceKey) {
+      return hasTargetSnapshot;
+    }
+    final updatedRecord = CachedSessionRecord(
+      workspaceKey: workspaceKey,
+      sessionId: targetRecord.sessionId,
+      title: targetRecord.title,
+      model: targetRecord.model,
+      provider: targetRecord.provider,
+      mode: targetRecord.mode,
+      version: targetRecord.version,
+      workspacePath: targetRecord.workspacePath,
+      lastEventId: targetRecord.lastEventId,
+      authorityEpoch: targetRecord.authorityEpoch,
+      lastUpdatedAt: DateTime.now(),
+      url: targetRecord.url,
+    );
     state = state.copyWith(
       sessions: Map<String, CachedSessionRecord>.from(state.sessions)
-        ..[sessionId] = CachedSessionRecord(
-          workspaceKey: workspaceKey,
-          sessionId: updatedRecord.sessionId,
-          title: updatedRecord.title,
-          model: updatedRecord.model,
-          provider: updatedRecord.provider,
-          mode: updatedRecord.mode,
-          version: updatedRecord.version,
-          lastEventId: updatedRecord.lastEventId,
-          lastUpdatedAt: updatedRecord.lastUpdatedAt,
-        ),
+        ..[sessionId] = updatedRecord,
       selectedWorkspaceKey: workspaceKey,
       selectedSessionId: sessionId,
     );
@@ -1586,12 +1624,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
             state.selectedSessionId == lastKnownLiveSessionId);
     debugPrint('[cache] registerLiveSession: sessionId=$sessionId prevLive=$previousLiveSessionId selected=${state.selectedSessionId} lastKnown=$lastKnownLiveSessionId followLive=$selectionFollowedLive');
     final sessionKey = sessionId;
+    final existingTitle = state.sessions[sessionKey]?.title ?? '';
     final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
       ..[sessionKey] = (state.sessions[sessionKey] ??
               CachedSessionRecord(
                 workspaceKey: workspaceKey,
                 sessionId: sessionId,
-                title: _sessionTitle(sessionInfo, sessionId),
+                title: sessionInfo?.title ?? '',
                 model: sessionInfo?.model ?? '',
                 provider: sessionInfo?.provider ?? '',
                 mode: sessionInfo?.mode ?? '',
@@ -1604,7 +1643,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
           .copyWith(
         title: sessionInfo?.title.isNotEmpty == true
             ? sessionInfo!.title
-            : (state.sessions[sessionKey]?.title ?? _sessionTitle(sessionInfo, sessionId)),
+            : existingTitle,
         model: sessionInfo?.model ?? state.sessions[sessionKey]?.model,
         provider: sessionInfo?.provider ?? state.sessions[sessionKey]?.provider,
         mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
@@ -1654,6 +1693,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     );
     _dirtyWorkspaces.add(workspaceKey);
     _dirtySessions.add(sessionKey);
+    // Sync-write session to SQLite when we have a real title — don't wait
+    // for the 350ms deferred flush. sessionsForWorkspace reads SQLite
+    // directly, so without this the session list shows stale empty title.
+    if (sessionInfo?.title.isNotEmpty == true && _store != null) {
+      debugPrint('[cache] sync upsertSession: sid=$sessionId title=${sessionInfo!.title}');
+      _store!.upsertSession(sessions[sessionKey]!);
+    }
     if (selectionFollowedLive) {
       _selectionDirty = true;
     }
@@ -1739,12 +1785,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots)
       ..[snapshotKey] = snapshot;
     final now = DateTime.now();
+    final existingSnapshotTitle = state.sessions[snapshotKey]?.title ?? '';
     final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
       ..[snapshotKey] = (state.sessions[snapshotKey] ??
               CachedSessionRecord(
                 workspaceKey: workspaceKey,
                 sessionId: sessionId,
-                title: _sessionTitle(sessionInfo, sessionId),
+                title: '',
                 model: sessionInfo?.model ?? '',
                 provider: sessionInfo?.provider ?? '',
                 mode: sessionInfo?.mode ?? '',
@@ -1755,9 +1802,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
                 url: sessionUrl,
               ))
           .copyWith(
-        title: sessionInfo?.title.isNotEmpty == true
-            ? sessionInfo!.title
-            : (state.sessions[snapshotKey]?.title ?? _sessionTitle(sessionInfo, sessionId)),
+        title: existingSnapshotTitle,
         model: sessionInfo?.model ?? state.sessions[snapshotKey]?.model,
         provider:
             sessionInfo?.provider ?? state.sessions[snapshotKey]?.provider,
@@ -1853,18 +1898,20 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   }
 
   List<CachedSessionRecord> sessionsForWorkspace(String workspaceKey) {
+    final cutoff = DateTime.now().subtract(const Duration(hours: 6));
     // Read from SQLite directly — same reason as sortedWorkspaces
     if (_store != null) {
       final allSessions = _store!.loadSessions();
       final items = allSessions
           .where((record) => record.workspaceKey == workspaceKey)
+          .where((record) => record.lastUpdatedAt.isAfter(cutoff))
           .toList()
         ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
-      debugPrint('[cache] sessionsForWorkspace: key=$workspaceKey matchCount=${items.length} allSessions=${allSessions.map((s) => "wk=${s.workspaceKey.substring(0, s.workspaceKey.length > 30 ? 30 : s.workspaceKey.length)} sid=${s.sessionId}").toList()}');
       return items;
     }
     final items = state.sessions.values
         .where((record) => record.workspaceKey == workspaceKey)
+        .where((record) => record.lastUpdatedAt.isAfter(cutoff))
         .toList()
       ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
     return items;
@@ -1928,13 +1975,17 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     for (final key in pendingSessions) {
       final session = state.sessions[key];
       if (session == null) continue;
-      // Override title with workspaceKey-derived name + date
-      final wsName = _displayNameFromKey(session.workspaceKey);
-      final date = session.sessionId.length >= 8
-          ? session.sessionId.substring(0, 8)
-          : session.sessionId;
-      final correctTitle = '$wsName · $date';
-      pendingSessionRecords.add(session.copyWith(title: correctTitle));
+      if (session.title.isNotEmpty) {
+        // Preserve real session title from host
+        pendingSessionRecords.add(session);
+      } else {
+        // Fallback: workspaceKey-derived name + date
+        final wsName = _displayNameFromKey(session.workspaceKey);
+        final date = session.sessionId.length >= 8
+            ? session.sessionId.substring(0, 8)
+            : session.sessionId;
+        pendingSessionRecords.add(session.copyWith(title: '$wsName · $date'));
+      }
     }
     final pendingSnapshotKeys = List<String>.from(_dirtySnapshots);
     final pendingSnapshotWrites = <_SnapshotWrite>[];
@@ -2230,16 +2281,5 @@ String? _workspaceParentPath(String workspacePath) {
   if (parts.length < 2) return null;
   // Show parent directory name
   return '/${parts[parts.length - 2]}';
-}
-
-String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
-  // Prefer host-provided session title (first user message summary)
-  if (sessionInfo?.title.isNotEmpty == true) {
-    return sessionInfo!.title;
-  }
-  final workspace = sessionInfo?.workspace ?? '';
-  final label = workspace.isNotEmpty ? workspace.split('/').last : 'Session';
-  final shortId = sessionId.length > 8 ? sessionId.substring(0, 8) : sessionId;
-  return '$label · $shortId';
 }
 
