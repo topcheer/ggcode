@@ -366,7 +366,7 @@ platform :ios do
       existing_locales = localizations.map(&:locale).to_set
 
       # Metadata directories define the full set of locales we support
-      metadata_dir = File.expand_path("../metadata", __dir__)
+      metadata_dir = File.expand_path("metadata", __dir__)
       metadata_locales = Dir.entries(metadata_dir)
         .select { |d| d =~ /\A[a-z]{2}(-[A-Za-z]+)?\z/ }
 
