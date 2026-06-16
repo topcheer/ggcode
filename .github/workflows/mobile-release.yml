@@ -236,6 +236,17 @@ jobs:
 
           flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
+          # Fix: App.framework Info.plist has empty MinimumOSVersion.
+          # This is a known Flutter issue. Patch it post-build.
+          APP_PLIST="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app/Frameworks/App.framework/Info.plist"
+          if [ -f "$APP_PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 17.0" "$APP_PLIST" 2>/dev/null || \
+              /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$APP_PLIST"
+            echo "Patched App.framework MinimumOSVersion to 17.0"
+          else
+            echo "WARNING: App.framework Info.plist not found at $APP_PLIST"
+          fi
+
       - name: Upload to TestFlight & promote
         run: |
           cd ios
