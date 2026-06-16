@@ -236,16 +236,39 @@ jobs:
 
           flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
-          # Fix: App.framework Info.plist has empty MinimumOSVersion.
-          # This is a known Flutter issue. Patch it post-build.
-          APP_PLIST="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app/Frameworks/App.framework/Info.plist"
+          # Fix: Flutter generates App.framework with empty MinimumOSVersion.
+          # Patch the exported IPA: unzip, fix plist, rezip.
+          IPA_PATH=$(find build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "ERROR: No IPA found in build/ios/ipa/"
+            exit 1
+          fi
+          echo "Patching IPA: $IPA_PATH"
+          TMPDIR=$(mktemp -d)
+          unzip -q "$IPA_PATH" -d "$TMPDIR"
+          APP_PLIST="$TMPDIR/Payload/Runner.app/Frameworks/App.framework/Info.plist"
           if [ -f "$APP_PLIST" ]; then
             /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 17.0" "$APP_PLIST" 2>/dev/null || \
               /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$APP_PLIST"
             echo "Patched App.framework MinimumOSVersion to 17.0"
           else
-            echo "WARNING: App.framework Info.plist not found at $APP_PLIST"
+            echo "WARNING: App.framework Info.plist not found, searching..."
+            find "$TMPDIR/Payload" -name "Info.plist" -path "*/App.framework/*" -exec \
+              /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" {} \;
           fi
+          # Also patch any other frameworks with empty MinimumOSVersion
+          find "$TMPDIR/Payload" -name "Info.plist" | while read plist; do
+            has_key=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$plist" 2>/dev/null)
+            if [ -z "$has_key" ]; then
+              echo "Patching $(basename $(dirname $plist))"
+              /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$plist" 2>/dev/null || true
+            fi
+          done
+          cd "$TMPDIR"
+          zip -qry "$GITHUB_WORKSPACE/$IPA_PATH" Payload
+          cd "$GITHUB_WORKSPACE"
+          rm -rf "$TMPDIR"
+          echo "IPA patched successfully"
 
       - name: Upload to TestFlight & promote
         run: |
