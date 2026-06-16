@@ -257,8 +257,10 @@ jobs:
           done
           echo "Patched App.framework MinimumOSVersion to 17.0"
           cd "$PATCH_DIR"
-          zip -qry "$GITHUB_WORKSPACE/$IPA_PATH" Payload
-          cd "$GITHUB_WORKSPACE"
+          # Overwrite the ORIGINAL IPA (relative path from mobile/flutter/)
+          ABS_IPA="$GITHUB_WORKSPACE/mobile/flutter/$IPA_PATH"
+          zip -qry "$ABS_IPA" Payload
+          cd "$GITHUB_WORKSPACE/mobile/flutter"
           rm -rf "$PATCH_DIR"
           echo "IPA patched successfully"
           set -e
