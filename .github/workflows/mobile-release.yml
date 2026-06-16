@@ -234,35 +234,32 @@ jobs:
           </plist>
           PLIST
 
-          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+          # Build archive only (no export yet)
+          flutter build ios --release --no-codesign
 
-          # Fix: Flutter generates App.framework with empty MinimumOSVersion.
-          # Patch the exported IPA: unzip, fix plist, rezip.
-          set +e
-          IPA_PATH=$(find build/ios/ipa -name "*.ipa" | head -1)
-          if [ -z "$IPA_PATH" ]; then
-            echo "ERROR: No IPA found in build/ios/ipa/"
-            exit 1
+          # Patch xcarchive App.framework MinimumOSVersion BEFORE export.
+          # Flutter generates App.framework with empty MinimumOSVersion.
+          # Patching before export preserves code signing in the final IPA.
+          ARCHIVE_PATH=$(find build/ios/archive -maxdepth 1 -name "*.xcarchive" | head -1)
+          if [ -n "$ARCHIVE_PATH" ]; then
+            echo "Patching xcarchive: $ARCHIVE_PATH"
+            for plist in $(find "$ARCHIVE_PATH/Products/Applications/Runner.app/Frameworks" -name "Info.plist" 2>/dev/null); do
+              val=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$plist" 2>/dev/null)
+              if [ -z "$val" ]; then
+                /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$plist" 2>/dev/null
+                echo "Patched: $(basename $(dirname $plist))"
+              fi
+            done
+          else
+            echo "WARNING: No xcarchive found"
           fi
-          echo "Patching IPA: $IPA_PATH"
-          PATCH_DIR=$(mktemp -d)
-          unzip -q "$IPA_PATH" -d "$PATCH_DIR"
-          # Patch all Info.plist files in frameworks that need MinimumOSVersion
-          for plist in $(find "$PATCH_DIR/Payload" -path "*/Frameworks/*/Info.plist"); do
-            val=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$plist" 2>/dev/null)
-            if [ -z "$val" ]; then
-              /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$plist" 2>/dev/null
-              echo "Patched: $(basename $(dirname $plist))"
-            fi
-          done
-          echo "Patched App.framework MinimumOSVersion to 17.0"
-          cd "$PATCH_DIR"
-          # Overwrite the ORIGINAL IPA (relative path from mobile/flutter/)
-          ABS_IPA="$GITHUB_WORKSPACE/mobile/flutter/$IPA_PATH"
-          zip -qry "$ABS_IPA" Payload
-          cd "$GITHUB_WORKSPACE/mobile/flutter"
-          rm -rf "$PATCH_DIR"
-          echo "IPA patched successfully"
+
+          # Now export the patched archive to IPA
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -exportPath build/ios/ipa/ \
+            -allowProvisioningUpdates
           set -e
 
       - name: Upload to TestFlight & promote
