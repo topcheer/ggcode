@@ -237,25 +237,39 @@ jobs:
           # Build archive (not just build) so we get .xcarchive
           flutter build ipa --release --no-codesign
 
+          # Disable errexit and pipefail for the patch section
+          set +e
+          set +o pipefail
+
           # Patch xcarchive App.framework MinimumOSVersion BEFORE export.
-          # flutter build ipa --no-codesign creates the archive but skips export.
-          ARCHIVE_PATH=$(find build/ios/archive -maxdepth 1 -name "*.xcarchive" | head -1)
+          ARCHIVE_PATH=$(find build/ios/archive -maxdepth 1 -name "*.xcarchive" 2>/dev/null | head -1)
           if [ -z "$ARCHIVE_PATH" ]; then
-            # Try alternative location
             ARCHIVE_PATH=$(find /Users/runner/Library/Developer/Xcode/Archives -maxdepth 3 -name "*.xcarchive" 2>/dev/null | head -1)
           fi
+          echo "Archive path: $ARCHIVE_PATH"
+
           if [ -n "$ARCHIVE_PATH" ]; then
             echo "Patching xcarchive: $ARCHIVE_PATH"
-            for plist in $(find "$ARCHIVE_PATH/Products/Applications/Runner.app/Frameworks" -name "Info.plist" 2>/dev/null); do
-              val=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$plist" 2>/dev/null)
-              if [ -z "$val" ]; then
-                /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$plist" 2>/dev/null
-                echo "Patched: $(basename $(dirname $plist))"
-              fi
-            done
+            FRAMEWORKS_DIR="$ARCHIVE_PATH/Products/Applications/Runner.app/Frameworks"
+            if [ -d "$FRAMEWORKS_DIR" ]; then
+              for plist in $(find "$FRAMEWORKS_DIR" -name "Info.plist"); do
+                val=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$plist" 2>/dev/null)
+                if [ -z "$val" ]; then
+                  /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 17.0" "$plist" 2>/dev/null
+                  echo "Patched: $(basename $(dirname $plist))"
+                fi
+              done
+            else
+              echo "WARNING: Frameworks dir not found at $FRAMEWORKS_DIR"
+            fi
           else
-            echo "WARNING: No xcarchive found, skipping patch"
+            echo "ERROR: No xcarchive found"
+            exit 1
           fi
+
+          # Re-enable errexit and pipefail for export
+          set -e
+          set -o pipefail
 
           # Export the patched archive to IPA with code signing
           rm -rf build/ios/ipa
@@ -265,7 +279,6 @@ jobs:
             -exportOptionsPlist ios/ExportOptions.plist \
             -exportPath build/ios/ipa/ \
             -allowProvisioningUpdates
-          set -e
 
       - name: Upload to TestFlight & promote
         run: |
