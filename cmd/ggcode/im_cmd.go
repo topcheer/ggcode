@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -531,9 +532,11 @@ func newIMConfigAddCmd(cfgFile *string) *cobra.Command {
 	var scope string
 
 	cmd := &cobra.Command{
-		Use:   "add <name>",
+		Use:   "add [name]",
 		Short: "Add an IM adapter configuration",
 		Long: `Add an IM adapter to the ggcode configuration.
+
+Run without arguments to enter the interactive setup wizard.
 
 Examples:
   ggcode im config add my-qq --platform qq --extra app_id=cli_xxx --extra app_secret=sss --extra token=xxx
@@ -542,8 +545,19 @@ Examples:
   ggcode im config add my-ding --platform dingtalk --extra client_id=xxx --extra client_secret=sss
   ggcode im config add my-discord --platform discord --extra token=Bot xxx
   ggcode im config add my-slack --platform slack --extra bot_token=xoxb-xxx --extra app_token=xapp-xxx`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Wizard mode: no name and no platform → interactive
+			if len(args) == 0 && platform == "" {
+				wizName, wizPlatform, wizExtras, err := imConfigAddWizard(cmd.OutOrStdout())
+				if err != nil {
+					return err
+				}
+				args = []string{wizName}
+				platform = wizPlatform
+				extras = wizExtras
+			}
+
 			name := strings.TrimSpace(args[0])
 			if platform == "" {
 				return fmt.Errorf("--platform is required (qq, telegram, feishu, dingtalk, discord, slack, privateclaw)")
@@ -590,7 +604,8 @@ Examples:
 	cmd.Flags().StringArrayVar(&extras, "extra", nil, "platform-specific key=value parameter (repeatable)")
 	cmd.Flags().StringArrayVar(&allowFrom, "allow-from", nil, "allowed source IDs (repeatable)")
 	addIMConfigScopeFlag(cmd, &scope)
-	_ = cmd.MarkFlagRequired("platform")
+	// Note: platform is not marked required because the wizard mode
+	// provides it interactively. The RunE handler validates it instead.
 	return cmd
 }
 
@@ -903,4 +918,101 @@ func sortedKeys(m map[string]interface{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// imConfigAddWizard provides an interactive prompt to add an IM adapter.
+// Returns (name, platform, extras).
+func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
+	reader := bufio.NewReader(os.Stdin)
+
+	prompt := func(label, def string) string {
+		suffix := ""
+		if def != "" {
+			suffix = fmt.Sprintf(" [%s]", def)
+		}
+		fmt.Fprintf(out, "%s%s: ", label, suffix)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return def
+		}
+		return line
+	}
+
+	fmt.Fprint(out, "\n=== IM Adapter Setup Wizard ===\n\n")
+
+	// Step 1: Name
+	name := prompt("Adapter name (e.g. my-qq, my-bot)", "")
+	if name == "" {
+		return "", "", nil, fmt.Errorf("adapter name is required")
+	}
+
+	// Step 2: Platform
+	fmt.Fprintln(out, "\nSupported platforms:")
+	fmt.Fprintln(out, "  1) qq         — QQ (Tencent)")
+	fmt.Fprintln(out, "  2) telegram   — Telegram Bot")
+	fmt.Fprintln(out, "  3) feishu     — Feishu / Lark")
+	fmt.Fprintln(out, "  4) dingtalk   — DingTalk")
+	fmt.Fprintln(out, "  5) discord    — Discord")
+	fmt.Fprintln(out, "  6) slack      — Slack")
+	fmt.Fprintln(out, "  7) privateclaw — Private Claw")
+	platformChoice := prompt("Choose platform [1]", "1")
+
+	platformMap := map[string]string{
+		"1": "qq", "2": "telegram", "3": "feishu",
+		"4": "dingtalk", "5": "discord", "6": "slack", "7": "privateclaw",
+	}
+	plt := platformMap[platformChoice]
+	if plt == "" {
+		plt = platformChoice // allow raw input
+	}
+
+	// Step 3: Platform-specific extras
+	fmt.Fprintf(out, "\nConfiguring %s adapter.\n", plt)
+
+	var requiredExtras []string
+	switch plt {
+	case "qq":
+		requiredExtras = []string{"app_id", "app_secret", "token"}
+	case "telegram":
+		requiredExtras = []string{"token"}
+	case "feishu":
+		requiredExtras = []string{"app_id", "app_secret"}
+	case "dingtalk":
+		requiredExtras = []string{"client_id", "client_secret"}
+	case "discord":
+		requiredExtras = []string{"token"}
+	case "slack":
+		requiredExtras = []string{"bot_token", "app_token"}
+	default:
+		requiredExtras = nil
+	}
+
+	var extras []string
+	for _, key := range requiredExtras {
+		val := prompt(fmt.Sprintf("  %s", key), "")
+		if val == "" {
+			return "", "", nil, fmt.Errorf("%s is required for %s", key, plt)
+		}
+		extras = append(extras, key+"="+val)
+	}
+
+	// Step 4: Optional extras
+	fmt.Fprintln(out, "\nOptional extras (KEY=VALUE). Press Enter on empty line to skip.")
+	for {
+		extra := prompt(fmt.Sprintf("Extra #%d", len(extras)+1), "")
+		if extra == "" {
+			break
+		}
+		extras = append(extras, extra)
+	}
+
+	// Review
+	fmt.Fprintf(out, "\nReview:\n  name: %s\n  platform: %s\n  extras: %d items\n", name, plt, len(extras))
+	confirm := prompt("\nConfirm add? [Y/n]", "Y")
+	if confirm == "n" || confirm == "N" {
+		return "", "", nil, fmt.Errorf("cancelled")
+	}
+
+	return name, plt, extras, nil
 }

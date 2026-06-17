@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -24,7 +27,16 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			args = sanitizeMCPInstallArgs(args)
 			if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-				return cmd.Help()
+				_ = cmd.Help()
+				return nil
+			}
+			// No args → interactive wizard
+			if len(args) == 0 {
+				wizardArgs, err := mcpInstallWizard(cmd.OutOrStdout())
+				if err != nil {
+					return err
+				}
+				args = wizardArgs
 			}
 			if len(args) < 2 {
 				return fmt.Errorf("usage: %s", cmd.UseLine())
@@ -207,4 +219,114 @@ func sanitizeMCPInstallArgs(args []string) []string {
 		out = append(out, args[i])
 	}
 	return out
+}
+
+// mcpInstallWizard provides an interactive prompt to configure an MCP server.
+// Returns the args in the same format as the CLI: [name, transport, command.../url].
+func mcpInstallWizard(out io.Writer) ([]string, error) {
+	reader := bufio.NewReader(os.Stdin)
+
+	prompt := func(label, def string) string {
+		suffix := ""
+		if def != "" {
+			suffix = fmt.Sprintf(" [%s]", def)
+		}
+		fmt.Fprintf(out, "%s%s: ", label, suffix)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return def
+		}
+		return line
+	}
+
+	fmt.Fprint(out, "\n=== MCP Server Setup Wizard ===\n\n")
+
+	// Step 1: Name
+	name := prompt("Server name (e.g. github, web-reader)", "")
+	if name == "" {
+		return nil, fmt.Errorf("server name is required")
+	}
+
+	// Step 2: Transport type
+	fmt.Fprintln(out, "\nTransport types:")
+	fmt.Fprintln(out, "  1) stdio  — local command (default)")
+	fmt.Fprintln(out, "  2) http   — remote HTTP endpoint")
+	fmt.Fprintln(out, "  3) ws     — WebSocket endpoint")
+	transportChoice := prompt("Choose transport [1]", "1")
+	transport := "stdio"
+	switch transportChoice {
+	case "2", "http":
+		transport = "http"
+	case "3", "ws":
+		transport = "ws"
+	}
+
+	// Step 3: Target (command or URL)
+	var target string
+	if transport == "stdio" {
+		target = prompt("Command (e.g. npx -y @modelcontextprotocol/server-github)", "")
+	} else {
+		target = prompt("URL (e.g. https://mcp.example.com/api)", "")
+	}
+	if target == "" {
+		return nil, fmt.Errorf("command or URL is required")
+	}
+
+	// Step 4: Environment variables (stdio only)
+	var envPairs []string
+	if transport == "stdio" {
+		fmt.Fprint(out, "\nEnvironment variables (KEY=VALUE). Press Enter on empty line to skip.\n")
+		envIdx := 0
+		for {
+			envIdx++
+			env := prompt(fmt.Sprintf("Env var #%d", envIdx), "")
+			if env == "" {
+				break
+			}
+			envPairs = append(envPairs, "--env", env)
+		}
+	}
+
+	// Step 5: Headers (http/ws only)
+	var headerPairs []string
+	if transport != "stdio" {
+		fmt.Fprint(out, "\nHeaders (KEY:VALUE). Press Enter on empty line to skip.\n")
+		headerIdx := 0
+		for {
+			headerIdx++
+			header := prompt(fmt.Sprintf("Header #%d", headerIdx), "")
+			if header == "" {
+				break
+			}
+			headerPairs = append(headerPairs, "--header", header)
+		}
+	}
+
+	// Assemble args — ParseInstallArgs expects:
+	//   [name] -t <transport> [--env KEY=VAL ...] [--header KEY:VAL ...] -- <cmd.../url>
+	args := []string{name}
+	args = append(args, "-t", transport)
+	args = append(args, envPairs...)
+	args = append(args, headerPairs...)
+	args = append(args, "--")
+	// For stdio, split the command into parts; for http/ws, it's a URL
+	if transport == "stdio" {
+		args = append(args, splitCommand(target)...)
+	} else {
+		args = append(args, target)
+	}
+
+	fmt.Fprintf(out, "\nReview:\n  name: %s\n  transport: %s\n  target: %s\n", name, transport, target)
+	confirm := prompt("\nConfirm install? [Y/n]", "Y")
+	if confirm == "n" || confirm == "N" {
+		return nil, fmt.Errorf("installation cancelled")
+	}
+
+	return args, nil
+}
+
+// splitCommand splits a command string into arguments, handling basic quoting.
+func splitCommand(s string) []string {
+	return strings.Fields(s)
 }

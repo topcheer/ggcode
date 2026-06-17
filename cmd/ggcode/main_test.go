@@ -1,41 +1,46 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
 
-func TestShouldPrintRootHelpDirectly(t *testing.T) {
-	tests := []struct {
-		args []string
-		want bool
-	}{
-		{args: nil, want: false},
-		{args: []string{"--help"}, want: true},
-		{args: []string{"-h"}, want: true},
-		{args: []string{"help"}, want: true},
-		{args: []string{"completion", "--help"}, want: false},
-		{args: []string{"--config", "x"}, want: false},
-	}
+func TestRootHelpShowsAllCommands(t *testing.T) {
+	cmd := NewRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--help"})
+	_ = cmd.Execute()
 
-	for _, tt := range tests {
-		if got := shouldPrintRootHelpDirectly(tt.args); got != tt.want {
-			t.Fatalf("shouldPrintRootHelpDirectly(%v) = %v, want %v", tt.args, got, tt.want)
+	help := buf.String()
+	// All subcommands should be visible
+	expected := []string{
+		"version",
+		"completion",
+		"daemon",
+		"harness",
+		"im",
+		"mcp",
+		"llm-probe",
+		"acp",
+	}
+	for _, name := range expected {
+		if !strings.Contains(help, name) {
+			t.Errorf("root help should list %q, got:\n%s", name, help)
 		}
 	}
 }
 
-func TestRootHelpTextIncludesExpectedSections(t *testing.T) {
-	help := rootHelpText()
-	want := []string{
-		"Usage:\nggcode [flags]\nggcode [command]\n",
-		"Available Commands:\n- completion: Generate shell completion script\n- daemon: Run ggcode in daemon mode, controlled via IM\n- harness: Manage harness-engineering workflows\n- help: Help about any command\n- im: Manage IM adapters, bindings, and pairing\n- mcp: Manage MCP server configuration\n",
-		"Flags:\n",
-		"- --config string: config file path\n",
-	}
-	for _, snippet := range want {
-		if !strings.Contains(help, snippet) {
-			t.Fatalf("expected help text to contain %q, got:\n%s", snippet, help)
-		}
+func TestVersionSubcommand(t *testing.T) {
+	cmd := NewRootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"version"})
+	_ = cmd.Execute()
+	out := strings.TrimSpace(buf.String())
+	if out == "" {
+		t.Error("version subcommand should print version")
 	}
 }

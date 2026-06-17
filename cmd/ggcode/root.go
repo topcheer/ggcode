@@ -180,7 +180,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the ggcode version",
 		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Println(version.Display())
+			fmt.Fprintln(cmd.OutOrStdout(), version.Display())
 		},
 	}
 	cmd.AddCommand(versionCmd)
