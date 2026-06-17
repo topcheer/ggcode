@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -276,7 +277,12 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 			// Silently ignore if clipboard doesn't contain an image.
 			// This is common (user pressed Ctrl+V with text in clipboard).
 			if errors.Is(err, image.ErrClipboardImageUnavailable) {
-				return nil // no-op, don't interrupt anything
+				// On Windows, show a hint since the terminal likely intercepted
+				// the keypress and the clipboard may not have been checked at all.
+				if runtime.GOOS == "windows" {
+					return systemNotifyMsg{Text: m.t("image.clipboard_no_image_windows")}
+				}
+				return nil // no-op on macOS/Linux
 			}
 			// Use systemNotifyMsg instead of errMsg so the actual clipboard
 			// error (e.g. "Install wl-clipboard or xclip") is shown as-is.

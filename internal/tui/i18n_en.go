@@ -549,7 +549,7 @@ func enCatalog(key string) string {
 	case "hint.enter_send":
 		return "Enter send"
 	case "hint.ctrlv_image":
-		return "Ctrl+V paste image"
+		return "Ctrl+V / Ctrl+G paste image"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R sidebar"
 	case "hint.help":
@@ -985,6 +985,8 @@ func enCatalog(key string) string {
 		return "Send a message to include the image, or /image to attach another.\n\n"
 	case "image.clipboard_failed":
 		return "Could not paste an image from the clipboard: %v"
+	case "image.clipboard_no_image_windows":
+		return "No image found in clipboard. On Windows, Ctrl+V is often intercepted by the terminal. Try Ctrl+G or /image paste instead."
 	case "agents.unavailable":
 		return "Sub-agent manager not configured.\n\n"
 	case "agents.none":
