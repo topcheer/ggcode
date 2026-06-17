@@ -30,6 +30,10 @@ const (
 
 var ErrAlreadyUpToDate = errors.New("already up to date")
 
+// ErrNeedsElevation indicates the target directory requires elevated
+// privileges. On Windows the caller should relaunch the helper with UAC.
+var ErrNeedsElevation = errors.New("update requires elevation")
+
 type Service struct {
 	CurrentVersion string
 	ExecPath       string
@@ -38,6 +42,7 @@ type Service struct {
 	WrapperKind    string
 	CheckTTL       time.Duration
 	HTTPClient     *http.Client
+	needsElevation bool // set by checkWritable; helper should launch elevated
 }
 
 type CheckResult struct {
@@ -123,9 +128,11 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 	// Pre-flight: verify write permissions BEFORE downloading.
 	// On Windows, the target binary dir and the helper staging dir must
 	// both be writable, otherwise the update will fail after a large download.
-	if err := s.checkWritable(); err != nil {
+	needsElevation, err := s.checkWritable()
+	if err != nil {
 		return PreparedUpdate{}, err
 	}
+	s.needsElevation = needsElevation
 
 	downloaded, err := install.DownloadBinary(ctx, install.Options{
 		Version:    check.LatestVersion,
@@ -179,6 +186,13 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 
 func (s *Service) LaunchHelper(prepared PreparedUpdate) error {
 	cmd := s.helperCommand(prepared)
+
+	// On Windows, if the target dir needs elevation, relaunch the helper
+	// with UAC (ShellExecute "runas" verb).
+	if s.needsElevation && runtime.GOOS == "windows" {
+		return launchElevated(cmd)
+	}
+
 	return cmd.Start()
 }
 
@@ -435,35 +449,38 @@ func copyFile(src, dst string, mode os.FileMode) error {
 }
 
 // checkWritable verifies that all paths needed for a self-update are writable.
-// This avoids downloading a large binary only to discover permission errors.
-func (s *Service) checkWritable() error {
-	// 1. Helper staging dir (~/.ggcode/update-helper/)
+// Returns (needsElevation=true) if the staging dir is writable but the target
+// dir is not — the caller can then relaunch the helper with elevation.
+// Returns a hard error only if even the staging dir is inaccessible.
+func (s *Service) checkWritable() (bool, error) {
+	// 1. Helper staging dir (~/.ggcode/update-helper/) — must be writable.
 	helperDir := filepath.Join(config.ConfigDir(), "update-helper")
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
-		return fmt.Errorf("update: cannot create staging directory %s: %w\n"+
+		return false, fmt.Errorf("update: cannot create staging directory %s: %w\n"+
 			"Check that you have write permission to this location.", helperDir, err)
 	}
-	// Probe-write a temp file to confirm the dir is actually writable.
 	probe := filepath.Join(helperDir, ".write-probe")
 	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
-		return fmt.Errorf("update: staging directory %s is not writable: %w\n"+
+		return false, fmt.Errorf("update: staging directory %s is not writable: %w\n"+
 			"Check that you have write permission to this location.", helperDir, err)
 	}
 	_ = os.Remove(probe)
 
-	// 2. Target executable directory
+	// 2. Target executable directory — may need elevation.
 	execDir := filepath.Dir(s.ExecPath)
 	if execDir == "." || execDir == "" {
 		execDir = mustGetwd()
 	}
 	probe2 := filepath.Join(execDir, ".ggcode-update-probe")
 	if err := os.WriteFile(probe2, []byte("x"), 0o644); err != nil {
-		return fmt.Errorf("update: target directory %s is not writable: %w\n"+
-			"The ggcode binary is installed in a location that requires "+
-			"elevated permissions. Try running as administrator or reinstall "+
-			"to a user-writable location.", execDir, err)
+		if runtime.GOOS == "windows" {
+			// On Windows we can request UAC elevation for the helper.
+			return true, nil
+		}
+		return false, fmt.Errorf("update: target directory %s is not writable: %w\n"+
+			"Try running with sudo or reinstall to a user-writable location.", execDir, err)
 	}
 	_ = os.Remove(probe2)
 
-	return nil
+	return false, nil
 }
