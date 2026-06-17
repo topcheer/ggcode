@@ -228,3 +228,5 @@ if [[ -x "${INSTALL_TARGET}" ]]; then
     echo -e "  Update with: ${BOLD}ggcode /update${NC}"
   fi
 fi
+
+exit 0
