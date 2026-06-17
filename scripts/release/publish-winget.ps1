@@ -108,10 +108,13 @@ if ($desiredUrls.Count -gt $existingCount -and $InstallerUrlArm64) {
     $newGuid = [System.Guid]::NewGuid().ToString().ToUpper()
     $productCode = "{$newGuid}"
 
-    # Build the new installer entry by cloning the last one and replacing values
-    # Match the last Installer entry block
-    $lastInstallerPattern = "(?s)(?<=  - Architecture: )(.+?)(?=(?:\n  - Architecture:|\z))"
-    $installerEntries = [regex]::Matches($yaml, "(?ms)  - Architecture: .+?(?=\n  - Architecture:|\z)")
+    # Build the new installer entry by cloning the existing one.
+    # winget YAML uses 0-indent for installer list items:
+    #   Installers:
+    #   - Architecture: x64
+    #     InstallerUrl: ...
+    $lastInstallerPattern = ""
+    $installerEntries = [regex]::Matches($yaml, "(?ms)^- Architecture: .+?(?=^- |\z)")
 
     if ($installerEntries.Count -gt 0) {
         # Clone the last entry
