@@ -108,38 +108,51 @@ if ($desiredUrls.Count -gt $existingCount -and $InstallerUrlArm64) {
     $newGuid = [System.Guid]::NewGuid().ToString().ToUpper()
     $productCode = "{$newGuid}"
 
-    # Build the new installer entry by cloning the existing one.
-    # winget YAML uses 0-indent for installer list items:
+    # Build the new installer entry by cloning the existing installer section.
+    # The installer YAML structure is:
     #   Installers:
     #   - Architecture: x64
     #     InstallerUrl: ...
-    $lastInstallerPattern = ""
-    $installerEntries = [regex]::Matches($yaml, "(?ms)^- Architecture: .+?(?=^- |\z)")
-
-    if ($installerEntries.Count -gt 0) {
-        # Clone the last entry
-        $lastEntry = $installerEntries[$installerEntries.Count - 1].Value
-
-        # Create arm64 entry based on last entry
-        $arm64Entry = $lastEntry `
-            -replace 'Architecture:\s*\w+', "Architecture: $arch" `
-            -replace 'InstallerUrl:\s*.+', "InstallerUrl: $InstallerUrlArm64" `
-            -replace 'InstallerSha256:\s*[A-Fa-f0-9]+', "InstallerSha256: $arm64Hash"
-
-        # Replace ProductCode if present (generate unique one)
-        if ($arm64Entry -match 'ProductCode:') {
-            $arm64Entry = $arm64Entry -replace "ProductCode:\s*'\{[^}]+\}'", "ProductCode: '$productCode'"
-        }
-
-        # Append arm64 entry after the last installer entry
-        $yaml = $yaml.Insert($installerEntries[$installerEntries.Count - 1].Index + $installerEntries[$installerEntries.Count - 1].Length, "`n" + $arm64Entry)
-
-        Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
-        Write-Host "  Added arm64 installer entry to $($installerFile.Name)"
-    } else {
-        Write-Warning "Could not parse installer entries from YAML."
+    #     AppsAndFeaturesEntries:
+    #     - DisplayVersion: ...
+    #   ManifestType: installer
+    #
+    # We split at ManifestType to get the full installer block, clone it,
+    # modify values, and reassemble. This avoids fragile per-entry regex.
+    $manifestTypeIdx = $yaml.IndexOf("ManifestType:")
+    if ($manifestTypeIdx -lt 0) {
+        Write-Warning "Could not find ManifestType in YAML."
         exit 0
     }
+
+    $beforeManifest = $yaml.Substring(0, $manifestTypeIdx)
+    $fromManifest = $yaml.Substring($manifestTypeIdx)
+
+    # Extract the installer entry (everything from "- Architecture:" to ManifestType)
+    $archIdx = $beforeManifest.IndexOf("- Architecture:")
+    if ($archIdx -lt 0) {
+        Write-Warning "Could not find any installer entry in YAML."
+        exit 0
+    }
+
+    $installerBlock = $beforeManifest.Substring($archIdx)
+
+    # Clone the installer block and modify for arm64
+    $arm64Entry = $installerBlock.TrimEnd()
+    $arm64Entry = $arm64Entry `
+        -replace 'Architecture:\s*\w+', "Architecture: $arch" `
+        -replace 'InstallerUrl:\s*.+', "InstallerUrl: $InstallerUrlArm64" `
+        -replace 'InstallerSha256:\s*[A-Fa-f0-9]+', "InstallerSha256: $arm64Hash"
+
+    # Replace ProductCode GUIDs with new ones for arm64
+    $newGuid = [System.Guid]::NewGuid().ToString().ToUpper()
+    $arm64Entry = $arm64Entry -replace "ProductCode:\s*'\{[^}]+\}'", "ProductCode: '{$newGuid}'"
+
+    # Reassemble: original block + new arm64 entry + ManifestType section
+    $yaml = $beforeManifest + $arm64Entry + "`n`n" + $fromManifest
+
+    Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
+    Write-Host "  Added arm64 installer entry to $($installerFile.Name)"
 }
 
 # Step 3: Submit the modified manifest
