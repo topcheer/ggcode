@@ -23,17 +23,21 @@ if (-not $packageExists) {
     exit 0
 }
 
+# Use wingetcreate's pipe-delimited override format to explicitly declare
+# scope as "user" since the default MSI is now perUser (LocalAppData).
+# wingetcreate will download and analyze the MSI, but the explicit scope
+# override ensures the manifest is correct even if detection differs.
 if ($InstallerUrlArm64) {
     & $wingetCreate update $PackageId `
         --version $releaseVersion `
-        --urls "$InstallerUrl|x64" "$InstallerUrlArm64|arm64" `
+        --urls "${InstallerUrl}|x64|user" "${InstallerUrlArm64}|arm64|user" `
         --submit `
         --token $GitHubToken `
         --no-open
 } else {
     & $wingetCreate update $PackageId `
         --version $releaseVersion `
-        --urls "$InstallerUrl|x64" `
+        --urls "${InstallerUrl}|x64|user" `
         --submit `
         --token $GitHubToken `
         --no-open
