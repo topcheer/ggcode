@@ -14,6 +14,7 @@ on:
       - docs/site/**
       - .github/workflows/site-release.yml
       - scripts/release/publish-site-branch.sh
+      - scripts/install/**
 
 permissions:
   contents: write
