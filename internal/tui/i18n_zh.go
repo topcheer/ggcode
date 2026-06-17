@@ -975,6 +975,8 @@ func zhCatalog(key string) string {
 		return "更新已安装。注意：ggcode 是通过 Scoop 安装的。\n建议运行 `scoop update ggcode` 以保持 Scoop 同步。\n\n"
 	case "update.pm_hint.winget":
 		return "更新已安装。注意：ggcode 是通过 winget 安装的。\n建议运行 `winget upgrade ggcode` 以保持 winget 同步。\n\n"
+	case "update.other_installs":
+		return "检测到系统中还有其他 ggcode 安装：\n%s\n如果 PATH 中另一个 ggcode 优先级更高，建议一并更新或调整 PATH 顺序。\n\n"
 	case "plugins.unavailable":
 		return "插件管理器不可用。\n\n"
 	case "plugins.none":

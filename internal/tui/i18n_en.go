@@ -967,6 +967,8 @@ func enCatalog(key string) string {
 		return "Update installed. Note: ggcode was installed via Scoop.\nRun `scoop update ggcode` to keep Scoop in sync.\n\n"
 	case "update.pm_hint.winget":
 		return "Update installed. Note: ggcode was installed via winget.\nRun `winget upgrade ggcode` to keep winget in sync.\n\n"
+	case "update.other_installs":
+		return "Other ggcode installations detected on this system:\n%s\nIf a different ggcode appears first in PATH, consider updating it too or adjusting PATH order.\n\n"
 	case "plugins.unavailable":
 		return "Plugin manager not available.\n\n"
 	case "plugins.none":

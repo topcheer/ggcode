@@ -119,6 +119,10 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 		m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
 		return m, nil
 	}
+	// Detect other installations and warn if they might shadow this one.
+	if others := update.FindOtherInstalls(m.updateSvc.ExecPath); len(others) > 0 {
+		m.chatWriteSystem(nextSystemID(), m.t("update.other_installs", update.FormatOtherInstalls(others)))
+	}
 	// Show package manager hint before quitting.
 	if pm := update.PackageManagerHint(m.updateSvc.ExecPath); pm != "" {
 		m.chatWriteSystem(nextSystemID(), m.t("update.pm_hint."+pm))
