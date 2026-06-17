@@ -4,6 +4,8 @@
 	auto_https off
 }
 
+# Site served by Caddy — static files from /srv
+
 :{$PORT:80} {
 	respond /health 200
 
