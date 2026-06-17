@@ -44,3 +44,17 @@ scripts/sync-model-caps.go
 mobile/builds/
 mobile/flutter/build/
 mobile/flutter/ios/Runner.xcworkspace/xcuserdata/
+
+# Build artifacts — NEVER commit these
+dist/
+dist-site/
+desktop/ggcode-desktop/desktop
+desktop/ggcode-desktop/ggcode.app/
+desktop/ggcode-desktop-wails/wails
+desktop/ggcode-desktop-wails/wails.exe
+desktop/ggcode-desktop-wails/build/bin/
+ggcode-relay/ggcode-relay
+*.test
+harness.test
+acp.test
+ggcode-fixed

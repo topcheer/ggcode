@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Publish deployment branch
         env:
@@ -36,5 +36,4 @@ jobs:
           chmod +x ./scripts/release/publish-site-branch.sh
           ./scripts/release/publish-site-branch.sh \
             --target-branch "${TARGET_BRANCH}" \
-            --preserve-latest \
             --source-label "${GITHUB_SHA}"
