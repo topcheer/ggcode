@@ -133,7 +133,14 @@ for name in sorted(asset_names):
     })
 
 with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-    json.dump({"source": release_tag, "files": files}, fh, indent=2)
+    # Include both "version" and "source" so the manifest can be consumed by
+    # install.go (which expects {"version": "v1.3.71"}) and by humans/scripts.
+    import re
+    version = release_tag
+    match = re.match(r'v?(\d+\.\d+\.\d+)', release_tag)
+    if match:
+        version = 'v' + match.group(1)
+    json.dump({"version": version, "source": release_tag, "files": files}, fh, indent=2)
     fh.write("\n")
 
 items = "\n".join(

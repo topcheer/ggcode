@@ -961,6 +961,12 @@ func enCatalog(key string) string {
 		return "Update failed: %v\n\n"
 	case "update.restart_failed":
 		return "Update prepared, but restart failed: %v\n\n"
+	case "update.pm_hint.brew":
+		return "Update installed. Note: ggcode was installed via Homebrew.\nRun `brew upgrade ggcode` to keep Homebrew in sync.\n\n"
+	case "update.pm_hint.scoop":
+		return "Update installed. Note: ggcode was installed via Scoop.\nRun `scoop update ggcode` to keep Scoop in sync.\n\n"
+	case "update.pm_hint.winget":
+		return "Update installed. Note: ggcode was installed via winget.\nRun `winget upgrade ggcode` to keep winget in sync.\n\n"
 	case "plugins.unavailable":
 		return "Plugin manager not available.\n\n"
 	case "plugins.none":

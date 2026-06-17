@@ -119,6 +119,10 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 		m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
 		return m, nil
 	}
+	// Show package manager hint before quitting.
+	if pm := update.PackageManagerHint(m.updateSvc.ExecPath); pm != "" {
+		m.chatWriteSystem(nextSystemID(), m.t("update.pm_hint."+pm))
+	}
 	m.quitting = true
 	return m, tea.Quit
 }

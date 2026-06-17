@@ -31,7 +31,6 @@ const (
 var defaultReleaseSources = []releaseSource{
 	{baseURL: fmt.Sprintf("https://github.com/%s/%s", owner, repo)},
 	{proxyPrefix: "https://get.ystone.us/"},
-	{latestMirrorBase: "https://ggcode.dev/downloads/latest"},
 }
 
 type releaseSource struct {

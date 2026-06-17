@@ -80,17 +80,14 @@ func TestReleaseURLsWithBaseURL(t *testing.T) {
 func TestReleaseSourcesDefaultsIncludeBuiltInFallbacks(t *testing.T) {
 	t.Setenv(updateBaseURLsEnv, "")
 	got := releaseSources("")
-	if len(got) != 3 {
-		t.Fatalf("unexpected default release sources: %#v", got)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 default release sources, got %d: %#v", len(got), got)
 	}
 	if got[0].baseURL != "https://github.com/topcheer/ggcode" || got[0].proxyPrefix != "" {
 		t.Fatalf("unexpected first default release source: %#v", got[0])
 	}
 	if got[1].proxyPrefix != "https://get.ystone.us/" || got[1].baseURL != "" {
 		t.Fatalf("unexpected default release sources: %#v", got)
-	}
-	if got[2].latestMirrorBase != "https://ggcode.dev/downloads/latest" {
-		t.Fatalf("unexpected third default release source: %#v", got[2])
 	}
 }
 

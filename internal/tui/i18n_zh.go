@@ -969,6 +969,12 @@ func zhCatalog(key string) string {
 		return "升级失败：%v\n\n"
 	case "update.restart_failed":
 		return "升级已准备完成，但重启失败：%v\n\n"
+	case "update.pm_hint.brew":
+		return "更新已安装。注意：ggcode 是通过 Homebrew 安装的。\n建议运行 `brew upgrade ggcode` 以保持 Homebrew 同步。\n\n"
+	case "update.pm_hint.scoop":
+		return "更新已安装。注意：ggcode 是通过 Scoop 安装的。\n建议运行 `scoop update ggcode` 以保持 Scoop 同步。\n\n"
+	case "update.pm_hint.winget":
+		return "更新已安装。注意：ggcode 是通过 winget 安装的。\n建议运行 `winget upgrade ggcode` 以保持 winget 同步。\n\n"
 	case "plugins.unavailable":
 		return "插件管理器不可用。\n\n"
 	case "plugins.none":
