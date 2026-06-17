@@ -76,8 +76,8 @@ if ($desiredUrls.Count -gt $existingCount -and $InstallerUrlArm64) {
     $arm64Hash = (Get-FileHash $arm64InstallerPath -Algorithm SHA256).Hash.ToLower()
     Write-Host "  arm64 SHA256: $arm64Hash"
 
-    # Find the installer YAML file
-    $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" | Select-Object -First 1
+    # Find the installer YAML file (saved in nested dirs like manifests/g/gg/ai/<id>/<version>/)
+    $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
     if (-not $installerFile) {
         Write-Warning "Could not find installer YAML to modify."
         exit 0
