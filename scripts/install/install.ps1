@@ -133,7 +133,7 @@ $Version = $Tag.TrimStart("v")
 Write-Info "Latest version: $Tag"
 
 # --- Download ---
-$ArchiveName = "ggcode_${Version}_windows_${Arch}.zip"
+$ArchiveName = "ggcode_windows_${Arch}.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/$Tag/$ArchiveName"
 $TempDir = Join-Path $env:TEMP "ggcode-install-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null

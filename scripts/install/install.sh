@@ -128,7 +128,7 @@ VERSION="${TAG#v}"
 info "Latest version: ${BOLD}${TAG}${NC}"
 
 # --- Download ---
-ARCHIVE_NAME="ggcode_${VERSION}_${PLATFORM}_${ARCH}.tar.gz"
+ARCHIVE_NAME="ggcode_${PLATFORM}_${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE_NAME}"
 
 TMPDIR="$(mktemp -d)"
