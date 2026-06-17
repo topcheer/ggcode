@@ -249,9 +249,31 @@ async function ensureInstalled(version, quiet) {
   }
 
   // Check if a system-installed binary exists (brew/winget/scoop).
-  // If found, symlink to it instead of downloading a duplicate.
+  // Only reuse if the version matches the requested version.
   const sysBinary = findSystemBinary();
   if (sysBinary) {
+    // Probe the system binary's version via `ggcode version` subcommand.
+    // This exits immediately (no TUI) so it's safe to call with a timeout.
+    let sysVersion = null;
+    try {
+      const { execSync } = require("child_process");
+      sysVersion = execSync(`"${sysBinary.path}" version`, {
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+    } catch (e) {
+      // Can't determine version — skip reuse, fall through to download
+    }
+
+    // Only reuse if the system binary version matches what was requested.
+    const versionMatch = sysVersion && (
+      sysVersion === requestedVersion ||
+      sysVersion === "v" + requestedVersion ||
+      requestedVersion === "" ||
+      requestedVersion === "latest"
+    );
+
+    if (versionMatch) {
     const dir = preferredInstallDirs()[0];
     if (dir) {
       fs.mkdirSync(dir, { recursive: true });
@@ -259,11 +281,12 @@ async function ensureInstalled(version, quiet) {
       try {
         // Remove existing file/symlink first
         fs.rmSync(linkPath, { force: true });
-        // Create a wrapper script that delegates to the system binary
         if (process.platform === "win32") {
-          fs.writeFileSync(linkPath,
-            `@echo off\r\n"${sysBinary.path}" %*\r\n`, "utf8");
+          // On Windows, we can't write batch content to a .exe file.
+          // Instead, copy the system binary directly — it's the same platform/arch.
+          fs.copyFileSync(sysBinary.path, linkPath);
         } else {
+          // On Unix, a shell wrapper script is fine.
           fs.writeFileSync(linkPath,
             `#!/bin/sh\nexec "${sysBinary.path}" "$@"\n`, "utf8");
           fs.chmodSync(linkPath, 0o755);

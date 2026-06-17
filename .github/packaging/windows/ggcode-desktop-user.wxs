@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- perUser MSI for GGCode Desktop: installs to LocalAppData (no admin required).
-     Same Package Name and UpgradeCode as perMachine so winget/MSI treats them
-     as the same product with different scope. -->
+     Different UpgradeCode from perMachine — winget handles cross-scope migration.
+     Same Package Name so winget matches the same PackageId. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
     Name="GGCode Desktop"
     Manufacturer="GG AI Studio"
     Version="$(var.Version)"
-    UpgradeCode="$(var.UpgradeCode)"
+    UpgradeCode="{D4E5F6A7-B8C9-0123-CDEF-345678901234}"
     Language="1033"
     InstallerVersion="500"
     Scope="perUser">
@@ -33,8 +33,6 @@
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="DesktopFolder" />
-
-    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\ggcode-desktop.exe" />
   </Fragment>
 
   <Fragment>
@@ -48,15 +46,13 @@
           Directory="DesktopFolder"
           Name="GGCode Desktop"
           WorkingDirectory="INSTALLFOLDER"
-          Target="[INSTALLFOLDER]ggcode-desktop.exe"
-          Icon="AppIcon" />
+          Target="[INSTALLFOLDER]ggcode-desktop.exe" />
         <Shortcut
           Id="ProgramMenuShortcut"
           Directory="ProgramMenuProductDir"
           Name="GGCode Desktop"
           WorkingDirectory="INSTALLFOLDER"
-          Target="[INSTALLFOLDER]ggcode-desktop.exe"
-          Icon="AppIcon" />
+          Target="[INSTALLFOLDER]ggcode-desktop.exe" />
         <RemoveFolder Id="RemoveProgramMenuProductDir" Directory="ProgramMenuProductDir" On="uninstall" />
         <!-- User-level registry key (HKCU instead of HKLM) -->
         <RegistryValue

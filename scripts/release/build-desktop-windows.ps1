@@ -85,10 +85,10 @@ Pop-Location
 Copy-Item $outFile (Join-Path $stageDir "ggcode-desktop.exe")
 
 # --- Build perUser MSI (default, no suffix) ---
+# perUser has its own UpgradeCode hardcoded in ggcode-desktop-user.wxs
 $msiUserTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64.msi"
 & wix build `
   -d "Version=$PackageVersion" `
-  -d "UpgradeCode=$UpgradeCode" `
   -d "SourceDir=$stageDir" `
   -arch x64 `
   -o $msiUserTarget `

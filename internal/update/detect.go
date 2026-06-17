@@ -204,12 +204,14 @@ func scanNpmDirWindows(npmDir string, check func(string, string, bool)) {
 }
 
 // tryGetVersion runs `ggcode version` on the binary and returns the version string.
+// Uses a 5-second timeout to prevent hangs. The "version" subcommand exits
+// immediately without starting the TUI.
 func tryGetVersion(binaryPath string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binaryPath, "version")
 	cmd.Stderr = nil
-	cmd.Stdin = nil
+	cmd.Stdin = strings.NewReader("") // /dev/null equivalent, prevents tty inheritance
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

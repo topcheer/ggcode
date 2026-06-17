@@ -60,6 +60,17 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:     true,
 		TraverseChildren: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Global --version/-v: print and exit immediately, before any
+			// config loading or TUI initialization.
+			if showVer, _ := cmd.Flags().GetBool("version"); showVer {
+				fmt.Println(version.Display())
+				return nil
+			}
+			if showVer, _ := cmd.Flags().GetBool("v"); showVer {
+				fmt.Println(version.Display())
+				return nil
+			}
+
 			if cfgFile == "" {
 				resolved, err := resolveConfigFilePath()
 				if err != nil {
@@ -132,6 +143,11 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
+
+	// Global --version/-v flag — many tools and agents probe this before
+	// trying a "version" subcommand. Must be handled before RunE starts the TUI.
+	cmd.Flags().Bool("version", false, "print version and exit")
+	cmd.Flags().BoolP("v", "v", false, "shorthand for --version")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
@@ -157,6 +173,17 @@ func NewRootCmd() *cobra.Command {
 	}
 	helperCmd.Flags().StringVar(&helperManifest, "manifest", "", "update manifest path")
 	cmd.AddCommand(helperCmd)
+
+	// version subcommand — outputs version string and exits immediately.
+	// Used by installers, package managers, and cross-install detection.
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the ggcode version",
+		Run: func(cmd *cobra.Command, _ []string) {
+			fmt.Println(version.Display())
+		},
+	}
+	cmd.AddCommand(versionCmd)
 
 	// Shell completion commands
 	completionCmd := &cobra.Command{
