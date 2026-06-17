@@ -180,6 +180,24 @@ with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as fh:
 PY
 fi
 
+# Generate railway.json in the orphan branch to force DOCKERFILE builder.
+# Railway's service has Root Directory = docs/site which doesn't exist
+# in this orphan branch (files are at root). This config overrides that
+# setting to use the root Dockerfile directly.
+cat > "${publish_dir}/railway.json" <<'RAILJSON'
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 30
+  }
+}
+RAILJSON
+
 cd "${publish_dir}"
 git add --all
 if git diff --cached --quiet; then
