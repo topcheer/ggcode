@@ -1,301 +1,248 @@
-const translations = {
-  en: {
-    "meta.title": "ggcode — AI Coding CLI Tool",
-    "meta.description":
-      "ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, harnessed task queues, MCP integrations, and checkpoints inside one clean terminal workflow.",
-    "nav.features": "Features",
-    "nav.workflow": "Workflow",
-    "nav.install": "Install",
-    "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
-    "hero.title": "Bring the AI coding workflow back into your terminal.",
-    "hero.text":
-      "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, syncing with the mobile companion app or IM bridges, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
-    "hero.ctaPrimary": "Get started",
-    "hero.ctaSecondary": "View repository",
-    "hero.stats.update": "Upgrade in-app or install native packages from releases",
-    "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
-    "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "release-ready · self-update ready",
-    "hero.bannerAlt": "ggcode CLI banner",
-    "features.eyebrow": "what makes it memorable",
-    "features.title":
-      "Not “AI with a shell attached”, but a complete product experience inside the terminal.",
-    "features.terminalFirst.title":
-      "Terminal-first, without breaking your workflow apart",
-    "features.terminalFirst.text":
-      "Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, drop into local shell mode, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.",
-    "features.stable.title": "Safer by design",
-    "features.stable.text":
-      "Five modes — supervised, plan, auto, bypass, and autopilot — balance caution and speed, while ask_user only interrupts when the agent is truly blocked.",
-    "features.control.title": "More controllable",
-    "features.control.text":
-      "Checkpoints, /undo, and dirty-workspace confirmation keep file changes reversible and harness runs grounded in an explicit baseline.",
-    "features.extend.title": "More extensible",
-    "features.extend.text":
-      "MCP, skills, plugins, and project memory can all plug into the same agent loop.",
-    "features.remote.title": "Remote coding across mobile and IM",
-    "features.remote.text":
-      "Use the mobile companion app or bind your workspace to QQ, Telegram, Discord, Slack, Feishu, or DingTalk. Ordered reconnect resume keeps prompts, streamed output, approvals, and ask_user flows consistent on your phone or in a shared team channel.",
-    "features.longTasks.title": "Better for long-running work",
-    "features.longTasks.text":
-      "Background commands, worker-backed harness runs, activity panels, and status signals keep builds, tests, and release batches from blocking the whole session.",
-    "features.crossPlatform.title": "More cross-platform",
-    "features.crossPlatform.text":
-      "Go, npm, pip, native packages, and in-app /update keep installs and upgrades simple across macOS, Windows, and Linux.",
-    "workflow.eyebrow": "from prompt to patch",
-    "workflow.title":
-      "More like a real engineering partner than a one-shot answer box.",
-    "workflow.demo.ask1": "Explain the auth flow and why startup feels slow",
-    "workflow.demo.reply1":
-      "● reads config, traces provider setup, inspects startup banner logic",
-    "workflow.demo.ask2": "go test -tags goolm ./internal/tui",
-    "workflow.demo.reply2":
-      "● local shell mode runs in the main session view",
-    "workflow.demo.reply3": "● rolls back the last file edit from checkpoint",
-    "workflow.demo.reply4":
-      "● background job started · progress visible in-session",
-    "workflow.step1.title": "Understand the codebase first",
-    "workflow.step1.text":
-      "Start from project context, memory files, configuration, and git state instead of guessing.",
-    "workflow.step2.title": "Enter the agent loop",
-    "workflow.step2.text":
-      "Read files, search code, execute tools, and feed the results back into the model for iterative reasoning.",
-    "workflow.step3.title": "Keep product-level interaction intact",
-    "workflow.step3.text":
-      "Language selection, permission modes, local shell mode, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.",
-    "modes.eyebrow": "trust model",
-    "modes.title":
-      "Choose the level of automation that matches the risk of the task.",
-    "modes.supervised":
-      "Best for most daily work and safer around sensitive actions.",
-    "modes.plan":
-      "Good for read-only exploration, architecture review, and higher-risk investigation.",
-    "modes.auto":
-      "Ideal for frequent small tasks and a smoother default flow.",
-    "modes.bypass":
-      "Fits the moments when you know what you want and want fewer pauses.",
-    "modes.autopilot":
-      "Built for continuous progress and high-tempo delivery, with ask_user reserved for genuinely blocking gaps.",
-    "install.eyebrow": "get running fast",
-    "install.title": "Pick the installation or update path you already use.",
-    "install.intro":
-      "Start with the path you already trust. Upgrade later without friction, or pull native packages when you need fleet-friendly distribution.",
-    "install.script.title": "One-line installer",
-    "install.script.text":
-      "Installs to your user directory — no sudo or admin required. Prompts for system-wide if needed.",
-    "install.go.text":
-      "Closest to the native release flow and fetches the right binary for your platform.",
-    "install.npm.text":
-      "Fits teams already in the Node ecosystem and installs the release-backed binary from the @ggcode-cli scope.",
-    "install.pip.text":
-      "Works well for Python environments or standardized distribution across team machines.",
-    "install.native.title": "Native release packages",
-    "install.native.text":
-      "Latest native installers and packages are available on GitHub Releases, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.",
-    "install.native.cta": "Open latest downloads",
-    "install.update.title": "In-app update",
-    "install.update.text":
-      "Already running ggcode? Use the built-in updater to fetch the latest release without reinstalling from scratch.",
-    "install.copy": "Copy command",
-    "copy.state": " copied",
-    "cta.eyebrow": "ready",
-    "cta.title":
-      "Turn your terminal from a command runner into an engineering accelerator.",
-    "cta.text":
-      "If you like living in the terminal, care about workflow integrity, and still want delivery speed, ggcode is the AI tool that belongs in your shell.",
-    "cta.github": "Open GitHub",
-    "cta.readme": "Read the README",
-  },
-  zh: {
-    "meta.title": "ggcode — AI Coding CLI Tool",
-    "meta.description":
-      "ggcode 是一个终端里的 AI Coding CLI。理解代码库、编辑文件、运行命令、跑 harness 队列、连接 MCP、管理 checkpoint，都在同一个清爽现代的终端工作流里完成。",
-    "nav.features": "能力",
-    "nav.workflow": "工作流",
-    "nav.install": "安装",
-    "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
-    "hero.title": "把 AI 编码工作流，真正放回你的终端。",
-    "hero.text":
-      "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、跑 harness 队列，并通过移动端伴侣应用或 IM 桥接保持远程协作与长任务连续性，都在一个清新、现代、极客感十足的界面里完成。",
-    "hero.ctaPrimary": "马上开始",
-    "hero.ctaSecondary": "查看仓库",
-    "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
-    "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
-    "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "release-ready · 可直接升级",
-    "hero.bannerAlt": "ggcode CLI 横幅",
-    "features.eyebrow": "what makes it memorable",
-    "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
-    "features.terminalFirst.title": "Terminal-first，不用切出你的工作流",
-    "features.terminalFirst.text":
-      "你可以在 TUI 里直接读文件、查 diff、看状态、管理 session、切 provider、选语言、进入本地 shell 模式、排队提交新任务，而不是把“AI 辅助开发”拆成十几个碎片化动作。",
-    "features.stable.title": "更稳",
-    "features.stable.text":
-      "supervised、plan、auto、bypass、autopilot 五种模式，兼顾安全和速度；而 ask_user 只会在 agent 真的被卡住时才打断你。",
-    "features.control.title": "更可控",
-    "features.control.text":
-      "checkpoint、/undo 和 dirty workspace 确认，让文件改动可回滚，也让 harness run 始终基于明确基线启动。",
-    "features.extend.title": "更能扩",
-    "features.extend.text":
-      "MCP、skills、plugins、project memory 同时存在，能把你自己的工具链接进 agent loop。",
-    "features.remote.title": "移动端与 IM 一体化远程协作",
-    "features.remote.text":
-      "既可以使用移动端伴侣应用，也可以把工作区绑定到 QQ、Telegram、Discord、Slack、飞书或钉钉。断线重连后的有序增量恢复，能让手机端或群聊里的提示词、流式输出、审批和 ask_user 流程保持一致。",
-    "features.longTasks.title": "更适合长任务",
-    "features.longTasks.text":
-      "后台命令、worker-backed harness run、活动面板、状态提示，让编译、测试、release batch 不再卡住整次交互。",
-    "features.crossPlatform.title": "更跨平台",
-    "features.crossPlatform.text":
-      "Go、npm、pip、原生安装包和应用内 /update，让 macOS、Windows、Linux 上的安装与升级都更直接。",
-    "workflow.eyebrow": "from prompt to patch",
-    "workflow.title": "像一个真正的工程搭档，而不是一次性回答器。",
-    "workflow.demo.ask1": "解释一下认证流程，以及为什么启动会变慢",
-    "workflow.demo.reply1": "● 读取配置，追踪 provider 初始化，检查启动 banner 逻辑",
-    "workflow.demo.ask2": "go test -tags goolm ./internal/tui",
-    "workflow.demo.reply2": "● 本地 shell 模式会直接在主会话区展示输出",
-    "workflow.demo.reply3": "● 从 checkpoint 回滚上一次文件修改",
-    "workflow.demo.reply4": "● 后台任务已启动 · 进度可在会话中持续查看",
-    "workflow.step1.title": "理解代码库",
-    "workflow.step1.text":
-      "从当前项目上下文、memory 文件、配置和 git 状态出发，而不是盲猜。",
-    "workflow.step2.title": "进入 agent loop",
-    "workflow.step2.text":
-      "自动读文件、搜代码、执行工具，把结果继续喂给模型迭代推理。",
-    "workflow.step3.title": "保留产品级交互",
-    "workflow.step3.text":
-      "语言选择、权限模式、本地 shell 模式、harness 队列、review/promote/release 流、sidebar、status、MCP 视图，都是持续使用时真正重要的细节。",
-    "modes.eyebrow": "trust model",
-    "modes.title": "根据任务风险，切换你想要的自动化强度。",
-    "modes.supervised": "适合大多数日常使用。遇到敏感动作时更稳。",
-    "modes.plan": "适合只读探索、架构审阅、风险较高的排查场景。",
-    "modes.auto": "适合频繁的小任务，默认更顺滑。",
-    "modes.bypass": "适合你已经知道自己在做什么，希望 agent 少停顿。",
-    "modes.autopilot": "适合连续推进和高节奏交付；只有在 agent 真的无法继续时才会触发 ask_user。",
-    "install.eyebrow": "get running fast",
-    "install.title": "安装或升级方式，选你已经在用的那一种。",
-    "install.intro":
-      "先走你最熟悉的安装路径；后续要升级时尽量无感，需要团队分发时再直接拿原生安装包。",
-    "install.script.title": "一键安装",
-    "install.script.text": "安装到用户目录，无需 sudo 或管理员权限。如需全局安装会交互式提示。",
-    "install.go.text": "最接近原生发布流，安装后直接拿到对应平台二进制。",
-    "install.npm.text": "适合已经在 Node 生态里的用户，通过 @ggcode-cli 作用域安装 Release 二进制。",
-    "install.pip.text": "适合 Python 环境或团队机器统一分发。",
-    "install.native.title": "原生发布包",
-    "install.native.text": "GitHub Releases 提供最新的原生安装包与系统包，包括 .pkg、.msi、.deb、.rpm、.apk、.ipk 和 Arch 包。",
-    "install.native.cta": "打开最新下载",
-    "install.update.title": "应用内升级",
-    "install.update.text": "如果你已经在用 ggcode，可以直接用内置 updater 拉取最新版本，不用重新安装。",
-    "install.copy": "复制命令",
-    "copy.state": " 已复制",
-    "cta.eyebrow": "ready",
-    "cta.title": "让你的终端，从会执行命令，变成会推进工程。",
-    "cta.text":
-      "如果你喜欢终端、在意工作流完整性、又不想牺牲交付速度，ggcode 就是应该待在你 shell 里的那个 AI 工具。",
-    "cta.github": "前往 GitHub",
-    "cta.readme": "查看 README",
-  },
-};
+/* ============================================
+   ggcode — Landing Page Logic
+   ============================================ */
 
-const copyTargets = document.querySelectorAll("[data-copy]");
-const textTargets = document.querySelectorAll("[data-i18n]");
-const attrTargets = document.querySelectorAll("[data-i18n-attr]");
-const multiAttrTargets = document.querySelectorAll("[data-i18n-attrs]");
-const metaDescription = document.querySelector('meta[name="description"]');
+(function () {
+  "use strict";
 
-function normalizeLanguage(input) {
-  if (!input) return "";
-  const lower = input.toLowerCase();
+  /* ---- Language ---- */
 
-  if (lower.startsWith("zh")) return "zh";
-  if (lower.startsWith("en")) return "en";
+  var LANG = localStorage.getItem("ggcode-lang") || "en";
 
-  return "";
-}
+  var STRINGS = {
+    en: {
+      "nav.features": "Features",
+      "nav.install": "Install",
+      "hero.title": "",
+      "hero.sub":
+        "Read code, edit files, run commands, wire in MCP, manage sessions, ship releases. Not a chat wrapper — a full engineering workflow.",
+      "hero.cta": "Get Started →",
+      "terminal.demo": "Explain the auth flow and refactor for readability",
+      "features.title":
+        "Everything you need.\n<span class='muted'>Nothing you don't.</span>",
+      "features.terminal.title": "Full toolkit, zero context switching",
+      "features.terminal.text":
+        "File editing, shell commands, Git, LSP, search, code review — all in one session, no window juggling.",
+      "features.mcp.title": "MCP integration",
+      "features.mcp.text":
+        "Connect Cloudflare, Playwright, web readers, databases, and custom tools via Model Context Protocol.",
+      "features.agent.title": "Multi-agent",
+      "features.agent.text":
+        "Spawn parallel workers, delegate to teammates, collaborate across instances with A2A protocol.",
+      "features.im.title": "IM bridging",
+      "features.im.text":
+        "Control from QQ, Telegram, Discord, Slack, Feishu, DingTalk. Your agent is always reachable.",
+      "features.modes.title": "Permission modes",
+      "features.modes.text":
+        "Five trust levels from fully supervised to autopilot. Checkpoints and /undo keep changes reversible.",
+      "features.harness.title": "Harness workflow",
+      "features.harness.text":
+        "Isolated task execution in git worktrees with automated checks, code review, and promotion.",
+      "features.mobile.title": "Desktop + Mobile",
+      "features.mobile.text":
+        "Native apps for macOS, Windows, Linux, iOS, Android. Pair mobile via encrypted relay.",
+      "features.sessions.title": "Resumable sessions",
+      "features.sessions.text":
+        "Pause any conversation, resume it later. Switch between projects without losing context.",
+      "install.title":
+        "Pick your path.\n<span class='muted'>Get running in seconds.</span>",
+      "install.script.text": "No sudo required. Installs to ~/.local/bin",
+      "install.win.text": "No admin required. Uses winget or PowerShell",
+      "install.brew.text": "macOS and Linux via Homebrew tap",
+      "install.npm.text": "Node ecosystem, installs release binary",
+      "install.pip.text": "Python environments or team distribution",
+      "install.native.title": "Native packages",
+      "install.native.text": ".pkg · .msi · .deb · .rpm · .apk · AppImage",
+      "install.native.cta": "Releases →",
+      "cta.title":
+        "<span class='gradient-text'>Ship faster</span><br />from your terminal.",
+      "cta.text":
+        "If you live in the terminal, care about workflow integrity, and still want delivery speed — ggcode belongs in your shell.",
+      "cta.cta": "Install now →",
+      "cta.github": "Star on GitHub",
+    },
+    zh: {
+      "nav.features": "功能",
+      "nav.install": "安装",
+      "hero.title": "",
+      "hero.sub":
+        "读代码、编辑文件、执行命令、接入 MCP、管理会话、发布版本。不是聊天包装器 — 是完整的工程工作流。",
+      "hero.cta": "开始使用 →",
+      "terminal.demo": "解释认证流程并重构以提升可读性",
+      "features.title":
+        "你需要的一切。\n<span class='muted'>没有多余的。</span>",
+      "features.terminal.title": "完整工具链，零上下文切换",
+      "features.terminal.text":
+        "文件编辑、Shell 命令、Git、LSP、搜索、代码审查 — 全在一个会话里，不用切窗口。",
+      "features.mcp.title": "MCP 集成",
+      "features.mcp.text":
+        "连接 Cloudflare、Playwright、网页读取、数据库和自定义工具，通过 Model Context Protocol。",
+      "features.agent.title": "多 Agent",
+      "features.agent.text":
+        "生成并行工作者、委托给队友、通过 A2A 协议跨实例协作。",
+      "features.im.title": "IM 桥接",
+      "features.im.text":
+        "从 QQ、Telegram、Discord、Slack、飞书、钉钉控制。你的 Agent 触手可及。",
+      "features.modes.title": "权限模式",
+      "features.modes.text":
+        "五种信任级别，从完全监督到自动驾驶。检查点和 /undo 让变更可逆。",
+      "features.harness.title": "Harness 工作流",
+      "features.harness.text":
+        "在 git worktree 中隔离执行任务，自动检查、代码审查、合并推广。",
+      "features.mobile.title": "桌面 + 移动端",
+      "features.mobile.text":
+        "macOS、Windows、Linux、iOS、Android 原生应用。通过加密 relay 配对移动端。",
+      "features.sessions.title": "可恢复会话",
+      "features.sessions.text":
+        "随时暂停对话，稍后恢复。在项目间切换不丢失上下文。",
+      "install.title":
+        "选择你的方式。\n<span class='muted'>几秒钟就能跑起来。</span>",
+      "install.script.text": "不需要 sudo。安装到 ~/.local/bin",
+      "install.win.text": "不需要管理员。用 winget 或 PowerShell",
+      "install.brew.text": "通过 Homebrew tap 安装，支持 macOS 和 Linux",
+      "install.npm.text": "Node 生态，安装 release 二进制",
+      "install.pip.text": "Python 环境或团队分发",
+      "install.native.title": "原生安装包",
+      "install.native.text": ".pkg · .msi · .deb · .rpm · .apk · AppImage",
+      "install.native.cta": "下载 →",
+      "cta.title":
+        "<span class='gradient-text'>更快交付</span><br />从你的终端开始。",
+      "cta.text":
+        "如果你生活在终端里、关心工作流完整性、还想保持交付速度 — ggcode 就属于你的 shell。",
+      "cta.cta": "立即安装 →",
+      "cta.github": "GitHub 加星",
+    },
+  };
 
-function resolveLanguage() {
-  const params = new URLSearchParams(window.location.search);
-  const queryLanguage = normalizeLanguage(params.get("lang"));
-
-  if (queryLanguage) {
-    return queryLanguage;
+  function applyLang() {
+    var dict = STRINGS[LANG] || STRINGS.en;
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n");
+      if (dict[key] !== undefined && dict[key] !== "") {
+        var val = dict[key];
+        if (val.indexOf("\n") !== -1) {
+          el.innerHTML = val.replace(/\n/g, "<br />");
+        } else {
+          el.textContent = val;
+        }
+      }
+    });
+    document.documentElement.lang = LANG === "zh" ? "zh-CN" : "en";
   }
 
-  const browserLanguages = Array.isArray(navigator.languages) && navigator.languages.length > 0
-    ? navigator.languages
-    : [navigator.language].filter(Boolean);
-
-  for (const candidate of browserLanguages) {
-    const normalized = normalizeLanguage(candidate);
-    if (normalized) {
-      return normalized;
-    }
+  var langToggle = document.getElementById("langToggle");
+  if (langToggle) {
+    langToggle.addEventListener("click", function () {
+      LANG = LANG === "en" ? "zh" : "en";
+      localStorage.setItem("ggcode-lang", LANG);
+      applyLang();
+    });
   }
 
-  return "en";
-}
+  applyLang();
 
-function translate(language, key) {
-  return translations[language]?.[key] ?? translations.en[key] ?? "";
-}
+  /* ---- Install tabs ---- */
 
-function applyTranslations(language) {
-  document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
-  document.title = translate(language, "meta.title");
+  var cmds = {
+    macos: "curl -fsSL https://ggcode.dev/install.sh | bash",
+    windows: "irm https://ggcode.dev/install.ps1 | iex",
+    brew: "brew install topcheer/ggcode/ggcode",
+    npm: "npm install -g @ggcode-cli/ggcode",
+  };
 
-  if (metaDescription) {
-    metaDescription.setAttribute("content", translate(language, "meta.description"));
+  var tabs = document.querySelectorAll(".tab");
+  var cmdEl = document.getElementById("installCmd");
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      tabs.forEach(function (t) { t.classList.remove("active"); });
+      tab.classList.add("active");
+      var key = tab.getAttribute("data-tab");
+      if (cmds[key] && cmdEl) {
+        cmdEl.textContent = cmds[key];
+      }
+    });
+  });
+
+  /* ---- Copy buttons ---- */
+
+  document.querySelectorAll("[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var text = btn.getAttribute("data-copy");
+      if (!text && cmdEl) text = cmdEl.textContent;
+
+      function fallback() {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(fallback);
+      } else {
+        fallback();
+      }
+
+      btn.classList.add("copied");
+      setTimeout(function () { btn.classList.remove("copied"); }, 1500);
+    });
+  });
+
+  /* ---- Scroll reveal ---- */
+
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("revealed");
+            io.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.08, rootMargin: "0px 0px -40px 0px" }
+    );
+
+    document.querySelectorAll("[data-reveal]").forEach(function (el) {
+      io.observe(el);
+    });
+  } else {
+    document.querySelectorAll("[data-reveal]").forEach(function (el) {
+      el.classList.add("revealed");
+    });
   }
 
-  textTargets.forEach((node) => {
-    const key = node.getAttribute("data-i18n");
-    if (!key) return;
-    node.textContent = translate(language, key);
-  });
+  /* ---- Terminal typing effect ---- */
 
-  attrTargets.forEach((node) => {
-    const attr = node.getAttribute("data-i18n-attr");
-    const key = node.getAttribute("data-i18n-key");
-    if (!attr || !key) return;
-    node.setAttribute(attr, translate(language, key));
-  });
+  var typedLines = document.querySelectorAll(".terminal-content .terminal-line");
+  var typedIndex = 0;
 
-  multiAttrTargets.forEach((node) => {
-    const attrs = node.getAttribute("data-i18n-attrs");
-    const key = node.getAttribute("data-i18n-key");
-    if (!attrs || !key) return;
+  function typeNext() {
+    if (typedIndex >= typedLines.length) return;
+    var line = typedLines[typedIndex];
+    line.style.opacity = "0";
+    line.style.transition = "opacity 0.3s";
 
-    const value = translate(language, key);
-    attrs
-      .split(",")
-      .map((attr) => attr.trim())
-      .filter(Boolean)
-      .forEach((attr) => node.setAttribute(attr, value));
-  });
-
-  copyTargets.forEach((button) => {
-    const copiedLabelKey = button.getAttribute("data-copy-label-key");
-    if (copiedLabelKey) {
-      button.setAttribute("data-copied-label", translate(language, copiedLabelKey));
-    }
-  });
-}
-
-async function copyText(button) {
-  const text = button.getAttribute("data-copy");
-  if (!text) return;
-
-  try {
-    await navigator.clipboard.writeText(text);
-    button.classList.add("copied");
-    setTimeout(() => button.classList.remove("copied"), 1400);
-  } catch {
-    // Best-effort only for a static promo page.
+    setTimeout(function () {
+      line.style.opacity = "1";
+      typedIndex++;
+      if (typedIndex < typedLines.length) {
+        setTimeout(typeNext, 200 + Math.random() * 250);
+      }
+    }, 100);
   }
-}
 
-const language = resolveLanguage();
-applyTranslations(language);
-
-copyTargets.forEach((button) => {
-  button.addEventListener("click", () => copyText(button));
-});
+  // Start typing effect after a short delay
+  setTimeout(function () {
+    // Hide all lines first
+    typedLines.forEach(function (l) { l.style.opacity = "0"; });
+    typeNext();
+  }, 600);
+})();
