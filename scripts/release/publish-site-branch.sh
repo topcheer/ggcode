@@ -71,24 +71,28 @@ trap cleanup EXIT
 git init -b "${target_branch}" "${publish_dir}" >/dev/null
 git -C "${publish_dir}" remote add origin "${remote_url}"
 
+# Railway deploys from this branch with Root Directory = docs/site.
+# So all site files must live under docs/site/ in the orphan branch.
+site_dir="${publish_dir}/docs/site"
+mkdir -p "${site_dir}"
+
 # Copy ONLY the site content — not the full repo.
 if [[ -d docs/site ]]; then
-  mkdir -p "${publish_dir}"
-  rsync -a --delete --exclude '.git' docs/site/ "${publish_dir}/"
+  rsync -a --delete --exclude '.git' docs/site/ "${site_dir}/"
 else
   echo "WARNING: docs/site/ not found, publishing empty site"
 fi
 
 # Copy install scripts so they're served from ggcode.dev/install.sh and /install.ps1
 if [[ -d scripts/install ]]; then
-  cp scripts/install/install.sh "${publish_dir}/install.sh" 2>/dev/null || true
-  cp scripts/install/install.ps1 "${publish_dir}/install.ps1" 2>/dev/null || true
+  cp scripts/install/install.sh "${site_dir}/install.sh" 2>/dev/null || true
+  cp scripts/install/install.ps1 "${site_dir}/install.ps1" 2>/dev/null || true
 fi
 
 # Generate a download manifest from release assets WITHOUT copying binaries.
 # The manifest lists files and their GitHub Releases download URLs so the
 # website can link directly to GitHub-hosted assets.
-latest_dir="${publish_dir}/downloads/latest"
+latest_dir="${site_dir}/downloads/latest"
 mkdir -p "${latest_dir}"
 
 if [[ ${#asset_dirs[@]} -gt 0 ]]; then
@@ -180,11 +184,10 @@ with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as fh:
 PY
 fi
 
-# Generate railway.json in the orphan branch to force DOCKERFILE builder.
-# Railway's service has Root Directory = docs/site which doesn't exist
-# in this orphan branch (files are at root). This config overrides that
-# setting to use the root Dockerfile directly.
-cat > "${publish_dir}/railway.json" <<'RAILJSON'
+# Generate railway.json under docs/site/ to force DOCKERFILE builder.
+# This overrides Railway's default Railpack driver which fails to resolve
+# the Root Directory path.
+cat > "${site_dir}/railway.json" <<'RAILJSON'
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
