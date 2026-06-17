@@ -15,11 +15,19 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
 
+# Check if package already exists in winget-pkgs
 & $wingetCreate show $PackageId | Out-Null
 $packageExists = $LASTEXITCODE -eq 0
 
 if (-not $packageExists) {
-    Write-Warning "Package '$PackageId' does not exist in winget-pkgs yet. Skipping automated submission until the first manifest is bootstrapped manually."
+    Write-Warning "Package '$PackageId' does not exist in winget-pkgs yet. Creating new manifest..."
+    # For new packages, use wingetcreate new which downloads installers,
+    # extracts metadata, and submits a PR to winget-pkgs.
+    $allUrls = @($InstallerUrl)
+    if ($InstallerUrlArm64) {
+        $allUrls += $InstallerUrlArm64
+    }
+    & $wingetCreate new $allUrls --out "$PWD/new-manifest" --token $GitHubToken --no-open
     exit 0
 }
 
@@ -44,22 +52,16 @@ if ($LASTEXITCODE -eq 0) {
 Write-Warning "wingetcreate update failed (likely installer count mismatch). Falling back to full manifest regeneration..."
 
 # --- Attempt 2: Generate complete new manifest and submit ---
-# This handles the case where installer count changes (e.g. adding arm64
-# to an existing x64-only manifest). wingetcreate new downloads the
-# installers, detects metadata, and creates a complete manifest from
-# scratch. The --token enables auto-fill from GitHub release metadata.
+# wingetcreate new downloads all installers, extracts metadata
+# (including version), and submits a PR to winget-pkgs.
+# No --version flag needed — version is auto-detected from installer metadata.
 $allUrls = @($InstallerUrl)
 if ($InstallerUrlArm64) {
     $allUrls += $InstallerUrlArm64
 }
 
-# Use wingetcreate new to generate a fresh manifest with all installers.
-# This is non-interactive when all required fields can be auto-filled
-# from GitHub release metadata.
-$newArgs = @("new") + $allUrls + @("--version", $releaseVersion, "--token", $GitHubToken, "--out", "$PWD/new-manifest", "--no-open")
-
 Write-Host "Generating new manifest with $($allUrls.Count) installer(s)..."
-& $wingetCreate @newArgs
+& $wingetCreate new $allUrls --out "$PWD/new-manifest" --token $GitHubToken --no-open
 
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "wingetcreate new also failed. This may require manual manifest update to add the new installer architecture."
@@ -67,14 +69,5 @@ if ($LASTEXITCODE -ne 0) {
     exit 0  # Don't fail the release — MSI files are already published
 }
 
-Write-Host "New manifest generated successfully."
-
-# Submit the generated manifest
-$submitArgs = @("submit", "$PWD/new-manifest", "--token", $GitHubToken, "--no-open")
-& $wingetCreate @submitArgs
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Manifest submission failed, but release assets are available. Manual review may be needed."
-}
-
+Write-Host "New manifest generated and PR submitted successfully."
 exit 0
