@@ -143,8 +143,11 @@ if ($desiredUrls.Count -gt $existingCount -and $InstallerUrlArm64) {
 }
 
 # Step 3: Submit the modified manifest
-Write-Host "Step 3: Submitting manifest to winget-pkgs..."
-& $wingetCreate submit $manifestDir --token $GitHubToken --no-open
+# wingetcreate submit expects the directory containing the YAML files directly,
+# not the top-level output directory with nested manifest structure.
+$yamlDir = Split-Path -Parent $installerFile.FullName
+Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
+& $wingetCreate submit $yamlDir --token $GitHubToken --no-open
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Manifest submitted successfully!"
