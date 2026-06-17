@@ -326,7 +326,35 @@ func mcpInstallWizard(out io.Writer) ([]string, error) {
 	return args, nil
 }
 
-// splitCommand splits a command string into arguments, handling basic quoting.
+// splitCommand splits a command string into arguments, respecting double quotes.
+// e.g. `npx -y "my server" --port 3000` → ["npx", "-y", "my server", "--port", "3000"]
 func splitCommand(s string) []string {
-	return strings.Fields(s)
+	// Use shell-style word splitting with quote support.
+	// This is intentionally simple — not a full shell parser.
+	var parts []string
+	var current strings.Builder
+	inQuote := false
+	flush := func() {
+		if current.Len() > 0 {
+			parts = append(parts, current.String())
+			current.Reset()
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"':
+			inQuote = !inQuote
+		case c == ' ' || c == '\t':
+			if inQuote {
+				current.WriteByte(c)
+			} else {
+				flush()
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+	flush()
+	return parts
 }

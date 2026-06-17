@@ -266,11 +266,13 @@ async function ensureInstalled(version, quiet) {
     }
 
     // Only reuse if the system binary version matches what was requested.
+    // When requestedVersion is empty, we have no constraint → reuse.
+    // When requestedVersion is "latest", we must NOT reuse because we don't
+    // know if the system binary is actually the latest available version.
     const versionMatch = sysVersion && (
       sysVersion === requestedVersion ||
       sysVersion === "v" + requestedVersion ||
-      requestedVersion === "" ||
-      requestedVersion === "latest"
+      requestedVersion === ""
     );
 
     if (versionMatch) {

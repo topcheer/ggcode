@@ -63,11 +63,11 @@ func NewRootCmd() *cobra.Command {
 			// Global --version/-v: print and exit immediately, before any
 			// config loading or TUI initialization.
 			if showVer, _ := cmd.Flags().GetBool("version"); showVer {
-				fmt.Println(version.Display())
+				fmt.Fprintln(cmd.OutOrStdout(), version.Display())
 				return nil
 			}
 			if showVer, _ := cmd.Flags().GetBool("v"); showVer {
-				fmt.Println(version.Display())
+				fmt.Fprintln(cmd.OutOrStdout(), version.Display())
 				return nil
 			}
 

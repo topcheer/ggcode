@@ -54,6 +54,7 @@
           WorkingDirectory="INSTALLFOLDER"
           Target="[INSTALLFOLDER]ggcode-desktop.exe" />
         <RemoveFolder Id="RemoveProgramMenuProductDir" Directory="ProgramMenuProductDir" On="uninstall" />
+        <RemoveFolder Id="RemoveProgramMenuVendorDir" Directory="ProgramMenuVendorDir" On="uninstall" />
         <!-- User-level registry key (HKCU instead of HKLM) -->
         <RegistryValue
           Root="HKCU"
