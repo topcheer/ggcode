@@ -179,12 +179,7 @@ try {
 
     # --- Verify ---
     Write-Host ""
-    $installedVersion = & $InstallTarget version 2>$null
-    if ($installedVersion) {
-        Write-Ok "ggcode $installedVersion is ready."
-    } else {
-        Write-Ok "ggcode installed."
-    }
+    Write-Ok "ggcode $Tag is ready."
     Write-Host ""
     Write-Host "  Run 'ggcode' to start." -ForegroundColor White
     Write-Host "  Update with: ggcode /update" -ForegroundColor White

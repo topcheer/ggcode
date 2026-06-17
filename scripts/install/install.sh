@@ -218,10 +218,9 @@ ensure_path "${INSTALL_DIR}"
 # --- Verify ---
 echo ""
 if [[ -x "${INSTALL_TARGET}" ]]; then
-  INSTALLED_VERSION="$("${INSTALL_TARGET}" version 2>/dev/null || echo "unknown")"
-  ok "ggcode ${INSTALLED_VERSION} is ready."
+  ok "ggcode ${TAG} is ready."
   echo ""
-  echo -e "  Run ${BOLD}${CYAN}ggcode${NC}${BOLD}${NC} to start."
+  echo -e "  Run ${BOLD}${CYAN}ggcode${NC} to start."
   if [[ "${SCOPE}" == "system" ]]; then
     echo -e "  Update with: ${BOLD}ggcode /update${NC} or ${BOLD}sudo cp ...${NC}"
   else
