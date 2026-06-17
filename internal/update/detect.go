@@ -217,14 +217,15 @@ func PackageManagerHint(execPath string) string {
 	if strings.Contains(p, "/scoop/apps/") || strings.Contains(p, "/scoop/shims/") {
 		return "scoop"
 	}
-	// winget perMachine
+	// winget perMachine (Program Files — needs admin)
 	if strings.Contains(p, "c:/program files/ggcode") || strings.Contains(p, "c:\\program files\\ggcode") ||
 		strings.Contains(p, "c:/program files (x86)/ggcode") {
 		return "winget"
 	}
-	// winget perUser — no upgrade hint needed (auto-updates via winget user scope)
+	// winget perUser (LocalAppData — default, no admin needed)
+	// Still show hint so winget can track the version
 	if strings.Contains(p, "/appdata/local/ggcode/") {
-		return ""
+		return "winget"
 	}
 	// Snap
 	if strings.Contains(p, "/snap/") {

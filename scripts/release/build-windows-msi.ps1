@@ -47,8 +47,20 @@ try {
             Pop-Location
         }
 
-        # perMachine MSI (for winget, enterprise)
-        $msiMachine = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
+        # perUser MSI — default, no suffix (no admin required)
+        $msiUser = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
+        & wix build `
+            -d "Version=$packageVersion" `
+            -d "SourceDir=$stageDir" `
+            -arch $build.WixArch `
+            -o $msiUser `
+            $wxsUser
+        if ($LASTEXITCODE -ne 0) {
+            throw "wix build (perUser) failed for $($build.WixArch)"
+        }
+
+        # perMachine MSI — for enterprise, gets _machine suffix
+        $msiMachine = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}_machine.msi" -f $packageVersion, $build.Suffix)
         & wix build `
             -d "Version=$packageVersion" `
             -d "UpgradeCode=$machineUpgradeCode" `
@@ -58,18 +70,6 @@ try {
             $wxsMachine
         if ($LASTEXITCODE -ne 0) {
             throw "wix build (perMachine) failed for $($build.WixArch)"
-        }
-
-        # perUser MSI (no admin required, installs to LocalAppData)
-        $msiUser = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}_user.msi" -f $packageVersion, $build.Suffix)
-        & wix build `
-            -d "Version=$packageVersion" `
-            -d "SourceDir=$stageDir" `
-            -arch $build.WixArch `
-            -o $msiUser `
-            $wxsUser
-        if ($LASTEXITCODE -ne 0) {
-            throw "wix build (perUser) failed for $($build.WixArch)"
         }
     }
 }

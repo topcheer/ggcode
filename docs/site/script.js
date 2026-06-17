@@ -80,6 +80,9 @@ const translations = {
     "install.title": "Pick the installation or update path you already use.",
     "install.intro":
       "Start with the path you already trust. Upgrade later without friction, or pull native packages when you need fleet-friendly distribution.",
+    "install.script.title": "One-line installer",
+    "install.script.text":
+      "Installs to your user directory — no sudo or admin required. Prompts for system-wide if needed.",
     "install.go.text":
       "Closest to the native release flow and fetches the right binary for your platform.",
     "install.npm.text":
@@ -172,6 +175,8 @@ const translations = {
     "install.title": "安装或升级方式，选你已经在用的那一种。",
     "install.intro":
       "先走你最熟悉的安装路径；后续要升级时尽量无感，需要团队分发时再直接拿原生安装包。",
+    "install.script.title": "一键安装",
+    "install.script.text": "安装到用户目录，无需 sudo 或管理员权限。如需全局安装会交互式提示。",
     "install.go.text": "最接近原生发布流，安装后直接拿到对应平台二进制。",
     "install.npm.text": "适合已经在 Node 生态里的用户，通过 @ggcode-cli 作用域安装 Release 二进制。",
     "install.pip.text": "适合 Python 环境或团队机器统一分发。",

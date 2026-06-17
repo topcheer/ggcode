@@ -17,7 +17,7 @@ func TestPackageManagerHint(t *testing.T) {
 		{"/home/user/scoop/shims/ggcode.exe", "scoop"},
 		{"C:\\Program Files\\ggcode\\ggcode.exe", "winget"},
 		{"C:/Program Files/ggcode/ggcode.exe", "winget"},
-		{"/home/user/AppData/Local/ggcode/ggcode.exe", ""},        // perUser winget — no hint
+		{"/home/user/AppData/Local/ggcode/ggcode.exe", "winget"},  // perUser winget (default)
 		{"/usr/local/bin/ggcode", ""},                             // direct install — no hint
 		{"/home/user/.local/share/ggcode/npm/v1.3.71/ggcode", ""}, // npm — no hint
 	}

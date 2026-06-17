@@ -79,6 +79,12 @@ else
   echo "WARNING: docs/site/ not found, publishing empty site"
 fi
 
+# Copy install scripts so they're served from ggcode.dev/install.sh and /install.ps1
+if [[ -d scripts/install ]]; then
+  cp scripts/install/install.sh "${publish_dir}/install.sh" 2>/dev/null || true
+  cp scripts/install/install.ps1 "${publish_dir}/install.ps1" 2>/dev/null || true
+fi
+
 # Generate a download manifest from release assets WITHOUT copying binaries.
 # The manifest lists files and their GitHub Releases download URLs so the
 # website can link directly to GitHub-hosted assets.
