@@ -120,6 +120,13 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 		return PreparedUpdate{}, ErrAlreadyUpToDate
 	}
 
+	// Pre-flight: verify write permissions BEFORE downloading.
+	// On Windows, the target binary dir and the helper staging dir must
+	// both be writable, otherwise the update will fail after a large download.
+	if err := s.checkWritable(); err != nil {
+		return PreparedUpdate{}, err
+	}
+
 	downloaded, err := install.DownloadBinary(ctx, install.Options{
 		Version:    check.LatestVersion,
 		HTTPClient: s.httpClient(),
@@ -425,4 +432,38 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// checkWritable verifies that all paths needed for a self-update are writable.
+// This avoids downloading a large binary only to discover permission errors.
+func (s *Service) checkWritable() error {
+	// 1. Helper staging dir (~/.ggcode/update-helper/)
+	helperDir := filepath.Join(config.ConfigDir(), "update-helper")
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		return fmt.Errorf("update: cannot create staging directory %s: %w\n"+
+			"Check that you have write permission to this location.", helperDir, err)
+	}
+	// Probe-write a temp file to confirm the dir is actually writable.
+	probe := filepath.Join(helperDir, ".write-probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+		return fmt.Errorf("update: staging directory %s is not writable: %w\n"+
+			"Check that you have write permission to this location.", helperDir, err)
+	}
+	_ = os.Remove(probe)
+
+	// 2. Target executable directory
+	execDir := filepath.Dir(s.ExecPath)
+	if execDir == "." || execDir == "" {
+		execDir = mustGetwd()
+	}
+	probe2 := filepath.Join(execDir, ".ggcode-update-probe")
+	if err := os.WriteFile(probe2, []byte("x"), 0o644); err != nil {
+		return fmt.Errorf("update: target directory %s is not writable: %w\n"+
+			"The ggcode binary is installed in a location that requires "+
+			"elevated permissions. Try running as administrator or reinstall "+
+			"to a user-writable location.", execDir, err)
+	}
+	_ = os.Remove(probe2)
+
+	return nil
 }
