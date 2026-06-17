@@ -1,4 +1,7 @@
-# Build GGCode Desktop (Wails) for Windows (amd64) and a matching MSI installer.
+# Build GGCode Desktop (Wails) for Windows (amd64) and matching MSI installers.
+# Produces two MSIs:
+#   - perUser (default, no suffix): ggcode-desktop_X.Y.Z_windows_x64.msi
+#   - perMachine (_machine suffix): ggcode-desktop_X.Y.Z_windows_x64_machine.msi
 param(
   [Parameter(Mandatory=$true)]
   [string]$Version,
@@ -10,7 +13,8 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $WailsDir = Join-Path $RootDir "desktop\ggcode-desktop-wails"
-$WxsPath = Join-Path $RootDir ".github\packaging\windows\ggcode-desktop.wxs"
+$WxsMachinePath = Join-Path $RootDir ".github\packaging\windows\ggcode-desktop.wxs"
+$WxsUserPath = Join-Path $RootDir ".github\packaging\windows\ggcode-desktop-user.wxs"
 $PackageVersion = $Version -replace '^v',''
 $Commit = if ($env:GGCODE_COMMIT) { $env:GGCODE_COMMIT } else { "" }
 $BuildDate = if ($env:GGCODE_DATE) { $env:GGCODE_DATE } else { "" }
@@ -30,8 +34,11 @@ $Ldflags = @(
 Write-Host "=== Building GGCode Desktop (Wails) for Windows (amd64) ==="
 Write-Host "Output: $AbsOutputDir"
 
-if (-not (Test-Path $WxsPath)) {
-  throw "missing WiX source at $WxsPath"
+if (-not (Test-Path $WxsMachinePath)) {
+  throw "missing WiX source at $WxsMachinePath"
+}
+if (-not (Test-Path $WxsUserPath)) {
+  throw "missing WiX source at $WxsUserPath"
 }
 
 # Install Wails CLI if not present
@@ -77,18 +84,33 @@ Pop-Location
 
 Copy-Item $outFile (Join-Path $stageDir "ggcode-desktop.exe")
 
-$msiTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64.msi"
+# --- Build perUser MSI (default, no suffix) ---
+$msiUserTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64.msi"
 & wix build `
   -d "Version=$PackageVersion" `
   -d "UpgradeCode=$UpgradeCode" `
   -d "SourceDir=$stageDir" `
   -arch x64 `
-  -o $msiTarget `
-  $WxsPath
+  -o $msiUserTarget `
+  $WxsUserPath
 if ($LASTEXITCODE -ne 0) {
-  throw "wix build failed for desktop windows installer"
+  throw "wix build failed for desktop windows perUser installer"
 }
-Write-Host "Built: $msiTarget"
+Write-Host "Built perUser MSI: $msiUserTarget"
+
+# --- Build perMachine MSI (_machine suffix) ---
+$msiMachineTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64_machine.msi"
+& wix build `
+  -d "Version=$PackageVersion" `
+  -d "UpgradeCode=$UpgradeCode" `
+  -d "SourceDir=$stageDir" `
+  -arch x64 `
+  -o $msiMachineTarget `
+  $WxsMachinePath
+if ($LASTEXITCODE -ne 0) {
+  throw "wix build failed for desktop windows perMachine installer"
+}
+Write-Host "Built perMachine MSI: $msiMachineTarget"
 
 Remove-Item -Recurse -Force $stageDir
 

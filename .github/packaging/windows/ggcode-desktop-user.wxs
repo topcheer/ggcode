@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- perUser MSI for GGCode Desktop: installs to LocalAppData (no admin required).
+     Same Package Name and UpgradeCode as perMachine so winget/MSI treats them
+     as the same product with different scope. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="GGCode Desktop"
+    Manufacturer="GG AI Studio"
+    Version="$(var.Version)"
+    UpgradeCode="$(var.UpgradeCode)"
+    Language="1033"
+    InstallerVersion="500"
+    Scope="perUser">
+    <SummaryInformation
+      Description="GGCode desktop AI coding agent (user install)"
+      Manufacturer="GG AI Studio"
+      Keywords="Installer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of GGCode Desktop is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="MainFeature" Title="GGCode Desktop" Level="1">
+      <ComponentGroupRef Id="MainComponents" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <!-- LocalAppDataFolder = C:\Users\<user>\AppData\Local -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="GGCode Desktop" FileSource="$(var.SourceDir)" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuVendorDir" Name="GG AI Studio">
+        <Directory Id="ProgramMenuProductDir" Name="GGCode Desktop" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\ggcode-desktop.exe" />
+  </Fragment>
+
+  <Fragment>
+    <DirectoryRef Id="INSTALLFOLDER" FileSource="$(var.SourceDir)">
+      <Component Id="MainExecutableComponent" Guid="*">
+        <File Id="MainExecutableFile" Name="ggcode-desktop.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="ShortcutComponent" Guid="*">
+        <Shortcut
+          Id="DesktopShortcut"
+          Directory="DesktopFolder"
+          Name="GGCode Desktop"
+          WorkingDirectory="INSTALLFOLDER"
+          Target="[INSTALLFOLDER]ggcode-desktop.exe"
+          Icon="AppIcon" />
+        <Shortcut
+          Id="ProgramMenuShortcut"
+          Directory="ProgramMenuProductDir"
+          Name="GGCode Desktop"
+          WorkingDirectory="INSTALLFOLDER"
+          Target="[INSTALLFOLDER]ggcode-desktop.exe"
+          Icon="AppIcon" />
+        <RemoveFolder Id="RemoveProgramMenuProductDir" Directory="ProgramMenuProductDir" On="uninstall" />
+        <!-- User-level registry key (HKCU instead of HKLM) -->
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\GG AI Studio\GGCode Desktop"
+          Name="installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="MainComponents">
+      <ComponentRef Id="MainExecutableComponent" />
+      <ComponentRef Id="ShortcutComponent" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>
