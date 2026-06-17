@@ -120,7 +120,7 @@
       var key = el.getAttribute("data-i18n");
       if (dict[key] !== undefined && dict[key] !== "") {
         var val = dict[key];
-        if (val.indexOf("\n") !== -1) {
+        if (val.indexOf("<") !== -1) {
           el.innerHTML = val.replace(/\n/g, "<br />");
         } else {
           el.textContent = val;
