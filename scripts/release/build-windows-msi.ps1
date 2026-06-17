@@ -9,8 +9,9 @@ $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $packageVersion = $Version.TrimStart("v")
 $commit = $env:GGCODE_COMMIT
 $buildDate = $env:GGCODE_DATE
-$upgradeCode = "{8E0F3BA8-802A-4FEA-9EDC-25475EB74ACF}"
-$wxsPath = Join-Path $rootDir ".github\packaging\windows\ggcode.wxs"
+$machineUpgradeCode = "{8E0F3BA8-802A-4FEA-9EDC-25475EB74ACF}"
+$wxsMachine = Join-Path $rootDir ".github\packaging\windows\ggcode.wxs"
+$wxsUser = Join-Path $rootDir ".github\packaging\windows\ggcode-user.wxs"
 $resolvedOutputDir = (New-Item -ItemType Directory -Force -Path $OutputDir).FullName
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ggcode-msi-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
@@ -46,16 +47,29 @@ try {
             Pop-Location
         }
 
-        $target = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
+        # perMachine MSI (for winget, enterprise)
+        $msiMachine = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
         & wix build `
             -d "Version=$packageVersion" `
-            -d "UpgradeCode=$upgradeCode" `
+            -d "UpgradeCode=$machineUpgradeCode" `
             -d "SourceDir=$stageDir" `
             -arch $build.WixArch `
-            -o $target `
-            $wxsPath
+            -o $msiMachine `
+            $wxsMachine
         if ($LASTEXITCODE -ne 0) {
-            throw "wix build failed for $($build.WixArch)"
+            throw "wix build (perMachine) failed for $($build.WixArch)"
+        }
+
+        # perUser MSI (no admin required, installs to LocalAppData)
+        $msiUser = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}_user.msi" -f $packageVersion, $build.Suffix)
+        & wix build `
+            -d "Version=$packageVersion" `
+            -d "SourceDir=$stageDir" `
+            -arch $build.WixArch `
+            -o $msiUser `
+            $wxsUser
+        if ($LASTEXITCODE -ne 0) {
+            throw "wix build (perUser) failed for $($build.WixArch)"
         }
     }
 }

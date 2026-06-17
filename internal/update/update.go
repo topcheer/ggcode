@@ -308,31 +308,6 @@ func detectWrapperKind(execPath string) string {
 	return wrapperKindNative
 }
 
-// PackageManagerHint returns a human-readable hint about the package manager
-// that likely installed this binary, or empty string if not detected.
-// This is used to advise users after a self-update that their package manager
-// won't know about the update.
-func PackageManagerHint(execPath string) string {
-	p := filepath.ToSlash(execPath)
-	p = strings.ToLower(p)
-
-	// Homebrew: /opt/homebrew/Cellar/ or /home/linuxbrew/.linuxbrew/Cellar/
-	if strings.Contains(p, "/homebrew/cellar/") || strings.Contains(p, "/linuxbrew/.linuxbrew/cellar/") {
-		return "brew"
-	}
-	// Scoop: ~/scoop/apps/ggcode/
-	if strings.Contains(p, "/scoop/apps/") {
-		return "scoop"
-	}
-	// winget/MSI: C:\Program Files\ggcode\
-	if strings.Contains(p, "c:/program files/ggcode") || strings.Contains(p, "c:\\program files\\ggcode") {
-		return "winget"
-	}
-	// deb/rpm: /usr/bin/ggcode (but could also be direct install)
-	// Only flag if we can detect dpkg/rpm — skip for now to avoid false positives.
-	return ""
-}
-
 func (s *Service) readCachedCheck() (cachedCheck, bool) {
 	path := s.cachePath()
 	data, err := os.ReadFile(path)

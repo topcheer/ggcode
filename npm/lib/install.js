@@ -248,6 +248,50 @@ async function ensureInstalled(version, quiet) {
     };
   }
 
+  // Check if a system-installed binary exists (brew/winget/scoop).
+  // If found, symlink to it instead of downloading a duplicate.
+  const sysBinary = findSystemBinary();
+  if (sysBinary) {
+    const dir = preferredInstallDirs()[0];
+    if (dir) {
+      fs.mkdirSync(dir, { recursive: true });
+      const linkPath = path.join(dir, target.binaryName);
+      try {
+        // Remove existing file/symlink first
+        fs.rmSync(linkPath, { force: true });
+        // Create a wrapper script that delegates to the system binary
+        if (process.platform === "win32") {
+          fs.writeFileSync(linkPath,
+            `@echo off\r\n"${sysBinary.path}" %*\r\n`, "utf8");
+        } else {
+          fs.writeFileSync(linkPath,
+            `#!/bin/sh\nexec "${sysBinary.path}" "$@"\n`, "utf8");
+          fs.chmodSync(linkPath, 0o755);
+        }
+        writeMetadata(dir, "system");
+        const pathUpdated = ensureInstalledPath(dir);
+        if (!quiet) {
+          console.log(`ggcode: Reusing system binary from ${sysBinary.source} at ${sysBinary.path}`);
+        }
+        return {
+          binaryPath: sysBinary.path,
+          installDir: dir,
+          version: "system",
+          pathUpdated,
+          installedNow: false,
+          needsRestart: pathUpdated,
+          reusedSystemBinary: true,
+          systemBinaryPath: sysBinary.path,
+        };
+      } catch (e) {
+        // Fall through to normal install if symlink fails
+        if (!quiet) {
+          console.warn(`ggcode: Could not reuse system binary (${e.message}), downloading instead.`);
+        }
+      }
+    }
+  }
+
   const resolvedVersion = await resolveReleaseVersion(requestedVersion);
   const base = releaseBase(resolvedVersion);
   const archiveURL = `${base}/${target.archiveName}`;
@@ -509,6 +553,50 @@ function resolveFinalURL(url) {
   });
 }
 
+/**
+ * Scans known system installation paths for an existing ggcode binary.
+ * Returns { path, version } or null if not found.
+ * This allows npm to reuse a binary installed by brew/winget/scoop instead
+ * of downloading a duplicate.
+ */
+function findSystemBinary() {
+  const candidates = [];
+  const home = os.homedir();
+
+  if (process.platform === "darwin") {
+    candidates.push(
+      { path: "/opt/homebrew/bin/ggcode", source: "brew" },
+      { path: "/usr/local/bin/ggcode", source: "brew" },
+      { path: "/opt/local/bin/ggcode", source: "macports" },
+    );
+  } else if (process.platform === "linux") {
+    candidates.push(
+      { path: "/home/linuxbrew/.linuxbrew/bin/ggcode", source: "brew" },
+      { path: "/usr/bin/ggcode", source: "system" },
+      { path: "/usr/local/bin/ggcode", source: "direct" },
+    );
+  } else if (process.platform === "win32") {
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+    candidates.push(
+      { path: path.join(programFiles, "ggcode", "ggcode.exe"), source: "winget" },
+      { path: path.join(localAppData, "ggcode", "ggcode.exe"), source: "winget-user" },
+      { path: path.join(home, "scoop", "apps", "ggcode", "current", "ggcode.exe"), source: "scoop" },
+      { path: path.join(home, "scoop", "shims", "ggcode.exe"), source: "scoop" },
+    );
+  }
+
+  for (const c of candidates) {
+    if (fs.existsSync(c.path)) {
+      const stat = fs.statSync(c.path);
+      if (stat.isFile()) {
+        return { path: c.path, version: null, source: c.source };
+      }
+    }
+  }
+  return null;
+}
+
 module.exports = {
   ensureInstalled,
   normalizeVersion,
@@ -516,4 +604,5 @@ module.exports = {
   resolveTarget,
   upsertPathBlock,
   preferredInstallDirs,
+  findSystemBinary,
 };
