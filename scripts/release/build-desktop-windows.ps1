@@ -1,7 +1,7 @@
-# Build GGCode Desktop (Wails) for Windows (amd64) and matching MSI installers.
-# Produces two MSIs:
-#   - perUser (default, no suffix): ggcode-desktop_X.Y.Z_windows_x64.msi
-#   - perMachine (_machine suffix): ggcode-desktop_X.Y.Z_windows_x64_machine.msi
+# Build GGCode Desktop (Wails) for Windows (amd64 + arm64) and matching MSI installers.
+# Produces per arch:
+#   - perUser (default, no suffix): ggcode-desktop_X.Y.Z_windows_x64.msi / _arm64.msi
+#   - perMachine (_machine suffix): ggcode-desktop_X.Y.Z_windows_x64_machine.msi / _arm64_machine.msi
 param(
   [Parameter(Mandatory=$true)]
   [string]$Version,
@@ -31,7 +31,7 @@ $Ldflags = @(
   "-X", "github.com/topcheer/ggcode/internal/version.Date=$BuildDate"
 ) -join " "
 
-Write-Host "=== Building GGCode Desktop (Wails) for Windows (amd64) ==="
+Write-Host "=== Building GGCode Desktop (Wails) for Windows (amd64 + arm64) ==="
 Write-Host "Output: $AbsOutputDir"
 
 if (-not (Test-Path $WxsMachinePath)) {
@@ -57,61 +57,72 @@ $wailsJson = Get-Content (Join-Path $WailsDir "wails.json") -Raw | ConvertFrom-J
 $wailsJson.info.productVersion = $PackageVersion
 $wailsJson | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $WailsDir "wails.json")
 
-$stageDir = Join-Path $AbsOutputDir "ggcode-desktop-msi-stage"
-Remove-Item -Recurse -Force $stageDir -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+# Build matrix: amd64 → x64, arm64 → arm64
+$builds = @(
+  @{ GoArch = "amd64"; WixArch = "x64";   Suffix = "x64"   },
+  @{ GoArch = "arm64"; WixArch = "arm64"; Suffix = "arm64" }
+)
 
-Push-Location $WailsDir
-  $env:CGO_ENABLED = "1"
-  $env:GOOS = "windows"
-  $env:GOARCH = "amd64"
+foreach ($build in $builds) {
+  $stageDir = Join-Path $AbsOutputDir "ggcode-desktop-msi-stage-$($build.Suffix)"
+  Remove-Item -Recurse -Force $stageDir -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
-  # Wails build produces build/bin/GGCode-Desktop.exe
-  wails build -tags goolm -ldflags $Ldflags -platform "windows/amd64" -clean -skipbindings
+  Write-Host ""
+  Write-Host "--- Building $($build.GoArch) ---"
+
+  Push-Location $WailsDir
+    $env:CGO_ENABLED = "1"
+    $env:GOOS = "windows"
+    $env:GOARCH = $build.GoArch
+
+    # Wails build produces build/bin/GGCode-Desktop.exe
+    wails build -tags goolm -ldflags $Ldflags -platform "windows/$($build.GoArch)" -clean -skipbindings
+    if ($LASTEXITCODE -ne 0) {
+      throw "wails build failed for desktop windows $($build.GoArch) binary"
+    }
+
+    $builtExe = Join-Path $WailsDir "build\bin\GGCode-Desktop.exe"
+    if (-not (Test-Path $builtExe)) {
+      throw "Wails build output not found at $builtExe"
+    }
+
+    $outFile = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_$($build.GoArch).exe"
+    Copy-Item $builtExe $outFile
+    Write-Host "Built exe: $outFile"
+  Pop-Location
+
+  Copy-Item $outFile (Join-Path $stageDir "ggcode-desktop.exe")
+
+  # --- Build perUser MSI (default, no suffix) ---
+  $msiUserTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_$($build.Suffix).msi"
+  & wix build `
+    -d "Version=$PackageVersion" `
+    -d "SourceDir=$stageDir" `
+    -arch $build.WixArch `
+    -o $msiUserTarget `
+    $WxsUserPath
   if ($LASTEXITCODE -ne 0) {
-    throw "wails build failed for desktop windows binary"
+    throw "wix build failed for desktop windows $($build.GoArch) perUser installer"
   }
+  Write-Host "Built perUser MSI: $msiUserTarget"
 
-  $builtExe = Join-Path $WailsDir "build\bin\GGCode-Desktop.exe"
-  if (-not (Test-Path $builtExe)) {
-    throw "Wails build output not found at $builtExe"
+  # --- Build perMachine MSI (_machine suffix) ---
+  $msiMachineTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_$($build.Suffix)_machine.msi"
+  & wix build `
+    -d "Version=$PackageVersion" `
+    -d "UpgradeCode=$UpgradeCode" `
+    -d "SourceDir=$stageDir" `
+    -arch $build.WixArch `
+    -o $msiMachineTarget `
+    $WxsMachinePath
+  if ($LASTEXITCODE -ne 0) {
+    throw "wix build failed for desktop windows $($build.GoArch) perMachine installer"
   }
+  Write-Host "Built perMachine MSI: $msiMachineTarget"
 
-  $outFile = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_amd64.exe"
-  Copy-Item $builtExe $outFile
-  Write-Host "Built: $outFile"
-Pop-Location
-
-Copy-Item $outFile (Join-Path $stageDir "ggcode-desktop.exe")
-
-# --- Build perUser MSI (default, no suffix) ---
-# perUser has its own UpgradeCode hardcoded in ggcode-desktop-user.wxs
-$msiUserTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64.msi"
-& wix build `
-  -d "Version=$PackageVersion" `
-  -d "SourceDir=$stageDir" `
-  -arch x64 `
-  -o $msiUserTarget `
-  $WxsUserPath
-if ($LASTEXITCODE -ne 0) {
-  throw "wix build failed for desktop windows perUser installer"
+  Remove-Item -Recurse -Force $stageDir
 }
-Write-Host "Built perUser MSI: $msiUserTarget"
 
-# --- Build perMachine MSI (_machine suffix) ---
-$msiMachineTarget = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_x64_machine.msi"
-& wix build `
-  -d "Version=$PackageVersion" `
-  -d "UpgradeCode=$UpgradeCode" `
-  -d "SourceDir=$stageDir" `
-  -arch x64 `
-  -o $msiMachineTarget `
-  $WxsMachinePath
-if ($LASTEXITCODE -ne 0) {
-  throw "wix build failed for desktop windows perMachine installer"
-}
-Write-Host "Built perMachine MSI: $msiMachineTarget"
-
-Remove-Item -Recurse -Force $stageDir
-
+Write-Host ""
 Write-Host "=== Done ==="

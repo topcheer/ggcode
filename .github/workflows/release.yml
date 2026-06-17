@@ -460,11 +460,14 @@ jobs:
             exit 0
           }
           $packageVersion = "${{ github.ref_name }}" -replace '^v',''
-          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ggcode-desktop_${packageVersion}_windows_x64.msi"
+          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          $installerUrlX64 = "${baseUrl}/ggcode-desktop_${packageVersion}_windows_x64.msi"
+          $installerUrlArm64 = "${baseUrl}/ggcode-desktop_${packageVersion}_windows_arm64.msi"
           .\scripts\release\publish-winget.ps1 `
             -PackageId $env:WINGET_PACKAGE_ID `
             -Version "${{ github.ref_name }}" `
-            -InstallerUrl $installerUrl `
+            -InstallerUrl $installerUrlX64 `
+            -InstallerUrlArm64 $installerUrlArm64 `
             -GitHubToken $env:WINGET_CREATE_GITHUB_TOKEN
 
   publish-winget-cli:

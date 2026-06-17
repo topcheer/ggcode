@@ -111,7 +111,7 @@ if ($NeedsAdmin) {
 
 # --- Detect architecture ---
 $Arch = if ([Environment]::Is64BitOperatingSystem) {
-    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
+    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x86_64" }
 } else {
     Write-Err "32-bit Windows is not supported."
     exit 1
