@@ -971,6 +971,8 @@ func enCatalog(key string) string {
 		return "Update installed. Note: ggcode was installed via Snap.\nRun `sudo snap refresh ggcode` to keep Snap in sync.\n\n"
 	case "update.other_installs":
 		return "Other ggcode installations detected on this system:\n%s\nIf a different ggcode appears first in PATH, consider updating it too or adjusting PATH order.\n\n"
+	case "update.dual_scope":
+		return "Warning: Both user and system-wide ggcode installations found:\n  User: %s\n  System: %s\nThis may cause PATH conflicts. Consider uninstalling one from Settings > Apps.\n\n"
 	case "plugins.unavailable":
 		return "Plugin manager not available.\n\n"
 	case "plugins.none":

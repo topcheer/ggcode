@@ -59,6 +59,40 @@ if ($Scope -eq "System") {
 
 Write-Info "Installing ggcode to $InstallDir"
 
+# --- Detect existing installation in the other scope ---
+if ($Scope -eq "User") {
+    $machinePath = Join-Path $env:ProgramFiles "ggcode"
+    if (Test-Path (Join-Path $machinePath "ggcode.exe")) {
+        Write-Warn "Found existing system-wide installation at $machinePath"
+        Write-Host ""
+        Write-Host "  A previous system-wide (all-users) ggcode installation was detected." -ForegroundColor Yellow
+        Write-Host "  Installing per-user alongside it may cause PATH conflicts." -ForegroundColor Yellow
+        Write-Host ""
+        if ([Environment]::UserInteractive) {
+            $migrate = Read-Host "Uninstall the system-wide version first? [Y/n]"
+            if ($migrate -ne "n" -and $migrate -ne "N") {
+                Write-Info "Uninstalling system-wide ggcode (requires admin)..."
+                # Find the product code and uninstall
+                $product = Get-Package -Name "ggcode" -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -eq "msi" }
+                if ($product) {
+                    $productCode = $product.FastPackageReference
+                    Write-Info "Uninstalling product $productCode..."
+                    Start-Process msiexec.exe -ArgumentList "/x $productCode /quiet" -Verb RunAs -Wait
+                    Write-Ok "System-wide ggcode uninstalled."
+                } else {
+                    Write-Warn "Could not find MSI product. Please uninstall manually from Settings > Apps."
+                }
+            }
+        }
+    }
+} elseif ($Scope -eq "System") {
+    $userPath = Join-Path $env:LOCALAPPDATA "ggcode"
+    if (Test-Path (Join-Path $userPath "ggcode.exe")) {
+        Write-Warn "Found existing user installation at $userPath"
+        Write-Host "  The per-user version will be left in place. You may uninstall it from Settings > Apps." -ForegroundColor Yellow
+    }
+}
+
 # Check admin for system install
 if ($NeedsAdmin) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)

@@ -123,6 +123,10 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 	if others := update.FindOtherInstalls(m.updateSvc.ExecPath); len(others) > 0 {
 		m.chatWriteSystem(nextSystemID(), m.t("update.other_installs", update.FormatOtherInstalls(others)))
 	}
+	// Windows: warn if both perUser and perMachine installations exist.
+	if dual := update.DetectDualScopeWindows(); dual != nil {
+		m.chatWriteSystem(nextSystemID(), m.t("update.dual_scope", dual.UserPath, dual.MachinePath))
+	}
 	// Show package manager hint before quitting.
 	if pm := update.PackageManagerHint(m.updateSvc.ExecPath); pm != "" {
 		m.chatWriteSystem(nextSystemID(), m.t("update.pm_hint."+pm))

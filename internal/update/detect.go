@@ -15,8 +15,46 @@ import (
 type OtherInstall struct {
 	Path       string // absolute path to the binary
 	Version    string // version string if known, empty otherwise
-	Source     string // "brew", "scoop", "winget", "winget-user", "npm", "pip", "go", "system", "path"
+	Source     string // "brew", "scoop", "winget", "winget-user", "winget-machine", "npm", "pip", "go", "system", "snap", "path"
 	Privileged bool   // true if installed in a system-wide location requiring admin/root
+}
+
+// DualScopeInstall represents a Windows-specific conflict where both
+// perUser and perMachine ggcode installations exist simultaneously.
+type DualScopeInstall struct {
+	UserPath    string // perUser MSI install path (LocalAppData)
+	MachinePath string // perMachine MSI install path (Program Files)
+}
+
+// DetectDualScopeWindows checks if both perUser and perMachine ggcode
+// installations exist on Windows. Returns the conflict info or nil.
+func DetectDualScopeWindows() *DualScopeInstall {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		localAppData = filepath.Join(home, "AppData", "Local")
+	}
+	userPath := filepath.Join(localAppData, "ggcode", "ggcode.exe")
+	machinePath := filepath.Join(os.Getenv("ProgramFiles"), "ggcode", "ggcode.exe")
+
+	userExists := fileExists(userPath)
+	machineExists := fileExists(machinePath)
+
+	if userExists && machineExists {
+		return &DualScopeInstall{
+			UserPath:    userPath,
+			MachinePath: machinePath,
+		}
+	}
+	return nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // FindOtherInstalls scans known installation paths for ggcode binaries
@@ -99,9 +137,9 @@ func FindOtherInstalls(currentPath string) []OtherInstall {
 	case "windows":
 		// winget/MSI perMachine (Program Files — needs admin)
 		programFiles := os.Getenv("ProgramFiles")
-		check(filepath.Join(programFiles, "ggcode", "ggcode.exe"), "winget", true)
+		check(filepath.Join(programFiles, "ggcode", "ggcode.exe"), "winget-machine", true)
 		programFiles86 := os.Getenv("ProgramFiles(x86)")
-		check(filepath.Join(programFiles86, "ggcode", "ggcode.exe"), "winget", true)
+		check(filepath.Join(programFiles86, "ggcode", "ggcode.exe"), "winget-machine", true)
 		// winget/MSI perUser (LocalAppData — no admin)
 		localAppData := os.Getenv("LOCALAPPDATA")
 		if localAppData == "" {

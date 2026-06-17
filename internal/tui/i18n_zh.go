@@ -979,6 +979,8 @@ func zhCatalog(key string) string {
 		return "更新已安装。注意：ggcode 是通过 Snap 安装的。\n建议运行 `sudo snap refresh ggcode` 以保持 Snap 同步。\n\n"
 	case "update.other_installs":
 		return "检测到系统中还有其他 ggcode 安装：\n%s\n如果 PATH 中另一个 ggcode 优先级更高，建议一并更新或调整 PATH 顺序。\n\n"
+	case "update.dual_scope":
+		return "警告：检测到用户级和系统级 ggcode 安装同时存在：\n  用户级：%s\n  系统级：%s\n这可能导致 PATH 冲突。建议从“设置 > 应用”中卸载其中一个。\n\n"
 	case "plugins.unavailable":
 		return "插件管理器不可用。\n\n"
 	case "plugins.none":

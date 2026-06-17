@@ -48,9 +48,13 @@ try {
         }
 
         # perUser MSI — default, no suffix (no admin required)
+        # Same UpgradeCode as perMachine so winget and MSI treat them as the same product.
+        # MSI with the same UpgradeCode but different scope will trigger a migration
+        # (uninstall old scope, install new scope).
         $msiUser = Join-Path $resolvedOutputDir ("ggcode_{0}_windows_{1}.msi" -f $packageVersion, $build.Suffix)
         & wix build `
             -d "Version=$packageVersion" `
+            -d "UpgradeCode=$machineUpgradeCode" `
             -d "SourceDir=$stageDir" `
             -arch $build.WixArch `
             -o $msiUser `

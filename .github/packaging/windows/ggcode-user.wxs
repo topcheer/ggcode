@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- perUser MSI: installs to LocalAppData (no admin required) -->
+<!-- perUser MSI: installs to LocalAppData (no admin required)
+     Same Package Name as perMachine so winget treats them as the same product.
+     Same UpgradeCode so MSI detects the other scope and can migrate. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-    Name="ggcode (User)"
+    Name="ggcode"
     Manufacturer="GG AI Studio"
     Version="$(var.Version)"
-    UpgradeCode="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+    UpgradeCode="$(var.UpgradeCode)"
     Language="1033"
     InstallerVersion="500"
     Scope="perUser">
