@@ -1078,14 +1078,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
 	// that don't speak A2A natively. These 4 tools let any MCP client discover
 	// and interact with this ggcode instance.
-	bridgeClient := a2a.NewClient(srv.Endpoint(), cfg.A2A.APIKey)
+	bridgeClient := a2a.NewClient(srv.Endpoint(), a2aAPIKey(cfg))
 	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
 		_ = reg.Register(t)
 	}
 
 	// Register A2A remote tool for agent-to-agent communication.
 	// This lets this ggcode agent discover and call other running ggcode instances.
-	remoteTool := a2a.NewRemoteTool(a2aReg, cfg.A2A.APIKey)
+	remoteTool := a2a.NewRemoteTool(a2aReg, a2aAPIKey(cfg))
 	_ = reg.Register(remoteTool)
 
 	// Periodically refresh the remote instance cache so new instances are discovered.
