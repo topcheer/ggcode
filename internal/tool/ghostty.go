@@ -48,6 +48,12 @@ func (g *GhosttyTool) Parameters() json.RawMessage {
 				"enum": ["right", "left", "down", "up"],
 				"description": "Split direction for 'split' action. Default: right."
 			},
+			"size": {
+				"type": "integer",
+				"description": "Size percentage (1-99) for the new pane after 'split'. E.g. size=30 means the new pane occupies 30%% of the space. 0 or omitted means 50/50 split (no resize). Only applies to 'split' action.",
+				"minimum": 0,
+				"maximum": 99
+			},
 			"command": {
 				"type": "string",
 				"description": "Command to run in the new split/tab/window. When set, the surface launches with this command instead of a shell."
@@ -89,6 +95,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	var args struct {
 		Action     string `json:"action"`
 		Direction  string `json:"direction"`
+		Size       int    `json:"size"`
 		Command    string `json:"command"`
 		WorkingDir string `json:"working_dir"`
 		TerminalID string `json:"terminal_id"`
@@ -119,7 +126,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	case "list":
 		return g.executeList(), nil
 	case "split":
-		return g.executeSplit(args.TerminalID, args.Direction, args.Command, args.WorkingDir), nil
+		return g.executeSplit(args.TerminalID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":
 		return g.executeNewTab(args.Command, args.WorkingDir), nil
 	case "new_window":
@@ -271,7 +278,7 @@ end tell`
 	return Result{Content: out}
 }
 
-func (g *GhosttyTool) executeSplit(terminalID, direction, command, workingDir string) Result {
+func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, command, workingDir string) Result {
 	dir := strings.ToLower(strings.TrimSpace(direction))
 	if dir == "" {
 		dir = "right"
@@ -288,31 +295,81 @@ func (g *GhosttyTool) executeSplit(terminalID, direction, command, workingDir st
 	}
 
 	spec := terminalSpecifier(terminalID)
-	var script string
-	if strings.TrimSpace(command) != "" {
-		// Create split with command by sending it as initial input after creation.
-		// Ghostty's AppleScript split returns the new terminal, then we send the command.
-		script = fmt.Sprintf(`
-tell application "Ghostty"
-	set term to %s
-	set newTerm to split term direction %s
-	input text "cd %s && %s" to newTerm
-	return id of newTerm
-end tell`, spec, dir, escapeAS(wd), escapeAS(command))
-	} else {
-		script = fmt.Sprintf(`
-tell application "Ghostty"
-	set term to %s
-	set newTerm to split term direction %s
-	return id of newTerm
-end tell`, spec, dir)
+
+	// Build the AppleScript: split, optionally resize to target size, optionally run command.
+	var resizePart string
+	if size > 0 && size < 99 {
+		// Ghostty creates a 50/50 split. resize_split moves the boundary.
+		// Direction semantics: resize_split:<dir>,<amount>
+		//   right: move boundary right → new pane (right/below) shrinks
+		//   left:  move boundary left  → new pane (right/below) grows
+		// For a split-right with size=30: new pane should be 30%, need to
+		// shrink it from 50% to 30% → move boundary right by 20%.
+		// For a split-right with size=70: new pane should be 70%, need to
+		// grow it from 50% to 70% → move boundary left by 20%.
+		var resizeDir string
+		var amount int
+
+		switch dir {
+		case "right":
+			amount = 50 - size // positive=shrink new pane, negative=grow
+			if amount >= 0 {
+				resizeDir = "right"
+			} else {
+				resizeDir = "left"
+				amount = -amount
+			}
+		case "left":
+			amount = 50 - size
+			if amount >= 0 {
+				resizeDir = "left"
+			} else {
+				resizeDir = "right"
+				amount = -amount
+			}
+		case "down":
+			amount = 50 - size
+			if amount >= 0 {
+				resizeDir = "down"
+			} else {
+				resizeDir = "up"
+				amount = -amount
+			}
+		case "up":
+			amount = 50 - size
+			if amount >= 0 {
+				resizeDir = "up"
+			} else {
+				resizeDir = "down"
+				amount = -amount
+			}
+		}
+
+		resizePart = fmt.Sprintf(`
+	set act to perform action "resize_split:%s,%d" in newTerm`, resizeDir, amount)
 	}
+
+	var cmdPart string
+	if strings.TrimSpace(command) != "" {
+		cmdPart = fmt.Sprintf(`
+	input text "cd %s && %s" to newTerm`, escapeAS(wd), escapeAS(command))
+	}
+
+	script := fmt.Sprintf(`
+tell application "Ghostty"
+	set term to %s
+	set newTerm to split term direction %s%s%s
+	return id of newTerm
+end tell`, spec, dir, resizePart, cmdPart)
 
 	out, err := runAppleScript(script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty split failed: %v", err)}
 	}
 
+	if size > 0 && size < 99 {
+		return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, size=%d%%, terminal_id=%s", dir, size, out)}
+	}
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, terminal_id=%s", dir, out)}
 }
 
