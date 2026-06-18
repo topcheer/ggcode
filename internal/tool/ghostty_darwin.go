@@ -4,9 +4,12 @@ package tool
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // ── AppleScript helpers (macOS only) ────────────────────────────────────────
@@ -47,6 +50,45 @@ func oppositeDir(dir string) string {
 		return "down"
 	}
 	return dir
+}
+
+// termCellDims returns the terminal's (cols, rows) via TIOCGWINSZ on /dev/tty.
+// Falls back to (80, 24) if unavailable (e.g. piped stdin/stdout).
+func termCellDims() (cols, rows int) {
+	cols, rows = 80, 24
+	f, err := os.Open("/dev/tty")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
+	if err != nil {
+		return
+	}
+	cols = int(ws.Col)
+	rows = int(ws.Row)
+	if cols == 0 {
+		cols = 80
+	}
+	if rows == 0 {
+		rows = 24
+	}
+	return
+}
+
+// termWidthPx estimates the terminal window pixel width from grid dimensions.
+// Ghostty default font (~13pt) has cell width ~8px.
+func termWidthPx() int {
+	cols, _ := termCellDims()
+	return cols * 8
+}
+
+// termHeightPx estimates the terminal window pixel height from grid dimensions.
+// Ghostty default font (~13pt) has line height ~17px.
+func termHeightPx() int {
+	_, rows := termCellDims()
+	return rows * 17
 }
 
 // terminalSpecifier builds an AppleScript specifier for a terminal.
@@ -159,7 +201,6 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 	if size > 0 && size < 99 {
 		// Ghostty resize_split amount is in PIXELS, not percentage.
 		// After a 50/50 split, move the divider so the new pane is size%.
-		// delta = |50 - size|% of the window dimension along the split axis.
 		delta := 50 - size
 		var resizeDir string
 		if delta >= 0 {
@@ -169,17 +210,23 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 			delta = -delta
 		}
 
-		var dimExpr string
+		// Ghostty sdef has no window bounds/size property. We estimate
+		// pixel dimensions from the terminal grid size (cols/rows) obtained
+		// via TIOCGWINSZ on /dev/tty. Ghostty default font ~13pt gives
+		// cell width ~8px and line height ~17px, which is accurate enough
+		// for proportional split resizing.
+		var pixAmt int
 		if dir == "right" || dir == "left" {
-			dimExpr = "((item 3 of b) - (item 1 of b))" // width
+			pixAmt = delta * termWidthPx() / 100
 		} else {
-			dimExpr = "((item 4 of b) - (item 2 of b))" // height
+			pixAmt = delta * termHeightPx() / 100
+		}
+		if pixAmt < 1 {
+			pixAmt = 1
 		}
 
 		resizePart = fmt.Sprintf(`
-	set b to bounds of window 1
-	set pixAmt to round (%d / 100 * %s) rounding as taught in school
-	perform action "resize_split:%s," & pixAmt on term`, delta, dimExpr, resizeDir)
+	perform action "resize_split:%s,%d" on term`, resizeDir, pixAmt)
 	}
 
 	var cmdPart string
