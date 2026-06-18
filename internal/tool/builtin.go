@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/permission"
@@ -90,7 +91,16 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return err
 		}
 	}
+	if shouldRegisterGhosttyTool() {
+		if err := registry.Register(NewGhosttyTool(workingDir)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func shouldRegisterGhosttyTool() bool {
+	return os.Getenv("TERM_PROGRAM") == "ghostty"
 }
 
 func shouldRegisterTmuxTool(client *tmux.Client) bool {

@@ -253,6 +253,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("A2A", displayTarget(argStr(args, "target")))
 	case "read_mcp_resource":
 		return toolPres("MCP Resource", displayTarget(argStr(args, "uri")))
+	case "ghostty":
+		return ghosttyLabel(args)
 	default:
 		// MCP tools or unknown — prettify the name
 		return toolPres(prettifyToolName(toolName), compactArgsPreview(rawArgs))
@@ -1018,4 +1020,70 @@ func RelativizePath(path, workingDir string) string {
 		return path
 	}
 	return rel
+}
+
+// ghosttyLabel produces a display label for ghostty tool calls.
+func ghosttyLabel(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	switch action {
+	case "status":
+		return toolPres("Ghostty Status", "")
+	case "list":
+		return toolPres("Ghostty Surfaces", "")
+	case "split":
+		dir := argStr(args, "direction")
+		if dir == "" {
+			dir = "right"
+		}
+		cmd := argStr(args, "command")
+		if cmd != "" {
+			return toolPres("Ghostty Split "+dir, cmd)
+		}
+		return toolPres("Ghostty Split "+dir, "")
+	case "new_tab":
+		return toolPres("Ghostty New Tab", argStr(args, "command"))
+	case "new_window":
+		return toolPres("Ghostty New Window", argStr(args, "command"))
+	case "focus":
+		return toolPres("Ghostty Focus", shortenID(argStr(args, "terminal_id")))
+	case "close":
+		return toolPres("Ghostty Close", shortenID(argStr(args, "terminal_id")))
+	case "input":
+		return toolPres("Ghostty Input", compactPreview(argStr(args, "text")))
+	case "send_key":
+		key := argStr(args, "key")
+		if mods := argStr(args, "modifiers"); mods != "" {
+			key = mods + "+" + key
+		}
+		return toolPres("Ghostty Key", key)
+	case "action":
+		return toolPres("Ghostty Action", argStr(args, "text"))
+	case "zoom":
+		return toolPres("Ghostty Zoom", "")
+	case "equalize":
+		return toolPres("Ghostty Equalize", "")
+	case "select_tab":
+		idx := 0
+		if v, ok := args["tab_index"]; ok {
+			switch vv := v.(type) {
+			case float64:
+				idx = int(vv)
+			case int:
+				idx = vv
+			}
+		}
+		return toolPres("Ghostty Select Tab", fmt.Sprintf("tab %d", idx))
+	case "reload_config":
+		return toolPres("Ghostty Reload Config", "")
+	default:
+		return toolPres("Ghostty", action)
+	}
+}
+
+func compactPreview(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 60 {
+		return s[:57] + "..."
+	}
+	return s
 }
