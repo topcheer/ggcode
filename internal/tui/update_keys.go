@@ -387,14 +387,9 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.promptExitConfirm()
 		return m, nil
 	case "ctrl+v":
-		// Clipboard image paste — allowed while loading so users can
-		// attach images for interleaved messages during agent runs.
-		// Note: on Windows, most terminals intercept Ctrl+V for text paste
-		// so the keypress never reaches the TUI. Use ctrl+g as alternative.
-		return m, m.handleClipboardPaste()
-	case "ctrl+g":
-		// Alternative image paste keybinding that works on Windows where
-		// Ctrl+V is intercepted by the terminal host.
+		// Clipboard image paste. Works on macOS and Linux terminals.
+		// On Windows, Ctrl+V is typically intercepted by the terminal for
+		// text paste, so users should use /image paste command instead.
 		return m, m.handleClipboardPaste()
 	case "ctrl+d":
 		m.quitting = true
