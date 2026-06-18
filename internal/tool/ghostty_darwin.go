@@ -35,6 +35,20 @@ func escapeAS(s string) string {
 	return s
 }
 
+func oppositeDir(dir string) string {
+	switch dir {
+	case "right":
+		return "left"
+	case "left":
+		return "right"
+	case "down":
+		return "up"
+	case "up":
+		return "down"
+	}
+	return dir
+}
+
 // terminalSpecifier builds an AppleScript specifier for a terminal.
 func terminalSpecifier(terminalID string) string {
 	if terminalID == "" {
@@ -143,43 +157,29 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 
 	var resizePart string
 	if size > 0 && size < 99 {
+		// Ghostty resize_split amount is in PIXELS, not percentage.
+		// After a 50/50 split, move the divider so the new pane is size%.
+		// delta = |50 - size|% of the window dimension along the split axis.
+		delta := 50 - size
 		var resizeDir string
-		var amount int
+		if delta >= 0 {
+			resizeDir = dir // shrink new pane
+		} else {
+			resizeDir = oppositeDir(dir) // grow new pane
+			delta = -delta
+		}
 
-		amount = 50 - size
-		switch dir {
-		case "right":
-			if amount >= 0 {
-				resizeDir = "right"
-			} else {
-				resizeDir = "left"
-				amount = -amount
-			}
-		case "left":
-			if amount >= 0 {
-				resizeDir = "left"
-			} else {
-				resizeDir = "right"
-				amount = -amount
-			}
-		case "down":
-			if amount >= 0 {
-				resizeDir = "down"
-			} else {
-				resizeDir = "up"
-				amount = -amount
-			}
-		case "up":
-			if amount >= 0 {
-				resizeDir = "up"
-			} else {
-				resizeDir = "down"
-				amount = -amount
-			}
+		var dimExpr string
+		if dir == "right" || dir == "left" {
+			dimExpr = "((item 3 of b) - (item 1 of b))" // width
+		} else {
+			dimExpr = "((item 4 of b) - (item 2 of b))" // height
 		}
 
 		resizePart = fmt.Sprintf(`
-	perform action "resize_split:%s,%d" on term`, resizeDir, amount)
+	set b to bounds of window 1
+	set pixAmt to round (%d / 100 * %s) rounding as taught in school
+	perform action "resize_split:%s," & pixAmt on term`, delta, dimExpr, resizeDir)
 	}
 
 	var cmdPart string
