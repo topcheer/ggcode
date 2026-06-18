@@ -179,7 +179,7 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 		}
 
 		resizePart = fmt.Sprintf(`
-	set act to perform action "resize_split:%s,%d" in newTerm`, resizeDir, amount)
+	perform action "resize_split:%s,%d" on newTerm`, resizeDir, amount)
 	}
 
 	var cmdPart string
