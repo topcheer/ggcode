@@ -179,7 +179,7 @@ func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, comma
 		}
 
 		resizePart = fmt.Sprintf(`
-	perform action "resize_split:%s,%d" on newTerm`, resizeDir, amount)
+	perform action "resize_split:%s,%d" on term`, resizeDir, amount)
 	}
 
 	var cmdPart string
@@ -216,7 +216,7 @@ func (g *GhosttyTool) executeNewTab(command, workingDir string) Result {
 	if strings.TrimSpace(command) != "" {
 		script = fmt.Sprintf(`
 tell application "Ghostty"
-	set newTab to make new tab
+	set newTab to new tab in window 1
 	set term to focused terminal of newTab
 	input text "cd %s && %s" to term
 	return id of term
@@ -224,7 +224,7 @@ end tell`, escapeAS(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
-	set newTab to make new tab
+	set newTab to new tab in window 1
 	set term to focused terminal of newTab
 	return id of term
 end tell`
@@ -248,16 +248,16 @@ func (g *GhosttyTool) executeNewWindow(command, workingDir string) Result {
 	if strings.TrimSpace(command) != "" {
 		script = fmt.Sprintf(`
 tell application "Ghostty"
-	set w to make new window
-	set term to focused terminal of selected tab of w
+	set newWindow to new window
+	set term to focused terminal of selected tab of newWindow
 	input text "cd %s && %s" to term
 	return id of term
 end tell`, escapeAS(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "Ghostty"
-	set w to make new window
-	set term to focused terminal of selected tab of w
+	set newWindow to new window
+	set term to focused terminal of selected tab of newWindow
 	return id of term
 end tell`
 	}
@@ -402,8 +402,7 @@ func (g *GhosttyTool) executeSelectTab(tabIndex int) Result {
 
 	script := fmt.Sprintf(`
 tell application "Ghostty"
-	set t to tab %d of window 1
-	select t
+	select tab %d of window 1
 	return "selected"
 end tell`, tabIndex)
 
