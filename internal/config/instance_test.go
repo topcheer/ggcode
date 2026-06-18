@@ -715,10 +715,12 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 	instance := &Config{A2A: A2AConfig{
 		Port:         8080,
 		Host:         "0.0.0.0",
-		APIKey:       "test-key",
 		MaxTasks:     10,
 		TaskTimeout:  "5m",
 		LANDiscovery: true,
+		Auth: A2AAuthConfig{
+			APIKey: "test-key",
+		},
 	}}
 
 	MergeInstance(global, instance)
@@ -729,8 +731,8 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 	if global.A2A.Host != "0.0.0.0" {
 		t.Errorf("A2A Host = %q, want %q", global.A2A.Host, "0.0.0.0")
 	}
-	if global.A2A.APIKey != "test-key" {
-		t.Errorf("A2A APIKey not set from instance")
+	if global.A2A.Auth.APIKey != "test-key" {
+		t.Errorf("A2A Auth.APIKey not set from instance")
 	}
 	if global.A2A.MaxTasks != 10 {
 		t.Errorf("A2A MaxTasks = %d, want 10", global.A2A.MaxTasks)
@@ -745,14 +747,18 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 
 func TestMergeInstance_A2AConfig_GlobalWins(t *testing.T) {
 	global := &Config{A2A: A2AConfig{
-		Port:   9090,
-		Host:   "127.0.0.1",
-		APIKey: "global-key",
+		Port: 9090,
+		Host: "127.0.0.1",
+		Auth: A2AAuthConfig{
+			APIKey: "global-key",
+		},
 	}}
 	instance := &Config{A2A: A2AConfig{
-		Port:   8080,
-		Host:   "0.0.0.0",
-		APIKey: "instance-key",
+		Port: 8080,
+		Host: "0.0.0.0",
+		Auth: A2AAuthConfig{
+			APIKey: "instance-key",
+		},
 	}}
 
 	MergeInstance(global, instance)
@@ -763,8 +769,8 @@ func TestMergeInstance_A2AConfig_GlobalWins(t *testing.T) {
 	if global.A2A.Host != "127.0.0.1" {
 		t.Errorf("global A2A Host should win, got %q", global.A2A.Host)
 	}
-	if global.A2A.APIKey != "global-key" {
-		t.Errorf("global A2A APIKey should win, got %q", global.A2A.APIKey)
+	if global.A2A.Auth.APIKey != "global-key" {
+		t.Errorf("global A2A Auth.APIKey should win, got %q", global.A2A.Auth.APIKey)
 	}
 }
 
@@ -1012,14 +1018,14 @@ func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 	// Create .ggcode/a2a.yaml in workspace
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
-	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"), []byte("api_key: legacy-key\n"), 0644)
+	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"), []byte("auth:\n  api_key: test-key\n"), 0644)
 
 	cfg, err := LoadWithInstance(globalPath, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.A2A.APIKey != "legacy-key" {
-		t.Errorf("A2A APIKey = %q, want %q from legacy a2a.yaml", cfg.A2A.APIKey, "legacy-key")
+	if cfg.A2A.Auth.APIKey != "test-key" {
+		t.Errorf("A2A Auth.APIKey = %q, want %q from a2a.yaml", cfg.A2A.Auth.APIKey, "test-key")
 	}
 }
 
@@ -1219,7 +1225,7 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
 	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"),
-		[]byte("api_key: migrated-key\nhost: 0.0.0.0\n"), 0644)
+		[]byte("auth:\n  api_key: migrated-key\nhost: 0.0.0.0\n"), 0644)
 
 	if !MigrateA2AYaml(workspace) {
 		t.Fatal("MigrateA2AYaml should return true on successful migration")
@@ -1229,8 +1235,8 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	if inst == nil {
 		t.Fatal("instance config should exist after migration")
 	}
-	if inst.A2A.APIKey != "migrated-key" {
-		t.Errorf("A2A.APIKey = %q, want %q", inst.A2A.APIKey, "migrated-key")
+	if inst.A2A.Auth.APIKey != "migrated-key" {
+		t.Errorf("A2A.Auth.APIKey = %q, want %q", inst.A2A.Auth.APIKey, "migrated-key")
 	}
 	if inst.A2A.Host != "0.0.0.0" {
 		t.Errorf("A2A.Host = %q, want %q", inst.A2A.Host, "0.0.0.0")

@@ -294,9 +294,6 @@ func mergeA2AConfigFields(global, instance *A2AConfig) {
 	if global.Host == "" && instance.Host != "" {
 		global.Host = instance.Host
 	}
-	if global.APIKey == "" && instance.APIKey != "" {
-		global.APIKey = instance.APIKey
-	}
 	if global.MaxTasks == 0 && instance.MaxTasks != 0 {
 		global.MaxTasks = instance.MaxTasks
 	}

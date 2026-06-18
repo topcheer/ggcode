@@ -284,7 +284,6 @@ type A2AConfig struct {
 	Disabled     bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
 	Port         int           `yaml:"port"`               // 0 = auto-assign
 	Host         string        `yaml:"host"`               // default "0.0.0.0" (if auth configured) or "127.0.0.1"
-	APIKey       string        `yaml:"api_key"`            // empty = no auth
 	MaxTasks     int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
 	TaskTimeout  string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
 	LANDiscovery bool          `yaml:"lan_discovery"`      // enable mDNS broadcast for LAN discovery
@@ -297,8 +296,7 @@ func (c A2AConfig) HasAuth() bool {
 		len(c.Auth.APIKeys) > 0 ||
 		c.Auth.OAuth2 != nil ||
 		c.Auth.OIDC != nil ||
-		c.Auth.MTLS != nil ||
-		strings.TrimSpace(c.APIKey) != ""
+		c.Auth.MTLS != nil
 }
 
 // HarnessConfig controls automatic harness routing behavior.
@@ -984,7 +982,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 	c.IM.STT.BaseURL = ExpandEnvWithLookup(c.IM.STT.BaseURL, lookup)
 	c.IM.STT.Model = ExpandEnvWithLookup(c.IM.STT.Model, lookup)
 	// A2A env expansion.
-	c.A2A.APIKey = ExpandEnvWithLookup(c.A2A.APIKey, lookup)
+
 	for i, k := range c.A2A.Auth.APIKeys {
 		c.A2A.Auth.APIKeys[i] = ExpandEnvWithLookup(k, lookup)
 	}

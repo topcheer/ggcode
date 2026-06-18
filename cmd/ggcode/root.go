@@ -952,12 +952,8 @@ func (s *tuiWebchatSender) SendWebchatMessage(text string) {
 }
 
 // a2aAPIKey resolves the A2A API key from config.
-// Priority: A2A.Auth.APIKey (new) > A2A.APIKey (legacy).
 func a2aAPIKey(cfg *config.Config) string {
-	if cfg.A2A.Auth.APIKey != "" {
-		return cfg.A2A.Auth.APIKey
-	}
-	return cfg.A2A.APIKey
+	return cfg.A2A.Auth.APIKey
 }
 
 // startA2AServer starts the A2A HTTP server, registers this instance in the local

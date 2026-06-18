@@ -22,7 +22,8 @@ func TestLoadA2AOverrideFromFile(t *testing.T) {
 	yamlContent := `disabled: true
 port: 9999
 host: "0.0.0.0"
-api_key: "instance-key"
+auth:
+  api_key: "instance-key"
 max_tasks: 10
 task_timeout: "10m"
 `
@@ -43,8 +44,8 @@ task_timeout: "10m"
 	if ov.Host != "0.0.0.0" {
 		t.Errorf("expected host=0.0.0.0, got %s", ov.Host)
 	}
-	if ov.APIKey != "instance-key" {
-		t.Errorf("expected api_key=instance-key, got %s", ov.APIKey)
+	if ov.Auth.APIKey != "instance-key" {
+		t.Errorf("expected auth.api_key=instance-key, got %s", ov.Auth.APIKey)
 	}
 	if ov.MaxTasks != 10 {
 		t.Errorf("expected max_tasks=10, got %d", ov.MaxTasks)
@@ -58,14 +59,14 @@ func TestMergeA2AConfig(t *testing.T) {
 	base := &A2AConfig{
 		Port:        0,
 		Host:        "127.0.0.1",
-		APIKey:      "global-key",
+		Auth:        A2AAuthConfig{APIKey: "global-key"},
 		MaxTasks:    5,
 		TaskTimeout: "5m",
 	}
 
 	override := &A2AConfig{
 		Port:     8080,
-		APIKey:   "instance-key",
+		Auth:     A2AAuthConfig{APIKey: "instance-key"},
 		MaxTasks: 20,
 	}
 
@@ -77,8 +78,8 @@ func TestMergeA2AConfig(t *testing.T) {
 	if base.Host != "127.0.0.1" {
 		t.Errorf("host should stay 127.0.0.1, got %s", base.Host)
 	}
-	if base.APIKey != "instance-key" {
-		t.Errorf("expected api_key=instance-key, got %s", base.APIKey)
+	if base.Auth.APIKey != "instance-key" {
+		t.Errorf("expected auth.api_key=instance-key, got %s", base.Auth.APIKey)
 	}
 	if base.MaxTasks != 20 {
 		t.Errorf("expected max_tasks=20, got %d", base.MaxTasks)
@@ -89,9 +90,9 @@ func TestMergeA2AConfig(t *testing.T) {
 }
 
 func TestMergeA2AConfigNilOverride(t *testing.T) {
-	base := &A2AConfig{Port: 1234, APIKey: "key"}
+	base := &A2AConfig{Port: 1234, Auth: A2AAuthConfig{APIKey: "key"}}
 	MergeA2AConfig(base, nil)
-	if base.Port != 1234 || base.APIKey != "key" {
+	if base.Port != 1234 || base.Auth.APIKey != "key" {
 		t.Error("nil override should not change base")
 	}
 }

@@ -99,11 +99,11 @@ type FullConfig struct {
 	SwarmInboxSize    int    `json:"swarmInboxSize"`
 
 	// A2A
-	A2ADisabled     bool   `json:"a2aDisabled"`
-	A2APort         int    `json:"a2aPort"`
-	A2AHost         string `json:"a2aHost"`
-	A2AAPIKey       string `json:"a2aApiKey"`
-	A2ALANDiscovery bool   `json:"a2aLanDiscovery"`
+	A2ADisabled bool   `json:"a2aDisabled"`
+	A2APort     int    `json:"a2aPort"`
+	A2AHost     string `json:"a2aHost"`
+
+	A2ALANDiscovery bool `json:"a2aLanDiscovery"`
 
 	// Harness
 	HarnessAutoRun  string `json:"harnessAutoRun"`
@@ -176,10 +176,10 @@ func GetFullConfig() (*FullConfig, error) {
 		SwarmTimeout:      cfg.Swarm.TeammateTimeout.String(),
 		SwarmInboxSize:    cfg.Swarm.InboxSize,
 
-		A2ADisabled:     cfg.A2A.Disabled,
-		A2APort:         cfg.A2A.Port,
-		A2AHost:         cfg.A2A.Host,
-		A2AAPIKey:       cfg.A2A.APIKey,
+		A2ADisabled: cfg.A2A.Disabled,
+		A2APort:     cfg.A2A.Port,
+		A2AHost:     cfg.A2A.Host,
+
 		A2ALANDiscovery: cfg.A2A.LANDiscovery,
 
 		HarnessAutoRun:  cfg.Harness.AutoRun,
@@ -277,9 +277,6 @@ func UpdateConfig(values map[string]interface{}) error {
 	}
 	if v, ok := values["a2aPort"].(float64); ok {
 		cfg.A2A.Port = int(v)
-	}
-	if v, ok := values["a2aApiKey"].(string); ok {
-		cfg.A2A.APIKey = v
 	}
 	if v, ok := values["harnessAutoRun"].(string); ok {
 		cfg.Harness.AutoRun = v

@@ -244,8 +244,8 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	if current.Host != global.Host && current.Host != "" {
 		a2aDelta["host"] = current.Host
 	}
-	if current.APIKey != global.APIKey && current.APIKey != "" {
-		a2aDelta["api_key"] = current.APIKey
+	if current.Auth.APIKey != global.Auth.APIKey && current.Auth.APIKey != "" {
+		a2aDelta["auth"] = map[string]any{"api_key": current.Auth.APIKey}
 	}
 	if current.MaxTasks != global.MaxTasks && current.MaxTasks != 0 {
 		a2aDelta["max_tasks"] = current.MaxTasks

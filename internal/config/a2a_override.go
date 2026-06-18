@@ -39,8 +39,8 @@ func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 	if override.Host != "" {
 		base.Host = override.Host
 	}
-	if override.APIKey != "" {
-		base.APIKey = override.APIKey
+	if override.Auth.APIKey != "" {
+		base.Auth.APIKey = override.Auth.APIKey
 	}
 	if override.MaxTasks != 0 {
 		base.MaxTasks = override.MaxTasks

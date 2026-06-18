@@ -674,8 +674,7 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 				"oidc":          sanitizeOIDC(a2a.Auth.OIDC),
 				"mtls":          sanitizeMTLS(a2a.Auth.MTLS),
 			},
-			"has_legacy_api_key": strings.TrimSpace(a2a.APIKey) != "",
-			"presets":            a2aAuthPresets(),
+			"presets": a2aAuthPresets(),
 		})
 	case http.MethodPut:
 		var req struct {
