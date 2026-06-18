@@ -19,8 +19,9 @@ func BuildInteractiveSystemPrompt(
 	globalAutoMem *memory.AutoMemory,
 	projectAutoMem *memory.AutoMemory,
 	gitStatus string,
+	remoteAgentsInfo string,
 ) string {
-	prompt, _ := BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, globalAutoMem, projectAutoMem, gitStatus)
+	prompt, _ := BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, globalAutoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
 	return prompt
 }
 
@@ -33,6 +34,7 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	globalAutoMem *memory.AutoMemory,
 	projectAutoMem *memory.AutoMemory,
 	gitStatus string,
+	remoteAgentsInfo string,
 ) (string, []string) {
 	toolNames := make([]string, 0)
 	if registry != nil {
@@ -60,6 +62,9 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	}
 	if mode == permission.AutopilotMode {
 		prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+	}
+	if strings.TrimSpace(remoteAgentsInfo) != "" {
+		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
 	}
 	if globalAutoMem != nil {
 		if globalAutoContent, _, _ := globalAutoMem.LoadAll(); globalAutoContent != "" {

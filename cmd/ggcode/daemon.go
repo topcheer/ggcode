@@ -216,8 +216,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	for i, t := range tools {
 		toolNames[i] = t.Name()
 	}
+	// Declare early so buildCurrentSystemPrompt closure can reference it.
+	var a2aReg *a2a.Registry
+
 	buildCurrentSystemPrompt := func() (string, []string) {
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus)
+		remoteAgentsInfo := ""
+		if a2aReg != nil {
+			if instances, err := a2aReg.Discover(); err == nil && len(instances) > 0 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+			}
+		}
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	var promptSkillRefsMu sync.RWMutex
@@ -697,7 +706,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Start A2A server if enabled.
 	var a2aSrv *a2a.Server
-	var a2aReg *a2a.Registry
+	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.

@@ -229,6 +229,34 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	return instances, nil
 }
 
+// RemoteAgentSummary returns a human-readable summary of other online
+// ggcode instances, suitable for injection into the system prompt.
+// Returns empty string if no other instances are online.
+func (t *RemoteTool) RemoteAgentSummary() string {
+	instances, err := t.discover()
+	if err != nil || len(instances) == 0 {
+		return ""
+	}
+	return FormatRemoteAgents(instances)
+}
+
+// FormatRemoteAgents formats a list of discovered instances into a
+// system-prompt-friendly summary. Exported so non-RemoteTool callers
+// (e.g. daemon, desktop) can use it directly from a Registry.
+func FormatRemoteAgents(instances []InstanceInfo) string {
+	if len(instances) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("The following %d ggcode instance(s) are online in other workspaces:\n", len(instances)))
+	for _, inst := range instances {
+		name := filepath.Base(inst.Workspace)
+		sb.WriteString(fmt.Sprintf("- %s (%s) — %s\n", name, inst.Workspace, inst.Status))
+	}
+	sb.WriteString("Use a2a_remote to delegate tasks to them.")
+	return sb.String()
+}
+
 // RefreshCache forces a cache refresh. Called periodically by background goroutine.
 func (t *RemoteTool) RefreshCache() {
 	instances, err := t.registry.Discover()
