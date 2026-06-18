@@ -17,14 +17,20 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
 
 # --- Idempotency: skip if a PR for this version already exists ---
+# Use GitHub Search API directly — gh CLI search may not work in CI
 Write-Host "Checking for existing PRs for $PackageId version $releaseVersion..."
-$existingPRs = gh search prs --repo microsoft/winget-pkgs "$PackageId version $releaseVersion" --state open --json number,url 2>$null | ConvertFrom-Json
-if ($existingPRs -and $existingPRs.Count -gt 0) {
-    Write-Host "Found $($existingPRs.Count) existing open PR(s) for $PackageId $releaseVersion. Skipping."
-    foreach ($pr in $existingPRs) {
-        Write-Host "  PR #$($pr.number): $($pr.url)"
+try {
+    $searchQuery = "repo:microsoft/winget-pkgs type:pr state:open $PackageId version $releaseVersion in:title"
+    $searchResponse = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$([uri]::EscapeDataString($searchQuery))" -Headers @{ Authorization = "token $GitHubToken"; Accept = "application/vnd.github+json" } -ErrorAction Stop
+    if ($searchResponse.total_count -gt 0) {
+        Write-Host "Found $($searchResponse.total_count) existing open PR(s) for $PackageId $releaseVersion. Skipping."
+        foreach ($item in $searchResponse.items) {
+            Write-Host "  PR #$($item.number): $($item.html_url)"
+        }
+        exit 0
     }
-    exit 0
+} catch {
+    Write-Warning "PR search failed: $_. Proceeding with submission."
 }
 
 # Check if package already exists
@@ -147,6 +153,12 @@ InstallerSwitches:
   Silent: /qn
   SilentWithProgress: /qb
 UpgradeBehavior: install
+ProductCode: '$productCode'
+AppsAndFeaturesEntries:
+- DisplayName: $displayName
+  Publisher: $publisher
+  ProductCode: '$productCode'
+  UpgradeCode: '$upgradeCode'
 Installers:
 "@
 
