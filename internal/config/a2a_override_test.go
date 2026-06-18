@@ -131,3 +131,24 @@ func TestLoadA2AOverrideInvalidYAML(t *testing.T) {
 		t.Error("expected nil for invalid YAML")
 	}
 }
+
+func TestLoadA2AOverrideLegacyAPIKeyMigration(t *testing.T) {
+	dir := t.TempDir()
+	ggcodeDir := filepath.Join(dir, ".ggcode")
+	os.MkdirAll(ggcodeDir, 0755)
+
+	// Write a2a.yaml with legacy api_key format
+	os.WriteFile(filepath.Join(ggcodeDir, "a2a.yaml"),
+		[]byte("api_key: legacy-key\nport: 8888\n"), 0644)
+
+	ov := LoadA2AOverride(dir)
+	if ov == nil {
+		t.Fatal("expected override")
+	}
+	if ov.Auth.APIKey != "legacy-key" {
+		t.Errorf("expected auth.api_key=legacy-key, got %q", ov.Auth.APIKey)
+	}
+	if ov.Port != 8888 {
+		t.Errorf("expected port=8888, got %d", ov.Port)
+	}
+}

@@ -17,8 +17,31 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 		return nil
 	}
 
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	// a2a.yaml override files are flat (no "a2a:" wrapper), so check
+	// top-level api_key and move it to auth.api_key directly.
+	if legacyKey, hasLegacy := raw["api_key"]; hasLegacy {
+		auth, _ := raw["auth"].(map[string]interface{})
+		if auth == nil {
+			auth = map[string]interface{}{}
+		}
+		if _, exists := auth["api_key"]; !exists {
+			auth["api_key"] = legacyKey
+			raw["auth"] = auth
+		}
+		delete(raw, "api_key")
+	}
+
+	migrated, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+
 	var override A2AConfig
-	if err := yaml.Unmarshal(data, &override); err != nil {
+	if err := yaml.Unmarshal(migrated, &override); err != nil {
 		return nil
 	}
 	return &override

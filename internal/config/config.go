@@ -795,6 +795,7 @@ func Load(path string) (*Config, error) {
 	if hasLegacyProviderKeys(raw) {
 		return nil, fmt.Errorf("legacy provider/providers config is no longer supported; use vendor/endpoint/vendors instead")
 	}
+	migrateLegacyA2AAPIKey(raw)
 	if shouldApplyFirstLaunchAnthropicBootstrap(raw) {
 		applyFirstLaunchAnthropicBootstrap(cfg)
 	}
@@ -1101,6 +1102,33 @@ func hasLegacyProviderKeys(raw map[string]interface{}) bool {
 	_, hasProvider := raw["provider"]
 	_, hasProviders := raw["providers"]
 	return hasProvider || hasProviders
+}
+
+// migrateLegacyA2AAPIKey silently moves a2a.api_key to a2a.auth.api_key
+// in the raw YAML map if the legacy field is present and the new field
+// is not already set. This is a backward-compatibility shim so existing
+// configs with the old format keep working without user intervention.
+func migrateLegacyA2AAPIKey(raw map[string]interface{}) {
+	if raw == nil {
+		return
+	}
+	a2a, ok := raw["a2a"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	legacyKey, hasLegacy := a2a["api_key"]
+	if !hasLegacy {
+		return
+	}
+	auth, _ := a2a["auth"].(map[string]interface{})
+	if auth == nil {
+		auth = map[string]interface{}{}
+	}
+	if _, exists := auth["api_key"]; !exists {
+		auth["api_key"] = legacyKey
+		a2a["auth"] = auth
+	}
+	delete(a2a, "api_key")
 }
 
 func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {

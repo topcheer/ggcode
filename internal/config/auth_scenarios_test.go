@@ -228,8 +228,39 @@ a2a:
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 9: Legacy A2A.APIKey removed — auth.api_key is the only path now
+// Scenario 9: Legacy a2a.api_key auto-migrates to auth.api_key
 // ---------------------------------------------------------------------------
+
+func TestOAuth2Scenario_LegacyA2AAPIKeyMigration(t *testing.T) {
+	yaml := `
+a2a:
+  api_key: "my-old-key"
+`
+	cfg := parseTestConfig(t, yaml)
+
+	// Legacy key should be migrated to auth.api_key
+	if cfg.A2A.Auth.APIKey != "my-old-key" {
+		t.Errorf("expected auth.api_key=my-old-key after migration, got %q", cfg.A2A.Auth.APIKey)
+	}
+	if !cfg.A2A.HasAuth() {
+		t.Error("expected HasAuth()=true after migration")
+	}
+}
+
+func TestOAuth2Scenario_LegacyA2AAPIKeyDoesNotOverrideNew(t *testing.T) {
+	yaml := `
+a2a:
+  api_key: "old-key"
+  auth:
+    api_key: "new-key"
+`
+	cfg := parseTestConfig(t, yaml)
+
+	// New format takes priority; legacy key is discarded
+	if cfg.A2A.Auth.APIKey != "new-key" {
+		t.Errorf("expected auth.api_key=new-key, got %q", cfg.A2A.Auth.APIKey)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Scenario 10: Instance-level override
