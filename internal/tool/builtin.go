@@ -96,11 +96,20 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return err
 		}
 	}
+	if shouldRegisterWarpTool() {
+		if err := registry.Register(NewWarpTool(workingDir)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func shouldRegisterGhosttyTool() bool {
 	return os.Getenv("TERM_PROGRAM") == "ghostty"
+}
+
+func shouldRegisterWarpTool() bool {
+	return os.Getenv("TERM_PROGRAM") == "WarpTerminal"
 }
 
 func shouldRegisterTmuxTool(client *tmux.Client) bool {
