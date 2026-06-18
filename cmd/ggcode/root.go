@@ -505,7 +505,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	buildCurrentSystemPrompt := func() (string, []string) {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
-			if instances, err := a2aRegistry.Discover(); err == nil && len(instances) > 0 {
+			// Read async cache only — never block the UI thread on disk I/O.
+			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
 				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
 			}
 		}
@@ -622,7 +623,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
 			a2aTaskHandler = a2aHandler
+			// Start async background refresh so CachedInstances() returns
+			// useful data without ever blocking the UI thread.
+			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
+			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
+				a2aBgCancel()
 				if a2aRegistry != nil {
 					_ = a2aRegistry.Unregister()
 				}

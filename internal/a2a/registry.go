@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -45,7 +46,15 @@ type Registry struct {
 	selfID   string
 	selfInfo *InstanceInfo
 	mdnsSvc  *mdnsService // nil if LAN discovery is disabled
+
+	// asyncCache is populated by a background goroutine so the UI thread
+	// never blocks on disk I/O or PID checks.
+	asyncCache   []InstanceInfo
+	asyncCacheOK bool
 }
+
+// backgroundRefreshInterval is how often the background goroutine refreshes.
+const backgroundRefreshInterval = 15 * time.Second
 
 // NewRegistry creates or opens the local instance registry.
 func NewRegistry() (*Registry, error) {
@@ -71,6 +80,7 @@ func (r *Registry) Register(info InstanceInfo) error {
 	r.removeStaleFiles(info.PID, info.Workspace, info.ID)
 
 	err := r.writeInstanceFile(info)
+	r.asyncCacheOK = false // force refresh on next background tick
 	r.mu.Unlock()
 	if err != nil {
 		return err
@@ -153,6 +163,8 @@ func (r *Registry) Unregister() error {
 
 // Discover returns all running instances (excluding self).
 // Merges local file discovery with mDNS LAN discovery, deduplicating by ID.
+// This is the full synchronous scan — callers that need non-blocking access
+// should use CachedInstances() instead.
 func (r *Registry) Discover() ([]InstanceInfo, error) {
 	// 1) Local file discovery
 	localInstances, err := r.discoverLocal()
@@ -187,7 +199,66 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 		seen[inst.ID] = true
 		result = append(result, inst)
 	}
+
+	// Update cache.
+	r.mu.Lock()
+	r.asyncCache = result
+	r.asyncCacheOK = true
+	r.mu.Unlock()
+
 	return result, nil
+}
+
+// CachedInstances returns the last background-refreshed instance list without
+// any disk I/O or PID checks. Returns nil if the background refresh hasn't
+// populated the cache yet. Safe to call from the UI thread.
+func (r *Registry) CachedInstances() []InstanceInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.asyncCacheOK {
+		return nil
+	}
+	return append([]InstanceInfo(nil), r.asyncCache...)
+}
+
+// StartBackgroundRefresh launches a goroutine that periodically calls
+// Discover() to keep the async cache fresh. This ensures CachedInstances()
+// returns useful data without ever blocking the caller. The goroutine is
+// stopped when ctx is cancelled.
+func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
+	// Immediate first refresh so the cache is populated without waiting.
+	go func() {
+		r.refreshCache()
+		ticker := time.NewTicker(backgroundRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				r.refreshCache()
+			}
+		}
+	}()
+}
+
+func (r *Registry) refreshCache() {
+	instances, err := r.Discover()
+	if err != nil {
+		debug.Log("a2a.registry", "background refresh error: %v", err)
+		return
+	}
+	r.mu.Lock()
+	r.asyncCache = instances
+	r.asyncCacheOK = true
+	r.mu.Unlock()
+}
+
+// InvalidateDiscoverCache forces the next background refresh to do a fresh scan.
+func (r *Registry) InvalidateDiscoverCache() {
+	r.mu.Lock()
+	r.asyncCacheOK = false
+	r.mu.Unlock()
 }
 
 // discoverLocal reads the local file-based registry, pruning dead PIDs

@@ -222,7 +222,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	buildCurrentSystemPrompt := func() (string, []string) {
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
-			if instances, err := a2aReg.Discover(); err == nil && len(instances) > 0 {
+			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
 				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
 			}
 		}
@@ -714,7 +714,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
+			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
+			a2aReg.StartBackgroundRefresh(a2aBgCtx)
 			defer func() {
+				a2aBgCancel()
 				_ = a2aReg.Unregister()
 				a2aSrv.Stop()
 			}()
@@ -902,10 +905,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if a2aReg == nil {
 			return nil
 		}
-		instances, err := a2aReg.Discover()
-		if err != nil {
-			return nil
-		}
+		instances := a2aReg.CachedInstances()
 		var result []webui.A2ADiscoveredInstance
 		for _, inst := range instances {
 			result = append(result, webui.A2ADiscoveredInstance{
