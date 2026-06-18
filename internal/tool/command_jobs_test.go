@@ -10,7 +10,7 @@ import (
 func TestCommandJobManagerLifecycle(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 
-	started, err := mgr.Start(context.Background(), "printf 'one\\ntwo\\n'", 5*time.Second)
+	started, err := mgr.Start(context.Background(), "printf 'one\\ntwo\\n'", false, 5*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCommandJobManagerLifecycle(t *testing.T) {
 func TestCommandJobManagerStop(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 
-	started, err := mgr.Start(context.Background(), "sleep 5", 30*time.Second)
+	started, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestCommandJobManagerOwnerContextCancellationDoesNotStopJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr := NewCommandJobManager(t.TempDir())
 
-	started, err := mgr.Start(ctx, "sleep 5", 30*time.Second)
+	started, err := mgr.Start(ctx, "sleep 5", false, 30*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCommandJobManagerWaitIgnoresCancelledContext(t *testing.T) {
 	// After the fix, wait_command does not propagate request context
 	// cancellation. It waits for the specified duration or job completion.
 	mgr := NewCommandJobManager(t.TempDir())
-	started, err := mgr.Start(context.Background(), "sleep 5", 30*time.Second)
+	started, err := mgr.Start(context.Background(), "sleep 5", false, 30*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestCommandJobManagerWaitIgnoresCancelledContext(t *testing.T) {
 func TestCommandJobManagerWriteInput(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 
-	started, err := mgr.Start(context.Background(), "read line; printf 'echo:%s\\n' \"$line\"", 5*time.Second)
+	started, err := mgr.Start(context.Background(), "read line; printf 'echo:%s\\n' \"$line\"", false, 5*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestCommandJobManagerWriteInput(t *testing.T) {
 func TestCommandJobManagerWriteInputFailsForStoppedJob(t *testing.T) {
 	mgr := NewCommandJobManager(t.TempDir())
 
-	started, err := mgr.Start(context.Background(), "printf 'done\\n'", 5*time.Second)
+	started, err := mgr.Start(context.Background(), "printf 'done\\n'", false, 5*time.Second)
 	if err != nil {
 		t.Fatalf("start command job: %v", err)
 	}

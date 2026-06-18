@@ -15,7 +15,7 @@ func TestCommandJobPollingNoDuplicateLines(t *testing.T) {
 	// at least one poll cycle to observe it running and capture the output.
 	// "echo hello && sleep 2" was flaky on CI because the output could be
 	// consumed and the process exit before the first poll.
-	snapshot, err := manager.Start(context.Background(), "sleep 1 && echo hello", 0)
+	snapshot, err := manager.Start(context.Background(), "sleep 1 && echo hello", false, 0)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}

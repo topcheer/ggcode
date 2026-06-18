@@ -149,7 +149,7 @@ func (m *Model) startShellCommand(command string) tea.Cmd {
 			defer cancel()
 			workDir, _ := os.Getwd()
 			manager := toolpkg.NewCommandJobManager(workDir)
-			snapshot, err := manager.Start(ctx, command, 0)
+			snapshot, err := manager.Start(ctx, command, false, 0)
 			if err != nil {
 				if m.program != nil {
 					m.program.Send(shellCommandDoneMsg{RunID: runID, Status: toolpkg.CommandJobFailed, ErrText: err.Error()})

@@ -80,19 +80,29 @@ func NewCommandJobManager(workingDir string) *CommandJobManager {
 	}
 }
 
-func (m *CommandJobManager) Start(ctx context.Context, command string, timeout time.Duration) (*CommandJobSnapshot, error) {
+func (m *CommandJobManager) Start(ctx context.Context, command string, detach bool, timeout time.Duration) (*CommandJobSnapshot, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	if timeout <= 0 {
-		timeout = defaultCommandTimeout
+
+	var jobCtx context.Context
+	var cancel context.CancelFunc
+	if detach {
+		// Detached mode: no timeout, runs until natural exit or stop_command.
+		// Still use context.Background() so it's not tied to the request context.
+		jobCtx, cancel = context.WithCancel(context.Background())
+		timeout = 0 // signals "no timeout" in snapshot display
+	} else {
+		if timeout <= 0 {
+			timeout = defaultCommandTimeout
+		}
+		// Use context.Background() so the background process is NOT tied to
+		// the incoming request context. The request ctx dies when the tool call
+		// returns, which would kill the process prematurely. Only the timeout
+		// (managed by the job's own context) should control the process lifetime.
+		jobCtx, cancel = context.WithTimeout(context.Background(), timeout)
 	}
-	// Use context.Background() so the background process is NOT tied to
-	// the incoming request context. The request ctx dies when the tool call
-	// returns, which would kill the process prematurely. Only the timeout
-	// (managed by the job's own context) should control the process lifetime.
-	jobCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd, _, err := util.NewShellCommandContext(jobCtx, command)
 	if err != nil {
 		cancel()
@@ -446,7 +456,11 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 	sb.WriteString(fmt.Sprintf("Job ID: %s\n", snapshot.ID))
 	sb.WriteString(fmt.Sprintf("Status: %s\n", snapshot.Status))
 	sb.WriteString(fmt.Sprintf("Duration: %s\n", snapshot.Duration))
-	sb.WriteString(fmt.Sprintf("Timeout: %s\n", snapshot.Timeout.Round(time.Second)))
+	if snapshot.Timeout > 0 {
+		sb.WriteString(fmt.Sprintf("Timeout: %s\n", snapshot.Timeout.Round(time.Second)))
+	} else {
+		sb.WriteString("Timeout: none (detached)\n")
+	}
 	sb.WriteString(fmt.Sprintf("Total lines: %d\n", snapshot.TotalLines))
 	if snapshot.TruncatedHead {
 		sb.WriteString(fmt.Sprintf("Buffered lines start at: %d\n", snapshot.BufferedFrom))

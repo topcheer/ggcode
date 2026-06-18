@@ -18,7 +18,7 @@ type StartCommandTool struct {
 func (t StartCommandTool) Name() string { return "start_command" }
 
 func (t StartCommandTool) Description() string {
-	return "Start a shell command in the background. Use this for long-running, streaming, or interactive commands; prefer run_command for quick one-shot commands. Commands run in the workspace working directory. Use read_command_output or wait_command with the returned job_id to monitor progress, write_command_input to answer prompts, and stop_command to cancel. Defaults to a 30-minute timeout."
+	return "Start a shell command in the background. Use this for long-running, streaming, or interactive commands; prefer run_command for quick one-shot commands. Commands run in the workspace working directory. Use read_command_output or wait_command with the returned job_id to monitor progress, write_command_input to answer prompts, and stop_command to cancel. Defaults to a 30-minute timeout. Set detach=true for long-running services (dev servers, watchers) that should run without any timeout — the process runs until it exits naturally or is stopped manually."
 }
 
 func (t StartCommandTool) Parameters() json.RawMessage {
@@ -35,7 +35,11 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 		},
 		"timeout": {
 			"type": "integer",
-			"description": "Timeout in seconds before the job is cancelled (default: 1800)"
+			"description": "Timeout in seconds before the job is cancelled (default: 1800). Ignored when detach=true."
+		},
+		"detach": {
+			"type": "boolean",
+			"description": "When true, the command runs with no timeout — it will not be killed until it exits naturally or stop_command is called. Use this for long-running services like dev servers, file watchers, or daemons. Default: false."
 		}
 	},
 	"required": [
@@ -59,6 +63,7 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	var args struct {
 		Command string `json:"command"`
 		Timeout int    `json:"timeout"`
+		Detach  bool   `json:"detach"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -88,7 +93,7 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		args.Command = gateResult.CleanedCmd
 	}
 
-	snap, err := t.Manager.Start(ctx, args.Command, secondsToDuration(args.Timeout, defaultCommandTimeout))
+	snap, err := t.Manager.Start(ctx, args.Command, args.Detach, secondsToDuration(args.Timeout, defaultCommandTimeout))
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

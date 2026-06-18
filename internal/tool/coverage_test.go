@@ -58,7 +58,7 @@ func TestCommandGateIsDestructive(t *testing.T) {
 
 func TestCommandJobManager_Start_Empty(t *testing.T) {
 	m := NewCommandJobManager(t.TempDir())
-	_, err := m.Start(nil, "", 0)
+	_, err := m.Start(nil, "", false, 0)
 	if err == nil {
 		t.Error("expected error for empty command")
 	}
