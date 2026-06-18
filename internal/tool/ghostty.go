@@ -119,7 +119,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	case "list":
 		return g.executeList(), nil
 	case "split":
-		return g.executeSplit(args.Direction, args.Command, args.WorkingDir), nil
+		return g.executeSplit(args.TerminalID, args.Direction, args.Command, args.WorkingDir), nil
 	case "new_tab":
 		return g.executeNewTab(args.Command, args.WorkingDir), nil
 	case "new_window":
@@ -271,7 +271,7 @@ end tell`
 	return Result{Content: out}
 }
 
-func (g *GhosttyTool) executeSplit(direction, command, workingDir string) Result {
+func (g *GhosttyTool) executeSplit(terminalID, direction, command, workingDir string) Result {
 	dir := strings.ToLower(strings.TrimSpace(direction))
 	if dir == "" {
 		dir = "right"
@@ -287,24 +287,25 @@ func (g *GhosttyTool) executeSplit(direction, command, workingDir string) Result
 		wd = g.workingDir()
 	}
 
+	spec := terminalSpecifier(terminalID)
 	var script string
 	if strings.TrimSpace(command) != "" {
 		// Create split with command by sending it as initial input after creation.
 		// Ghostty's AppleScript split returns the new terminal, then we send the command.
 		script = fmt.Sprintf(`
 tell application "Ghostty"
-	set term to focused terminal of selected tab of window 1
+	set term to %s
 	set newTerm to split term direction %s
 	input text "cd %s && %s" to newTerm
 	return id of newTerm
-end tell`, dir, escapeAS(wd), escapeAS(command))
+end tell`, spec, dir, escapeAS(wd), escapeAS(command))
 	} else {
 		script = fmt.Sprintf(`
 tell application "Ghostty"
-	set term to focused terminal of selected tab of window 1
+	set term to %s
 	set newTerm to split term direction %s
 	return id of newTerm
-end tell`, dir)
+end tell`, spec, dir)
 	}
 
 	out, err := runAppleScript(script)
