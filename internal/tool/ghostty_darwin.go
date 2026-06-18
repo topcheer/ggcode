@@ -400,11 +400,25 @@ func (g *GhosttyTool) executeSelectTab(tabIndex int) Result {
 		return Result{IsError: true, Content: "tab_index must be >= 1 (1-based)"}
 	}
 
+	// Ghostty's sdef defines "select tab" as a command whose direct parameter
+	// is a tab specifier. The correct AppleScript syntax is:
+	//   tell window 1 to select tab (first tab) / (second tab) / etc.
+	// We convert the 1-based index to an ordinal.
+	ordinals := []string{"", "first", "second", "third", "fourth", "fifth",
+		"sixth", "seventh", "eighth", "ninth", "tenth"}
+	var tabRef string
+	if tabIndex < len(ordinals) {
+		tabRef = ordinals[tabIndex] + " tab"
+	} else {
+		// For indices beyond our ordinal list, use "item N of tabs"
+		tabRef = fmt.Sprintf("item %d of tabs", tabIndex)
+	}
+
 	script := fmt.Sprintf(`
 tell application "Ghostty"
-	select tab %d of window 1
+	tell window 1 to select tab (%s)
 	return "selected"
-end tell`, tabIndex)
+end tell`, tabRef)
 
 	_, err := runAppleScript(script)
 	if err != nil {
