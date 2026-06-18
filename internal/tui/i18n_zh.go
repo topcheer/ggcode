@@ -547,7 +547,7 @@ func zhCatalog(key string) string {
 	case "hint.enter_send":
 		return "Enter 发送"
 	case "hint.ctrlv_image":
-		return "Ctrl+V 粘贴图片"
+		return "Ctrl+V / Ctrl+Shift+V 粘贴图片"
 	case "hint.ctrlr_sidebar":
 		return "Ctrl+R 侧栏"
 	case "hint.help":
@@ -1006,7 +1006,7 @@ func zhCatalog(key string) string {
 	case "image.clipboard_failed":
 		return "无法从剪贴板粘贴图片：%v"
 	case "image.clipboard_no_image_windows":
-		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请输入 /image paste。"
+		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请尝试 Ctrl+Shift+V 或输入 /image paste。"
 	case "cron.firing":
 		return "⏰ 定时任务触发"
 	case "agents.none":

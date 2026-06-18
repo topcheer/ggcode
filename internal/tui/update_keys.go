@@ -386,10 +386,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		m.promptExitConfirm()
 		return m, nil
-	case "ctrl+v":
-		// Clipboard image paste. Works on macOS and Linux terminals.
-		// On Windows, Ctrl+V is typically intercepted by the terminal for
-		// text paste, so users should use /image paste command instead.
+	case "ctrl+v", "ctrl+shift+v":
+		// Clipboard image paste.
+		// Ctrl+V works on macOS/Linux but is intercepted by most Windows terminals.
+		// Ctrl+Shift+V works on Windows terminals that intercept Ctrl+V.
 		return m, m.handleClipboardPaste()
 	case "ctrl+d":
 		m.quitting = true
