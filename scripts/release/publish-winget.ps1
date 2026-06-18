@@ -16,6 +16,17 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
 
+# --- Idempotency: skip if a PR for this version already exists ---
+Write-Host "Checking for existing PRs for $PackageId version $releaseVersion..."
+$existingPRs = gh search prs --repo microsoft/winget-pkgs "$PackageId version $releaseVersion" --state open --json number,url 2>$null | ConvertFrom-Json
+if ($existingPRs -and $existingPRs.Count -gt 0) {
+    Write-Host "Found $($existingPRs.Count) existing open PR(s) for $PackageId $releaseVersion. Skipping."
+    foreach ($pr in $existingPRs) {
+        Write-Host "  PR #$($pr.number): $($pr.url)"
+    }
+    exit 0
+}
+
 # Check if package already exists
 & $wingetCreate show $PackageId | Out-Null
 $packageExists = $LASTEXITCODE -eq 0
