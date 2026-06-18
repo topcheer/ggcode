@@ -42,7 +42,7 @@ if (-not $packageExists) {
 # --- Determine existing installer count from latest manifest ---
 $existingManifest = & $wingetCreate show $PackageId 2>&1 | Out-String
 $existingCount = ([regex]::Matches($existingManifest, "InstallerUrl:")).Count
-if ($existingCount -eq 0) { $existingCount = 1 }  # fallback
+if ($existingCount -eq 0) { $existingCount = 1 }
 
 $desiredUrls = @("${InstallerUrl}|x64|user")
 if ($InstallerUrlArm64) {
@@ -63,10 +63,10 @@ if ($desiredUrls.Count -eq $existingCount) {
     exit 0
 }
 
-# --- Different count: need to add/remove installer entries ---
-Write-Host "Installer count changed ($existingCount -> $($desiredUrls.Count)). Using multi-step approach..."
+# --- Different count: generate complete installer YAML from scratch ---
+Write-Host "Installer count changed ($existingCount -> $($desiredUrls.Count)). Generating complete manifest..."
 
-# Step 1: Update with only the URLs that match existing count (x64 first)
+# Step 1: Generate base manifest with existing URL count (for locale + version YAML)
 $matchingUrls = $desiredUrls[0..([Math]::Min($existingCount, $desiredUrls.Count) - 1)]
 Write-Host "Step 1: Generating base manifest with $existingCount installer(s)..."
 & $wingetCreate update $PackageId --version $releaseVersion --urls $matchingUrls --out $manifestDir --token $GitHubToken
@@ -76,101 +76,110 @@ if ($LASTEXITCODE -ne 0) {
     exit 0
 }
 
-# Step 2: If we have more installers than existing, add the extra entries
-if ($desiredUrls.Count -gt $existingCount -and $InstallerUrlArm64) {
-    Write-Host "Step 2: Adding arm64 installer entry to manifest..."
+# Step 2: Download all installers, compute SHA256
+Write-Host "Step 2: Computing installer hashes..."
 
-    # Download arm64 installer to get its hash
-    $arm64InstallerPath = Join-Path $PWD "arm64.msi"
-    Write-Host "  Downloading arm64 MSI for hashing..."
-    Invoke-WebRequest -Uri $InstallerUrlArm64 -OutFile $arm64InstallerPath -UseBasicParsing
-    $arm64Hash = (Get-FileHash $arm64InstallerPath -Algorithm SHA256).Hash.ToLower()
-    Write-Host "  arm64 SHA256: $arm64Hash"
+$installers = @()
 
-    # Find the installer YAML file (saved in nested dirs like manifests/g/gg/ai/<id>/<version>/)
-    $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
-    if (-not $installerFile) {
-        Write-Warning "Could not find installer YAML to modify."
-        exit 0
-    }
-
-    $yaml = Get-Content $installerFile.FullName -Raw
-
-    # Extract architecture from the URL or default to arm64
-    $arch = "arm64"
-
-    # Find the last Installer block and duplicate it with new values
-    # The installer YAML looks like:
-    # - Architecture: x64
-    #   InstallerUrl: https://...
-    #   InstallerSha256: ABC...
-    #   InstallerType: wix
-    #   Scope: user
-    #   ProductCode: '{...}'
-    #   InstallerSwitches:
-    #     Silent: /qn
-    #     SilentWithProgress: /qb
-
-    # Parse existing installer entry to get ProductCode pattern and InstallerType
-    $installerType = "wix"
-    if ($yaml -match "InstallerType:\s*(\w+)") { $installerType = $matches[1] }
-
-    # Generate a new ProductCode GUID for arm64
-    $newGuid = [System.Guid]::NewGuid().ToString().ToUpper()
-    $productCode = "{$newGuid}"
-
-    # Build the new installer entry by cloning the existing installer section.
-    # The installer YAML structure is:
-    #   Installers:
-    #   - Architecture: x64
-    #     InstallerUrl: ...
-    #     AppsAndFeaturesEntries:
-    #     - DisplayVersion: ...
-    #   ManifestType: installer
-    #
-    # We split at ManifestType to get the full installer block, clone it,
-    # modify values, and reassemble. This avoids fragile per-entry regex.
-    $manifestTypeIdx = $yaml.IndexOf("ManifestType:")
-    if ($manifestTypeIdx -lt 0) {
-        Write-Warning "Could not find ManifestType in YAML."
-        exit 0
-    }
-
-    $beforeManifest = $yaml.Substring(0, $manifestTypeIdx)
-    $fromManifest = $yaml.Substring($manifestTypeIdx)
-
-    # Extract the installer entry (everything from "- Architecture:" to ManifestType)
-    $archIdx = $beforeManifest.IndexOf("- Architecture:")
-    if ($archIdx -lt 0) {
-        Write-Warning "Could not find any installer entry in YAML."
-        exit 0
-    }
-
-    $installerBlock = $beforeManifest.Substring($archIdx)
-
-    # Clone the installer block and modify for arm64
-    $arm64Entry = $installerBlock.TrimEnd()
-    $arm64Entry = $arm64Entry `
-        -replace 'Architecture:\s*\w+', "Architecture: $arch" `
-        -replace 'InstallerUrl:\s*.+', "InstallerUrl: $InstallerUrlArm64" `
-        -replace 'InstallerSha256:\s*[A-Fa-f0-9]+', "InstallerSha256: $arm64Hash"
-
-    # Replace ProductCode GUIDs with new ones for arm64
-    $newGuid = [System.Guid]::NewGuid().ToString().ToUpper()
-    $arm64Entry = $arm64Entry -replace "ProductCode:\s*'\{[^}]+\}'", "ProductCode: '{$newGuid}'"
-
-    # Reassemble: original block + new arm64 entry + ManifestType section
-    $yaml = $beforeManifest + $arm64Entry + "`n`n" + $fromManifest
-
-    Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
-    Write-Host "  Added arm64 installer entry to $($installerFile.Name)"
+# x64 installer
+$x64Path = Join-Path $PWD "x64.msi"
+Invoke-WebRequest -Uri $InstallerUrl -OutFile $x64Path -UseBasicParsing
+$x64Hash = (Get-FileHash $x64Path -Algorithm SHA256).Hash.ToUpper()
+Write-Host "  x64 SHA256: $x64Hash"
+$installers += @{
+    Arch        = "x64"
+    Url         = $InstallerUrl
+    Sha256      = $x64Hash
 }
 
-# Step 3: Submit the modified manifest
-# wingetcreate submit expects the directory containing the YAML files directly,
-# not the top-level output directory with nested manifest structure.
+# arm64 installer
+if ($InstallerUrlArm64) {
+    $arm64Path = Join-Path $PWD "arm64.msi"
+    Invoke-WebRequest -Uri $InstallerUrlArm64 -OutFile $arm64Path -UseBasicParsing
+    $arm64Hash = (Get-FileHash $arm64Path -Algorithm SHA256).Hash.ToUpper()
+    Write-Host "  arm64 SHA256: $arm64Hash"
+    $installers += @{
+        Arch   = "arm64"
+        Url    = $InstallerUrlArm64
+        Sha256 = $arm64Hash
+    }
+}
+
+# Step 3: Write complete installer YAML from scratch
+Write-Host "Step 3: Writing complete installer YAML..."
+
+$installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
+if (-not $installerFile) {
+    Write-Warning "Could not find installer YAML template."
+    exit 0
+}
+
+# Extract shared metadata from the base manifest (locale info, etc.)
+$baseYaml = Get-Content $installerFile.FullName -Raw
+
+# Parse top-level fields we need to preserve
+$productCode = ""
+if ($baseYaml -match "ProductCode:\s*'(\{[^}]+\})'") { $productCode = $matches[1] }
+$upgradeCode = ""
+if ($baseYaml -match "UpgradeCode:\s*'(\{[^}]+\})'") { $upgradeCode = $matches[1] }
+$displayName = "GGCode Desktop"
+if ($baseYaml -match "DisplayName:\s*(.+)") { $displayName = $matches[1].Trim() }
+$publisher = "GG AI Studio"
+if ($baseYaml -match "Publisher:\s*(.+)") { $publisher = $matches[1].Trim() }
+
+# Build the complete installer YAML
+$yaml = @"
+# Created using wingetcreate 1.12.8.0
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+PackageIdentifier: $PackageId
+PackageVersion: $releaseVersion
+Platform:
+- Windows.Desktop
+MinimumOSVersion: 10.0.17763.0
+InstallerType: wix
+Scope: user
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+InstallerSwitches:
+  Silent: /qn
+  SilentWithProgress: /qb
+UpgradeBehavior: install
+Installers:
+"@
+
+foreach ($inst in $installers) {
+    $yaml += @"
+
+- Architecture: $($inst.Arch)
+  InstallerUrl: $($inst.Url)
+  InstallerSha256: $($inst.Sha256)
+  InstallerType: wix
+  Scope: user
+  ProductCode: '$productCode'
+  AppsAndFeaturesEntries:
+  - DisplayName: $displayName
+    Publisher: $publisher
+    ProductCode: '$productCode'
+    UpgradeCode: '$upgradeCode'
+"@
+}
+
+$yaml += @"
+
+ManifestType: installer
+ManifestVersion: 1.12.0
+ReleaseDate: $(Get-Date -Format "yyyy-MM-dd")
+"@
+
+Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
+Write-Host "  Wrote complete installer YAML with $($installers.Count) installer(s)"
+
+# Step 4: Submit the modified manifest
 $yamlDir = Split-Path -Parent $installerFile.FullName
-Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
+Write-Host "Step 4: Submitting manifest from $yamlDir to winget-pkgs..."
 & $wingetCreate submit $yamlDir --token $GitHubToken --no-open
 
 if ($LASTEXITCODE -eq 0) {
