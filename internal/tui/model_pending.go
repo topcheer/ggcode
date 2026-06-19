@@ -136,6 +136,9 @@ func (m *Model) shutdownAll() {
 	if m.swarmMgr != nil {
 		m.swarmMgr.CancelAll()
 	}
+	if m.extPaneMgr != nil {
+		m.extPaneMgr.CloseAll()
+	}
 }
 
 func (m *Model) restorePendingInput() {

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 )
 
 func scheduleFollowGraceTick(hasTerminal bool) tea.Cmd {
@@ -75,6 +76,7 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 func (m Model) handleSubAgentTunnelStreamTextMsg(msg subAgentTunnelStreamTextMsg) (Model, tea.Cmd) {
 	if msg.AgentID != "" && msg.Text != "" {
 		m.pushSubAgentTunnelStreamText(msg.AgentID, msg.Text)
+		m.extPaneWriteText(msg.AgentID, msg.Text)
 	}
 	return m, nil
 }
@@ -87,6 +89,7 @@ func (m Model) handleSubAgentTunnelReasoningMsg(msg subAgentTunnelReasoningMsg) 
 }
 
 func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (Model, tea.Cmd) {
+	m.extPaneWriteToolCall(msg.AgentID, msg.ToolName, msg.Detail)
 	if msg.AgentID != "" {
 		displayName := msg.DisplayName
 		if displayName == "" {
@@ -109,6 +112,7 @@ func (m Model) handleSubAgentTunnelToolCallMsg(msg subAgentTunnelToolCallMsg) (M
 }
 
 func (m Model) handleSubAgentTunnelToolResultMsg(msg subAgentTunnelToolResultMsg) (Model, tea.Cmd) {
+	m.extPaneWriteToolResult(msg.AgentID, msg.ToolName, msg.Result, msg.IsError)
 	if msg.AgentID != "" {
 		m.pushSubAgentTunnelToolResult(
 			msg.AgentID,
@@ -125,6 +129,7 @@ func (m Model) handleSubAgentTunnelToolResultMsg(msg subAgentTunnelToolResultMsg
 
 func (m Model) handleSwarmTunnelEventMsg(msg swarmTunnelEventMsg) (Model, tea.Cmd) {
 	m.pushSwarmTunnelEvent(msg.Event)
+	m.extPaneHandleSwarmEvent(msg.Event)
 	return m, nil
 }
 
@@ -134,6 +139,7 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	// Show a human-readable system message and wake the main agent.
 	m.chatWriteSystem(nextSystemID(), m.formatSubAgentDoneNotice(msg))
 	m.chatListScrollToBottom()
+	m.extPaneHandleDone(msg)
 
 	// Force immediate strip refresh on completion (status changed).
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
@@ -206,4 +212,96 @@ func (m Model) handleFollowGraceTickMsg(msg followGraceTickMsg) (Model, tea.Cmd)
 	// Continue ticking only while terminal slots still exist
 	return m, scheduleFollowGraceTick(m.subAgentFollow.hasTerminalSlots())
 
+}
+
+// ── External pane helpers ──
+
+// extPaneResolveName looks up the agent/teammate name from the follow slots.
+func (m Model) extPaneResolveName(agentID string) (name, kind string) {
+	for _, slot := range m.subAgentFollow.slots {
+		if slot.ID == agentID {
+			k := "subagent"
+			if slot.Kind == followSlotTeammate {
+				k = "teammate"
+			}
+			return slot.Name, k
+		}
+	}
+	return agentID, "subagent"
+}
+
+// extPaneWriteText writes streaming text to the agent's external pane,
+// creating the pane lazily if needed.
+func (m Model) extPaneWriteText(agentID, text string) {
+	if !m.extPaneMgr.Available() {
+		return
+	}
+	name, kind := m.extPaneResolveName(agentID)
+	m.extPaneMgr.EnsurePane(agentID, name, kind)
+	m.extPaneMgr.WriteText(agentID, text)
+}
+
+// extPaneWriteToolCall writes a tool call line to the external pane.
+func (m Model) extPaneWriteToolCall(agentID, toolName, detail string) {
+	if !m.extPaneMgr.Available() {
+		return
+	}
+	name, kind := m.extPaneResolveName(agentID)
+	m.extPaneMgr.EnsurePane(agentID, name, kind)
+	m.extPaneMgr.WriteToolCall(agentID, toolName, detail)
+}
+
+// extPaneWriteToolResult writes a tool result line to the external pane.
+func (m Model) extPaneWriteToolResult(agentID, toolName, result string, isError bool) {
+	if !m.extPaneMgr.Available() {
+		return
+	}
+	m.extPaneMgr.WriteToolResult(agentID, toolName, result, isError)
+}
+
+// extPaneHandleSwarmEvent routes swarm events to the external pane.
+func (m Model) extPaneHandleSwarmEvent(ev swarm.Event) {
+	if !m.extPaneMgr.Available() {
+		return
+	}
+	// For teammate spawn/idle events, ensure the pane exists
+	teammateID := ev.TeammateID
+	name := ev.TeammateName
+	if name == "" {
+		name, _ = m.extPaneResolveName(teammateID)
+	}
+	if teammateID == "" {
+		return
+	}
+	switch ev.Type {
+	case "teammate_spawned", "teammate_working":
+		m.extPaneMgr.EnsurePane(teammateID, name, "teammate")
+		m.extPaneMgr.UpdateStatus(teammateID, name, "teammate", ev.Type)
+	case "teammate_text":
+		m.extPaneMgr.EnsurePane(teammateID, name, "teammate")
+		m.extPaneMgr.WriteText(teammateID, ev.Result)
+	case "teammate_tool_call":
+		m.extPaneMgr.EnsurePane(teammateID, name, "teammate")
+		m.extPaneMgr.WriteToolCall(teammateID, ev.CurrentTool, ev.ToolArgs)
+	case "teammate_tool_result":
+		// Tool result text is stored in ToolArgs (see idle_runner.go:403)
+		m.extPaneMgr.WriteToolResult(teammateID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+	case "teammate_done":
+		m.extPaneMgr.HandleDone(teammateID, name, false)
+	case "teammate_idle":
+		m.extPaneMgr.UpdateStatus(teammateID, name, "teammate", "idle")
+	case "teammate_shutdown":
+		m.extPaneMgr.HandleDone(teammateID, name, false)
+	case "teammate_error":
+		m.extPaneMgr.HandleDone(teammateID, name, true)
+	}
+}
+
+// extPaneHandleDone handles agent completion for external panes.
+func (m Model) extPaneHandleDone(msg subAgentDoneMsg) {
+	if !m.extPaneMgr.Available() {
+		return
+	}
+	name, _ := m.extPaneResolveName(msg.AgentID)
+	m.extPaneMgr.HandleDone(msg.AgentID, name, msg.IsError)
 }
