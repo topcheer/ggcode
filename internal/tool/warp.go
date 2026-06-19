@@ -142,8 +142,8 @@ func (w *WarpTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			}
 			if surfaceActions[action] {
 				// Brief delay to let the new surface get focus
-				w.sendKeys(args.Command)
-				w.sendKeys("\r")
+				w.executeInput(args.Command)
+				w.executeSendKey("enter", "")
 			}
 		}
 		return result, nil
