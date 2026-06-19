@@ -3,6 +3,7 @@ package extpane
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -10,13 +11,17 @@ import (
 
 // kittyBackend implements Backend using kitty remote control.
 // Each agent gets its own OS window running `tail -f`.
-type kittyBackend struct{}
+type kittyBackend struct {
+	selfWindowID string // KITTY_WINDOW_ID — never close
+}
 
 func newKittyBackend() *kittyBackend {
 	if _, err := exec.LookPath("kitten"); err != nil {
 		return nil
 	}
-	return &kittyBackend{}
+	return &kittyBackend{
+		selfWindowID: os.Getenv("KITTY_WINDOW_ID"),
+	}
 }
 
 func (k *kittyBackend) Name() string { return "kitty" }
@@ -38,8 +43,11 @@ func (k *kittyBackend) CreateTab(ctx context.Context, title, logfile string) (st
 	return windowID, nil
 }
 
-// CloseTab closes the kitty window.
+// CloseTab closes the kitty window. Refuses to close our own window.
 func (k *kittyBackend) CloseTab(tabID string) error {
+	if tabID == "" || tabID == k.selfWindowID {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := runKitten(ctx, "@", "close-window", "--match=id:"+tabID)

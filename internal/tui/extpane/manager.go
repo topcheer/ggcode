@@ -56,6 +56,8 @@ const maxConcurrentOps = 4
 type Manager struct {
 	backend  Backend
 	panes    map[string]*ExtPane
+	creating map[string]bool // prevents duplicate EnsurePane for same agent
+	failed   map[string]bool // permanently failed — never retry CreateTab
 	mu       sync.Mutex
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -69,6 +71,9 @@ type Manager struct {
 	gracePeriod time.Duration
 }
 
+// maxPanes is the hard cap on concurrent tabs. Prevents runaway creation.
+const maxPanes = 10
+
 // NewManager creates a Manager, auto-detecting the best available backend.
 // Priority: tmux > iTerm2 > Kitty. Returns a Manager with a nil backend
 // if no terminal is suitable (all operations become no-ops).
@@ -77,11 +82,13 @@ func NewManager() *Manager {
 	tmpDir, err := os.MkdirTemp("", "ggcode-extpane-*")
 	if err != nil {
 		debug.Logf("extpane: mkdir temp failed, disabling: %v", err)
-		backend = nil // disable feature if we can't create temp files
+		backend = nil
 	}
 	m := &Manager{
 		backend:     backend,
 		panes:       make(map[string]*ExtPane),
+		creating:    make(map[string]bool),
+		failed:      make(map[string]bool),
 		stopCh:      make(chan struct{}),
 		sem:         make(chan struct{}, maxConcurrentOps),
 		tmpDir:      tmpDir,
@@ -115,6 +122,7 @@ func (m *Manager) goBackend(fn func()) {
 }
 
 // EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
+// Uses a `creating` set to prevent duplicate tab creation during the async backend call.
 func (m *Manager) EnsurePane(agentID, name, kind string) {
 	if !m.Available() {
 		return
@@ -124,20 +132,53 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 		m.mu.Unlock()
 		return
 	}
+	// Prevent duplicate creation: if EnsurePane is already in progress for this agent,
+	// bail out. This is the critical guard against spawning hundreds of tabs.
+	if m.creating[agentID] {
+		m.mu.Unlock()
+		return
+	}
+	// If CreateTab previously failed for this agent, never retry.
+	// This prevents runaway tab creation when the backend creates a tab
+	// but returns an error (e.g., iTerm2 returns numeric session ID).
+	if m.failed[agentID] {
+		m.mu.Unlock()
+		return
+	}
+	// Hard cap: never exceed maxPanes concurrent tabs.
+	if len(m.panes) >= maxPanes {
+		m.mu.Unlock()
+		return
+	}
+	m.creating[agentID] = true
 	m.mu.Unlock()
+
+	// Cleanup helper on failure: mark as permanently failed so we never retry.
+	fail := func(format string, args ...any) {
+		debug.Logf(format, args...)
+		m.mu.Lock()
+		delete(m.creating, agentID)
+		m.failed[agentID] = true // permanent — never retry CreateTab
+		m.mu.Unlock()
+	}
 
 	// Create log file
 	safeName := sanitizeFilename(name)
 	logPath := filepath.Join(m.tmpDir, fmt.Sprintf("%s-%s.log", safeName, shortID(agentID)))
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		debug.Logf("extpane: create log file failed: %v", err)
+		fail("extpane: create log file failed: %v", err)
 		return
 	}
 
 	// Write header to log
 	header := formatHeader(name, kind)
-	f.WriteString(header)
+	if _, err := f.WriteString(header); err != nil {
+		fail("extpane: write header failed: %v", err)
+		f.Close()
+		os.Remove(logPath)
+		return
+	}
 
 	// Create tab
 	title := formatTitle(name, kind, "starting")
@@ -145,13 +186,14 @@ func (m *Manager) EnsurePane(agentID, name, kind string) {
 	defer cancel()
 	tabID, err := m.backend.CreateTab(ctx, title, logPath)
 	if err != nil {
-		debug.Logf("extpane: create tab failed for %s: %v", agentID, err)
+		fail("extpane: create tab failed for %s: %v", agentID, err)
 		f.Close()
 		os.Remove(logPath)
 		return
 	}
 
 	m.mu.Lock()
+	delete(m.creating, agentID)
 	m.panes[agentID] = &ExtPane{
 		AgentID:   agentID,
 		Name:      name,
@@ -241,10 +283,15 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	ep.Done = true
 	ep.DoneAt = time.Now()
 	kind := ep.Kind
+	// Flush remaining buffer BEFORE setting Done.
+	// flushAgent skips Done panes, so we extract and write the buffer here.
+	text := ep.buffer.String()
+	ep.buffer.Reset()
+	ep.dirty = false
+	if text != "" && ep.LogFile != nil {
+		ep.LogFile.WriteString(text)
+	}
 	m.mu.Unlock()
-
-	// Flush remaining buffer + write completion notice
-	m.flushAgent(agentID)
 	status := "done"
 	if isError {
 		status = "failed"
@@ -266,10 +313,17 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 
 // CloseAll immediately closes all external tabs. Called on TUI shutdown.
 func (m *Manager) CloseAll() {
-	if !m.Available() {
+	if m == nil {
 		return
 	}
 	m.stopOnce.Do(func() { close(m.stopCh) })
+	if !m.Available() {
+		// Still clean up tmpDir even if backend was nil.
+		if m.tmpDir != "" {
+			os.RemoveAll(m.tmpDir)
+		}
+		return
+	}
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.panes))
 	for id := range m.panes {

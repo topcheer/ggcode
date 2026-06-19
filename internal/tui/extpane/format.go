@@ -47,7 +47,7 @@ func formatHeader(name, kind string) string {
 //	  internal/tui/extpane/manager.go
 func formatToolCall(toolName, detail string) string {
 	detail = compactPreview(detail)
-	header := fmt.Sprintf("%s%s▸ %s%s%s\n", cCyan+cBold, "", toolName, cReset, "")
+	header := fmt.Sprintf("%s▸ %s%s\n", cCyan+cBold, toolName, cReset)
 	if detail != "" {
 		header += fmt.Sprintf("%s  %s%s\n", cDim, detail, cReset)
 	}
@@ -60,13 +60,13 @@ func formatToolCall(toolName, detail string) string {
 func formatToolResult(toolName, result string, isError bool) string {
 	result = compactPreview(result)
 	if isError {
-		return fmt.Sprintf("%s✗ %s%s  %s%s\n\n",
+		return fmt.Sprintf("%s✗ %s%s  %s%s%s\n\n",
 			cRed+cBold, toolName, cReset,
-			cRed, result+cReset)
+			cRed, result, cReset)
 	}
-	return fmt.Sprintf("%s✓ %s%s  %s%s\n\n",
+	return fmt.Sprintf("%s✓ %s%s  %s%s%s\n\n",
 		cBrightGreen, toolName, cReset,
-		cDim, result+cReset)
+		cDim, result, cReset)
 }
 
 // formatDone renders a completion banner.
