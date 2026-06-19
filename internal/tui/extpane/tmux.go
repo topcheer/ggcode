@@ -31,6 +31,17 @@ func (t *tmuxBackend) Name() string { return "tmux" }
 
 // CreateTab creates a new tmux window (full-screen tab) running `tail -f`.
 func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
+	// Temporarily suppress after-new-window hook to avoid user tmux configs
+	// that trigger interactive rename prompts (command-prompt).
+	// Save the current hook value so we can restore it.
+	savedHook, _ := runTmux(ctx, "show-hooks", "-g", "after-new-window")
+	savedHook = strings.TrimSpace(savedHook)
+	if savedHook != "" && !strings.HasPrefix(savedHook, "after-new-window") {
+		// show-hooks returns "after-new-window -> ..." format; keep full line for restore
+	}
+	// Unset the hook globally.
+	_, _ = runTmux(ctx, "set-hook", "-g", "-u", "after-new-window")
+
 	args := []string{
 		"new-window", "-P", "-F", "#{window_id}",
 		"-n", title,
@@ -44,10 +55,17 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	if tabID == "" {
 		return "", fmt.Errorf("tmux new-window: empty window ID")
 	}
-	// Dismiss any interactive rename prompt caused by user tmux configs
-	// (e.g. set-hook → command-prompt on window-created).
-	// send-keys Enter confirms the prompt if present; harmless to tail -f otherwise.
-	_, _ = runTmux(ctx, "send-keys", "-t", tabID, "Enter")
+
+	// Restore the original hook (if any) so user's tmux config still works
+	// for manually created windows.
+	if savedHook != "" {
+		// Extract the command part after "after-new-window -> "
+		hookCmd := strings.SplitN(savedHook, " -> ", 2)
+		if len(hookCmd) == 2 {
+			_, _ = runTmux(ctx, "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
+		}
+	}
+
 	return tabID, nil
 }
 
