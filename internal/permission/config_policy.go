@@ -292,7 +292,7 @@ func isModeControlTool(name string) bool {
 
 func isCommandTool(name string) bool {
 	switch name {
-	case "run_command", "start_command", "write_command_input", "tmux", "ghostty", "warp":
+	case "run_command", "start_command", "write_command_input", "tmux", "ghostty", "warp", "kitty", "iterm2":
 		return true
 	}
 	return false

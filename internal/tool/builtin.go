@@ -101,6 +101,16 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return err
 		}
 	}
+	if shouldRegisterKittyTool() {
+		if err := registry.Register(NewKittyTool(workingDir)); err != nil {
+			return err
+		}
+	}
+	if shouldRegisterITerm2Tool() {
+		if err := registry.Register(NewIterm2Tool(workingDir)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -110,6 +120,17 @@ func shouldRegisterGhosttyTool() bool {
 
 func shouldRegisterWarpTool() bool {
 	return os.Getenv("TERM_PROGRAM") == "WarpTerminal"
+}
+
+func shouldRegisterKittyTool() bool {
+	// Kitty sets TERM_PROGRAM=kitty, but this can be lost when running
+	// through tmux, screen, or other wrappers. KITTY_WINDOW_ID is always
+	// set by kitty and is a reliable fallback.
+	return os.Getenv("TERM_PROGRAM") == "kitty" || os.Getenv("KITTY_WINDOW_ID") != ""
+}
+
+func shouldRegisterITerm2Tool() bool {
+	return os.Getenv("TERM_PROGRAM") == "iTerm.app"
 }
 
 func shouldRegisterTmuxTool(client *tmux.Client) bool {

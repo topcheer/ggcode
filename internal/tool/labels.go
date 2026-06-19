@@ -255,6 +255,10 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("MCP Resource", displayTarget(argStr(args, "uri")))
 	case "ghostty":
 		return ghosttyLabel(args)
+	case "kitty":
+		return kittyLabel(args)
+	case "iterm2":
+		return iterm2Label(args)
 	default:
 		// MCP tools or unknown — prettify the name
 		return toolPres(prettifyToolName(toolName), compactArgsPreview(rawArgs))
@@ -1077,6 +1081,152 @@ func ghosttyLabel(args map[string]any) ToolPresentation {
 		return toolPres("Ghostty Reload Config", "")
 	default:
 		return toolPres("Ghostty", action)
+	}
+}
+
+// kittyLabel produces a display label for kitty tool calls.
+func kittyLabel(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	switch action {
+	case "status":
+		return toolPres("Kitty Status", "")
+	case "list":
+		return toolPres("Kitty Windows", "")
+	case "split":
+		dir := argStr(args, "direction")
+		if dir == "" {
+			dir = "right"
+		}
+		return toolPres("Kitty Split "+dir, argStr(args, "command"))
+	case "new_tab":
+		return toolPres("Kitty New Tab", argStr(args, "command"))
+	case "new_window":
+		return toolPres("Kitty New Window", argStr(args, "command"))
+	case "focus":
+		return toolPres("Kitty Focus", fmt.Sprintf("window %v", args["window_id"]))
+	case "close":
+		return toolPres("Kitty Close", fmt.Sprintf("window %v", args["window_id"]))
+	case "close_tab":
+		return toolPres("Kitty Close Tab", "")
+	case "select_tab":
+		idx := 0
+		if v, ok := args["tab_index"]; ok {
+			switch vv := v.(type) {
+			case float64:
+				idx = int(vv)
+			case int:
+				idx = vv
+			}
+		}
+		return toolPres("Kitty Select Tab", fmt.Sprintf("tab %d", idx))
+	case "input":
+		return toolPres("Kitty Input", compactPreview(argStr(args, "text")))
+	case "send_key":
+		key := argStr(args, "key")
+		if mods := argStr(args, "modifiers"); mods != "" {
+			key = mods + "+" + key
+		}
+		return toolPres("Kitty Key", key)
+	case "resize":
+		axis := argStr(args, "axis")
+		inc := 0
+		if v, ok := args["increment"]; ok {
+			switch vv := v.(type) {
+			case float64:
+				inc = int(vv)
+			case int:
+				inc = vv
+			}
+		}
+		return toolPres("Kitty Resize", fmt.Sprintf("%s %+d", axis, inc))
+	case "get_text":
+		return toolPres("Kitty Get Text", fmt.Sprintf("window %v", args["window_id"]))
+	case "zoom":
+		return toolPres("Kitty Zoom", "")
+	case "set_tab_title":
+		return toolPres("Kitty Tab Title", argStr(args, "text"))
+	case "action":
+		return toolPres("Kitty Action", argStr(args, "text"))
+	case "reload_config":
+		return toolPres("Kitty Reload Config", "")
+	default:
+		return toolPres("Kitty", action)
+	}
+}
+
+// iterm2Label produces a display label for iterm2 tool calls.
+func iterm2Label(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	switch action {
+	case "status":
+		return toolPres("iTerm2 Status", "")
+	case "list":
+		return toolPres("iTerm2 Sessions", "")
+	case "split":
+		dir := argStr(args, "direction")
+		if dir == "" {
+			dir = "right"
+		}
+		return toolPres("iTerm2 Split "+dir, argStr(args, "command"))
+	case "new_tab":
+		return toolPres("iTerm2 New Tab", argStr(args, "command"))
+	case "new_window":
+		return toolPres("iTerm2 New Window", argStr(args, "command"))
+	case "focus":
+		return toolPres("iTerm2 Focus", argStr(args, "session_id"))
+	case "close":
+		return toolPres("iTerm2 Close", argStr(args, "session_id"))
+	case "select_tab":
+		idx := 0
+		if v, ok := args["tab_index"]; ok {
+			switch vv := v.(type) {
+			case float64:
+				idx = int(vv)
+			case int:
+				idx = vv
+			}
+		}
+		return toolPres("iTerm2 Select Tab", fmt.Sprintf("tab %d", idx))
+	case "input":
+		return toolPres("iTerm2 Input", compactPreview(argStr(args, "text")))
+	case "send_key":
+		key := argStr(args, "key")
+		if mods := argStr(args, "modifiers"); mods != "" {
+			key = mods + "+" + key
+		}
+		return toolPres("iTerm2 Key", key)
+	case "resize":
+		axis := argStr(args, "axis")
+		inc := 0
+		if v, ok := args["increment"]; ok {
+			switch vv := v.(type) {
+			case float64:
+				inc = int(vv)
+			case int:
+				inc = vv
+			}
+		}
+		return toolPres("iTerm2 Resize", fmt.Sprintf("%s %+d", axis, inc))
+	case "get_text":
+		return toolPres("iTerm2 Get Text", argStr(args, "session_id"))
+	case "set_title":
+		return toolPres("iTerm2 Set Title", argStr(args, "text"))
+	case "profile":
+		return toolPres("iTerm2 Profile", argStr(args, "text"))
+	case "badge":
+		return toolPres("iTerm2 Badge", compactPreview(argStr(args, "text")))
+	case "broadcast":
+		return toolPres("iTerm2 Broadcast", argStr(args, "text"))
+	case "mark":
+		return toolPres("iTerm2 Mark", argStr(args, "text"))
+	case "clear":
+		return toolPres("iTerm2 Clear", "")
+	case "action":
+		return toolPres("iTerm2 Action", argStr(args, "text"))
+	case "reload_config":
+		return toolPres("iTerm2 Reload Config", "")
+	default:
+		return toolPres("iTerm2", action)
 	}
 }
 
