@@ -42,11 +42,13 @@ func (t *tmuxBackend) Name() string { return "tmux" }
 
 // CreateTab creates a new tmux window (full-screen tab) running `tail -f`.
 func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
-	// new-window creates a new window (tab), not a split.
+	// Use -d (detached) to create the window without switching focus.
+	// This avoids triggering interactive rename prompts from user tmux configs
+	// (e.g., set-hook on window-created, or custom prefix-c bindings).
 	// -P prints info, -F returns just the window ID.
 	args := []string{
-		"new-window", "-P", "-F", "#{window_id}",
-		"-n", title, // window name
+		"new-window", "-d", "-P", "-F", "#{window_id}",
+		"-n", title,
 		"tail", "-f", logfile,
 	}
 	output, err := runTmux(ctx, args...)
@@ -57,6 +59,11 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	if tabID == "" {
 		return "", fmt.Errorf("tmux new-window: empty window ID")
 	}
+	// Force-set the window title to override any user hook that may have changed it.
+	// Also dismisses any lingering rename prompt by directly setting the name.
+	_, _ = runTmux(ctx, "rename-window", "-t", tabID, title)
+	// Now switch to the new window so the user sees it.
+	_, _ = runTmux(ctx, "select-window", "-t", tabID)
 	return tabID, nil
 }
 
