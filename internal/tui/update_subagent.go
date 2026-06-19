@@ -158,8 +158,9 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 		// Agent is idle — start a new loop to process the notification.
 		return m, tea.Batch(graceCmd, m.submitText(agentHint, true))
 	}
-	// Agent is busy — queue for processing after current run.
-	m.queuePendingSubmissionHidden(agentHint)
+	// Agent is busy — don't inject the completion notification into the
+	// main agent's conversation. The system message and follow strip above
+	// are sufficient for the user to see the result.
 	return m, graceCmd
 
 }

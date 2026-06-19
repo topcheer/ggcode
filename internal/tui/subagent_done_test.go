@@ -33,7 +33,8 @@ func TestSubAgentDoneMsg_IdleAgent(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_BusyAgent(t *testing.T) {
-	// When the main agent is busy, subAgentDoneMsg should queue the notification.
+	// When the main agent is busy, subAgentDoneMsg should NOT inject into the
+	// main agent's conversation (no pending submission queued).
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 	m.loading = true // simulate busy agent
@@ -45,17 +46,13 @@ func TestSubAgentDoneMsg_BusyAgent(t *testing.T) {
 		Kind:      "subagent",
 	}
 
-	next, cmd := m.Update(msg)
+	next, _ := m.Update(msg)
 	m = next.(Model)
-	if cmd != nil {
-		// tea.Cmd might return a no-op; verify it's not submitText by checking no run was started
-		_ = cmd
-	}
 
-	// Verify pending submission was queued
+	// Verify NO pending submission was queued
 	count := m.pendingSubmissionCount()
-	if count != 1 {
-		t.Fatalf("expected 1 pending submission, got %d", count)
+	if count != 0 {
+		t.Fatalf("expected 0 pending submissions when busy, got %d", count)
 	}
 
 	// Verify system message was still written
@@ -85,8 +82,8 @@ func TestSubAgentDoneMsg_BusyAgentSchedulesGraceCleanup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected grace cleanup tick when a terminal subagent remains visible")
 	}
-	if count := m.pendingSubmissionCount(); count != 1 {
-		t.Fatalf("expected queued follow-up while busy, got %d", count)
+	if count := m.pendingSubmissionCount(); count != 0 {
+		t.Fatalf("expected 0 pending submissions when busy, got %d", count)
 	}
 }
 
@@ -127,7 +124,7 @@ func TestSubAgentDoneMsg_EmptyName(t *testing.T) {
 }
 
 func TestSubAgentDoneMsg_MultipleDone(t *testing.T) {
-	// Multiple sub-agents completing while busy should queue multiple pending submissions.
+	// Multiple sub-agents completing while busy should NOT inject any pending submissions.
 	m := NewModel(nil, nil)
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 	m.loading = true
@@ -145,8 +142,8 @@ func TestSubAgentDoneMsg_MultipleDone(t *testing.T) {
 	}
 
 	count := m.pendingSubmissionCount()
-	if count != 3 {
-		t.Fatalf("expected 3 pending submissions, got %d", count)
+	if count != 0 {
+		t.Fatalf("expected 0 pending submissions when busy, got %d", count)
 	}
 }
 
