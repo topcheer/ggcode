@@ -3080,24 +3080,25 @@ func TestCancelledBusyRunKeepsSubAgentDoneQueued(t *testing.T) {
 	m = next.(Model)
 
 	if cmd != nil {
-		t.Fatal("expected cancelled-but-unwinding run to queue subagent completion instead of starting a new run")
+		t.Fatal("expected cancelled-but-unwinding run to not start a new run")
 	}
 	if !m.loading {
 		t.Fatal("expected run to remain in cancelling state until agentDone arrives")
 	}
-	if count := m.pendingSubmissionCount(); count != 1 {
-		t.Fatalf("expected queued subagent follow-up, got %d pending item(s)", count)
+	// New behavior: sub-agent completion does NOT queue agentHint when busy.
+	if count := m.pendingSubmissionCount(); count != 0 {
+		t.Fatalf("expected 0 pending submissions (no inject when busy), got %d", count)
 	}
 
 	m, cmd = m.handleAgentDoneMsg(agentDoneMsg{RunID: 7})
 	if cmd != nil {
-		t.Fatal("expected cancelled agentDone not to auto-submit queued follow-up")
+		t.Fatal("expected cancelled agentDone not to auto-submit")
 	}
 	if m.loading {
 		t.Fatal("expected agentDone to clear loading after cancellation finishes")
 	}
-	if count := m.pendingSubmissionCount(); count != 1 {
-		t.Fatalf("expected queued hidden follow-up to remain pending after cancel, got %d", count)
+	if count := m.pendingSubmissionCount(); count != 0 {
+		t.Fatalf("expected 0 pending submissions, got %d", count)
 	}
 }
 
