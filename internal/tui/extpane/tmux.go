@@ -31,14 +31,6 @@ func (t *tmuxBackend) Name() string { return "tmux" }
 
 // CreateTab creates a new tmux window (full-screen tab) running `tail -f`.
 func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
-	// Temporarily suppress window-created hooks to avoid user tmux configs
-	// that trigger interactive rename prompts (e.g. set-hook → command-prompt).
-	session, _ := runTmux(ctx, "display-message", "-p", "#{session_name}")
-	session = strings.TrimSpace(session)
-	if session != "" {
-		_, _ = runTmux(ctx, "set-hook", "-t", session, "window-created", "")
-	}
-
 	args := []string{
 		"new-window", "-P", "-F", "#{window_id}",
 		"-n", title,
@@ -52,12 +44,10 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	if tabID == "" {
 		return "", fmt.Errorf("tmux new-window: empty window ID")
 	}
-
-	// Restore user hooks by removing our session-level override.
-	if session != "" {
-		_, _ = runTmux(ctx, "set-hook", "-t", session, "-u", "window-created")
-	}
-
+	// Dismiss any interactive rename prompt caused by user tmux configs
+	// (e.g. set-hook → command-prompt on window-created).
+	// send-keys Enter confirms the prompt if present; harmless to tail -f otherwise.
+	_, _ = runTmux(ctx, "send-keys", "-t", tabID, "Enter")
 	return tabID, nil
 }
 
