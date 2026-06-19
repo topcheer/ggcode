@@ -3,7 +3,6 @@ package extpane
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -21,16 +20,6 @@ func newTmuxBackend() *tmuxBackend {
 	}
 	b := &tmuxBackend{}
 	// Capture our own window ID so we never kill it.
-	// $TMUX gives "session:window:pane" format. Extract window as "session:window".
-	if raw := os.Getenv("TMUX"); raw != "" {
-		parts := strings.Split(raw, ",")
-		if len(parts) >= 2 {
-			// tmux uses comma-separated format: ,session,window,pane
-			// The format is actually: /tmp/tmux-501/default,12345,0
-			// We need to query the active window ID properly
-		}
-	}
-	// Best-effort: query active window ID
 	out, err := runTmux(context.Background(), "display-message", "-p", "#{window_id}")
 	if err == nil {
 		b.selfWindowID = strings.TrimSpace(out)
@@ -42,12 +31,16 @@ func (t *tmuxBackend) Name() string { return "tmux" }
 
 // CreateTab creates a new tmux window (full-screen tab) running `tail -f`.
 func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
-	// Use -d (detached) to create the window without switching focus.
-	// This avoids triggering interactive rename prompts from user tmux configs
-	// (e.g., set-hook on window-created, or custom prefix-c bindings).
-	// -P prints info, -F returns just the window ID.
+	// Temporarily suppress window-created hooks to avoid user tmux configs
+	// that trigger interactive rename prompts (e.g. set-hook → command-prompt).
+	session, _ := runTmux(ctx, "display-message", "-p", "#{session_name}")
+	session = strings.TrimSpace(session)
+	if session != "" {
+		_, _ = runTmux(ctx, "set-hook", "-t", session, "window-created", "")
+	}
+
 	args := []string{
-		"new-window", "-d", "-P", "-F", "#{window_id}",
+		"new-window", "-P", "-F", "#{window_id}",
 		"-n", title,
 		"tail", "-f", logfile,
 	}
@@ -59,11 +52,12 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 	if tabID == "" {
 		return "", fmt.Errorf("tmux new-window: empty window ID")
 	}
-	// Force-set the window title to override any user hook that may have changed it.
-	// Also dismisses any lingering rename prompt by directly setting the name.
-	_, _ = runTmux(ctx, "rename-window", "-t", tabID, title)
-	// Now switch to the new window so the user sees it.
-	_, _ = runTmux(ctx, "select-window", "-t", tabID)
+
+	// Restore user hooks by removing our session-level override.
+	if session != "" {
+		_, _ = runTmux(ctx, "set-hook", "-t", session, "-u", "window-created")
+	}
+
 	return tabID, nil
 }
 
@@ -80,6 +74,9 @@ func (t *tmuxBackend) CloseTab(tabID string) error {
 
 // SetTitle renames the window.
 func (t *tmuxBackend) SetTitle(tabID, title string) error {
+	if tabID == "" || tabID == t.selfWindowID {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := runTmux(ctx, "rename-window", "-t", tabID, title)
