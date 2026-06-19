@@ -35,6 +35,20 @@ go mod download
 echo "[verify-ci] building ggcode"
 go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
+echo "[verify-ci] cross-platform compile check (linux + windows)"
+# Catch errors in platform-specific files (*_darwin.go, *_linux.go, *_windows.go)
+# that only surface when building for a different OS than the dev machine.
+for target in "linux/amd64" "windows/amd64"; do
+  os="${target%%/*}"
+  arch="${target##*/}"
+  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
+    echo "[verify-ci] cross-compile FAILED for ${os}/${arch}:"
+    cat /tmp/cross-build.err
+    exit 1
+  fi
+done
+echo "[verify-ci] cross-platform compile check passed"
+
 echo "[verify-ci] running go vet (main module)"
 go vet -tags goolm ./cmd/... ./internal/...
 
