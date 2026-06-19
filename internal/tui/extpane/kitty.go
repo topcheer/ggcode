@@ -10,7 +10,7 @@ import (
 )
 
 // kittyBackend implements Backend using kitty remote control.
-// Each agent gets its own OS window running `tail -f`.
+// Each agent gets its own tab in the current kitty window running `tail -f`.
 type kittyBackend struct {
 	selfWindowID string // KITTY_WINDOW_ID — never close
 }
@@ -26,10 +26,10 @@ func newKittyBackend() *kittyBackend {
 
 func (k *kittyBackend) Name() string { return "kitty" }
 
-// CreateTab creates a new kitty OS window running `tail -f`.
+// CreateTab creates a new kitty tab in the current window running `tail -f`.
 func (k *kittyBackend) CreateTab(ctx context.Context, title, logfile string) (string, error) {
 	args := []string{
-		"@", "launch", "--type=window", "--title", title,
+		"@", "launch", "--type=tab", "--title", title,
 		"tail", "-f", logfile,
 	}
 	output, err := runKitten(ctx, args...)
@@ -43,7 +43,7 @@ func (k *kittyBackend) CreateTab(ctx context.Context, title, logfile string) (st
 	return windowID, nil
 }
 
-// CloseTab closes the kitty window. Refuses to close our own window.
+// CloseTab closes the kitty tab. Refuses to close our own window/tab.
 func (k *kittyBackend) CloseTab(tabID string) error {
 	if tabID == "" || tabID == k.selfWindowID {
 		return nil
@@ -54,8 +54,11 @@ func (k *kittyBackend) CloseTab(tabID string) error {
 	return err
 }
 
-// SetTitle sets the window title.
+// SetTitle sets the tab title.
 func (k *kittyBackend) SetTitle(tabID, title string) error {
+	if tabID == "" || tabID == k.selfWindowID {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err := runKitten(ctx, "@", "set-window-title", "--match=id:"+tabID, title)
