@@ -280,7 +280,29 @@ jobs:
             -exportPath build/ios/ipa/ \
             -allowProvisioningUpdates
 
+      - name: Check if build already uploaded
+        id: check-build
+        env:
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          APP_STORE_PRIVATE_KEY: ${{ secrets.APP_STORE_PRIVATE_KEY }}
+        run: |
+          BUILD_VERSION=$(grep 'CFBundleVersion' ios/Runner/Info.plist | grep -o '>[0-9]*<' | tr -d '<>')
+          echo "Build version: $BUILD_VERSION"
+          cd ios
+          bundle install --jobs 4 --retry 3
+          # Check if this build version already exists in App Store Connect
+          CHECK_RESULT=$(bundle exec fastlane check_build_version build_number:"$BUILD_VERSION" 2>&1 || true)
+          echo "$CHECK_RESULT"
+          if echo "$CHECK_RESULT" | grep -q "ALREADY_UPLOADED"; then
+            echo "::Notice::Build $BUILD_VERSION already uploaded to App Store Connect. Skipping upload."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload to TestFlight & promote
+        if: steps.check-build.outputs.skip != 'true'
         run: |
           cd ios
           bundle install --jobs 4 --retry 3

@@ -125,6 +125,30 @@ platform :ios do
   # ── Build & Upload ────────────────────────────────────
 
   desc "Upload pre-built IPA to TestFlight"
+  lane :check_build_version do |options|
+    build_number = options[:build_number]
+    UI.user_error!("build_number is required") unless build_number
+
+    # Query App Store Connect for existing builds with this version
+    # Uses the App Store Connect API to check if a build was already uploaded
+    begin
+      builds = app_store_build_data(
+        api_key: api_key,
+        version: build_number,
+        app_identifier: "gg.ai.ggcode.mobile"
+      )
+      if builds && !builds.empty?
+        UI.message("ALREADY_UPLOADED: Build #{build_number} already exists in App Store Connect")
+      else
+        UI.message("NOT_UPLOADED: Build #{build_number} not found, safe to upload")
+      end
+    rescue => ex
+      # If the API call fails (permissions, network, etc.), don't block the upload
+      UI.important("Build check failed: #{ex.message}. Proceeding with upload.")
+      UI.message("NOT_UPLOADED")
+    end
+  end
+
   lane :upload_ipa do |options|
     ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)
     UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
