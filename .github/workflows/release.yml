@@ -452,7 +452,24 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-desktop
     steps:
       - uses: actions/checkout@v6
+      - name: Check for existing winget PR
+        id: check-pr
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $existingPRs = gh pr list --repo microsoft/winget-pkgs `
+            --search "is:pr is:open $env:WINGET_PACKAGE_ID $packageVersion" `
+            --json number,title --jq 'length' 2>$null
+          if ($existingPRs -and [int]$existingPRs -gt 0) {
+            Write-Host "::Notice::Found $existingPRs open PR(s) for $env:WINGET_PACKAGE_ID $packageVersion. Skipping submission."
+            echo "skip=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "skip=false" >> $env:GITHUB_OUTPUT
+          }
       - name: Submit or skip winget update
+        if: steps.check-pr.outputs.skip != 'true'
         shell: pwsh
         run: |
           if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
@@ -483,7 +500,24 @@ jobs:
       WINGET_PACKAGE_ID: gg.ai.ggcode-cli
     steps:
       - uses: actions/checkout@v6
+      - name: Check for existing winget PR
+        id: check-pr
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $packageVersion = "${{ github.ref_name }}" -replace '^v',''
+          $existingPRs = gh pr list --repo microsoft/winget-pkgs `
+            --search "is:pr is:open $env:WINGET_PACKAGE_ID $packageVersion" `
+            --json number,title --jq 'length' 2>$null
+          if ($existingPRs -and [int]$existingPRs -gt 0) {
+            Write-Host "::Notice::Found $existingPRs open PR(s) for $env:WINGET_PACKAGE_ID $packageVersion. Skipping submission."
+            echo "skip=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "skip=false" >> $env:GITHUB_OUTPUT
+          }
       - name: Submit or skip winget update
+        if: steps.check-pr.outputs.skip != 'true'
         shell: pwsh
         run: |
           if (-not $env:WINGET_CREATE_GITHUB_TOKEN) {
