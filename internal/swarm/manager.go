@@ -55,6 +55,11 @@ type Manager struct {
 	// so teammates know where they are without having to discover it via pwd/ls.
 	workingDir string
 
+	// systemPromptBuilder, if set, builds a rich system prompt for teammates
+	// with full project context (tools, memory, git status, etc.).
+	// When nil, falls back to the minimal buildTeammateSystemPrompt().
+	systemPromptBuilder func(name, teamName, workingDir string) string
+
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 	mu         sync.Mutex
@@ -343,8 +348,13 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		toolSet = m.toolBuilder(allowedTools)
 	}
 
-	// Create independent agent for this teammate
-	systemPrompt := buildTeammateSystemPrompt(name, team.Name, m.workingDir)
+	// Build system prompt: use rich builder if available, otherwise fall back to simple prompt
+	var systemPrompt string
+	if m.systemPromptBuilder != nil {
+		systemPrompt = m.systemPromptBuilder(name, team.Name, m.workingDir)
+	} else {
+		systemPrompt = buildTeammateSystemPrompt(name, team.Name, m.workingDir)
+	}
 	var agent AgentRunner
 	if m.agentFactory != nil {
 		agent = m.agentFactory(m.provider, toolSet, systemPrompt, 0)
@@ -524,6 +534,12 @@ func (m *Manager) SetOnUpdate(fn func(Event)) {
 // SetWorkingDir sets the working directory injected into teammate system prompts.
 func (m *Manager) SetWorkingDir(dir string) {
 	m.workingDir = dir
+}
+
+// SetSystemPromptBuilder sets a function that builds a rich system prompt for
+// teammates with full project context. When not set, a minimal prompt is used.
+func (m *Manager) SetSystemPromptBuilder(fn func(name, teamName, workingDir string) string) {
+	m.systemPromptBuilder = fn
 }
 
 // GetTeammateResult returns the most recent task output for a teammate.

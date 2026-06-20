@@ -163,3 +163,76 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 
 	return prompt
 }
+
+// BuildTeammateSystemPrompt builds a system prompt for a swarm teammate that
+// mirrors the main agent's prompt (tools, environment, memory, LSP guidance,
+// skills, remote agents, git status) but with these differences:
+//   - No custom slash commands list
+//   - No autopilot section (permission mode is always bypass)
+//   - No ask_user tool (teammates cannot interact with the user)
+//   - Cannot spawn further sub-agents or teammates
+func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName, workingDir string) string {
+	// 1. Gather tool names from the registry
+	toolNames := make([]string, 0)
+	if ctx.Registry != nil {
+		tools := ctx.Registry.List()
+		toolNames = make([]string, len(tools))
+		for i, t := range tools {
+			toolNames[i] = t.Name()
+		}
+	}
+
+	// 2. Build base prompt (same as main agent but with NO custom slash commands)
+	gitStatus := ""
+	if ctx.GitStatus != nil {
+		gitStatus = ctx.GitStatus()
+	}
+	prompt := config.BuildSystemPrompt(ctx.Cfg.ExtraPrompt, workingDir, ctx.Cfg.Language, toolNames, gitStatus, nil)
+
+	// 3. Add skills (same as main agent)
+	if ctx.CommandMgr != nil {
+		skillsPrompt, _ := BuildSkillsSystemPromptWithPromptRefs(ctx.CommandMgr.List())
+		if skillsPrompt != "" {
+			prompt += "\n\n## Skills\n" + skillsPrompt
+		}
+	}
+
+	// 4. Add remote agents info (same as main agent)
+	if ctx.RemoteAgentsInfo != nil {
+		if remoteInfo := strings.TrimSpace(ctx.RemoteAgentsInfo()); remoteInfo != "" {
+			prompt += "\n\n## Remote Agents\n" + remoteInfo
+		}
+	}
+
+	// 5. Add auto memory (same as main agent)
+	if ctx.GlobalAutoMem != nil {
+		if globalAutoContent, _, _ := ctx.GlobalAutoMem.LoadAll(); globalAutoContent != "" {
+			prompt += "\n\n## Auto Memory (Global)\n" + strings.TrimSpace(globalAutoContent)
+		}
+	}
+	if ctx.ProjectAutoMem != nil {
+		if projContent, _, _ := ctx.ProjectAutoMem.LoadAll(); projContent != "" {
+			prompt += "\n\n## Auto Memory (Project)\n" + strings.TrimSpace(projContent)
+		}
+	}
+
+	// 6. Append teammate-specific constraints
+	prompt += "\n\n## Teammate Constraints\n"
+	prompt += fmt.Sprintf("You are a teammate named %q in team %q.\n", name, teamName)
+	prompt += "Work like a professional collaborative team member.\n"
+	prompt += "Use the shared task board as the source of truth for tracked work.\n"
+	prompt += "If a task is assigned to you directly via inbox, start it immediately and do not re-claim it from the board first.\n"
+	prompt += "If you choose unassigned work from the board, claim it before starting.\n"
+	prompt += "Before creating a new follow-up task, check whether related work is already tracked so you do not duplicate effort.\n"
+	prompt += "Share intermediate findings when they materially unblock another teammate, but avoid repetitive back-and-forth or message loops.\n"
+	prompt += "If you need help or discover specialized follow-up work, send one targeted request or create one clear handoff task with enough context.\n"
+	prompt += "Only claim tasks that match your role and capabilities.\n"
+	prompt += "If a task does not match your role, hand it off cleanly instead of doing partial low-quality work.\n"
+	prompt += "- Permission mode is bypass — no user confirmation is needed for any operation.\n"
+	prompt += "- Do not use `ask_user` — there is no interactive user to answer questions. Make the best decision from available context.\n"
+	prompt += "- Do not spawn further sub-agents (`spawn_agent`) or teammates (`teammate_spawn`).\n"
+	prompt += "- Report results concisely and mark tracked tasks complete when done.\n"
+	prompt += "- Do not use emoji with Variation Selector-16 (VS16, U+FE0F) in your output.\n"
+
+	return prompt
+}

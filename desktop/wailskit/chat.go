@@ -831,6 +831,18 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		return reg
 	}
 	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
+	b.swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
+		return agentruntime.BuildTeammateSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              b.cfg,
+			WorkingDir:       wd,
+			Registry:         b.registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return "" },
+			RemoteAgentsInfo: func() string { return "" },
+		}, name, teamName, wd)
+	})
 
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 

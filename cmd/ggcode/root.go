@@ -817,6 +817,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	swarmMgr.SetUsageHandler(repl.SessionUsageHandler())
+	swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
+		remoteAgentsInfo := ""
+		if a2aRegistry != nil {
+			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+			}
+		}
+		return agentruntime.BuildTeammateSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              cfg,
+			WorkingDir:       wd,
+			Registry:         registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return gitStatus },
+			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
+		}, name, teamName, wd)
+	})
 	repl.SetSwarmManager(swarmMgr, registry)
 	repl.SetACPClientManager(acpClientMgr)
 	trace.Mark("setup swarm")
