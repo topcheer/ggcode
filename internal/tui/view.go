@@ -82,6 +82,14 @@ func (m Model) View() tea.View {
 		sections = append(sections, statusBar)
 	}
 	sections = append(sections, composer)
+
+	// Pet row: rendered right-aligned on its own line below the composer.
+	pet := m.renderPet()
+	if pet != "" {
+		leftWidth := m.mainColumnWidth()
+		sections = append(sections, lipgloss.PlaceHorizontal(leftWidth, lipgloss.Right, pet))
+	}
+
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	right := m.renderAuxColumn()
 	var content string

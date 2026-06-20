@@ -121,6 +121,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg, spinnerCmd)
 
+	case petAnimMsg:
+		return m.handlePetAnimMsg(msg)
+
 	case streamMsg:
 		return m.handleStreamMsg(msg, spinnerCmd)
 

@@ -291,6 +291,10 @@ type Model struct {
 
 	// Command pane manager for real-time command output mirroring (tmux only)
 	cmdPaneMgr *cmdpane.Manager
+
+	// Terminal pet (animated ASCII art at the bottom of the composer)
+	petEnabled bool
+	pet        *petState
 }
 
 // pendingQueue holds the queue of user messages submitted while the agent
@@ -517,6 +521,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		tmuxEnv:                tmuxEnv,
 		tmuxStartupSetupLayout: tmuxStartupSetupLayout,
 		extPaneMgr:             extpane.NewManager(),
+		petEnabled:             true,
+		pet:                    &petState{},
 	}
 }
 
@@ -615,6 +621,9 @@ func (m Model) Init() tea.Cmd {
 		func() tea.Msg { return textarea.Blink() },
 		func() tea.Msg { return tea.RequestWindowSize() },
 		func() tea.Msg { return gitBranchTickMsg{} },
+	}
+	if m.petEnabled {
+		cmds = append(cmds, startPetAnim())
 	}
 	if m.updateSvc != nil {
 		cmds = append(cmds, m.checkForUpdateCmd())
