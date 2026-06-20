@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func TestTryAcquireSessionLock_FirstInstance(t *testing.T) {
@@ -110,5 +113,96 @@ func TestLockFilePath(t *testing.T) {
 	// since it's only used as a string path on all platforms.
 	if path != "/tmp/sessions/abc-123.lock" {
 		t.Errorf("got %q, want %q", path, expected)
+	}
+}
+
+func TestLatestForWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two sessions for workspace-a and one for workspace-b.
+	ses1 := NewSession("vendor", "endpoint", "model")
+	ses1.Workspace = "/tmp/ws-a"
+	ses1.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+	}
+	if err := store.Save(ses1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Small delay to ensure different UpdatedAt.
+	time.Sleep(10 * time.Millisecond)
+
+	ses2 := NewSession("vendor", "endpoint", "model")
+	ses2.Workspace = "/tmp/ws-a"
+	ses2.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
+	}
+	if err := store.Save(ses2); err != nil {
+		t.Fatal(err)
+	}
+
+	ses3 := NewSession("vendor", "endpoint", "model")
+	ses3.Workspace = "/tmp/ws-b"
+	ses3.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "other"}}},
+	}
+	if err := store.Save(ses3); err != nil {
+		t.Fatal(err)
+	}
+
+	// ws-a should return ses2 (most recently updated).
+	latest, err := store.LatestForWorkspace("/tmp/ws-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil {
+		t.Fatal("expected non-nil session for ws-a")
+	}
+	if latest.ID != ses2.ID {
+		t.Errorf("expected session %s, got %s", ses2.ID, latest.ID)
+	}
+
+	// ws-b should return ses3.
+	latest3, err := store.LatestForWorkspace("/tmp/ws-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest3 == nil || latest3.ID != ses3.ID {
+		t.Errorf("expected session %s for ws-b", ses3.ID)
+	}
+
+	// Non-existent workspace should return nil.
+	latest4, err := store.LatestForWorkspace("/tmp/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest4 != nil {
+		t.Error("expected nil for non-existent workspace")
+	}
+}
+
+func TestLatestForWorkspace_EmptySession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a session with no messages.
+	ses1 := NewSession("vendor", "endpoint", "model")
+	ses1.Workspace = "/tmp/ws-empty"
+	store.Save(ses1)
+
+	// Should return nil — no session with messages.
+	latest, err := store.LatestForWorkspace("/tmp/ws-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != nil {
+		t.Error("expected nil for workspace with only empty sessions")
 	}
 }

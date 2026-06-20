@@ -702,15 +702,34 @@ func (s *JSONLStore) Delete(id string) error {
 }
 
 // LatestForWorkspace returns the most recently updated session for the
-// given workspace, or nil if none exists.
+// given workspace that has at least one message, or nil if none exists.
+// Uses the index directly (not List) to access MsgCount.
 func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
-	all, err := s.List()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, err := s.loadIndex()
 	if err != nil {
 		return nil, err
 	}
-	for _, ses := range all {
-		if ses.Workspace == workspace && len(ses.Messages) > 0 {
-			return ses, nil
+
+	// Sort by UpdatedAt descending.
+	sort.Slice(idx, func(i, j int) bool {
+		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
+	})
+
+	for _, e := range idx {
+		if e.Workspace == workspace && e.MsgCount > 0 {
+			return &Session{
+				ID:        e.ID,
+				Title:     e.Title,
+				CreatedAt: e.CreatedAt,
+				UpdatedAt: e.UpdatedAt,
+				Workspace: e.Workspace,
+				Vendor:    e.Vendor,
+				Endpoint:  e.Endpoint,
+				Model:     e.Model,
+			}, nil
 		}
 	}
 	return nil, nil
