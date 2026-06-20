@@ -257,6 +257,41 @@ platform :ios do
     end
   end
 
+  # ── Expire & Promote (fix stuck beta review) ──────────
+
+  desc "Expire previous builds, then promote latest to External Testing. Usage: fastlane expire_and_promote build_number:2026061904"
+  lane :expire_and_promote do |options|
+    api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    target_version = options[:build_number]
+
+    if target_version
+      # Find specific build by version number.
+      builds = client.get_builds(
+        filter: { app: app.id, version: target_version },
+        includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+      ).to_models
+      build = builds.first
+      UI.user_error!("Build #{target_version} not found in App Store Connect") if build.nil?
+    else
+      build = _wait_for_valid_build(client, app)
+    end
+
+    UI.message("Target build: #{build.version} (#{build.processing_state})")
+
+    # Wait for build to become VALID.
+    unless build.processing_state == "VALID"
+      build = _wait_for_valid_build(client, app)
+    end
+
+    _expire_previous_beta_builds(client, app, build.id)
+    _promote_to_external(client, app, build)
+    UI.success("Done! Build #{build.version} promoted to External Testing.")
+  end
+
   # ── App Store Review Submission ───────────────────────
 
   desc "Submit latest build for App Store Review"
@@ -312,6 +347,48 @@ platform :ios do
     UI.user_error!("Build did not become VALID in 20 minutes")
   end
 
+  def _expire_previous_beta_builds(client, app, keep_build_id)
+    # Find all builds for this app, sorted newest first.
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate", limit: 10,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models
+
+    builds.each do |b|
+      next if b.id == keep_build_id
+      next if b.processing_state == "PROCESSING"
+
+      # Check for active beta review submission on this build.
+      beta_subs = client.get_beta_app_review_submissions(filter: { build: b.id }).to_models
+      active_sub = beta_subs.find do |s|
+        ["WAITING_FOR_REVIEW", "IN_REVIEW"].include?(s.beta_review_state)
+      end
+
+      if active_sub
+        if active_sub.beta_review_state == "WAITING_FOR_REVIEW"
+          UI.message("Cancelling beta review (#{active_sub.id}) for build #{b.version}...")
+          client.delete_beta_app_review_submission(beta_app_review_submission_id: active_sub.id)
+          UI.success("Cancelled beta review for build #{b.version}")
+        else
+          # IN_REVIEW — can't cancel, but we can still expire the build.
+          UI.message("Build #{b.version} beta review is IN_REVIEW — cannot cancel, will expire build.")
+        end
+      end
+
+      # Expire the build so it stops blocking the new one.
+      if b.processing_state == "VALID"
+        UI.message("Expiring build #{b.version}...")
+        begin
+          b.update(attributes: { expired: true })
+          UI.success("Expired build #{b.version}")
+        rescue => e
+          UI.message("Expire build #{b.version}: #{e.message}")
+        end
+      end
+    end
+  end
+
   def _promote_to_external(client, app, build)
     groups = client.get_beta_groups(filter: { app: app.id }).to_models
     ext_group = groups.find { |g| g.name == "ext" }
@@ -324,6 +401,9 @@ platform :ios do
       begin
         existing_beta_subs = client.get_beta_app_review_submissions(filter: { build: build.id }).to_models
         if existing_beta_subs.empty?
+          # Expire any previous builds that might block beta review.
+          _expire_previous_beta_builds(client, app, build.id)
+
           client.post_beta_app_review_submissions(build_id: build.id)
           UI.success("Beta App Review submitted for build #{build.version}!")
         else

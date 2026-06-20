@@ -15,6 +15,15 @@ on:
         required: false
         type: string
         default: 'both'
+      expire_and_promote:
+        description: 'Expire previous iOS beta build and promote latest to External Testing'
+        required: false
+        type: boolean
+        default: false
+      build_number:
+        description: 'Build number to promote (e.g. 2026061904). Leave empty for latest.'
+        required: false
+        type: string
 
 concurrency:
   group: mobile-release-${{ github.ref }}
@@ -24,6 +33,35 @@ env:
   FLUTTER_VERSION: '3.38.7'
 
 jobs:
+  # ── Expire & Promote (fix stuck beta review) ──────────────────
+  expire-and-promote:
+    name: Expire & promote iOS beta
+    runs-on: macos-15
+    if: ${{ github.event.inputs.expire_and_promote == 'true' }}
+    env:
+      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+      APP_STORE_PRIVATE_KEY: ${{ secrets.APP_STORE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: mobile/flutter/ios
+
+      - name: Expire previous builds and promote latest
+        working-directory: mobile/flutter/ios
+        run: |
+          bundle install --jobs 4 --retry 3
+          ARGS=""
+          if [ -n "${{ github.event.inputs.build_number }}" ]; then
+            ARGS="build_number:${{ github.event.inputs.build_number }}"
+          fi
+          bundle exec fastlane expire_and_promote $ARGS
+
   # ── Verify ──────────────────────────────────────────────────
   verify:
     name: Verify mobile

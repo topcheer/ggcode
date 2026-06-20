@@ -39,6 +39,7 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tmux"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tui/cmdpane"
 	extpane "github.com/topcheer/ggcode/internal/tui/extpane"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
@@ -287,6 +288,9 @@ type Model struct {
 
 	// External pane manager for sub-agent/teammate output
 	extPaneMgr *extpane.Manager
+
+	// Command pane manager for real-time command output mirroring (tmux only)
+	cmdPaneMgr *cmdpane.Manager
 }
 
 // pendingQueue holds the queue of user messages submitted while the agent

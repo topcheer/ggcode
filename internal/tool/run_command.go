@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,6 +32,13 @@ type RunCommand struct {
 	// is Bypass or Autopilot, "Ask" gate results are automatically downgraded
 	// to Allow (with a warning log) instead of blocking execution.
 	Policy permission.PermissionPolicy
+	// OutputTee, if non-nil, receives a copy of stdout/stderr in real time.
+	// Used by the TUI to mirror command output to a tmux pane.
+	OutputTee io.Writer
+	// OnPreExec, if non-nil, is called just before the command starts.
+	OnPreExec func(command, description string)
+	// OnPostExec, if non-nil, is called after the command finishes.
+	OnPostExec func(exitCode int, err error)
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -258,9 +266,18 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	}
 
+	if t.OnPreExec != nil {
+		t.OnPreExec(args.Command, args.Description)
+	}
+
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	if t.OutputTee != nil {
+		cmd.Stdout = io.MultiWriter(&stdout, t.OutputTee)
+		cmd.Stderr = io.MultiWriter(&stderr, t.OutputTee)
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 
 	// GUI commands: start and return immediately.
 	if isGUICommand(args.Command) {
@@ -311,7 +328,18 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	if err != nil {
+		exitCode := -1
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		}
+		if t.OnPostExec != nil {
+			t.OnPostExec(exitCode, err)
+		}
 		return Result{IsError: true, Content: fmt.Sprintf("%s\nCommand failed: %v", sb.String(), err)}, nil
+	}
+
+	if t.OnPostExec != nil {
+		t.OnPostExec(0, nil)
 	}
 
 	if sb.Len() == 0 {
@@ -344,11 +372,16 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	}
 
 	if err := waitForCommandJob(context.Background(), job, delay); err != nil {
+		if t.OnPostExec != nil {
+			t.OnPostExec(-1, err)
+		}
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	snap := t.JobManager.snapshot(job)
 	snapshot = &snap
 	if snapshot.Status == CommandJobRunning {
+		// Command is still running in background — pane footer will be
+		// written when the user checks the job output or stops it.
 		return Result{Content: fmt.Sprintf(
 			"Command is still running after %v. Automatically moved to background (job %s).\nUse `read_command_output` to check progress or `stop_command` to stop it.",
 			delay, snapshot.ID,
@@ -358,9 +391,15 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	content := commandSnapshotOutput(*snapshot)
 	if snapshot.Status == CommandJobFailed || snapshot.Status == CommandJobCancelled || snapshot.Status == CommandJobTimedOut {
 		t.JobManager.forget(snapshot.ID)
+		if t.OnPostExec != nil {
+			t.OnPostExec(-1, fmt.Errorf("status: %s", snapshot.Status))
+		}
 		return Result{IsError: true, Content: content}, nil
 	}
 	t.JobManager.forget(snapshot.ID)
+	if t.OnPostExec != nil {
+		t.OnPostExec(0, nil)
+	}
 	return Result{Content: content}, nil
 }
 
@@ -386,5 +425,11 @@ func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
 
 // Clone returns an independent copy of this tool for use by a different agent.
 func (t RunCommand) Clone() Tool {
-	return &RunCommand{WorkingDir: t.WorkingDir, Policy: t.Policy}
+	return &RunCommand{
+		WorkingDir: t.WorkingDir,
+		Policy:     t.Policy,
+		OutputTee:  t.OutputTee,
+		OnPreExec:  t.OnPreExec,
+		OnPostExec: t.OnPostExec,
+	}
 }

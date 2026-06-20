@@ -32,10 +32,35 @@ func runAppleScript(script string) (string, error) {
 }
 
 // escapeAS escapes a string for safe embedding in AppleScript double-quoted strings.
+// Handles backslash, double-quote, and common control characters (tab, newline,
+// carriage return) that could break AppleScript syntax.
 func escapeAS(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString("\\\\")
+		case '"':
+			b.WriteString("\\\"")
+		case '\t':
+			b.WriteString("\\t")
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		default:
+			if r >= 0x20 {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+// escapeShellSingleQuote escapes a string for safe use inside single quotes
+// in a shell command (e.g., cd 'path'). Replaces ' with '\”.
+func escapeShellSingleQuote(s string) string {
+	return strings.ReplaceAll(s, `'`, `'\''`)
 }
 
 func oppositeDir(dir string) string {

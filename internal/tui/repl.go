@@ -36,6 +36,7 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tui/cmdpane"
 	"github.com/topcheer/ggcode/internal/update"
 )
 
@@ -533,6 +534,54 @@ func (r *REPL) SetAskUserTool(tools *tool.Registry) {
 	askTool.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
 		return r.requestAskUser(ctx, req)
 	})
+}
+
+// SetCommandPane wires the command pane manager into the run_command tool
+// for real-time output mirroring in tmux environments.
+func (r *REPL) SetCommandPane(tools *tool.Registry, workingDir string) {
+	if os.Getenv("TMUX") == "" {
+		return // only active in tmux
+	}
+	mgr := cmdpane.NewManager(workingDir)
+	r.model.cmdPaneMgr = mgr
+
+	tl, ok := tools.Get("run_command")
+	if !ok {
+		return
+	}
+	rc, ok := tl.(*tool.RunCommand)
+	if !ok {
+		return
+	}
+
+	writer, err := mgr.Writer()
+	if err != nil {
+		debug.Logf("cmdpane: failed to get writer: %v", err)
+		return
+	}
+
+	preExecFn := func(command, description string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := mgr.EnsurePane(ctx); err != nil {
+			debug.Logf("cmdpane: ensure pane: %v", err)
+		}
+		mgr.WriteHeader(command, description)
+	}
+
+	rc.OutputTee = writer
+	rc.OnPreExec = preExecFn
+	rc.OnPostExec = mgr.WriteFooter
+
+	// Also wire start_command for long-running/streaming commands.
+	if tl2, ok := tools.Get("start_command"); ok {
+		if sc, ok := tl2.(*tool.StartCommandTool); ok {
+			sc.OutputTee = writer
+			sc.OnPreExec = preExecFn
+			// start_command is async — no OnPostExec here (job completion
+			// is checked separately via read_command_output/wait_command).
+		}
+	}
 }
 
 // requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
