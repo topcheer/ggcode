@@ -313,6 +313,7 @@ func (m *Model) handleRestartCommand(text string) tea.Cmd {
 	}
 	m.quitting = true
 	m.restartRequested = true
+	m.shutdownAll()
 	return tea.Quit
 }
 

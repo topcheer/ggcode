@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -13,6 +14,11 @@ import (
 type StartCommandTool struct {
 	Manager *CommandJobManager
 	Policy  permission.PermissionPolicy
+	// OutputTee, if non-nil, receives a copy of stdout/stderr in real time.
+	// Used by the TUI to mirror command output to a tmux command pane.
+	OutputTee  io.Writer
+	OnPreExec  func(command, description string)
+	OnPostExec func(exitCode int, err error)
 }
 
 func (t StartCommandTool) Name() string { return "start_command" }
@@ -93,10 +99,23 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		args.Command = gateResult.CleanedCmd
 	}
 
+	if t.OnPreExec != nil {
+		t.OnPreExec(args.Command, "")
+	}
+	if t.OutputTee != nil {
+		t.Manager.SetOutputTee(t.OutputTee)
+		defer t.Manager.SetOutputTee(nil)
+	}
 	snap, err := t.Manager.Start(ctx, args.Command, args.Detach, secondsToDuration(args.Timeout, defaultCommandTimeout))
 	if err != nil {
+		if t.OnPostExec != nil {
+			t.OnPostExec(-1, err)
+		}
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// start_command is async — we don't know the exit code yet.
+	// OnPostExec will be called by the caller via read_command_output/wait_command
+	// when the job completes, not here.
 	return Result{Content: formatCommandJobSnapshot(*snap, false)}, nil
 }
 

@@ -160,6 +160,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case remoteRestartMsg:
 		m.quitting = true
 		m.restartRequested = true
+		m.shutdownAll()
 		return m, tea.Quit
 
 	case remoteInboundMsg:

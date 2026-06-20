@@ -4,6 +4,8 @@ package tool
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -38,6 +40,7 @@ func iterm2SessionLookup(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
+	escapedID := escapeAS(sessionID)
 	return fmt.Sprintf(`
 	set theSession to missing value
 	repeat with w in windows
@@ -52,7 +55,7 @@ func iterm2SessionLookup(sessionID string) string {
 		end repeat
 		if theSession is not missing value then exit repeat
 	end repeat
-	if theSession is missing value then error "Session not found: %s"`, sessionID, sessionID)
+	if theSession is missing value then error "Session not found: %s"`, escapedID, escapedID)
 }
 
 // iterm2WriteText writes text to a session using iTerm2's native AppleScript.
@@ -218,11 +221,11 @@ tell application "iTerm"
 	tell %s
 		set newSession to (split %s with default profile)
 		tell newSession
-			write text "cd %s && %s"
+			write text "cd '%s' && %s"
 		end tell
 		return id of newSession
 	end tell
-end tell`, lookup, targetSpec, splitCmd, escapeAS(wd), escapeAS(command))
+end tell`, lookup, targetSpec, splitCmd, escapeShellSingleQuote(wd), escapeAS(command))
 	} else {
 		script = fmt.Sprintf(`
 tell application "iTerm"
@@ -230,11 +233,11 @@ tell application "iTerm"
 	tell %s
 		set newSession to (split %s with default profile)
 		tell newSession
-			write text "cd %s"
+			write text "cd '%s'"
 		end tell
 		return id of newSession
 	end tell
-end tell`, lookup, targetSpec, splitCmd, escapeAS(wd))
+end tell`, lookup, targetSpec, splitCmd, escapeShellSingleQuote(wd))
 	}
 
 	out, err := runAppleScript(script)
@@ -268,11 +271,11 @@ tell application "iTerm"
 	tell current window
 		set newTab to create tab with default profile
 		tell current session of newTab
-			write text "cd %s && %s"
+			write text "cd '%s' && %s"
 		end tell
 		return id of current session of newTab
 	end tell
-end tell`, escapeAS(wd), escapeAS(command))
+end tell`, escapeShellSingleQuote(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "iTerm"
@@ -305,10 +308,10 @@ tell application "iTerm"
 	activate
 	set newWindow to create window with default profile
 	tell current session of newWindow
-		write text "cd %s && %s"
+		write text "cd '%s' && %s"
 	end tell
 	return id of current session of newWindow
-end tell`, escapeAS(wd), escapeAS(command))
+end tell`, escapeShellSingleQuote(wd), escapeAS(command))
 	} else {
 		script = `
 tell application "iTerm"
@@ -636,8 +639,12 @@ end tell`, lookup, spec)
 		return fmt.Errorf("could not determine session TTY")
 	}
 
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("printf '%s' > %s", data, tty))
-	if err := cmd.Run(); err != nil {
+	f, err := os.OpenFile(tty, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open tty: %w", err)
+	}
+	defer f.Close()
+	if _, err := io.WriteString(f, data); err != nil {
 		return fmt.Errorf("failed to write to tty: %w", err)
 	}
 	return nil

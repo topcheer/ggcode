@@ -217,6 +217,10 @@ func TestEscapeAS(t *testing.T) {
 		{`say "hi"`, `say \"hi\"`},
 		{`path\to\file`, `path\\to\\file`},
 		{`mix \"quote" and \backslash`, `mix \\\"quote\" and \\backslash`},
+		{"tab\there", "tab\\there"},
+		{"line1\nline2", "line1\\nline2"},
+		{"line1\r\nline2", "line1\\r\\nline2"},
+		{"\x00control", "control"},
 	}
 	for _, tc := range tests {
 		got := escapeAS(tc.input)

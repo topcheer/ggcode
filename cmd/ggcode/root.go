@@ -702,6 +702,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetProjectMemoryLoader(projectMemoryLoader)
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
+	repl.SetCommandPane(registry, workingDir)
 	repl.SetKnight(knightAgent)
 	// Show knight status hint at startup (conflict takes priority, then general status)
 	if knightConflictHint != "" {

@@ -44,6 +44,8 @@ func launchElevated(cmd *exec.Cmd) error {
 }
 
 // quoteArgs joins args into a command-line string suitable for ShellExecute.
+// Arguments containing spaces or special characters are quoted, and embedded
+// double quotes are escaped with backslash per the CommandLineToArgvW convention.
 func quoteArgs(args []string) string {
 	var b []byte
 	for i, a := range args {
@@ -52,7 +54,17 @@ func quoteArgs(args []string) string {
 		}
 		if needsQuote(a) {
 			b = append(b, '"')
-			b = append(b, a...)
+			// Escape backslashes that precede a quote, and the quote itself.
+			for _, c := range a {
+				switch c {
+				case '"':
+					b = append(b, '\\', '"')
+				case '\\':
+					b = append(b, '\\', '\\')
+				default:
+					b = append(b, byte(c))
+				}
+			}
 			b = append(b, '"')
 		} else {
 			b = append(b, a...)
@@ -63,7 +75,7 @@ func quoteArgs(args []string) string {
 
 func needsQuote(s string) bool {
 	for _, c := range s {
-		if c == ' ' || c == '\t' {
+		if c == ' ' || c == '\t' || c == '"' {
 			return true
 		}
 	}

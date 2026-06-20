@@ -71,6 +71,10 @@ type CommandJobManager struct {
 	mu     sync.Mutex
 	nextID int
 	jobs   map[string]*CommandJob
+
+	// outputTee is an optional writer that receives a copy of all command
+	// stdout/stderr in real time. Set per-call by StartCommandTool.
+	outputTee io.Writer
 }
 
 func NewCommandJobManager(workingDir string) *CommandJobManager {
@@ -78,6 +82,15 @@ func NewCommandJobManager(workingDir string) *CommandJobManager {
 		workingDir: workingDir,
 		jobs:       make(map[string]*CommandJob),
 	}
+}
+
+// SetOutputTee sets an optional writer that receives a copy of stdout/stderr.
+// Pass nil to disable. This is used by the TUI to mirror command output to a
+// tmux command pane. The tee applies to the next Start/StartExisting call.
+func (m *CommandJobManager) SetOutputTee(w io.Writer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.outputTee = w
 }
 
 func (m *CommandJobManager) Start(ctx context.Context, command string, detach bool, timeout time.Duration) (*CommandJobSnapshot, error) {
@@ -147,8 +160,20 @@ func (m *CommandJobManager) StartExisting(ctx context.Context, cmd *exec.Cmd, co
 func (m *CommandJobManager) startExisting(ctx context.Context, command string, timeout time.Duration, cancel context.CancelFunc, cmd *exec.Cmd) (*CommandJob, *CommandJobSnapshot, error) {
 	job := m.newJob(command, timeout, cancel)
 	writer := &commandJobWriter{job: job}
-	cmd.Stdout = writer
-	cmd.Stderr = writer
+
+	// If a tee writer is set, mirror stdout/stderr through it in real time.
+	m.mu.Lock()
+	tee := m.outputTee
+	m.outputTee = nil // one-shot: consumed by this call
+	m.mu.Unlock()
+
+	if tee != nil {
+		cmd.Stdout = io.MultiWriter(writer, tee)
+		cmd.Stderr = io.MultiWriter(writer, tee)
+	} else {
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
