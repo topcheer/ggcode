@@ -592,8 +592,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 		return m, m.submitText(text, true)
-	case "shift+enter":
-		// Shift+Enter inserts newline into textarea.
+	case "shift+enter", "ctrl+j", "alt+enter":
+		// Insert newline into textarea.
+		// Shift+Enter works in terminals with Kitty keyboard protocol support
+		// (iTerm2, Kitty, WezTerm, Ghostty outside tmux).
+		// Ctrl+J and Alt+Enter are fallbacks that work inside tmux, which
+		// strips the shift modifier and sends \r for both Enter and Shift+Enter.
 		// Use InsertRune('\n') instead of manual string splicing + SetValue
 		// so that the textarea's internal cursor/row/col state stays correct.
 		// SetValue resets the cursor to the end, causing visual glitches.

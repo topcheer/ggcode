@@ -428,7 +428,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ta.DynamicHeight = true
 	ta.MinHeight = 1
 	ta.MaxHeight = 10
-	// Single-line mode: Enter submits, Shift+Enter inserts newline.
+	// Single-line mode: Enter submits, Shift+Enter/Ctrl+J/Alt+Enter inserts newline.
 	// Show min 1 line, expand up to 10 lines for multiline input.
 	taStyles := textarea.DefaultStyles(true)
 	// Clear all background colors — composer sits inside its own styled box.

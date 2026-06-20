@@ -1415,6 +1415,46 @@ func TestShiftEnterCJK(t *testing.T) {
 	}
 }
 
+func TestCtrlJInsertsNewline(t *testing.T) {
+	// Ctrl+J is the fallback newline key inside tmux (which strips shift modifier).
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello")
+	m.input.SetHeight(1)
+
+	// Ctrl+J: text representation "ctrl+j"
+	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+j"})
+	m = model.(Model)
+
+	val := m.input.Value()
+	if val == "" {
+		t.Error("input was cleared — ctrl+j should NOT submit")
+	}
+	if !strings.Contains(val, "hello\n") {
+		t.Errorf("expected newline inserted, got %q", val)
+	}
+}
+
+func TestAltEnterInsertsNewline(t *testing.T) {
+	// Alt+Enter is another fallback newline key for tmux environments.
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello")
+	m.input.SetHeight(1)
+
+	// Alt+Enter: Code=KeyEnter, Mod=ModAlt
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	m = model.(Model)
+
+	val := m.input.Value()
+	if val == "" {
+		t.Error("input was cleared — alt+enter should NOT submit")
+	}
+	if !strings.Contains(val, "hello\n") {
+		t.Errorf("expected newline inserted, got %q", val)
+	}
+}
+
 func TestEnterSubmitsSingleLine(t *testing.T) {
 	m := newTestModel()
 	m.inputReady = true
