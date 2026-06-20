@@ -826,11 +826,15 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
 	toolBuilder := func(allowedTools []string) interface{} {
-		reg := tool.NewRegistry()
-		_ = tool.RegisterBuiltinTools(reg, nil, b.workingDir)
-		// Teammates cannot interact with the user directly.
-		reg.Unregister("ask_user")
-		return reg
+		cloned := b.registry.Clone() // each teammate gets independent tool instances with MCP/plugins
+		// Unconditionally remove tools that teammates must never use.
+		for _, name := range []string{
+			"ask_user", "spawn_agent", "wait_agent", "list_agents",
+			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
+		} {
+			cloned.Unregister(name)
+		}
+		return cloned
 	}
 	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)
 	b.swarmMgr.SetSystemPromptBuilder(func(name, teamName, wd string) string {
@@ -843,7 +847,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			ProjectAutoMem:   projectAutoMem,
 			GitStatus:        func() string { return "" },
 			RemoteAgentsInfo: func() string { return "" },
-		}, name, teamName, wd)
+		}, name, teamName)
 	})
 
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})

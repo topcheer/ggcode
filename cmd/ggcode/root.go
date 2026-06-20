@@ -816,8 +816,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	swarmToolBuilder := func(_ []string) interface{} {
 		cloned := registry.Clone() // each teammate gets independent tool instances
-		// Teammates cannot interact with the user directly.
-		cloned.Unregister("ask_user")
+		// Unconditionally remove tools that teammates must never use.
+		for _, name := range []string{
+			"ask_user", "spawn_agent", "wait_agent", "list_agents",
+			"teammate_spawn", "teammate_shutdown", "team_create", "team_delete",
+		} {
+			cloned.Unregister(name)
+		}
 		return cloned
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
@@ -839,7 +844,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			ProjectAutoMem:   projectAutoMem,
 			GitStatus:        func() string { return detectGitStatus(wd) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
-		}, name, teamName, wd)
+		}, name, teamName)
 	})
 	repl.SetSwarmManager(swarmMgr, registry)
 	repl.SetACPClientManager(acpClientMgr)

@@ -35,8 +35,8 @@ func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
 		{"working dir", "/tmp/test-project"},
 		{"task", "review the code"},
 		{"sub-agent constraint: bypass", "Permission mode is bypass"},
-		{"sub-agent constraint: no ask_user", "Do not use `ask_user`"},
-		{"sub-agent constraint: no spawn", "Do not spawn further sub-agents"},
+		{"sub-agent constraint: no ask_user", "`ask_user` is not available"},
+		{"sub-agent constraint: no spawn", "`spawn_agent` is not available"},
 		{"VS16 emoji", "Variation Selector-16"},
 		{"tool names present", "read_file"},
 		{"git status", "## main"},
@@ -50,11 +50,9 @@ func TestBuildSubAgentSystemPrompt_FullContext(t *testing.T) {
 }
 
 func TestBuildSubAgentSystemPrompt_NilFields(t *testing.T) {
-	cfg := &config.Config{Language: "en"}
 	ctx := SubAgentPromptContext{
-		Cfg:        cfg,
 		WorkingDir: "/tmp/test",
-		// Registry, CommandMgr, GlobalAutoMem, ProjectAutoMem, GitStatus, RemoteAgentsInfo all nil
+		// Cfg, Registry, CommandMgr, GlobalAutoMem, ProjectAutoMem, GitStatus, RemoteAgentsInfo all nil
 	}
 
 	prompt := BuildSubAgentSystemPrompt(ctx, "do something", "")
@@ -66,7 +64,7 @@ func TestBuildSubAgentSystemPrompt_NilFields(t *testing.T) {
 	if !strings.Contains(prompt, "do something") {
 		t.Error("prompt should contain the task description")
 	}
-	if !strings.Contains(prompt, "Do not use `ask_user`") {
+	if !strings.Contains(prompt, "`ask_user` is not available") {
 		t.Error("prompt should contain ask_user exclusion constraint")
 	}
 }
@@ -84,7 +82,7 @@ func TestBuildTeammateSystemPrompt_FullContext(t *testing.T) {
 		RemoteAgentsInfo: func() string { return "" },
 	}
 
-	prompt := BuildTeammateSystemPrompt(ctx, "researcher", "review-team", "/tmp/test-project")
+	prompt := BuildTeammateSystemPrompt(ctx, "researcher", "review-team")
 
 	checks := []struct {
 		name     string
@@ -94,9 +92,9 @@ func TestBuildTeammateSystemPrompt_FullContext(t *testing.T) {
 		{"team name", `"review-team"`},
 		{"working dir", "/tmp/test-project"},
 		{"teammate constraint: bypass", "Permission mode is bypass"},
-		{"teammate constraint: no ask_user", "Do not use `ask_user`"},
-		{"teammate constraint: no spawn_agent", "spawn_agent"},
-		{"teammate constraint: no teammate_spawn", "teammate_spawn"},
+		{"teammate constraint: no ask_user", "`ask_user` is not available"},
+		{"teammate constraint: no spawn_agent", "`spawn_agent`"},
+		{"teammate constraint: no teammate_spawn", "`teammate_spawn`"},
 		{"VS16 emoji", "Variation Selector-16"},
 		{"tool names present", "read_file"},
 		{"collaboration guidance", "task board"},
@@ -110,13 +108,11 @@ func TestBuildTeammateSystemPrompt_FullContext(t *testing.T) {
 }
 
 func TestBuildTeammateSystemPrompt_NilFields(t *testing.T) {
-	cfg := &config.Config{Language: "en"}
 	ctx := SubAgentPromptContext{
-		Cfg:        cfg,
 		WorkingDir: "/tmp/test",
 	}
 
-	prompt := BuildTeammateSystemPrompt(ctx, "coder", "dev-team", "/tmp/test")
+	prompt := BuildTeammateSystemPrompt(ctx, "coder", "dev-team")
 
 	if !strings.Contains(prompt, `"coder"`) {
 		t.Error("prompt should contain teammate name")
@@ -130,9 +126,7 @@ func TestBuildTeammateSystemPrompt_NilFields(t *testing.T) {
 }
 
 func TestBuildSubAgentSystemPrompt_NoSlashCommands(t *testing.T) {
-	cfg := &config.Config{Language: "en"}
 	ctx := SubAgentPromptContext{
-		Cfg:        cfg,
 		WorkingDir: "/tmp/test",
 	}
 
@@ -168,6 +162,49 @@ func TestBuildSubAgentSystemPrompt_WithMemory(t *testing.T) {
 	// and contain the core constraints.
 	if !strings.Contains(prompt, "Permission mode is bypass") {
 		t.Error("prompt should contain bypass constraint")
+	}
+}
+
+func TestBuildSubAgentSystemPrompt_DeterministicToolOrder(t *testing.T) {
+	reg := tool.NewRegistry()
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test")
+
+	ctx := SubAgentPromptContext{
+		WorkingDir: "/tmp/test",
+		Registry:   reg,
+	}
+
+	prompt1 := BuildSubAgentSystemPrompt(ctx, "task", "")
+	prompt2 := BuildSubAgentSystemPrompt(ctx, "task", "")
+
+	if prompt1 != prompt2 {
+		t.Error("prompt should be deterministic (same tools should produce same order)")
+	}
+}
+
+func TestBuildSubAgentSystemPrompt_MemoryFraming(t *testing.T) {
+	withTestHome(t)
+
+	cfg := &config.Config{Language: "en"}
+	reg := tool.NewRegistry()
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test")
+
+	autoMem := memory.NewAutoMemory()
+
+	ctx := SubAgentPromptContext{
+		Cfg:           cfg,
+		WorkingDir:    "/tmp/test",
+		Registry:      reg,
+		GlobalAutoMem: autoMem,
+	}
+
+	prompt := BuildSubAgentSystemPrompt(ctx, "task", "")
+
+	// If memory sections exist, they should be framed as reference data
+	if strings.Contains(prompt, "## Auto Memory") {
+		if !strings.Contains(prompt, "reference information") {
+			t.Error("auto-memory section should contain framing text indicating it's reference data")
+		}
 	}
 }
 

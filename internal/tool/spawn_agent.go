@@ -11,6 +11,20 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
+// subAgentBlockedTools lists tools that are unconditionally removed from every
+// sub-agent's tool set, regardless of what allowedTools requests. Sub-agents
+// must never interact with the user, spawn nested agents, or manage teams.
+var subAgentBlockedTools = []string{
+	"ask_user",
+	"spawn_agent",
+	"wait_agent",
+	"list_agents",
+	"teammate_spawn",
+	"teammate_shutdown",
+	"team_create",
+	"team_delete",
+}
+
 // SpawnAgentTool implements the spawn_agent tool.
 type SpawnAgentTool struct {
 	Manager             *subagent.Manager
@@ -146,15 +160,13 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 				// data races when multiple sub-agents run concurrently in
 				// different worktrees.
 				cloned := tools.Clone()
-				// Always remove interactive tools — sub-agents have no user to interact with.
-				cloned.Unregister("ask_user")
-				if len(allowedTools) == 0 {
-					// Remove agent lifecycle tools from sub-agent's set
-					cloned.Unregister("spawn_agent")
-					cloned.Unregister("wait_agent")
-					cloned.Unregister("list_agents")
-				} else {
-					// Keep only allowed tools
+				// Unconditionally remove tools that sub-agents must never use,
+				// regardless of what allowedTools requests.
+				for _, name := range subAgentBlockedTools {
+					cloned.Unregister(name)
+				}
+				if len(allowedTools) > 0 {
+					// Keep only allowed tools (minus blocked ones above)
 					all := cloned.ToolNames()
 					for _, name := range all {
 						if !sliceContains(allowedTools, name) {

@@ -194,7 +194,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 	}
-	_ = registry.Register(skillTool)
+	// NOTE: skillTool registration deferred until after buildCurrentSystemPrompt is defined
 	var subMgr *subagent.Manager
 	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
 		return permission.Allow
@@ -229,6 +229,28 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
+
+	// Wire sub-agent system prompt builder into skillTool (same pattern as root.go)
+	skillTool.SystemPromptBuilder = func(task, agentType string) string {
+		remoteAgentsInfo := ""
+		if a2aReg != nil {
+			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+			}
+		}
+		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              cfg,
+			WorkingDir:       workingDir,
+			Registry:         registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return detectGitStatus(workingDir) },
+			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
+		}, task, agentType)
+	}
+	_ = registry.Register(skillTool)
+
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
 		promptSkillRefsMu.RLock()
