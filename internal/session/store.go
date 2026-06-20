@@ -83,6 +83,10 @@ type Store interface {
 	// CleanupOlderThan removes sessions whose UpdatedAt is before the given time.
 	CleanupOlderThan(before time.Time) (int, error)
 
+	// LatestForWorkspace returns the most recently updated session for the
+	// given workspace, or nil if none exists.
+	LatestForWorkspace(workspace string) (*Session, error)
+
 	// AppendCheckpoint persists a checkpoint of compacted messages after summarize.
 	// The checkpoint allows --resume to skip re-compacting old history.
 	AppendCheckpoint(s *Session, compactedMessages []provider.Message, tokenCount int) error
@@ -695,6 +699,21 @@ func (s *JSONLStore) Delete(id string) error {
 		return err
 	}
 	return s.removeFromIndex(id)
+}
+
+// LatestForWorkspace returns the most recently updated session for the
+// given workspace, or nil if none exists.
+func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
+	all, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, ses := range all {
+		if ses.Workspace == workspace && len(ses.Messages) > 0 {
+			return ses, nil
+		}
+	}
+	return nil, nil
 }
 
 // ExportMarkdown renders a session as a markdown document.

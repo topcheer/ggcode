@@ -123,6 +123,19 @@ func ClearSession() SessionState {
 	return SessionState{}
 }
 
+// DeleteSessionIfEmpty removes a session from the store if it has no
+// user messages. Used to clean up ephemeral sessions that were created
+// but never used (e.g., desktop auto-created when latest was locked).
+func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
+	if store == nil || ses == nil {
+		return nil
+	}
+	if len(ses.Messages) > 0 {
+		return nil
+	}
+	return store.Delete(ses.ID)
+}
+
 func SaveSessionMessages(store session.Store, ses *session.Session, messages []provider.Message) error {
 	if store == nil || ses == nil {
 		return nil

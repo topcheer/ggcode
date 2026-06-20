@@ -123,6 +123,10 @@ type ChatBridge struct {
 	OnSessionChanged func()
 
 	liveHistory []SessionMessage
+
+	// Session lock for preventing concurrent access to the same session.
+	sessionLock      *session.SessionLock
+	sessionEphemeral bool // true if this session should be deleted when empty
 }
 
 // NewChatBridge creates a new chat bridge using the global config.
@@ -425,6 +429,9 @@ func (b *ChatBridge) Cancel() {
 
 // ClearCurrentSession resets the current session so next chat creates a fresh one.
 func (b *ChatBridge) ClearCurrentSession() {
+	// Clean up ephemeral empty session before switching.
+	b.cleanupEphemeralSession()
+
 	state := agentruntime.ClearSession()
 	b.ResetAgent()
 	b.mu.Lock()
@@ -439,6 +446,27 @@ func (b *ChatBridge) ClearCurrentSession() {
 	}
 	b.mu.Unlock()
 	b.bindSessionIntegrations(nil)
+}
+
+// cleanupEphemeralSession deletes the current session if it was marked
+// ephemeral (auto-created because the latest session was locked) and
+// has no user messages. Also releases the session lock.
+func (b *ChatBridge) cleanupEphemeralSession() {
+	b.mu.Lock()
+	ses := b.currentSes
+	ephemeral := b.sessionEphemeral
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	if ephemeral && ses != nil && store != nil {
+		_ = agentruntime.DeleteSessionIfEmpty(store, ses)
+	}
+	// Release lock.
+	if b.sessionLock != nil {
+		b.sessionLock.Release()
+		b.sessionLock = nil
+	}
+	b.sessionEphemeral = false
 }
 
 func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
@@ -568,6 +596,9 @@ func (b *ChatBridge) CurrentSessionID() string {
 }
 
 // EnsureSession creates a default session if none exists (mirrors Fyne's ensureSession).
+// On first call with no current session, tries to auto-load the most recent
+// workspace session. If that session is locked by another instance, creates
+// a new ephemeral session (auto-deleted if empty on close/switch).
 func (b *ChatBridge) EnsureSession() {
 	// Ensure session store is initialized
 	if b.sessionStore == nil {
@@ -577,6 +608,31 @@ func (b *ChatBridge) EnsureSession() {
 		}
 		b.sessionStore = store
 	}
+	if b.currentSes != nil {
+		return // already have a session
+	}
+
+	// Try to auto-load the most recent workspace session.
+	if latest, err := b.sessionStore.LatestForWorkspace(b.workingDir); err == nil && latest != nil {
+		storeDir, _ := session.DefaultDir()
+		lock, lockErr := session.TryAcquireSessionLock(storeDir, latest.ID)
+		if lockErr == nil && lock != nil && lock.Acquired() {
+			// Got the lock — load this session.
+			b.sessionLock = lock
+			b.sessionEphemeral = false
+			ses, loadErr := b.sessionStore.Load(latest.ID)
+			if loadErr == nil && ses != nil {
+				b.setSessionState(agentruntime.AdoptSession(ses))
+				if b.OnSessionChanged != nil {
+					b.OnSessionChanged()
+				}
+				return
+			}
+		}
+	}
+
+	// Fallback: create a new ephemeral session.
+	b.sessionEphemeral = true
 	vendor, endpoint, model := "", "", ""
 	if b.cfg != nil {
 		vendor = b.cfg.Vendor
@@ -588,6 +644,15 @@ func (b *ChatBridge) EnsureSession() {
 		return
 	}
 	b.setSessionState(state)
+
+	// Acquire lock on the new session too.
+	storeDir, _ := session.DefaultDir()
+	if b.currentSes != nil {
+		lock, _ := session.TryAcquireSessionLock(storeDir, b.currentSes.ID)
+		if lock != nil && lock.Acquired() {
+			b.sessionLock = lock
+		}
+	}
 }
 
 // InitAgent sets up provider, tools, and agent — full parity with Fyne bridge.
@@ -1975,6 +2040,9 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 
 // Close cleans up all resources (mirrors Fyne AgentBridge.Close).
 func (b *ChatBridge) Close() {
+	// Clean up ephemeral empty session before shutting down.
+	b.cleanupEphemeralSession()
+
 	b.mu.Lock()
 	if b.metricCancel != nil {
 		b.metricCancel()

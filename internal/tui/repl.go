@@ -49,6 +49,7 @@ type REPL struct {
 	planSwitcher        *replModeSwitcher
 	store               session.Store
 	resumeID            string
+	sessionLock         *session.SessionLock
 	core                *agentruntime.InteractiveRuntimeCore
 	mcpMgr              *plugin.MCPManager
 	commandMgr          *commands.Manager
@@ -118,6 +119,12 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 // SetResumeID sets the session ID to resume.
 func (r *REPL) SetResumeID(id string) {
 	r.resumeID = id
+}
+
+// SetSessionLock passes a pre-acquired session lock to the REPL.
+// The REPL will release it on shutdown or restart.
+func (r *REPL) SetSessionLock(lock *session.SessionLock) {
+	r.sessionLock = lock
 }
 
 // SetConfig passes the config to the model for /model and /provider commands.
@@ -650,11 +657,17 @@ func (r *REPL) Run() error {
 	// Initialize session
 	if r.store != nil {
 		if r.resumeID != "" {
+			// Explicit --resume <id>
 			r.loadSession(r.resumeID)
 			traceMark("load session")
 		} else {
-			r.createSession()
-			traceMark("create session")
+			// Auto-load: try to resume the most recent workspace session.
+			if r.tryAutoLoadSession() {
+				traceMark("auto-load session")
+			} else {
+				r.createSession()
+				traceMark("create session")
+			}
 		}
 	}
 	r.primeInitialWindowSize(term.GetSize)
@@ -870,6 +883,12 @@ func (r *REPL) Run() error {
 		_ = agentruntime.SaveAgentSessionSnapshot(r.store, r.model.session, r.agent)
 	}
 
+	// Release the session lock so another instance can resume this session.
+	if r.sessionLock != nil {
+		r.sessionLock.Release()
+		r.sessionLock = nil
+	}
+
 	if m, ok := finalModel.(Model); ok {
 		if m.terminalTitleWriter != nil {
 			m.statusActivity = ""
@@ -915,6 +934,58 @@ func (r *REPL) primeInitialWindowSize(getSize func(fd uintptr) (int, int, error)
 }
 
 // createSession creates a fresh session and wires it into the model.
+// tryAutoLoadSession attempts to load the most recent workspace session.
+// Returns true if a session was loaded, false if it should create a new one.
+// If the latest session is locked by another process, shows the session picker.
+func (r *REPL) tryAutoLoadSession() bool {
+	if r.store == nil {
+		return false
+	}
+	// If root.go already acquired a lock (from the picker path), skip.
+	if r.sessionLock != nil && r.sessionLock.Acquired() {
+		return false
+	}
+	workspace := r.model.agent.WorkingDir()
+	if workspace == "" {
+		return false
+	}
+
+	latest, err := r.store.LatestForWorkspace(workspace)
+	if err != nil {
+		debug.Log("repl", "tryAutoLoadSession: LatestForWorkspace error: %v", err)
+		return false
+	}
+	if latest == nil {
+		debug.Log("repl", "tryAutoLoadSession: no sessions for workspace %q", workspace)
+		return false
+	}
+
+	// Try to acquire a lock on the session.
+	storeDir, err := session.DefaultDir()
+	if err != nil {
+		debug.Log("repl", "tryAutoLoadSession: DefaultDir error: %v", err)
+		return false
+	}
+	lock, err := session.TryAcquireSessionLock(storeDir, latest.ID)
+	if err != nil {
+		debug.Log("repl", "tryAutoLoadSession: lock error: %v", err)
+		return false
+	}
+	if lock != nil && lock.Acquired() {
+		// We got the lock — auto-resume this session.
+		r.sessionLock = lock
+		r.loadSession(latest.ID)
+		debug.Log("repl", "tryAutoLoadSession: auto-loaded session %s", latest.ID)
+		return true
+	}
+
+	// Session is locked by another instance — create new session.
+	// (The picker flow is handled in root.go before the TUI starts.)
+	debug.Log("repl", "tryAutoLoadSession: session %s is locked (PID %d), creating new session",
+		latest.ID, lock.HolderPID())
+	return false
+}
+
 func (r *REPL) createSession() {
 	start := time.Now()
 	vendor := ""
@@ -972,6 +1043,12 @@ func messageCount(ses *session.Session) int {
 // Called after program.Run() returns and the terminal has been restored.
 // Uses restart.ExecSelf which does syscall.Exec on Unix or exec+exit on Windows.
 func (r *REPL) execRestart() error {
+	// Release session lock before execve — the new process will re-acquire it.
+	if r.sessionLock != nil {
+		r.sessionLock.Release()
+		r.sessionLock = nil
+	}
+
 	binary, err := restart.ResolveBinary()
 	if err != nil {
 		return fmt.Errorf("restart: resolve binary: %w", err)

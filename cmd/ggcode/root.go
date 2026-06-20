@@ -573,6 +573,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("create session store")
 
+	var replPendingSessionLock *session.SessionLock
+
 	if resumeID == "picker" {
 		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
 		if err != nil {
@@ -580,6 +582,41 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		resumeID = selectedID
 		trace.Mark("pick resume session")
+	} else if resumeID == "" {
+		// Auto-load: try to resume the most recent workspace session.
+		workspace := workingDir
+		latest, err := store.LatestForWorkspace(workspace)
+		if err == nil && latest != nil {
+			storeDir, _ := session.DefaultDir()
+			lock, lockErr := session.TryAcquireSessionLock(storeDir, latest.ID)
+			if lockErr == nil && lock != nil && lock.Acquired() {
+				// Got the lock — auto-resume this session.
+				// Store the lock for the REPL to hold.
+				replPendingSessionLock = lock
+				resumeID = latest.ID
+				trace.Mark("auto-load session")
+			} else if lock != nil && !lock.Acquired() {
+				// Session is locked by another instance — show picker.
+				pid := lock.HolderPID()
+				fmt.Fprintf(os.Stderr, "\n  Latest session %s is active in another instance (PID %d).\n", latest.ID[:8], pid)
+				selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
+				if err != nil {
+					return err
+				}
+				if selectedID == "" {
+					// User chose "new session" from picker.
+					lock2, _ := session.TryAcquireSessionLock(storeDir, "")
+					_ = lock2 // new session lock will be acquired by REPL
+				} else {
+					lock2, lockErr2 := session.TryAcquireSessionLock(storeDir, selectedID)
+					if lockErr2 == nil && lock2 != nil && lock2.Acquired() {
+						replPendingSessionLock = lock2
+					}
+				}
+				resumeID = selectedID
+				trace.Mark("pick resume session (locked)")
+			}
+		}
 	}
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
@@ -922,6 +959,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
+	}
+	if replPendingSessionLock != nil {
+		repl.SetSessionLock(replPendingSessionLock)
 	}
 
 	// Wire config tool UI notify — sync TUI state after provider changes
