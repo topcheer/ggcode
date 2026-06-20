@@ -66,6 +66,7 @@ jobs:
   verify:
     name: Verify mobile
     runs-on: ubuntu-latest
+    if: ${{ inputs.expire_and_promote != 'true' }}
     defaults:
       run:
         working-directory: mobile/flutter
@@ -93,7 +94,7 @@ jobs:
     name: Build & deploy Android
     needs: verify
     runs-on: ubuntu-latest
-    if: ${{ inputs.platform == 'both' || inputs.platform == 'android' || inputs.platform == '' || inputs.platform == null }}
+    if: ${{ (inputs.platform == 'both' || inputs.platform == 'android' || inputs.platform == '' || inputs.platform == null) && inputs.expire_and_promote != 'true' }}
     defaults:
       run:
         working-directory: mobile/flutter
@@ -156,7 +157,7 @@ jobs:
     name: Build & deploy iOS
     needs: verify
     runs-on: macos-15
-    if: ${{ inputs.platform == 'both' || inputs.platform == 'ios' || inputs.platform == '' || inputs.platform == null }}
+    if: ${{ (inputs.platform == 'both' || inputs.platform == 'ios' || inputs.platform == '' || inputs.platform == null) && inputs.expire_and_promote != 'true' }}
     defaults:
       run:
         working-directory: mobile/flutter

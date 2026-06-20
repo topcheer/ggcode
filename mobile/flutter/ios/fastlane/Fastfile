@@ -368,8 +368,13 @@ platform :ios do
       if active_sub
         if active_sub.beta_review_state == "WAITING_FOR_REVIEW"
           UI.message("Cancelling beta review (#{active_sub.id}) for build #{b.version}...")
-          client.delete_beta_app_review_submission(beta_app_review_submission_id: active_sub.id)
-          UI.success("Cancelled beta review for build #{b.version}")
+          begin
+            # App Store Connect API: DELETE /v1/betaAppReviewSubmissions/{id}
+            client.delete("betaAppReviewSubmissions/#{active_sub.id}")
+            UI.success("Cancelled beta review for build #{b.version}")
+          rescue => e
+            UI.message("Cancel beta review: #{e.message}")
+          end
         else
           # IN_REVIEW — can't cancel, but we can still expire the build.
           UI.message("Build #{b.version} beta review is IN_REVIEW — cannot cancel, will expire build.")
