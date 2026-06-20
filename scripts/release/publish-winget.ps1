@@ -17,7 +17,6 @@ Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
 
 # --- Idempotency: skip if a PR for this version already exists ---
-# Use GitHub Search API directly — gh CLI search may not work in CI
 Write-Host "Checking for existing PRs for $PackageId version $releaseVersion..."
 try {
     $searchQuery = "repo:microsoft/winget-pkgs type:pr state:open $PackageId version $releaseVersion in:title"
@@ -45,57 +44,55 @@ if (-not $packageExists) {
     exit 0
 }
 
-# --- Determine existing installer count from latest manifest ---
-$existingManifest = & $wingetCreate show $PackageId 2>&1 | Out-String
-$existingCount = ([regex]::Matches($existingManifest, "InstallerUrl:")).Count
-if ($existingCount -eq 0) { $existingCount = 1 }
-
-$desiredUrls = @("${InstallerUrl}|x64|user")
-if ($InstallerUrlArm64) {
-    $desiredUrls += "${InstallerUrlArm64}|arm64|user"
-}
-
-Write-Host "Existing installers: $existingCount, Desired installers: $($desiredUrls.Count)"
-
-if ($desiredUrls.Count -eq $existingCount) {
-    # --- Same count: direct update + submit ---
-    Write-Host "Installer count matches. Running wingetcreate update --submit..."
-    & $wingetCreate update $PackageId --version $releaseVersion --urls $desiredUrls --submit --token $GitHubToken --no-open
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "wingetcreate update succeeded."
-        exit 0
-    }
-    Write-Warning "wingetcreate update failed despite matching count."
-    exit 0
-}
-
-# --- Different count: generate complete installer YAML from scratch ---
-Write-Host "Installer count changed ($existingCount -> $($desiredUrls.Count)). Generating complete manifest..."
-
-# Step 1: Generate base manifest with existing URL count (for locale + version YAML)
-$matchingUrls = $desiredUrls[0..([Math]::Min($existingCount, $desiredUrls.Count) - 1)]
-Write-Host "Step 1: Generating base manifest with $existingCount installer(s)..."
-& $wingetCreate update $PackageId --version $releaseVersion --urls $matchingUrls --out $manifestDir --token $GitHubToken
+# --- Step 1: Generate base manifest from existing package ---
+Write-Host "Step 1: Generating base manifest..."
+& $wingetCreate update $PackageId --version $releaseVersion --urls @("${InstallerUrl}|x64|user") --out $manifestDir --token $GitHubToken
 
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Base manifest generation failed."
     exit 0
 }
 
-# Step 2: Download all installers, compute SHA256
-Write-Host "Step 2: Computing installer hashes..."
+# --- Step 2: Download installers and extract MSI properties ---
+Write-Host "Step 2: Downloading installers and extracting MSI properties..."
 
 $installers = @()
+
+# Helper: extract ProductCode, UpgradeCode, DisplayName from MSI
+function Get-MsiProperties {
+    param([string]$MsiPath)
+
+    $props = @{}
+    try {
+        $windowsInstaller = New-Object -ComObject WindowsInstaller.Installer
+        $database = $windowsInstaller.OpenDatabase($MsiPath, 0)
+        $view = $database.OpenView("SELECT `Property`, `Value` FROM Property WHERE `Property` IN ('ProductCode', 'UpgradeCode', 'ProductName', 'ProductVersion', 'Manufacturer')")
+        $view.Execute()
+        while ($true) {
+            $record = $view.Fetch()
+            if ($null -eq $record) { break }
+            $props[$record.StringData(1)] = $record.StringData(2)
+        }
+    } catch {
+        Write-Warning "Failed to extract MSI properties: $_"
+    }
+    return $props
+}
 
 # x64 installer
 $x64Path = Join-Path $PWD "x64.msi"
 Invoke-WebRequest -Uri $InstallerUrl -OutFile $x64Path -UseBasicParsing
 $x64Hash = (Get-FileHash $x64Path -Algorithm SHA256).Hash.ToUpper()
+$x64Props = Get-MsiProperties -MsiPath $x64Path
 Write-Host "  x64 SHA256: $x64Hash"
+Write-Host "  x64 ProductCode: $($x64Props['ProductCode'])"
+Write-Host "  x64 UpgradeCode: $($x64Props['UpgradeCode'])"
 $installers += @{
-    Arch        = "x64"
-    Url         = $InstallerUrl
-    Sha256      = $x64Hash
+    Arch         = "x64"
+    Url          = $InstallerUrl
+    Sha256       = $x64Hash
+    ProductCode  = $x64Props['ProductCode']
+    UpgradeCode  = $x64Props['UpgradeCode']
 }
 
 # arm64 installer
@@ -103,39 +100,41 @@ if ($InstallerUrlArm64) {
     $arm64Path = Join-Path $PWD "arm64.msi"
     Invoke-WebRequest -Uri $InstallerUrlArm64 -OutFile $arm64Path -UseBasicParsing
     $arm64Hash = (Get-FileHash $arm64Path -Algorithm SHA256).Hash.ToUpper()
+    $arm64Props = Get-MsiProperties -MsiPath $arm64Path
     Write-Host "  arm64 SHA256: $arm64Hash"
+    Write-Host "  arm64 ProductCode: $($arm64Props['ProductCode'])"
     $installers += @{
-        Arch   = "arm64"
-        Url    = $InstallerUrlArm64
-        Sha256 = $arm64Hash
+        Arch         = "arm64"
+        Url          = $InstallerUrlArm64
+        Sha256       = $arm64Hash
+        ProductCode  = $arm64Props['ProductCode']
+        UpgradeCode  = $arm64Props['UpgradeCode']
     }
 }
 
-# Step 3: Write complete installer YAML from scratch
-Write-Host "Step 3: Writing complete installer YAML..."
-
+# --- Step 3: Extract shared metadata ---
 $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
 if (-not $installerFile) {
     Write-Warning "Could not find installer YAML template."
     exit 0
 }
 
-# Extract shared metadata from the base manifest (locale info, etc.)
-$baseYaml = Get-Content $installerFile.FullName -Raw
-
-# Parse top-level fields we need to preserve
-$productCode = ""
-if ($baseYaml -match "ProductCode:\s*'(\{[^}]+\})'") { $productCode = $matches[1] }
-$upgradeCode = ""
-if ($baseYaml -match "UpgradeCode:\s*'(\{[^}]+\})'") { $upgradeCode = $matches[1] }
+# Use first installer's metadata for top-level fields
+$topProductCode = $installers[0].ProductCode
+$topUpgradeCode = $installers[0].UpgradeCode
 $displayName = "GGCode Desktop"
-if ($baseYaml -match "DisplayName:\s*(.+)") { $displayName = $matches[1].Trim() }
+if ($x64Props['ProductName']) { $displayName = $x64Props['ProductName'] }
+if ($displayName -eq "ggcode") { $displayName = "GGCode Desktop" }
 $publisher = "GG AI Studio"
-if ($baseYaml -match "Publisher:\s*(.+)") { $publisher = $matches[1].Trim() }
+if ($x64Props['Manufacturer']) { $publisher = $x64Props['Manufacturer'] }
 
-# Build the complete installer YAML
+Write-Host "Step 3: ProductCode=$topProductCode UpgradeCode=$topUpgradeCode DisplayName=$displayName Publisher=$publisher"
+
+# --- Step 4: Write complete installer YAML ---
+Write-Host "Step 4: Writing complete installer YAML..."
+
 $yaml = @"
-# Created using wingetcreate 1.12.8.0
+# Created using wingetcreate
 # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
 PackageIdentifier: $PackageId
@@ -153,12 +152,13 @@ InstallerSwitches:
   Silent: /qn
   SilentWithProgress: /qb
 UpgradeBehavior: install
-ProductCode: '$productCode'
+ProductCode: '$topProductCode'
 AppsAndFeaturesEntries:
 - DisplayName: $displayName
   Publisher: $publisher
-  ProductCode: '$productCode'
-  UpgradeCode: '$upgradeCode'
+  ProductCode: '$topProductCode'
+  UpgradeCode: '$topUpgradeCode'
+  InstallerType: wix
 Installers:
 "@
 
@@ -170,12 +170,13 @@ foreach ($inst in $installers) {
   InstallerSha256: $($inst.Sha256)
   InstallerType: wix
   Scope: user
-  ProductCode: '$productCode'
+  ProductCode: '$($inst.ProductCode)'
   AppsAndFeaturesEntries:
   - DisplayName: $displayName
     Publisher: $publisher
-    ProductCode: '$productCode'
-    UpgradeCode: '$upgradeCode'
+    ProductCode: '$($inst.ProductCode)'
+    UpgradeCode: '$($inst.UpgradeCode)'
+    InstallerType: wix
 "@
 }
 
@@ -189,9 +190,9 @@ ReleaseDate: $(Get-Date -Format "yyyy-MM-dd")
 Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
 Write-Host "  Wrote complete installer YAML with $($installers.Count) installer(s)"
 
-# Step 4: Submit the modified manifest
+# --- Step 5: Submit the manifest ---
 $yamlDir = Split-Path -Parent $installerFile.FullName
-Write-Host "Step 4: Submitting manifest from $yamlDir to winget-pkgs..."
+Write-Host "Step 5: Submitting manifest from $yamlDir to winget-pkgs..."
 & $wingetCreate submit $yamlDir --token $GitHubToken --no-open
 
 if ($LASTEXITCODE -eq 0) {
