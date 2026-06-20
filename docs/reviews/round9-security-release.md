@@ -2,7 +2,7 @@
 
 **Scope**: full-codebase security; `.goreleaser.yaml`; `.github/workflows/`; `scripts/`; install wrappers (`cmd/ggcode-installer/`, `npm/`, `python/`); native packages (MSI, deb, rpm, apk, ipk, pkg.tar.zst); winget; mobile app-store compliance.
 
-**Date**: 2026-05-29. Round 8 references: `docs/reviews/round8-security.md`, `docs/reviews/cross-platform-compat.md`, `SECURITY_AUDIT_REPORT.md`, `docs/design-decisions.md` (some "issues" are intentional).
+**Date**: 2026-05-29. Round 8 references: `docs/reviews/round8-security.md`, `docs/reviews/cross-platform-compat.md`, `security/SECURITY_AUDIT_REPORT.md`, `docs/design-decisions.md` (some "issues" are intentional).
 
 ---
 

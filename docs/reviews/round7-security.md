@@ -3,13 +3,13 @@
 **Date**: 2025-07-17  
 **Reviewer**: Automated Security Audit  
 **Scope**: Full codebase security review of ggcode  
-**Previous Audit**: `SECURITY_AUDIT_REPORT.md` (2025-07-14)
+**Previous Audit**: `security/SECURITY_AUDIT_REPORT.md` (2025-07-14)
 
 ---
 
 ## Executive Summary
 
-This report provides an updated security review of the ggcode codebase. The previous audit (Round 6, `SECURITY_AUDIT_REPORT.md`) identified 2 Critical, 6 High, 8 Medium, and 6 Low findings. This round re-validates those findings and identifies additional issues.
+This report provides an updated security review of the ggcode codebase. The previous audit (Round 6, `security/SECURITY_AUDIT_REPORT.md`) identified 2 Critical, 6 High, 8 Medium, and 6 Low findings. This round re-validates those findings and identifies additional issues.
 
 **Status of prior findings**: All previously reported findings (C-01 through L-06) remain unfixed as of this review. See the "Prior Findings Status" section for details.
 

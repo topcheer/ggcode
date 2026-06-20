@@ -64,7 +64,7 @@ The root cause of mobile message loss during token renewal has been **definitive
      - Implementation checklist
      - Success criteria
 
-### 5. **ARCHITECTURE_DIAGRAM.md**
+### 5. **ARCHITECTURE_DIAGRAM.md** (moved to `../../design/tunnel-relay-architecture.md`)
    - **Purpose**: System architecture and interactions
    - **Length**: ~17,700 words (heavily diagrammed)
    - **Best For**: Understanding system components
@@ -284,12 +284,12 @@ authority_epoch_mismatch + hash_mismatch → RESET_ALL
 2. MESSAGE_FLOW_DIAGRAM.md (visual understanding)
 3. MOBILE_MESSAGE_LOSS_ROOT_CAUSE_ANALYSIS.md (technical depth)
 4. QUICK_FIX_REFERENCE.md (implementation)
-5. ARCHITECTURE_DIAGRAM.md (system view)
+5. ../../design/tunnel-relay-architecture.md (system view)
 
 **For Implementation**:
 1. QUICK_FIX_REFERENCE.md (all practical details)
 2. MOBILE_MESSAGE_LOSS_ROOT_CAUSE_ANALYSIS.md (context on why)
-3. ARCHITECTURE_DIAGRAM.md (testing diagrams)
+3. ../../design/tunnel-relay-architecture.md (testing diagrams)
 
 ---
 
@@ -362,7 +362,7 @@ authority_epoch_mismatch + hash_mismatch → RESET_ALL
 
 All questions should be answerable from these documents:
 - **What's the root cause?** → See MESSAGE_FLOW_DIAGRAM.md
-- **How does it happen?** → See ARCHITECTURE_DIAGRAM.md
+- **How does it happen?** → See ../../design/tunnel-relay-architecture.md
 - **How to fix it?** → See QUICK_FIX_REFERENCE.md
 - **Why is it safe?** → See MOBILE_MESSAGE_LOSS_ROOT_CAUSE_ANALYSIS.md
 - **Quick overview?** → See INVESTIGATION_SUMMARY.txt

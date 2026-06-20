@@ -340,6 +340,7 @@ All stem from the same root cause: aggressive history reset on authority mismatc
 
 - **Root Cause Analysis**: `MOBILE_MESSAGE_LOSS_ROOT_CAUSE_ANALYSIS.md`
 - **Message Flow Diagram**: `MESSAGE_FLOW_DIAGRAM.md`
+- **Architecture Diagram**: `../../design/tunnel-relay-architecture.md`
 - **Code Locations**: Lines referenced in this document
 
 ---
