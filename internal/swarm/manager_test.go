@@ -715,6 +715,52 @@ func TestBuildTeammateSystemPrompt_WithWorkingDir(t *testing.T) {
 	}
 }
 
+func TestManager_SystemPromptBuilder(t *testing.T) {
+	m, _ := testManager(t)
+	m.SetWorkingDir("/test/dir")
+
+	called := false
+	m.SetSystemPromptBuilder(func(name, teamName, workingDir string) string {
+		called = true
+		if name != "tester" {
+			t.Errorf("expected name %q, got %q", "tester", name)
+		}
+		if teamName != "my-team" {
+			t.Errorf("expected teamName %q, got %q", "my-team", teamName)
+		}
+		if workingDir != "/test/dir" {
+			t.Errorf("expected workingDir %q, got %q", "/test/dir", workingDir)
+		}
+		return "custom-prompt"
+	})
+
+	// Spawn a teammate — it should use the builder, not the fallback
+	m.CreateTeam("my-team", "")
+	_, err := m.SpawnTeammate("team-1", "tester", "", nil)
+	if err != nil {
+		t.Fatalf("SpawnTeammate failed: %v", err)
+	}
+
+	if !called {
+		t.Error("systemPromptBuilder was not called during SpawnTeammate")
+	}
+	m.CancelAll()
+}
+
+func TestManager_SystemPromptBuilder_FallbackToMinimal(t *testing.T) {
+	m, _ := testManager(t)
+	m.SetWorkingDir("/test/dir")
+	// Do NOT set systemPromptBuilder — should fall back to buildTeammateSystemPrompt
+
+	m.CreateTeam("fallback-team", "")
+	_, err := m.SpawnTeammate("team-1", "fallback-teammate", "", nil)
+	if err != nil {
+		t.Fatalf("SpawnTeammate failed: %v", err)
+	}
+	// If no panic and teammate spawned, fallback works
+	m.CancelAll()
+}
+
 func TestBuildTeammateSystemPrompt_NoWorkingDir(t *testing.T) {
 	prompt := buildTeammateSystemPrompt("researcher", "review-team", "")
 	if containsSubstr(prompt, "Working directory:") {
