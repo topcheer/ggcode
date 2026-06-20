@@ -26,6 +26,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ReadFile{SandboxCheck: sandboxFor("read_file")},
 		MultiFileRead{SandboxCheck: sandboxFor("multi_file_read")},
 		WriteFile{SandboxCheck: sandboxFor("write_file")},
+		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write")},
 		ListDir{SandboxCheck: sandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file")},
 		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit")},
