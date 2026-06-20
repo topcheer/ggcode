@@ -13,12 +13,13 @@ import (
 
 // SpawnAgentTool implements the spawn_agent tool.
 type SpawnAgentTool struct {
-	Manager      *subagent.Manager
-	Provider     provider.Provider
-	Tools        *Registry
-	AgentFactory subagent.AgentFactory
-	WorkingDir   string // working directory to propagate to sub-agent
-	OnUsage      func(provider.TokenUsage)
+	Manager             *subagent.Manager
+	Provider            provider.Provider
+	Tools               *Registry
+	AgentFactory        subagent.AgentFactory
+	WorkingDir          string // working directory to propagate to sub-agent
+	OnUsage             func(provider.TokenUsage)
+	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
 }
 
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
@@ -127,17 +128,18 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	// Launch the sub-agent in a goroutine
 	safego.Go("tool.spawnAgent.subagent", func() {
 		subagent.Run(runCtx, subagent.RunnerConfig{
-			Provider:     t.Provider,
-			AllTools:     allToolInfo,
-			Task:         args.Task,
-			AllowedTools: args.Tools,
-			Manager:      t.Manager,
-			SubAgentID:   id,
-			AgentFactory: t.AgentFactory,
-			Model:        model,
-			AgentType:    subagentType,
-			WorkingDir:   t.WorkingDir,
-			OnUsage:      t.OnUsage,
+			Provider:            t.Provider,
+			AllTools:            allToolInfo,
+			Task:                args.Task,
+			AllowedTools:        args.Tools,
+			Manager:             t.Manager,
+			SubAgentID:          id,
+			AgentFactory:        t.AgentFactory,
+			Model:               model,
+			AgentType:           subagentType,
+			WorkingDir:          t.WorkingDir,
+			OnUsage:             t.OnUsage,
+			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each sub-agent gets its own tool
 				// instances with independent WorkingDir fields. This prevents
@@ -171,12 +173,13 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 // (they coordinate sub-agent lifecycle). Only WorkingDir is agent-specific.
 func (t SpawnAgentTool) Clone() Tool {
 	return SpawnAgentTool{
-		Manager:      t.Manager,
-		Provider:     t.Provider,
-		Tools:        t.Tools,
-		AgentFactory: t.AgentFactory,
-		WorkingDir:   t.WorkingDir,
-		OnUsage:      t.OnUsage,
+		Manager:             t.Manager,
+		Provider:            t.Provider,
+		Tools:               t.Tools,
+		AgentFactory:        t.AgentFactory,
+		WorkingDir:          t.WorkingDir,
+		OnUsage:             t.OnUsage,
+		SystemPromptBuilder: t.SystemPromptBuilder,
 	}
 }
 

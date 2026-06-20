@@ -736,8 +736,22 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
 	}
-	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, b.workingDir, b.recordSessionUsage, agentFactory)
-	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, b.recordSessionUsage))
+	// Build sub-agent system prompt builder (shared by SpawnAgentTool and SkillTool)
+	subAgentPromptBuilder := func(task, agentType string) string {
+		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              b.cfg,
+			WorkingDir:       b.workingDir,
+			Registry:         b.registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return "" },
+			RemoteAgentsInfo: func() string { return "" },
+		}, task, agentType)
+	}
+
+	b.subAgentMgr = agentruntime.NewSubAgentManager(b.cfg.SubAgents, b.registry, p, b.workingDir, b.recordSessionUsage, agentFactory, subAgentPromptBuilder)
+	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, b.recordSessionUsage, subAgentPromptBuilder))
 	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager { return b.subAgentMgr }, b.workingDir, func() string {
 		if b.agent != nil {
 			return b.agent.WorkingDir()

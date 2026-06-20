@@ -449,7 +449,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if skillUsageHandler != nil {
 			skillUsageHandler(usage)
 		}
-	})
+	}, nil) // SystemPromptBuilder set later after buildCurrentSystemPrompt is defined
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)
@@ -514,6 +514,27 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
+
+	// Set the sub-agent system prompt builder on the skill tool now that
+	// buildCurrentSystemPrompt is available.
+	skillTool.SystemPromptBuilder = func(task, agentType string) string {
+		remoteAgentsInfo := ""
+		if a2aRegistry != nil {
+			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+			}
+		}
+		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              cfg,
+			WorkingDir:       workingDir,
+			Registry:         registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return gitStatus },
+			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
+		}, task, agentType)
+	}
 
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
@@ -737,6 +758,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetAutoMemory(autoMem)
 	repl.SetAutoMemoryFiles(autoFiles)
 	repl.SetProjectMemoryLoader(projectMemoryLoader)
+	repl.SetSystemPromptBuilder(func(task, agentType string) string {
+		remoteAgentsInfo := ""
+		if a2aRegistry != nil {
+			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+			}
+		}
+		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
+			Cfg:              cfg,
+			WorkingDir:       workingDir,
+			Registry:         registry,
+			CommandMgr:       commandMgr,
+			GlobalAutoMem:    autoMem,
+			ProjectAutoMem:   projectAutoMem,
+			GitStatus:        func() string { return gitStatus },
+			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
+		}, task, agentType)
+	})
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetCommandPane(registry, workingDir)

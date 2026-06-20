@@ -41,15 +41,16 @@ type SkillExecutionEvent struct {
 }
 
 type SkillTool struct {
-	Skills           SkillLookup
-	Runtime          MCPRuntime
-	Provider         provider.Provider
-	Tools            *Registry
-	AgentFactory     subagent.AgentFactory
-	WorkingDir       string // working directory to propagate to sub-agent
-	OnUsage          func(provider.TokenUsage)
-	OnSkillUsed      func(ref string)                // optional callback when a skill is loaded by the agent
-	OnSkillCompleted func(event SkillExecutionEvent) // optional callback when execution finishes
+	Skills              SkillLookup
+	Runtime             MCPRuntime
+	Provider            provider.Provider
+	Tools               *Registry
+	AgentFactory        subagent.AgentFactory
+	WorkingDir          string // working directory to propagate to sub-agent
+	OnUsage             func(provider.TokenUsage)
+	OnSkillUsed         func(ref string)                    // optional callback when a skill is loaded by the agent
+	OnSkillCompleted    func(event SkillExecutionEvent)     // optional callback when execution finishes
+	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
 }
 
 func (t SkillTool) Name() string { return "skill" }
@@ -174,15 +175,16 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 	}
 	safego.Go("tool.skill.subagent", func() {
 		subagent.Run(ctx, subagent.RunnerConfig{
-			Provider:     t.Provider,
-			AllTools:     allToolInfo,
-			Task:         task,
-			AllowedTools: cmd.AllowedTools,
-			Manager:      mgr,
-			SubAgentID:   id,
-			AgentFactory: t.AgentFactory,
-			WorkingDir:   t.WorkingDir,
-			OnUsage:      t.OnUsage,
+			Provider:            t.Provider,
+			AllTools:            allToolInfo,
+			Task:                task,
+			AllowedTools:        cmd.AllowedTools,
+			Manager:             mgr,
+			SubAgentID:          id,
+			AgentFactory:        t.AgentFactory,
+			WorkingDir:          t.WorkingDir,
+			OnUsage:             t.OnUsage,
+			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each skill sub-agent gets its own tool
 				// instances with independent WorkingDir fields.

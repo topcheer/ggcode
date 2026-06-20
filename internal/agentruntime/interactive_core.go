@@ -132,14 +132,16 @@ func NewSkillTool(
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
+	systemPromptBuilder func(task, agentType string) string,
 ) tool.SkillTool {
 	return tool.SkillTool{
-		Skills:       commandMgr,
-		Runtime:      mcpMgr,
-		Provider:     prov,
-		Tools:        registry,
-		AgentFactory: agentFactory,
-		WorkingDir:   workingDir,
-		OnUsage:      onUsage,
+		Skills:              commandMgr,
+		Runtime:             mcpMgr,
+		Provider:            prov,
+		Tools:               registry,
+		AgentFactory:        agentFactory,
+		WorkingDir:          workingDir,
+		OnUsage:             onUsage,
+		SystemPromptBuilder: systemPromptBuilder,
 	}
 }

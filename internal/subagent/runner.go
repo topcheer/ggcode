@@ -33,19 +33,20 @@ type usageHandlerSetter interface {
 
 // RunnerConfig holds everything needed to run a sub-agent.
 type RunnerConfig struct {
-	Provider     provider.Provider
-	AllTools     []ToolInfo
-	Task         string
-	AllowedTools []string
-	Manager      *Manager
-	SubAgentID   string
-	AgentFactory AgentFactory
-	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
-	Model        string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
-	AgentType    string                                                       // optional agent type hint (e.g., "Explore", "Plan")
-	WorkingDir   string                                                       // working directory for the sub-agent
-	OnStreamText func(agentID, text string)                                   // called on each text chunk for tunnel relay
-	OnUsage      func(provider.TokenUsage)                                    // optional exact-usage callback for session accounting
+	Provider            provider.Provider
+	AllTools            []ToolInfo
+	Task                string
+	AllowedTools        []string
+	Manager             *Manager
+	SubAgentID          string
+	AgentFactory        AgentFactory
+	BuildToolSet        func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
+	Model               string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
+	AgentType           string                                                       // optional agent type hint (e.g., "Explore", "Plan")
+	WorkingDir          string                                                       // working directory for the sub-agent
+	OnStreamText        func(agentID, text string)                                   // called on each text chunk for tunnel relay
+	OnUsage             func(provider.TokenUsage)                                    // optional exact-usage callback for session accounting
+	SystemPromptBuilder func(task, agentType string) string                          // optional: builds rich system prompt; falls back to simple prompt if nil
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.
@@ -87,18 +88,23 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		toolSet = cfg.BuildToolSet(cfg.AllowedTools, cfg.AllTools)
 	}
 
-	// Create independent agent with its own context manager
-	rolePrefix := "You are a sub-agent."
-	if cfg.AgentType != "" {
-		rolePrefix = fmt.Sprintf("You are a %s sub-agent.", cfg.AgentType)
-	}
-	systemPrompt := fmt.Sprintf(
-		"%s Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents. Do not use emoji with Variation Selector-16 (U+FE0F, e.g. ⚠️ ✨️ ⚙️) — use plain text instead to avoid terminal rendering issues.",
-		rolePrefix,
-		cfg.Task,
-	)
-	if cfg.WorkingDir != "" {
-		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s", cfg.WorkingDir)
+	// Build system prompt: use rich builder if available, otherwise fall back to simple prompt
+	var systemPrompt string
+	if cfg.SystemPromptBuilder != nil {
+		systemPrompt = cfg.SystemPromptBuilder(cfg.Task, cfg.AgentType)
+	} else {
+		rolePrefix := "You are a sub-agent."
+		if cfg.AgentType != "" {
+			rolePrefix = fmt.Sprintf("You are a %s sub-agent.", cfg.AgentType)
+		}
+		systemPrompt = fmt.Sprintf(
+			"%s Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents.",
+			rolePrefix,
+			cfg.Task,
+		)
+		if cfg.WorkingDir != "" {
+			systemPrompt += fmt.Sprintf("\n\nWorking directory: %s", cfg.WorkingDir)
+		}
 	}
 	if cfg.AgentFactory == nil {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))

@@ -84,7 +84,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil))
+	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil, nil))
 	acpClientMgr := agentruntime.NewACPClientManager(workingDir, policy, func(_ context.Context, _ string, _ string) permission.Decision {
 		return permission.Deny
 	})

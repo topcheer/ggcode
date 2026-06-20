@@ -67,18 +67,20 @@ func NewSubAgentManager(
 	workingDir string,
 	onUsage func(provider.TokenUsage),
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
+	systemPromptBuilder func(task, agentType string) string,
 ) *subagent.Manager {
 	mgr := subagent.NewManager(subCfg)
 	if registry == nil || prov == nil || agentFactory == nil {
 		return mgr
 	}
 	_ = registry.Register(tool.SpawnAgentTool{
-		Manager:      mgr,
-		Provider:     prov,
-		Tools:        registry,
-		AgentFactory: agentFactory,
-		WorkingDir:   workingDir,
-		OnUsage:      onUsage,
+		Manager:             mgr,
+		Provider:            prov,
+		Tools:               registry,
+		AgentFactory:        agentFactory,
+		WorkingDir:          workingDir,
+		OnUsage:             onUsage,
+		SystemPromptBuilder: systemPromptBuilder,
 	})
 	_ = registry.Register(tool.WaitAgentTool{Manager: mgr})
 	_ = registry.Register(tool.ListAgentsTool{Manager: mgr})

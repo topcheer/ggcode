@@ -56,9 +56,10 @@ type REPL struct {
 	skillsChangedHook   func()
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
-	webuiAddr           string // webui listen address
-	webuiToken          string // webui auth token, displayed in URL fragment
-	knightStartupHint   string // one-time hint shown at startup (e.g. lock conflict)
+	systemPromptBuilder func(task, agentType string) string // builds rich prompt for sub-agents
+	webuiAddr           string                              // webui listen address
+	webuiToken          string                              // webui auth token, displayed in URL fragment
+	knightStartupHint   string                              // one-time hint shown at startup (e.g. lock conflict)
 	metricCollector     *metrics.Collector
 	metricCancel        context.CancelFunc
 }
@@ -269,6 +270,12 @@ func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
 	})
 }
 
+// SetSystemPromptBuilder sets the function used to build rich system prompts for sub-agents.
+// Must be called before SetSubAgentManager.
+func (r *REPL) SetSystemPromptBuilder(fn func(task, agentType string) string) {
+	r.systemPromptBuilder = fn
+}
+
 // SetSubAgentManager wires the sub-agent manager and registers sub-agent tools.
 func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider, tools *tool.Registry) {
 	r.model.SetSubAgentManager(mgr)
@@ -278,12 +285,13 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	}
 
 	tools.Register(tool.SpawnAgentTool{
-		Manager:      mgr,
-		Provider:     prov,
-		Tools:        tools,
-		AgentFactory: factory,
-		WorkingDir:   r.model.agent.WorkingDir(),
-		OnUsage:      r.recordSessionUsage,
+		Manager:             mgr,
+		Provider:            prov,
+		Tools:               tools,
+		AgentFactory:        factory,
+		WorkingDir:          r.model.agent.WorkingDir(),
+		OnUsage:             r.recordSessionUsage,
+		SystemPromptBuilder: r.systemPromptBuilder,
 	})
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})
