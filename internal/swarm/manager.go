@@ -349,11 +349,15 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	}
 
 	// Build system prompt: use rich builder if available, otherwise fall back to simple prompt
+	m.mu.Lock()
+	builder := m.systemPromptBuilder
+	wd := m.workingDir
+	m.mu.Unlock()
 	var systemPrompt string
-	if m.systemPromptBuilder != nil {
-		systemPrompt = m.systemPromptBuilder(name, team.Name, m.workingDir)
+	if builder != nil {
+		systemPrompt = builder(name, team.Name, wd)
 	} else {
-		systemPrompt = buildTeammateSystemPrompt(name, team.Name, m.workingDir)
+		systemPrompt = buildTeammateSystemPrompt(name, team.Name, wd)
 	}
 	var agent AgentRunner
 	if m.agentFactory != nil {
@@ -533,13 +537,17 @@ func (m *Manager) SetOnUpdate(fn func(Event)) {
 
 // SetWorkingDir sets the working directory injected into teammate system prompts.
 func (m *Manager) SetWorkingDir(dir string) {
+	m.mu.Lock()
 	m.workingDir = dir
+	m.mu.Unlock()
 }
 
 // SetSystemPromptBuilder sets a function that builds a rich system prompt for
 // teammates with full project context. When not set, a minimal prompt is used.
 func (m *Manager) SetSystemPromptBuilder(fn func(name, teamName, workingDir string) string) {
+	m.mu.Lock()
 	m.systemPromptBuilder = fn
+	m.mu.Unlock()
 }
 
 // GetTeammateResult returns the most recent task output for a teammate.

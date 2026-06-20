@@ -828,6 +828,8 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	toolBuilder := func(allowedTools []string) interface{} {
 		reg := tool.NewRegistry()
 		_ = tool.RegisterBuiltinTools(reg, nil, b.workingDir)
+		// Teammates cannot interact with the user directly.
+		reg.Unregister("ask_user")
 		return reg
 	}
 	b.swarmMgr = agentruntime.NewSwarmManager(b.cfg.Swarm, p, b.registry, nil, swarmFactory, toolBuilder)

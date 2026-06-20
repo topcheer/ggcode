@@ -449,7 +449,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if skillUsageHandler != nil {
 			skillUsageHandler(usage)
 		}
-	}, nil) // SystemPromptBuilder set later after buildCurrentSystemPrompt is defined
+	}, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)
@@ -469,8 +469,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 	}
-	_ = registry.Register(skillTool)
-	trace.Mark("register skill tool")
 
 	var subMgr *subagent.Manager
 
@@ -531,10 +529,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			CommandMgr:       commandMgr,
 			GlobalAutoMem:    autoMem,
 			ProjectAutoMem:   projectAutoMem,
-			GitStatus:        func() string { return gitStatus },
+			GitStatus:        func() string { return detectGitStatus(workingDir) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	}
+
+	// Register skill tool now that SystemPromptBuilder is set (must be before
+	// any registry.Clone() for sub-agent/teammate tool isolation).
+	_ = registry.Register(skillTool)
+	trace.Mark("register skill tool")
 
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
@@ -812,7 +815,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return a
 	}
 	swarmToolBuilder := func(_ []string) interface{} {
-		return registry.Clone() // each teammate gets independent tool instances
+		cloned := registry.Clone() // each teammate gets independent tool instances
+		// Teammates cannot interact with the user directly.
+		cloned.Unregister("ask_user")
+		return cloned
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())
@@ -831,7 +837,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			CommandMgr:       commandMgr,
 			GlobalAutoMem:    autoMem,
 			ProjectAutoMem:   projectAutoMem,
-			GitStatus:        func() string { return gitStatus },
+			GitStatus:        func() string { return detectGitStatus(wd) },
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, name, teamName, wd)
 	})

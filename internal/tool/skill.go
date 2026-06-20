@@ -329,14 +329,15 @@ func skillScopeForCommand(cmd *commands.Command) string {
 // Only WorkingDir is agent-specific.
 func (t SkillTool) Clone() Tool {
 	return SkillTool{
-		Skills:           t.Skills,
-		Runtime:          t.Runtime,
-		Provider:         t.Provider,
-		Tools:            t.Tools,
-		AgentFactory:     t.AgentFactory,
-		WorkingDir:       t.WorkingDir,
-		OnUsage:          t.OnUsage,
-		OnSkillUsed:      t.OnSkillUsed,
-		OnSkillCompleted: t.OnSkillCompleted,
+		Skills:              t.Skills,
+		Runtime:             t.Runtime,
+		Provider:            t.Provider,
+		Tools:               t.Tools,
+		AgentFactory:        t.AgentFactory,
+		WorkingDir:          t.WorkingDir,
+		OnUsage:             t.OnUsage,
+		OnSkillUsed:         t.OnSkillUsed,
+		OnSkillCompleted:    t.OnSkillCompleted,
+		SystemPromptBuilder: t.SystemPromptBuilder,
 	}
 }

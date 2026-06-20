@@ -146,6 +146,8 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 				// data races when multiple sub-agents run concurrently in
 				// different worktrees.
 				cloned := tools.Clone()
+				// Always remove interactive tools — sub-agents have no user to interact with.
+				cloned.Unregister("ask_user")
 				if len(allowedTools) == 0 {
 					// Remove agent lifecycle tools from sub-agent's set
 					cloned.Unregister("spawn_agent")
