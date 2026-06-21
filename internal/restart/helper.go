@@ -41,9 +41,10 @@ type HelperRequest struct {
 //  4. Launches a fresh ggcode instance
 //
 // The helper is the ggcode binary itself running with the hidden
-// "restart-helper" subcommand. It detaches into its own session via
-// setsid (Unix) or CREATE_NEW_PROCESS_GROUP (Windows) so it never
-// becomes an orphaned child — it owns the terminal after the parent exits.
+// "restart-helper" subcommand. It detaches into a separate process
+// group (Setpgid on Unix, CREATE_NEW_PROCESS_GROUP on Windows) so it
+// won't receive signals sent to the parent's group, but it stays in
+// the same session to retain terminal access.
 //
 // After calling this function, the caller should perform its normal
 // shutdown (tea.Quit, terminal restore, release locks) and exit.
@@ -84,11 +85,12 @@ func RestartWithHelper(req HelperRequest) error {
 	cmd := exec.Command(req.Binary, helperArgs...)
 	cmd.Dir = req.WorkDir
 	cmd.Env = req.Env
-	// Detach stdio — the helper must not share the parent's terminal
-	// so it doesn't get SIGHUP when the parent exits.
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Inherit the parent's stdio (the terminal). The helper needs these fds
+	// to pass to the new ggcode process via syscall.Exec. Without terminal
+	// access, the new process cannot enter raw mode and will exit immediately.
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := detachHelper(cmd); err != nil {
 		return fmt.Errorf("launch restart helper: %w", err)

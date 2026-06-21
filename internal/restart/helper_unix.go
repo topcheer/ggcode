@@ -12,13 +12,14 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// detachHelper starts the helper process in a new session (setsid) so it
-// is completely independent of the parent. The helper will not receive
-// SIGHUP when the parent exits, and it can acquire the terminal after the
-// parent releases it.
+// detachHelper starts the helper in a separate process group (Setpgid)
+// so it won't receive signals sent to the parent's process group (e.g.
+// ctrl+C, SIGINT). Crucially, we do NOT use Setsid — that would create a
+// new session and detach the controlling terminal, making it impossible
+// for the helper (and the new ggcode it execs) to enter raw mode.
 func detachHelper(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true,
+		Setpgid: true,
 	}
 	return cmd.Start()
 }
@@ -42,20 +43,12 @@ func waitForProcess(pid int) error {
 // process has exited. The parent's TUI restore may not have taken full
 // effect because the process group teardown is asynchronous.
 func resetTerminal() {
-	// Run "stty sane" on the controlling terminal.
-	// The helper inherited the terminal from the session, so /dev/tty
-	// should be available.
-	tty, err := os.Open("/dev/tty")
-	if err != nil {
-		debug.Log("restart-helper", "resetTerminal: cannot open /dev/tty: %v (continuing)", err)
-		return
-	}
-	defer tty.Close()
-
 	// stty sane resets cooked mode, echo, etc.
+	// The helper inherited stdin/stdout from the parent, which is the
+	// terminal — use it directly instead of opening /dev/tty.
 	stty := exec.Command("stty", "sane")
-	stty.Stdin = tty
-	stty.Stdout = tty
+	stty.Stdin = os.Stdin
+	stty.Stdout = os.Stdout
 	stty.Stderr = nil
 	_ = stty.Run()
 
@@ -79,25 +72,15 @@ func replaceBinary(target, staged string) error {
 }
 
 // launchTarget uses syscall.Exec to replace the helper process with the
-// new ggcode instance. This ensures the new process inherits the session
-// leader role and terminal control established by the helper.
+// new ggcode instance. Since the helper inherited the terminal stdio from
+// the parent, fds 0/1/2 are already connected to the terminal — no dup2
+// needed. syscall.Exec preserves them automatically.
 func launchTarget(req HelperRequest) error {
 	debug.Log("restart-helper", "exec: %s %v", req.Binary, req.Args)
 
-	// Open the terminal for the new process.
-	// syscall.Exec preserves file descriptors, so we need to make sure
-	// stdin/stdout/stderr are connected to the tty.
-	tty, err := os.Open("/dev/tty")
-	if err != nil {
-		// Fallback: if /dev/tty is not available, use whatever stdin we have.
-		tty = os.Stdin
-	}
-
-	// Ensure fd 0,1,2 point to the terminal.
-	if tty.Fd() != 0 {
-		syscall.Dup2(int(tty.Fd()), 0)
-		syscall.Dup2(int(tty.Fd()), 1)
-		syscall.Dup2(int(tty.Fd()), 2)
+	// Change to the working directory before exec.
+	if req.WorkDir != "" {
+		_ = os.Chdir(req.WorkDir)
 	}
 
 	execArgs := append([]string{req.Binary}, req.Args...)
