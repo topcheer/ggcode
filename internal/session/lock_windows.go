@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"syscall"
 	"unsafe"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 var (
@@ -70,7 +72,8 @@ func (l *SessionLock) HolderPID() int {
 	return l.holderPID
 }
 
-// Release releases the session lock and closes the underlying file handle.
+// Release releases the session lock, closes the underlying file handle,
+// and removes the lock file.
 func (l *SessionLock) Release() {
 	if l == nil || l.holderPID != 0 || l.file == nil {
 		return
@@ -78,22 +81,34 @@ func (l *SessionLock) Release() {
 	unlockFileEx(syscall.Handle(l.file.Fd()), 1, 0)
 	l.file.Close()
 	l.file = nil
+
+	// Best-effort: remove the lock file so it doesn't linger.
+	lockPath := LockFilePath(l.storeDir, l.sessionID)
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		debug.Log("session-lock", "failed to remove lock file %s: %v", lockPath, err)
+	}
 }
 
 // IsSessionLocked checks if a session is locked by another process.
+// If a stale lock file exists (no active lock), it is silently removed.
 func IsSessionLocked(storeDir, sessionID string) bool {
 	lockPath := LockFilePath(storeDir, sessionID)
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0o600)
 	if err != nil {
 		return false
 	}
-	defer f.Close()
 
 	err = lockFileEx(syscall.Handle(f.Fd()), lockfileExclusiveLock|lockfileFailImmediately, 0, 1, 0)
 	if err != nil {
+		f.Close()
 		return true
 	}
 	unlockFileEx(syscall.Handle(f.Fd()), 1, 0)
+	f.Close()
+
+	// We acquired the lock — the file is stale (no process holds it).
+	// Clean it up so lock files don't accumulate.
+	_ = os.Remove(lockPath)
 	return false
 }
 

@@ -598,6 +598,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("create session store")
 
+	// Clean up stale lock files from crashed/killed processes.
+	storeDir, _ := session.DefaultDir()
+	session.CleanupStaleLocks(storeDir)
+
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
