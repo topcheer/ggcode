@@ -939,8 +939,9 @@ func (f *fakeMCPManager) Uninstall(name string) bool {
 	return true
 }
 
-func (f *fakeMCPManager) Disconnect(name string) bool { return true }
-func (f *fakeMCPManager) Reconnect(name string) bool  { return true }
+func (f *fakeMCPManager) Disconnect(name string) bool  { return true }
+func (f *fakeMCPManager) Reconnect(name string) bool   { return true }
+func (f *fakeMCPManager) ForceReauth(name string) bool { return true }
 func (f *fakeMCPManager) PendingOAuth() *plugin.MCPOAuthRequiredError {
 	return nil
 }

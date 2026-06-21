@@ -62,6 +62,10 @@ type MCPPlugin struct {
 	lastError     string
 	prompts       []string
 	resources     []string
+
+	// forceReauthPending signals Connect() to call ForceReauth on the new
+	// OAuthHandler so it skips the canonical (shared) credential fallback.
+	forceReauthPending bool
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -85,6 +89,15 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.mu.RUnlock()
 
 	client := mcp.NewClientFromConfig(m.cfg)
+	m.mu.Lock()
+	forceReauth := m.forceReauthPending
+	m.forceReauthPending = false // one-shot: clear immediately
+	m.mu.Unlock()
+	if forceReauth && client != nil {
+		// New client was just created — tell its OAuthHandler to skip
+		// the canonical credential so a fresh OAuth flow triggers.
+		_ = client.ForceReauth()
+	}
 	if err := client.Start(ctx); err != nil {
 		m.mu.Lock()
 		m.status = MCPStatusFailed
@@ -543,6 +556,49 @@ func (m *MCPManager) Reconnect(name string) bool {
 		}
 		pluginCopy := plugin
 		safego.Go("plugin.mcp.reconnect", func() { m.connectOne(context.Background(), pluginCopy) })
+		return true
+	}
+	return false
+}
+
+// ForceReauth disconnects the server and marks it to skip the canonical
+// (shared) credential on next connect. The new client's OAuthHandler will
+// find no valid token and trigger a fresh OAuth flow.
+func (m *MCPManager) ForceReauth(name string) bool {
+	m.mu.RLock()
+	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	m.mu.RUnlock()
+	for _, p := range plugins {
+		if p.Name() != name {
+			continue
+		}
+
+		// 1. Unregister old tools so stale descriptions (e.g. embedded
+		//    accountId) don't survive the reconnect.
+		p.mu.RLock()
+		oldToolNames := p.Info().ToolNames
+		p.mu.RUnlock()
+		for _, toolName := range oldToolNames {
+			m.registry.Unregister(toolName)
+		}
+
+		// 2. Disconnect: close old client, clear adapter so Connect() creates new ones.
+		p.mu.Lock()
+		if p.client != nil {
+			_ = p.client.Close()
+			p.client = nil
+		}
+		p.adapter = nil
+		p.connected = false
+		p.awaitingOAuth = true
+		p.forceReauthPending = true
+		p.mu.Unlock()
+
+		// 3. Reconnect — Connect() will create a new client/handler, call
+		//    ForceReauth() on it (skipCanonical=true), find no credential,
+		//    and return OAuthRequiredError to trigger the auth flow.
+		pCopy := p
+		safego.Go("plugin.mcp.reauth", func() { m.connectOne(context.Background(), pCopy) })
 		return true
 	}
 	return false

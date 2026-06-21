@@ -30,6 +30,8 @@ export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;
 
 export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<string>>;
 
+export function ForceReauthMCPServer(arg1:string):Promise<boolean>;
+
 export function GetAvailableModels():Promise<Array<string>>;
 
 export function GetConfig():Promise<wailskit.FullConfig>;

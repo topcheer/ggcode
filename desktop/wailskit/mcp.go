@@ -96,6 +96,18 @@ func ReconnectMCPServer(name string) bool {
 	return chat.mcpManager.Reconnect(name)
 }
 
+// ForceReauthMCPServer deletes the server-name-specific OAuth credential and
+// triggers a reconnect. The next request will start a fresh OAuth flow.
+func ForceReauthMCPServer(name string) bool {
+	globalMu.RLock()
+	chat := activeChatBridge
+	globalMu.RUnlock()
+	if chat == nil || chat.mcpManager == nil {
+		return false
+	}
+	return chat.mcpManager.ForceReauth(name)
+}
+
 // AddMCPServer adds a new MCP server configuration.
 // The values map may contain:
 //   - "name" (required): server name

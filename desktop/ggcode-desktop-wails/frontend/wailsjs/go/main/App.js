@@ -54,6 +54,10 @@ export function FetchModels(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['FetchModels'](arg1, arg2, arg3, arg4);
 }
 
+export function ForceReauthMCPServer(arg1) {
+  return window['go']['main']['App']['ForceReauthMCPServer'](arg1);
+}
+
 export function GetAvailableModels() {
   return window['go']['main']['App']['GetAvailableModels']();
 }

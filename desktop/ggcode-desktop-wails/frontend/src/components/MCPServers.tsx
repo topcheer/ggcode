@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi, RefreshCw, Power } from 'lucide-react'
+import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi, RefreshCw, Power, KeyRound } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 import { useTranslation } from '../i18n'
@@ -163,6 +163,15 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
   const handleReconnect = async (name: string) => {
     try {
       await App.ReconnectMCPServer(name)
+      await loadServers()
+    } catch {}
+  }
+
+  const handleForceReauth = async (name: string) => {
+    try {
+      await App.ForceReauthMCPServer(name)
+      // After resetting credentials, if the server needs OAuth it will show
+      // the oauthRequired banner automatically on next status update.
       await loadServers()
     } catch {}
   }
@@ -417,6 +426,12 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--text-tertiary)', padding: 4,
                 }}><RefreshCw size={14} /></button>
+                {(server.type === 'http' || server.type === 'ws' || server.url) && (
+                  <button onClick={() => handleForceReauth(server.name)} title="Reset OAuth (switch account)" style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--text-tertiary)', padding: 4,
+                  }}><KeyRound size={14} /></button>
+                )}
                 <button onClick={() => handleRemove(server.name)} title="Remove" style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--text-tertiary)', padding: 4,

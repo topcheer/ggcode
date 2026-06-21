@@ -83,10 +83,11 @@ type OAuthHandler struct {
 	httpClient *http.Client
 	store      *auth.Store
 
-	mu          sync.Mutex
-	state       *oauthState
-	callbackCh  chan oauthCallbackResult
-	callbackSrv *http.Server
+	mu            sync.Mutex
+	state         *oauthState
+	callbackCh    chan oauthCallbackResult
+	callbackSrv   *http.Server
+	skipCanonical bool // set by ForceReauth to skip shared credential fallback
 }
 
 // NewOAuthHandler creates a new OAuth handler for an MCP server.
@@ -139,14 +140,18 @@ func (h *OAuthHandler) canonicalResource() string {
 	return normalizeOAuthIdentity(h.serverURL)
 }
 
+// providerIDCandidates returns the ordered list of provider IDs to try when
+// loading a stored token. The priority is:
+//
+//  1. Server-name key (mcp:<serverName>) — allows per-server isolation
+//     so that two MCP servers with the same URL can hold different credentials.
+//  2. Canonical key (mcp-shared:<issuer>|<resource>) — shared fallback for
+//     servers that haven't been individually authenticated.
 func (h *OAuthHandler) providerIDCandidates() []string {
 	out := make([]string, 0, 2)
+	out = append(out, h.legacyProviderID()) // server-name first
 	if canonical := h.canonicalProviderID(); canonical != "" {
 		out = append(out, canonical)
-	}
-	legacy := h.legacyProviderID()
-	if legacy != "" {
-		out = append(out, legacy)
 	}
 	return out
 }
@@ -171,7 +176,13 @@ func normalizeOAuthIdentity(raw string) string {
 }
 
 func (h *OAuthHandler) loadStoredInfo() (*auth.Info, string, error) {
+	h.mu.Lock()
+	skip := h.skipCanonical
+	h.mu.Unlock()
 	for _, key := range h.providerIDCandidates() {
+		if skip && strings.HasPrefix(key, "mcp-shared:") {
+			continue
+		}
 		info, err := h.store.Load(key)
 		if err != nil || info == nil {
 			if err != nil {
@@ -220,17 +231,12 @@ func (h *OAuthHandler) hydrateStateFromInfo(info *auth.Info) {
 // the token has a few minutes left (the 5-minute IsExpired() buffer caused
 // tokens to be discarded too early, requiring re-auth every time).
 func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
-	info, sourceKey, err := h.loadStoredInfo()
+	info, _, err := h.loadStoredInfo()
 	if err != nil || info == nil {
 		return "", nil
 	}
 	h.hydrateStateFromInfo(info)
 	if !info.IsExpired() {
-		if canonical := h.canonicalProviderID(); canonical != "" && canonical != sourceKey {
-			copy := *info
-			copy.ProviderID = canonical
-			_ = h.store.Save(&copy)
-		}
 		return info.AccessToken, nil
 	}
 	// Token is near-expiry or expired. Try refresh if we have a refresh token.
@@ -311,10 +317,25 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 			info.RefreshToken = old.RefreshToken
 		}
 	}
+	// Save refreshed token under server-name key.
+	info.ProviderID = h.legacyProviderID()
 	if err := h.store.Save(info); err != nil {
 		return nil, err
 	}
+	// Do NOT update canonical key on refresh — it might hold a different
+	// credential. Only SaveToken (initial auth) seeds the canonical key.
 	return info, nil
+}
+
+// DeleteServerToken removes only the server-name-specific credential and marks
+// the handler to skip the canonical (shared) fallback on the next load. This
+// forces a fresh OAuth flow even when a valid shared credential exists. The
+// flag is cleared once a new token is saved via SaveToken.
+func (h *OAuthHandler) DeleteServerToken() error {
+	h.mu.Lock()
+	h.skipCanonical = true
+	h.mu.Unlock()
+	return h.store.Delete(h.legacyProviderID())
 }
 
 // Handle401 processes a 401 response. Returns true if OAuth is needed.
@@ -614,11 +635,35 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	if len(scopes) > 0 {
 		params.Set("scope", strings.Join(scopes, " "))
 	}
-	if h.serverURL != "" {
+	// The authorization_endpoint may already contain query params (e.g. Railway
+	// embeds ?resource=backboard.railway.com). Parse it and merge so we don't
+	// produce duplicate keys or double-? malformed URLs.
+	parsed, err := url.Parse(authEndpoint)
+	if err != nil {
+		return "", fmt.Errorf("parsing authorization endpoint: %w", err)
+	}
+	baseQuery := parsed.Query()
+
+	// If the endpoint already specifies a resource, it takes priority over our
+	// own serverURL-derived value — the authorization server knows what resource
+	// indicator it expects (RFC 8707).
+	if _, ok := baseQuery["resource"]; ok {
+		params.Del("resource")
+	}
+	if h.serverURL != "" && !params.Has("resource") {
 		params.Set("resource", h.serverURL)
 	}
 
-	return authEndpoint + "?" + params.Encode(), nil
+	// Merge any remaining endpoint params that we haven't already set.
+	for key, values := range baseQuery {
+		if !params.Has(key) {
+			for _, v := range values {
+				params.Add(key, v)
+			}
+		}
+	}
+	parsed.RawQuery = params.Encode()
+	return parsed.String(), nil
 }
 
 func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oauthCallbackResult, *http.Server, error) {
@@ -748,9 +793,36 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 }
 
 // SaveToken persists the token response to the auth store.
+// It always saves under the server-name key (mcp:<serverName>), enabling
+// per-server credential isolation. If the canonical (shared) key does not
+// yet exist, the token is also saved there so that other servers with the
+// same OAuth issuer can reuse it without a separate auth flow. If the
+// canonical key already exists, it is left untouched.
 func (h *OAuthHandler) SaveToken(tokenResp *TokenResponse) error {
 	info := h.buildAuthInfo(tokenResp)
-	return h.store.Save(info)
+
+	// Always save under server-name key.
+	serverKey := h.legacyProviderID()
+	info.ProviderID = serverKey
+	if err := h.store.Save(info); err != nil {
+		return err
+	}
+
+	// Clear the skipCanonical flag — we now have a server-name credential.
+	h.mu.Lock()
+	h.skipCanonical = false
+	h.mu.Unlock()
+
+	// If canonical key doesn't exist yet, also save there (seed the global).
+	if canonical := h.canonicalProviderID(); canonical != "" && canonical != serverKey {
+		existing, _ := h.store.Load(canonical)
+		if existing == nil {
+			infoCopy := *info
+			infoCopy.ProviderID = canonical
+			_ = h.store.Save(&infoCopy)
+		}
+	}
+	return nil
 }
 
 func (h *OAuthHandler) buildAuthInfo(tokenResp *TokenResponse) *auth.Info {

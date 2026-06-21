@@ -369,6 +369,7 @@ type mcpManager interface {
 	Uninstall(name string) bool
 	Disconnect(name string) bool
 	Reconnect(name string) bool
+	ForceReauth(name string) bool
 	PendingOAuth() *plugin.MCPOAuthRequiredError
 	ClearPendingOAuth()
 }

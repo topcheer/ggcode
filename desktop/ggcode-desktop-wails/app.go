@@ -748,6 +748,12 @@ func (a *App) ReconnectMCPServer(name string) bool {
 	return wailskit.ReconnectMCPServer(name)
 }
 
+// ForceReauthMCPServer deletes the per-server OAuth credential and triggers
+// a fresh OAuth flow for the named MCP server.
+func (a *App) ForceReauthMCPServer(name string) bool {
+	return wailskit.ForceReauthMCPServer(name)
+}
+
 func (a *App) StartMCPOAuth(name string) (*wailskit.MCPOAuthStartResult, error) {
 	if a.chat == nil {
 		return nil, fmt.Errorf("chat not initialized")

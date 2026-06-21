@@ -169,7 +169,7 @@ func (m Model) renderMCPPanel() string {
 		body = append(body,
 			" Press i to install a new MCP server.",
 			" Press b to install the built-in Playwright browser automation preset.",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Space toggle • Enter/r reconnect • i install • b browser • x uninstall • Esc close"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Space toggle • Enter/r reconnect • a reset auth • i install • b browser • x uninstall • Esc close"),
 		)
 	}
 	if panel.message != "" {
@@ -266,6 +266,20 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "b", "B":
 		panel.message = m.t("panel.mcp.installing_browser_preset")
 		return *m, m.installMCPServer(mcp.BrowserAutomationInstallSpec)
+	case "a", "A":
+		if len(m.mcpServers) == 0 {
+			break
+		}
+		if m.mcpManager == nil {
+			panel.message = m.t("panel.mcp.reconnect_unavailable")
+			break
+		}
+		name := m.mcpServers[panel.selected].Name
+		if m.mcpManager.ForceReauth(name) {
+			panel.message = fmt.Sprintf(" Reset credentials for %s — reconnecting...", name)
+		} else {
+			panel.message = fmt.Sprintf(" %s: no OAuth handler (not an HTTP/WS server?)", name)
+		}
 	case "x", "X", "u", "U":
 		if len(m.mcpServers) == 0 {
 			break

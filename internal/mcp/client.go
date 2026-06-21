@@ -272,6 +272,19 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// ForceReauth deletes the server-name-specific OAuth credential (if any),
+// leaving the canonical (shared) credential untouched. The next request will
+// get a 401 and trigger a fresh OAuth flow bound to this server name.
+func (c *Client) ForceReauth() error {
+	c.mu.Lock()
+	handler := c.oauthHandler
+	c.mu.Unlock()
+	if handler == nil {
+		return nil
+	}
+	return handler.DeleteServerToken()
+}
+
 func (c *Client) Abort() {
 	c.abortOnce.Do(func() {
 		wsConn := c.wsConn
