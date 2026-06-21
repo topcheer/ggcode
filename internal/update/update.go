@@ -196,6 +196,38 @@ func (s *Service) LaunchHelper(prepared PreparedUpdate) error {
 	return cmd.Start()
 }
 
+// ApplyBinary replaces the binary files directly without spawning a helper
+// process or starting a new instance. This is used on Unix where the running
+// binary can be overwritten in place. After ApplyBinary returns, the caller
+// should use restart.ExecSelf (syscall.Exec) to load the new binary, keeping
+// the same PID, process group, and terminal control.
+func (s *Service) ApplyBinary(prepared PreparedUpdate) error {
+	data, err := os.ReadFile(prepared.ManifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	var manifest HelperManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse manifest: %w", err)
+	}
+	sourceData, err := os.ReadFile(manifest.SourceBinary)
+	if err != nil {
+		return fmt.Errorf("read staged binary: %w", err)
+	}
+	for _, target := range manifest.TargetPaths {
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("create target dir for %s: %w", target, err)
+		}
+		// On Unix, the running binary can be overwritten directly — no retry needed.
+		if err := install.WriteExecutable(target, sourceData); err != nil {
+			return fmt.Errorf("replace %s: %w", target, err)
+		}
+	}
+	_ = os.Remove(manifest.SourceBinary)
+	_ = os.Remove(prepared.ManifestPath)
+	return nil
+}
+
 func RunHelper(manifestPath string) error {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {

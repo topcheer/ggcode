@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/util"
+	"runtime"
 	"strings"
 	"time"
 
@@ -115,9 +116,24 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 		m.chatWriteSystem(nextSystemID(), m.t("update.failed", msg.Err))
 		return m, nil
 	}
-	if err := m.updateSvc.LaunchHelper(msg.Prepared); err != nil {
-		m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
-		return m, nil
+	// On Unix, replace the binary directly and use execRestart (syscall.Exec)
+	// to keep the same PID, process group, and terminal control. This avoids
+	// the "error entering raw mode: input/output error" that occurs when a
+	// helper-spawned grandchild tries to enter raw mode in an orphaned
+	// process group.
+	//
+	// On Windows, use the helper process (running binary can't be overwritten).
+	if runtime.GOOS != "windows" {
+		if err := m.updateSvc.ApplyBinary(msg.Prepared); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
+			return m, nil
+		}
+		m.restartRequested = true
+	} else {
+		if err := m.updateSvc.LaunchHelper(msg.Prepared); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
+			return m, nil
+		}
 	}
 	// Detect other installations and warn if they might shadow this one.
 	if others := update.FindOtherInstalls(m.updateSvc.ExecPath); len(others) > 0 {
