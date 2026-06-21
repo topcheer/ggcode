@@ -1219,7 +1219,7 @@ loop:
 	}
 
 	if daemonRestartRequested {
-		// Self-restart: replace this process with a fresh ggcode daemon.
+		// Self-restart via detached helper process.
 		binary, err := restart.ResolveBinary()
 		if err != nil {
 			return fmt.Errorf("restart: resolve binary: %w", err)
@@ -1239,7 +1239,6 @@ loop:
 		if bypass {
 			args = append(args, "--bypass")
 		}
-		execArgs := append([]string{binary}, args...)
 
 		// If /restart debug was requested, inject GGCODE_DEBUG=1
 		env := os.Environ()
@@ -1248,21 +1247,16 @@ loop:
 			env = append(env, "GGCODE_DEBUG=1")
 		}
 
-		debug.Log("daemon", "restart exec %s", strings.Join(execArgs, " "))
-		if runtime.GOOS == "windows" {
-			// Windows doesn't support syscall.Exec — start new process and exit.
-			restartCmd := exec.Command(binary, args...)
-			restartCmd.Stdin = os.Stdin
-			restartCmd.Stdout = os.Stdout
-			restartCmd.Stderr = os.Stderr
-			restartCmd.Env = env
-			if err := restartCmd.Start(); err != nil {
-				fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
-				return nil
-			}
-			os.Exit(0)
+		debug.Log("daemon", "restart via helper: %s %v", binary, args)
+		if err := restart.RestartWithHelper(restart.HelperRequest{
+			Binary:  binary,
+			Args:    args,
+			WorkDir: workingDir,
+			Env:     env,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
 		}
-		return syscall.Exec(binary, execArgs, env)
+		return nil
 	}
 
 	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\r\n")

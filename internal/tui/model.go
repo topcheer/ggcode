@@ -87,6 +87,7 @@ type Model struct {
 	quitting                        bool
 	restartRequested                bool
 	restartDebug                    bool
+	updatePrepared                  *update.PreparedUpdate // set by /update before restart
 	tmuxExecRequested               bool
 	tmuxExecSession                 string
 	tmuxExecSetupLayout             string

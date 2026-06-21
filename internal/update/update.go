@@ -68,6 +68,20 @@ type HelperManifest struct {
 	ExpectedVersion string   `json:"expected_version"`
 }
 
+// ReadStagedBinary reads a manifest file and returns the path to the staged
+// (downloaded) binary. Used by the restart helper to know which file to install.
+func ReadStagedBinary(manifestPath string) (string, error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("read manifest: %w", err)
+	}
+	var manifest HelperManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("parse manifest: %w", err)
+	}
+	return manifest.SourceBinary, nil
+}
+
 type cachedCheck struct {
 	CurrentVersion string    `json:"current_version"`
 	LatestVersion  string    `json:"latest_version"`

@@ -29,6 +29,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -173,6 +174,35 @@ func NewRootCmd() *cobra.Command {
 	}
 	helperCmd.Flags().StringVar(&helperManifest, "manifest", "", "update manifest path")
 	cmd.AddCommand(helperCmd)
+
+	// restart-helper subcommand: runs inside the detached helper process
+	// that waits for the parent to exit, optionally replaces the binary,
+	// and launches a fresh ggcode instance.
+	var restartPID int
+	var restartBinary, restartWorkdir, restartStaged string
+	var restartArgs []string
+	restartHelperCmd := &cobra.Command{
+		Use:    "restart-helper",
+		Short:  "Internal restart helper",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := restart.HelperRequest{
+				ParentPID:    restartPID,
+				Binary:       restartBinary,
+				WorkDir:      restartWorkdir,
+				StagedBinary: restartStaged,
+				Args:         restartArgs,
+				Env:          os.Environ(),
+			}
+			return restart.RunHelper(req)
+		},
+	}
+	restartHelperCmd.Flags().IntVar(&restartPID, "pid", 0, "parent PID to wait for")
+	restartHelperCmd.Flags().StringVar(&restartBinary, "binary", "", "ggcode binary to launch")
+	restartHelperCmd.Flags().StringVar(&restartWorkdir, "workdir", "", "working directory")
+	restartHelperCmd.Flags().StringVar(&restartStaged, "staged-binary", "", "staged binary to replace target (optional)")
+	restartHelperCmd.Flags().StringArrayVar(&restartArgs, "args", nil, "arguments for the new ggcode process")
+	cmd.AddCommand(restartHelperCmd)
 
 	// version subcommand — outputs version string and exits immediately.
 	// Used by installers, package managers, and cross-install detection.
