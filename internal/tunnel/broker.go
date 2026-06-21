@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -43,7 +44,7 @@ type Broker struct {
 	// TCP/WebSocket guarantees ordered delivery.
 	outMu    sync.Mutex
 	outCond  *sync.Cond
-	outbound []GatewayMessage // unbounded queue: enqueue never blocks
+	outbound []GatewayMessage // soft-capped queue (maxOutbound)
 	outDone  chan struct{}
 	stopOnce sync.Once
 
@@ -697,7 +698,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			return
 		}
 		b.beginProjectionSync()
-		go func() {
+		safego.Go("tunnel.broker.clientReplay", func() {
 			defer b.endProjectionSync()
 			defer b.endClientReplaySync()
 			if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
@@ -783,7 +784,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			b.replayActiveReasoning(activeReasoning)
 			b.enqueueControl(EventReplayDone, nil)
 			b.clientProjectionSeeded.Store(true)
-		}()
+		})
 		return
 	}
 	if info.Role != "server" {
@@ -823,7 +824,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		return
 	}
 	b.beginProjectionSync()
-	go func() {
+	safego.Go("tunnel.broker.relayReplay", func() {
 		defer b.endProjectionSync()
 		if !b.isSessionStateCurrent(currentSessionID, currentGeneration) {
 			return
@@ -869,7 +870,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		}
 		b.replayActiveReasoning(activeReasoning)
 		b.markRelayReady()
-	}()
+	})
 }
 
 func (b *Broker) beginClientReplaySync(info RelayConnectedState, sessionID string, generation uint64) bool {
@@ -1583,8 +1584,16 @@ func (b *Broker) waitProjectionSync() {
 
 // enqueueOut appends a message to the unbounded outbound queue and wakes the sender.
 // This NEVER blocks, so OnUpdate callbacks can call tunnel methods safely.
+const maxOutbound = 10000 // soft cap; older events dropped when exceeded
+
 func (b *Broker) enqueueOut(msg GatewayMessage) {
 	b.outMu.Lock()
+	if len(b.outbound) >= maxOutbound {
+		// Drop oldest 10% to make room, log the overflow.
+		drop := maxOutbound / 10
+		b.outbound = b.outbound[drop:]
+		debug.Log("tunnel", "broker: outbound queue overflow, dropped %d events", drop)
+	}
 	b.outbound = append(b.outbound, msg)
 	b.outMu.Unlock()
 	b.outCond.Signal()

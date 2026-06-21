@@ -103,12 +103,12 @@ func IsSessionLocked(storeDir, sessionID string) bool {
 		f.Close()
 		return true
 	}
-	unlockFileEx(syscall.Handle(f.Fd()), 1, 0)
-	f.Close()
 
 	// We acquired the lock — the file is stale (no process holds it).
-	// Clean it up so lock files don't accumulate.
+	// Remove the file WHILE holding the lock, then unlock and close.
 	_ = os.Remove(lockPath)
+	unlockFileEx(syscall.Handle(f.Fd()), 1, 0)
+	f.Close()
 	return false
 }
 

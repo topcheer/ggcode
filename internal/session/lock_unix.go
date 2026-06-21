@@ -87,18 +87,20 @@ func IsSessionLocked(storeDir, sessionID string) bool {
 	if err != nil {
 		return false // no lock file = not locked
 	}
-	defer f.Close()
 
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
+		f.Close()
 		return true // locked by another process
 	}
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
 	// We acquired the flock — the file is stale (no process holds it).
-	// Clean it up so lock files don't accumulate.
-	f.Close()
+	// Remove the file WHILE holding the lock, then unlock and close.
+	// This prevents a race where another process creates+locks a new file
+	// between our unlock and remove.
 	_ = os.Remove(lockPath)
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	f.Close()
 	return false
 }
 

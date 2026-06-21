@@ -150,12 +150,13 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		m.logFile = f
 	}
 
-	// Capture self pane ID for safety.
+	// Capture self pane ID — required for split targeting.
 	if m.selfPane == "" {
 		out, err := m.runTmux(ctx, "display-message", "-p", "#{pane_id}")
-		if err == nil {
-			m.selfPane = strings.TrimSpace(out)
+		if err != nil || strings.TrimSpace(out) == "" {
+			return fmt.Errorf("cmdpane: failed to determine current tmux pane: %w", err)
 		}
+		m.selfPane = strings.TrimSpace(out)
 	}
 
 	// Create the split pane, targeting our own pane so the split always

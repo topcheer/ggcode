@@ -751,6 +751,10 @@ func (h *OAuthHandler) WaitForCallback(ctx context.Context) (string, error) {
 // ExchangeCode exchanges an authorization code for tokens.
 func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenResponse, error) {
 	h.mu.Lock()
+	if h.state == nil || (h.state.authorizationServerMeta.TokenEndpoint == "" && h.state.authorizationServerMeta.Issuer == "") {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("oauth state not initialized (discovery incomplete)")
+	}
 	tokenEndpoint := h.state.authorizationServerMeta.TokenEndpoint
 	clientID := ""
 	clientSecret := ""
@@ -790,7 +794,7 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 	if err != nil {
 		return nil, err
 	}
-	debug.Log("mcp-oauth", "exchange_response server=%s status=%d body=%s", h.serverName, resp.StatusCode, string(body))
+	debug.Log("mcp-oauth", "exchange_response server=%s status=%d body_len=%d", h.serverName, resp.StatusCode, len(body))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("token exchange failed: %d %s", resp.StatusCode, string(body))
 	}
@@ -969,7 +973,7 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 	if err != nil {
 		return nil, err
 	}
-	debug.Log("mcp-oauth", "device_flow_response server=%s status=%d body=%s", h.serverName, resp.StatusCode, string(body))
+	debug.Log("mcp-oauth", "device_flow_response server=%s status=%d body_len=%d", h.serverName, resp.StatusCode, len(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("device flow failed: %d %s", resp.StatusCode, string(body))
@@ -1001,6 +1005,10 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 // Should be called after StartDeviceFlow and the user visits the verification URI.
 func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, error) {
 	h.mu.Lock()
+	if h.state == nil || (h.state.authorizationServerMeta.TokenEndpoint == "" && h.state.authorizationServerMeta.Issuer == "") {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("oauth state not initialized (discovery incomplete)")
+	}
 	tokenEndpoint := h.state.authorizationServerMeta.TokenEndpoint
 	clientID := ""
 	if h.state.clientRegistration != nil {
@@ -1044,7 +1052,7 @@ func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, err
 			body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 			resp.Body.Close()
 
-			debug.Log("mcp-oauth", "device_poll server=%s status=%d body=%s", h.serverName, resp.StatusCode, string(body))
+			debug.Log("mcp-oauth", "device_poll server=%s status=%d body_len=%d", h.serverName, resp.StatusCode, len(body))
 
 			var tokenResp TokenResponse
 			if err := json.Unmarshal(body, &tokenResp); err != nil {

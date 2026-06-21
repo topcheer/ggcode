@@ -19,7 +19,7 @@ type SessionLock struct {
 
 // LockFilePath returns the path to the lock file for a session.
 func LockFilePath(storeDir, sessionID string) string {
-	return storeDir + "/" + sessionID + ".lock"
+	return filepath.Join(storeDir, sessionID+".lock")
 }
 
 // CleanupStaleLocks scans the sessions directory for lock files whose
