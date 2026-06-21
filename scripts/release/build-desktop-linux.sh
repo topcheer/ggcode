@@ -57,7 +57,8 @@ ensure_nfpm() {
   fi
   echo "nfpm not found in PATH; installing it into a temp tool dir"
   mkdir -p "${WORK_DIR}/bin"
-  GOBIN="${WORK_DIR}/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+  # Pin to v2.46.3 — v2.47.0+ requires Go >= 1.26.4 which may exceed the CI toolchain
+  GOBIN="${WORK_DIR}/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
   NFPM_BIN="${WORK_DIR}/bin/nfpm"
 }
 
