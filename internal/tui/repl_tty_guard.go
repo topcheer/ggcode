@@ -104,7 +104,9 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 			preBubbletea.Lflag, preBubbletea.Lflag&unix.ICANON != 0, preBubbletea.Lflag&unix.ECHO != 0)
 	}
 	wctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	safego.Go("tui.ttyWatchdog", func() {
+		defer close(done)
 		// Tight initial loop: aggressively re-apply raw mode for the first
 		// ~1.5s after bubbletea startup. This is the window in which bubbletea
 		// (or something it calls into) has been observed to silently revert
@@ -169,7 +171,27 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 			}
 		}
 	})
-	return cancel
+	return func() {
+		cancel()
+		// Wait for the watchdog goroutine to exit so it can't re-apply raw
+		// mode after we restore the terminal below.
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			debug.Log("repl", "tty-watchdog stop: goroutine did not exit within 2s")
+		}
+		// Restore the terminal to pre-bubbletea state. The watchdog may have
+		// re-applied raw mode in its final loop iteration, so we must overwrite
+		// that here. This runs AFTER bubbletea's own Restore() but is the last
+		// writer, guaranteeing the shell gets back a sane terminal.
+		if preBubbletea != nil {
+			if err := unix.IoctlSetTermios(fd, ioctlSetTermios, preBubbletea); err != nil {
+				debug.Log("repl", "tty-watchdog restore failed err=%v", err)
+			} else {
+				debug.Log("repl", "tty-watchdog terminal restored to pre-bubbletea state")
+			}
+		}
+	}
 }
 
 // forceRawMode applies a cfmakeraw-equivalent transformation to the given fd.
