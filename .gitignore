@@ -58,3 +58,9 @@ ggcode-relay/ggcode-relay
 harness.test
 acp.test
 ggcode-fixed
+
+# Stray build artifacts from sub-agents/tools
+/ggcode.exe
+/package.json
+/package-lock.json
+/node_modules/
