@@ -78,6 +78,10 @@ export function GetImpersonationPresets() {
   return window['go']['main']['App']['GetImpersonationPresets']();
 }
 
+export function GetLSPStatus() {
+  return window['go']['main']['App']['GetLSPStatus']();
+}
+
 export function GetModelInfo() {
   return window['go']['main']['App']['GetModelInfo']();
 }
@@ -120,6 +124,10 @@ export function GetWorkDir() {
 
 export function InitWorkspace(arg1) {
   return window['go']['main']['App']['InitWorkspace'](arg1);
+}
+
+export function InstallLSPServer(arg1, arg2) {
+  return window['go']['main']['App']['InstallLSPServer'](arg1, arg2);
 }
 
 export function IsSharing() {

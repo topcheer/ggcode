@@ -115,6 +115,28 @@ mcp_servers:
       Authorization: "Bearer ${REMOTE_TOKEN}"
 ```
 
+## LSP Servers
+
+Language Server Protocol (LSP) servers provide the agent with code intelligence (go-to-definition, find references, hover info, diagnostics). Servers are **auto-detected** from PATH and workspace files — no configuration needed for standard setups.
+
+Override the auto-detected binary or add custom arguments via `lsp_servers`:
+
+```yaml
+lsp_servers:
+  go:
+    binary: /usr/local/bin/gopls  # custom binary path
+    args: ["-vv"]                 # additional CLI arguments
+  rust:
+    binary: ~/.cargo/bin/rust-analyzer
+  typescript:
+    binary: typescript-language-server
+    args: ["--stdio"]
+```
+
+Supported language IDs: `go`, `rust`, `clang`, `lua`, `swift`, `terraform`, `yaml`, `json`, `dockerfile`, `shell`, `zig`, `java`, `typescript`, `python`, `csharp`.
+
+In the **desktop app**, navigate to Settings > Integrations > Language Servers to view detection status and install missing servers with one click. Install scope priority: **user** (home directory) > **global** (system-wide) > **project** (inside workspace).
+
 ## Tool Permissions
 
 Control tool access via `tool_permissions` with per-tool rules:

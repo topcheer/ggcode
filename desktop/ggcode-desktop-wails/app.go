@@ -1094,6 +1094,22 @@ func (a *App) GetIMPlatformRegistry() []wailskit.IMPlatformMeta {
 	return wailskit.GetIMPlatformRegistry()
 }
 
+// GetLSPStatus returns detected language server status for the current workspace.
+func (a *App) GetLSPStatus() wailskit.LSPStatusResponse {
+	if a.chat == nil {
+		return wailskit.LSPStatusResponse{}
+	}
+	return a.chat.GetLSPStatus()
+}
+
+// InstallLSPServer installs a language server for the given language.
+func (a *App) InstallLSPServer(languageID, optionID string) wailskit.LSPInstallResult {
+	if a.chat == nil {
+		return wailskit.LSPInstallResult{Success: false, Output: "chat bridge not initialized"}
+	}
+	return a.chat.InstallLSPServer(languageID, optionID)
+}
+
 // SaveIMAdapter creates or updates an IM adapter.
 func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	debug.Log("desktop", "IM SaveAdapter: name=%s platform=%s", name, values["platform"])

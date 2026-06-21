@@ -75,7 +75,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   knight/              Knight background agent: autonomous code monitoring, daily token budget
   a2a/                 Agent-to-Agent protocol: server (multi-auth), client (auto-negotiate), registry, MCP bridge, E2E mesh test
   acp/                 Agent Client Protocol support (JetBrains, Zed, ACP-compatible editors)
-  lsp/                 LSP client integration (gopls, rust-analyzer, clangd, etc.)
+  lsp/                 LSP client integration (gopls, rust-analyzer, clangd, etc.) with auto-discovery, config overrides, and scoped install (user/global/project)
   commands/            Slash command registry (bundled + loaded), usage formatting, skill templates
   context/             Conversation context window management and tokenization (imported as `ctxpkg`)
   session/             JSONL-backed session persistence with tunnel event recording
@@ -139,6 +139,7 @@ Key concepts:
 - **`vendors.<name>.endpoints.<name>.protocol`**: One of `openai`, `anthropic`, `gemini`, `copilot`
 - **`mcp_servers`**: List of MCP servers to start (command + args + env) or connect (URL + headers)
 - **`plugins`**: External command-based tools
+- **`lsp_servers`**: Optional LSP server binary overrides, keyed by language ID (e.g. `go`, `rust`, `typescript`, `python`). Each entry has `binary` (path) and optional `args` list. When set, takes priority over auto-detected servers.
 - **`tool_permissions`**: Per-tool rules: `allow`, `ask`, `deny`
 - **`allowed_dirs`**: Directories the agent may access
 - **`max_iterations`**: Agent loop limit per user turn (0 = unlimited)
@@ -215,7 +216,7 @@ Available in any IM channel connected to a ggcode daemon:
 
 ## CLI Modes
 
-- **Desktop GUI**: `ggcode-desktop-wails` — Wails-based desktop application with React frontend, visual chat, IM integration, tool approval dialogs, session sidebar
+- **Desktop GUI**: `ggcode-desktop-wails` — Wails-based desktop application with React frontend, visual chat, IM integration, tool approval dialogs, session sidebar, LSP language server status panel with one-click install (user/global/project scope)
 - **Interactive TUI**: `ggcode` — launches the full Bubble Tea TUI
 - **Daemon mode**: `ggcode daemon` — headless agent with IM gateway; `--follow` for terminal follow display
 - **Pipe mode**: `ggcode -p "prompt"` — non-interactive, sends prompt and outputs response
@@ -244,7 +245,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`
 **Web** (2): `web_fetch`, `web_search`
 **Search**: `grep` (ripgrep-based, supports regex, glob, file type, context lines)
-**LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`
+**LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
 **Productivity** (3, in `builtin.go`): `ask_user`, `todo_write` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
 **Swarm** (10, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`

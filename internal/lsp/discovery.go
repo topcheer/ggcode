@@ -36,12 +36,22 @@ type ResolvedServer struct {
 	InstallHint string
 }
 
+// InstallScope indicates the installation scope.
+type InstallScope string
+
+const (
+	ScopeUser    InstallScope = "user"    // Installed to user's home directory
+	ScopeGlobal  InstallScope = "global"  // System-wide installation
+	ScopeProject InstallScope = "project" // Installed inside the project directory
+)
+
 type InstallOption struct {
 	ID          string
 	Label       string
 	Binary      string
 	Command     string
 	Recommended bool
+	Scope       InstallScope
 }
 
 type serverSpec struct {
@@ -71,6 +81,21 @@ var builtinServerSpecs = []serverSpec{
 	{id: "typescript", displayName: "TypeScript / JavaScript", binaries: []string{"typescript-language-server"}, rootMarkers: []string{"package.json", "tsconfig.json", "jsconfig.json"}, extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}},
 	{id: "python", displayName: "Python", binaries: []string{"pyright-langserver", "pylsp"}, rootMarkers: []string{"pyproject.toml", "requirements.txt", "setup.py"}, extensions: []string{".py"}},
 	{id: "csharp", displayName: "C#", binaries: []string{"csharp-ls"}, rootMarkers: []string{"Directory.Build.props", "global.json"}, extensions: []string{".cs", ".csproj", ".sln"}},
+}
+
+// serverOverrides holds optional user-configured overrides keyed by language ID.
+// Set via SetServerOverrides at startup from config.LSPServers.
+var serverOverrides map[string]config.LSPServerConfig
+
+// SetServerOverrides configures custom LSP server binary paths and arguments.
+// Pass the config.LSPServers map (or nil to clear overrides).
+func SetServerOverrides(overrides map[string]config.LSPServerConfig) {
+	serverOverrides = overrides
+}
+
+// ServerOverrides returns the currently configured server overrides.
+func ServerOverrides() map[string]config.LSPServerConfig {
+	return serverOverrides
 }
 
 func DetectWorkspaceStatus(workspace string) WorkspaceStatus {
@@ -144,6 +169,16 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 		if !matched {
 			continue
 		}
+		// Check user-configured override first.
+		if ov, ok := serverOverrides[spec.id]; ok && ov.Binary != "" {
+			return ResolvedServer{
+				LanguageID:  languageIDForFile(spec.id, path),
+				DisplayName: spec.displayName,
+				Binary:      ov.Binary,
+				Args:        ov.Args,
+				InstallHint: installHint(spec.id, workspace),
+			}, true
+		}
 		binary, available := resolveServerBinary(spec, workspace)
 		return ResolvedServer{
 			LanguageID:  languageIDForFile(spec.id, path),
@@ -161,6 +196,16 @@ func ResolveServerForWorkspace(workspace string) (ResolvedServer, bool) {
 	for _, lang := range status.Languages {
 		if !lang.Available {
 			continue
+		}
+		// Check user-configured override first.
+		if ov, ok := serverOverrides[lang.ID]; ok && ov.Binary != "" {
+			return ResolvedServer{
+				LanguageID:  lang.ID,
+				DisplayName: lang.DisplayName,
+				Binary:      ov.Binary,
+				Args:        ov.Args,
+				InstallHint: lang.InstallHint,
+			}, true
 		}
 		for _, spec := range builtinServerSpecs {
 			if spec.id != lang.ID {
@@ -578,13 +623,13 @@ func installHint(languageID, workspace string) string {
 	case "typescript":
 		return commandWithPrereq("npm", "npm is required to install typescript-language-server. Install Node.js first.", "npm install -g typescript typescript-language-server")
 	case "yaml":
-		return nodeWorkspaceInstallCommand("yaml-language-server")
+		return npmGlobalInstallCommand("yaml-language-server")
 	case "json":
-		return nodeWorkspaceInstallCommand("vscode-langservers-extracted")
+		return npmGlobalInstallCommand("vscode-langservers-extracted")
 	case "dockerfile":
-		return nodeWorkspaceInstallCommand("dockerfile-language-server-nodejs")
+		return npmGlobalInstallCommand("dockerfile-language-server-nodejs")
 	case "shell":
-		return nodeWorkspaceInstallCommand("bash-language-server")
+		return npmGlobalInstallCommand("bash-language-server")
 	case "python":
 		return pythonVenvInstallCommand(workspace, "pyright")
 	case "csharp":
@@ -594,40 +639,168 @@ func installHint(languageID, workspace string) string {
 	}
 }
 
+// GetInstallOptions returns the available install options for a language ID.
+// Returns nil if the language is not recognized or has no install path.
+func GetInstallOptions(languageID, workspace string) []InstallOption {
+	for _, spec := range builtinServerSpecs {
+		if spec.id == languageID {
+			return installOptions(spec, workspace)
+		}
+	}
+	return nil
+}
+
+// IsInstallable returns true if the language has at least one install option
+// whose command is a real install (not just an error message).
+func IsInstallable(languageID, workspace string) bool {
+	opts := GetInstallOptions(languageID, workspace)
+	for _, opt := range opts {
+		cmd := strings.TrimSpace(opt.Command)
+		if cmd == "" {
+			continue
+		}
+		// Skip pure error commands (unsupportedInstallCommand outputs).
+		if strings.HasPrefix(cmd, "echo ") || strings.HasPrefix(cmd, "Write-Error ") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func installOptions(spec serverSpec, workspace string) []InstallOption {
 	switch spec.id {
 	case "python":
 		return []InstallOption{
 			{
-				ID:          "pyright",
-				Label:       "pyright-langserver",
+				ID:          "pyright-user",
+				Label:       "pyright-langserver (user)",
 				Binary:      "pyright-langserver",
-				Command:     pythonVenvInstallCommand(workspace, "pyright"),
+				Command:     pythonUserInstallCommand("pyright"),
 				Recommended: true,
+				Scope:       ScopeUser,
 			},
 			{
-				ID:      "pylsp",
-				Label:   "pylsp",
+				ID:      "pyright-project",
+				Label:   "pyright-langserver (project venv)",
+				Binary:  "pyright-langserver",
+				Command: pythonVenvInstallCommand(workspace, "pyright"),
+				Scope:   ScopeProject,
+			},
+			{
+				ID:      "pylsp-user",
+				Label:   "pylsp (user)",
+				Binary:  "pylsp",
+				Command: pythonUserInstallCommand("python-lsp-server"),
+				Scope:   ScopeUser,
+			},
+			{
+				ID:      "pylsp-project",
+				Label:   "pylsp (project venv)",
 				Binary:  "pylsp",
 				Command: pythonVenvInstallCommand(workspace, "python-lsp-server"),
+				Scope:   ScopeProject,
 			},
 		}
 	case "typescript":
 		return []InstallOption{{
 			ID:          "typescript-language-server",
-			Label:       "typescript-language-server",
+			Label:       "typescript-language-server (global)",
 			Binary:      "typescript-language-server",
 			Command:     installHint(spec.id, workspace),
 			Recommended: true,
+			Scope:       ScopeGlobal,
 		}}
 	case "csharp":
-		return []InstallOption{{
-			ID:          "csharp-ls",
-			Label:       "csharp-ls",
-			Binary:      "csharp-ls",
-			Command:     csharpToolInstallCommand(),
-			Recommended: true,
-		}}
+		return []InstallOption{
+			{
+				ID:          "csharp-ls-user",
+				Label:       "csharp-ls (user)",
+				Binary:      "csharp-ls",
+				Command:     csharpUserInstallCommand(),
+				Recommended: true,
+				Scope:       ScopeUser,
+			},
+			{
+				ID:      "csharp-ls-project",
+				Label:   "csharp-ls (project)",
+				Binary:  "csharp-ls",
+				Command: csharpToolInstallCommand(),
+				Scope:   ScopeProject,
+			},
+		}
+	case "yaml":
+		return []InstallOption{
+			{
+				ID:          "yaml-language-server-global",
+				Label:       "yaml-language-server (global)",
+				Binary:      "yaml-language-server",
+				Command:     npmGlobalInstallCommand("yaml-language-server"),
+				Recommended: true,
+				Scope:       ScopeGlobal,
+			},
+			{
+				ID:      "yaml-language-server-project",
+				Label:   "yaml-language-server (project)",
+				Binary:  "yaml-language-server",
+				Command: nodeWorkspaceInstallCommand("yaml-language-server"),
+				Scope:   ScopeProject,
+			},
+		}
+	case "json":
+		return []InstallOption{
+			{
+				ID:          "vscode-langservers-extracted-global",
+				Label:       "vscode-langservers-extracted (global)",
+				Binary:      "vscode-json-language-server",
+				Command:     npmGlobalInstallCommand("vscode-langservers-extracted"),
+				Recommended: true,
+				Scope:       ScopeGlobal,
+			},
+			{
+				ID:      "vscode-langservers-extracted-project",
+				Label:   "vscode-langservers-extracted (project)",
+				Binary:  "vscode-json-language-server",
+				Command: nodeWorkspaceInstallCommand("vscode-langservers-extracted"),
+				Scope:   ScopeProject,
+			},
+		}
+	case "dockerfile":
+		return []InstallOption{
+			{
+				ID:          "dockerfile-language-server-global",
+				Label:       "dockerfile-language-server (global)",
+				Binary:      "docker-langserver",
+				Command:     npmGlobalInstallCommand("dockerfile-language-server-nodejs"),
+				Recommended: true,
+				Scope:       ScopeGlobal,
+			},
+			{
+				ID:      "dockerfile-language-server-project",
+				Label:   "dockerfile-language-server (project)",
+				Binary:  "docker-langserver",
+				Command: nodeWorkspaceInstallCommand("dockerfile-language-server-nodejs"),
+				Scope:   ScopeProject,
+			},
+		}
+	case "shell":
+		return []InstallOption{
+			{
+				ID:          "bash-language-server-global",
+				Label:       "bash-language-server (global)",
+				Binary:      "bash-language-server",
+				Command:     npmGlobalInstallCommand("bash-language-server"),
+				Recommended: true,
+				Scope:       ScopeGlobal,
+			},
+			{
+				ID:      "bash-language-server-project",
+				Label:   "bash-language-server (project)",
+				Binary:  "bash-language-server",
+				Command: nodeWorkspaceInstallCommand("bash-language-server"),
+				Scope:   ScopeProject,
+			},
+		}
 	default:
 		command := installHint(spec.id, workspace)
 		binary := ""
@@ -637,12 +810,14 @@ func installOptions(spec serverSpec, workspace string) []InstallOption {
 		if strings.TrimSpace(command) == "" && strings.TrimSpace(binary) == "" {
 			return nil
 		}
+		scope := ScopeUser // brew/go/rustup are all user-level by default
 		return []InstallOption{{
 			ID:          spec.id,
 			Label:       firstNonEmpty(binary, spec.displayName),
 			Binary:      binary,
 			Command:     command,
 			Recommended: true,
+			Scope:       scope,
 		}}
 	}
 }
@@ -654,6 +829,8 @@ func csharpToolInstallCommand() string {
 			"New-Item -ItemType Directory -Force -Path '.ggcode\\tools' | Out-Null",
 			"New-Item -ItemType Directory -Force -Path '.ggcode\\dotnet-cli-home' | Out-Null",
 			"$env:DOTNET_CLI_HOME = (Resolve-Path '.ggcode\\dotnet-cli-home').Path",
+			"$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'",
+			"$env:DOTNET_NOLOGO = '1'",
 			"$toolPath = (Resolve-Path '.ggcode\\tools').Path",
 			"if (Test-Path (Join-Path $toolPath 'csharp-ls.exe')) { dotnet tool update --tool-path $toolPath csharp-ls } else { dotnet tool install --tool-path $toolPath csharp-ls }",
 		}, "; ")
@@ -662,6 +839,7 @@ func csharpToolInstallCommand() string {
 		"echo 'dotnet is required to install csharp-ls. Install the .NET SDK first.' >&2; exit 1; fi " +
 		"&& mkdir -p .ggcode/tools .ggcode/dotnet-cli-home " +
 		"&& export DOTNET_CLI_HOME=\"$(pwd)/.ggcode/dotnet-cli-home\" " +
+		"&& export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 " +
 		"&& if [ -x .ggcode/tools/csharp-ls ]; then " +
 		"dotnet tool update --tool-path \"$(pwd)/.ggcode/tools\" csharp-ls; " +
 		"else dotnet tool install --tool-path \"$(pwd)/.ggcode/tools\" csharp-ls; fi"
@@ -730,6 +908,67 @@ func nodeWorkspaceInstallCommand(packages ...string) string {
 		"echo 'npm is required to install this LSP server. Install Node.js first.' >&2; exit 1; fi " +
 		"&& if [ ! -f package.json ]; then npm init -y >/dev/null 2>&1; fi " +
 		"&& npm install --save-dev " + joined
+}
+
+// npmGlobalInstallCommand installs npm packages globally (user-level by default
+// in modern npm, or falls back to system global).
+func npmGlobalInstallCommand(packages ...string) string {
+	joined := strings.Join(packages, " ")
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Error 'npm is required to install this LSP server. Install Node.js first.'; exit 1 }",
+			"npm install -g " + joined,
+		}, "; ")
+	}
+	return "if ! command -v npm >/dev/null 2>&1; then " +
+		"echo 'npm is required to install this LSP server. Install Node.js first.' >&2; exit 1; fi " +
+		"&& npm install -g " + joined
+}
+
+// pythonUserInstallCommand installs a Python package to the user's home directory.
+func pythonUserInstallCommand(packageName string) string {
+	packageName = strings.TrimSpace(packageName)
+	if packageName == "" {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (-not (Get-Command py -ErrorAction SilentlyContinue) -and -not (Get-Command python -ErrorAction SilentlyContinue)) { Write-Error 'Python is required to install Python LSP servers. Install Python first.'; exit 1 }",
+			"$py = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }",
+			"& $py -m pip install --user " + packageName,
+		}, "; ")
+	}
+	return "if command -v pip3 >/dev/null 2>&1; then pip3 install --user " + packageName + "; " +
+		"elif command -v pip >/dev/null 2>&1; then pip install --user " + packageName + "; " +
+		"elif command -v python3 >/dev/null 2>&1; then python3 -m pip install --user " + packageName + "; " +
+		"elif command -v python >/dev/null 2>&1; then python -m pip install --user " + packageName + "; " +
+		"else echo 'Python is required to install Python LSP servers. Install Python first.' >&2; exit 1; fi"
+}
+
+// csharpUserInstallCommand installs csharp-ls as a dotnet global tool (user-level).
+func csharpUserInstallCommand() string {
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { Write-Error 'dotnet is required to install csharp-ls. Install the .NET SDK first.'; exit 1 }",
+			"$env:DOTNET_CLI_HOME = $env:USERPROFILE + '\\.dotnet'",
+			"$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'",
+			"$env:DOTNET_NOLOGO = '1'",
+			"New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME | Out-Null",
+			"$existing = dotnet tool list -g | Select-String 'csharp-ls'",
+			"if ($existing) { dotnet tool update -g csharp-ls } else { dotnet tool install -g csharp-ls }",
+		}, "; ")
+	}
+	return "if ! command -v dotnet >/dev/null 2>&1; then " +
+		"echo 'dotnet is required to install csharp-ls. Install the .NET SDK first.' >&2; exit 1; fi " +
+		"&& export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 " +
+		"&& dotnet tool list -g >/dev/null 2>&1 || { " +
+		"echo 'dotnet first-time setup failed. Check if ~/.dotnet is a broken symlink:' >&2; " +
+		"echo '  ls -la ~/.dotnet' >&2; " +
+		"echo 'If broken, remove it: rm ~/.dotnet' >&2; " +
+		"exit 1; } ; " +
+		"if dotnet tool list -g 2>/dev/null | grep -q csharp-ls; then " +
+		"dotnet tool update -g csharp-ls; " +
+		"else dotnet tool install -g csharp-ls; fi"
 }
 
 func workspaceLinkExistingCommand(binary, missingMessage string) string {

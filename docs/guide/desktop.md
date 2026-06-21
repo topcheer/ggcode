@@ -35,6 +35,7 @@ Download from GitHub Releases:
 - **Session management** — create, switch, and manage coding sessions
 - **IM management UI** — configure and monitor IM adapters visually
 - **MCP browser** — explore connected MCP servers and their tools
+- **Language Servers** — view LSP server detection status and install missing servers with one click (user > global > project scope)
 - **Config editor** — edit settings through a structured UI
 - **Multiple workspaces** — manage several projects side by side
 

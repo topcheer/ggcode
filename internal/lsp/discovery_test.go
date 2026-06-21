@@ -195,16 +195,35 @@ func TestDetectWorkspaceStatusIncludesPythonInstallOptions(t *testing.T) {
 	if python.Available {
 		t.Fatalf("expected python server to be unavailable in isolated PATH, got %#v", python)
 	}
-	if len(python.InstallOptions) != 2 {
-		t.Fatalf("expected 2 python install options, got %#v", python.InstallOptions)
+	if len(python.InstallOptions) != 4 {
+		t.Fatalf("expected 4 python install options (user+project for each), got %#v", python.InstallOptions)
 	}
 	if !python.InstallOptions[0].Recommended || !strings.Contains(python.InstallOptions[0].Command, "pyright") {
 		t.Fatalf("expected recommended pyright install option, got %#v", python.InstallOptions)
 	}
-	if !strings.Contains(python.InstallOptions[0].Command, ".venv") || !strings.Contains(python.InstallOptions[0].Command, "python3 -m venv") {
-		t.Fatalf("expected python install option to bootstrap a venv, got %#v", python.InstallOptions[0])
+	if !strings.Contains(python.InstallOptions[0].Command, "--user") {
+		t.Fatalf("expected first pyright option to be user-level, got %#v", python.InstallOptions[0])
 	}
-	if !strings.Contains(python.InstallOptions[1].Command, "python-lsp-server") {
+	// Check that a project-level venv option exists
+	foundVenv := false
+	for _, opt := range python.InstallOptions {
+		if strings.Contains(opt.Command, ".venv") && strings.Contains(opt.Command, "python3 -m venv") {
+			foundVenv = true
+			break
+		}
+	}
+	if !foundVenv {
+		t.Fatalf("expected a project venv install option, got %#v", python.InstallOptions)
+	}
+	// Check that pylsp option exists
+	foundPylsp := false
+	for _, opt := range python.InstallOptions {
+		if strings.Contains(opt.Command, "python-lsp-server") {
+			foundPylsp = true
+			break
+		}
+	}
+	if !foundPylsp {
 		t.Fatalf("expected pylsp install option, got %#v", python.InstallOptions)
 	}
 }
@@ -307,12 +326,21 @@ func TestDetectWorkspaceStatusIncludesConfigInstallOptions(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected %s detection in %#v", id, status.Languages)
 		}
-		if len(lang.InstallOptions) != 1 || !lang.InstallOptions[0].Recommended {
-			t.Fatalf("expected one recommended install option for %s, got %#v", id, lang.InstallOptions)
+		// Should have at least 2 options (global + project)
+		if len(lang.InstallOptions) < 2 {
+			t.Fatalf("expected at least 2 install options for %s, got %#v", id, lang.InstallOptions)
+		}
+		// First option should be recommended (global)
+		if !lang.InstallOptions[0].Recommended {
+			t.Fatalf("expected first install option to be recommended for %s, got %#v", id, lang.InstallOptions)
 		}
 	}
 	if !strings.Contains(got["yaml"].InstallOptions[0].Command, "yaml-language-server") {
 		t.Fatalf("expected yaml install command, got %#v", got["yaml"].InstallOptions)
+	}
+	// yaml global option should use npm install -g
+	if !strings.Contains(got["yaml"].InstallOptions[0].Command, "-g") {
+		t.Fatalf("expected yaml global install to use -g, got %#v", got["yaml"].InstallOptions[0])
 	}
 	if !strings.Contains(got["json"].InstallOptions[0].Command, "vscode-langservers-extracted") {
 		t.Fatalf("expected json install command, got %#v", got["json"].InstallOptions)
@@ -650,11 +678,23 @@ func TestDetectWorkspaceStatusIncludesCSharpInstallOption(t *testing.T) {
 	if csharp.ID != "csharp" {
 		t.Fatalf("expected csharp detection, got %#v", csharp)
 	}
-	if len(csharp.InstallOptions) != 1 || !strings.Contains(csharp.InstallOptions[0].Command, "csharp-ls") {
-		t.Fatalf("expected csharp-ls install option, got %#v", csharp.InstallOptions)
+	if len(csharp.InstallOptions) < 2 {
+		t.Fatalf("expected at least 2 csharp install options, got %#v", csharp.InstallOptions)
 	}
-	if !strings.Contains(csharp.InstallOptions[0].Command, "--tool-path") || !strings.Contains(csharp.InstallOptions[0].Command, ".ggcode/tools") {
-		t.Fatalf("expected workspace-local csharp install command, got %#v", csharp.InstallOptions[0])
+	// First option should be user-level (recommended)
+	if !csharp.InstallOptions[0].Recommended {
+		t.Fatalf("expected first csharp install option to be recommended, got %#v", csharp.InstallOptions)
+	}
+	if !strings.Contains(csharp.InstallOptions[0].Command, "csharp-ls") {
+		t.Fatalf("expected csharp-ls install option, got %#v", csharp.InstallOptions[0])
+	}
+	// First option should be user-level (-g flag)
+	if !strings.Contains(csharp.InstallOptions[0].Command, "-g") {
+		t.Fatalf("expected first csharp option to be user-level (-g), got %#v", csharp.InstallOptions[0])
+	}
+	// Second option should be project-level (.ggcode/tools)
+	if !strings.Contains(csharp.InstallOptions[1].Command, "--tool-path") || !strings.Contains(csharp.InstallOptions[1].Command, ".ggcode/tools") {
+		t.Fatalf("expected workspace-local csharp install command as second option, got %#v", csharp.InstallOptions[1])
 	}
 }
 

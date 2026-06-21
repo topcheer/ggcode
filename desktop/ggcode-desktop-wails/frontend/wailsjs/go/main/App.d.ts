@@ -42,6 +42,8 @@ export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
 
 export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPresetInfo>>;
 
+export function GetLSPStatus():Promise<wailskit.LSPStatusResponse>;
+
 export function GetModelInfo():Promise<Record<string, any>>;
 
 export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
@@ -63,6 +65,8 @@ export function GetVersion():Promise<string>;
 export function GetWorkDir():Promise<string>;
 
 export function InitWorkspace(arg1:string):Promise<void>;
+
+export function InstallLSPServer(arg1:string,arg2:string):Promise<wailskit.LSPInstallResult>;
 
 export function IsSharing():Promise<boolean>;
 

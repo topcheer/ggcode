@@ -6,6 +6,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/lsp"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -32,6 +33,9 @@ type InteractiveRuntimeCore struct {
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
+	// Apply LSP server overrides from config before registering tools.
+	lsp.SetServerOverrides(cfg.LSPServers)
+
 	registry := tool.NewRegistry()
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		return nil, err

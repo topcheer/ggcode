@@ -630,3 +630,19 @@ plugins:
 #   ~/.ggcode/oauth-tokens/{provider}-{clientID}.json
 # with 0600 permissions. Cache is checked before prompting for re-auth.
 # Same client_id = shared token (intentional). Different client_id = isolated.
+
+# LSP (Language Server Protocol) server overrides.
+# By default, ggcode auto-detects language servers from PATH and workspace files.
+# Use this section to override the binary path or add custom arguments.
+# The key is the language ID: go, rust, clang, lua, swift, terraform, yaml,
+# json, dockerfile, shell, zig, java, typescript, python, csharp.
+#
+# lsp_servers:
+#   go:
+#     binary: /usr/local/bin/gopls  # override auto-detected path
+#     args: ["-vv"]                 # additional CLI arguments
+#   rust:
+#     binary: ~/.cargo/bin/rust-analyzer
+#   typescript:
+#     binary: typescript-language-server
+#     args: ["--stdio"]

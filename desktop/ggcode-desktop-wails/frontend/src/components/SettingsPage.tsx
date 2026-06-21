@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2 } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale } from '../i18n'
@@ -14,7 +14,7 @@ interface Props {
   showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
-type SettingsTab = 'provider' | 'agent' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics'
+type SettingsTab = 'provider' | 'agent' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp'
 
 interface ImpersonationPreset {
   id: string
@@ -55,6 +55,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [presets, setPresets] = useState<ImpersonationPreset[]>([])
   const [selectedPreset, setSelectedPreset] = useState('none')
   const [impVersion, setImpVersion] = useState('')
+
+  // Load initial data
+  const [lspStatus, setLspStatus] = useState<{ id: string; display_name: string; available: boolean; binary: string; install_hint: string; override: boolean; can_install: boolean; install_options: { id: string; label: string; binary: string; recommended: boolean; scope: string }[] }[]>([])
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [installResult, setInstallResult] = useState<{ lang: string; success: boolean; output: string } | null>(null)
 
   // Load initial data
   useEffect(() => {
@@ -492,7 +497,156 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 action="Open Context"
                 onClick={onOpenContext}
               />
+              <FeatureCard
+                icon={<Code2 size={18} />}
+                title="Language Servers"
+                description="View detected LSP servers for Go, Rust, TypeScript, Python and more."
+                action="View Status"
+                onClick={() => {
+                  App.GetLSPStatus().then((res: any) => {
+                    setLspStatus(res.languages || [])
+                    setTab('lsp')
+                  })
+                }}
+              />
             </FeatureGrid>
+          </>
+        )}
+
+        {/* LSP Tab */}
+        {tab === 'lsp' && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <button onClick={() => setTab('integrations')} style={backBtnStyle}>
+                <ArrowLeft size={14} /> Integrations
+              </button>
+            </div>
+            <h3 style={sectionTitle}>Language Servers</h3>
+            <p style={hintStyle}>
+              Language Server Protocol (LSP) servers provide the agent with code intelligence:
+              go-to-definition, find references, hover info, diagnostics, and more. Servers are
+              auto-detected from your PATH and workspace files. You can override binary paths in
+              the config file under <code style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}>lsp_servers</code>.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+              {lspStatus.length === 0 && (
+                <div style={{ ...cardStyleObj, padding: 24, textAlign: 'center', color: 'var(--text-tertiary)' }}>
+                  No language servers detected in this workspace.
+                </div>
+              )}
+              {lspStatus.map((lang) => (
+                <div key={lang.id} style={{
+                  ...cardStyleObj,
+                  padding: '12px 16px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{
+                        width: 8, height: 8, borderRadius: '50%',
+                        background: lang.available ? 'var(--color-success)' : 'var(--color-error)',
+                        flexShrink: 0,
+                      }} />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                          {lang.display_name}
+                          {lang.override && (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--color-primary)', fontWeight: 400 }}>
+                              (configured)
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
+                          {lang.available ? lang.binary : 'Not found'}
+                        </div>
+                      </div>
+                    </div>
+                    {lang.available && (
+                      <Check size={16} style={{ color: 'var(--color-success)' }} />
+                    )}
+                  </div>
+                  {/* Install buttons for unavailable servers */}
+                  {!lang.available && lang.can_install && lang.install_options && lang.install_options.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Install:</span>
+                      {lang.install_options.map((opt) => {
+                        const scopeColors: Record<string, string> = {
+                          user: 'var(--color-success)',
+                          global: 'var(--color-primary)',
+                          project: 'var(--text-tertiary)',
+                        }
+                        const scopeColor = scopeColors[opt.scope] || 'var(--text-tertiary)'
+                        return (
+                          <button
+                            key={opt.id}
+                            disabled={installing === `${lang.id}:${opt.id}`}
+                            onClick={() => {
+                              setInstalling(`${lang.id}:${opt.id}`)
+                              setInstallResult(null)
+                              App.InstallLSPServer(lang.id, opt.id).then((res: any) => {
+                                setInstalling(null)
+                                setInstallResult({ lang: lang.id, success: res.success, output: res.output })
+                                if (res.success) {
+                                  // Refresh status
+                                  App.GetLSPStatus().then((r: any) => setLspStatus(r.languages || []))
+                                }
+                              })
+                            }}
+                            style={{
+                              padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                              background: opt.recommended ? 'var(--color-primary)' : 'var(--color-surface)',
+                              color: opt.recommended ? '#fff' : 'var(--text-secondary)',
+                              border: `1px solid ${opt.recommended ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                              cursor: installing ? 'wait' : 'pointer', fontSize: 11,
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                              opacity: installing === `${lang.id}:${opt.id}` ? 0.6 : 1,
+                            }}
+                          >
+                            {installing === `${lang.id}:${opt.id}` && <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />}
+                            {opt.label}
+                            <span style={{
+                              fontSize: 8, padding: '1px 4px', borderRadius: 3,
+                              background: opt.recommended ? 'rgba(255,255,255,0.2)' : `color-mix(in srgb, ${scopeColor} 15%, transparent)`,
+                              color: opt.recommended ? 'rgba(255,255,255,0.8)' : scopeColor,
+                              textTransform: 'uppercase', fontWeight: 600,
+                            }}>
+                              {opt.scope}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {!lang.available && !lang.can_install && lang.install_hint && (
+                    <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)',
+                      marginTop: 8, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                      background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                    }}>
+                      {lang.install_hint}
+                    </div>
+                  )}
+                  {/* Install result */}
+                  {installResult && installResult.lang === lang.id && (
+                    <div style={{
+                      marginTop: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+                      background: installResult.success ? 'color-mix(in srgb, var(--color-success) 10%, transparent)' : 'color-mix(in srgb, var(--color-error) 10%, transparent)',
+                      border: `1px solid ${installResult.success ? 'var(--color-success)' : 'var(--color-error)'}`,
+                      fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)',
+                      maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap',
+                    }}>
+                      {installResult.output}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => {
+                App.GetLSPStatus().then((res: any) => setLspStatus(res.languages || []))
+              }}
+              style={{ ...secondaryBtnStyle, marginTop: 16 }}
+            >
+              <RefreshCw size={14} /> Refresh
+            </button>
           </>
         )}
 
@@ -822,4 +976,10 @@ const secondaryBtnStyle: React.CSSProperties = {
   background: 'var(--color-surface)', color: 'var(--text-secondary)',
   border: '1px solid var(--color-border)', cursor: 'pointer', fontSize: 12,
   display: 'flex', alignItems: 'center', gap: 4,
+}
+
+const cardStyleObj: React.CSSProperties = {
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-border)',
+  borderRadius: 'var(--radius-md)',
 }

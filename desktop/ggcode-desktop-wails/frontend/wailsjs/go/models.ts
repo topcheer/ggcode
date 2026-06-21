@@ -294,7 +294,6 @@ export namespace wailskit {
 	    a2aDisabled: boolean;
 	    a2aPort: number;
 	    a2aHost: string;
-	    a2aApiKey: string;
 	    a2aLanDiscovery: boolean;
 	    harnessAutoRun: string;
 	    harnessAutoInit: boolean;
@@ -333,7 +332,6 @@ export namespace wailskit {
 	        this.a2aDisabled = source["a2aDisabled"];
 	        this.a2aPort = source["a2aPort"];
 	        this.a2aHost = source["a2aHost"];
-	        this.a2aApiKey = source["a2aApiKey"];
 	        this.a2aLanDiscovery = source["a2aLanDiscovery"];
 	        this.harnessAutoRun = source["harnessAutoRun"];
 	        this.harnessAutoInit = source["harnessAutoInit"];
@@ -449,6 +447,116 @@ export namespace wailskit {
 	        this.defaultVersion = source["defaultVersion"];
 	        this.extraHeaders = source["extraHeaders"];
 	    }
+	}
+	export class LSPInstallOption {
+	    id: string;
+	    label: string;
+	    binary: string;
+	    recommended: boolean;
+	    scope: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPInstallOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.binary = source["binary"];
+	        this.recommended = source["recommended"];
+	        this.scope = source["scope"];
+	    }
+	}
+	export class LSPInstallResult {
+	    success: boolean;
+	    output: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPInstallResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.output = source["output"];
+	    }
+	}
+	export class LSPServerStatus {
+	    id: string;
+	    display_name: string;
+	    available: boolean;
+	    binary: string;
+	    install_hint: string;
+	    override: boolean;
+	    can_install: boolean;
+	    install_options: LSPInstallOption[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPServerStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.display_name = source["display_name"];
+	        this.available = source["available"];
+	        this.binary = source["binary"];
+	        this.install_hint = source["install_hint"];
+	        this.override = source["override"];
+	        this.can_install = source["can_install"];
+	        this.install_options = this.convertValues(source["install_options"], LSPInstallOption);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LSPStatusResponse {
+	    workspace: string;
+	    languages: LSPServerStatus[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LSPStatusResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workspace = source["workspace"];
+	        this.languages = this.convertValues(source["languages"], LSPServerStatus);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class MCPOAuthStartResult {
 	    serverName: string;
