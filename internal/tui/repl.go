@@ -1011,6 +1011,21 @@ func (r *REPL) createSession() {
 		debug.Log("repl", "startup timing repl.createSession store.Save duration=%s", time.Since(saveStart).Round(time.Millisecond))
 		r.model.SetSession(ses, r.store)
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.new", ses.ID))
+
+		// Acquire a session lock so concurrent instances in the same workspace
+		// cannot auto-load this session. This mirrors the desktop Wails path
+		// (chat.go EnsureSession).
+		if r.sessionLock != nil {
+			r.sessionLock.Release()
+			r.sessionLock = nil
+		}
+		if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
+			if lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID); lockErr == nil && lock != nil && lock.Acquired() {
+				r.sessionLock = lock
+				debug.Log("repl", "createSession: acquired lock on new session %s", ses.ID)
+			}
+		}
+
 		debug.Log("repl", "startup timing repl.createSession total=%s", time.Since(start).Round(time.Millisecond))
 	} else {
 		debug.Log("repl", "startup timing repl.createSession store.Save err=%v duration=%s", err, time.Since(saveStart).Round(time.Millisecond))

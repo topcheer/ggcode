@@ -713,13 +713,17 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		return nil, err
 	}
 
+	// Normalize the workspace for comparison so symlinks and path
+	// inconsistencies don't prevent finding sessions.
+	normalizedWorkspace := NormalizeWorkspacePath(workspace)
+
 	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
 
 	for _, e := range idx {
-		if e.Workspace == workspace && e.MsgCount > 0 {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace && e.MsgCount > 0 {
 			return &Session{
 				ID:        e.ID,
 				Title:     e.Title,

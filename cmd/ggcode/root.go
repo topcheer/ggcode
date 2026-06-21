@@ -605,7 +605,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if err != nil {
 			return err
 		}
-		resumeID = selectedID
+		if selectedID != "" {
+			storeDir, _ := session.DefaultDir()
+			lock, lockErr := session.TryAcquireSessionLock(storeDir, selectedID)
+			if lockErr == nil && lock != nil && lock.Acquired() {
+				replPendingSessionLock = lock
+				resumeID = selectedID
+			} else {
+				// Race: session was locked between picker filter and now.
+				fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", selectedID[:8])
+			}
+		}
 		trace.Mark("pick resume session")
 	} else if resumeID == "" {
 		// Auto-load: try to resume the most recent workspace session.
@@ -629,16 +639,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 					return err
 				}
 				if selectedID == "" {
-					// User chose "new session" from picker.
-					lock2, _ := session.TryAcquireSessionLock(storeDir, "")
-					_ = lock2 // new session lock will be acquired by REPL
+					// User chose "new session" from picker (or picker was empty).
+					// Leave resumeID empty so the REPL creates a new session.
 				} else {
+					// Try to acquire a lock on the user-selected session.
+					// If the lock fails (race condition: another instance grabbed
+					// it between the picker check and now), do NOT load it —
+					// fall through to creating a new session instead.
 					lock2, lockErr2 := session.TryAcquireSessionLock(storeDir, selectedID)
 					if lockErr2 == nil && lock2 != nil && lock2.Acquired() {
 						replPendingSessionLock = lock2
+						resumeID = selectedID
+					} else {
+						fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", selectedID[:8])
 					}
 				}
-				resumeID = selectedID
 				trace.Mark("pick resume session (locked)")
 			}
 		}
