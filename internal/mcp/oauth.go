@@ -644,13 +644,11 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	}
 	baseQuery := parsed.Query()
 
-	// If the endpoint already specifies a resource, it takes priority over our
-	// own serverURL-derived value — the authorization server knows what resource
-	// indicator it expects (RFC 8707).
-	if _, ok := baseQuery["resource"]; ok {
-		params.Del("resource")
-	}
-	if h.serverURL != "" && !params.Has("resource") {
+	// Only set our serverURL as resource if the endpoint doesn't already
+	// specify one (RFC 8707). The authorization server knows what resource
+	// indicator it expects.
+	endpointHasResource := baseQuery.Get("resource") != ""
+	if h.serverURL != "" && !endpointHasResource && !params.Has("resource") {
 		params.Set("resource", h.serverURL)
 	}
 
