@@ -109,9 +109,7 @@ func TestIsSessionLocked_NoLockFile(t *testing.T) {
 func TestLockFilePath(t *testing.T) {
 	path := LockFilePath("/tmp/sessions", "abc-123")
 	expected := filepath.Join("/tmp/sessions", "abc-123.lock")
-	// LockFilePath uses "/" separator which is fine for the lock file path
-	// since it's only used as a string path on all platforms.
-	if path != "/tmp/sessions/abc-123.lock" {
+	if path != expected {
 		t.Errorf("got %q, want %q", path, expected)
 	}
 }
@@ -204,5 +202,79 @@ func TestLatestForWorkspace_EmptySession(t *testing.T) {
 	}
 	if latest != nil {
 		t.Error("expected nil for workspace with only empty sessions")
+	}
+}
+
+func TestSessionLock_ReleaseDeletesFile(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "test-release-deletes"
+
+	lock, _ := TryAcquireSessionLock(dir, sessionID)
+	if !lock.Acquired() {
+		t.Fatal("should acquire")
+	}
+
+	lockPath := LockFilePath(dir, sessionID)
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock file should exist after acquire: %v", err)
+	}
+
+	lock.Release()
+
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Errorf("lock file should be deleted after Release, got err=%v", err)
+	}
+}
+
+func TestIsSessionLocked_RemovesStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "test-stale-removal"
+
+	// Create a stale lock file (no flock held — simulates crashed process).
+	lockPath := LockFilePath(dir, sessionID)
+	if err := os.WriteFile(lockPath, []byte("99999"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// IsSessionLocked should detect it's stale and remove it.
+	if IsSessionLocked(dir, sessionID) {
+		t.Fatal("stale lock should not report as locked")
+	}
+
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Errorf("stale lock file should be removed, got err=%v", err)
+	}
+}
+
+func TestCleanupStaleLocks(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two stale lock files (no flock held).
+	stale1 := LockFilePath(dir, "stale-session-1")
+	stale2 := LockFilePath(dir, "stale-session-2")
+	_ = os.WriteFile(stale1, []byte("11111"), 0o600)
+	_ = os.WriteFile(stale2, []byte("22222"), 0o600)
+
+	// Also create a live lock that should NOT be removed.
+	liveLock, _ := TryAcquireSessionLock(dir, "live-session")
+	if !liveLock.Acquired() {
+		t.Fatal("should acquire live lock")
+	}
+	defer liveLock.Release()
+
+	CleanupStaleLocks(dir)
+
+	// Stale files should be gone.
+	if _, err := os.Stat(stale1); !os.IsNotExist(err) {
+		t.Errorf("stale lock 1 should be cleaned up, got err=%v", err)
+	}
+	if _, err := os.Stat(stale2); !os.IsNotExist(err) {
+		t.Errorf("stale lock 2 should be cleaned up, got err=%v", err)
+	}
+
+	// Live lock file should still exist.
+	livePath := LockFilePath(dir, "live-session")
+	if _, err := os.Stat(livePath); err != nil {
+		t.Errorf("live lock should NOT be cleaned up, got err=%v", err)
 	}
 }

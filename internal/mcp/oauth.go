@@ -751,7 +751,7 @@ func (h *OAuthHandler) WaitForCallback(ctx context.Context) (string, error) {
 // ExchangeCode exchanges an authorization code for tokens.
 func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenResponse, error) {
 	h.mu.Lock()
-	if h.state == nil || (h.state.authorizationServerMeta.TokenEndpoint == "" && h.state.authorizationServerMeta.Issuer == "") {
+	if h.state == nil || h.state.authorizationServerMeta == nil {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("oauth state not initialized (discovery incomplete)")
 	}
@@ -1005,7 +1005,7 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 // Should be called after StartDeviceFlow and the user visits the verification URI.
 func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, error) {
 	h.mu.Lock()
-	if h.state == nil || (h.state.authorizationServerMeta.TokenEndpoint == "" && h.state.authorizationServerMeta.Issuer == "") {
+	if h.state == nil || h.state.authorizationServerMeta == nil {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("oauth state not initialized (discovery incomplete)")
 	}

@@ -316,3 +316,31 @@ func TestBrowserAutomationPreset(t *testing.T) {
 		t.Errorf("command = %q", cfg.Command)
 	}
 }
+
+func TestExchangeCode_NilStateGuard(t *testing.T) {
+	h := NewOAuthHandler("test-server", "https://example.com", nil)
+	// h.state is nil — should return error, not panic.
+	_, err := h.ExchangeCode(context.Background(), "some-code")
+	if err == nil {
+		t.Fatal("ExchangeCode should fail with nil state")
+	}
+}
+
+func TestPollDeviceToken_NilStateGuard(t *testing.T) {
+	h := NewOAuthHandler("test-server", "https://example.com", nil)
+	// h.state is nil — should return error, not panic.
+	_, err := h.PollDeviceToken(context.Background())
+	if err == nil {
+		t.Fatal("PollDeviceToken should fail with nil state")
+	}
+}
+
+func TestExchangeCode_EmptyMetadataGuard(t *testing.T) {
+	h := NewOAuthHandler("test-server", "https://example.com", nil)
+	// State exists but discovery never completed — no token endpoint.
+	h.state = &oauthState{}
+	_, err := h.ExchangeCode(context.Background(), "some-code")
+	if err == nil {
+		t.Fatal("ExchangeCode should fail with empty authorizationServerMeta")
+	}
+}
