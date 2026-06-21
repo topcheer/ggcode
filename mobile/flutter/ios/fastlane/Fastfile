@@ -448,13 +448,8 @@ platform :ios do
       case state
       when "READY_FOR_REVIEW"
         UI.message("Version #{ver.version_string} (#{ver.id}) is READY_FOR_REVIEW — removing from review submission...")
-        # Remove the version's review submission items to revert to editable
-        begin
-          items = client.get_review_submission_items(review_submission_id: nil).to_models
-        rescue
-          items = []
-        end
-        # Find and delete review submission items for this version
+        # Remove the version's review submission items to revert to PREPARE_FOR_SUBMISSION.
+        # Spaceship doesn't have delete_review_submission_item, use raw API.
         submissions = client.get_review_submissions(app_id: app.id).to_models
         submissions.each do |sub|
           next if sub.state == "COMPLETE"
@@ -462,7 +457,7 @@ platform :ios do
             sub_items = client.get_review_submission_items(review_submission_id: sub.id).to_models
             sub_items.each do |item|
               begin
-                client.delete_review_submission_item(review_submission_item_id: item.id)
+                client.tunes_request_client.delete("v1/reviewSubmissionItems/#{item.id}")
                 UI.success("  Removed submission item #{item.id} from submission #{sub.id}")
                 changed = true
               rescue => e
@@ -476,13 +471,8 @@ platform :ios do
 
       when "WAITING_FOR_REVIEW", "IN_REVIEW"
         UI.message("Version #{ver.version_string} (#{ver.id}) is #{state} — developer rejecting...")
-        # Developer reject = DELETE the appStoreVersionSubmission
-        begin
-          resp = client.get_app_store_version_submission(app_store_version_id: nil)
-        rescue
-          nil
-        end
-        # Use the raw API to find and delete the submission
+        # Developer reject = DELETE the appStoreVersionSubmission.
+        # Use raw API since Spaceship may not expose this.
         begin
           url = "v1/appStoreVersions/#{ver.id}/appStoreVersionSubmission"
           resp = client.tunes_request_client.get(url)
