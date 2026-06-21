@@ -80,6 +80,7 @@ ggcode
 | [Harness 工作流](docs/guide/harness.md) | 隔离任务 + 审查 + 合并 |
 | [A2A 协议](docs/guide/a2a.md) | 跨实例 Agent 委托 |
 | [ACP / 编辑器](docs/guide/acp.md) | JetBrains、Zed 等 ACP 兼容编辑器 |
+| [任务委托](docs/guide/delegation.md) | 委托任务给 Copilot、Claude、Cursor 等外部 Agent |
 | [多 Agent 模式](docs/guide/multi-agent-modes.md) | 子 Agent、团队协作 |
 | [配置参考](docs/guide/configuration.md) | 完整配置文件说明 |
 | [项目记忆](docs/guide/project-memory.md) | GGCODE.md / AGENTS.md / CLAUDE.md |

@@ -80,6 +80,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 | [Harness](docs/guide/harness.md) | Isolated task workflow with review |
 | [A2A Protocol](docs/guide/a2a.md) | Cross-instance agent delegation |
 | [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
+| [Delegation](docs/guide/delegation.md) | Delegate tasks to Copilot, Claude, Cursor, and other agents |
 | [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
 | [Configuration](docs/guide/configuration.md) | Full config file reference |
 | [Project Memory](docs/guide/project-memory.md) | GGCODE.md, AGENTS.md, CLAUDE.md |
