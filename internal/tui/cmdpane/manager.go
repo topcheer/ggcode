@@ -158,7 +158,9 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		}
 	}
 
-	// Create the split pane.
+	// Create the split pane, targeting our own pane so the split always
+	// happens in the window/tab where ggcode is running — not the
+	// currently-active tab (which may differ if the user switched tabs).
 	var flag string
 	if wantPlacement.Direction == "right" {
 		flag = "-h"
@@ -166,11 +168,14 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 		flag = "-v"
 	}
 
-	paneID, err := m.runTmux(ctx,
-		"split-window", flag, "-l", fmt.Sprintf("%d", wantPlacement.Size),
-		"-P", "-F", "#{pane_id}",
-		"tail", "-f", m.logPath,
-	)
+	splitArgs := []string{"split-window", flag, "-l", fmt.Sprintf("%d", wantPlacement.Size),
+		"-P", "-F", "#{pane_id}"}
+	if m.selfPane != "" {
+		splitArgs = append(splitArgs, "-t", m.selfPane)
+	}
+	splitArgs = append(splitArgs, "tail", "-f", m.logPath)
+
+	paneID, err := m.runTmux(ctx, splitArgs...)
 	if err != nil {
 		return fmt.Errorf("cmdpane: failed to create pane: %w", err)
 	}
@@ -210,8 +215,10 @@ func (m *Manager) shouldRecreatePane(want Placement) bool {
 }
 
 // paneExists checks whether a tmux pane ID is still alive.
+// Searches across ALL windows, not just the active one, because the
+// command pane might be in a different window than the current active tab.
 func (m *Manager) paneExists(ctx context.Context, paneID string) (bool, error) {
-	out, err := m.runTmux(ctx, "list-panes", "-F", "#{pane_id}")
+	out, err := m.runTmux(ctx, "list-panes", "-a", "-F", "#{pane_id}")
 	if err != nil {
 		return false, err
 	}
