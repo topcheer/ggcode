@@ -347,6 +347,13 @@ jobs:
           bundle install --jobs 4 --retry 3
           bundle exec fastlane deploy_external
 
+      - name: Submit for App Store Review
+        if: steps.check-build.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          cd ios
+          bundle exec fastlane submit_for_review
+
       - name: Clean up keychain
         if: always()
         run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true

@@ -235,6 +235,9 @@ platform :ios do
   # ── Full Deploy (used by store_deploy.sh) ─────────────
 
   desc "Full deploy: upload → wait for processing → External Testing → submit for review if needed"
+  # ── TestFlight: Upload + Promote to External Testing ──
+
+  desc "Upload to TestFlight and promote to External Testing"
   lane :deploy_external do
     upload_testflight
 
@@ -244,17 +247,25 @@ platform :ios do
 
     build = _wait_for_valid_build(client, app)
     _promote_to_external(client, app, build)
+  end
 
-    # Check if there's an active review submission; if not, submit for review
-    submissions = client.get_review_submissions(app_id: app.id).to_models
-    active_submission = submissions.find { |s| %w[READY_FOR_REVIEW IN_REVIEW WAITING_FOR_REVIEW].include?(s.state) }
+  # ── App Store Review: Reject old + Submit new ──────────
 
-    if active_submission
-      UI.message("Submission #{active_submission.id} is #{active_submission.state} — skipping App Store submission.")
-    else
-      UI.message("No active review submission — submitting latest build for App Store Review.")
-      _submit_build_for_review(client, app, build)
-    end
+  desc "Reject pending App Store version and submit latest build for review"
+  lane :submit_for_review do
+    api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    build = _wait_for_valid_build(client, app)
+
+    # 1. Reject any pending versions to unblock new submission
+    _reject_pending_version(client, app)
+
+    # 2. Submit the new version
+    _submit_build_for_review(client, app, build)
+    UI.success("App Store Review submission complete!")
   end
 
   # ── Expire & Promote (fix stuck beta review) ──────────
@@ -296,23 +307,7 @@ platform :ios do
 
   desc "Submit latest build for App Store Review"
   lane :submit do
-    api_key
-    client = Spaceship::ConnectAPI.client
-    app = Spaceship::ConnectAPI::App.find(app_id)
-    UI.user_error!("App not found") if app.nil?
-
-    build = _wait_for_valid_build(client, app)
-
-    # Check existing submissions
-    submissions = client.get_review_submissions(app_id: app.id).to_models
-    active = submissions.find { |s| %w[READY_FOR_REVIEW IN_REVIEW WAITING_FOR_REVIEW].include?(s.state) }
-    if active
-      UI.message("Active submission #{active.id} (#{active.state}) — skipping.")
-      return
-    end
-
-    _submit_build_for_review(client, app, build)
-    UI.success("Done!")
+    submit_for_review
   end
 
   # ── Private Methods ───────────────────────────────────
@@ -431,75 +426,89 @@ platform :ios do
     UI.message("External Testing: #{e.message}")
   end
 
-  # Cancel any pending review submissions to unblock a new version submission.
-  # When a previous version is stuck in READY_FOR_REVIEW, App Store Connect
-  # will not allow creating or submitting a new one until the old submission
-  # is cancelled.
-  def _cancel_pending_review(client, app)
-    submissions = client.get_review_submissions(app_id: app.id).to_models
-    pending = submissions.reject { |s| s.state == "COMPLETE" }
+  # Developer-reject any pending App Store version to unblock a new submission.
+  #
+  # App Store states that block a new submission:
+  #   READY_FOR_REVIEW   → remove review submission items to revert to PREPARE_FOR_SUBMISSION
+  #   WAITING_FOR_REVIEW → developer reject: DELETE the appStoreVersionSubmission
+  #   IN_REVIEW          → developer reject: DELETE the appStoreVersionSubmission
+  #   PENDING_DEVELOPER_RELEASE → already approved, cannot reject
+  def _reject_pending_version(client, app)
+    versions = app.get_app_store_versions
+    changed = false
 
-    if pending.empty?
-      UI.message("No pending review submissions found")
-      return
-    end
+    versions.each do |ver|
+      next unless ver.platform == "IOS"
+      state = ver.app_store_state
+      next unless state
 
-    pending.each do |sub|
-      UI.message("Found review submission #{sub.id} (state=#{sub.state}) — cancelling...")
-
-      # 1. Delete all items from the submission to revert versions to editable
-      begin
-        items = client.get_review_submission_items(review_submission_id: sub.id).to_models
-        items.each do |item|
+      case state
+      when "READY_FOR_REVIEW"
+        UI.message("Version #{ver.version_string} (#{ver.id}) is READY_FOR_REVIEW — removing from review submission...")
+        # Remove the version's review submission items to revert to editable
+        begin
+          items = client.get_review_submission_items(review_submission_id: nil).to_models
+        rescue
+          items = []
+        end
+        # Find and delete review submission items for this version
+        submissions = client.get_review_submissions(app_id: app.id).to_models
+        submissions.each do |sub|
+          next if sub.state == "COMPLETE"
           begin
-            client.delete_review_submission_item(review_submission_item_id: item.id)
-            UI.success("  Removed submission item #{item.id}")
+            sub_items = client.get_review_submission_items(review_submission_id: sub.id).to_models
+            sub_items.each do |item|
+              begin
+                client.delete_review_submission_item(review_submission_item_id: item.id)
+                UI.success("  Removed submission item #{item.id} from submission #{sub.id}")
+                changed = true
+              rescue => e
+                UI.message("  Remove item #{item.id}: #{e.message}")
+              end
+            end
           rescue => e
-            UI.message("  Remove item #{item.id}: #{e.message}")
+            UI.message("  Get items for #{sub.id}: #{e.message}")
           end
         end
-      rescue => e
-        UI.message("  Get items: #{e.message}")
-      end
 
-      # 2. Delete the review submission itself
-      begin
-        client.delete_review_submission(review_submission_id: sub.id)
-        UI.success("  Cancelled review submission #{sub.id}")
-      rescue => e
-        UI.message("  Cancel submission: #{e.message}")
-      end
-
-      # 3. Also reject the app store version if it has an appStoreVersionSubmission
-      begin
-        versions = app.get_app_store_versions
-        versions.each do |ver|
-          next unless ver.platform == "IOS"
-          next unless ["READY_FOR_REVIEW", "WAITING_FOR_REVIEW", "IN_REVIEW"].include?(ver.app_store_state)
-          # Try deleting the appStoreVersionSubmission if one exists
-          begin
-            client.tunes_request_client.delete("v1/appStoreVersions/#{ver.id}/appStoreVersionSubmission")
-            UI.success("  Removed appStoreVersionSubmission for #{ver.version_string}")
-          rescue
-            nil
-          end
+      when "WAITING_FOR_REVIEW", "IN_REVIEW"
+        UI.message("Version #{ver.version_string} (#{ver.id}) is #{state} — developer rejecting...")
+        # Developer reject = DELETE the appStoreVersionSubmission
+        begin
+          resp = client.get_app_store_version_submission(app_store_version_id: nil)
+        rescue
+          nil
         end
-      rescue => e
-        UI.message("  Version cleanup: #{e.message}")
+        # Use the raw API to find and delete the submission
+        begin
+          url = "v1/appStoreVersions/#{ver.id}/appStoreVersionSubmission"
+          resp = client.tunes_request_client.get(url)
+          sub_data = resp.body['data']
+          if sub_data && sub_data['id']
+            client.tunes_request_client.delete("v1/appStoreVersionSubmissions/#{sub_data['id']}")
+            UI.success("  Developer rejected version #{ver.version_string} (deleted submission #{sub_data['id']})")
+            changed = true
+          else
+            UI.message("  No appStoreVersionSubmission found for #{ver.version_string}")
+          end
+        rescue => e
+          UI.message("  Developer reject: #{e.message}")
+        end
       end
     end
 
-    UI.message("Waiting 10s for App Store Connect to process cancellation...")
-    sleep 10
+    if changed
+      UI.message("Waiting 10s for App Store Connect to process...")
+      sleep 10
+    else
+      UI.message("No pending versions to reject")
+    end
   end
 
   def _submit_build_for_review(client, app, build)
     v = version_str
     UI.user_error!("Could not read version") if v.empty?
     UI.message("Version: #{v}")
-
-    # 0. Cancel any pending review submissions to unblock this new submission
-    _cancel_pending_review(client, app)
 
     # 1. Find or create IOS version
     ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
