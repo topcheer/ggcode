@@ -2,7 +2,7 @@
 
 **Scope**: full-codebase security; `.goreleaser.yaml`; `.github/workflows/`; `scripts/`; install wrappers (`cmd/ggcode-installer/`, `npm/`, `python/`); native packages (MSI, deb, rpm, apk, ipk, pkg.tar.zst); winget; mobile app-store compliance.
 
-**Date**: 2026-05-29. Round 8 references: `docs/reviews/round8-security.md`, `docs/reviews/cross-platform-compat.md`, `security/SECURITY_AUDIT_REPORT.md`, `docs/design-decisions.md` (some "issues" are intentional).
+**Date**: 2026-05-29. Round 8 references: `(deleted)`, `(deleted)`, `security/SECURITY_AUDIT_REPORT.md`, `docs/design/design-decisions.md` (some "issues" are intentional).
 
 ---
 
@@ -11,7 +11,7 @@
 | ID | Title | Status | Evidence | Action |
 |----|-------|--------|----------|--------|
 | C-1 | Relay WS zero auth | **OPEN** | `ggcode-relay/relay.go:724-760`, `:16-18` | See Round 9 mobile-relay action plan |
-| C-2 | WebUI WS `CheckOrigin: true` | **DESIGN-INTENDED** | `internal/webui/server_websocket.go:16-18`; intent doc: `docs/design-decisions.md:60-91` (127.0.0.1 + token auth) | None unless remote binding introduced |
+| C-2 | WebUI WS `CheckOrigin: true` | **DESIGN-INTENDED** | `internal/webui/server_websocket.go:16-18`; intent doc: `docs/design/design-decisions.md:60-91` (127.0.0.1 + token auth) | None unless remote binding introduced |
 | C-3 | `/nuke` unauthenticated | **OPEN** | `ggcode-relay/relay.go:738-760` | Require admin token or remove |
 | C-4 | Config API key exposure | **PARTIAL** | `internal/webui/server_handlers.go:125,185,670-671` returns booleans only; underlying file still 0644 | Combine with H-20 fix |
 | C-5 | Tunnel token = encryption key | **OPEN** | `internal/tunnel/crypto.go:13-25` | HKDF-derive enc key from token; separate auth |

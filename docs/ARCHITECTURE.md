@@ -4,232 +4,600 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-05-23
+> Last updated: 2026-06-21
 
 ## Overview
 
-ggcode is a terminal-based AI coding agent written in Go. It provides an interactive REPL where users describe coding tasks in natural language; the agent iteratively plans, calls tools, and refines its work in an agentic loop.
+ggcode is a terminal-based AI coding agent written in Go. It provides an interactive REPL where users describe coding tasks in natural language; the agent iteratively plans, calls tools, and refines its work in an agentic loop. The same core engine powers a desktop GUI (Wails/React), a daemon mode with IM gateway, a harness control plane, an A2A (Agent-to-Agent) mesh, and a mobile relay tunnel.
 
-The core agent loop is now complemented by a lightweight **harness control plane** and an **A2A (Agent-to-Agent) mesh** for multi-instance collaboration. Harness mode is intentionally implemented around the existing runtime rather than inside it: `ggcode harness ...` scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work, supports dependency-gated backlogs, binds tasks to bounded contexts when useful, carries lightweight context ownership metadata, summarizes queue health per context, exposes owner-centric actionable inboxes and owner-filtered batch actions, creates isolated git worktrees when available, can explicitly retry failed backlog items or resume interrupted runs, uses pollable sub-agent-backed workers for queued execution, persists post-run delivery evidence, exposes review/approval, promotion, and owner/context-scoped release-batch loops on verified tasks, and can further split release-ready work into owner- or context-grouped rollout waves with persisted staged rollout state, explicit environment tags, gate approval/rejection, and advance/pause/resume/abort controls without forking a second agent architecture.
+The core agent loop is complemented by several subsystems:
 
-The A2A subsystem enables multiple ggcode instances to discover each other, authenticate via multiple schemes (API key, OAuth2+PKCE, Device Flow, OIDC, mTLS), and call tools across instances transparently via MCP bridge.
+- **Harness control plane** (`ggcode harness ...`): scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work with dependency-gated backlogs, binds tasks to bounded contexts, summarizes queue health per context, exposes owner-centric actionable inboxes and batch actions, creates isolated git worktrees, persists delivery evidence, and exposes review/approval, promotion, and release-batch loops — all built around the existing runtime rather than forking a second agent architecture.
+- **A2A mesh**: Multiple ggcode instances discover each other, authenticate via multiple schemes (API key, OAuth2+PKCE, Device Flow, OIDC, mTLS), and call tools across instances transparently via MCP bridge. Optional mDNS LAN discovery.
+- **IM gateway**: Remote coding via Telegram, QQ, Discord, Slack, DingTalk, Feishu, WeCom, WhatsApp, and more with slash commands for adapter management.
+- **Mobile relay**: WebSocket tunnel broker that records and replays agent events to mobile clients via a standalone relay server, enabling mobile/remote interaction with running sessions.
+- **Desktop GUI**: Wails-based application (React frontend + Go backend) with visual chat, IM integration, tool approval dialogs, session sidebar, and LSP language server status panel.
 
 ### Core Principles
 
 - **Agentic loop**: user prompt → LLM → tool calls → execute → feed results back → repeat
 - **Extensible tools**: built-in tools + MCP servers + Go plugin interface
 - **Safe by default**: permission policy with path sandbox and dangerous-command detection
-- **Streaming UX**: Bubble Tea TUI with live markdown, diff preview, spinners
+- **Multi-surface**: TUI (Bubble Tea), Desktop (Wails/React), Daemon (headless + IM), Pipe (non-interactive), ACP (editor integration)
 - **Portable config**: YAML with `${ENV_VAR}` expansion
 - **Multi-instance collaboration**: A2A protocol with multi-auth, auto-discovery, MCP bridge
-- **IM gateway**: Remote coding via Telegram, QQ, Discord, Slack, DingTalk, Feishu with slash commands
+- **Mobile tunnel**: event persistence, replay-on-reconnect, active session tracking
 
 ## Directory Structure
 
 ```
-cmd/ggcode/              # CLI entrypoint (main.go, root.go, pipe.go, daemon.go)
-ggcode-relay/            # Standalone relay server for mobile tunnel (main.go, store.go)
-desktop/                 # Desktop GUI application (Fyne, separate Go module)
-  ggcode-desktop/        # Main desktop app — visual chat, IM, tool approval, tunnel relay
-  markdownx/             # Extended Markdown widget (Fyne, Mermaid diagram support)
+cmd/ggcode/                # CLI entrypoint
+  main.go                  # Entry point
+  root.go                  # Root command: tool registration, agent wiring, permission modes
+  pipe.go                  # Non-interactive pipe mode (-p flag)
+  daemon.go                # Daemon mode: headless agent, follow display, tunnel/IM, keyboard shortcuts
+  harness_cmd.go           # Harness CLI: scaffold, run, queue, review, promote, release
+  im_cmd.go                # IM adapter management CLI
+  mcp_cmd.go               # MCP server management CLI
+  acp.go                   # ACP server CLI (expose ggcode as an ACP agent)
+  resume_picker.go         # Session resume picker (interactive list)
+  onboard.go               # First-run onboarding wizard
+  llm_probe.go             # LLM connectivity probing
+  bootstrap.go             # Provider bootstrap helpers
+
+cmd/ggcode-installer/      # Standalone Go installer that downloads release binaries
+
+desktop/                   # Desktop GUI application (Wails-based, separate Go module)
+  ggcode-desktop-wails/    # Wails desktop app — React frontend + Go backend
+    app.go                 # Wails App: all bound methods (chat, config, IM, MCP, LSP, tunnel, sessions, files)
+    main.go                # Wails main entry point
+    frontend/src/          # React + TypeScript SPA (Vite build)
+      App.tsx              # Root component
+      components/           # Chat view, sidebar, settings, tool approval, inspector, model picker
+      i18n/                 # English and Chinese localization
+      assets/              # Icons and images
+  wailskit/                # Shared Go backend for Wails desktop
+    chat.go                # ChatBridge: agent lifecycle, streaming, tool calls, tunnel integration
+    config.go              # Config REST: vendors, endpoints, API keys, MCP, A2A, IM, LSP, general
+    sessions.go            # Session list/load/delete, workspace filtering
+    im.go                  # IM adapter management (enable, disable, mute, bind, unbind)
+    mcp.go                 # MCP server management and status
+    lsp.go                 # LSP server discovery, status, install (user/global/project scope)
+    files.go               # File reading/serving for desktop preview
+    logstream.go           # Log streaming for debugging
+    desktop_config.go      # Desktop-specific config accessors
+
+ggcode-relay/              # Standalone relay server for mobile tunnel
+  relay.go                 # WebSocket relay: room management, event routing, peer-to-peer forwarding
+  store.go                 # SQLite event persistence with dedup by sessionID+eventID
+  share_auth.go            # Share session authentication and QR code pairing
+  stats.go                 # Relay usage statistics
+  trace.go                 # Request tracing
+  model_catalog.go         # Model catalog for mobile client discovery
+  Dockerfile               # Container deployment
+  railway.json             # Railway deployment config
+
 internal/
-  agent/                 # Agent: agentic loop, provider abstraction
-    agent.go             # Agent struct, Run/RunStream, core orchestration
-    agent_autopilot.go   # Autopilot continuation logic
-    agent_compact.go     # Auto-compaction of conversation history
-    agent_memory.go      # Memory management helpers
-    agent_tool.go        # Tool execution, diff confirm, hooks
-  a2a/                   # Agent-to-Agent protocol
-    server.go            # HTTP server with multi-auth middleware
-    client.go            # Auto-negotiating A2A client
-    handler.go           # JSON-RPC handler (SendMessage, SendMessageStreaming)
-    registry.go          # Local instance registry (PID-based discovery)
-    mcp_bridge.go        # MCP bridge: exposes remote agents as MCP tools
-    remote_tool.go       # Remote tool executor
-    types.go             # Shared types (Task, Artifact, AgentCard, auth config)
-  auth/                  # Authentication subsystem
-    store.go             # Credential store
-    copilot.go           # GitHub Copilot token management
-    pkce.go              # PKCE helpers (code verifier/challenge generation)
-    claude_oauth.go      # Claude OAuth flow
-    a2a_oauth.go         # A2A OAuth2 PKCE/Device Flow providers
-    a2a_presets.go       # Provider presets (GitHub, Google, Auth0, Azure)
-    a2a_token_cache.go   # Token cache with per-client isolation
-  checkpoint/            # File edit checkpoints for undo
-    checkpoint.go
-  commands/              # Markdown-backed skills and legacy custom slash commands
-    command.go           # Command/skill metadata and expansion helpers
-    loader.go            # Load skills and legacy commands from ~/.agents, ~/.ggcode, and project .ggcode
-  config/                # Configuration loading and env expansion
-    config.go            # Config struct, LoadFromFile, A2A auth config
-    env.go               # ${ENV_VAR} expansion
-    a2a_override.go      # Instance-level A2A config merge from .ggcode/a2a.yaml
-  context/               # Conversation context management
-    manager.go           # ContextManager: message history, compression
-    tokenizer.go         # CJK-aware token estimation
-  cost/                  # Token usage and cost tracking
-    manager.go           # CostManager: per-session and total cost
-    pricing.go           # Model pricing data
-    types.go             # SessionCost type
-    tracker.go           # In-flight token counting
-  daemon/                # Daemon mode: headless agent with follow display
-    daemon.go            # Daemon struct, keyboard shortcuts, i18n labels
-  debug/                 # Debug logging
-    debug.go
-  diff/                  # Diff formatting utilities
-    diff.go              # FormatDiff, IsDiffContent
-  hooks/                 # Pre/post execution hooks
-    hook.go              # Hook struct
-    runner.go            # HookRunner
-  harness/               # Harness control plane: scaffold, checks, queue/run tracking, review/promotion/release, worktrees, gc
-    config.go            # Harness config model and defaults
-    project.go           # Project discovery and scaffold creation
-    check.go             # Structural checks and validation commands
-    run.go               # Tracked harness runs / queued execution
-    release.go           # Release-batch planning and persisted release reports
-    worktree.go          # Git worktree lifecycle for isolated task workspaces
-    gc.go                # Archive/prune stale harness state
-  image/                 # Image file handling for multimodal input
-    image.go             # ReadFile, Placeholder
-  im/                    # IM gateway runtime
-    runtime.go           # Manager: multi-adapter routing, bindings, mute/unmute
-    daemon_bridge.go     # DaemonBridge: agent loop + IM slash commands + ChatBridge impl
-    emitter.go           # IMEmitter: outbound event routing
-    fanout.go            # Multi-adapter fan-out with echo suppression
-    adapter_*.go         # Platform adapters (Telegram, QQ, Discord, Slack, DingTalk, Feishu)
-    tool_format.go       # Unified tool result formatting for IM
-  webui/                 # WebUI HTTP server + WebSocket chat
-    server.go            # Server: REST API (config, sessions, MCP, IM, A2A, general) + WS chat handler
-    tui_bridge.go        # TUIChatBridge: routes webchat → TUI event loop via program.Send()
-    server_test.go       # Unit tests for config serialization, sessions, WS
-    server_e2e_test.go   # E2E tests (48 tests): REST API, WS lifecycle, broadcast, attachments, errors
-  knight/                # Knight: background autonomous agent
-    knight.go            # Daily token budget, activity-driven code monitoring
-  mcp/                   # Model Context Protocol client
-    client.go            # MCPClient: spawn and communicate with MCP servers
-    adapter.go           # Tool adapter (MCP tool → ggcode tool interface)
-    jsonrpc.go           # JSON-RPC protocol
-    oauth.go             # OAuth 2.1 handler: metadata discovery, DCR, device flow, token refresh
-  memory/                # Project and auto memory
-    auto.go              # AutoMemory: automatic memory extraction
-    project.go           # ProjectMemory: load memory files
-  permission/            # Permission and sandbox policy
-    policy.go            # PermissionPolicy interface
-    config_policy.go     # Config-backed policy
-    mode.go              # PermissionMode enum (Supervised/Plan/Auto/Bypass)
-    dangerous.go         # Dangerous command detection
-    sandbox.go           # Path sandbox enforcement
-  plugin/                # Go plugin system
-    loader.go            # Plugin loader
-    mcp_loader.go        # MCP server plugin loader
-    plugin.go            # Plugin interface
-  provider/              # LLM provider implementations
-    provider.go          # Provider interface
-    openai.go            # OpenAI-compatible provider
-    anthropic.go         # Anthropic provider
-    gemini.go            # Google Gemini provider
-    copilot.go           # GitHub Copilot provider
-    registry.go          # Provider registry
-    retry.go             # Retry logic with backoff
-  session/               # Session persistence
-    store.go             # Store: save/load sessions as JSONL
-  subagent/              # Sub-agent spawning and management
-    manager.go           # Manager: spawn, list, cancel, and snapshot sub-agents
-    runner.go            # Runner: execute sub-agent tasks and wait/poll their state
-  tool/                  # Built-in tools
-    tool.go              # Tool interface
-    builtin.go           # RegisterBuiltinTools
-    read_file.go         # File reading
-    write_file.go        # File writing
-    edit_file.go         # File editing with checkpoint support
-    run_command.go       # Synchronous shell command execution
-    command_jobs.go      # Background command job manager and buffered output
-    command_job_tools.go # Async command start/read/wait/write/stop/list tools
-    search_files.go      # Code search
-    list_dir.go          # Directory listing
-    glob.go              # Glob pattern matching
-    web_fetch.go         # HTTP fetch with SSRF protection
-    web_search.go        # Web search
-    git_diff.go / git_log.go / git_status.go  # Git tools
-    save_memory.go       # Save memory entries
-    todo_write.go        # Write todo lists
-    spawn_agent.go       # Spawn sub-agents
+  agent/                   # Core agent loop
+    agent.go               # Agent struct, Run/RunStream, provider call orchestration
+    agent_autopilot.go     # Autopilot continuation logic (auto-resume on ask_user)
+    agent_compact.go       # Auto-compaction: microcompact + summarize
+    agent_precompact.go    # Pre-compaction heuristics and context inference
+    agent_memory.go        # Memory management helpers (project/auto memory)
+    agent_tool.go          # Tool execution, diff confirmation, pre/post hooks
+
+  agentruntime/            # Unified runtime layer for desktop, daemon, and TUI
+    config_access.go       # Config read/write accessors shared across surfaces
+    desktop_adapters.go    # Desktop-specific adapter wiring
+    desktop_stream.go      # Desktop streaming event dispatch
+    im_round.go            # IM round coordination
+    interactions.go        # Shared interaction handling (ask_user, approvals)
+    interactive_core.go    # Core interactive session loop
+    mobile_interactions.go # Mobile/tunnel-specific interaction routing
+    tunnel_interactions.go # Tunnel-specific interaction dispatch
+    tunnel_main_stream.go  # Tunnel main stream setup
+    types.go               # Shared runtime types
+
+  provider/                # LLM provider implementations
+    provider.go            # Provider interface (Name, Chat, ChatStream, CountTokens)
+    openai.go              # OpenAI-compatible provider (OpenAI, DeepSeek, Groq, Mistral, etc.)
+    anthropic.go           # Anthropic provider
+    gemini.go              # Google Gemini provider
+    copilot.go             # GitHub Copilot provider (custom transport)
+    registry.go            # Provider registry (protocol name → adapter)
+    retry.go               # Retry logic with exponential backoff
+    adaptive_cap.go        # Adaptive output token cap based on model limits
+    context_probe.go       # Context window probing and model capability detection
+    model_discovery.go     # Dynamic model list discovery from provider APIs
+    impersonate.go         # System prompt impersonation presets
+    user_error.go          # User-facing error formatting (rate limits, auth failures)
+    vision.go              # Multimodal vision support
+
+  config/                  # Configuration loading and env expansion
+    config.go              # Config struct, LoadFromFile, full schema
+    config_save.go         # Save, SaveScoped (global/instance), recompact
+    config_vendor.go       # Vendor/endpoint CRUD helpers
+    config_keys.go         # Config key enumeration and dot-notation access
+    config_exposed.go      # Read-only config accessors for WebUI/API
+    env.go                 # ${ENV_VAR} expansion
+    api_keys.go            # API key resolution, migration, secure storage
+    anthropic_bootstrap.go # Anthropic first-run API key bootstrap
+    a2a_override.go        # Instance-level A2A config merge from .ggcode/a2a.yaml
+    instance.go            # Instance paths, LoadInstanceConfig, SetInstancePaths
+    instance_delta.go      # Instance-scoped delta config
+    vendor_defaults.go     # Built-in vendor defaults (protocols, base URLs, models)
+    knight.go              # Knight-specific config
+    onboard.go             # First-run onboarding config
+    context_window.go      # Context window size management and overrides
+    secure_write.go        # Atomic file write with temp + rename
+
+  context/                 # Conversation context management (imported as `ctxpkg`)
+    manager.go             # ContextManager: message history, compression
+    tokenizer.go           # CJK-aware token estimation
+
+  cost/                    # Token usage and cost tracking
+    manager.go             # CostManager: per-session and total cost
+    pricing.go             # Model pricing data
+    types.go               # SessionCost / TokenUsage (local type to avoid circular deps)
+    tracker.go             # In-flight token counting
+
+  permission/              # Permission and sandbox policy
+    mode.go                # PermissionMode enum (supervised/plan/auto/bypass/autopilot)
+    policy.go              # PermissionPolicy interface
+    config_policy.go       # Config-backed per-tool rules
+    dangerous.go           # Dangerous command classification
+    sandbox.go             # Path sandbox enforcement
+
+  tool/                    # Built-in tools
+    tool.go                # Tool interface (Name, Description, Parameters, Execute)
+    builtin.go             # RegisterBuiltinTools: file ops, search, commands, git, web, ask_user, todo_write
+    read_file.go           # File reading (text, images, PDF, Office, archives)
+    write_file.go          # File writing
+    edit_file.go           # Targeted file editing with checkpoint support
+    multi_edit_file.go     # Multi-edit single file
+    multi_file_edit.go     # Coordinated multi-file edit
+    multi_file_read.go     # Batch file reading
+    list_dir.go            # Directory listing
+    search_files.go        # Regex content search
+    glob.go                # Glob pattern file matching
+    grep.go                # Ripgrep-based search with context lines
+    run_command.go         # Synchronous shell command execution
+    command_jobs.go        # Background command job manager and buffered output
+    command_job_tools.go   # Async command tools (start/read/wait/write/stop/list)
+    web_fetch.go           # HTTP fetch with SSRF protection
+    web_search.go          # Web search
+    git_diff.go / git_log.go / git_status.go / git_add.go / git_commit.go / git_blame.go  # Git tools
+    git_show.go / git_branch_list.go / git_remote.go / git_stash.go / git_stash_list.go  # Git tools
+    save_memory.go         # Save memory entries
+    todo_write.go          # Write todo lists
+    spawn_agent.go         # Spawn sub-agents
     list_agents.go / wait_agent.go  # Sub-agent polling and wait tools
-  tui/                   # Terminal UI (Bubble Tea)
-    model.go             # Model struct, Init, configuration methods
-    model_update.go      # Update loop: message routing, key handling, agent lifecycle
-    model_messages.go    # Message types (streamMsg, doneMsg, errMsg, etc.)
-    model_approval.go    # Approval/diff confirmation selection lists
-    model_pending.go     # Pending state helpers (device codes, questionnaires)
-    model_clipboard.go   # Clipboard image loading
-    model_terminal.go    # Terminal utility helpers (open URL, resize)
-    view.go              # View rendering, status bar, autocomplete
-    commands.go          # Slash command handlers
-    submit.go            # Message submission and agent startup
-    resize.go            # Window resize handling
-    repl.go              # REPL: wires Model to Agent, session, cost
-    completion.go        # Slash command autocomplete logic
-    viewport.go          # Scrollable viewport with auto-follow
-    spinner.go           # Tool execution spinner
-    diff.go              # Diff display formatting
-    markdown.go          # Markdown rendering with glamour
-    preview_panel.go     # File preview, markdown rendering, syntax highlighting
-    app.go               # Minimal package marker
-  tunnel/                # Tunnel broker for mobile relay
-    broker.go            # Broker: client management, event recording, replay, active session tracking
-    relay_client.go      # WebSocket client to relay server with backpressure
-    session.go           # Tunnel session helpers (SendText, SendSnapshot, etc.)
-    protocol.go          # Event types and gateway message structs
-  swarm/                 # Team-based multi-agent coordination
-    team.go              # Team creation, deletion, teammate management
-    task_board.go        # Shared task board with assignee-based delivery
-  cron/                  # Scheduled jobs
-    cron.go              # Cron expression parsing, recurring and one-shot jobs
-  lsp/                   # LSP client integration
-    client.go            # Generic LSP client for gopls, rust-analyzer, etc.
-  markdown/              # Markdown rendering
-    render.go            # Glamour-based markdown rendering helpers
-  chat/                  # Chat utilities
-    types.go             # Shared chat types and helpers
-  extract/               # Content extraction
-    extract.go           # File content extraction utilities
-  stream/                # Stream processing
-    stream.go            # Stream utilities
-  task/                  # Task tracking
-    task.go              # Task primitives
-  safego/                # Safe goroutine helpers
-    safego.go            # Panic recovery wrappers for goroutines
-  restart/               # Process restart
-    restart.go           # Restart support
-  acp/                   # Agent Client Protocol
-    acp.go               # ACP support for JetBrains, Zed, etc.
-  util/                  # Shared utilities
-    truncate.go          # String truncation
-docs/                    # Documentation
-  ARCHITECTURE.md        # This file
-  a2a-auth.md            # A2A authentication guide (5 schemes, config examples, decision matrix)
+    notebook_edit.go       # Jupyter notebook editing
+    sleep.go               # Sleep/delay tool
+    worktree.go            # Enter/exit git worktree tools
+
+  tui/                     # Terminal UI (Bubble Tea)
+    model.go               # Model struct, Init, configuration methods
+    model_update.go        # Update loop: message routing, key handling, agent lifecycle
+    model_messages.go      # Message types (streamMsg, doneMsg, errMsg, etc.)
+    model_approval.go      # Approval/diff confirmation selection lists
+    model_pending.go       # Pending state helpers (device codes, questionnaires)
+    model_clipboard.go     # Clipboard image loading
+    model_terminal.go      # Terminal utility helpers (open URL, resize)
+    view.go                # View rendering, status bar, autocomplete
+    commands.go            # Slash command handlers
+    submit.go              # Message submission and agent startup
+    resize.go              # Window resize handling
+    repl.go                # REPL: wires Model to Agent, session, cost, tools
+    completion.go          # Slash command autocomplete logic
+    viewport.go            # Scrollable viewport with auto-follow
+    spinner.go             # Tool execution spinner
+    diff.go                # Diff display formatting
+    markdown.go            # Markdown rendering with glamour
+    preview_panel.go       # File preview, markdown rendering, syntax highlighting
+    model_picker.go        # Model selection panel
+    provider_picker.go     # Provider/vendor/endpoint selection
+    mcp_panel.go           # MCP server management panel
+    inspector.go           # Session inspector panel
+    harness_panel.go       # Harness workflow panel
+    skills_panel.go        # Skills browser panel
+    i18n.go                # i18n catalogs (en / zh-CN)
+    ask_user.go            # Interactive ask_user questionnaire
+    chat_bridge.go         # TUIChatBridge: webchat → TUI event loop
+    ask_user.go            # ask_user questionnaire handling
+    wechat_panel.go        # WeChat adapter panel
+    wecom_panel.go         # WeCom adapter panel
+    whatsapp_panel.go      # WhatsApp adapter panel
+    extpane/               # External terminal pane management
+      manager.go           # PaneManager: lifecycle, maxPanes=10, failed-agent blocklist
+      tmux.go              # Tmux backend (priority 1 if $TMUX set)
+      kitty.go             # Kitty backend (priority 2, KITTY_WINDOW_ID)
+      iterm2.go            # iTerm2 backend (priority 3, TERM_PROGRAM=="iTerm2")
+      iterm2_other.go      # iTerm2 no-op stub (non-darwin)
+      format.go            # Logfile path formatting
+      sizing.go            # Pane sizing helpers (pixel estimation)
+      pixel_unix.go        # TIOCGWINSZ pixel size detection (unix)
+      pixel_other.go       # Pixel size stub (non-unix)
+    cmdpane/               # Command pane management
+      manager.go           # CmdPaneManager: terminal pane for running commands
+
+  webui/                   # WebUI HTTP server + WebSocket chat
+    server.go              # Server: REST API + WS chat handler
+    server_handlers.go     # REST endpoint handlers (config, sessions, MCP, IM, A2A)
+    server_static.go       # SPA static file serving
+    server_websocket.go    # WebSocket connection lifecycle and event broadcast
+    tui_bridge.go          # TUIChatBridge: routes webchat → TUI event loop
+    auth.go                # WebUI token authentication
+    embed.go               # Embed SPA dist/ files
+    dist/                  # Built SPA frontend
+
+  im/                      # IM gateway runtime
+    adapters.go            # Adapter interface and registration
+    runtime.go             # Manager: multi-adapter routing, bindings, mute/unmute
+    daemon_bridge.go       # DaemonBridge: agent loop + IM slash commands + ChatBridge impl
+    emitter.go             # IMEmitter: outbound event routing
+    fanout.go              # Multi-adapter fan-out with per-channel echo suppression
+    approval_reply.go      # Tool approval via IM (approve/reject)
+    approval_text.go       # Approval message formatting
+    ask_user_format.go     # ask_user questionnaire formatting for IM
+    ask_user_parse.go      # Parse IM responses back to ask_user answers
+    tool_format.go         # Unified tool result formatting for all IM adapters
+    telegram_adapter.go    # Telegram adapter
+    qq_adapter.go          # QQ adapter
+    discord_adapter.go     # Discord adapter
+    slack_adapter.go       # Slack adapter
+    dingtalk_adapter.go    # DingTalk (DingDing) adapter
+    feishu_adapter.go      # Feishu (Lark) adapter
+    wecom_adapter.go       # WeCom (Enterprise WeChat) adapter
+    whatsapp_adapter.go    # WhatsApp adapter
+    stt/                   # Speech-to-text support for IM voice messages
+
+  tunnel/                  # Tunnel broker for mobile relay
+    broker.go              # Broker: client management, event recording, replay, active session tracking
+    relay_client.go        # WebSocket client to relay server with backpressure (30s write deadline)
+    session.go             # Tunnel session helpers (SendText, SendSnapshot, etc.)
+    protocol.go            # Event types and gateway message structs
+    projection_store.go    # Projection state tracking for event ordering
+    projection_hash.go     # Projection hash for reconnect verification
+    share_protocol.go      # Session share/online/offline protocol
+    crypto.go              # End-to-end encryption for tunnel events
+    key_exchange.go        # Key exchange for encrypted tunnel sessions
+    qrcode.go              # QR code generation for mobile pairing
+    relay_url_security.go  # Relay URL validation and security checks
+    replay_order.go        # Event replay ordering guarantees
+
+  swarm/                   # Team-based multi-agent coordination
+    team.go                # Team creation, deletion, teammate management
+    manager.go             # Manager: spawn, list, cancel teammates, CancelAll
+    idle_runner.go         # Idle teammate runner: processes inbox tasks
+
+  agentruntime/            # Unified runtime layer (see above)
+
+  a2a/                     # Agent-to-Agent protocol
+    server.go              # HTTP server with multi-auth middleware
+    client.go              # Auto-negotiating A2A client
+    handler.go             # JSON-RPC handler (SendMessage, SendMessageStreaming)
+    registry.go            # Local instance registry (PID-based discovery)
+    mcp_bridge.go          # MCP bridge: exposes remote agents as MCP tools
+    remote_tool.go         # Remote tool executor
+    types.go               # Shared types (Task, Artifact, AgentCard, auth config)
+    mdns.go                # mDNS LAN discovery (broadcast and listen)
+    ip.go                  # Local IP address discovery
+
+  acp/                     # Agent Client Protocol (ACP)
+    handler.go             # ACP handler: expose ggcode as an ACP agent for JetBrains, Zed, etc.
+    client.go              # ACP client: connect to external ACP-compatible agents
+    client_manager.go      # Multi-client ACP session management
+    agent_loop.go          # ACP agent loop integration
+    adapter.go             # ACP tool adapter
+    transport.go           # ACP transport layer (stdio, WebSocket)
+    session.go             # ACP session lifecycle
+    discovery.go           # ACP agent discovery
+    auth.go                # ACP authentication
+    activity_trail.go      # Activity trail for ACP sessions
+    output_tail.go         # Output tailing for ACP
+    mcp_bridge.go          # MCP bridge for ACP tools
+    types.go               # ACP types and protocol definitions
+
+  acpclient/               # ACP client utilities
+    manager.go             # Manager for spawning and tracking ACP-compatible editor agents (Claude, Codex, etc.)
+
+  auth/                    # Full authentication subsystem
+    store.go               # Credential store
+    copilot.go             # GitHub Copilot token management
+    pkce.go                # PKCE helpers (code verifier/challenge generation)
+    claude_oauth.go        # Claude OAuth flow
+    a2a_oauth.go           # A2A OAuth2 PKCE/Device Flow providers
+    a2a_presets.go         # Provider presets (GitHub, Google, Auth0, Azure)
+    a2a_token_cache.go     # Token cache with per-{provider}-{clientID} isolation
+
+  checkpoint/              # In-memory file checkpointing
+    checkpoint.go          # File edit checkpoints for undo/revert support
+
+  commands/                # Markdown-backed skills and slash commands
+    command.go             # Command/skill metadata and expansion helpers
+    loader.go              # Load skills and legacy commands from ~/.agents, ~/.ggcode, and project .ggcode
+
+  cron/                    # Scheduled job management
+    parser.go              # Cron expression parsing (5-field standard format)
+    scheduler.go           # Scheduler: recurring jobs (persisted) and one-shot reminders (in-memory)
+
+  daemon/                  # Daemon mode
+    daemon.go              # Daemon struct, keyboard shortcuts, i18n labels, follow display
+
+  debug/                   # Debug logging
+    debug.go               # Debug log helpers (file-based, toggled by env var)
+
+  diff/                    # Diff formatting
+    diff.go                # FormatDiff, IsDiffContent
+
+  extract/                 # Content extraction
+    extract.go             # File content extraction utilities
+
+  hooks/                   # Pre/post execution hooks
+    hook.go                # Hook struct
+    runner.go              # HookRunner: executes pre/post tool hooks
+
+  harness/                 # Harness control plane
+    config.go              # Harness config model and defaults
+    project.go             # Project discovery and scaffold creation
+    check.go               # Structural checks and validation commands
+    run.go                 # Tracked harness runs / queued execution
+    release.go             # Release-batch planning and persisted release reports
+    worktree.go            # Git worktree lifecycle for isolated task workspaces
+    gc.go                  # Archive/prune stale harness state
+    auto_init.go           # Auto-init: detect projects and scaffold
+    auto_run.go            # Auto-run: pollable sub-agent-backed workers
+    templates.go           # Harness prompt templates
+    worker.go              # Worker: sub-agent-backed task execution
+    context.go             # Bounded context binding
+    context_config.go      # Context configuration model
+
+  image/                   # Image handling for multimodal input
+    image.go               # ReadFile, Placeholder
+    clipboard_*.go         # Platform-specific clipboard integration (darwin, linux, windows)
+
+  install/                 # Self-update and install
+    install.go             # Self-update logic (download, verify, replace binary)
+
+  knight/                  # Knight: background autonomous agent
+    analyzer.go            # Code change analysis and pattern extraction
+    budget.go              # Daily token budget management
+    budget_buckets.go     # Budget bucket allocation per category
+    auto_policy.go         # Auto-policy decision engine
+    auto_promote_eval_log.go  # Auto-promotion evaluation logging
+    usage_tracker.go       # Usage tracking and reporting
+    ab_replay.go           # A/B replay for skill evaluation
+    skill_promoter.go      # Skill promotion pipeline
+    skill_validator.go     # Skill validation
+    skill_scenario_log.go  # Skill scenario logging
+    candidate_name.go      # Candidate name generation
+
+  lsp/                     # LSP client integration
+    client.go              # Generic LSP client (gopls, rust-analyzer, clangd, etc.)
+    discovery.go           # Auto-discovery from PATH and workspace files
+    operations.go          # LSP operations (definition, references, hover, rename, etc.)
+    session.go             # LSP session lifecycle management
+
+  markdown/                # Markdown rendering
+    render.go              # Glamour-based markdown rendering helpers
+
+  mcp/                     # Model Context Protocol client
+    client.go              # MCPClient: spawn and communicate with MCP servers
+    adapter.go             # Tool adapter (MCP tool → ggcode tool interface)
+    jsonrpc.go             # JSON-RPC protocol implementation
+    oauth.go               # OAuth 2.1: metadata discovery, DCR, device flow, token refresh
+    install.go             # MCP server installation (npm, npx, etc.)
+    migration.go           # MCP config migration from legacy formats
+    presets.go             # MCP preset definitions
+
+  memory/                  # Project and auto memory
+    auto.go                # AutoMemory: automatic memory extraction from sessions
+    project.go             # ProjectMemory: load GGCODE.md, AGENTS.md, CLAUDE.md, COPILOT.md
+
+  metrics/                 # Token usage metrics
+    collector.go           # Metrics collector: aggregates usage across sessions
+    digest.go              # Periodic usage digest generation
+    summary.go             # Human-readable usage summary
+    metrics.go             # Metrics type definitions
+
+  plugin/                  # Go plugin system
+    loader.go              # Plugin loader
+    mcp_loader.go          # MCP server plugin loader
+    plugin.go              # Plugin interface
+
+  relaycatalog/            # Relay catalog
+    client.go              # Client for relay model catalog API
+    manager.go             # Catalog manager: model list, capability discovery
+    store.go               # Catalog persistence
+    layout_infer.go        # Layout inference from catalog data
+
+  restart/                 # Process restart
+    restart.go             # Restart support (exec self with same args)
+
+  safego/                  # Safe goroutine helpers
+    safego.go              # Panic recovery wrappers for goroutines (GoSafe, GoSafeWait)
+
+  session/                 # Session persistence
+    store.go               # Store: save/load sessions as JSONL with tunnel event recording
+    lock.go                # Session file locking (cross-platform)
+    lock_unix.go           # Unix flock-based locking
+    lock_windows.go        # Windows LockFileEx-based locking
+    endpoint_stats.go      # Per-endpoint usage statistics
+
+  stream/                  # Stream processing
+    stream.go              # Stream utilities (channel helpers, fan-out)
+
+  subagent/                # Sub-agent spawning and management
+    manager.go             # Manager: spawn, list, cancel, snapshot sub-agents (semaphore concurrency)
+    runner.go              # Runner: execute sub-agent tasks with timeout (default 30 min)
+
+  task/                    # Task tracking primitives
+    task.go                # Task primitives (create, update, dependencies, blocks/blockedBy)
+
+  tmux/                    # Tmux client utilities
+    client.go              # Tmux command wrapper for pane/window management
+
+  uiusage/                 # UI usage display
+    display.go             # Token usage display formatting for UI surfaces
+
+  util/                    # Shared utilities
+    truncate.go            # String truncation, shell quoting
+
+  version/                 # Build-time version info
+    version.go             # Version, Commit, Date (injected via -X ldflags)
+
+  chat/                    # Chat utilities
+    types.go               # Shared chat types and helpers
+
+docs/                      # Documentation
+  ARCHITECTURE.md          # This file
+  a2a-auth.md              # A2A authentication guide (5 schemes, config examples)
+  releases/                # Version-specific release notes
+  design/                  # Design documents and architecture decisions
+  guide/                   # User guides
+  reviews/                 # Review reports (security, mobile, full-codebase)
+
+config/                    # MCP preset configuration (mcporter.json)
+
+mobile/                    # Mobile application (Flutter)
+  flutter/                 # Flutter app source
+    lib/                   # Dart source: session provider, tunnel protocol, UI
+    ios/                   # iOS platform code + fastlane
+    android/               # Android platform code + fastlane
+
+npm/                       # npm wrapper package (installs GitHub Release binary)
+python/                    # Python wrapper (PyPI: ggcode)
+
+scripts/                   # Build, release, and development scripts
+  dev/                     # Development helpers (verify-ci.sh)
+  release/                 # Release automation (winget, scoop, etc.)
 ```
+
+## Build Tags
+
+All Go operations require the `goolm` build tag (set in Makefile via `TAGS := goolm`). Without it, builds fail due to missing libolm C headers (mautrix crypto dependency for tunnel encryption).
+
+```bash
+go build -tags goolm ./...
+go vet -tags goolm ./...
+go test -tags "goolm,!integration" ./...     # unit tests (CI-equivalent)
+go test -tags "goolm,integration" ./...      # include integration tests
+```
+
+CI alignment: `scripts/dev/verify-ci.sh` mirrors the CI pipeline and clears provider env vars before running tests.
 
 ## Key Patterns
 
 - **Bubble Tea streaming**: Agent runs in a goroutine; events flow into the TUI via `tea.Program.Send()`
 - **Permission policy**: Two layers — tool-level `ShouldAsk` + dangerous-command detection
-- **Import cycle avoidance**: Shared types defined in downstream packages; factory functions injected
+- **Import cycle avoidance**: Shared types defined in downstream packages; `internal/context` imported as `ctxpkg`; `cost.TokenUsage` defined locally to avoid importing `provider`
+- **Platform-specific files**: Go build tags for OS-specific code (`clipboard_darwin.go`, `clipboard_linux.go`, `clipboard_windows.go`, `run_command_unix.go` with `//go:build unix`, `run_command_other.go` with `//go:build !unix`)
 - **MCP client**: Spawns fresh process per tool call (`callToolStandalone`); HTTP transport supports OAuth 2.1 with automatic metadata discovery, dynamic client registration, device flow, and token refresh
 - **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai), Copilot (custom transport on top of the provider abstraction)
 - **IM routing**: IM events are fanned out to all bound adapters; per-channel echo suppression skips the originating adapter for user mirror messages
-- **Session format**: JSONL with index.json metadata
+- **Session format**: JSONL with index.json metadata; checkpoints recorded inline after compaction
 - **A2A multi-auth**: Server advertises enabled auth schemes in agent card; client auto-negotiates the strongest available. Auth middleware validates each scheme independently. Multiple schemes can coexist.
 - **Token cache**: OAuth2/OIDC tokens cached at `~/.ggcode/oauth-tokens/{provider}-{clientID[:12]}.json` with per-client isolation. Same client_id = shared token; different client_id = isolated.
 - **IM mute**: In-memory only (not persisted to binding store). `MuteAllExcept(adapter)` prevents self-mute race. Daemon restart recovers all adapters.
 - **WebUI ChatBridge**: Decouples WebSocket chat from agent implementation via `ChatBridge` interface (`SendUserMessage`, `Messages`, `Subscribe`). Two implementations:
   - `DaemonBridge` (daemon mode): Injects webchat messages through `pendingInterruptions` into agent's `SetInterruptionHandler`. Broadcasts events from agent stream callback.
-  - `TUIChatBridge` (TUI mode): Routes webchat messages through `program.Send(webchatUserMsg)` into bubbletea event loop. No direct agent access — TUI handles queuing/interruption identically to keyboard input. Events broadcast via `BroadcastEvent()` called from TUI's stream callback.
-- **WebUI WebSocket**: Per-connection write goroutine with buffered channel (cap 256). Read and write goroutines fully separated to satisfy gorilla/webstack concurrency requirements. Slow subscribers drop events (non-blocking send) instead of blocking the broadcast path.
+  - `TUIChatBridge` (TUI mode): Routes webchat messages through `program.Send(webchatUserMsg)` into bubbletea event loop. No direct agent access — TUI handles queuing/interruption identically to keyboard input.
 - **Tunnel event persistence**: Tunnel events are appended to session JSONL via `AppendTunnelEventToDisk()` without rewriting the whole file. On reconnect, `replayCanonicalEvents()` replays recorded events. `TunnelEventsComplete` flag ensures only fully-recorded event sets are used for replay; incomplete sets fall back to snapshot-based recovery.
 - **Relay backpressure**: Peer writes in `ggcode-relay` use blocking sends with a 30s write deadline instead of buffered channel drops, preventing silent data loss during slow connections.
 - **Relay event dedup**: `room.upsertHistoryEvent()` deduplicates by sessionID+eventID so replayed events don't accumulate. `snapshot_reset` (empty eventID) is not persisted to SQLite.
 - **Swarm task board**: Tasks are assigned to specific teammates via `swarm_task_create` with `assignee`, which pushes directly to the assignee's inbox. Unassigned tasks can be claimed by any idle teammate. Task completion is tracked on a shared board visible to all teammates.
+- **Extpane backend detection**: When terminal environments nest (e.g. iTerm2 inside tmux), tmux wins because `$TMUX` is checked first. Each backend captures its own window ID at init to avoid self-closure. `maxPanes=10` hard cap; `failed[agentID]` permanent blocklist after first failure.
+- **Extpane tmux hook suppression**: User tmux configs with `set-hook -g after-new-window 'command-prompt ...'` would block tab creation. The tmux backend temporarily suppresses this hook before `new-window`, then restores it.
+- **TunnelHost unified management**: `agentruntime.TunnelHost` manages tunnel event streaming for all three surfaces (TUI, Daemon, Wails). Stream callbacks route through `PushStreamEvent` → broker → event recorder (persist) → session store → online broker (forward to mobile).
+- **Interrupt/exit cascading**: ctrl+c/esc calls `cancelActiveRun()` which also calls `subAgentMgr.CancelAll()` and `swarmMgr.CancelAll()`, cancelling all running sub-agents and swarm teammates on interrupt.
+- **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected at load time; only `vendor`/`endpoint`/`vendors` schema is supported.
+
+## Desktop Architecture (Wails)
+
+The desktop application uses Wails v2 to bridge a Go backend with a React/TypeScript frontend. It is a separate Go module under `desktop/`.
+
+```
+desktop/
+  ggcode-desktop-wails/        # Wails app (separate go.mod)
+    app.go                     # All Wails-bound methods (chat, config, IM, MCP, LSP, tunnel, sessions)
+    frontend/                  # React SPA (Vite + TypeScript)
+      src/
+        App.tsx                # Root component
+        components/            # ChatView, Sidebar, Settings, ModelPicker, Inspector, etc.
+        i18n/                  # en.json, zh-CN.json
+    wails.json                 # Wails build config
+
+  wailskit/                    # Shared Go backend (imported by ggcode-desktop-wails)
+    chat.go                    # ChatBridge: agent lifecycle, streaming events, tool calls
+    config.go                  # Config REST surface for desktop settings UI
+    sessions.go                # Session management (list, load, delete, workspace filter)
+    im.go                      # IM adapter lifecycle (enable/disable/mute/bind/unbind)
+    mcp.go                     # MCP server management
+    lsp.go                     # LSP discovery, status, install
+    files.go                   # File serving for preview
+    logstream.go               # Log streaming
+```
+
+### Key design decisions
+
+- **Event-driven rendering**: The frontend receives streaming events (`text_delta`, `tool_call`, `tool_result`, `done`, `run_done`, etc.) via Wails event emitter. No polling — each event triggers a targeted React state update.
+- **TunnelHost integration**: The Wails backend uses `agentruntime.TunnelHost` for unified tunnel event management, identical to the TUI and daemon.
+- **Tool approval dialogs**: Desktop intercepts `ask_user` events and renders native-style approval dialogs instead of terminal lists.
+- **Session workspace filtering**: `ListSessions()` filters by working directory so users only see sessions for the current project.
+- **LSP integration**: Desktop Settings > Integrations > Language Servers shows auto-detected servers with one-click install (scope: user > global > project).
+
+## Tunnel & Relay Architecture
+
+The tunnel subsystem enables mobile and remote interaction with running ggcode sessions.
+
+```
+  ┌──────────────────────────────────────────────────────┐
+  │  Host (TUI / Daemon / Desktop)                        │
+  │                                                       │
+  │  Agent ──► agentruntime.TunnelHost                    │
+  │              │                                        │
+  │              ▼                                        │
+  │           tunnel.Broker                               │
+  │           ├── Event recording (→ session JSONL)       │
+  │           ├── Replay on reconnect                     │
+  │           ├── Active session tracking                 │
+  │           └── Multi-session switching                 │
+  │              │                                        │
+  │              ▼                                        │
+  │           tunnel.RelayClient ──── WebSocket ──────►  │
+  └──────────────────────────────────────────────────────┘
+                                              │
+                                    ┌─────────┴──────────┐
+                                    │  ggcode-relay       │
+                                    │  (standalone binary) │
+                                    │                     │
+                                    │  Room per workspace  │
+                                    │  SQLite persistence  │
+                                    │  Event dedup by      │
+                                    │   sessionID+eventID  │
+                                    │  active_session      │
+                                    │   binding            │
+                                    └─────────┬──────────┘
+                                              │
+                                    ┌─────────┴──────────┐
+                                    │  Mobile Client      │
+                                    │  (Flutter app)      │
+                                    │                     │
+                                    │  Connects to relay   │
+                                    │  Receives events     │
+                                    │  Sends interactions  │
+                                    └────────────────────┘
+```
+
+### Key properties
+
+- **Event persistence**: Tunnel events are appended to session JSONL via `AppendTunnelEventToDisk()`. On reconnect, `replayCanonicalEvents()` replays the canonical event stream.
+- **Completeness flag**: `Session.TunnelEventsComplete` ensures only fully-recorded event sets are used for replay. Incomplete sets fall back to snapshot-based recovery.
+- **Relay backpressure**: Peer writes use blocking sends with a 30s write deadline instead of channel drops, preventing silent data loss.
+- **Event dedup**: Relay's `room.upsertHistoryEvent()` deduplicates by sessionID+eventID. `snapshot_reset` (empty eventID) is not persisted.
+- **E2E encryption**: Tunnel supports encrypted event delivery via key exchange (`key_exchange.go`, `crypto.go`).
+- **QR code pairing**: Mobile clients pair via QR code (`qrcode.go`) that encodes relay URL + session token.
 
 ## A2A Authentication Architecture
 
@@ -263,7 +631,9 @@ docs/                    # Documentation
 └───────────────┘    └─────────────┘
 ```
 
-Server rebuilds auth state from config on restart (no persistence needed). Client tokens survive restarts via cache.
+Server rebuilds auth state from config on restart (no persistence needed). Client tokens survive restarts via cache. Optional mDNS broadcast (`a2a.lan_discovery`) enables LAN peer discovery when auth is configured.
+
+See [`docs/a2a-auth.md`](a2a-auth.md) for the full authentication guide.
 
 ## Conversation Context Management
 
@@ -300,38 +670,6 @@ This avoids re-loading and re-compacting the entire conversation history. Checkp
 - `tryReactiveCompact` (after prompt-too-long errors)
 - `forceCompactAndPause` (autopilot loop guard)
 
-### IM Tool Call Display
-
-All IM adapters (Telegram, QQ, Discord, Slack, DingTalk, Feishu) share a unified tool result formatter (`internal/im/tool_format.go`). Each built-in tool has a dedicated format with emoji icon + code block:
-
-| Category | Format |
-|----------|--------|
-| Commands | `✓` + bash code block for command + plain code block for output (no truncation) |
-| File read | `✓ 📖 {path}` (status only, no content) |
-| File edit/write | `✓ ✏️/📝 {path}` (status only) |
-| Directory/glob/search | Icon + pattern + full results in code block |
-| Git | `✓ 🔧 Git Status/Log/Diff` + output in code block |
-| Web | `✓ 🌐` + output in code block |
-| MCP tools | `✓ 🔧 PrettyName(args)` + output in code block |
-| Error variants use `✗` + error in code block |
-
-All absolute paths are relativized against the project working directory before sending to IM.
-
-### IM Slash Commands (Daemon Mode)
-
-The daemon bridge (`internal/im/daemon_bridge.go`) processes slash commands from any IM channel:
-
-| Command | Handler | Notes |
-|---------|---------|-------|
-| `/listim` | `handleListIM()` | Lists adapters from `Manager.Snapshot()` — shows name, platform, health, mute status |
-| `/muteim <name>` | `handleMuteIM()` | Calls `Manager.MuteBinding(name)`. Refuses to mute self. |
-| `/muteall` | `handleMuteAll()` | Calls `Manager.MuteAllExcept(selfAdapter)` — sender's adapter is never muted |
-| `/muteself` | `handleMuteSelf()` | Emits warning first (500ms delay), then `Manager.MuteBinding(self)` |
-| `/restart` | `onRestart()` hook | Triggers daemon restart, recovers all muted adapters |
-| `/help` | Static text | Lists all commands |
-
-Mute is in-memory only — `persistBinding()` strips the Muted flag before saving.
-
 ### Provider Error Detection
 
 All provider adapters detect output truncation and policy errors:
@@ -339,11 +677,11 @@ All provider adapters detect output truncation and policy errors:
 - **Anthropic**: `stop_reason=max_tokens` or `stop_reason=refusal` returns error
 - **Gemini**: `FinishReason=MAX_TOKENS`, `SAFETY`, `RECITATION`, etc. returns error
 
-Default `max_output_tokens` is 16384 (configurable per endpoint).
+Default `max_output_tokens` is 16384 (configurable per endpoint). Adaptive cap (`adaptive_cap.go`) adjusts based on model-specific limits.
 
 ## WebUI Architecture
 
-The WebUI subsystem provides an HTTP+WebSocket interface for browser-based interaction with ggcode. It starts in both TUI and daemon modes.
+The WebUI subsystem provides an HTTP+WebSocket interface for browser-based interaction with ggcode. It starts in both TUI and daemon modes on `127.0.0.1:0` (random port). In TUI mode, the URL is displayed as a system message inside the chat area.
 
 ### ChatBridge Interface
 

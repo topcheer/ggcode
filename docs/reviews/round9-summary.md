@@ -39,7 +39,7 @@ Five parallel reviewers audited the full ggcode stack (Go core/infra, TUI, deskt
 | # | Title | Status | Evidence |
 |---|-------|--------|----------|
 | C-1 | Relay zero auth | **OPEN** | `ggcode-relay/relay.go:609-630, 724-760` — still only checks token-presence as room ID |
-| C-2 | WebUI WebSocket CheckOrigin bypass | **DESIGN-INTENDED** | `internal/webui/server_websocket.go:16-18` — confirmed by `docs/design-decisions.md:60-91` (127.0.0.1 + token auth) |
+| C-2 | WebUI WebSocket CheckOrigin bypass | **DESIGN-INTENDED** | `internal/webui/server_websocket.go:16-18` — confirmed by `docs/design/design-decisions.md:60-91` (127.0.0.1 + token auth) |
 | C-3 | `/nuke` unauthenticated | **OPEN** | `ggcode-relay/relay.go:738-760` |
 | C-4 | Config API key exposure | **RESOLVED** | `internal/webui/server.go:276-360` routes through `sanitizeConfigForAPI()`; `server_handlers.go:125,185,670-671` returns booleans only |
 | C-5 | Tunnel token = encryption key | **OPEN** | `internal/tunnel/crypto.go:13-25` |
@@ -220,7 +220,7 @@ Tap-to-dismiss-keyboard, room-not-found-permanent, instance-bound resume — all
 ### Long-term (next half)
 
 17. **Knight learning loop integration** (already designed in `docs/design/knight-auto-evolution.md`) — implement.
-18. **Cross-instance shared memory** — see `docs/plans/2026-05-29-round9-creative-features.md`.
+18. **Cross-instance shared memory** — see `(deleted)`.
 19. **Pair-session relay protocol** — multi-developer single-session via the same relay.
 20. **Compliance/audit log signing** — for enterprise adoption.
 
@@ -233,7 +233,7 @@ Tap-to-dismiss-keyboard, room-not-found-permanent, instance-bound resume — all
 - `docs/reviews/round9-desktop.md` — Desktop (Fyne) + macOS native titlebar
 - `docs/reviews/round9-mobile-relay.md` — Flutter + relay
 - `docs/reviews/round9-security-release.md` — security, release, packaging, cross-platform
-- `docs/plans/2026-05-29-round9-creative-features.md` — creative new feature proposals (18 ideas, prioritized & sketched)
+- `(deleted)` — creative new feature proposals (18 ideas, prioritized & sketched)
 
 ---
 

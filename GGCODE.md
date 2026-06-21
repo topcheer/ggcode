@@ -100,7 +100,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   diff/                Diff formatting
   version/             Build-time version/commit/date (injected via ldflags)
   util/                Shell quoting, text truncation
-docs/                  Architecture docs, design notes, release notes, A2A auth guide, site content
+docs/                  Architecture docs, design docs, release notes, A2A auth guide, user guides, site content
 npm/                   npm wrapper package (installs GitHub Release binary)
 python/                Python wrapper (PyPI: ggcode)
 scripts/               Release scripts, site scripts
