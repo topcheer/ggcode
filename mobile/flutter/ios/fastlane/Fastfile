@@ -124,20 +124,23 @@ platform :ios do
 
   # ── Build & Upload ────────────────────────────────────
 
-  desc "Upload pre-built IPA to TestFlight"
+  desc "Check if a build version already exists in App Store Connect"
   lane :check_build_version do |options|
     build_number = options[:build_number]
     UI.user_error!("build_number is required") unless build_number
 
-    # Query App Store Connect for existing builds with this version
-    # Uses the App Store Connect API to check if a build was already uploaded
+    api_key
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
     begin
-      builds = app_store_build_data(
-        api_key: api_key,
-        version: build_number,
-        app_identifier: "gg.ai.ggcode.mobile"
-      )
-      if builds && !builds.empty?
+      builds = client.get_builds(
+        filter: { app: app.id, version: build_number },
+        includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+      ).to_models
+
+      if builds.any?
         UI.message("ALREADY_UPLOADED: Build #{build_number} already exists in App Store Connect")
       else
         UI.message("NOT_UPLOADED: Build #{build_number} not found, safe to upload")

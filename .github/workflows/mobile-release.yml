@@ -326,7 +326,7 @@ jobs:
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
           APP_STORE_PRIVATE_KEY: ${{ secrets.APP_STORE_PRIVATE_KEY }}
         run: |
-          BUILD_VERSION=$(grep 'CFBundleVersion' ios/Runner/Info.plist | grep -o '>[0-9]*<' | tr -d '<>')
+          BUILD_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" ios/Runner/Info.plist)
           echo "Build version: $BUILD_VERSION"
           cd ios
           bundle install --jobs 4 --retry 3
