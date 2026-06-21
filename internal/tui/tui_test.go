@@ -1647,8 +1647,8 @@ func TestInspectorStatusEnterOpensPythonLSPInstallChooser(t *testing.T) {
 	if next.inspectorPanel == nil || next.inspectorPanel.kind != inspectorPanelLSPInstall {
 		t.Fatalf("expected LSP install chooser, got %#v", next.inspectorPanel)
 	}
-	if len(next.inspectorPanel.lspInstallOptions) != 2 {
-		t.Fatalf("expected 2 python install options, got %#v", next.inspectorPanel.lspInstallOptions)
+	if len(next.inspectorPanel.lspInstallOptions) != 4 {
+		t.Fatalf("expected 4 python install options (pyright-user, pyright-project, pylsp-user, pylsp-project), got %#v", next.inspectorPanel.lspInstallOptions)
 	}
 }
 

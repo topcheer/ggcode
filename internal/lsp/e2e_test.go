@@ -80,7 +80,17 @@ main
 		if len(shellLang.InstallOptions) == 0 {
 			t.Fatal("expected install options for shell language")
 		}
-		installCmd := shellLang.InstallOptions[0].Command
+		// Use the project-level install option so the binary lands in node_modules/.bin
+		var installCmd string
+		for _, opt := range shellLang.InstallOptions {
+			if opt.Scope == ScopeProject {
+				installCmd = opt.Command
+				break
+			}
+		}
+		if installCmd == "" {
+			installCmd = shellLang.InstallOptions[0].Command
+		}
 		t.Logf("Install command: %s", installCmd)
 
 		cmd := exec.Command("sh", "-c", installCmd)
