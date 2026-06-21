@@ -7,25 +7,29 @@
     "type": "git",
     "url": "https://github.com/topcheer/ggcode.git"
   },
+  "homepage": "https://github.com/topcheer/ggcode",
+  "bugs": {
+    "url": "https://github.com/topcheer/ggcode/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "bin": {
-    "ggcode": "bin/ggcode"
-  },
-  "scripts": {
-    "install": "node install.js"
-  },
-  "keywords": [
-    "cli",
-    "ai",
-    "coding",
-    "agent",
-    "llm",
-    "tui"
-  ],
-  "engines": {
-    "node": ">=18"
+    "ggcode-bootstrap": "bin/ggcode-bootstrap.js"
   },
   "files": [
-    "install.js",
-    "README.md"
+    "bin",
+    "lib",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding",
+    "ggcode"
   ]
 }
