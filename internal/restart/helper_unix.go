@@ -12,15 +12,17 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// detachHelper starts the helper in a separate process group (Setpgid)
-// so it won't receive signals sent to the parent's process group (e.g.
-// ctrl+C, SIGINT). Crucially, we do NOT use Setsid — that would create a
-// new session and detach the controlling terminal, making it impossible
-// for the helper (and the new ggcode it execs) to enter raw mode.
+// detachHelper simply starts the helper process. We intentionally do NOT
+// use Setsid or Setpgid — the helper must stay in the same session and
+// foreground process group so it can access the terminal (tcsetattr) after
+// the parent exits. If we put it in a different PG (Setpgid), the terminal's
+// foreground PG reverts to the shell when the parent exits, and the helper
+// gets EIO when trying to enter raw mode.
+//
+// The helper inherits the parent's stdio (terminal fds) and does
+// syscall.Exec to become the new ggcode, all within the same PG.
 func detachHelper(cmd *exec.Cmd) error {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	// No SysProcAttr — stay in the same process group and session.
 	return cmd.Start()
 }
 

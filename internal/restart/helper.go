@@ -41,10 +41,10 @@ type HelperRequest struct {
 //  4. Launches a fresh ggcode instance
 //
 // The helper is the ggcode binary itself running with the hidden
-// "restart-helper" subcommand. It detaches into a separate process
-// group (Setpgid on Unix, CREATE_NEW_PROCESS_GROUP on Windows) so it
-// won't receive signals sent to the parent's group, but it stays in
-// the same session to retain terminal access.
+// "restart-helper" subcommand. It stays in the same session and process
+// group as the parent (no setsid/setpgid) so it retains terminal access.
+// It inherits the parent's stdio, waits for the parent to exit, then
+// uses syscall.Exec to become the new ggcode instance.
 //
 // After calling this function, the caller should perform its normal
 // shutdown (tea.Quit, terminal restore, release locks) and exit.
