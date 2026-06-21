@@ -49,8 +49,11 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 - **Full dev toolkit** — file edits, shell commands, Git, LSP, search
 - **MCP integration** — connect external tools and data sources
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
+- **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
+- **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
 - **Harness workflow** — isolated task execution with review and promotion
+- **Scheduled tasks** — cron jobs, reminders, and background automation
 - **Resumable sessions** — pause and resume any conversation
 - **Desktop + Mobile** — native apps for macOS, Windows, Linux, iOS, Android
 
@@ -76,6 +79,8 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |
 | [Harness](docs/guide/harness.md) | Isolated task workflow with review |
 | [A2A Protocol](docs/guide/a2a.md) | Cross-instance agent delegation |
+| [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
+| [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
 | [Configuration](docs/guide/configuration.md) | Full config file reference |
 | [Project Memory](docs/guide/project-memory.md) | GGCODE.md, AGENTS.md, CLAUDE.md |
 | [Skills](docs/guide/skills.md) | Reusable workflow patterns |

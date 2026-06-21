@@ -49,8 +49,11 @@ ggcode
 - **完整开发工具** — 文件编辑、Shell 命令、Git、LSP、搜索
 - **MCP 集成** — 连接外部工具和数据源
 - **多 Agent** — 并行工作、团队协作、A2A 协议
+- **编辑器集成** — JetBrains、Zed 等 ACP 兼容编辑器
+- **WebUI** — 内置 Web 界面，浏览器即可使用
 - **IM 集成** — 从 QQ、Telegram、Discord、Slack、飞书、钉钉 控制
 - **Harness 工作流** — 隔离任务执行 + 代码审查 + 合并
+- **定时任务** — Cron 定时任务、提醒、后台自动化
 - **可恢复会话** — 随时暂停和恢复对话
 - **桌面 + 移动端** — macOS、Windows、Linux、iOS、Android 原生应用
 
@@ -76,6 +79,8 @@ ggcode
 | [IM 集成](docs/guide/im-integration.md) | QQ / Telegram / Discord / Slack / 飞书 / 钉钉 |
 | [Harness 工作流](docs/guide/harness.md) | 隔离任务 + 审查 + 合并 |
 | [A2A 协议](docs/guide/a2a.md) | 跨实例 Agent 委托 |
+| [ACP / 编辑器](docs/guide/acp.md) | JetBrains、Zed 等 ACP 兼容编辑器 |
+| [多 Agent 模式](docs/guide/multi-agent-modes.md) | 子 Agent、团队协作 |
 | [配置参考](docs/guide/configuration.md) | 完整配置文件说明 |
 | [项目记忆](docs/guide/project-memory.md) | GGCODE.md / AGENTS.md / CLAUDE.md |
 | [技能系统](docs/guide/skills.md) | 可复用工作流模式 |
