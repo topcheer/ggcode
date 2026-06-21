@@ -524,18 +524,52 @@ func (h *OAuthHandler) SupportsDCR() bool {
 		h.state.authorizationServerMeta.RegistrationEndpoint != ""
 }
 
+// prepareCallbackServer generates state and starts the local callback listener
+// so we have the real port before DCR registration. Idempotent: if a server is
+// already running it's reused.
+func (h *OAuthHandler) prepareCallbackServer() error {
+	h.mu.Lock()
+	alreadyRunning := h.callbackSrv != nil
+	h.mu.Unlock()
+	if alreadyRunning {
+		return nil
+	}
+
+	state, err := auth.GenerateState()
+	if err != nil {
+		return fmt.Errorf("generating state: %w", err)
+	}
+
+	port, callbackCh, srv, err := h.startCallbackServer(state)
+	if err != nil {
+		return fmt.Errorf("starting callback server: %w", err)
+	}
+
+	h.mu.Lock()
+	h.state.state = state
+	h.state.callbackPort = port
+	h.state.redirectURI = fmt.Sprintf("http://localhost:%d/callback", port)
+	h.callbackCh = callbackCh
+	h.callbackSrv = srv
+	h.mu.Unlock()
+	return nil
+}
+
 // RegisterClient performs RFC 7591 dynamic client registration.
 func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
+	// Start callback server FIRST so we have the correct redirect_uri port.
+	if err := h.prepareCallbackServer(); err != nil {
+		return err
+	}
+
 	h.mu.Lock()
 	regEndpoint := h.state.authorizationServerMeta.RegistrationEndpoint
-	callbackPort := h.state.callbackPort
+	redirectURI := h.state.redirectURI
 	h.mu.Unlock()
 
 	if regEndpoint == "" {
 		return fmt.Errorf("no registration endpoint")
 	}
-
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", callbackPort)
 	regBody := map[string]interface{}{
 		"client_name":                "ggcode-mcp-" + h.serverName,
 		"redirect_uris":              []string{redirectURI},
@@ -587,28 +621,14 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	}
 	challenge := auth.GenerateCodeChallenge(verifier)
 
-	state, err := auth.GenerateState()
-	if err != nil {
-		return "", fmt.Errorf("generating state: %w", err)
-	}
-
-	// Start local callback server
-	port, callbackCh, srv, err := h.startCallbackServer(state)
-	if err != nil {
-		return "", fmt.Errorf("starting callback server: %w", err)
+	// Reuse existing callback server (from RegisterClient) or start a new one.
+	if err := h.prepareCallbackServer(); err != nil {
+		return "", err
 	}
 
 	h.mu.Lock()
 	h.state.codeVerifier = verifier
-	h.state.state = state
-	h.state.callbackPort = port
-	h.state.redirectURI = fmt.Sprintf("http://localhost:%d/callback", port)
-	h.callbackCh = callbackCh
-	h.callbackSrv = srv
-	h.mu.Unlock()
-
-	// Build authorize URL
-	h.mu.Lock()
+	state := h.state.state
 	authEndpoint := h.state.authorizationServerMeta.AuthorizationEndpoint
 	clientID := ""
 	if h.state.clientRegistration != nil {
