@@ -1047,11 +1047,17 @@ func messageCount(ses *session.Session) int {
 	return len(ses.Messages)
 }
 
-// execRestart launches a detached helper process that will wait for this
-// process to exit, reset the terminal, and launch a fresh ggcode instance.
-// Called after program.Run() returns and the terminal has been restored.
+// execRestart replaces the current process in-place using syscall.Exec.
+// No child process or helper is spawned — the same PID continues with a
+// fresh binary image, keeping the same terminal and file descriptors.
+//
+// For /update, the binary file is atomically swapped (rename-based) before
+// exec, so syscall.Exec loads the new version. On Unix the running process
+// keeps the old inode, making this safe.
+//
+// Must be called after program.Run() returns (terminal already restored).
 func (r *REPL) execRestart() error {
-	// Release session lock before — the new process will re-acquire it.
+	// Release session lock — the new process will re-acquire it.
 	if r.sessionLock != nil {
 		r.sessionLock.Release()
 		r.sessionLock = nil
@@ -1063,33 +1069,27 @@ func (r *REPL) execRestart() error {
 	}
 
 	args := r.model.buildRestartArgs()
-
-	sessionID := ""
-	if r.model.session != nil {
-		sessionID = r.model.session.ID
-	}
-	debug.Log("restart", "helper binary=%s session=%s args=%v", binary, sessionID, args)
-
 	env := os.Environ()
 	if r.model.restartDebug {
 		env = append(env, "GGCODE_DEBUG=1")
 	}
 
-	req := restart.HelperRequest{
-		Binary:  binary,
-		Args:    args,
-		WorkDir: "",
-		Env:     env,
-	}
-	// If this is an update restart, tell the helper to swap the binary first.
+	// For /update: get the staged binary path to swap before exec.
+	stagedBinary := ""
 	if r.model.updatePrepared != nil {
-		// Read manifest to get the staged binary path
 		if staged, err := update.ReadStagedBinary(r.model.updatePrepared.ManifestPath); err == nil {
-			req.StagedBinary = staged
-			req.Binary = binary // helper replaces this with staged version
+			stagedBinary = staged
 		}
 	}
-	return restart.RestartWithHelper(req)
+
+	sessionID := ""
+	if r.model.session != nil {
+		sessionID = r.model.session.ID
+	}
+	debug.Log("restart", "exec binary=%s session=%s staged=%q args=%v",
+		binary, sessionID, stagedBinary != "", args)
+
+	return restart.ExecRestart(binary, args, env, stagedBinary)
 }
 
 func (r *REPL) execTmuxEnter() error {

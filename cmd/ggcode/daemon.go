@@ -1219,7 +1219,7 @@ loop:
 	}
 
 	if daemonRestartRequested {
-		// Self-restart via detached helper process.
+		// Self-restart via in-place syscall.Exec — no child process needed.
 		binary, err := restart.ResolveBinary()
 		if err != nil {
 			return fmt.Errorf("restart: resolve binary: %w", err)
@@ -1247,13 +1247,8 @@ loop:
 			env = append(env, "GGCODE_DEBUG=1")
 		}
 
-		debug.Log("daemon", "restart via helper: %s %v", binary, args)
-		if err := restart.RestartWithHelper(restart.HelperRequest{
-			Binary:  binary,
-			Args:    args,
-			WorkDir: workingDir,
-			Env:     env,
-		}); err != nil {
+		debug.Log("daemon", "exec restart: %s %v", binary, args)
+		if err := restart.ExecRestart(binary, args, env, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
 		}
 		return nil

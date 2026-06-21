@@ -6,20 +6,6 @@ import (
 	"testing"
 )
 
-func TestResolveBinary(t *testing.T) {
-	path, err := ResolveBinary()
-	if err != nil {
-		t.Fatalf("ResolveBinary error: %v", err)
-	}
-	if path == "" {
-		t.Error("expected non-empty binary path")
-	}
-	// Should be an absolute path
-	if !filepath.IsAbs(path) {
-		t.Errorf("expected absolute path, got %q", path)
-	}
-}
-
 func TestLaunch_WritesScriptAndStarts(t *testing.T) {
 	// Create a temp binary that just exits
 	dir := t.TempDir()

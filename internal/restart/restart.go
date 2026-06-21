@@ -3,7 +3,6 @@ package restart
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -41,23 +40,6 @@ func Launch(req Request) error {
 	}
 
 	return launchPlatformScript(scriptPath, req)
-}
-
-// ResolveBinary returns the path to the ggcode binary that should be used
-// for restart. It resolves symlinks so npm/python wrappers point to the
-// latest installed version.
-func ResolveBinary() (string, error) {
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolve executable: %w", err)
-	}
-	// Resolve symlinks — important for npm/python wrappers where the shim
-	// points to a versioned directory.
-	resolved, err := filepath.EvalSymlinks(execPath)
-	if err != nil {
-		return execPath, nil // best effort
-	}
-	return resolved, nil
 }
 
 // --- Unix-only types and helpers (used by restart_unix.go) ---
