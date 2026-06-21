@@ -42,9 +42,19 @@ type Broker struct {
 	// Send queue: all outbound messages go here.
 	// The sender goroutine drains it continuously (no ACK blocking).
 	// TCP/WebSocket guarantees ordered delivery.
+	//
+	// This queue is intentionally unbounded. senderLoop drains the entire
+	// queue on each iteration (batch := b.outbound; b.outbound = nil), so
+	// under normal operation messages do not accumulate — the slice is
+	// replaced with nil every cycle. Messages only pile up when the relay
+	// connection drops (b.session == nil), during which time the agent
+	// keeps producing events. Those buffered events are essential for
+	// replay to the mobile client on reconnect; dropping them would cause
+	// permanent data loss on the mobile side. The replay mechanism
+	// (relayRecoveryPlan, replayCanonicalEvents) relies on this.
 	outMu    sync.Mutex
 	outCond  *sync.Cond
-	outbound []GatewayMessage // drained by senderLoop; accumulates only during relay disconnect
+	outbound []GatewayMessage // see comment above: drained continuously, intentionally unbounded
 	outDone  chan struct{}
 	stopOnce sync.Once
 
