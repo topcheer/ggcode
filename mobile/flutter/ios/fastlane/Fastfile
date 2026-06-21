@@ -431,10 +431,75 @@ platform :ios do
     UI.message("External Testing: #{e.message}")
   end
 
+  # Cancel any pending review submissions to unblock a new version submission.
+  # When a previous version is stuck in READY_FOR_REVIEW, App Store Connect
+  # will not allow creating or submitting a new one until the old submission
+  # is cancelled.
+  def _cancel_pending_review(client, app)
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    pending = submissions.reject { |s| s.state == "COMPLETE" }
+
+    if pending.empty?
+      UI.message("No pending review submissions found")
+      return
+    end
+
+    pending.each do |sub|
+      UI.message("Found review submission #{sub.id} (state=#{sub.state}) — cancelling...")
+
+      # 1. Delete all items from the submission to revert versions to editable
+      begin
+        items = client.get_review_submission_items(review_submission_id: sub.id).to_models
+        items.each do |item|
+          begin
+            client.delete_review_submission_item(review_submission_item_id: item.id)
+            UI.success("  Removed submission item #{item.id}")
+          rescue => e
+            UI.message("  Remove item #{item.id}: #{e.message}")
+          end
+        end
+      rescue => e
+        UI.message("  Get items: #{e.message}")
+      end
+
+      # 2. Delete the review submission itself
+      begin
+        client.delete_review_submission(review_submission_id: sub.id)
+        UI.success("  Cancelled review submission #{sub.id}")
+      rescue => e
+        UI.message("  Cancel submission: #{e.message}")
+      end
+
+      # 3. Also reject the app store version if it has an appStoreVersionSubmission
+      begin
+        versions = app.get_app_store_versions
+        versions.each do |ver|
+          next unless ver.platform == "IOS"
+          next unless ["READY_FOR_REVIEW", "WAITING_FOR_REVIEW", "IN_REVIEW"].include?(ver.app_store_state)
+          # Try deleting the appStoreVersionSubmission if one exists
+          begin
+            client.tunes_request_client.delete("v1/appStoreVersions/#{ver.id}/appStoreVersionSubmission")
+            UI.success("  Removed appStoreVersionSubmission for #{ver.version_string}")
+          rescue
+            nil
+          end
+        end
+      rescue => e
+        UI.message("  Version cleanup: #{e.message}")
+      end
+    end
+
+    UI.message("Waiting 10s for App Store Connect to process cancellation...")
+    sleep 10
+  end
+
   def _submit_build_for_review(client, app, build)
     v = version_str
     UI.user_error!("Could not read version") if v.empty?
     UI.message("Version: #{v}")
+
+    # 0. Cancel any pending review submissions to unblock this new submission
+    _cancel_pending_review(client, app)
 
     # 1. Find or create IOS version
     ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
@@ -523,26 +588,21 @@ platform :ios do
       UI.error("Review notes: #{e.message}")
     end
 
-    # 4. Submit — find or create submission
+    # 4. Submit — find usable submission or create new one
     submissions = client.get_review_submissions(app_id: app.id).to_models
-    existing = submissions.first
+    # Find a submission that's empty (ready for items) or create a new one.
+    # After _cancel_pending_review, old submissions should be COMPLETE or gone.
+    usable = submissions.find { |s| s.state.nil? || s.state.empty? }
 
-    if existing && (existing.state.nil? || existing.state.empty?)
-      UI.message("Adding version to existing submission #{existing.id}...")
-      client.post_review_submission_item(review_submission_id: existing.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{existing.id}!")
-    elsif existing && existing.state == "COMPLETE"
-      UI.message("Previous submission #{existing.id} is COMPLETE, creating new one...")
-      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
-      sub = resp.to_models.first
-      client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{sub.id} with version #{v}!")
-    elsif existing
-      UI.error("Submission #{existing.id} state=#{existing.state} — manage in App Store Connect")
+    if usable
+      UI.message("Adding version to existing submission #{usable.id}...")
+      client.post_review_submission_item(review_submission_id: usable.id, app_store_version_id: ios_version.id)
+      UI.success("Submitted #{usable.id}!")
     else
-      UI.message("Creating submission...")
+      UI.message("Creating new submission...")
       resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
       sub = resp.to_models.first
+      UI.user_error!("Failed to create review submission") if sub.nil?
       client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
       UI.success("Submitted #{sub.id} with version #{v}!")
     end
