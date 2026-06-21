@@ -1051,9 +1051,10 @@ func messageCount(ses *session.Session) int {
 // No child process or helper is spawned — the same PID continues with a
 // fresh binary image, keeping the same terminal and file descriptors.
 //
-// For /update, the binary file is atomically swapped (rename-based) before
-// exec, so syscall.Exec loads the new version. On Unix the running process
-// keeps the old inode, making this safe.
+// For /update, ApplyBinary writes the new binary to all target paths first.
+// On Unix, install.WriteExecutable uses temp-file + rename (atomic), which
+// works even on the currently running binary because the kernel preserves
+// the old inode. syscall.Exec then loads the new file at the same path.
 //
 // Must be called after program.Run() returns (terminal already restored).
 func (r *REPL) execRestart() error {
@@ -1061,6 +1062,15 @@ func (r *REPL) execRestart() error {
 	if r.sessionLock != nil {
 		r.sessionLock.Release()
 		r.sessionLock = nil
+	}
+
+	// For /update: write new binary to all target paths BEFORE exec.
+	// This must happen while the process is still alive (before syscall.Exec).
+	if r.model.updatePrepared != nil && r.model.updateSvc != nil {
+		debug.Log("restart", "applying binary update")
+		if err := r.model.updateSvc.ApplyBinary(*r.model.updatePrepared); err != nil {
+			return fmt.Errorf("restart: apply binary: %w", err)
+		}
 	}
 
 	binary, err := restart.ResolveBinary()
@@ -1074,22 +1084,13 @@ func (r *REPL) execRestart() error {
 		env = append(env, "GGCODE_DEBUG=1")
 	}
 
-	// For /update: get the staged binary path to swap before exec.
-	stagedBinary := ""
-	if r.model.updatePrepared != nil {
-		if staged, err := update.ReadStagedBinary(r.model.updatePrepared.ManifestPath); err == nil {
-			stagedBinary = staged
-		}
-	}
-
 	sessionID := ""
 	if r.model.session != nil {
 		sessionID = r.model.session.ID
 	}
-	debug.Log("restart", "exec binary=%s session=%s staged=%q args=%v",
-		binary, sessionID, stagedBinary != "", args)
+	debug.Log("restart", "exec binary=%s session=%s args=%v", binary, sessionID, args)
 
-	return restart.ExecRestart(binary, args, env, stagedBinary)
+	return restart.ExecRestart(binary, args, env)
 }
 
 func (r *REPL) execTmuxEnter() error {

@@ -1248,7 +1248,7 @@ loop:
 		}
 
 		debug.Log("daemon", "exec restart: %s %v", binary, args)
-		if err := restart.ExecRestart(binary, args, env, ""); err != nil {
+		if err := restart.ExecRestart(binary, args, env); err != nil {
 			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
 		}
 		return nil
