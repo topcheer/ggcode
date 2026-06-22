@@ -18,18 +18,31 @@ import (
 )
 
 // buildEchoPlugin compiles the test plugin binary.
-// Returns the path to the built binary.
+// Returns the absolute path to the built binary.
 func buildEchoPlugin(t *testing.T) string {
 	t.Helper()
 
-	pluginDir := filepath.Join("..", "..", "..", "internal", "plugin", "grpc", "testdata", "echo-plugin")
-	binaryPath := filepath.Join(pluginDir, "echo-plugin")
+	// Resolve plugin dir relative to the test working directory (package dir).
+	repoRoot, _ := os.Getwd()
+	repoRoot = filepath.Join(repoRoot, "..", "..", "..")
+	pluginDir := filepath.Join(repoRoot, "internal", "plugin", "grpc", "testdata", "echo-plugin")
+
+	binaryName := "echo-plugin"
 	if runtime.GOOS == "windows" {
-		binaryPath += ".exe"
+		binaryName += ".exe"
 	}
+	binaryPath := filepath.Join(pluginDir, binaryName)
 
 	// Check if already built; if not, build it
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		// Run go mod tidy first to ensure go.sum is complete
+		tidyCmd := exec.Command("go", "mod", "tidy")
+		tidyCmd.Dir = pluginDir
+		if out, err := tidyCmd.CombinedOutput(); err != nil {
+			t.Fatalf("tidying echo plugin modules: %v\n%s", err, string(out))
+		}
+
+		// Build: use absolute path for -o to avoid cwd confusion
 		cmd := exec.Command("go", "build", "-tags", "goolm", "-o", binaryPath, ".")
 		cmd.Dir = pluginDir
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -37,8 +50,7 @@ func buildEchoPlugin(t *testing.T) string {
 		}
 	}
 
-	abs, _ := filepath.Abs(binaryPath)
-	return abs
+	return binaryPath
 }
 
 func TestEndToEnd_PluginLoadAndExecute(t *testing.T) {
