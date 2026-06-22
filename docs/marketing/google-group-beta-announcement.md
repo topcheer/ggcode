@@ -50,7 +50,8 @@ The mobile app does not run an agent locally. It's a remote control for your des
 **iOS (App Store):**
 https://apps.apple.com/us/app/ggcode-mobile/id6770855612
 
-Also available on TestFlight (free beta access).
+**iOS (TestFlight — free beta):**
+https://testflight.apple.com/join/J34wVD6p
 
 **Android (Closed Testing):**
 https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile

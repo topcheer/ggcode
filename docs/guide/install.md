@@ -109,7 +109,7 @@ Downloads: [github.com/topcheer/ggcode/releases](https://github.com/topcheer/ggc
 
 | Platform | Distribution |
 |----------|-------------|
-| iOS      | [App Store](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) (also on [TestFlight](https://testflight.apple.com))   |
+| iOS      | [App Store](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) · [TestFlight](https://testflight.apple.com/join/J34wVD6p)   |
 | Android  | [Google Play](https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile)  |
 
 ---

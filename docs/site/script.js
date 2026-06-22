@@ -54,6 +54,11 @@
       "install.native.title": "Native packages",
       "install.native.text": ".pkg · .msi · .deb · .rpm · .apk · AppImage",
       "install.native.cta": "Releases →",
+      "install.ios.text": "App Store · also on TestFlight (free)",
+      "install.ios.cta": "App Store →",
+      "install.ios.testflight": "TestFlight →",
+      "install.android.text": "Google Play",
+      "install.android.cta": "Google Play →",
       "cta.title":
         "<span class='gradient-text'>Ship faster</span><br />from your terminal.",
       "cta.text":
@@ -105,6 +110,11 @@
       "install.native.title": "原生安装包",
       "install.native.text": ".pkg · .msi · .deb · .rpm · .apk · AppImage",
       "install.native.cta": "下载 →",
+      "install.ios.text": "App Store · TestFlight 免费",
+      "install.ios.cta": "App Store →",
+      "install.ios.testflight": "TestFlight →",
+      "install.android.text": "Google Play",
+      "install.android.cta": "Google Play →",
       "cta.title":
         "<span class='gradient-text'>更快交付</span><br />从你的终端开始。",
       "cta.text":

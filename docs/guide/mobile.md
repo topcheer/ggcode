@@ -10,7 +10,7 @@ ggcode Mobile connects to your desktop or CLI ggcode instance via a relay server
 
 | Platform | Source |
 |----------|--------|
-| iOS | [App Store](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) (also available on TestFlight) |
+| iOS | [App Store](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) · [TestFlight](https://testflight.apple.com/join/J34wVD6p) |
 | Android | [Google Play](https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile) |
 
 ## Pairing
