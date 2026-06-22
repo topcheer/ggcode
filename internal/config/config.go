@@ -115,8 +115,10 @@ type MCPServerConfig struct {
 type PluginConfigEntry struct {
 	Name     string                 `yaml:"name"`
 	Path     string                 `yaml:"path"`
-	Type     string                 `yaml:"type"`
+	Type     string                 `yaml:"type"` // "command", "so", "grpc"
 	Commands []PluginCommandConfig  `yaml:"commands"`
+	Command  []string               `yaml:"command"` // gRPC plugin: ["python", "-m", "my_plugin"]
+	Env      map[string]string      `yaml:"env"`     // gRPC plugin: environment variables
 	Extra    map[string]interface{} `yaml:",inline"`
 }
 

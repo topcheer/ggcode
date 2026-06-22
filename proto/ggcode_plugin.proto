@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package ggcode.plugin.v1;
+
+option go_package = "github.com/topcheer/ggcode/internal/plugin/grpc/proto;ggcodeplugin";
+
+// ToolService is implemented by the plugin process.
+// The host (ggcode) acts as the gRPC client; the plugin is the server.
+service ToolService {
+  // ListTools returns all tools provided by this plugin.
+  // Called once at startup after the gRPC connection is established.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Execute invokes a single tool call.
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+
+  // Shutdown is called before the host terminates the plugin process.
+  // The plugin should do any cleanup (close connections, flush state).
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+// ─── ListTools ───
+
+message ListToolsRequest {}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  // JSON Schema encoded as JSON bytes.
+  // Example: {"type":"object","properties":{"query":{"type":"string"}}}
+  bytes parameters = 3;
+  // Optional category tags for grouping (e.g. "jira", "search").
+  repeated string categories = 4;
+}
+
+message ListToolsResponse {
+  repeated ToolDefinition tools = 1;
+}
+
+// ─── Execute ───
+
+message ExecuteRequest {
+  // The tool name (must match a name returned by ListTools).
+  string tool_name = 1;
+  // JSON-encoded arguments (matches the tool's parameters schema).
+  bytes input = 2;
+  // Runtime context from the host.
+  map<string, string> context = 3;
+}
+
+message ExecuteResponse {
+  string content = 1;
+  bool is_error = 2;
+  repeated ResultImage images = 3;
+  // Optional hint: if non-empty, the agent will switch its working directory.
+  string suggested_working_dir = 4;
+}
+
+message ResultImage {
+  string mime = 1;
+  string base64 = 2;
+  int32 width = 3;
+  int32 height = 4;
+}
+
+// ─── Shutdown ───
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}

@@ -571,6 +571,17 @@ plugins:
         execute: npm
         args: ["run", "lint"]
 
+  # gRPC plugin — independent process, any language (Go, Python, Node.js, etc.)
+  # Zero version coupling with the host. The plugin exposes tools via gRPC.
+  # See docs/guide/grpc-plugins.md for the full development guide.
+  #
+  # - name: jira-tools
+  #   type: grpc
+  #   command: ["./bin/jira-plugin"]        # or ["python", "-m", "my_jira_plugin"]
+  #   env:
+  #     JIRA_URL: "https://company.atlassian.net"
+  #     JIRA_TOKEN: "${JIRA_API_TOKEN}"     # ${VAR} syntax for env var expansion
+
 # A2A protocol server — expose this ggcode instance as an A2A agent
 # so other ggcode instances (or any A2A client) can discover and collaborate.
 # Enabled by default on port 0 (auto-assign). Set disabled: true to opt out.

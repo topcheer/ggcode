@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -11,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
+	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -20,6 +22,7 @@ type InteractiveRuntimeCore struct {
 	Registry       *tool.Registry
 	MCPManager     *plugin.MCPManager
 	PluginManager  *plugin.Manager
+	GRPCPluginMgr  *grpcplugin.Manager
 	AutoMemory     *memory.AutoMemory
 	ProjectAutoMem *memory.AutoMemory
 	SaveMemoryTool *tool.SaveMemoryTool
@@ -53,6 +56,11 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return nil, err
 	}
 
+	// Load gRPC plugins (type: grpc)
+	grpcMgr := grpcplugin.NewManager(workingDir)
+	grpcConfigs := buildGRPCPluginConfigs(cfg.Plugins)
+	_ = grpcMgr.LoadAll(grpcConfigs, registry) // errors are per-plugin, not fatal
+
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
 	saveMemoryTool := tool.NewSaveMemoryTool(autoMem, projectAutoMem)
@@ -72,6 +80,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		Registry:       registry,
 		MCPManager:     mcpMgr,
 		PluginManager:  pluginMgr,
+		GRPCPluginMgr:  grpcMgr,
 		AutoMemory:     autoMem,
 		ProjectAutoMem: projectAutoMem,
 		SaveMemoryTool: saveMemoryTool,
@@ -148,4 +157,24 @@ func NewSkillTool(
 		OnUsage:             onUsage,
 		SystemPromptBuilder: systemPromptBuilder,
 	}
+}
+
+// buildGRPCPluginConfigs filters plugin config entries for type:"grpc"
+// and converts them to GRPCPluginConfig.
+func buildGRPCPluginConfigs(entries []config.PluginConfigEntry) []grpcplugin.GRPCPluginConfig {
+	var out []grpcplugin.GRPCPluginConfig
+	for _, e := range entries {
+		if strings.ToLower(e.Type) != "grpc" {
+			continue
+		}
+		if len(e.Command) == 0 {
+			continue
+		}
+		out = append(out, grpcplugin.GRPCPluginConfig{
+			Name:    e.Name,
+			Command: e.Command,
+			Env:     e.Env,
+		})
+	}
+	return out
 }
