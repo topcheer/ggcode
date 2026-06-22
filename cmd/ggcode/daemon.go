@@ -314,6 +314,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return fmt.Errorf("creating session store: %w", err)
 	}
 
+	// Clean up stale lock files from crashed/killed processes.
+	storeDir, _ := session.DefaultDir()
+	session.CleanupStaleLocks(storeDir)
+
 	var daemonRestartRequested bool
 	restartCh := make(chan struct{}, 1)
 
@@ -381,6 +385,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	if err := store.Save(ses); err != nil {
 		return fmt.Errorf("saving session: %w", err)
+	}
+
+	// Acquire session lock to prevent concurrent instances on the same session.
+	var sessionLock *session.SessionLock
+	if ses.ID != "" {
+		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
+		if lockErr == nil && lock != nil && lock.Acquired() {
+			sessionLock = lock
+		} else if lock != nil && !lock.Acquired() {
+			pid := lock.HolderPID()
+			return fmt.Errorf("session %s is locked by another instance (PID %d)", ses.ID[:8], pid)
+		}
 	}
 
 	// Create emitter and daemon bridge
@@ -1228,6 +1244,14 @@ loop:
 		ses.Messages = ag.Messages()
 		_ = store.Save(ses)
 
+		// Release the session lock before exec — the new process will acquire it fresh.
+		// syscall.Exec preserves FDs with flocks, so without releasing here the
+		// new process would fail to acquire its own lock on the same session.
+		if sessionLock != nil {
+			sessionLock.Release()
+			sessionLock = nil
+		}
+
 		var args []string
 		if cfgFile != "" {
 			args = append(args, "--config", cfgFile)
@@ -1260,6 +1284,12 @@ loop:
 	bridge.Close()
 	ses.Messages = ag.Messages()
 	_ = store.Save(ses)
+
+	// Release session lock on exit
+	if sessionLock != nil {
+		sessionLock.Release()
+		sessionLock = nil
+	}
 
 	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.stopped"))
 	return nil
