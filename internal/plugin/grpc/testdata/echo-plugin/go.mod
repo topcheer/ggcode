@@ -21,4 +21,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/topcheer/ggcode => /Users/zhanju/.openclaw/workspace-teamclaw/projects/https-github-com-topcheer-cc-git-ggcode-coding-age-s7ccb6
+replace github.com/topcheer/ggcode => ../../../../..
