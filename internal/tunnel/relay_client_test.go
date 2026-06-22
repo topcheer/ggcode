@@ -201,7 +201,10 @@ func TestRelayReconnectDelay(t *testing.T) {
 		{attempt: 2, want: 10 * time.Second},
 		{attempt: 3, want: 20 * time.Second},
 		{attempt: 4, want: 40 * time.Second},
-		{attempt: 8, want: 40 * time.Second},
+		{attempt: 6, want: 40 * time.Second},
+		{attempt: 7, want: 2 * time.Minute},
+		{attempt: 8, want: 2 * time.Minute},
+		{attempt: 13, want: 5 * time.Minute},
 	}
 
 	for _, tt := range tests {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -277,7 +278,11 @@ class ConnectionService {
   bool _serverOfflineReconnect = false;
   bool _everConnected = false;
   int _reconnectAttempts = 0;
-  static const _maxReconnectAttempts = 30;
+  // After _maxReconnectAttempts fast attempts, switch to slow-interval retry
+  // instead of giving up entirely. Messages are buffered server-side and
+  // recovered via cursor replay, so we must keep retrying.
+  static const _maxReconnectAttempts = 15;
+  static const _slowReconnectInterval = Duration(minutes: 5);
   Timer? _reconnectTimer;
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();
@@ -297,6 +302,8 @@ class ConnectionService {
   ShareConnectionDescriptor get descriptor => _descriptor;
 
   Timer? _heartbeatTimer;
+  int _missedPongs = 0;
+  static const _maxMissedPongs = 3; // 3 × 20s = 60s without pong → reconnect
   StreamSubscription? _socketSub;
 
   // Sequential message processing queue
@@ -453,15 +460,25 @@ class ConnectionService {
 
   void _scheduleReconnect() {
     if (_disposed) return;
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      _errorController.add('Max reconnection attempts reached');
-      return;
+    _reconnectAttempts++;
+
+    Duration delay;
+    if (_reconnectAttempts <= _maxReconnectAttempts) {
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s, 60s, ...
+      final seconds = math.min(
+        math.pow(2, _reconnectAttempts).toInt(),
+        60,
+      );
+      delay = Duration(seconds: seconds);
+      debugPrint(
+          '[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    } else {
+      // Past fast attempts: switch to slow interval, never give up.
+      delay = _slowReconnectInterval;
+      debugPrint(
+          '[connection] slow reconnect in ${delay.inMinutes}m (attempt $_reconnectAttempts)');
     }
 
-    _reconnectAttempts++;
-    final delay = Duration(seconds: (_reconnectAttempts * 2).clamp(2, 30));
-    debugPrint(
-        '[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer = Timer(delay, () {
       if (!_disposed) {
         connect();
@@ -541,6 +558,7 @@ class ConnectionService {
         break;
 
       case 'pong':
+        _missedPongs = 0;
         break;
 
       case 'active_session':
@@ -828,7 +846,15 @@ class ConnectionService {
 
   void _startHeartbeat() {
     _stopHeartbeat();
+    _missedPongs = 0;
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _missedPongs++;
+      if (_missedPongs > _maxMissedPongs) {
+        debugPrint(
+            '[connection] no pong for ${_missedPongs * 20}s, forcing reconnect');
+        _forceReconnect();
+        return;
+      }
       send({'type': 'ping'});
     });
   }
@@ -836,6 +862,19 @@ class ConnectionService {
   void _stopHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+  }
+
+  /// Force-close the current WebSocket and trigger a reconnect sequence.
+  /// Used when the connection appears half-open (no pong responses).
+  void _forceReconnect() {
+    _stopHeartbeat();
+    _cleanup();
+    _socket?.close();
+    _socket = null;
+    if (!_disposed) {
+      _statusController.add(ConnectionStatus.disconnected);
+      _scheduleReconnect();
+    }
   }
 
   void send(Map<String, dynamic> data) {

@@ -73,6 +73,7 @@ type RelayConnectedState struct {
 const (
 	relayPingInterval = 20 * time.Second
 	relayReadTimeout  = 75 * time.Second
+	relayWriteTimeout = 30 * time.Second
 )
 
 func relayReconnectDelay(attempt int) time.Duration {
@@ -83,8 +84,15 @@ func relayReconnectDelay(attempt int) time.Duration {
 		return 10 * time.Second
 	case attempt == 3:
 		return 20 * time.Second
-	default:
+	case attempt <= 6:
 		return 40 * time.Second
+	case attempt <= 12:
+		return 2 * time.Minute
+	default:
+		// Persistent failure (relay down >24 min): keep trying every 5 min.
+		// Messages are buffered in the broker outbound queue and replayed
+		// once the connection is restored.
+		return 5 * time.Minute
 	}
 }
 
@@ -232,10 +240,21 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	ticker := time.NewTicker(relayPingInterval)
 	defer ticker.Stop()
 
+	// writeMsg writes a message with a write deadline. On failure it pushes
+	// the message back to pendingFront and returns false.
+	writeMsg := func(msg []byte) bool {
+		_ = conn.SetWriteDeadline(time.Now().Add(relayWriteTimeout))
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			conn.SetWriteDeadline(time.Time{}) // clear deadline
+			rc.pushPendingFront(msg)
+			return false
+		}
+		return true
+	}
+
 	for {
 		if msg, ok := rc.popPendingFront(); ok {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				rc.pushPendingFront(msg)
+			if !writeMsg(msg) {
 				return
 			}
 			continue
@@ -245,14 +264,13 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 			if !ok {
 				return
 			}
-			err := conn.WriteMessage(websocket.TextMessage, msg)
-			if err != nil {
-				rc.pushPendingFront(msg)
+			if !writeMsg(msg) {
 				return
 			}
 		case <-ticker.C:
-			err := conn.WriteMessage(websocket.TextMessage, pingMsg)
-			if err != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(relayWriteTimeout))
+			if err := conn.WriteMessage(websocket.TextMessage, pingMsg); err != nil {
+				conn.SetWriteDeadline(time.Time{})
 				return
 			}
 		case <-rc.gracefulStopCh:
@@ -262,9 +280,7 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 					if !ok {
 						return
 					}
-					err := conn.WriteMessage(websocket.TextMessage, msg)
-					if err != nil {
-						rc.pushPendingFront(msg)
+					if !writeMsg(msg) {
 						return
 					}
 				default:

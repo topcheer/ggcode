@@ -95,19 +95,22 @@ func newRoom(token string) *room {
 	}
 }
 
-func (r *room) appendEvent(ev roomEvent) {
+// appendEvent stores an event in room history with idempotent dedup.
+// Returns true if the event is new, false if it was a duplicate (updated in-place).
+func (r *room) appendEvent(ev roomEvent) bool {
 	if ev.eventID == "" {
-		return
+		return false
 	}
 	// Deduplicate the tail (idempotent upsert for retries).
 	for i := len(r.history) - 1; i >= 0 && i >= len(r.history)-50; i-- {
 		if r.history[i].eventID == ev.eventID {
 			r.history[i] = ev
-			return
+			return false
 		}
 	}
 	r.history = append(r.history, ev)
 	r.lastEventAt = time.Now()
+	return true
 }
 
 func (r *room) clearHistoryLocked() {
@@ -239,7 +242,7 @@ func newPeer(h *hub, room *room, role string, conn *websocket.Conn) *peer {
 		room:   room,
 		role:   role,
 		conn:   conn,
-		sendCh: make(chan []byte, 10000),
+		sendCh: make(chan []byte, 512),
 		done:   make(chan struct{}),
 	}
 }
@@ -268,10 +271,19 @@ func (p *peer) trySend(msg relayMessage) bool {
 	}
 }
 
+// sendRaw enqueues a raw message. Non-blocking with a 2s grace period:
+// events are already persisted to history before sendRaw, so a dropped
+// live-forward is recoverable via cursor-based replay on reconnect.
 func (p *peer) sendRaw(raw []byte) {
 	select {
 	case p.sendCh <- raw:
 	case <-p.done:
+	case <-time.After(2 * time.Second):
+		// Buffer full (slow peer). Message is in history; will be
+		// replayed from cursor on reconnect. Log and move on to avoid
+		// blocking the relay goroutine.
+		log.Printf("[relay] send buffer full, dropping live-forward room=%s peer=%s",
+			shortToken(p.room.token), p.clientID)
 	}
 }
 
@@ -288,8 +300,12 @@ func (p *peer) closeWithReason(code int, reason string) {
 }
 
 // writeLoop drains sendCh and writes to the WebSocket.
+// Also sends WebSocket-level ping frames every 30s to detect dead peers
+// at the TCP level (complementary to app-level ping/pong).
 func (p *peer) writeLoop() {
 	defer p.conn.Close()
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
 	for {
 		select {
 		case raw, ok := <-p.sendCh:
@@ -298,6 +314,14 @@ func (p *peer) writeLoop() {
 			}
 			_ = p.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if err := p.conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+				return
+			}
+		case <-pingTicker.C:
+			// WebSocket control frame ping — triggers the peer's pong handler,
+			// which resets the read deadline. If the peer is half-open,
+			// the write or read deadline will expire and close the connection.
+			_ = p.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := p.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				return
 			}
 		case <-p.done:
@@ -317,10 +341,10 @@ func (p *peer) readLoop(h *hub) {
 
 	p.conn.SetReadLimit(1 << 20)
 	p.conn.SetPongHandler(func(string) error {
-		p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(75 * time.Second))
 		return nil
 	})
-	p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	p.conn.SetReadDeadline(time.Now().Add(75 * time.Second))
 	for {
 		_, raw, err := p.conn.ReadMessage()
 		if err != nil {
@@ -407,13 +431,54 @@ func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 	if p.role == "server" {
 		p.handleServerBroadcast(raw, msg)
 	} else {
-		// Client → Server (user input).
-		p.room.mu.RLock()
-		srv := p.room.server
-		p.room.mu.RUnlock()
-		if srv != nil {
-			srv.sendRaw(raw)
-		}
+		p.handleClientEncrypted(raw, msg)
+	}
+}
+
+// handleClientEncrypted processes Client → Server messages (user input).
+// These are persisted to history so they survive desktop disconnections.
+// When desktop reconnects, it receives them via replay (if it supports cursors)
+// or they are delivered immediately if currently connected.
+func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
+	p.room.sendMu.Lock()
+	defer p.room.sendMu.Unlock()
+
+	p.room.mu.Lock()
+	srv := p.room.server
+	// Persist to history so desktop can recover on reconnect.
+	ev := roomEvent{
+		sessionID: msg.SessionID,
+		eventID:   msg.EventID,
+		streamID:  msg.StreamID,
+		eventHash: msg.EventHash,
+		typ:       "client_encrypted",
+		raw:       append([]byte(nil), raw...),
+	}
+	isNew := p.room.appendEvent(ev)
+	p.room.mu.Unlock()
+
+	if !isNew {
+		p.hub.trace("client_broadcast_dedup", p.room.token, msg)
+		return
+	}
+
+	// Forward to server if connected.
+	if srv != nil {
+		srv.sendRaw(raw)
+	} else {
+		log.Printf("[relay] server offline, buffered client message room=%s event=%s",
+			shortToken(p.room.token), msg.EventID)
+	}
+
+	// Persist async.
+	if p.hub.store != nil && msg.SessionID != "" {
+		token := p.room.token
+		s := p.hub.store
+		go func() {
+			if err := s.persistEvent(token, msg, append([]byte(nil), raw...)); err != nil {
+				log.Printf("[relay] persist client event error: %v", err)
+			}
+		}()
 	}
 }
 
@@ -457,7 +522,15 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 		typ:       "encrypted",
 		raw:       append([]byte(nil), wire...),
 	}
-	p.room.appendEvent(ev)
+	isNew := p.room.appendEvent(ev)
+	if !isNew {
+		// Duplicate event (e.g. desktop replay after reconnect).
+		// History was updated in-place; skip forwarding to avoid
+		// redundant replay at the network level.
+		p.room.mu.Unlock()
+		p.hub.trace("server_broadcast_dedup", p.room.token, msg)
+		return
+	}
 
 	clients := p.room.snapshotClientsLocked(func(c *peer) bool {
 		return c.ready
