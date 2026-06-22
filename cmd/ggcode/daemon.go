@@ -1323,7 +1323,7 @@ type daemonTunnelShareController struct {
 	reasoningTail string
 	textTail      string
 	status        tunnel.StatusData
-	userOverride  *tunnel.MessageData
+	userOverrides []tunnel.MessageData // queue, not single override — prevents message loss
 }
 
 func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.DaemonBridge, sessionInfo tunnel.SessionInfoData, tunnelHost *agentruntime.TunnelHost) *daemonTunnelShareController {
@@ -1473,7 +1473,7 @@ func (c *daemonTunnelShareController) SetNextUserMessageOverride(data tunnel.Mes
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	data.MessageID = tunnel.NormalizeClientMessageID(data.MessageID)
-	c.userOverride = &data
+	c.userOverrides = append(c.userOverrides, data)
 }
 
 func (c *daemonTunnelShareController) HandleCommand(target daemonTunnelCommandTarget, cmd tunnel.GatewayMessage) {
@@ -1527,11 +1527,11 @@ func (c *daemonTunnelShareController) currentStatus() tunnel.StatusData {
 func (c *daemonTunnelShareController) consumeUserMessageOverride() tunnel.MessageData {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.userOverride == nil {
+	if len(c.userOverrides) == 0 {
 		return tunnel.MessageData{}
 	}
-	data := *c.userOverride
-	c.userOverride = nil
+	data := c.userOverrides[0]
+	c.userOverrides = c.userOverrides[1:]
 	return data
 }
 
