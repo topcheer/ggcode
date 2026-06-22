@@ -110,13 +110,41 @@ lsp_servers:
 
 ## Plugins
 
-External command-based tools:
+ggcode supports two plugin types:
+
+### gRPC Plugins (recommended)
+
+Run as independent subprocesses, communicate via gRPC. Zero version coupling with the host. Supports any language (Go, Python, Node.js, etc.).
 
 ```yaml
 plugins:
-  - name: my-tool
-    command: /path/to/plugin
-    args: ["--flag"]
+  - name: my-grpc-tool
+    type: grpc
+    command: ["./bin/my-plugin"]
+    env:                          # optional
+      API_KEY: "secret"
+```
+
+Install via CLI:
+
+```bash
+ggcode plugin install my-grpc-tool ./bin/my-plugin --env API_KEY=secret
+```
+
+See [gRPC Plugins](grpc-plugins.md) for the full development guide and demo repos.
+
+### Command Plugins
+
+Wrap external shell commands as tools:
+
+```yaml
+plugins:
+  - name: my-cmd-tool
+    type: command
+    commands:
+      - name: deploy
+        description: Deploy the current project
+        command: ["./scripts/deploy.sh"]
 ```
 
 ## Tool Permissions

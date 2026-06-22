@@ -47,6 +47,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 - **Codebase-aware** — reads, understands, and edits your entire project
 - **Full dev toolkit** — file edits, shell commands, Git, LSP, search
 - **MCP integration** — connect external tools and data sources
+- **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser
@@ -75,6 +76,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 | [Slash Commands](docs/guide/slash-commands.md) | In-TUI command reference |
 | [Permission Modes](docs/guide/modes.md) | Supervised, plan, auto, bypass, autopilot |
 | [MCP Servers](docs/guide/mcp.md) | Connect external tools via MCP |
+| [gRPC Plugins](docs/guide/grpc-plugins.md) | Build and install custom tool plugins (Go, Python, Node.js) |
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |
 | [Harness](docs/guide/harness.md) | Isolated task workflow with review |
 | [A2A Protocol](docs/guide/a2a.md) | Cross-instance agent delegation |

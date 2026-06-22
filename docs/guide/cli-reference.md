@@ -62,13 +62,16 @@ ggcode mcp remove <name>               # Remove an MCP server
 
 ### plugin
 
-External plugin management:
+Manage gRPC and command plugins:
 
 ```bash
 ggcode plugin list                     # List configured plugins
-ggcode plugin install <name>           # Install a plugin
-ggcode plugin remove <name>            # Remove a plugin
+ggcode plugin install <name> <cmd...>  # Install a plugin (--env K=V, --type grpc|command)
+ggcode plugin uninstall <name>         # Remove a plugin
+ggcode plugin test <name>              # Test a plugin can start and handshake
 ```
+
+See [gRPC Plugins](grpc-plugins.md) for the full guide.
 
 ### im
 

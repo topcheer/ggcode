@@ -47,6 +47,7 @@ ggcode
 - **代码理解** — 读取、理解并编辑整个项目
 - **完整开发工具** — 文件编辑、Shell 命令、Git、LSP、搜索
 - **MCP 集成** — 连接外部工具和数据源
+- **gRPC 插件** — 用 Go、Python、Node.js 等任意语言编写自定义工具插件
 - **多 Agent** — 并行工作、团队协作、A2A 协议
 - **编辑器集成** — JetBrains、Zed 等 ACP 兼容编辑器
 - **WebUI** — 内置 Web 界面，浏览器即可使用
@@ -75,6 +76,7 @@ ggcode
 | [斜杠命令](docs/guide/slash-commands.md) | TUI 内命令参考 |
 | [权限模式](docs/guide/modes.md) | 监督 / 计划 / 自动 / 旁路 / 自动驾驶 |
 | [MCP 服务器](docs/guide/mcp.md) | 通过 MCP 连接外部工具 |
+| [gRPC 插件](docs/guide/grpc-plugins.md) | 编写和安装自定义工具插件（Go / Python / Node.js）|
 | [IM 集成](docs/guide/im-integration.md) | QQ / Telegram / Discord / Slack / 飞书 / 钉钉 |
 | [Harness 工作流](docs/guide/harness.md) | 隔离任务 + 审查 + 合并 |
 | [A2A 协议](docs/guide/a2a.md) | 跨实例 Agent 委托 |
