@@ -1043,6 +1043,24 @@ func (r *REPL) loadSession(id string) {
 		r.createSession()
 		return
 	}
+	// Acquire session lock — mirrors createSession and tryAutoLoadSession.
+	// This is critical for the /restart path: execRestart releases the lock
+	// before syscall.Exec, and the new process enters via loadSession with
+	// --resume <id>. Without re-acquiring here, the session is left unlocked.
+	if r.sessionLock != nil {
+		r.sessionLock.Release()
+		r.sessionLock = nil
+	}
+	if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
+		if lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID); lockErr == nil && lock != nil && lock.Acquired() {
+			r.sessionLock = lock
+			debug.Log("repl", "loadSession: acquired lock on session %s", ses.ID)
+		} else if lock != nil && !lock.Acquired() {
+			pid := lock.HolderPID()
+			debug.Log("repl", "loadSession: session %s is locked by PID %d", ses.ID, pid)
+		}
+	}
+
 	agentruntime.RestoreSessionIntoAgent(r.agent, ses)
 	r.model.SetSession(ses, r.store)
 	r.model.rebuildConversationFromMessages(ses.Messages)
