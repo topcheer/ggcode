@@ -6,16 +6,14 @@ Project memory gives ggcode persistent context about your project across session
 
 ## File Hierarchy
 
-ggcode reads context files from the project root. Files higher in the list take priority:
+ggcode reads context files from the project root. All files are loaded and merged — each serves a different purpose:
 
-| Priority | File | Description |
-|----------|------|-------------|
-| 1 | `GGCODE.md` | Project-specific instructions (primary) |
-| 2 | `AGENTS.md` | Compatibility alias for `GGCODE.md` |
-| 3 | `CLAUDE.md` | Compatibility alias for Claude users |
-| 4 | `COPILOT.md` | Compatibility alias for GitHub Copilot users |
-
-If multiple files exist, the highest-priority file wins.
+| File | Description |
+|------|-------------|
+| `GGCODE.md` | Project-specific instructions (primary conventions) |
+| `AGENTS.md` | Agent-specific instructions (used by TeamClaw workers) |
+| `CLAUDE.md` | Claude-specific instructions |
+| `COPILOT.md` | GitHub Copilot-specific instructions |
 
 ## What to Put in These Files
 

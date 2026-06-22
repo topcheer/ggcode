@@ -35,8 +35,7 @@ ggcode
 
 # 2. On first launch, configure your API key (interactive prompt)
 #    Or set it directly:
-#    OpenAI:      ggcode --vendor openai
-#    Anthropic:   ggcode --vendor anthropic
+#    Or set up via the interactive wizard on first launch
 
 # 3. Start coding — just type your request
 ```
@@ -74,7 +73,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 | [CLI Reference](docs/guide/cli-reference.md) | Commands, flags, pipe mode |
 | [Providers](docs/guide/providers.md) | LLM vendor and endpoint configuration |
 | [Slash Commands](docs/guide/slash-commands.md) | In-TUI command reference |
-| [Permission Modes](docs/guide/modes.md) | Default, bypass, readonly, yolo |
+| [Permission Modes](docs/guide/modes.md) | Supervised, plan, auto, bypass, autopilot |
 | [MCP Servers](docs/guide/mcp.md) | Connect external tools via MCP |
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |
 | [Harness](docs/guide/harness.md) | Isolated task workflow with review |

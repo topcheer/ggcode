@@ -25,7 +25,7 @@ knight-eval:
 	./scripts/dev/knight-eval.sh
 
 install:
-	go install $(PKG)
+	go install -tags "$(TAGS)" $(PKG)
 
 install-installer:
 	go install $(INSTALLER_PKG)

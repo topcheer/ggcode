@@ -12,67 +12,62 @@ On first run, ggcode auto-detects your environment and prompts for configuration
 ggcode
 ```
 
-Alternatively, set your vendor, endpoint, and model manually.
+The onboarding wizard will:
+- Ask you to select a provider (Z.ai, OpenAI, Anthropic, etc.)
+- Prompt for your API key
+- Write the configuration to `~/.ggcode/ggcode.yaml`
+- Store the API key securely in `~/.ggcode/keys.env`
 
-**OpenAI:**
+You can also manually create the config file. See [Configuration](./configuration.md) for details.
 
-```bash
-ggcode config set vendor openai
-ggcode config set endpoint openai
-ggcode config set model gpt-4o
-ggcode config set api_key sk-...
+### Manual Setup
+
+Create `~/.ggcode/ggcode.yaml`:
+
+```yaml
+vendor: openai
+endpoint: default
+model: gpt-4o
 ```
 
-**Anthropic:**
+Then add your API key to `~/.ggcode/keys.env`:
 
 ```bash
-ggcode config set vendor anthropic
-ggcode config set endpoint anthropic
-ggcode config set model claude-sonnet-4-20250514
-ggcode config set api_key sk-ant-...
+OPENAI_API_KEY=sk-your-key-here
 ```
 
-**Local endpoint (e.g. Ollama):**
+Or set it via environment variable:
 
 ```bash
-ggcode config set vendor openai
-ggcode config set endpoint http://localhost:11434
-ggcode config set model llama3
+export OPENAI_API_KEY=sk-your-key-here
 ```
 
-Verify your configuration:
+## 3. Start Chatting
 
 ```bash
-ggcode llm-probe
-```
-
-## 3. Start Coding
-
-Navigate to your project and launch ggcode:
-
-```bash
-cd your-project
 ggcode
 ```
 
-## 4. Basic Interactions
+Type a message and press Enter. ggcode will:
+1. Send your message to the configured LLM
+2. Stream the response in real-time
+3. Execute any tool calls (file reads, searches, etc.) with your approval
 
-| Action | Command |
-|--------|---------|
-| Ask a question | Type your prompt and press Enter |
-| View help | `/help` |
-| Update ggcode | `/update` |
-| List sessions | `/sessions` |
+## 4. Essential Slash Commands
 
-## 5. TUI Shortcuts
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/sessions` | List and resume sessions |
+| `/model [name]` | Switch model |
+| `/mode [mode]` | Switch permission mode (supervised/plan/auto/bypass/autopilot) |
+| `/compact` | Compact conversation to save context |
+| `/exit` | Exit ggcode |
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+C` | Cancel current operation |
-| `Ctrl+L` | Clear the screen |
-| `Tab` | Switch between panes |
-| `/` | Open command menu |
+## 5. Next Steps
 
----
-
-Next: [CLI Reference](./cli-reference.md)
+- [Configuration](./configuration.md) — Full config reference
+- [Providers](./providers.md) — Set up multiple providers
+- [Slash Commands](./slash-commands.md) — All available commands
+- [Permission Modes](./modes.md) — Control agent autonomy
+- [CLI Reference](./cli-reference.md) — All CLI flags and subcommands

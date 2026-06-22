@@ -4,7 +4,7 @@ The harness provides isolated coding tasks with automated checks, bounded contex
 
 ## Overview
 
-Each task runs in its own git worktree under `.ggcode/worktrees/`, completely isolated from your working directory. Task state, events, and snapshots are persisted as JSON files under `.ggcode/harness/`. Configuration lives in `.ggcode/harness.yaml`.
+Each task runs in its own git worktree under `.ggcode/harness/worktrees/`, completely isolated from your working directory. Task state, events, and snapshots are persisted as JSONL files under `.ggcode/harness/`. Configuration lives in `.ggcode/harness.yaml`.
 
 Tasks flow through a lifecycle:
 
@@ -174,7 +174,7 @@ ggcode harness gc
 ## Task Lifecycle
 
 1. **Queue** — task goal added to backlog with optional dependencies and context binding.
-2. **Run** — executes in an isolated worktree (`.ggcode/worktrees/`).
+2. **Run** — executes in an isolated worktree (`.ggcode/harness/worktrees/`).
 3. **Review** — inspect diffs, check results, and drift detection output.
 4. **Approve / Reject** — approved tasks become promotable; rejected tasks re-enter retry.
 5. **Promote** — approved changes merge into the main branch in dependency order.

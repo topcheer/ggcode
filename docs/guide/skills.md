@@ -4,9 +4,9 @@
 
 Skills are reusable, composable workflows that ggcode can invoke. Each skill is a markdown file containing step-by-step instructions that guide the agent through a specific task pattern.
 
-## Auto-Detection
+## Availability
 
-Skills auto-detect when their trigger conditions are met. When the current context matches a skill's criteria, ggcode suggests the skill automatically.
+Skills are available through the `skill` tool. When a listed skill clearly matches the user's task, the agent invokes it before continuing. Skills can also be loaded explicitly via the `skill` tool or the `/skills` slash command.
 
 ## Viewing Skills
 

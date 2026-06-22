@@ -4,117 +4,120 @@
 
 ## Core Commands
 
-### Interactive TUI
+### Interactive TUI (default)
 
 ```bash
-ggcode
+ggcode                    # Launch interactive TUI
+ggcode --bypass           # Start in bypass permission mode
+ggcode --config <path>    # Use a specific config file
 ```
 
-Starts the interactive terminal UI in the current project directory.
-
-### Version
+### Pipe Mode
 
 ```bash
-ggcode version
-ggcode --version
-ggcode -v
+ggcode -p "prompt"        # Non-interactive: send prompt, print response
+echo "fix typo" | ggcode  # Read from stdin
 ```
 
-Prints the installed version.
-
-### Pipe Mode (Non-Interactive)
+### Resume Session
 
 ```bash
-ggcode -p "fix the failing tests"
-cat error.log | ggcode -p "explain this error"
-```
-
-Runs a single prompt without launching the TUI. Reads stdin if available.
-
----
-
-## Session Management
-
-```bash
-ggcode --resume <session-id>     # resume a specific session
-ggcode --resume-picker            # interactively select a session to resume
-```
-
----
-
-## Flags
-
-| Flag | Description |
-|------|-------------|
-| `--vendor <name>` | Override the configured vendor (e.g. `openai`) |
-| `--allowedTools <tools>` | Restrict available tools in pipe mode |
-| `--config <path>` | Override the config file path |
-| `--bypass` | Auto-approve mode (skip confirmation prompts) |
-| `--output <file>` | Write output to a file |
-| `-p, --prompt` | Pipe mode with a prompt string |
-
----
-
-## Subcommands
-
-### MCP Management
-
-```bash
-ggcode mcp install     # install an MCP server
-ggcode mcp list        # list configured MCP servers
-ggcode mcp uninstall   # remove an MCP server
-```
-
-### IM (Instant Messaging) Management
-
-```bash
-ggcode im config add     # add an IM adapter
-ggcode im config list    # list IM adapters
-ggcode im config status  # show IM adapter status
-```
-
-### LLM Probe
-
-```bash
-ggcode llm-probe
-```
-
-Tests connectivity to all configured endpoints and reports results.
-
-### Harness Workflow
-
-```bash
-ggcode harness init      # initialize a harness project
-ggcode harness queue     # queue tasks
-ggcode harness run       # run queued tasks
-ggcode harness review    # review results
-ggcode harness promote   # promote a build
-ggcode harness release   # release a build
+ggcode --resume <id>      # Resume a specific session
+ggcode --resume           # Auto-resume latest session
+ggcode --resume-picker    # Open session picker
 ```
 
 ### Daemon Mode
 
 ```bash
-ggcode daemon
+ggcode daemon             # Start daemon (headless + IM gateway)
+ggcode daemon --follow    # Daemon with terminal follow display
+ggcode daemon --bypass    # Daemon in bypass mode
+ggcode daemon --background  # Fork to background
 ```
 
-Runs ggcode as a background daemon.
+## Subcommands
 
-### ACP Mode
+### harness
+
+Harness-engineering workflow for structured multi-step tasks:
 
 ```bash
-ggcode acp
+ggcode harness create <title>          # Create a task
+ggcode harness list                    # List tasks
+ggcode harness show <id>               # Show task details
+ggcode harness start <id>              # Start working on a task
+ggcode harness monitor                 # Monitor active work
 ```
 
-Starts ggcode in ACP (Agent Communication Protocol) mode for programmatic integration.
+### mcp
 
-### Shell Completion
+MCP server management:
 
 ```bash
-ggcode completion bash
-ggcode completion zsh
-ggcode completion fish
-ggcode completion powershell
+ggcode mcp list                        # List configured MCP servers
+ggcode mcp add <name> <command>        # Add an MCP server
+ggcode mcp remove <name>               # Remove an MCP server
 ```
 
-Add the output to your shell profile to enable tab-completion for ggcode commands.
+### plugin
+
+External plugin management:
+
+```bash
+ggcode plugin list                     # List configured plugins
+ggcode plugin install <name>           # Install a plugin
+ggcode plugin remove <name>            # Remove a plugin
+```
+
+### im
+
+IM integration management:
+
+```bash
+ggcode im list                         # List configured IM adapters
+```
+
+### acp
+
+Agent Client Protocol support for editor integration (JetBrains, Zed, etc.):
+
+```bash
+ggcode acp                             # Start ACP server
+```
+
+### llm-probe
+
+Test LLM provider connectivity and list available models:
+
+```bash
+ggcode llm-probe                       # Test current provider
+```
+
+### completion
+
+Generate shell completion scripts:
+
+```bash
+ggcode completion bash                 # Bash completion
+ggcode completion zsh                  # Zsh completion
+ggcode completion fish                 # Fish completion
+ggcode completion powershell           # PowerShell completion
+```
+
+### version
+
+```bash
+ggcode version                         # Print version, commit, and build date
+```
+
+## Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `--config <path>` | Use a specific config file |
+| `--bypass` | Start in bypass permission mode |
+| `-p, --pipe <prompt>` | Non-interactive pipe mode |
+| `--resume [id]` | Resume a session |
+| `--resume-picker` | Open session picker |
+| `-h, --help` | Show help |

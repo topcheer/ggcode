@@ -5,7 +5,7 @@
 | Item | Value |
 |------|-------|
 | Module | `github.com/topcheer/ggcode` |
-| Go version | 1.26.1 |
+| Go version | 1.26.2 |
 | Build tags | **`goolm`** — required for all `go build`, `go vet`, `go test` commands |
 | CLI framework | Cobra (`spf13/cobra`) |
 | TUI framework | Bubble Tea / Lip Gloss (`charmbracelet/bubbletea`, `charmbracelet/lipgloss`) |

@@ -4,15 +4,25 @@ ggcode uses permission modes to control how much autonomy the agent has over fil
 
 ## Modes
 
-### `default`
+### `supervised`
 
-Asks for confirmation on file writes and command execution.
+Default mode. Respects per-tool permission rules, asks for confirmation on unspecified tools.
 
 ```bash
 ggcode
 ```
 
-Best for exploring an unfamiliar codebase.
+Best for exploring an unfamiliar codebase or working with sensitive code.
+
+### `plan`
+
+Read-only mode — allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes and command execution. The agent can only read and search.
+
+Best for code review, exploration, and planning before implementation.
+
+### `auto`
+
+Allows safe operations automatically, denies dangerous ones. Reduces interruptions while maintaining safety guardrails.
 
 ### `bypass`
 
@@ -22,26 +32,20 @@ Auto-approves safe operations and warns on potentially dangerous ones. Faster fo
 ggcode --bypass
 ```
 
-### `readonly`
+### `autopilot`
 
-Read-only mode — no file writes or command execution allowed. The agent can only read and search.
+Bypass permissions plus automatically continues when the model asks for input. Escalates external blockers to `ask_user`. Enables fully autonomous workflows.
 
-Best for code review and exploration.
-
-### `yolo`
-
-Auto-approves everything, including dangerous operations. **Use with caution.**
-
-### `dangerous`
-
-Same as `yolo` but adds extra warnings for destructive operations.
+```bash
+ggcode --bypass  # then switch to autopilot via /mode
+```
 
 ## Mode Indicator
 
 The active mode is shown in the TUI status bar:
 
 ```
-[default]  model: gpt-4o  |  cost: $0.012
+[supervised]  model: gpt-4o  |  cost: $0.012
 ```
 
 ## Switching Mid-Session
@@ -49,15 +53,19 @@ The active mode is shown in the TUI status bar:
 Switch modes without restarting using the `/mode` slash command:
 
 ```
+/mode supervised
+/mode plan
+/mode auto
 /mode bypass
+/mode autopilot
 ```
 
 ## Pipe Mode
 
-When using pipe mode (`-p`), ggcode defaults to `default` mode unless `--bypass` is specified:
+When using pipe mode (`-p`), ggcode defaults to `supervised` mode unless `--bypass` is specified:
 
 ```bash
-echo "fix the typo" | ggcode -p            # default mode (asks confirmation)
+echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
 echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
 ```
 
@@ -65,7 +73,8 @@ echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
 
 | Scenario | Mode |
 |----------|------|
-| Exploring unfamiliar code | `default` |
-| Trusted workflow / CI | `bypass` |
-| Code review | `readonly` |
-| Experimental / throwaway | `yolo` |
+| Exploring unfamiliar code | `supervised` |
+| Code review / planning | `plan` |
+| Trusted workflow with guardrails | `auto` |
+| Fast trusted workflow | `bypass` |
+| Fully autonomous | `autopilot` |

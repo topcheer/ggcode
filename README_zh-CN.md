@@ -35,8 +35,7 @@ ggcode
 
 # 2. 首次启动时按提示配置 API Key（交互式）
 #    或直接指定:
-#    OpenAI:      ggcode --vendor openai
-#    Anthropic:   ggcode --vendor anthropic
+#    首次启动时通过交互式向导配置
 
 # 3. 开始编程 — 直接输入你的需求
 ```
@@ -74,7 +73,7 @@ ggcode
 | [CLI 参考](docs/guide/cli-reference.md) | 命令、参数、管道模式 |
 | [模型配置](docs/guide/providers.md) | LLM 厂商和端点配置 |
 | [斜杠命令](docs/guide/slash-commands.md) | TUI 内命令参考 |
-| [权限模式](docs/guide/modes.md) | 默认 / 旁路 / 只读 / 自动 |
+| [权限模式](docs/guide/modes.md) | 监督 / 计划 / 自动 / 旁路 / 自动驾驶 |
 | [MCP 服务器](docs/guide/mcp.md) | 通过 MCP 连接外部工具 |
 | [IM 集成](docs/guide/im-integration.md) | QQ / Telegram / Discord / Slack / 飞书 / 钉钉 |
 | [Harness 工作流](docs/guide/harness.md) | 隔离任务 + 审查 + 合并 |

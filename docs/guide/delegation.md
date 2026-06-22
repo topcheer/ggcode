@@ -32,7 +32,6 @@ ggcode auto-detects the following agents. Only agents found on your system appea
 | **Kiro** (AWS) | `kiro` | IDE-integrated development |
 | **Qoder** | `qoder` | Code generation and review |
 | **Pi** (PolyMind) | `pi` | Specialized analysis |
-| **OpenCode** | `opencode` | Open-source multi-provider agent |
 | **Fast Agent** | `fast-agent` | MCP-native agent framework |
 
 ## Usage

@@ -38,17 +38,46 @@ Available skills: `code-edit`, `file-search`, `command-exec`, `git-ops`, `code-r
 
 ## Configuration
 
-A2A auth is API-key based and configured in `~/.ggcode/ggcode.yaml`:
+A2A supports multiple authentication schemes, configured in `~/.ggcode/ggcode.yaml`:
 
 ```yaml
 a2a:
-  host: 0.0.0.0:7878
+  host: 0.0.0.0:7878      # 0.0.0.0 when auth configured, 127.0.0.1 otherwise
   auth:
-    api_key: your-secret-key
+    api_key: "your-secret"                # Shared secret (simplest)
+    api_keys:                             # Additional keys
+      - "${A2A_EXTRA_KEY}"
+    oauth2:
+      provider: "github"                  # Zero-config GitHub OAuth
+      # flow: "device"                    # or Device Flow
+    oidc:
+      provider: "google"                  # OpenID Connect
+      client_id: "xxx"
+    mtls:
+      cert_file: ".ggcode/certs/server.pem"
+      key_file: ".ggcode/certs/server.key"
+      ca_file: ".ggcode/certs/ca.pem"
+    allow_unauthenticated: false           # Explicitly allow all (default: false)
+  lan_discovery: false                     # mDNS broadcast for LAN discovery
 ```
+
+### Host Auto-Selection
+
+- **Auth configured** → binds to `0.0.0.0` (LAN accessible)
+- **No auth** → binds to `127.0.0.1` (localhost only)
+- Override with an explicit `host` value
+
+### Instance-Level Override
+
+Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
 ## Security
 
-- All communication is authenticated via API keys.
-- No unauthenticated access is permitted.
-- API keys are stored securely in `keys.env`, never in plaintext config.
+- Multiple auth schemes can be enabled simultaneously (any matching scheme authenticates)
+- Without auth, only localhost connections are accepted (unless `allow_unauthenticated: true`)
+- API keys support `${ENV_VAR}` expansion and are stored in `keys.env`
+- OAuth2 supports PKCE and Device Flow
+- OIDC adds identity layer on top of OAuth2 with JWKS key rotation
+- mTLS provides mutual certificate-based authentication
+
+See [A2A Authentication Guide](../a2a-auth.md) for detailed setup instructions.
