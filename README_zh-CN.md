@@ -63,7 +63,7 @@ ggcode
 |------|------|
 | **CLI** (macOS/Linux/Windows) | 本仓库 — 主要交互界面 |
 | **[桌面端](docs/guide/desktop.md)** | macOS / Windows / Linux 原生应用 |
-| **[移动端](docs/guide/mobile.md)** | iOS (TestFlight) / Android (Google Play) |
+| **[移动端](docs/guide/mobile.md)** | [iOS (App Store)](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) / [Android (Google Play)](https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile) |
 
 ## 文档
 

@@ -164,7 +164,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
 
         {/* Download links */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-          <a href="https://apps.apple.com/app/ggcode-mobile/id6770855612" target="_blank" rel="noopener noreferrer" style={{
+          <a href="https://apps.apple.com/us/app/ggcode-mobile/id6770855612" target="_blank" rel="noopener noreferrer" style={{
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, color: 'var(--color-info)',
             textDecoration: 'none',

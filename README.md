@@ -63,7 +63,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 |----------|---------|
 | **CLI** (macOS/Linux/Windows) | This repo — the primary interface |
 | **[Desktop](docs/guide/desktop.md)** | Native app for macOS, Windows, Linux |
-| **[Mobile](docs/guide/mobile.md)** | iOS (TestFlight) and Android (Google Play) |
+| **[Mobile](docs/guide/mobile.md)** | [iOS (App Store)](https://apps.apple.com/us/app/ggcode-mobile/id6770855612) and [Android (Google Play)](https://play.google.com/store/apps/details?id=gg.ai.ggcode.mobile) |
 
 ## Documentation
 
