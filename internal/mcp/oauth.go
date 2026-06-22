@@ -265,7 +265,25 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 	}
 	tokenEndpoint := st.authorizationServerMeta.TokenEndpoint
 	if tokenEndpoint == "" {
-		return nil, fmt.Errorf("no token endpoint")
+		// TokenEndpoint is not populated when the handler was restored from
+		// stored credentials (hydrateStateFromInfo only sets Issuer). Perform
+		// lazy discovery to fetch the full authorization server metadata,
+		// including the token endpoint needed for refresh.
+		issuer := st.authorizationServerMeta.Issuer
+		if issuer == "" {
+			return nil, fmt.Errorf("no token endpoint and no issuer for discovery")
+		}
+		discoverCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := h.discoverAuthorizationServer(discoverCtx, issuer); err != nil {
+			return nil, fmt.Errorf("lazy discovery for token refresh: %w", err)
+		}
+		h.mu.Lock()
+		tokenEndpoint = h.state.authorizationServerMeta.TokenEndpoint
+		h.mu.Unlock()
+		if tokenEndpoint == "" {
+			return nil, fmt.Errorf("no token endpoint after discovery")
+		}
 	}
 
 	data := url.Values{}
@@ -644,6 +662,11 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	if clientID == "" {
 		return "", fmt.Errorf("no OAuth client_id: server does not support dynamic client registration and no client_id was configured; set oauth_client_id in your MCP server config")
 	}
+
+	// Request offline_access scope so the server returns a refresh token.
+	// Without this, tokens expire and the user must re-authenticate every time.
+	// OAuth 2.1 requires the client to explicitly request offline_access.
+	scopes = ensureOfflineAccess(scopes)
 
 	params := url.Values{}
 	params.Set("response_type", "code")
@@ -1114,6 +1137,18 @@ var wellKnownDeviceEndpoints = map[string]string{
 
 func tokenExpiry(expiresIn int) time.Time {
 	return time.Now().Add(time.Duration(expiresIn) * time.Second)
+}
+
+// ensureOfflineAccess adds the "offline_access" scope if not already present.
+// This signals the authorization server to issue a refresh token, enabling
+// silent token renewal instead of forcing interactive re-authentication.
+func ensureOfflineAccess(scopes []string) []string {
+	for _, s := range scopes {
+		if s == "offline_access" {
+			return scopes
+		}
+	}
+	return append(scopes, "offline_access")
 }
 
 // SetClientCredentials sets pre-configured client credentials for servers without DCR.
