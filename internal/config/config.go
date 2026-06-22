@@ -289,12 +289,20 @@ type SwarmConfig struct {
 	PollInterval        time.Duration `yaml:"poll_interval"`          // default: 1s — how often idle teammates check the task board
 }
 
+// DefaultA2AAPIKey is a well-known key baked into every ggcode binary.
+// It is NOT a secret — its purpose is to ensure that only ggcode instances
+// (not random HTTP clients) can reach the A2A endpoint when users enable
+// lan_discovery without configuring their own api_key.
+//
+// For real security, teams should set a2a.auth.api_key to their own value.
+const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
+
 // A2AConfig holds A2A protocol server configuration.
 // A2A is enabled by default. Set disabled: true to turn it off.
 type A2AConfig struct {
 	Disabled     bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
 	Port         int           `yaml:"port"`               // 0 = auto-assign
-	Host         string        `yaml:"host"`               // default "0.0.0.0" (if auth configured) or "127.0.0.1"
+	Host         string        `yaml:"host"`               // default "0.0.0.0" (if auth configured or lan_discovery) or "127.0.0.1"
 	MaxTasks     int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
 	TaskTimeout  string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
 	LANDiscovery bool          `yaml:"lan_discovery"`      // enable mDNS broadcast for LAN discovery
@@ -308,6 +316,16 @@ func (c A2AConfig) HasAuth() bool {
 		c.Auth.OAuth2 != nil ||
 		c.Auth.OIDC != nil ||
 		c.Auth.MTLS != nil
+}
+
+// EffectiveAPIKey returns the user-configured API key if set, otherwise
+// the built-in default key. This ensures that even without explicit auth
+// config, ggcode instances can authenticate to each other on a LAN.
+func (c A2AConfig) EffectiveAPIKey() string {
+	if strings.TrimSpace(c.Auth.APIKey) != "" {
+		return c.Auth.APIKey
+	}
+	return DefaultA2AAPIKey
 }
 
 // HarnessConfig controls automatic harness routing behavior.
@@ -1053,9 +1071,10 @@ func (c *Config) Validate() error {
 		if c.A2A.TaskTimeout == "" {
 			c.A2A.TaskTimeout = "5m"
 		}
-		// Host: 0.0.0.0 only when auth is configured; otherwise 127.0.0.1 for safety.
+		// Host: 0.0.0.0 when auth is configured OR lan_discovery is enabled;
+		// otherwise 127.0.0.1 for safety.
 		if c.A2A.Host == "" {
-			if c.A2A.HasAuth() {
+			if c.A2A.HasAuth() || c.A2A.LANDiscovery {
 				c.A2A.Host = "0.0.0.0"
 			} else {
 				c.A2A.Host = "127.0.0.1"

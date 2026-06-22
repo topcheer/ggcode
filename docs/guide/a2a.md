@@ -61,10 +61,31 @@ a2a:
   lan_discovery: false                     # mDNS broadcast for LAN discovery
 ```
 
+### LAN Team Mode (Zero Config)
+
+For teams on the same local network, enable discovery with a single line:
+
+```yaml
+a2a:
+  lan_discovery: true
+```
+
+That's it. No `api_key` needed — ggcode uses a **built-in community key**
+(`ggcode-lan-a2a-v1`) that lets any ggcode instance authenticate to any other.
+The key is baked into the binary and is not a real secret — its purpose is to
+prevent non-ggcode HTTP clients from reaching the A2A endpoint.
+
+When `lan_discovery: true` is set without a custom `api_key`:
+- The server binds to `0.0.0.0` (LAN accessible)
+- mDNS broadcasts the instance on the local network
+- Other ggcode instances auto-discover and connect using the built-in key
+
+For real security, set your own `api_key` — all team members must use the same key.
+
 ### Host Auto-Selection
 
-- **Auth configured** → binds to `0.0.0.0` (LAN accessible)
-- **No auth** → binds to `127.0.0.1` (localhost only)
+- **Auth configured** or **`lan_discovery: true`** → binds to `0.0.0.0` (LAN accessible)
+- **No auth, no lan_discovery** → binds to `127.0.0.1` (localhost only)
 - Override with an explicit `host` value
 
 ### Instance-Level Override
@@ -73,8 +94,9 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
 ## Security
 
+- A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect
 - Multiple auth schemes can be enabled simultaneously (any matching scheme authenticates)
-- Without auth, only localhost connections are accepted (unless `allow_unauthenticated: true`)
+- Without custom auth or lan_discovery, only localhost connections are accepted
 - API keys support `${ENV_VAR}` expansion and are stored in `keys.env`
 - OAuth2 supports PKCE and Device Flow
 - OIDC adds identity layer on top of OAuth2 with JWKS key rotation

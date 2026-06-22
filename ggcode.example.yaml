@@ -589,10 +589,15 @@ plugins:
 # a2a:
 #   enabled: true
 #   port: 0                    # 0 = auto-assign (recommended for multi-instance)
-#   host: ""                   # auto: 0.0.0.0 when auth configured, 127.0.0.1 otherwise
+#   host: ""                   # auto: 0.0.0.0 when auth or lan_discovery, 127.0.0.1 otherwise
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
-#   lan_discovery: true        # enable mDNS broadcast for LAN discovery (requires auth)
+#   lan_discovery: true        # enable mDNS broadcast for LAN discovery (uses built-in community key)
+#
+#   # LAN Team Mode: set lan_discovery: true and you're done.
+#   # No api_key needed — ggcode uses a built-in key (ggcode-lan-a2a-v1)
+#   # that lets any ggcode instance on the same network connect.
+#   # Set your own api_key for real security (all team members must share it).
 #
 #   # Authentication — multiple schemes can be enabled simultaneously.
 #   # Server advertises enabled schemes in the agent card; clients auto-negotiate.

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -29,6 +30,9 @@ type RemoteTool struct {
 
 // NewRemoteTool creates an A2A remote tool for agent-to-agent calls.
 func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
+	if apiKey == "" {
+		apiKey = config.DefaultA2AAPIKey
+	}
 	return &RemoteTool{registry: reg, apiKey: apiKey}
 }
 
