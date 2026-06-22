@@ -717,7 +717,7 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 		Host:         "0.0.0.0",
 		MaxTasks:     10,
 		TaskTimeout:  "5m",
-		LANDiscovery: true,
+		LANDiscovery: boolPtr(true),
 		Auth: A2AAuthConfig{
 			APIKey: "test-key",
 		},
@@ -740,7 +740,7 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 	if global.A2A.TaskTimeout != "5m" {
 		t.Errorf("A2A TaskTimeout = %q, want %q", global.A2A.TaskTimeout, "5m")
 	}
-	if !global.A2A.LANDiscovery {
+	if !global.A2A.IsLANDiscovery() {
 		t.Error("A2A LANDiscovery should be true")
 	}
 }

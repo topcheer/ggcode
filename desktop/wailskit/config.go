@@ -180,7 +180,7 @@ func GetFullConfig() (*FullConfig, error) {
 		A2APort:     cfg.A2A.Port,
 		A2AHost:     cfg.A2A.Host,
 
-		A2ALANDiscovery: cfg.A2A.LANDiscovery,
+		A2ALANDiscovery: cfg.A2A.IsLANDiscovery(),
 
 		HarnessAutoRun:  cfg.Harness.AutoRun,
 		HarnessAutoInit: cfg.Harness.AutoInit,

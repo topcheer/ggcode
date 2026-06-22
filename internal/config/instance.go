@@ -300,7 +300,7 @@ func mergeA2AConfigFields(global, instance *A2AConfig) {
 	if global.TaskTimeout == "" && instance.TaskTimeout != "" {
 		global.TaskTimeout = instance.TaskTimeout
 	}
-	if !global.LANDiscovery && instance.LANDiscovery {
+	if global.LANDiscovery == nil && instance.LANDiscovery != nil {
 		global.LANDiscovery = instance.LANDiscovery
 	}
 	if global.Auth.APIKey == "" && instance.Auth.APIKey != "" {

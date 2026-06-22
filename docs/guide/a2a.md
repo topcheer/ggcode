@@ -63,24 +63,36 @@ a2a:
 
 ### LAN Team Mode (Zero Config)
 
-For teams on the same local network, enable discovery with a single line:
+**LAN discovery is ON by default.** When you install ggcode and start it,
+it automatically:
+
+1. Binds to `0.0.0.0` (LAN accessible)
+2. Broadcasts via mDNS (`_ggcode._tcp`)
+3. Uses a built-in community key (`ggcode-lan-a2a-v1`) for authentication
+
+Any other ggcode instance on the same network will auto-discover and can
+immediately send tasks or delegate work — **no configuration needed**.
+
+#### Disabling LAN Discovery
+
+For single-user or security-sensitive environments:
 
 ```yaml
 a2a:
-  lan_discovery: true
+  lan_discovery: false   # binds to 127.0.0.1 only
 ```
 
-That's it. No `api_key` needed — ggcode uses a **built-in community key**
-(`ggcode-lan-a2a-v1`) that lets any ggcode instance authenticate to any other.
-The key is baked into the binary and is not a real secret — its purpose is to
-prevent non-ggcode HTTP clients from reaching the A2A endpoint.
+#### Using Your Own API Key
 
-When `lan_discovery: true` is set without a custom `api_key`:
-- The server binds to `0.0.0.0` (LAN accessible)
-- mDNS broadcasts the instance on the local network
-- Other ggcode instances auto-discover and connect using the built-in key
+For teams that want real authentication:
 
-For real security, set your own `api_key` — all team members must use the same key.
+```yaml
+a2a:
+  auth:
+    api_key: "your-team-secret"
+```
+
+All team members must use the same key.
 
 ### Host Auto-Selection
 

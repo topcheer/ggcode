@@ -1121,7 +1121,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 
 	// Enable LAN discovery via mDNS if configured.
-	if cfg.A2A.LANDiscovery {
+	if cfg.A2A.IsLANDiscovery() {
 		a2aReg.EnableLANDiscovery()
 	}
 

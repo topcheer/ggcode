@@ -253,8 +253,8 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	if current.TaskTimeout != global.TaskTimeout && current.TaskTimeout != "" {
 		a2aDelta["task_timeout"] = current.TaskTimeout
 	}
-	if current.LANDiscovery != global.LANDiscovery {
-		a2aDelta["lan_discovery"] = current.LANDiscovery
+	if current.IsLANDiscovery() != global.IsLANDiscovery() {
+		a2aDelta["lan_discovery"] = current.IsLANDiscovery()
 	}
 	// Auth
 	authDelta := map[string]interface{}{}

@@ -109,7 +109,7 @@ func (a *configAccess) Get(key string) (string, error) {
 	case key == "a2a.port":
 		return strconv.Itoa(a.cfg.A2A.Port), nil
 	case key == "a2a.lan_discovery":
-		return strconv.FormatBool(a.cfg.A2A.LANDiscovery), nil
+		return strconv.FormatBool(a.cfg.A2A.IsLANDiscovery()), nil
 	case strings.HasPrefix(key, "a2a.auth"):
 		return a.getA2AAuth(key)
 
@@ -223,7 +223,7 @@ func (a *configAccess) Set(key, value string) error {
 		if err != nil {
 			return fmt.Errorf("invalid a2a.lan_discovery: %w", err)
 		}
-		a.cfg.A2A.LANDiscovery = b
+		a.cfg.A2A.LANDiscovery = &b
 		return a.saveAndPatch("a2a.lan_discovery", value)
 	case strings.HasPrefix(key, "a2a.auth"):
 		return a.setA2AAuth(key, value)
@@ -951,7 +951,7 @@ func (a *configAccess) listSectionA2A() string {
 	}
 	return fmt.Sprintf("== A2A ==\n  disabled: %v\n  host: %s\n  port: %d\n  auth: %s\n  lan_discovery: %v\n",
 		a.cfg.A2A.Disabled, a.cfg.A2A.Host, a.cfg.A2A.Port,
-		strings.Join(methods, "+"), a.cfg.A2A.LANDiscovery)
+		strings.Join(methods, "+"), a.cfg.A2A.IsLANDiscovery())
 }
 
 func (a *configAccess) listSectionKnight() string {

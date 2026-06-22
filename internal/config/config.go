@@ -298,14 +298,15 @@ type SwarmConfig struct {
 const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 
 // A2AConfig holds A2A protocol server configuration.
-// A2A is enabled by default. Set disabled: true to turn it off.
+// A2A is enabled by default with lan_discovery on, so teams on the same
+// network can discover each other without any configuration.
 type A2AConfig struct {
 	Disabled     bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
 	Port         int           `yaml:"port"`               // 0 = auto-assign
-	Host         string        `yaml:"host"`               // default "0.0.0.0" (if auth configured or lan_discovery) or "127.0.0.1"
+	Host         string        `yaml:"host"`               // default "0.0.0.0" (always, since lan_discovery defaults on)
 	MaxTasks     int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
 	TaskTimeout  string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
-	LANDiscovery bool          `yaml:"lan_discovery"`      // enable mDNS broadcast for LAN discovery
+	LANDiscovery *bool         `yaml:"lan_discovery"`      // mDNS broadcast (nil = default true, set false to disable)
 	Auth         A2AAuthConfig `yaml:"auth,omitempty"`
 }
 
@@ -326,6 +327,15 @@ func (c A2AConfig) EffectiveAPIKey() string {
 		return c.Auth.APIKey
 	}
 	return DefaultA2AAPIKey
+}
+
+// IsLANDiscovery returns whether LAN discovery is enabled.
+// Defaults to true when the pointer is nil (not explicitly configured).
+func (c A2AConfig) IsLANDiscovery() bool {
+	if c.LANDiscovery == nil {
+		return true
+	}
+	return *c.LANDiscovery
 }
 
 // HarnessConfig controls automatic harness routing behavior.
@@ -1071,10 +1081,10 @@ func (c *Config) Validate() error {
 		if c.A2A.TaskTimeout == "" {
 			c.A2A.TaskTimeout = "5m"
 		}
-		// Host: 0.0.0.0 when auth is configured OR lan_discovery is enabled;
-		// otherwise 127.0.0.1 for safety.
+		// Host: 0.0.0.0 when lan_discovery is on (default) or auth is configured;
+		// 127.0.0.1 only when lan_discovery is explicitly false and no auth.
 		if c.A2A.Host == "" {
-			if c.A2A.HasAuth() || c.A2A.LANDiscovery {
+			if c.A2A.IsLANDiscovery() || c.A2A.HasAuth() {
 				c.A2A.Host = "0.0.0.0"
 			} else {
 				c.A2A.Host = "127.0.0.1"
