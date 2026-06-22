@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -240,16 +243,6 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Connecting to plugin %q...\n", name)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  command: %s\n", strings.Join(p.Command, " "))
 
-			// Start the plugin and try to list tools
-			// We use a context with timeout
-			ctx := cmd.Context()
-
-			// Build env
-			env := os.Environ()
-			for k, v := range p.Env {
-				env = append(env, k+"="+v)
-			}
-
 			// Check command exists
 			binary := p.Command[0]
 			if _, err := exec.LookPath(binary); err != nil {
@@ -258,37 +251,61 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 				}
 			}
 
-			// Quick test: just verify the binary starts and outputs the handshake
+			// Start the plugin process with a pipe on stdout to read the handshake line.
+			// The plugin blocks forever (it's a server), so we read the first line then kill it.
+			ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+			defer cancel()
+
 			testCmd := exec.CommandContext(ctx, p.Command[0], p.Command[1:]...)
 			testCmd.Env = append(os.Environ(), "GGCODE_PLUGIN=ggcode-grpc-plugin-v1")
 			for k, v := range p.Env {
 				testCmd.Env = append(testCmd.Env, k+"="+v)
 			}
 
-			output, err := testCmd.CombinedOutput()
+			stdout, err := testCmd.StdoutPipe()
 			if err != nil {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Plugin process exited with error (this may be normal for handshake test):\n%s\n", string(output))
+				return fmt.Errorf("creating stdout pipe: %w", err)
+			}
+			testCmd.Stderr = os.Stderr
+
+			if err := testCmd.Start(); err != nil {
+				return fmt.Errorf("starting plugin: %w", err)
 			}
 
-			// Check if the output contains a go-plugin handshake line
-			lines := strings.Split(string(output), "\n")
-			handshakeFound := false
-			for _, line := range lines {
-				if strings.Contains(line, "|") && strings.Contains(line, "unix") {
-					handshakeFound = true
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Handshake detected: %s\n", line)
-					break
-				}
+			// Read the first line from stdout — this is the go-plugin handshake line.
+			reader := bufio.NewReader(stdout)
+			handshakeLine, err := reader.ReadString('\n')
+			if err != nil {
+				_ = testCmd.Process.Kill()
+				return fmt.Errorf("reading handshake from plugin stdout: %w", err)
+			}
+			handshakeLine = strings.TrimSpace(handshakeLine)
+
+			// Kill the plugin process — we only needed the handshake
+			_ = testCmd.Process.Kill()
+			_, _ = testCmd.Process.Wait()
+
+			// Validate handshake line format: core_version|app_version|network|address|protocol|cert
+			parts := strings.Split(handshakeLine, "|")
+			if len(parts) < 5 {
+				return fmt.Errorf("invalid handshake line (expected 5+ fields): %s", handshakeLine)
+			}
+			network := parts[2]
+			address := parts[3]
+			protocol := parts[4]
+
+			if network != "unix" {
+				return fmt.Errorf("expected unix socket, got network %q", network)
+			}
+			if protocol != "grpc" {
+				return fmt.Errorf("expected grpc protocol, got %q", protocol)
 			}
 
-			if !handshakeFound {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "No go-plugin handshake line found in output.\n")
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Plugin output:\n%s\n", string(output))
-				return fmt.Errorf("plugin did not produce a valid handshake")
-			}
-
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPlugin %q appears to be a valid gRPC plugin.\n", name)
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Full tool discovery happens at ggcode startup.\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nHandshake OK!\n")
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  network:  %s\n", network)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  address:  %s\n", address)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  protocol: %s\n", protocol)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\nPlugin %q is a valid gRPC plugin. Tools are discovered at ggcode startup.\n", name)
 			return nil
 		},
 	}
