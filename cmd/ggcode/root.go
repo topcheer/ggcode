@@ -212,6 +212,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(completionCmd)
 	cmd.AddCommand(newHarnessCmd(&cfgFile))
 	cmd.AddCommand(newMCPCmd(&cfgFile))
+	cmd.AddCommand(newPluginCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))

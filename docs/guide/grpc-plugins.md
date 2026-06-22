@@ -2,6 +2,98 @@
 
 gRPC plugins allow you to extend ggcode with custom tools written in **any language**. Unlike Go `.so` plugins, gRPC plugins run as independent processes and have **zero version coupling** with the host.
 
+## Reference Implementations
+
+Ready-to-use demo plugins in three languages:
+
+| Language | Repo | Tools |
+|----------|------|-------|
+| **Go** | [ggcode-plugin-demo-go](https://github.com/topcheer/ggcode-plugin-demo-go) | `timestamp`, `uuid` |
+| **Python** | [ggcode-plugin-demo-python](https://github.com/topcheer/ggcode-plugin-demo-python) | `weather`, `calc` |
+| **Node.js** | [ggcode-plugin-demo-node](https://github.com/topcheer/ggcode-plugin-demo-node) | `base64_encode`, `base64_decode`, `hash` |
+
+## Quick Start
+
+### 1. Clone a demo
+
+```bash
+# Go
+git clone https://github.com/topcheer/ggcode-plugin-demo-go.git
+cd ggcode-plugin-demo-go
+go build -o ggcode-plugin-demo .
+
+# Python
+git clone https://github.com/topcheer/ggcode-plugin-demo-python.git
+cd ggcode-plugin-demo-python
+pip install -r requirements.txt
+./generate_proto.sh
+
+# Node.js
+git clone https://github.com/topcheer/ggcode-plugin-demo-node.git
+cd ggcode-plugin-demo-node
+npm install && npm run build
+```
+
+### 2. Install
+
+```bash
+# Go
+ggcode plugin install time-uuid-tools $(pwd)/ggcode-plugin-demo
+
+# Python
+ggcode plugin install weather-calc python $(pwd)/plugin.py
+
+# Node.js
+ggcode plugin install crypto-tools node $(pwd)/dist/plugin.js
+```
+
+### 3. Verify
+
+```bash
+ggcode plugin list
+```
+
+Restart ggcode — the agent can now use the plugin's tools.
+
+## CLI Commands
+
+### Install
+
+```bash
+ggcode plugin install <name> <command...> [--env KEY=VALUE ...] [--type grpc|command]
+```
+
+Examples:
+
+```bash
+# Install a Go binary
+ggcode plugin install my-tools /path/to/binary
+
+# Install a Python plugin
+ggcode plugin install jira-tools python -m my_jira_plugin --env JIRA_TOKEN=xxx
+
+# Install with multiple env vars
+ggcode plugin install api-tools ./bin/api-tool --env API_KEY=secret --env DEBUG=true
+```
+
+### List
+
+```bash
+ggcode plugin list
+```
+
+### Uninstall
+
+```bash
+ggcode plugin uninstall <name>
+```
+
+### Test (verify plugin can start)
+
+```bash
+ggcode plugin test <name>
+```
+
 ## How It Works
 
 ```
@@ -14,9 +106,9 @@ ggcode host process
   └── on shutdown: calls Shutdown() → SIGTERM → grace period → SIGKILL
 ```
 
-## Configuration
+## Manual Configuration
 
-Add a `type: grpc` entry to your `ggcode.yaml`:
+You can also edit `ggcode.yaml` directly:
 
 ```yaml
 plugins:
@@ -30,23 +122,17 @@ plugins:
 
 ## Go SDK Quick Start
 
-### 1. Create a new Go module
+### 1. Create a module
 
 ```bash
 mkdir my-plugin && cd my-plugin
 go mod init my-plugin
 ```
 
-### 2. Add the SDK dependency
+### 2. Add SDK dependency
 
 ```bash
 go get github.com/topcheer/ggcode/sdk/plugin
-```
-
-In your `go.mod`, add a replace directive pointing to your local ggcode checkout (or remove it once published):
-
-```
-replace github.com/topcheer/ggcode => /path/to/ggcode
 ```
 
 ### 3. Implement the plugin
@@ -74,7 +160,6 @@ func (p *myPlugin) ListTools() []plugin.ToolSpec {
             },
             "required": ["title"]
         }`),
-        Categories: []string{"tickets"},
     }}
 }
 
@@ -84,37 +169,23 @@ func (p *myPlugin) Execute(toolName string, input json.RawMessage, ctx plugin.Co
         Priority string `json:"priority"`
     }
     _ = json.Unmarshal(input, &args)
-
-    // Your business logic here
-    ticketID := "TKT-001"
-
     return &plugin.Result{
-        Content: fmt.Sprintf("Created ticket %s: %s (priority: %s)", ticketID, args.Title, args.Priority),
+        Content: fmt.Sprintf("Created ticket: %s (priority: %s)", args.Title, args.Priority),
     }, nil
 }
 
-func (p *myPlugin) Shutdown() {
-    // Cleanup resources (close DB connections, etc.)
-}
+func (p *myPlugin) Shutdown() {}
 
 func main() {
     plugin.Serve(&myPlugin{})
 }
 ```
 
-### 4. Build and configure
+### 4. Build and install
 
 ```bash
 go build -o my-plugin .
-```
-
-In `ggcode.yaml`:
-
-```yaml
-plugins:
-  - name: my-tools
-    type: grpc
-    command: ["/path/to/my-plugin"]
+ggcode plugin install ticket-tools $(pwd)/my-plugin
 ```
 
 ## SDK Reference
@@ -123,52 +194,51 @@ plugins:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Name` | `string` | Unique tool identifier (e.g., `"create_ticket"`) |
-| `Description` | `string` | Human-readable description shown to the LLM |
-| `Parameters` | `json.RawMessage` | JSON Schema defining the tool's parameters |
+| `Name` | `string` | Unique tool identifier |
+| `Description` | `string` | Description shown to the LLM |
+| `Parameters` | `json.RawMessage` | JSON Schema for tool parameters |
 | `Categories` | `[]string` | Optional grouping tags |
 
 ### Context
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `WorkingDir` | `string` | The agent's current working directory |
+| `WorkingDir` | `string` | Agent's current working directory |
 | `SessionID` | `string` | Current session identifier |
-| `Extra` | `map[string]string` | Additional context key-values |
+| `Extra` | `map[string]string` | Additional context values |
 
 ### Result
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `Content` | `string` | Text result returned to the LLM |
-| `IsError` | `bool` | If true, the result is treated as an error |
-| `Images` | `[]ResultImage` | Images to include in the result |
-| `SuggestedWorkingDir` | `string` | Optional hint to change the agent's working directory |
+| `IsError` | `bool` | If true, treated as an error |
+| `Images` | `[]ResultImage` | Images in the result |
+| `SuggestedWorkingDir` | `string` | Optional hint to change working directory |
 
-### ResultImage
+## Non-Go Plugins
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `Mime` | `string` | MIME type (e.g., `"image/png"`) |
-| `Base64` | `string` | Base64-encoded image data |
-| `Width` | `int` | Image width in pixels |
-| `Height` | `int` | Image height in pixels |
+Any language with gRPC support works. The plugin must:
+
+1. Check the environment variable `GGCODE_PLUGIN` equals `ggcode-grpc-plugin-v1`
+2. Create a Unix domain socket
+3. Print the go-plugin handshake line to stdout:
+   ```
+   1|1|unix|/tmp/plugin-XXXXX|grpc|
+   ```
+   Format: `core_version|app_version|network|socket_path|protocol|cert`
+4. Start a gRPC server on that socket
+5. Register a health check service (go-plugin requires it)
+6. Implement `ToolService` with `ListTools`, `Execute`, `Shutdown` methods
+
+See the [Python](https://github.com/topcheer/ggcode-plugin-demo-python) and [Node.js](https://github.com/topcheer/ggcode-plugin-demo-node) demos for complete implementations.
 
 ## Protocol Details
 
 - **Transport**: gRPC over Unix domain socket
-- **Handshake**: Magic cookie `GGCODE_PLUGIN=ggcode-grpc-plugin-v1`, protocol version 1
+- **Handshake**: `GGCODE_PLUGIN` magic cookie, protocol version 1
 - **Framework**: [HashiCorp go-plugin](https://github.com/hashicorp/go-plugin)
-
-## Non-Go Plugins
-
-Any language with gRPC support can implement a plugin. You need to:
-
-1. Generate gRPC stubs from `proto/ggcode_plugin.proto`
-2. Implement the `ToolService` gRPC server
-3. Use go-plugin's handshake protocol (magic cookie + stdout handshake)
-
-For Python, you can use `grpcio` and implement the handshake manually. A Python SDK is planned.
+- **Proto**: [`proto/ggcode_plugin.proto`](https://github.com/topcheer/ggcode/blob/main/proto/ggcode_plugin.proto)
 
 ## Security
 
@@ -179,6 +249,6 @@ For Python, you can use `grpcio` and implement the handshake manually. A Python 
 
 ## Limitations
 
-- One plugin process per config entry (use multiple tools within one plugin for efficiency)
+- One plugin process per config entry
 - Plugin startup adds to ggcode launch time (~200ms per plugin)
-- No hot-reload yet (restart ggcode to pick up plugin changes)
+- No hot-reload (restart ggcode to pick up changes)
