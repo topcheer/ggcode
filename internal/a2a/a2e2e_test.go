@@ -59,7 +59,7 @@ func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 		}
 		t.Cleanup(srv.Stop)
 
-		reg := &Registry{dir: regDir}
+		reg := &Registry{}
 		remote := NewRemoteTool(reg, "")
 		client := NewClient(srv.Endpoint(), "")
 

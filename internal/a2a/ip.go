@@ -56,41 +56,6 @@ func PreferredIP() string {
 	return addr.IP.String()
 }
 
-// PreferredInterface returns the net.Interface that carries the default-route IP.
-// Returns nil if not found (caller should fall back to default behavior).
-func PreferredInterface() *net.Interface {
-	ip := net.ParseIP(PreferredIP())
-	if ip == nil || ip.IsLoopback() {
-		return nil
-	}
-
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-
-	for _, iface := range interfaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			var ifaceIP net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ifaceIP = v.IP
-			case *net.IPAddr:
-				ifaceIP = v.IP
-			}
-			if ifaceIP != nil && ifaceIP.Equal(ip) {
-				ifaceCopy := iface
-				return &ifaceCopy
-			}
-		}
-	}
-	return nil
-}
-
 func isLocalRequestHost(host string) bool {
 	if host == "" || host == "localhost" {
 		return true

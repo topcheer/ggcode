@@ -92,8 +92,8 @@ type NickChange struct {
 const maxHistoryPerSession = 100
 
 // ageOffline marks a participant offline if not seen within this duration.
-// Kept short because A2A registry already does PID liveness checks —
-// this is only a grace period for discovery gaps (mDNS flakiness etc).
+// This is the app-level liveness check: if a peer hasn't responded to
+// heartbeats or presence exchanges within this window, it's marked offline.
 var ageOffline = 60 * time.Second
 
 // presenceHeartbeat is how long without communication before we re-probe

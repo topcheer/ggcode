@@ -18,7 +18,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/go-plugin v1.8.0
-	github.com/hashicorp/mdns v1.0.6
 	github.com/larksuite/oapi-sdk-go/v3 v3.6.1
 	github.com/leaanthony/go-ansi-parser v1.4.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
@@ -31,6 +30,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	github.com/topcheer/ggcode-acp-go v0.1.5
+	github.com/topcheer/mdns v0.0.0-20260623161405-3e3f915456db
 	github.com/young2j/oxmltotext v1.0.3
 	github.com/yuin/goldmark v1.8.2
 	go.mau.fi/whatsmeow v0.0.0-20260504140538-51dcc5e33be0
@@ -98,7 +98,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
-	github.com/miekg/dns v1.1.55 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
@@ -128,10 +127,8 @@ require (
 	go.uber.org/zap v1.26.0 // indirect
 	golang.org/x/arch v0.15.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect

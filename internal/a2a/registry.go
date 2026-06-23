@@ -2,7 +2,6 @@ package a2a
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -12,10 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // InstanceInfo describes a running ggcode instance for discovery.
@@ -40,16 +37,15 @@ func (i InstanceInfo) DisplayName() string {
 	return name + ":" + port
 }
 
-// Registry manages local A2A instance discovery via a shared JSON file.
+// Registry manages A2A instance discovery via mDNS.
 type Registry struct {
 	mu       sync.Mutex
-	dir      string // ~/.ggcode/a2a/
 	selfID   string
 	selfInfo *InstanceInfo
 	mdnsSvc  *mdnsService // nil if LAN discovery is disabled
 
 	// asyncCache is populated by a background goroutine so the UI thread
-	// never blocks on disk I/O or PID checks.
+	// never blocks on mDNS lookups.
 	asyncCache   []InstanceInfo
 	asyncCacheOK bool
 }
@@ -57,102 +53,29 @@ type Registry struct {
 // backgroundRefreshInterval is how often the background goroutine refreshes.
 const backgroundRefreshInterval = 15 * time.Second
 
-// NewRegistry creates or opens the local instance registry.
+// NewRegistry creates a new registry. No local file storage is used —
+// all discovery is mDNS-based.
 func NewRegistry() (*Registry, error) {
-	dir := filepath.Join(config.ConfigDir(), "a2a")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("a2a registry dir: %w", err)
-	}
-	return &Registry{dir: dir}, nil
+	return &Registry{}, nil
 }
 
-// Register adds this instance to the registry.
-// Cleans up stale files from the same PID, writes a new file,
-// and optionally starts mDNS broadcasting.
+// Register records self info and starts mDNS broadcasting (if enabled).
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
 	r.selfInfo = &info
-
-	// Proactively remove all zombie files from dead processes.
-	r.removeDeadPIDFiles()
-
-	// Remove any stale files from a previous registration of this PID+workspace.
-	r.removeStaleFiles(info.PID, info.Workspace, info.ID)
-
-	err := r.writeInstanceFile(info)
-	r.asyncCacheOK = false // force refresh on next background tick
+	r.asyncCacheOK = false
 	r.mu.Unlock()
-	if err != nil {
-		return err
-	}
 
 	// Start mDNS if LAN discovery is enabled.
 	if r.mdnsSvc != nil {
 		if startErr := r.mdnsSvc.start(info); startErr != nil {
-			// mDNS failure is non-fatal — local discovery still works.
 			debug.Log("a2a.registry", "mDNS registration warning: %v", startErr)
 		}
 	}
 	return nil
 }
 
-// removeDeadPIDFiles removes all registry files belonging to dead processes.
-// Called during Register() to proactively clean up zombie files that would
-// otherwise accumulate until someone calls Discover().
-func (r *Registry) removeDeadPIDFiles() {
-	entries, err := os.ReadDir(r.dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		path := filepath.Join(r.dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var inst InstanceInfo
-		if json.Unmarshal(data, &inst) == nil && inst.PID > 0 && !isPIDAlive(inst.PID) {
-			os.Remove(path)
-		}
-	}
-}
-
-// removeStaleFiles deletes registry files from the same PID+workspace
-// that aren't the current ID. This handles the case where a daemon
-// restarts within the same PID and same workspace over time.
-func (r *Registry) removeStaleFiles(pid int, workspace string, currentID string) {
-	entries, err := os.ReadDir(r.dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		// Extract PID from filename: ggcode-hostname-PID-timestamp.json
-		name := entry.Name()
-		// The current file will be written after this cleanup, so skip it.
-		if strings.Contains(name, currentID) {
-			continue
-		}
-		// Read file to check PID match.
-		path := filepath.Join(r.dir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var inst InstanceInfo
-		if json.Unmarshal(data, &inst) == nil && inst.PID == pid && inst.Workspace == workspace {
-			os.Remove(path)
-		}
-	}
-}
-
-// Unregister removes this instance from the registry and stops mDNS.
 // SelfID returns this instance's ID.
 func (r *Registry) SelfID() string {
 	r.mu.Lock()
@@ -160,69 +83,38 @@ func (r *Registry) SelfID() string {
 	return r.selfID
 }
 
+// Unregister stops mDNS broadcasting.
 func (r *Registry) Unregister() error {
 	if r.mdnsSvc != nil {
 		r.mdnsSvc.stop()
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return os.Remove(r.instanceFilePath(r.selfID))
+	return nil
 }
 
-// Discover returns all running instances (excluding self).
-// Merges local file discovery with mDNS LAN discovery, deduplicating by ID.
-// This is the full synchronous scan — callers that need non-blocking access
-// should use CachedInstances() instead.
+// Discover returns all running instances found via mDNS (excluding self).
+// When mDNS is not enabled, returns the cached instance list (useful for
+// testing and single-machine scenarios).
 func (r *Registry) Discover() ([]InstanceInfo, error) {
-	// 1) Local file discovery
-	localInstances, err := r.discoverLocal()
-	if err != nil {
-		localInstances = nil // non-fatal
-	}
-
-	// 2) mDNS LAN discovery
-	var mdnsInstances []InstanceInfo
+	var instances []InstanceInfo
 	if r.mdnsSvc != nil {
-		mdnsInstances = r.mdnsSvc.lookup()
-	}
-
-	// 3) Merge with dedup by ID, pruning dead PIDs from mDNS results
-	seen := make(map[string]bool)
-	var result []InstanceInfo
-	for _, inst := range localInstances {
-		if !seen[inst.ID] {
-			seen[inst.ID] = true
-			result = append(result, inst)
-		}
-	}
-	for _, inst := range mdnsInstances {
-		if seen[inst.ID] {
-			continue
-		}
-		// Only do PID liveness check for local (same-machine) instances.
-		// For cross-machine mDNS results, the PID belongs to a remote process
-		// and isPIDAlive() checks our local process table — it would always
-		// return false (unless the PID coincidentally exists locally),
-		// incorrectly dropping all remote instances.
-		if inst.PID > 0 && isLocalEndpoint(inst.Endpoint) && !isPIDAlive(inst.PID) {
-			continue
-		}
-		seen[inst.ID] = true
-		result = append(result, inst)
+		instances = r.mdnsSvc.lookup()
+	} else {
+		// No mDNS — use cached instances (populated by tests or manual injection).
+		instances = r.CachedInstances()
 	}
 
 	// Update cache.
 	r.mu.Lock()
-	r.asyncCache = result
+	r.asyncCache = instances
 	r.asyncCacheOK = true
 	r.mu.Unlock()
 
-	return result, nil
+	return instances, nil
 }
 
 // CachedInstances returns the last background-refreshed instance list without
-// any disk I/O or PID checks. Returns nil if the background refresh hasn't
-// populated the cache yet. Safe to call from the UI thread.
+// any mDNS I/O. Returns nil if the background refresh hasn't populated the
+// cache yet. Safe to call from the UI thread.
 func (r *Registry) CachedInstances() []InstanceInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -233,11 +125,8 @@ func (r *Registry) CachedInstances() []InstanceInfo {
 }
 
 // StartBackgroundRefresh launches a goroutine that periodically calls
-// Discover() to keep the async cache fresh. This ensures CachedInstances()
-// returns useful data without ever blocking the caller. The goroutine is
-// stopped when ctx is cancelled.
+// Discover() to keep the async cache fresh.
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
-	// Immediate first refresh so the cache is populated without waiting.
 	safego.Go("a2a.registry.backgroundRefresh", func() {
 		r.refreshCache()
 		ticker := time.NewTicker(backgroundRefreshInterval)
@@ -272,58 +161,6 @@ func (r *Registry) InvalidateDiscoverCache() {
 	r.mu.Unlock()
 }
 
-// discoverLocal reads the local file-based registry, pruning dead PIDs
-// and deduplicating stale files from the same PID+workspace combination.
-func (r *Registry) discoverLocal() ([]InstanceInfo, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	instances, err := r.loadAll()
-	if err != nil {
-		return nil, err
-	}
-
-	// Group by PID+workspace: keep only the latest (by StartedAt) per key,
-	// remove stale files, and prune dead PIDs entirely.
-	type pidWorkKey struct {
-		pid       int
-		workspace string
-	}
-	latest := make(map[pidWorkKey]InstanceInfo)
-	files := make(map[pidWorkKey][]string) // key → list of file paths
-	for _, inst := range instances {
-		key := pidWorkKey{inst.PID, inst.Workspace}
-		path := r.instanceFilePath(inst.ID)
-		files[key] = append(files[key], path)
-
-		existing, ok := latest[key]
-		if !ok || inst.StartedAt > existing.StartedAt {
-			latest[key] = inst
-		}
-	}
-
-	var others []InstanceInfo
-	for key, inst := range latest {
-		if !isPIDAlive(key.pid) {
-			// Dead PID — remove all its files.
-			for _, p := range files[key] {
-				os.Remove(p)
-			}
-			continue
-		}
-		// Remove stale files from the same key (older registrations).
-		for _, p := range files[key] {
-			if p != r.instanceFilePath(inst.ID) {
-				os.Remove(p)
-			}
-		}
-		if inst.ID != r.selfID {
-			others = append(others, inst)
-		}
-	}
-	return others, nil
-}
-
 // EnableLANDiscovery enables mDNS broadcasting for this registry.
 // Must be called before Register.
 func (r *Registry) EnableLANDiscovery() {
@@ -356,87 +193,48 @@ func (r *Registry) UpdateStatus(status string) error {
 
 	if r.selfInfo != nil {
 		r.selfInfo.Status = status
-		return r.writeInstanceFile(*r.selfInfo)
+		// mDNS TXT records are set at registration time; future enhancement
+		// could update them dynamically. For now we just update the in-memory copy.
 	}
 	return nil
 }
 
-func (r *Registry) instancesDir() string {
-	return r.dir
+// GenerateInstanceID creates a unique instance ID.
+func GenerateInstanceID() string {
+	hostname, _ := os.Hostname()
+	pid := os.Getpid()
+	return fmt.Sprintf("ggcode-%s-%d-%d", hostname, pid, time.Now().UnixNano())
 }
 
-func (r *Registry) instanceFilePath(id string) string {
-	return filepath.Join(r.dir, id+".json")
+// SelfInfo returns the InstanceInfo for this instance (safe copy).
+func (r *Registry) SelfInfo() *InstanceInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.selfInfo == nil {
+		return nil
+	}
+	info := *r.selfInfo
+	return &info
 }
 
-// loadAll reads all per-instance files from the registry directory.
-func (r *Registry) loadAll() ([]InstanceInfo, error) {
-	entries, err := os.ReadDir(r.dir)
+// ListAllInstances returns all known instances sorted by workspace name.
+func (r *Registry) ListAllInstances() ([]InstanceInfo, error) {
+	instances, err := r.Discover()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
+	sort.Slice(instances, func(i, j int) bool {
+		return instances[i].Workspace < instances[j].Workspace
+	})
 
-	var instances []InstanceInfo
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		path := filepath.Join(r.dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue // skip unreadable files
-		}
-		var inst InstanceInfo
-		if err := json.Unmarshal(data, &inst); err != nil {
-			continue // skip corrupted files
-		}
-		instances = append(instances, inst)
+	// Prepend self if registered.
+	r.mu.Lock()
+	if r.selfInfo != nil {
+		instances = append([]InstanceInfo{*r.selfInfo}, instances...)
 	}
+	r.mu.Unlock()
+
 	return instances, nil
-}
-
-func (r *Registry) writeInstanceFile(info InstanceInfo) error {
-	data, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(r.instanceFilePath(info.ID), data, 0644)
-}
-
-// isPIDAlive checks if a process with the given PID exists.
-// Delegates to util.IsProcessAlive which uses syscall.Signal(0)
-// for reliable detection across macOS and Linux.
-func isPIDAlive(pid int) bool {
-	return util.IsProcessAlive(pid)
-}
-
-// isLocalEndpoint returns true if the endpoint's host is a local address
-// (localhost, 127.x, ::1, or one of our own interface IPs).
-// Used to decide whether PID liveness checks are meaningful: a local PID
-// check on a remote mDNS instance is meaningless.
-func isLocalEndpoint(endpoint string) bool {
-	addr := strings.TrimPrefix(endpoint, "http://")
-	addr = strings.TrimPrefix(addr, "https://")
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
-		return true
-	}
-	ips, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, ip := range ips {
-		if ipnet, ok := ip.(*net.IPNet); ok && ipnet.IP.String() == host {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +336,7 @@ func scanWorkspaceSignals(dir string) ([]string, bool) {
 
 func shouldSkipRecursiveWorkspaceMeta(dir string) bool {
 	absDir := canonicalWorkspacePath(dir)
-	home := canonicalWorkspacePath(config.HomeDir())
+	home := canonicalWorkspacePath(homeDir())
 	return absDir == string(filepath.Separator) || (home != "" && strings.EqualFold(absDir, home))
 }
 
@@ -571,9 +369,10 @@ func shouldSkipWorkspaceMetaDir(name string) bool {
 	}
 }
 
-// GenerateInstanceID creates a unique ID for this ggcode process.
-func GenerateInstanceID() string {
-	hostname, _ := os.Hostname()
-	pid := os.Getpid()
-	return fmt.Sprintf("ggcode-%s-%d-%d", hostname, pid, time.Now().UnixNano())
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }

@@ -1054,14 +1054,14 @@ func (r *stringReader) Read(p []byte) (n int, err error) {
 // ---------------------------------------------------------------------------
 
 func TestRemoteToolName(t *testing.T) {
-	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
+	remote := NewRemoteTool(&Registry{}, "key")
 	if remote.Name() != "a2a_remote" {
 		t.Errorf("expected a2a_remote, got %s", remote.Name())
 	}
 }
 
 func TestRemoteToolParameters(t *testing.T) {
-	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
+	remote := NewRemoteTool(&Registry{}, "key")
 	params := remote.Parameters()
 	var schema map[string]interface{}
 	if err := json.Unmarshal(params, &schema); err != nil {
@@ -1076,7 +1076,7 @@ func TestRemoteToolParameters(t *testing.T) {
 }
 
 func TestRemoteToolListInstances(t *testing.T) {
-	reg := &Registry{dir: t.TempDir()}
+	reg := &Registry{}
 	remote := NewRemoteTool(reg, "key")
 
 	// No instances → friendly message.
@@ -1093,7 +1093,7 @@ func TestRemoteToolListInstances(t *testing.T) {
 }
 
 func TestRemoteToolInvalidInput(t *testing.T) {
-	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
+	remote := NewRemoteTool(&Registry{}, "key")
 
 	result, err := remote.Execute(context.Background(), json.RawMessage(`{invalid}`))
 	if err != nil {
@@ -1105,7 +1105,7 @@ func TestRemoteToolInvalidInput(t *testing.T) {
 }
 
 func TestRemoteToolTargetNotFound(t *testing.T) {
-	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
+	remote := NewRemoteTool(&Registry{}, "key")
 
 	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"nonexistent","skill":"full-task","message":"test"}`))
 	if err != nil {
@@ -1120,7 +1120,7 @@ func TestRemoteToolTargetNotFound(t *testing.T) {
 }
 
 func TestRemoteToolCacheRefresh(t *testing.T) {
-	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
+	remote := NewRemoteTool(&Registry{}, "key")
 
 	// Initially empty.
 	instances, err := remote.discover()
@@ -1140,58 +1140,6 @@ func TestRemoteToolCacheRefresh(t *testing.T) {
 	}
 	if len(instances) != 0 {
 		t.Error("expected 0 instances after refresh")
-	}
-}
-
-func TestRemoteToolE2E(t *testing.T) {
-	// Use isolated temp dir for registry to avoid pollution from other tests.
-	tmpDir := t.TempDir()
-	dir := filepath.Join(tmpDir, "a2a")
-	os.MkdirAll(dir, 0755)
-
-	reg := &Registry{dir: dir}
-
-	// Start an A2A server to simulate a remote ggcode instance.
-	handler1 := NewTaskHandler(".", nil, nil)
-	srv1 := NewServer(ServerConfig{Port: 0}, handler1)
-	if err := srv1.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer srv1.Stop()
-
-	// Write a fake "remote" instance with our PID (so pruneDead keeps it).
-	inst := InstanceInfo{
-		ID:        "remote-test-id",
-		PID:       os.Getpid(),
-		Workspace: "/Users/zhanju/ggai/a2a-order-service",
-		Endpoint:  srv1.Endpoint(),
-		Status:    "ready",
-	}
-	data, _ := json.MarshalIndent(inst, "", "  ")
-	instPath := filepath.Join(reg.dir, inst.ID+".json")
-	os.WriteFile(instPath, data, 0644)
-
-	remote := NewRemoteTool(reg, "")
-
-	// List instances.
-	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"list","skill":"full-task","message":"test"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsStr(result.Content, "a2a-order-service") {
-		t.Errorf("expected order-service in list, got: %s", result.Content)
-	}
-
-	// Call by name.
-	result, err = remote.Execute(context.Background(), json.RawMessage(`{"target":"order-service","skill":"file-search","message":"find TODOs"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Errorf("unexpected error: %s", result.Content)
-	}
-	if !containsStr(result.Content, "Task sent to order-service") {
-		t.Errorf("expected task sent message, got: %s", result.Content)
 	}
 }
 
@@ -1427,188 +1375,6 @@ func TestSSECommentLines(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for SSE event")
-	}
-}
-
-func TestPerPIDRegistryFiles(t *testing.T) {
-	dir := t.TempDir()
-	reg := &Registry{dir: dir}
-
-	// Register instance A.
-	instA := InstanceInfo{
-		ID: "inst-a", PID: os.Getpid(),
-		Workspace: "/project-a", Endpoint: "http://localhost:9001", Status: "ready",
-	}
-	if err := reg.Register(instA); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify file exists.
-	if _, err := os.Stat(filepath.Join(dir, "inst-a.json")); err != nil {
-		t.Fatalf("per-PID file not created: %v", err)
-	}
-
-	// Register instance B.
-	regB := &Registry{dir: dir}
-	instB := InstanceInfo{
-		ID: "inst-b", PID: os.Getpid(),
-		Workspace: "/project-b", Endpoint: "http://localhost:9002", Status: "ready",
-	}
-	if err := regB.Register(instB); err != nil {
-		t.Fatal(err)
-	}
-
-	// Discover from a third registry (simulates a different process).
-	regC := &Registry{dir: dir, selfID: "inst-c"}
-	discovered, err := regC.Discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(discovered) != 2 {
-		t.Fatalf("expected 2 discovered instances, got %d", len(discovered))
-	}
-
-	// Unregister A.
-	if err := reg.Unregister(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Discover should now return 1 (B only).
-	discovered, err = regC.Discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(discovered) != 1 {
-		t.Fatalf("expected 1 discovered instance after unregister, got %d", len(discovered))
-	}
-	if discovered[0].ID != "inst-b" {
-		t.Errorf("expected inst-b, got %s", discovered[0].ID)
-	}
-}
-
-func TestRegistryConcurrentRegister(t *testing.T) {
-	dir := t.TempDir()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			reg := &Registry{dir: dir}
-			inst := InstanceInfo{
-				ID: fmt.Sprintf("inst-%d", i), PID: os.Getpid(),
-				Workspace: fmt.Sprintf("/project-%d", i),
-				Endpoint:  fmt.Sprintf("http://localhost:%d", 9000+i),
-				Status:    "ready",
-			}
-			if err := reg.Register(inst); err != nil {
-				t.Errorf("register %d failed: %v", i, err)
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	// All 10 instances should be discoverable.
-	reg := &Registry{dir: dir, selfID: "self"}
-	discovered, err := reg.Discover()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(discovered) != 10 {
-		t.Errorf("expected 10 discovered instances, got %d", len(discovered))
-	}
-}
-
-func TestRegisterCleansDeadPIDFiles(t *testing.T) {
-	dir := t.TempDir()
-	reg := &Registry{dir: dir}
-
-	// Write several fake instance files with different PIDs.
-	// Use PID 1 (init/launchd — always alive on macOS/Linux) for "alive" instances,
-	// and a very high PID that definitely doesn't exist for "dead" ones.
-	deadPID := 999999901
-	alivePID := os.Getpid()
-
-	dead1 := InstanceInfo{
-		ID: "dead-inst-1", PID: deadPID,
-		Workspace: "/project-dead-1", Endpoint: "http://localhost:9001", Status: "ready",
-	}
-	dead2 := InstanceInfo{
-		ID: "dead-inst-2", PID: deadPID,
-		Workspace: "/project-dead-2", Endpoint: "http://localhost:9002", Status: "ready",
-	}
-	alive1 := InstanceInfo{
-		ID: "alive-inst-1", PID: alivePID,
-		Workspace: "/project-alive-1", Endpoint: "http://localhost:9003", Status: "ready",
-	}
-	for _, inst := range []InstanceInfo{dead1, dead2, alive1} {
-		data, _ := json.MarshalIndent(inst, "", "  ")
-		os.WriteFile(filepath.Join(dir, inst.ID+".json"), data, 0644)
-	}
-
-	// Verify we have 3 files before register.
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 files before register, got %d", len(entries))
-	}
-
-	// Register a new instance — this should clean up dead PID files.
-	newInst := InstanceInfo{
-		ID: "new-inst", PID: alivePID,
-		Workspace: "/project-new", Endpoint: "http://localhost:9004", Status: "ready",
-	}
-	if err := reg.Register(newInst); err != nil {
-		t.Fatal(err)
-	}
-
-	// Dead files should be gone; alive + new should remain.
-	entries, _ = os.ReadDir(dir)
-	remaining := map[string]bool{}
-	for _, e := range entries {
-		remaining[e.Name()] = true
-	}
-	if remaining["dead-inst-1.json"] {
-		t.Error("dead-inst-1.json should have been removed")
-	}
-	if remaining["dead-inst-2.json"] {
-		t.Error("dead-inst-2.json should have been removed")
-	}
-	if !remaining["alive-inst-1.json"] {
-		t.Error("alive-inst-1.json should still exist")
-	}
-	if !remaining["new-inst.json"] {
-		t.Error("new-inst.json should exist")
-	}
-}
-
-func TestAmbiguousMatchError(t *testing.T) {
-	dir := t.TempDir()
-	remote := NewRemoteTool(&Registry{dir: dir, selfID: "self"}, "")
-
-	// Register two instances with similar names using separate registry objects
-	// (simulating separate processes).
-	reg1 := &Registry{dir: dir}
-	reg1.Register(InstanceInfo{
-		ID: "order-1", PID: os.Getpid(),
-		Workspace: "/order-service-v1", Endpoint: "http://localhost:9001", Status: "ready",
-	})
-	reg2 := &Registry{dir: dir}
-	reg2.Register(InstanceInfo{
-		ID: "order-2", PID: os.Getpid(),
-		Workspace: "/order-service-v2", Endpoint: "http://localhost:9002", Status: "ready",
-	})
-
-	// "order" should match both → ambiguous error.
-	result, err := remote.Execute(context.Background(), json.RawMessage(
-		`{"target":"order","skill":"full-task","message":"test"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Error("expected error for ambiguous match")
-	}
-	if !containsStr(result.Content, "ambiguous") {
-		t.Errorf("expected ambiguous error, got: %s", result.Content)
 	}
 }
 

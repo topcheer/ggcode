@@ -304,9 +304,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			existing.Online = true
 			// Don't refresh LastSeen here — it's only meaningful when
 			// the peer actually communicates with us (presence, message,
-			// receipt). Registry discovery proves the process exists,
+			// receipt). mDNS discovery proves the process is registered,
 			// not that lanchat is responsive. If we refresh LastSeen
-			// here, a crashed peer with a stale PID file never goes offline.
+			// here, a crashed peer that's still in the mDNS cache never goes offline.
 			// If LastSeen is stale, probe via presence exchange (heartbeat).
 			if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
 				stalePeers = append(stalePeers, *existing)

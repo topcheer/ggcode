@@ -3,7 +3,6 @@ package a2a
 import (
 	"net"
 	"net/http/httptest"
-	"os"
 	"testing"
 )
 
@@ -149,38 +148,15 @@ func TestInstanceDisplayName(t *testing.T) {
 }
 
 func TestDiscoverMergesAndDeduplicates(t *testing.T) {
-	// Create a temp registry
-	dir := t.TempDir()
-	r := &Registry{dir: dir}
+	// Registry without mDNS enabled — Discover returns empty.
+	r := &Registry{}
+	r.selfID = "self-id"
+	r.selfInfo = &InstanceInfo{ID: "self-id", Endpoint: "127.0.0.1:11111"}
 
-	// Register self
-	selfInfo := InstanceInfo{
-		ID:        "self-id",
-		PID:       os.Getpid(),
-		Workspace: "/tmp/self",
-		Endpoint:  "127.0.0.1:11111",
-		Status:    "ready",
-	}
-	r.selfID = selfInfo.ID
-	r.selfInfo = &selfInfo
-	r.writeInstanceFile(selfInfo)
-
-	// Register another instance in local files
-	otherInfo := InstanceInfo{
-		ID:        "local-only-id",
-		PID:       99999, // won't be alive
-		Workspace: "/tmp/other",
-		Endpoint:  "127.0.0.1:22222",
-		Status:    "ready",
-	}
-	r.writeInstanceFile(otherInfo)
-
-	// Without mDNS, Discover should return only local instances
 	instances, err := r.Discover()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Dead PID should be pruned, self excluded
 	for _, inst := range instances {
 		if inst.ID == "self-id" {
 			t.Error("should not include self")

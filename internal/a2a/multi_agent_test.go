@@ -4,7 +4,6 @@ package a2a
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,10 +41,9 @@ type agentNode struct {
 }
 
 type testCluster struct {
-	t      *testing.T
-	nodes  []*agentNode
-	regDir string
-	cfg    *config.Config
+	t     *testing.T
+	nodes []*agentNode
+	cfg   *config.Config
 }
 
 func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster {
@@ -57,10 +55,7 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 		t.Fatalf("load config: %v", err)
 	}
 
-	regDir := filepath.Join(t.TempDir(), "a2a-reg")
-	os.MkdirAll(regDir, 0755)
-
-	c := &testCluster{t: t, regDir: regDir, cfg: cfg}
+	c := &testCluster{t: t, cfg: cfg}
 
 	for _, spec := range specs {
 		name := spec.Name
@@ -95,7 +90,7 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 
 		ag := agent.NewAgent(prov, registry, sysPrompt, 0)
 
-		reg := &Registry{dir: regDir}
+		reg := &Registry{}
 		remoteTool := NewRemoteTool(reg, mAPIKey)
 		registry.Register(remoteTool)
 
@@ -117,16 +112,6 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 
 		t.Logf("[%s] (%s) → %s", name, role, srv.Endpoint())
 		c.nodes = append(c.nodes, &agentNode{name: name, dir: dir, server: srv, client: NewClient(srv.Endpoint(), mAPIKey)})
-	}
-
-	// Register all instances via per-ID files.
-	for _, n := range c.nodes {
-		inst := InstanceInfo{
-			ID: n.name + "-id", PID: os.Getpid(),
-			Workspace: n.dir, Endpoint: n.server.Endpoint(), Status: "ready",
-		}
-		data, _ := json.MarshalIndent(inst, "", "  ")
-		os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
 	}
 
 	return c
