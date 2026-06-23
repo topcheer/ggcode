@@ -11,6 +11,7 @@ func MountHandlers(mux *http.ServeMux, hub *Hub) {
 	mux.HandleFunc("/lanchat/message", hub.handleReceiveMessage)
 	mux.HandleFunc("/lanchat/receipt", hub.handleReceiveReceipt)
 	mux.HandleFunc("/lanchat/nick", hub.handleNickChange)
+	mux.HandleFunc("/lanchat/presence", hub.handlePresence)
 	mux.HandleFunc("/lanchat/participants", hub.handleParticipantQuery)
 	if hub.attachments != nil {
 		mux.HandleFunc("/lanchat/attach/", hub.attachments.HandleAttachmentDownload)
@@ -94,4 +95,26 @@ func (h *Hub) handleParticipantQuery(w http.ResponseWriter, r *http.Request) {
 
 	p := h.HandleParticipantQuery()
 	json.NewEncoder(w).Encode(p)
+}
+
+func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var p Participant
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		http.Error(w, "invalid presence: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if p.NodeID == h.nodeID {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Respond with our own presence so both sides learn each other
+	h.HandlePresence(p)
+	json.NewEncoder(w).Encode(h.SelfParticipant())
 }

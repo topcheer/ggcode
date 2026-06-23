@@ -50,7 +50,7 @@ type Hub struct {
 	onMessage        func(Message)
 	onReceipt        func(Receipt)
 	onParticipantAdd func(Participant)
-	onParticipantRm  func(string) // nodeID
+	onParticipantRm  func(nodeID, humanNick string) // nodeID + nick for display
 	onApprovalReq    func(PendingAgentMsg)
 
 	// HTTP client for peer communication
@@ -105,7 +105,7 @@ func (h *Hub) SetCallbacks(
 	onMessage func(Message),
 	onReceipt func(Receipt),
 	onParticipantAdd func(Participant),
-	onParticipantRm func(string),
+	onParticipantRm func(nodeID, humanNick string),
 	onApprovalReq func(PendingAgentMsg),
 ) {
 	h.mu.Lock()
@@ -212,9 +212,10 @@ func (h *Hub) SetNick(nick string) error {
 // New peers trigger the onParticipantAdd callback; removed peers trigger onParticipantRm.
 func (h *Hub) UpdatePeers(participants []Participant) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	seen := make(map[string]bool)
+	var newPeers []Participant
+
 	for _, p := range participants {
 		if p.NodeID == h.nodeID {
 			continue // skip self
@@ -227,9 +228,7 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
 			h.peers[p.NodeID] = &cp
-			if h.onParticipantAdd != nil {
-				go h.onParticipantAdd(cp)
-			}
+			newPeers = append(newPeers, cp)
 		} else {
 			// Update existing peer info
 			existing.HumanNick = p.HumanNick
@@ -242,13 +241,121 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	}
 
 	// Mark disappeared peers offline
+	type leftPeer struct {
+		nodeID, humanNick string
+	}
+	var leftPeers []leftPeer
 	for id, p := range h.peers {
 		if !seen[id] {
 			if time.Since(time.Unix(p.LastSeen, 0)) > ageOffline {
-				p.Online = false
+				if p.Online {
+					p.Online = false
+					leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
+				}
 			}
 		}
 	}
+
+	callbacks := struct {
+		add func(Participant)
+		rm  func(nodeID, humanNick string)
+	}{h.onParticipantAdd, h.onParticipantRm}
+	h.mu.Unlock()
+
+	// Fire callbacks outside lock
+	for _, np := range newPeers {
+		if callbacks.add != nil {
+			go callbacks.add(np)
+		}
+		// Proactively send our presence to the new peer
+		go h.sendPresence(np)
+	}
+	for _, lp := range leftPeers {
+		if callbacks.rm != nil {
+			go callbacks.rm(lp.nodeID, lp.humanNick)
+		}
+	}
+}
+
+// HandlePresence processes an incoming presence announcement from a peer.
+// This is called when a newly discovered peer sends us their participant info.
+func (h *Hub) HandlePresence(p Participant) {
+	h.mu.Lock()
+	existing, ok := h.peers[p.NodeID]
+	isNew := false
+	if !ok {
+		isNew = true
+		cp := p
+		cp.Online = true
+		cp.LastSeen = time.Now().Unix()
+		h.peers[p.NodeID] = &cp
+	} else {
+		existing.HumanNick = p.HumanNick
+		existing.AgentNick = p.AgentNick
+		existing.Mode = p.Mode
+		existing.Endpoint = p.Endpoint
+		existing.Online = true
+		existing.LastSeen = time.Now().Unix()
+	}
+	callback := h.onParticipantAdd
+	h.mu.Unlock()
+
+	if isNew && callback != nil {
+		go callback(p)
+	}
+}
+
+// sendPresence POSTs our participant info to a peer so they learn our nick.
+func (h *Hub) sendPresence(peer Participant) {
+	self := h.SelfParticipant()
+	url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/presence"
+
+	data, err := json.Marshal(self)
+	if err != nil {
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if h.apiKey != "" {
+		req.Header.Set("X-API-Key", h.apiKey)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	// The response contains the peer's own presence — learn it too
+	var peerInfo Participant
+	if err := json.NewDecoder(resp.Body).Decode(&peerInfo); err == nil && peerInfo.NodeID != "" {
+		h.mu.Lock()
+		if existing, ok := h.peers[peerInfo.NodeID]; ok {
+			existing.HumanNick = peerInfo.HumanNick
+			existing.AgentNick = peerInfo.AgentNick
+			existing.Mode = peerInfo.Mode
+			existing.Online = true
+			existing.LastSeen = time.Now().Unix()
+		}
+		h.mu.Unlock()
+	}
+}
+
+// IsOnline returns whether a node is currently online.
+func (h *Hub) IsOnline(nodeID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if nodeID == h.nodeID {
+		return true
+	}
+	if p, ok := h.peers[nodeID]; ok {
+		return p.Online
+	}
+	return false
 }
 
 // ---- Outbound ----

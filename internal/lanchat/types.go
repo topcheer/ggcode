@@ -86,5 +86,5 @@ type NickChange struct {
 // maxHistoryPerSession is the maximum number of messages persisted per session.
 const maxHistoryPerSession = 100
 
-// ageOffine marks a participant offline if not seen within this duration.
+// ageOffline marks a participant offline if not seen within this duration.
 var ageOffline = 5 * time.Minute

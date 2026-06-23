@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,7 +18,7 @@ import (
 type lanchatMsg struct{ msg lanchat.Message }
 type lanchatReceiptMsg struct{ receipt lanchat.Receipt }
 type lanchatPeerJoinMsg struct{ participant lanchat.Participant }
-type lanchatPeerLeaveMsg struct{ nodeID string }
+type lanchatPeerLeaveMsg struct{ nodeID, humanNick string }
 type lanchatApprovalReqMsg struct{ pending lanchat.PendingAgentMsg }
 
 // ---- Panel State ----
@@ -30,7 +31,7 @@ type lanChatPanelState struct {
 	mentionMode  bool
 	mentionQuery string
 	mentionIdx   int
-	mentionList  []lanchat.Participant
+	mentionList  []mentionTarget
 
 	// approval popup
 	approvalPopup bool
@@ -38,6 +39,14 @@ type lanChatPanelState struct {
 
 	// notice text (for errors/info within panel)
 	notice string
+}
+
+// mentionTarget is a single selectable entry in the @mention list.
+// One Participant can produce two targets: human and agent.
+type mentionTarget struct {
+	NodeID string
+	Nick   string // the actual nick to @mention
+	Role   string // lanchat.RoleHuman or lanchat.RoleAgent
 }
 
 func (m *Model) openLanChatPanel() {
@@ -71,9 +80,9 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub) {
 			}
 		},
 		// On participant remove
-		func(nodeID string) {
+		func(nodeID, humanNick string) {
 			if m.program != nil {
-				m.program.Send(lanchatPeerLeaveMsg{nodeID: nodeID})
+				m.program.Send(lanchatPeerLeaveMsg{nodeID: nodeID, humanNick: humanNick})
 			}
 		},
 		// On approval request
@@ -106,10 +115,10 @@ func (m Model) renderLanChatNotice() string {
 	text := m.lanChatNotice
 	if text == "" {
 		if m.lanChatUnread > 0 {
-			text = fmt.Sprintf("💬 [LAN Chat] %d unread message(s) — /chat to view", m.lanChatUnread)
+			text = fmt.Sprintf("[LAN Chat] %d unread message(s) — /chat to view", m.lanChatUnread)
 		}
 	} else {
-		text = fmt.Sprintf("💬 [LAN Chat] %s", text)
+		text = fmt.Sprintf("[LAN Chat] %s", text)
 	}
 	return style.Render(text)
 }
@@ -131,7 +140,7 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lanChatPanel.approvalPopup = true
 		} else {
 			// Show system message in main chat
-			m.lanChatNotice = fmt.Sprintf("🔔 [LAN Chat] %s sent a message to your agent — /chat to view", msg.pending.Message.FromNick)
+			m.lanChatNotice = fmt.Sprintf("%s sent a message to your agent — /chat to view", msg.pending.Message.FromNick)
 			m.lanChatUnread++
 		}
 		return m, nil
@@ -144,8 +153,19 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.lanChatHub != nil {
 			m.lanChatHub.UpdatePeers([]lanchat.Participant{msg.participant})
 		}
+		// System message in main chat
+		nick := msg.participant.HumanNick
+		if nick == "" {
+			nick = msg.participant.NodeID[:8]
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online", nick))
 		return m, nil
 	case lanchatPeerLeaveMsg:
+		nick := msg.humanNick
+		if nick == "" {
+			nick = msg.nodeID[:8]
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s went offline", nick))
 		return m, nil
 	}
 	return m, nil
@@ -157,6 +177,29 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	// If approval popup is open, handle its keys
 	if p.approvalPopup {
 		return m.handleApprovalKey(msg)
+	}
+
+	// In mention mode, Enter and Tab both complete the mention
+	if p.mentionMode && len(p.mentionList) > 0 {
+		switch msg.String() {
+		case "enter", "tab":
+			selected := p.mentionList[p.mentionIdx]
+			atIdx := strings.LastIndex(p.input, "@")
+			p.input = p.input[:atIdx] + "@" + selected.Nick + " "
+			p.mentionMode = false
+			p.mentionQuery = ""
+			return m, nil
+		case "up":
+			p.mentionIdx = (p.mentionIdx - 1 + len(p.mentionList)) % len(p.mentionList)
+			return m, nil
+		case "down":
+			p.mentionIdx = (p.mentionIdx + 1) % len(p.mentionList)
+			return m, nil
+		case "esc":
+			p.mentionMode = false
+			p.mentionQuery = ""
+			return m, nil
+		}
 	}
 
 	switch msg.String() {
@@ -183,24 +226,10 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.refreshMentionList()
 		return m, nil
 	case "tab":
-		if p.mentionMode && len(p.mentionList) > 0 {
-			selected := p.mentionList[p.mentionIdx]
-			// Replace @query with @nick
-			atIdx := strings.LastIndex(p.input, "@")
-			p.input = p.input[:atIdx] + "@" + selected.HumanNick + " "
-			p.mentionMode = false
-			p.mentionQuery = ""
-		}
+		// Tab outside mention mode = no-op (was previously broken)
 		return m, nil
-	case "up":
-		if p.mentionMode && len(p.mentionList) > 0 {
-			p.mentionIdx = (p.mentionIdx - 1 + len(p.mentionList)) % len(p.mentionList)
-		}
-		return m, nil
-	case "down":
-		if p.mentionMode && len(p.mentionList) > 0 {
-			p.mentionIdx = (p.mentionIdx + 1) % len(p.mentionList)
-		}
+	case "up", "down":
+		// Up/down outside mention mode = no-op
 		return m, nil
 	default:
 		if len(msg.String()) == 1 {
@@ -288,14 +317,18 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 			mention := text[1:spaceIdx]
 			content := strings.TrimSpace(text[spaceIdx:])
 
+			if content == "" {
+				return m, nil // empty message
+			}
+
 			// Find target participant
 			for _, part := range m.lanChatHub.Participants() {
 				if part.HumanNick == mention || part.AgentNick == mention {
 					role := lanchat.RoleHuman
-					if strings.HasSuffix(mention, "_agent") {
+					if mention == part.AgentNick {
 						role = lanchat.RoleAgent
 					}
-					m.lanChatHub.SendDirect(nil, part.NodeID, role, content, nil)
+					m.lanChatHub.SendDirect(context.Background(), part.NodeID, role, content, nil)
 					return m, nil
 				}
 			}
@@ -303,10 +336,12 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 			p.notice = fmt.Sprintf("Unknown @mention: %s", mention)
 			return m, nil
 		}
+		// @ with no space and no content — just the @nick, ignore
+		return m, nil
 	}
 
 	// Broadcast
-	m.lanChatHub.SendBroadcast(nil, text, nil)
+	m.lanChatHub.SendBroadcast(context.Background(), text, nil)
 	return m, nil
 }
 
@@ -317,23 +352,33 @@ func (m *Model) refreshMentionList() {
 	}
 
 	all := m.lanChatHub.Participants()
-	// Filter by query and sort
-	var filtered []lanchat.Participant
+	var targets []mentionTarget
 	for _, part := range all {
-		nick := part.HumanNick
-		if strings.HasPrefix(strings.ToLower(nick), strings.ToLower(p.mentionQuery)) {
-			filtered = append(filtered, part)
+		if !part.Online {
+			continue
 		}
-		// Also include agent nick
-		if strings.HasPrefix(strings.ToLower(part.AgentNick), strings.ToLower(p.mentionQuery)) {
-			filtered = append(filtered, part)
+		// Human target
+		if part.HumanNick != "" {
+			t := mentionTarget{NodeID: part.NodeID, Nick: part.HumanNick, Role: lanchat.RoleHuman}
+			if p.mentionQuery == "" || strings.HasPrefix(strings.ToLower(t.Nick), strings.ToLower(p.mentionQuery)) {
+				targets = append(targets, t)
+			}
+		}
+		// Agent target (only if different from human nick)
+		if part.AgentNick != "" && part.AgentNick != part.HumanNick {
+			t := mentionTarget{NodeID: part.NodeID, Nick: part.AgentNick, Role: lanchat.RoleAgent}
+			if p.mentionQuery == "" || strings.HasPrefix(strings.ToLower(t.Nick), strings.ToLower(p.mentionQuery)) {
+				targets = append(targets, t)
+			}
 		}
 	}
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].HumanNick < filtered[j].HumanNick
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].Nick < targets[j].Nick
 	})
-	p.mentionList = filtered
-	p.mentionIdx = 0
+	p.mentionList = targets
+	if p.mentionIdx >= len(targets) {
+		p.mentionIdx = 0
+	}
 }
 
 // ---- View ----
@@ -347,19 +392,18 @@ func (m *Model) renderLanChatPanel() string {
 	hub := m.lanChatHub
 	var body []string
 
-	// Online participants header
+	// Online participants header — show one entry per human, not per role
 	onlineStr := "No one online"
 	if hub != nil {
 		parts := hub.Participants()
-		nicks := make([]string, 0, len(parts)*2)
+		nicks := make([]string, 0, len(parts))
 		for _, part := range parts {
 			if part.Online {
-				if part.HumanNick != "" {
-					nicks = append(nicks, "👤"+part.HumanNick)
+				nick := part.HumanNick
+				if nick == "" {
+					nick = part.NodeID[:8]
 				}
-				if part.AgentNick != "" {
-					nicks = append(nicks, "🤖"+part.AgentNick)
-				}
+				nicks = append(nicks, nick)
 			}
 		}
 		if len(nicks) > 0 {
@@ -385,7 +429,7 @@ func (m *Model) renderLanChatPanel() string {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  (no messages yet)"))
 		} else {
 			for i := start; i < len(msgs); i++ {
-				body = append(body, renderLanChatMessage(msgs[i]))
+				body = append(body, m.renderLanChatMessage(msgs[i]))
 			}
 		}
 	}
@@ -396,7 +440,7 @@ func (m *Model) renderLanChatPanel() string {
 		if len(pending) > 0 {
 			body = append(body, "")
 			current := pending[p.approvalIdx]
-			popup := fmt.Sprintf("📨 %s → your agent:\n  %q\n\n  [Enter] Approve  [N] Reject  [Esc] Close",
+			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve  [N] Reject  [Esc] Close",
 				current.Message.FromNick, current.Message.Content)
 			popupStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FBBF24")).
@@ -405,30 +449,21 @@ func (m *Model) renderLanChatPanel() string {
 		}
 	}
 
-	// Mention autocomplete
+	// Mention autocomplete — one line per target (human or agent)
 	if p.mentionMode && len(p.mentionList) > 0 {
 		body = append(body, "")
-		for i, part := range p.mentionList {
+		for i, t := range p.mentionList {
 			prefix := "  "
 			style := lipgloss.NewStyle()
 			if i == p.mentionIdx {
-				prefix = "▶ "
+				prefix = "> "
 				style = style.Foreground(lipgloss.Color("#FBBF24")).Bold(true)
 			}
-			label := ""
-			if part.HumanNick != "" {
-				label += "👤" + part.HumanNick
+			icon := "[H]"
+			if t.Role == lanchat.RoleAgent {
+				icon = "[A]"
 			}
-			if part.AgentNick != "" {
-				if label != "" {
-					label += "  "
-				}
-				label += "🤖" + part.AgentNick
-			}
-			if label == "" {
-				label = part.NodeID[:8]
-			}
-			body = append(body, style.Render(fmt.Sprintf("%s%s", prefix, label)))
+			body = append(body, style.Render(fmt.Sprintf("%s%s %s", prefix, icon, t.Nick)))
 		}
 	}
 
@@ -437,33 +472,40 @@ func (m *Model) renderLanChatPanel() string {
 	inputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
 	hint := "[Tab] @mention  [Esc] Close"
 	if p.mentionMode {
-		hint = "[↑↓] Select  [Tab] Confirm  [Esc] Cancel mention"
+		hint = "[Enter/Tab] Select  [Up/Down] Navigate  [Esc] Cancel"
 	}
 	body = append(body, inputStyle.Render(hint))
-	body = append(body, fmt.Sprintf("> %s█", p.input))
+	body = append(body, fmt.Sprintf("> %s_", p.input))
 
-	return m.renderContextBox("/chat — LAN Chat", strings.Join(body, "\n"), lipgloss.Color("11"))
+	return m.renderContextBox("/chat - LAN Chat", strings.Join(body, "\n"), lipgloss.Color("11"))
 }
 
-func renderLanChatMessage(msg lanchat.Message) string {
+// renderLanChatMessage renders a single chat message with offline indicator.
+func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 	ts := time.UnixMilli(msg.Timestamp).Format("15:04")
-	icon := "👤"
+	icon := "[H]"
 	if msg.FromRole == lanchat.RoleAgent {
-		icon = "🤖"
+		icon = "[A]"
 	}
 
-	// Color: own messages vs others, agent vs human
 	senderStyle := lipgloss.NewStyle().Bold(true)
 	contentStyle := lipgloss.NewStyle()
 
+	// Dim messages from offline users
+	senderOnline := m.lanChatHub != nil && m.lanChatHub.IsOnline(msg.FromNodeID)
+	if !senderOnline {
+		senderStyle = senderStyle.Foreground(lipgloss.Color("8")) // grey
+		contentStyle = contentStyle.Foreground(lipgloss.Color("8"))
+	}
+
 	if msg.IsBroadcast() {
-		return fmt.Sprintf("  [%s] %s%s: %s\n", ts, icon, senderStyle.Render(msg.FromNick), contentStyle.Render(msg.Content))
+		return fmt.Sprintf("  [%s] %s%s: %s", ts, icon, senderStyle.Render(msg.FromNick), contentStyle.Render(msg.Content))
 	}
 
 	// Direct message
-	dmTag := "→"
+	dmTag := "->"
 	if msg.ToRole == lanchat.RoleAgent {
-		dmTag = "→agent"
+		dmTag = "->agent"
 	}
-	return fmt.Sprintf("  [%s] %s%s %s: %s\n", ts, icon, senderStyle.Render(msg.FromNick), dmTag, contentStyle.Render(msg.Content))
+	return fmt.Sprintf("  [%s] %s%s %s: %s", ts, icon, senderStyle.Render(msg.FromNick), dmTag, contentStyle.Render(msg.Content))
 }
