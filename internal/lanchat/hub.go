@@ -269,6 +269,7 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	seen := make(map[string]bool)
 	var newPeers []Participant
 	var emptyNickPeers []Participant // existing online peers with unknown nick
+	var stalePeers []Participant     // peers whose LastSeen is older than heartbeatThreshold
 
 	for _, p := range participants {
 		if p.NodeID == h.nodeID {
@@ -300,7 +301,15 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			existing.Mode = p.Mode
 			existing.Endpoint = p.Endpoint
 			existing.Online = true
-			existing.LastSeen = time.Now().Unix()
+			// Don't refresh LastSeen here — it's only meaningful when
+			// the peer actually communicates with us (presence, message,
+			// receipt). Registry discovery proves the process exists,
+			// not that lanchat is responsive. If we refresh LastSeen
+			// here, a crashed peer with a stale PID file never goes offline.
+			// If LastSeen is stale, probe via presence exchange (heartbeat).
+			if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
+				stalePeers = append(stalePeers, *existing)
+			}
 			// If we still don't know this peer's nick, retry presence
 			if existing.HumanNick == "" {
 				emptyNickPeers = append(emptyNickPeers, *existing)
@@ -308,19 +317,19 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		}
 	}
 
-	// Mark disappeared peers offline
+	// Mark peers offline — two cases:
+	// 1. Peer disappeared from A2A registry (process exited)
+	// 2. Peer is still in registry but lanchat server is unresponsive
+	//    (LastSeen stale beyond ageOffline despite presence heartbeats)
 	type leftPeer struct {
 		nodeID, humanNick string
 	}
 	var leftPeers []leftPeer
 	for id, p := range h.peers {
-		if !seen[id] {
-			if time.Since(time.Unix(p.LastSeen, 0)) > ageOffline {
-				if p.Online {
-					p.Online = false
-					leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
-				}
-			}
+		isStale := time.Since(time.Unix(p.LastSeen, 0)) > ageOffline
+		if (!seen[id] || isStale) && p.Online {
+			p.Online = false
+			leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
 		}
 	}
 
@@ -345,6 +354,13 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	// don't know (presence exchange may have failed on a previous tick).
 	for _, ep := range emptyNickPeers {
 		go h.sendPresence(ep)
+	}
+	// Heartbeat: re-probe peers whose LastSeen hasn't been updated recently.
+	// This detects peers that are still in the A2A registry (process alive)
+	// but whose lanchat HTTP server is unresponsive. sendPresence failure
+	// means LastSeen stays stale; after ageOffline they'll be marked offline.
+	for _, sp := range stalePeers {
+		go h.sendPresence(sp)
 	}
 	for _, lp := range leftPeers {
 		if callbacks.rm != nil {

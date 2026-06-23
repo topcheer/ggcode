@@ -95,3 +95,8 @@ const maxHistoryPerSession = 100
 // Kept short because A2A registry already does PID liveness checks —
 // this is only a grace period for discovery gaps (mDNS flakiness etc).
 var ageOffline = 60 * time.Second
+
+// presenceHeartbeat is how long without communication before we re-probe
+// a peer via sendPresence. If the probe fails (peer's lanchat server is
+// dead), LastSeen stays stale and after ageOffline the peer goes offline.
+var presenceHeartbeat = 30 * time.Second
