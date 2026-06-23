@@ -66,6 +66,9 @@ type oauthState struct {
 	state                   string
 	callbackPort            int
 	redirectURI             string
+	// authResource is the resource parameter sent in the authorization request
+	// (RFC 8707). It MUST be echoed in the token exchange. Set by StartAuthFlow.
+	authResource string
 	// Device flow state
 	deviceCode     string
 	deviceInterval int
@@ -294,6 +297,17 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 		if st.clientRegistration.ClientSecret != "" {
 			data.Set("client_secret", st.clientRegistration.ClientSecret)
 		}
+	}
+	// RFC 8707: include resource parameter in refresh requests when available.
+	// Use the exact resource from the original auth request (stored by StartAuthFlow).
+	h.mu.Lock()
+	authResource := ""
+	if h.state != nil {
+		authResource = h.state.authResource
+	}
+	h.mu.Unlock()
+	if authResource != "" {
+		data.Set("resource", authResource)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(data.Encode()))
@@ -704,6 +718,14 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 		}
 	}
 	parsed.RawQuery = params.Encode()
+
+	// Store the actual resource parameter used (RFC 8707: must be echoed in
+	// token exchange). This may differ from canonicalResource() when the
+	// authorization endpoint embeds a different resource (e.g. Railway).
+	h.mu.Lock()
+	h.state.authResource = params.Get("resource")
+	h.mu.Unlock()
+
 	return parsed.String(), nil
 }
 
@@ -787,6 +809,7 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 	}
 	redirectURI := h.state.redirectURI
 	codeVerifier := h.state.codeVerifier
+	resource := h.state.authResource
 	h.mu.Unlock()
 
 	debug.Log("mcp-oauth", "exchange_code server=%s endpoint=%s client_id=%s redirect_uri=%s", h.serverName, tokenEndpoint, clientID, redirectURI)
@@ -799,6 +822,13 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 	data.Set("client_id", clientID)
 	if clientSecret != "" {
 		data.Set("client_secret", clientSecret)
+	}
+	// RFC 8707: if the authorization request included a "resource" parameter,
+	// the token exchange MUST also include it. Some servers (e.g. Railway)
+	// refuse to return a refresh_token without it. Use the exact resource
+	// value from the auth request (stored by StartAuthFlow).
+	if resource != "" {
+		data.Set("resource", resource)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(data.Encode()))

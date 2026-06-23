@@ -1094,7 +1094,7 @@ func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 	safeCommands := []string{
 		"/help", "/model", "/provider", "/lang en",
 		"/mcp", "/skills", "/stats", "/sessions",
-		"/status", "/config", "/memory", "/todo", "/plugins",
+		"/status", "/config", "/memory", "/todo", "/plugins", "/chat",
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",
 		"/tg", "/pc", "/discord", "/feishu", "/slack", "/dingtalk",
 		"/im", "/harness", "/harness panel",

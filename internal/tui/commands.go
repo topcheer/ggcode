@@ -179,7 +179,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	cmd := parts[0]
 	switch cmd {
 	// Panel / UI commands — always safe
-	case "/lang", "/model", "/provider", "/impersonate",
+	case "/lang", "/model", "/provider", "/impersonate", "/chat",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
 		"/skills", "/stats", "/sessions", "/mcp",
