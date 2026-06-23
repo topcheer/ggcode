@@ -107,7 +107,7 @@ func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 
 // SetLanChatHub connects the LAN chat hub for /chat panel support.
 func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
-	r.model.SetLanChatHub(hub)
+	r.model.SetLanChatHub(hub, r.sendTUI)
 }
 
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {

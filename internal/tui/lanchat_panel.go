@@ -55,7 +55,11 @@ func (m *Model) openLanChatPanel() {
 }
 
 // SetLanChatHub wires the lanchat hub and its callbacks into the TUI model.
-func (m *Model) SetLanChatHub(hub *lanchat.Hub) {
+// sendMsg is r.sendTUI — NOT m.program.Send — because tea.NewProgram()
+// copies the model, so m.program is nil in the pre-copy model that the
+// closures capture. Using a function indirection lets callbacks deliver
+// messages to the real running event loop.
+func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 	m.lanChatHub = hub
 	if hub == nil {
 		return
@@ -63,34 +67,32 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub) {
 	hub.SetCallbacks(
 		// On message
 		func(msg lanchat.Message) {
-			if m.program != nil {
-				m.program.Send(lanchatMsg{msg: msg})
+			if sendMsg != nil {
+				sendMsg(lanchatMsg{msg: msg})
 			}
 		},
 		// On receipt
 		func(r lanchat.Receipt) {
-			if m.program != nil {
-				m.program.Send(lanchatReceiptMsg{receipt: r})
+			if sendMsg != nil {
+				sendMsg(lanchatReceiptMsg{receipt: r})
 			}
 		},
 		// On participant add
 		func(p lanchat.Participant) {
-			if m.program != nil {
-				m.program.Send(lanchatPeerJoinMsg{participant: p})
+			if sendMsg != nil {
+				sendMsg(lanchatPeerJoinMsg{participant: p})
 			}
 		},
 		// On participant remove
 		func(nodeID, humanNick string) {
-			if m.program != nil {
-				m.program.Send(lanchatPeerLeaveMsg{nodeID: nodeID, humanNick: humanNick})
+			if sendMsg != nil {
+				sendMsg(lanchatPeerLeaveMsg{nodeID: nodeID, humanNick: humanNick})
 			}
 		},
 		// On approval request
 		func(pending lanchat.PendingAgentMsg) {
-			if m.program != nil {
-				m.program.Send(lanchatApprovalReqMsg{pending: pending})
-				// Also show notification if panel is closed
-				m.lanChatUnread++
+			if sendMsg != nil {
+				sendMsg(lanchatApprovalReqMsg{pending: pending})
 			}
 		},
 	)
