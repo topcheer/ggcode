@@ -738,10 +738,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)
 		// Sync peers from A2A registry
 		go func() {
-			ticker := time.NewTicker(15 * time.Second)
-			defer ticker.Stop()
-			for {
-				<-ticker.C
+			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
 				peers := make([]lanchat.Participant, 0, len(instances))
 				for _, inst := range instances {
@@ -754,6 +751,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 					})
 				}
 				lanchatHub.UpdatePeers(peers)
+			}
+			// Initial sync after 2s (let registry warm up)
+			time.Sleep(2 * time.Second)
+			syncPeers()
+			// Then periodic every 15s
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				syncPeers()
 			}
 		}()
 	}

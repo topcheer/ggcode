@@ -230,9 +230,16 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			h.peers[p.NodeID] = &cp
 			newPeers = append(newPeers, cp)
 		} else {
-			// Update existing peer info
-			existing.HumanNick = p.HumanNick
-			existing.AgentNick = p.AgentNick
+			// Update existing peer info — but DON'T overwrite nicks with
+			// empty values. A2A discovery doesn't carry lanchat nicks, so
+			// p.HumanNick/p.AgentNick are usually "". We must preserve the
+			// nicks we learned from presence/messages.
+			if p.HumanNick != "" {
+				existing.HumanNick = p.HumanNick
+			}
+			if p.AgentNick != "" {
+				existing.AgentNick = p.AgentNick
+			}
 			existing.Mode = p.Mode
 			existing.Endpoint = p.Endpoint
 			existing.Online = true
