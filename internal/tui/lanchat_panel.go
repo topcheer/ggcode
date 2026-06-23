@@ -32,16 +32,12 @@ type lanChatPanelState struct {
 	mentionIdx   int
 	mentionList  []lanchat.Participant
 
-	// approval popup (option B)
+	// approval popup
 	approvalPopup bool
 	approvalIdx   int
 
 	// notice text (for errors/info within panel)
 	notice string
-
-	// scroll/view
-	width  int
-	height int
 }
 
 func (m *Model) openLanChatPanel() {
@@ -349,17 +345,21 @@ func (m *Model) renderLanChatPanel() string {
 	}
 
 	hub := m.lanChatHub
-	var b strings.Builder
+	var body []string
 
-	// Header
+	// Online participants header
 	onlineStr := "No one online"
 	if hub != nil {
 		parts := hub.Participants()
 		nicks := make([]string, 0, len(parts)*2)
 		for _, part := range parts {
 			if part.Online {
-				nicks = append(nicks, "👤"+part.HumanNick)
-				nicks = append(nicks, "🤖"+part.AgentNick)
+				if part.HumanNick != "" {
+					nicks = append(nicks, "👤"+part.HumanNick)
+				}
+				if part.AgentNick != "" {
+					nicks = append(nicks, "🤖"+part.AgentNick)
+				}
 			}
 		}
 		if len(nicks) > 0 {
@@ -369,49 +369,45 @@ func (m *Model) renderLanChatPanel() string {
 
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#7DD3FC")).
-		Width(p.width)
-	b.WriteString(headerStyle.Render("🌐 LAN Chat — " + onlineStr))
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", p.width))
-	b.WriteString("\n")
+		Foreground(lipgloss.Color("#7DD3FC"))
+	body = append(body, headerStyle.Render("Online: "+onlineStr))
+	body = append(body, "")
 
 	// Messages
 	if hub != nil {
 		msgs := hub.Messages()
-		// Show last N messages that fit
-		maxLines := p.height - 5
+		maxMsgs := 15
 		start := 0
-		if len(msgs) > maxLines {
-			start = len(msgs) - maxLines
+		if len(msgs) > maxMsgs {
+			start = len(msgs) - maxMsgs
 		}
-		for i := start; i < len(msgs); i++ {
-			msg := msgs[i]
-			b.WriteString(renderLanChatMessage(msg))
+		if len(msgs) == 0 {
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  (no messages yet)"))
+		} else {
+			for i := start; i < len(msgs); i++ {
+				body = append(body, renderLanChatMessage(msgs[i]))
+			}
 		}
 	}
 
-	// Approval popup (option B)
-	if p.approvalPopup {
-		pending := m.lanChatHub.PendingApprovals()
+	// Approval popup
+	if p.approvalPopup && hub != nil {
+		pending := hub.PendingApprovals()
 		if len(pending) > 0 {
-			b.WriteString("\n")
-			popupStyle := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("#FBBF24")).
-				Padding(1, 2).
-				Width(p.width - 4)
+			body = append(body, "")
 			current := pending[p.approvalIdx]
-			popup := fmt.Sprintf("📨 %s → your agent:\n  %q\n\n  [Enter] Approve  [N] Reject  [↑↓] Navigate  [Esc] Close",
+			popup := fmt.Sprintf("📨 %s → your agent:\n  %q\n\n  [Enter] Approve  [N] Reject  [Esc] Close",
 				current.Message.FromNick, current.Message.Content)
-			b.WriteString(popupStyle.Render(popup))
-			b.WriteString("\n")
+			popupStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FBBF24")).
+				Bold(true)
+			body = append(body, popupStyle.Render(popup))
 		}
 	}
 
 	// Mention autocomplete
 	if p.mentionMode && len(p.mentionList) > 0 {
-		b.WriteString("\n")
+		body = append(body, "")
 		for i, part := range p.mentionList {
 			prefix := "  "
 			style := lipgloss.NewStyle()
@@ -419,23 +415,34 @@ func (m *Model) renderLanChatPanel() string {
 				prefix = "▶ "
 				style = style.Foreground(lipgloss.Color("#FBBF24")).Bold(true)
 			}
-			b.WriteString(style.Render(fmt.Sprintf("%s👤%s  🤖%s", prefix, part.HumanNick, part.AgentNick)))
-			b.WriteString("\n")
+			label := ""
+			if part.HumanNick != "" {
+				label += "👤" + part.HumanNick
+			}
+			if part.AgentNick != "" {
+				if label != "" {
+					label += "  "
+				}
+				label += "🤖" + part.AgentNick
+			}
+			if label == "" {
+				label = part.NodeID[:8]
+			}
+			body = append(body, style.Render(fmt.Sprintf("%s%s", prefix, label)))
 		}
 	}
 
-	// Input
-	b.WriteString(strings.Repeat("─", p.width))
-	b.WriteString("\n")
+	// Input line
+	body = append(body, "")
 	inputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
-	hint := "[Tab] @mention  [↑↓] Select  [Esc] Close"
+	hint := "[Tab] @mention  [Esc] Close"
 	if p.mentionMode {
 		hint = "[↑↓] Select  [Tab] Confirm  [Esc] Cancel mention"
 	}
-	b.WriteString(inputStyle.Render(hint + "\n"))
-	b.WriteString(fmt.Sprintf("> %s█", p.input))
+	body = append(body, inputStyle.Render(hint))
+	body = append(body, fmt.Sprintf("> %s█", p.input))
 
-	return b.String()
+	return m.renderContextBox("/chat — LAN Chat", strings.Join(body, "\n"), lipgloss.Color("11"))
 }
 
 func renderLanChatMessage(msg lanchat.Message) string {
