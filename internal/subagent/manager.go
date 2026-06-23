@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // AgentEventType identifies the kind of event recorded during sub-agent execution.
@@ -664,7 +665,7 @@ func (m *Manager) NotifyReasoning(agentID, text string) {
 // flushes accumulated stream text/reasoning to the registered callbacks.
 // Must be called after SetOnStreamText/SetOnReasoning.
 func (m *Manager) StartStreamBatcher() {
-	go func() {
+	safego.Go("subagent.streamBatcher", func() {
 		ticker := time.NewTicker(streamBatchInterval)
 		defer ticker.Stop()
 		for {
@@ -678,7 +679,7 @@ func (m *Manager) StartStreamBatcher() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // flushStreamBatch delivers all accumulated text/reasoning chunks to

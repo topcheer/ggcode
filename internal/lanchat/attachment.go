@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // maxAttachmentSize is the maximum allowed attachment size (50MB).
@@ -40,7 +41,7 @@ func NewAttachmentManager() *AttachmentManager {
 		pending: make(map[string]*pendingAttachment),
 		stopCh:  make(chan struct{}),
 	}
-	go am.cleanupLoop()
+	safego.Go("lanchat.cleanupLoop", func() { am.cleanupLoop() })
 	return am
 }
 

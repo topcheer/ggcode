@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/relaycatalog"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 func ApplyResolvedLimitsToAgent(agentInst *agent.Agent, resolved *config.ResolvedEndpoint) {
@@ -41,7 +42,7 @@ func StartAsyncRelayModelLimitRefresh(cfg *config.Config, resolved *config.Resol
 		return
 	}
 
-	go func() {
+	safego.Go("agentruntime.relayCatalogResolve", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		resp, err := relaycatalog.Resolve(ctx, relaycatalog.RelayURL(), expectedVendor, expectedModel)
@@ -78,5 +79,5 @@ func StartAsyncRelayModelLimitRefresh(cfg *config.Config, resolved *config.Resol
 		if applied && onApplied != nil {
 			onApplied(resp)
 		}
-	}()
+	})
 }

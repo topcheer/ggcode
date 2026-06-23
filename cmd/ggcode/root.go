@@ -737,7 +737,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)
 		// Sync peers from A2A registry
-		go func() {
+		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
 				peers := make([]lanchat.Participant, 0, len(instances))
@@ -761,7 +761,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			for range ticker.C {
 				syncPeers()
 			}
-		}()
+		})
 	}
 
 	// Start TUI REPL

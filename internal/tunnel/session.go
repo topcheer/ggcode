@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // DefaultRelayURL is the default ggcode-relay server URL.
@@ -177,7 +179,8 @@ func (s *Session) OnConnected(fn func(info RelayConnectedState)) {
 	// Replay the cached connected state that arrived before this handler
 	// was registered (e.g. relay responded before NewBroker was called).
 	if cached != nil && fn != nil {
-		go fn(*cached)
+		next := *cached
+		safego.Go("tunnel.session.replayCachedConn", func() { fn(next) })
 	}
 }
 

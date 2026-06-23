@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -291,7 +292,7 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 	debug.Log("probe", "cache MISS: key=%s — launching background goroutine", key)
 
 	// Phase 2: fire background probe
-	go func() {
+	safego.Go("provider.contextProbe", func() {
 		start := time.Now()
 		window := probeInBackground(ctx, p, key)
 		elapsed := time.Since(start)
@@ -301,7 +302,7 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 			debug.Log("probe", "FAILED: key=%s no window found took=%s — will use inferContextWindow fallback", key, elapsed)
 		}
 		onResult(ProbeResult{Key: key, ContextWindow: window, FromCache: false})
-	}()
+	})
 }
 
 // probeInBackground does the actual probing. The strategy, in order:

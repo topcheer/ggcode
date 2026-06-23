@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Hub is the core LAN chat coordinator. It manages participants, sends and
@@ -257,7 +258,7 @@ func (h *Hub) SetNick(nick string) error {
 	}
 
 	// Broadcast nick change to peers
-	go h.broadcastNickChange(nick)
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(nick) })
 	return nil
 }
 
@@ -345,26 +346,26 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	// and HandlePresence will fire the callback once the nick arrives.
 	for _, np := range newPeers {
 		if np.HumanNick != "" && callbacks.add != nil {
-			go callbacks.add(np)
+			safego.Go("lanchat.participantAdd", func() { callbacks.add(np) })
 		}
 		// Proactively send our presence to the new peer
-		go h.sendPresence(np)
+		safego.Go("lanchat.sendPresence", func() { h.sendPresence(np) })
 	}
 	// Also retry presence for existing online peers whose nick we still
 	// don't know (presence exchange may have failed on a previous tick).
 	for _, ep := range emptyNickPeers {
-		go h.sendPresence(ep)
+		safego.Go("lanchat.sendPresence", func() { h.sendPresence(ep) })
 	}
 	// Heartbeat: re-probe peers whose LastSeen hasn't been updated recently.
 	// This detects peers that are still in the A2A registry (process alive)
 	// but whose lanchat HTTP server is unresponsive. sendPresence failure
 	// means LastSeen stays stale; after ageOffline they'll be marked offline.
 	for _, sp := range stalePeers {
-		go h.sendPresence(sp)
+		safego.Go("lanchat.sendPresence", func() { h.sendPresence(sp) })
 	}
 	for _, lp := range leftPeers {
 		if callbacks.rm != nil {
-			go callbacks.rm(lp.nodeID, lp.humanNick)
+			safego.Go("lanchat.participantRm", func() { callbacks.rm(lp.nodeID, lp.humanNick) })
 		}
 	}
 
@@ -405,7 +406,7 @@ func (h *Hub) resolveNickConflict() {
 
 	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
-	go h.broadcastNickChange(newNick)
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick) })
 }
 
 // HandlePresence processes an incoming presence announcement from a peer.
@@ -450,7 +451,7 @@ func (h *Hub) HandlePresence(p Participant) {
 	h.mu.Unlock()
 
 	if needCallback && callback != nil {
-		go callback(participant)
+		safego.Go("lanchat.presenceCallback", func() { callback(participant) })
 	}
 }
 
@@ -505,7 +506,7 @@ func (h *Hub) sendPresence(peer Participant) {
 		}
 		h.mu.Unlock()
 		if cb != nil {
-			go cb(participant)
+			safego.Go("lanchat.presenceCallback", func() { cb(participant) })
 		}
 	}
 }
@@ -602,7 +603,7 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 		h.mu.RUnlock()
 
 		for _, peer := range peers {
-			go h.postToPeer(ctx, peer.Endpoint, msg)
+			safego.Go("lanchat.postToPeer", func() { h.postToPeer(ctx, peer.Endpoint, msg) })
 		}
 		return nil
 	}
@@ -614,7 +615,7 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", msg.ToNodeID)
 	}
-	go h.postToPeer(ctx, peer.Endpoint, msg)
+	safego.Go("lanchat.postToPeer", func() { h.postToPeer(ctx, peer.Endpoint, msg) })
 	return nil
 }
 
@@ -662,7 +663,7 @@ func (h *Hub) broadcastNickChange(newNick string) {
 
 	data, _ := json.Marshal(change)
 	for _, peer := range peers {
-		go func(peer Participant) {
+		safego.Go("lanchat.nickChangePeer", func() {
 			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
 			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 			req.Header.Set("Content-Type", "application/json")
@@ -674,7 +675,7 @@ func (h *Hub) broadcastNickChange(newNick string) {
 				return
 			}
 			resp.Body.Close()
-		}(peer)
+		})
 	}
 }
 
@@ -703,15 +704,15 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// Fire callbacks asynchronously so we never block the HTTP handler.
 	// A slow or blocked TUI event loop must not freeze message reception.
 	if callback != nil {
-		go callback(msg)
+		safego.Go("lanchat.messageCallback", func() { callback(msg) })
 	}
 
 	// Send delivered receipt immediately
-	go h.sendReceipt(msg, StatusDelivered, "")
+	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusDelivered, "") })
 
 	// If it's an @agent message, trigger approval callback
 	if needsApproval && approvalCb != nil {
-		go approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()})
+		safego.Go("lanchat.approvalCallback", func() { approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()}) })
 	}
 }
 
@@ -724,7 +725,7 @@ func (h *Hub) HandleReceipt(r Receipt) {
 
 	// Fire callback asynchronously to avoid blocking the HTTP handler.
 	if callback != nil {
-		go callback(r)
+		safego.Go("lanchat.receiptCallback", func() { callback(r) })
 	}
 }
 
@@ -760,7 +761,7 @@ func (h *Hub) ApproveMessage(messageID string) (*Message, error) {
 			h.mu.Unlock()
 
 			// Send processing receipt
-			go h.sendReceipt(msg, StatusProcessing, "")
+			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
 			return &msg, nil
 		}
 	}
@@ -777,7 +778,7 @@ func (h *Hub) RejectMessage(messageID, reason string) error {
 			msg := pending.Message
 			h.mu.Unlock()
 
-			go h.sendReceipt(msg, StatusRejected, reason)
+			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusRejected, reason) })
 			return nil
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -571,7 +572,7 @@ func (s *JSONLStore) scheduleMaintenanceLocked() {
 	}
 
 	s.maintenanceRunning = true
-	go s.runMaintenance()
+	safego.Go("session.runMaintenance", func() { s.runMaintenance() })
 }
 
 func (s *JSONLStore) runMaintenance() {

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Encoder wraps an FFmpeg subprocess that encodes raw RGBA frames into FLV.
@@ -80,12 +81,12 @@ func (e *Encoder) Start() error {
 	e.running = true
 
 	// Monitor stderr in background — log any errors
-	go func() {
+	safego.Go("stream.encoderStderr", func() {
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
 			debug.Log("stream", "ffmpeg stderr: %s", scanner.Text())
 		}
-	}()
+	})
 
 	return nil
 }

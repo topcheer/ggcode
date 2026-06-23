@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -21,11 +22,11 @@ func main() {
 	app := NewApp()
 	shutdownSignals := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignals, os.Interrupt, syscall.SIGTERM)
-	go func() {
+	safego.Go("desktop.shutdown-signal", func() {
 		<-shutdownSignals
 		app.shutdown(context.Background())
 		os.Exit(0)
-	}()
+	})
 
 	err := wails.Run(&options.App{
 		Title:     "GGCode Desktop",

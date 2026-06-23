@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Backend abstracts a terminal's tab creation/destruction.
@@ -109,7 +110,7 @@ func (m *Manager) Available() bool {
 // and WaitGroup tracking.
 func (m *Manager) goBackend(fn func()) {
 	m.wg.Add(1)
-	go func() {
+	safego.Go("extpane.backend", func() {
 		defer m.wg.Done()
 		select {
 		case m.sem <- struct{}{}:
@@ -118,7 +119,7 @@ func (m *Manager) goBackend(fn func()) {
 			return
 		}
 		fn()
-	}()
+	})
 }
 
 // EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
@@ -301,14 +302,14 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 
 	// Schedule cleanup after grace period
 	m.wg.Add(1)
-	go func() {
+	safego.Go("extpane.cleanup", func() {
 		defer m.wg.Done()
 		select {
 		case <-time.After(m.gracePeriod):
 			m.closePane(agentID)
 		case <-m.stopCh:
 		}
-	}()
+	})
 }
 
 // CloseAll immediately closes all external tabs. Called on TUI shutdown.
@@ -367,7 +368,7 @@ func (m *Manager) closePane(agentID string) {
 // at ~10 Hz to each agent's log file.
 func (m *Manager) startFlusher() {
 	m.wg.Add(1)
-	go func() {
+	safego.Go("extpane.flusher", func() {
 		defer m.wg.Done()
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -379,7 +380,7 @@ func (m *Manager) startFlusher() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (m *Manager) flushAll() {

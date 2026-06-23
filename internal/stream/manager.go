@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // TerminalSize holds the current terminal dimensions in characters.
@@ -93,7 +94,7 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 		m.config.Width, m.config.Height, m.config.FPS, m.config.Quality, len(m.targets), m.viewFunc != nil)
 
 	// Start frame capture goroutine (creates encoder + connects targets on first frame)
-	go m.frameLoop()
+	safego.Go("stream.frameLoop", func() { m.frameLoop() })
 
 	return nil
 }
@@ -263,7 +264,7 @@ func (m *Manager) frameLoop() {
 					}
 				}
 				// Single broadcaster goroutine reads encoder, broadcasts to all targets
-				go m.fanOutBroadcaster()
+				safego.Go("stream.fanOutBroadcaster", func() { m.fanOutBroadcaster() })
 				frameLoopInit = true
 				lastCols, lastRows = cols, rows
 			}
@@ -337,7 +338,7 @@ func (m *Manager) fanOutBroadcaster() {
 		ch := make(chan []byte, 64)
 		t.broadcastCh = ch
 		targets = append(targets, ch)
-		go m.targetWriter(t, ch)
+		safego.Go("stream.targetWriter", func() { m.targetWriter(t, ch) })
 	}
 
 	defer func() {

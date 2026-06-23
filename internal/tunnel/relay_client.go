@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // RelayClient connects to the ggcode-relay server as the "server" role.
@@ -137,7 +138,7 @@ func (rc *RelayClient) Connect() error {
 	if err != nil {
 		return err
 	}
-	go rc.run(conn)
+	safego.Go("tunnel.relayClient.run", func() { rc.run(conn) })
 	return nil
 }
 
@@ -185,14 +186,15 @@ func (rc *RelayClient) run(conn *websocket.Conn) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 
-		go func(activeConn *websocket.Conn) {
+		curConn := conn
+		safego.Go("tunnel.relayClient.writePump", func() {
 			defer wg.Done()
-			rc.writePump(activeConn, closeDone)
-		}(conn)
-		go func(activeConn *websocket.Conn) {
+			rc.writePump(curConn, closeDone)
+		})
+		safego.Go("tunnel.relayClient.readPump", func() {
 			defer wg.Done()
-			rc.readPump(activeConn, closeDone)
-		}(conn)
+			rc.readPump(curConn, closeDone)
+		})
 
 		<-done // Wait for either pump to exit
 		_ = conn.Close()

@@ -28,6 +28,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/relaycatalog"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -2229,7 +2230,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 
 	// Background cache refresh
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
-	go func() {
+	safego.Go("desktop.a2a-cache-refresh", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -2240,7 +2241,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 				return
 			}
 		}
-	}()
+	})
 
 	b.a2aServer = srv
 	b.a2aRegistry = a2aReg
@@ -2259,7 +2260,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)
 	// Sync peers from A2A registry
-	go func() {
+	safego.Go("desktop.a2a-peer-sync", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -2279,7 +2280,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 			}
 			b.lanchatHub.UpdatePeers(peers)
 		}
-	}()
+	})
 
 	log.Printf("[a2a] server started at %s (lan_discovery=%v)", srv.Endpoint(), cfg.A2A.IsLANDiscovery())
 }

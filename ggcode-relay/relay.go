@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/topcheer/ggcode-relay/safego"
 )
 
 const (
@@ -474,11 +476,11 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	if p.hub.store != nil && msg.SessionID != "" {
 		token := p.room.token
 		s := p.hub.store
-		go func() {
+		safego.Go("relay.persist-client-event", func() {
 			if err := s.persistEvent(token, msg, append([]byte(nil), raw...)); err != nil {
 				log.Printf("[relay] persist client event error: %v", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -546,11 +548,11 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	if p.hub.store != nil && msg.SessionID != "" {
 		token := p.room.token
 		s := p.hub.store
-		go func() {
+		safego.Go("relay.persist-event", func() {
 			if err := s.persistEvent(token, msg, append([]byte(nil), wire...)); err != nil {
 				log.Printf("[relay] persist error: %v", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -620,9 +622,9 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	p.hub.trace("relay_push", p.room.token, msg)
 
 	if p.hub.store != nil {
-		go func() {
+		safego.Go("relay.persist-active-session", func() {
 			_ = p.hub.store.persistActiveSession(p.room.token, sessionID, authorityEpoch, wsPath, provName, mdlName)
-		}()
+		})
 	}
 }
 
@@ -840,11 +842,11 @@ func (p *peer) onAck(msg relayMessage, h *hub) {
 		s := h.store
 		cid := p.clientID
 		eid := msg.EventID
-		go func() {
+		safego.Go("relay.save-client-cursor", func() {
 			if err := s.saveClientCursor(th, cid, sid, eid); err != nil {
 				log.Printf("[relay] cursor save error: %v", err)
 			}
-		}()
+		})
 	}
 }
 
@@ -950,7 +952,7 @@ func (h *hub) removeRoomIfEmpty(r *room) {
 	h.mu.Unlock()
 
 	if h.store != nil {
-		go func() { _ = h.store.destroyRoom(r.token) }()
+		safego.Go("relay.destroy-room-empty", func() { _ = h.store.destroyRoom(r.token) })
 	}
 	if h.stats != nil {
 		h.stats.recordRoomDestroy()
@@ -1074,7 +1076,7 @@ func (h *hub) expireRoom(token string) {
 	r.sendMu.Unlock()
 
 	if h.store != nil {
-		go func() { _ = h.store.destroyRoom(token) }()
+		safego.Go("relay.destroy-room-expired", func() { _ = h.store.destroyRoom(token) })
 	}
 	if h.stats != nil {
 		h.stats.recordRoomDestroy()
@@ -1129,7 +1131,7 @@ func (h *hub) destroyRoom(token string) {
 	}
 	r.sendMu.Unlock()
 	if h.store != nil {
-		go func() { _ = h.store.destroyRoom(token) }()
+		safego.Go("relay.destroy-room-stale", func() { _ = h.store.destroyRoom(token) })
 	}
 	if h.stats != nil {
 		h.stats.recordRoomDestroy()
@@ -1386,7 +1388,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		p.notifyServerClientConnected(false)
 	}
 
-	go p.writeLoop()
+	safego.Go("relay.peer-writeLoop", func() { p.writeLoop() })
 	p.readLoop(h) // blocks until disconnect
 }
 
@@ -1635,22 +1637,22 @@ func main() {
 	mux.HandleFunc("/nuke", newNukeHandler(store, h, adminToken))
 
 	// Background tasks.
-	go func() {
+	safego.Go("relay.stats-ticker", func() {
 		for range time.Tick(10 * time.Second) {
 			h.logStats()
 			h.flushTraceLogs()
 		}
-	}()
-	go func() {
+	})
+	safego.Go("relay.cleanup-ticker", func() {
 		for range time.Tick(time.Hour) {
 			_ = store.cleanupExpired(time.Now())
 		}
-	}()
-	go func() {
+	})
+	safego.Go("relay.evict-stale-rooms-ticker", func() {
 		for range time.Tick(time.Hour) {
 			h.evictStaleRooms(12 * time.Hour)
 		}
-	}()
+	})
 
 	log.Printf("[relay] listening on :%s", port)
 	server := &http.Server{
@@ -1658,9 +1660,9 @@ func main() {
 		Handler: mux,
 	}
 	errCh := make(chan error, 1)
-	go func() {
+	safego.Go("relay.http-listen", func() {
 		errCh <- server.ListenAndServe()
-	}()
+	})
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)

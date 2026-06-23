@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/topcheer/ggcode-relay/safego"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -115,7 +117,7 @@ func newModelCatalogManager(store *relayStore) (*modelCatalogManager, error) {
 }
 
 func (m *modelCatalogManager) start(ctx context.Context) {
-	go func() {
+	safego.Go("relay.model-catalog-refresh", func() {
 		m.refresh(ctx)
 		ticker := time.NewTicker(defaultCatalogSyncInterval)
 		defer ticker.Stop()
@@ -127,7 +129,7 @@ func (m *modelCatalogManager) start(ctx context.Context) {
 				m.refresh(ctx)
 			}
 		}
-	}()
+	})
 }
 
 func (m *modelCatalogManager) refresh(parent context.Context) {

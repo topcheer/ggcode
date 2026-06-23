@@ -1193,7 +1193,8 @@ func (a *App) SaveIMAdapter(name string, values map[string]string) error {
 	}
 	// Auto-start if enabled
 	if values["enabled"] != "false" {
-		go a.imStartAdapter(name)
+		name := name
+		safego.Go("desktop.im-start-save", func() { a.imStartAdapter(name) })
 	}
 	return nil
 }
@@ -1262,7 +1263,8 @@ func (a *App) SetIMAdapterEnabled(name string, enabled bool) error {
 		return err
 	}
 	if enabled {
-		go a.imStartAdapter(name)
+		name := name
+		safego.Go("desktop.im-start-enabled", func() { a.imStartAdapter(name) })
 	} else {
 		a.imStopAdapter(name)
 	}
@@ -1290,7 +1292,8 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 			debug.Log("desktop", "IM UnmuteBinding failed: %v", err)
 			return err
 		}
-		go a.imStartAdapter(name)
+		name := name
+		safego.Go("desktop.im-start-unmute", func() { a.imStartAdapter(name) })
 	}
 	return nil
 }
@@ -1304,7 +1307,8 @@ func (a *App) BindIMAdapter(name string) error {
 		return err
 	}
 	// Start the adapter after binding
-	go a.imStartAdapter(name)
+	name := name
+	safego.Go("desktop.im-start-bind", func() { a.imStartAdapter(name) })
 	return nil
 }
 
@@ -1317,7 +1321,8 @@ func (a *App) RebindIMAdapter(name string) error {
 		debug.Log("desktop", "IM Rebind failed: %v", err)
 		return err
 	}
-	go a.imStartAdapter(name)
+	name := name
+	safego.Go("desktop.im-start-rebind", func() { a.imStartAdapter(name) })
 	return nil
 }
 

@@ -144,7 +144,7 @@ func (a *dingtalkAdapter) Start(ctx context.Context) {
 	a.mu.Lock()
 	a.cancel = cancel
 	a.mu.Unlock()
-	go a.run(childCtx)
+	safego.Go("dingtalk.run", func() { a.run(childCtx) })
 }
 
 func (a *dingtalkAdapter) Stop() {
@@ -167,7 +167,7 @@ func (a *dingtalkAdapter) Close() error {
 
 func (a *dingtalkAdapter) run(ctx context.Context) {
 	// Start token refresh goroutine
-	go a.tokenRefresher(ctx)
+	safego.Go("dingtalk.tokenRefresher", func() { a.tokenRefresher(ctx) })
 
 	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	attempt := 0

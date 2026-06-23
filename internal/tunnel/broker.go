@@ -144,10 +144,10 @@ func NewBroker(sess *Session) *Broker {
 	b.projectionCond = sync.NewCond(&b.projectionMu)
 
 	// Start sender goroutine.
-	go b.senderLoop()
+	safego.Go("tunnel.broker.senderLoop", func() { b.senderLoop() })
 
 	// Start text flush ticker
-	go b.textFlushLoop()
+	safego.Go("tunnel.broker.textFlushLoop", func() { b.textFlushLoop() })
 
 	// Handle incoming messages from mobile
 	if sess != nil {
@@ -917,13 +917,14 @@ func (b *Broker) endClientReplaySync() {
 	if pending == nil {
 		return
 	}
-	go func(next pendingClientReplay) {
+	next := *pending
+	safego.Go("tunnel.broker.clientReplayDeferred", func() {
 		b.waitProjectionSync()
 		if !b.isSessionStateCurrent(next.sessionID, next.generation) {
 			return
 		}
 		b.handleRelayConnected(next.info)
-	}(*pending)
+	})
 }
 
 type relayRecoveryPlan struct {

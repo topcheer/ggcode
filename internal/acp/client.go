@@ -16,6 +16,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -200,7 +201,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.cancelRead = cancelRead
 	c.done = make(chan struct{})
 	c.mu.Unlock()
-	go c.readLoop(readCtx)
+	safego.Go("acp.readLoop", func() { c.readLoop(readCtx) })
 
 	// Perform initialize handshake
 	if err := c.initialize(ctx); err != nil {
@@ -390,7 +391,7 @@ func (c *Client) promptInternal(
 		err      error
 	}
 	promptRespCh := make(chan promptRequestResult, 1)
-	go func() {
+	safego.Go("acp.sendPromptRequest", func() {
 		result, err := c.sendRequest("session/prompt", promptReq, c.promptReqTime)
 		if err != nil {
 			promptRespCh <- promptRequestResult{err: err}
@@ -409,7 +410,7 @@ func (c *Client) promptInternal(
 		}
 		c.recordActivity("recv session/prompt response stop=%s", stop)
 		promptRespCh <- promptRequestResult{response: resp}
-	}()
+	})
 
 	idleTimer := time.NewTimer(promptIdleTime)
 	defer idleTimer.Stop()

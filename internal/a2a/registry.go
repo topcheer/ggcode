@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -237,7 +238,7 @@ func (r *Registry) CachedInstances() []InstanceInfo {
 // stopped when ctx is cancelled.
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	// Immediate first refresh so the cache is populated without waiting.
-	go func() {
+	safego.Go("a2a.registry.backgroundRefresh", func() {
 		r.refreshCache()
 		ticker := time.NewTicker(backgroundRefreshInterval)
 		defer ticker.Stop()
@@ -249,7 +250,7 @@ func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 				r.refreshCache()
 			}
 		}
-	}()
+	})
 }
 
 func (r *Registry) refreshCache() {

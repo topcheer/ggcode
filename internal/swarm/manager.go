@@ -652,7 +652,7 @@ func (m *Manager) emit(ev Event) {
 // flushes accumulated teammate text/reasoning events. Must be called
 // after SetOnUpdate.
 func (m *Manager) StartStreamBatcher() {
-	go func() {
+	safego.Go("swarm.streamBatcher", func() {
 		ticker := time.NewTicker(swarmStreamBatchInterval)
 		defer ticker.Stop()
 		for {
@@ -666,7 +666,7 @@ func (m *Manager) StartStreamBatcher() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // flushStreamBatch delivers accumulated text/reasoning as single batched

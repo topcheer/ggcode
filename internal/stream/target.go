@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // TargetState represents the current state of a streaming target.
@@ -150,12 +151,12 @@ func (t *Target) Connect() (io.Writer, error) {
 	// Monitor target stderr in background
 	if targetStderr != nil {
 		targetName := t.name
-		go func() {
+		safego.Go("stream.targetStderr", func() {
 			scanner := bufio.NewScanner(targetStderr)
 			for scanner.Scan() {
 				debug.Log("stream", "target %s stderr: %s", targetName, scanner.Text())
 			}
-		}()
+		})
 	}
 
 	t.startedAt = time.Now()
