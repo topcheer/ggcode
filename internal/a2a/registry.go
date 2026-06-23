@@ -198,9 +198,12 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 		if seen[inst.ID] {
 			continue
 		}
-		// mDNS may advertise instances whose avahi-publish is still running
-		// but the actual ggcode process is dead (killed with SIGKILL).
-		if inst.PID > 0 && !isPIDAlive(inst.PID) {
+		// Only do PID liveness check for local (same-machine) instances.
+		// For cross-machine mDNS results, the PID belongs to a remote process
+		// and isPIDAlive() checks our local process table — it would always
+		// return false (unless the PID coincidentally exists locally),
+		// incorrectly dropping all remote instances.
+		if inst.PID > 0 && isLocalEndpoint(inst.Endpoint) && !isPIDAlive(inst.PID) {
 			continue
 		}
 		seen[inst.ID] = true
@@ -407,6 +410,32 @@ func (r *Registry) writeInstanceFile(info InstanceInfo) error {
 // for reliable detection across macOS and Linux.
 func isPIDAlive(pid int) bool {
 	return util.IsProcessAlive(pid)
+}
+
+// isLocalEndpoint returns true if the endpoint's host is a local address
+// (localhost, 127.x, ::1, or one of our own interface IPs).
+// Used to decide whether PID liveness checks are meaningful: a local PID
+// check on a remote mDNS instance is meaningless.
+func isLocalEndpoint(endpoint string) bool {
+	addr := strings.TrimPrefix(endpoint, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	ips, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ipnet, ok := ip.(*net.IPNet); ok && ipnet.IP.String() == host {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
