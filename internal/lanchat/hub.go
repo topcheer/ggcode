@@ -466,15 +466,31 @@ func (h *Hub) sendPresence(peer Participant) {
 	// The response contains the peer's own presence — learn it too
 	var peerInfo Participant
 	if err := json.NewDecoder(resp.Body).Decode(&peerInfo); err == nil && peerInfo.NodeID != "" {
+		var cb func(Participant)
+		var participant Participant
 		h.mu.Lock()
 		if existing, ok := h.peers[peerInfo.NodeID]; ok {
-			existing.HumanNick = peerInfo.HumanNick
-			existing.AgentNick = peerInfo.AgentNick
+			// Guard against empty overwrites
+			if peerInfo.HumanNick != "" {
+				existing.HumanNick = peerInfo.HumanNick
+			}
+			if peerInfo.AgentNick != "" {
+				existing.AgentNick = peerInfo.AgentNick
+			}
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
+			participant = *existing
+			// If we just learned the nick, fire the join callback
+			if existing.HumanNick != "" && !existing.notifiedJoin {
+				existing.notifiedJoin = true
+				cb = h.onParticipantAdd
+			}
 		}
 		h.mu.Unlock()
+		if cb != nil {
+			go cb(participant)
+		}
 	}
 }
 
@@ -495,26 +511,34 @@ func (h *Hub) IsOnline(nodeID string) bool {
 
 // SendBroadcast sends a message to all peers (human role only).
 func (h *Hub) SendBroadcast(ctx context.Context, content string, attachments []Attachment) error {
-	msg := h.newMessage(RoleHuman, h.humanNick, "", "", content, attachments)
+	h.mu.RLock()
+	nick := h.humanNick
+	h.mu.RUnlock()
+	msg := h.newMessage(RoleHuman, nick, "", "", content, attachments)
 	return h.deliverMessage(ctx, msg, true)
 }
 
 // SendDirect sends a targeted message to a specific node/role.
 func (h *Hub) SendDirect(ctx context.Context, toNodeID, toRole, content string, attachments []Attachment) error {
+	h.mu.RLock()
 	fromRole := RoleHuman
 	fromNick := h.humanNick
-	if toRole == RoleHuman && false {
-		// Messages from agent role use agent nick
+	// Messages from agent role use agent nick (currently disabled)
+	if false {
 		fromRole = RoleAgent
 		fromNick = h.agentNick
 	}
+	h.mu.RUnlock()
 	msg := h.newMessage(fromRole, fromNick, toNodeID, toRole, content, attachments)
 	return h.deliverMessage(ctx, msg, false)
 }
 
 // SendAsAgent sends a message from the agent role (for agent responses to @agent messages).
 func (h *Hub) SendAsAgent(ctx context.Context, toNodeID, toRole, content string) error {
-	msg := h.newMessage(RoleAgent, h.agentNick, toNodeID, toRole, content, nil)
+	h.mu.RLock()
+	nick := h.agentNick
+	h.mu.RUnlock()
+	msg := h.newMessage(RoleAgent, nick, toNodeID, toRole, content, nil)
 	return h.deliverMessage(ctx, msg, false)
 }
 
@@ -622,17 +646,19 @@ func (h *Hub) broadcastNickChange(newNick string) {
 
 	data, _ := json.Marshal(change)
 	for _, peer := range peers {
-		url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
-		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
-		req.Header.Set("Content-Type", "application/json")
-		if h.apiKey != "" {
-			req.Header.Set("X-API-Key", h.apiKey)
-		}
-		resp, err := h.httpClient.Do(req)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
+		go func(peer Participant) {
+			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
+			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+			req.Header.Set("Content-Type", "application/json")
+			if h.apiKey != "" {
+				req.Header.Set("X-API-Key", h.apiKey)
+			}
+			resp, err := h.httpClient.Do(req)
+			if err != nil {
+				return
+			}
+			resp.Body.Close()
+		}(peer)
 	}
 }
 
@@ -658,8 +684,10 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	approvalCb := h.onApprovalReq
 	h.mu.Unlock()
 
+	// Fire callbacks asynchronously so we never block the HTTP handler.
+	// A slow or blocked TUI event loop must not freeze message reception.
 	if callback != nil {
-		callback(msg)
+		go callback(msg)
 	}
 
 	// Send delivered receipt immediately
@@ -667,7 +695,7 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 
 	// If it's an @agent message, trigger approval callback
 	if needsApproval && approvalCb != nil {
-		approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()})
+		go approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()})
 	}
 }
 
@@ -678,8 +706,9 @@ func (h *Hub) HandleReceipt(r Receipt) {
 	callback := h.onReceipt
 	h.mu.Unlock()
 
+	// Fire callback asynchronously to avoid blocking the HTTP handler.
 	if callback != nil {
-		callback(r)
+		go callback(r)
 	}
 }
 
@@ -687,8 +716,12 @@ func (h *Hub) HandleReceipt(r Receipt) {
 func (h *Hub) HandleNickChange(change NickChange) {
 	h.mu.Lock()
 	if peer, ok := h.peers[change.NodeID]; ok {
-		peer.HumanNick = change.HumanNick
-		peer.AgentNick = change.AgentNick
+		if change.HumanNick != "" {
+			peer.HumanNick = change.HumanNick
+		}
+		if change.AgentNick != "" {
+			peer.AgentNick = change.AgentNick
+		}
 	}
 	h.mu.Unlock()
 }
