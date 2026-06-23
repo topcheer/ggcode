@@ -280,6 +280,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			cp := p
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
+			if cp.HumanNick != "" {
+				cp.notifiedJoin = true // will fire callback below
+			}
 			h.peers[p.NodeID] = &cp
 			newPeers = append(newPeers, cp)
 		} else {
@@ -322,9 +325,12 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 	}{h.onParticipantAdd, h.onParticipantRm}
 	h.mu.Unlock()
 
-	// Fire callbacks outside lock
+	// Fire callbacks outside lock — but only for peers whose nick we
+	// already know (from a prior presence exchange). Peers discovered
+	// via A2A registry have empty nicks; we sendPresence to learn them,
+	// and HandlePresence will fire the callback once the nick arrives.
 	for _, np := range newPeers {
-		if callbacks.add != nil {
+		if np.HumanNick != "" && callbacks.add != nil {
 			go callbacks.add(np)
 		}
 		// Proactively send our presence to the new peer
@@ -381,26 +387,44 @@ func (h *Hub) resolveNickConflict() {
 func (h *Hub) HandlePresence(p Participant) {
 	h.mu.Lock()
 	existing, ok := h.peers[p.NodeID]
-	isNew := false
+	needCallback := false
 	if !ok {
-		isNew = true
+		// Truly new peer — create and fire callback
 		cp := p
 		cp.Online = true
 		cp.LastSeen = time.Now().Unix()
 		h.peers[p.NodeID] = &cp
+		needCallback = p.HumanNick != ""
 	} else {
-		existing.HumanNick = p.HumanNick
-		existing.AgentNick = p.AgentNick
+		// Update existing — protect learned nicks from empty overwrites
+		if p.HumanNick != "" {
+			existing.HumanNick = p.HumanNick
+		}
+		if p.AgentNick != "" {
+			existing.AgentNick = p.AgentNick
+		}
 		existing.Mode = p.Mode
 		existing.Endpoint = p.Endpoint
 		existing.Online = true
 		existing.LastSeen = time.Now().Unix()
+		// If we previously didn't know the nick but now we do, fire callback
+		// so the join notification shows the real name.
+		if existing.HumanNick != "" && !existing.notifiedJoin {
+			needCallback = true
+			existing.notifiedJoin = true
+		}
 	}
 	callback := h.onParticipantAdd
+	participant := p
+	if existing != nil {
+		participant.HumanNick = existing.HumanNick
+		participant.AgentNick = existing.AgentNick
+		participant.Endpoint = existing.Endpoint
+	}
 	h.mu.Unlock()
 
-	if isNew && callback != nil {
-		go callback(p)
+	if needCallback && callback != nil {
+		go callback(participant)
 	}
 }
 

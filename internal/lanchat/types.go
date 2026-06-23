@@ -31,6 +31,11 @@ type Participant struct {
 	Endpoint  string `json:"endpoint"`
 	Online    bool   `json:"online"`
 	LastSeen  int64  `json:"last_seen"`
+
+	// Internal (not serialized): tracks whether we already fired
+	// onParticipantAdd for this peer. Prevents duplicate join
+	// notifications when presence exchanges complete.
+	notifiedJoin bool `json:"-"`
 }
 
 // Message is a chat message exchanged between nodes.

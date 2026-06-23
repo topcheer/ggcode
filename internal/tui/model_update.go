@@ -633,6 +633,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// after creating the questionnaire state.
 		return m, nil
 
+	// ---- LAN chat messages ----
+	case lanchatMsg, lanchatReceiptMsg, lanchatPeerJoinMsg, lanchatPeerLeaveMsg, lanchatApprovalReqMsg:
+		return m.handleLanChatPanelUpdate(msg)
+
 	}
 
 	// Skip spinnerMsg — it fires every tick and would flood the log.
