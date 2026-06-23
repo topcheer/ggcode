@@ -134,6 +134,15 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.lanChatHub != nil {
 			m.lanChatHub.HandleIncomingMessage(msg.msg)
 		}
+		// If chat panel is not visible, show a notification in the main panel
+		if m.lanChatPanel == nil {
+			fromNick := msg.msg.FromNick
+			if fromNick == "" {
+				fromNick = "(unknown)"
+			}
+			m.lanChatUnread++
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s: %s — /chat to reply", fromNick, msg.msg.Content))
+		}
 		return m, nil
 	case lanchatApprovalReqMsg:
 		if m.lanChatPanel != nil {
@@ -156,14 +165,18 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// System message in main chat
 		nick := msg.participant.HumanNick
 		if nick == "" {
-			nick = msg.participant.NodeID[:8]
+			nick = "(unknown)"
 		}
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online", nick))
+		ep := msg.participant.Endpoint
+		// Trim http:// prefix for display
+		ep = strings.TrimPrefix(ep, "http://")
+		ep = strings.TrimPrefix(ep, "https://")
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)", nick, ep))
 		return m, nil
 	case lanchatPeerLeaveMsg:
 		nick := msg.humanNick
 		if nick == "" {
-			nick = msg.nodeID[:8]
+			nick = "(unknown)"
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s went offline", nick))
 		return m, nil
