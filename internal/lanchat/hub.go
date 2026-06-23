@@ -268,6 +268,7 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 
 	seen := make(map[string]bool)
 	var newPeers []Participant
+	var emptyNickPeers []Participant // existing online peers with unknown nick
 
 	for _, p := range participants {
 		if p.NodeID == h.nodeID {
@@ -300,6 +301,10 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			existing.Endpoint = p.Endpoint
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
+			// If we still don't know this peer's nick, retry presence
+			if existing.HumanNick == "" {
+				emptyNickPeers = append(emptyNickPeers, *existing)
+			}
 		}
 	}
 
@@ -335,6 +340,11 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		}
 		// Proactively send our presence to the new peer
 		go h.sendPresence(np)
+	}
+	// Also retry presence for existing online peers whose nick we still
+	// don't know (presence exchange may have failed on a previous tick).
+	for _, ep := range emptyNickPeers {
+		go h.sendPresence(ep)
 	}
 	for _, lp := range leftPeers {
 		if callbacks.rm != nil {

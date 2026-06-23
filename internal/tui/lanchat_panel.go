@@ -413,10 +413,10 @@ func (m *Model) renderLanChatPanel() string {
 		parts := hub.Participants()
 		nicks := make([]string, 0, len(parts))
 		for _, part := range parts {
-			if part.Online {
+			if part.Online && part.HumanNick != "" {
 				nick := part.HumanNick
-				if nick == "" {
-					nick = "(unknown)"
+				if part.NodeID == hub.NodeID() {
+					nick += " (you)"
 				}
 				nicks = append(nicks, nick)
 			}
