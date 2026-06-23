@@ -2,6 +2,7 @@ package lanchat
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -138,7 +139,11 @@ func LoadNick(dir string) (string, error) {
 	return string(data), nil
 }
 
-// SaveNick persists the nickname to ~/.ggcode/lanchat-nick.
+// SaveNick persists the nickname to <dir>/lanchat-nick.
+// The directory is created if it does not exist.
 func SaveNick(dir, nick string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create nick dir %s: %w", dir, err)
+	}
 	return os.WriteFile(filepath.Join(dir, "lanchat-nick"), []byte(nick), 0o644)
 }

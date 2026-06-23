@@ -688,7 +688,7 @@ func (r *REPL) Run() error {
 	// Switch lanchat nick persistence to per-session path
 	if r.model.lanChatHub != nil && r.model.session != nil {
 		r.model.lanChatHub.SetSessionID(
-			filepath.Join(config.HomeDir(), "lanchat"),
+			filepath.Join(config.ConfigDir(), "lanchat"),
 			r.model.session.ID,
 		)
 	}

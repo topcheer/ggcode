@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Hub is the core LAN chat coordinator. It manages participants, sends and
@@ -244,7 +244,7 @@ func (h *Hub) SetNick(nick string) error {
 
 	// Persist to session-scoped path
 	if err := SaveNick(sessionDir, nick); err != nil {
-		log.Printf("[lanchat] failed to persist session nick: %v", err)
+		debug.Log("lanchat", "failed to persist session nick: %v", err)
 	}
 
 	// Also persist to global path so new instances get a sensible default.
@@ -252,7 +252,7 @@ func (h *Hub) SetNick(nick string) error {
 	globalDir := globalNickDir(sessionDir)
 	if globalDir != "" && globalDir != sessionDir {
 		if err := SaveNick(globalDir, nick); err != nil {
-			log.Printf("[lanchat] failed to persist global nick: %v", err)
+			debug.Log("lanchat", "failed to persist global nick: %v", err)
 		}
 	}
 
@@ -377,7 +377,7 @@ func (h *Hub) resolveNickConflict() {
 	sessionDir := h.store.dir
 	h.mu.Unlock()
 
-	log.Printf("[lanchat] nick conflict: %s -> %s", myNick, newNick)
+	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
 	go h.broadcastNickChange(newNick)
 }
@@ -573,7 +573,7 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) {
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[lanchat] marshal error: %v", err)
+		debug.Log("lanchat", "marshal error: %v", err)
 		return
 	}
 
@@ -588,7 +588,7 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) {
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[lanchat] POST to %s failed: %v", endpoint, err)
+		debug.Log("lanchat", "POST to %s failed: %v", endpoint, err)
 		return
 	}
 	resp.Body.Close()
