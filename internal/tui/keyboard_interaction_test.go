@@ -1026,6 +1026,9 @@ func TestScenario_UserOpensInspectorPanels(t *testing.T) {
 		{"/plugins", inspectorPanelPlugins},
 		{"/config", inspectorPanelConfig},
 		{"/status", inspectorPanelStatus},
+		{"/inspector", inspectorPanelStatus},
+		{"/inspector sessions", inspectorPanelSessions},
+		{"/inspector plugins", inspectorPanelPlugins},
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {

@@ -177,6 +177,32 @@ func (m *Model) handlePluginsCommand() tea.Cmd {
 	return nil
 }
 
+// handleInspectorCommand opens the inspector panel for the requested sub-panel.
+// With no argument, defaults to status.
+func (m *Model) handleInspectorCommand(parts []string) tea.Cmd {
+	kind := inspectorPanelStatus // default
+	if len(parts) > 1 {
+		switch strings.ToLower(parts[1]) {
+		case "sessions", "session", "s":
+			kind = inspectorPanelSessions
+		case "checkpoints", "checkpoint", "c":
+			kind = inspectorPanelCheckpoints
+		case "memory", "mem":
+			kind = inspectorPanelMemory
+		case "todos", "todo", "t":
+			kind = inspectorPanelTodos
+		case "plugins", "plugin", "p":
+			kind = inspectorPanelPlugins
+		case "config", "cfg":
+			kind = inspectorPanelConfig
+		case "status", "stat":
+			kind = inspectorPanelStatus
+		}
+	}
+	m.openInspectorPanel(kind)
+	return nil
+}
+
 func (m *Model) handleMCPCommand() tea.Cmd {
 	if len(m.mcpServers) == 0 {
 		m.chatWriteSystem(nextSystemID(), m.t("mcp.none"))
