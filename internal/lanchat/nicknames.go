@@ -1,6 +1,7 @@
 package lanchat
 
 import (
+	"fmt"
 	"math/rand"
 	"strings"
 )
@@ -51,7 +52,7 @@ func ResolveNickConflict(nick string, taken map[string]bool) string {
 		return nick
 	}
 	for i := 2; ; i++ {
-		candidate := nick + string(rune('0'+i-2))
+		candidate := fmt.Sprintf("%s%d", nick, i)
 		if !taken[candidate] {
 			return candidate
 		}

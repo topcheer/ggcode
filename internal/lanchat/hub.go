@@ -64,12 +64,35 @@ type PendingAgentMsg struct {
 	Received time.Time
 }
 
+// globalNickDir extracts the global lanchat dir from a session-scoped path.
+// sessionDir = <baseDir>/sessions/<sessionID>
+// returns <baseDir>, or "" if the path doesn't match the expected pattern.
+func globalNickDir(sessionDir string) string {
+	idx := strings.LastIndex(sessionDir, "/sessions/")
+	if idx < 0 {
+		return ""
+	}
+	return sessionDir[:idx]
+}
+
 // NewHub creates a new chat hub.
+// Nickname resolution:
+//  1. If a global nick exists at store.dir/lanchat-nick, use it as the default
+//     (this is the user's preferred nick from a previous session).
+//  2. If not, generate a random nick and save it globally.
+//
+// Per-session override happens later via SetSessionID.
 func NewHub(nodeID, mode, endpoint, apiKey string, store *Store) *Hub {
 	nick := RandomNick()
-	// Try to load persisted nickname.
+	globalExisted := false
 	if persisted, err := LoadNick(store.dir); err == nil && persisted != "" {
 		nick = persisted
+		globalExisted = true
+	}
+	if !globalExisted {
+		// Save the random nick globally so the user can see what they got
+		// and override with /nick if desired.
+		_ = SaveNick(store.dir, nick)
 	}
 	return &Hub{
 		nodeID:    nodeID,
@@ -211,16 +234,26 @@ func (h *Hub) PendingApprovals() []PendingAgentMsg {
 }
 
 // SetNick changes the human nickname, updates agent nick, broadcasts to peers,
-// and persists locally.
+// and persists locally to both session-scoped and global paths.
 func (h *Hub) SetNick(nick string) error {
 	h.mu.Lock()
 	h.humanNick = nick
 	h.agentNick = AgentNick(nick)
+	sessionDir := h.store.dir
 	h.mu.Unlock()
 
-	// Persist
-	if err := SaveNick(h.store.dir, nick); err != nil {
-		log.Printf("[lanchat] failed to persist nick: %v", err)
+	// Persist to session-scoped path
+	if err := SaveNick(sessionDir, nick); err != nil {
+		log.Printf("[lanchat] failed to persist session nick: %v", err)
+	}
+
+	// Also persist to global path so new instances get a sensible default.
+	// We derive the global dir by stripping the /sessions/<id> suffix.
+	globalDir := globalNickDir(sessionDir)
+	if globalDir != "" && globalDir != sessionDir {
+		if err := SaveNick(globalDir, nick); err != nil {
+			log.Printf("[lanchat] failed to persist global nick: %v", err)
+		}
 	}
 
 	// Broadcast nick change to peers
@@ -302,6 +335,45 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			go callbacks.rm(lp.nodeID, lp.humanNick)
 		}
 	}
+
+	// Check for nick conflicts with peers (only once — when we first learn
+	// peer nicks). If a peer shares our nick, auto-resolve by appending a suffix.
+	h.resolveNickConflict()
+}
+
+// resolveNickConflict checks if any online peer has the same human nick as us.
+// If so, auto-renames to a suffixed variant (e.g. "CleverOtter2").
+// Only fires once per conflict to avoid loops.
+func (h *Hub) resolveNickConflict() {
+	h.mu.Lock()
+	myNick := h.humanNick
+	conflict := false
+	for _, p := range h.peers {
+		if p.Online && p.HumanNick == myNick {
+			conflict = true
+			break
+		}
+	}
+	if !conflict {
+		h.mu.Unlock()
+		return
+	}
+	// Collect all taken nicks
+	taken := make(map[string]bool)
+	for _, p := range h.peers {
+		if p.HumanNick != "" {
+			taken[p.HumanNick] = true
+		}
+	}
+	newNick := ResolveNickConflict(myNick, taken)
+	h.humanNick = newNick
+	h.agentNick = AgentNick(newNick)
+	sessionDir := h.store.dir
+	h.mu.Unlock()
+
+	log.Printf("[lanchat] nick conflict: %s -> %s", myNick, newNick)
+	_ = SaveNick(sessionDir, newNick)
+	go h.broadcastNickChange(newNick)
 }
 
 // HandlePresence processes an incoming presence announcement from a peer.
