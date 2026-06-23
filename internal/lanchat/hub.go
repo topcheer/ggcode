@@ -37,6 +37,9 @@ type Hub struct {
 	// pending agent-direct messages awaiting host approval
 	pendingApproval []PendingAgentMsg
 
+	// attachments manager (nil = attachments disabled)
+	attachments *AttachmentManager
+
 	// receipts received, keyed by message ID
 	receipts map[string]Receipt
 
@@ -81,6 +84,20 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store) *Hub {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// SetAttachments enables attachment support on this hub.
+func (h *Hub) SetAttachments(am *AttachmentManager) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.attachments = am
+}
+
+// Attachments returns the attachment manager (nil if not enabled).
+func (h *Hub) Attachments() *AttachmentManager {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.attachments
 }
 
 // SetCallbacks registers UI event callbacks.
@@ -262,6 +279,15 @@ func (h *Hub) SendAsAgent(ctx context.Context, toNodeID, toRole, content string)
 }
 
 func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, attachments []Attachment) Message {
+	// Populate attachment URLs from this node's endpoint
+	if len(attachments) > 0 {
+		h.mu.RLock()
+		ep := h.endpoint
+		h.mu.RUnlock()
+		for i := range attachments {
+			SetAttachmentURL(ep, &attachments[i])
+		}
+	}
 	return Message{
 		ID:          uuid.NewString(),
 		FromNodeID:  h.nodeID,

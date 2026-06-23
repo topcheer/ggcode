@@ -9,6 +9,7 @@ import DebugConsole from './DebugConsole'
 import { IMManagement } from './IMManagement'
 import { FileBrowser } from './FileBrowser'
 import { MCPServers } from './MCPServers'
+import { LanChatView } from './LanChatView'
 import { ContextPanel } from './ContextPanel'
 import { CommandPalette } from './CommandPalette'
 import RealShareDialog from './ShareDialog'
@@ -33,6 +34,7 @@ function LayoutInner() {
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
+  const [lanChatUnread, setLanChatUnread] = useState(0)
   const [askUserRequest, setAskUserRequest] = useState<AskUserRequest | null>(null)
   const [pairingRequest, setPairingRequest] = useState<PairingRequest | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
@@ -261,7 +263,7 @@ function LayoutInner() {
 
           {/* Main body: NavRail + Sidebar + Content + ContextPanel */}
           <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+            <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} lanChatUnread={view === 'lanchat' ? 0 : lanChatUnread} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
             {sidebarOpen && view === 'chat' && (
               <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
@@ -277,6 +279,7 @@ function LayoutInner() {
               {view === 'im' && <IMManagement />}
               {view === 'files' && <FileBrowser onBack={backToChat} />}
               {view === 'mcp' && <MCPServers onBack={backToChat} />}
+              {view === 'lanchat' && <LanChatView onUnreadChange={setLanChatUnread} />}
             </div>
 
             {contextPanelOpen && view === 'chat' && (

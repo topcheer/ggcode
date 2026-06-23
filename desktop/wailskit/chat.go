@@ -211,6 +211,84 @@ func (b *ChatBridge) SendMessage(userMsg string) error {
 	return b.sendMessageData(tunnel.MessageData{Text: userMsg}, "desktop", "")
 }
 
+// LanChatParticipants returns all known LAN chat participants.
+func (b *ChatBridge) LanChatParticipants() ([]lanchat.Participant, error) {
+	if b.lanchatHub == nil {
+		return nil, fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.Participants(), nil
+}
+
+// LanChatMessages returns recent messages.
+func (b *ChatBridge) LanChatMessages() ([]lanchat.Message, error) {
+	if b.lanchatHub == nil {
+		return nil, fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.Messages(), nil
+}
+
+// LanChatSend broadcasts or sends a direct message.
+// If toNodeID is empty, broadcasts to all peers. If toRole is "agent", sends to agent.
+func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string) error {
+	if b.lanchatHub == nil {
+		return fmt.Errorf("LAN chat not available")
+	}
+	ctx := context.Background()
+	if toNodeID == "" {
+		return b.lanchatHub.SendBroadcast(ctx, content, nil)
+	}
+	return b.lanchatHub.SendDirect(ctx, toNodeID, toRole, content, nil)
+}
+
+// LanChatSetNick changes the user's nickname.
+func (b *ChatBridge) LanChatSetNick(nick string) error {
+	if b.lanchatHub == nil {
+		return fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.SetNick(nick)
+}
+
+// LanChatPendingApprovals returns messages awaiting host approval.
+func (b *ChatBridge) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
+	if b.lanchatHub == nil {
+		return nil, fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.PendingApprovals(), nil
+}
+
+// LanChatApprove approves a pending @agent message.
+func (b *ChatBridge) LanChatApprove(messageID string) error {
+	if b.lanchatHub == nil {
+		return fmt.Errorf("LAN chat not available")
+	}
+	msg, err := b.lanchatHub.ApproveMessage(messageID)
+	if err != nil {
+		return err
+	}
+	// Inject into agent loop
+	if msg != nil {
+		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.FromNick, msg.Content)
+		return b.SendMessage(agentText)
+	}
+	return nil
+}
+
+// LanChatReject rejects a pending @agent message.
+func (b *ChatBridge) LanChatReject(messageID, reason string) error {
+	if b.lanchatHub == nil {
+		return fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.RejectMessage(messageID, reason)
+}
+
+// LanChatSelf returns this node's own participant info.
+func (b *ChatBridge) LanChatSelf() (lanchat.Participant, error) {
+	if b.lanchatHub == nil {
+		return lanchat.Participant{}, fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.SelfParticipant(), nil
+}
+
 // SendNonUIMessage sends a user message originating from a non-desktop source (IM/mobile).
 // It pushes a user_message event to the frontend so the message appears in the chat,
 // but avoids duplicate display on the originating surface.
@@ -2178,6 +2256,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		cfg.A2A.EffectiveAPIKey(),
 		chatStore,
 	)
+	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)
 	// Sync peers from A2A registry
 	go func() {

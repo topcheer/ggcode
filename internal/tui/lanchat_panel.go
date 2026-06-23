@@ -49,6 +49,48 @@ func (m *Model) openLanChatPanel() {
 	m.lanChatUnread = 0 // clear unread when opening
 }
 
+// SetLanChatHub wires the lanchat hub and its callbacks into the TUI model.
+func (m *Model) SetLanChatHub(hub *lanchat.Hub) {
+	m.lanChatHub = hub
+	if hub == nil {
+		return
+	}
+	hub.SetCallbacks(
+		// On message
+		func(msg lanchat.Message) {
+			if m.program != nil {
+				m.program.Send(lanchatMsg{msg: msg})
+			}
+		},
+		// On receipt
+		func(r lanchat.Receipt) {
+			if m.program != nil {
+				m.program.Send(lanchatReceiptMsg{receipt: r})
+			}
+		},
+		// On participant add
+		func(p lanchat.Participant) {
+			if m.program != nil {
+				m.program.Send(lanchatPeerJoinMsg{participant: p})
+			}
+		},
+		// On participant remove
+		func(nodeID string) {
+			if m.program != nil {
+				m.program.Send(lanchatPeerLeaveMsg{nodeID: nodeID})
+			}
+		},
+		// On approval request
+		func(pending lanchat.PendingAgentMsg) {
+			if m.program != nil {
+				m.program.Send(lanchatApprovalReqMsg{pending: pending})
+				// Also show notification if panel is closed
+				m.lanChatUnread++
+			}
+		},
+	)
+}
+
 func (m *Model) closeLanChatPanel() {
 	m.lanChatPanel = nil
 }
@@ -193,8 +235,10 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
 			if approved != nil {
-				// TODO: inject into agent loop
-				p.notice = fmt.Sprintf("✅ Approved message from %s, injecting into agent...", approved.FromNick)
+				// Inject into agent loop
+				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
+				m.closeLanChatPanel()
+				return m, m.startAgent(agentText)
 			}
 		}
 		return m, nil

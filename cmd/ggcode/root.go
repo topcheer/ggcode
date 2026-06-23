@@ -734,6 +734,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			cfg.A2A.EffectiveAPIKey(),
 			chatStore,
 		)
+		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)
 		// Sync peers from A2A registry
 		go func() {
@@ -762,6 +763,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	skillUsageHandler = repl.SessionUsageHandler()
 	if a2aTaskHandler != nil {
 		repl.SetA2AHandler(a2aTaskHandler)
+	}
+	if lanchatHub != nil {
+		repl.SetLanChatHub(lanchatHub)
 	}
 	trace.Mark("create repl")
 

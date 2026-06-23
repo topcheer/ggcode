@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	imgpkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -496,6 +497,70 @@ func (a *App) SendMessage(userMsg string) error {
 		}
 	})
 	return nil
+}
+
+// LanChatParticipants returns all known LAN chat participants.
+func (a *App) LanChatParticipants() ([]lanchat.Participant, error) {
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatParticipants()
+}
+
+// LanChatMessages returns recent LAN chat messages.
+func (a *App) LanChatMessages() ([]lanchat.Message, error) {
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatMessages()
+}
+
+// LanChatSend sends a LAN chat message (broadcast if toNodeID is empty).
+func (a *App) LanChatSend(content, toNodeID, toRole string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatSend(content, toNodeID, toRole)
+}
+
+// LanChatSetNick changes the user's nickname.
+func (a *App) LanChatSetNick(nick string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatSetNick(nick)
+}
+
+// LanChatPendingApprovals returns pending @agent messages.
+func (a *App) LanChatPendingApprovals() ([]lanchat.PendingAgentMsg, error) {
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatPendingApprovals()
+}
+
+// LanChatApprove approves a pending @agent message.
+func (a *App) LanChatApprove(messageID string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatApprove(messageID)
+}
+
+// LanChatReject rejects a pending @agent message.
+func (a *App) LanChatReject(messageID, reason string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatReject(messageID, reason)
+}
+
+// LanChatSelf returns this node's own participant info.
+func (a *App) LanChatSelf() (lanchat.Participant, error) {
+	if a.chat == nil {
+		return lanchat.Participant{}, fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatSelf()
 }
 
 func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {

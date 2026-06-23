@@ -1,5 +1,5 @@
 import React from 'react'
-import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft } from 'lucide-react'
+import { MessageSquare, FolderOpen, Settings, Radio, Server, Terminal, PanelLeft, Users } from 'lucide-react'
 import { ViewMode } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -7,8 +7,9 @@ interface Props {
   view: ViewMode
   onViewChange: (v: ViewMode) => void
   onAbout: () => void
-  sidebarOpen: boolean
-  onToggleSidebar: () => void
+  lanChatUnread?: number
+  sidebarOpen?: boolean
+  onToggleSidebar?: () => void
 }
 
 function NavItems() {
@@ -23,7 +24,7 @@ function NavItems() {
   ]
 }
 
-export function NavRail({ view, onViewChange, onAbout, sidebarOpen, onToggleSidebar }: Props) {
+export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sidebarOpen, onToggleSidebar }: Props) {
   const navItems = NavItems()
   return (
     <div style={{
@@ -81,6 +82,36 @@ export function NavRail({ view, onViewChange, onAbout, sidebarOpen, onToggleSide
           {item.icon}
         </button>
       ))}
+
+      {/* LAN Chat */}
+      <button
+        onClick={() => onViewChange('lanchat')}
+        style={{
+          width: 'var(--nav-rail-width)',
+          height: 'var(--nav-rail-width)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: view === 'lanchat' ? 'var(--color-nav-active)' : 'transparent',
+          color: view === 'lanchat' ? 'var(--color-primary)' : 'var(--text-secondary)',
+          border: 'none', cursor: 'pointer',
+          transition: 'background 0.15s',
+          position: 'relative',
+        }}
+      >
+        <Users size={18} />
+        {lanChatUnread > 0 && (
+          <span style={{
+            position: 'absolute', top: 4, right: 4,
+            background: '#ef4444', color: '#fff',
+            fontSize: 10, fontWeight: 700,
+            minWidth: 16, height: 16,
+            borderRadius: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '0 4px',
+          }}>
+            {lanChatUnread > 99 ? '99+' : lanChatUnread}
+          </span>
+        )}
+      </button>
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />

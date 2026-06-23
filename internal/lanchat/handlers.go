@@ -3,8 +3,6 @@ package lanchat
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
-	"strings"
 )
 
 // MountHandlers registers lanchat HTTP endpoints on the given mux.
@@ -14,6 +12,9 @@ func MountHandlers(mux *http.ServeMux, hub *Hub) {
 	mux.HandleFunc("/lanchat/receipt", hub.handleReceiveReceipt)
 	mux.HandleFunc("/lanchat/nick", hub.handleNickChange)
 	mux.HandleFunc("/lanchat/participants", hub.handleParticipantQuery)
+	if hub.attachments != nil {
+		mux.HandleFunc("/lanchat/attach/", hub.attachments.HandleAttachmentDownload)
+	}
 }
 
 // AuthMiddleware wraps an http.HandlerFunc with API key validation.
@@ -94,12 +95,3 @@ func (h *Hub) handleParticipantQuery(w http.ResponseWriter, r *http.Request) {
 	p := h.HandleParticipantQuery()
 	json.NewEncoder(w).Encode(p)
 }
-
-// HandleMuxPath extracts the handler for a given path for testing.
-func HandleMuxPath(mux *http.ServeMux, path string) http.HandlerFunc {
-	h, _ := mux.Handler(&http.Request{URL: &url.URL{Path: path}})
-	return h.ServeHTTP
-}
-
-// Ensure net/url is imported by using it.
-var _ = strings.TrimSpace

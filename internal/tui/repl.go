@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -101,6 +102,11 @@ func (r *REPL) SetMCPServers(servers []MCPInfo) {
 // SetA2AHandler passes the A2A task handler so the sidebar can show remote tasks.
 func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 	r.model.SetA2AHandler(h)
+}
+
+// SetLanChatHub connects the LAN chat hub for /chat panel support.
+func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
+	r.model.SetLanChatHub(hub)
 }
 
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
