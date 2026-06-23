@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/acpclient"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -112,6 +113,12 @@ type ChatBridge struct {
 
 	// Unified tunnel event management (from InteractiveRuntimeCore.Tunnel)
 	tunnelHost *agentruntime.TunnelHost
+
+	// A2A server for agent-to-agent communication on LAN
+	a2aServer        *a2a.Server
+	a2aRegistry      *a2a.Registry
+	a2aRemoteTool    *a2a.RemoteTool
+	a2aRefreshCancel context.CancelFunc
 
 	// Pending approval/ask_user requests from agent
 	interactions *agentruntime.InteractionBroker
@@ -983,6 +990,10 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	_, _ = agentruntime.ApplyProjectMemoryToAgent(a, b.workingDir)
 
 	b.agent = a
+
+	// Start A2A server for LAN agent-to-agent communication.
+	b.startA2A(b.cfg, a, b.registry)
+
 	// Set interruption handler — agent checks for pending messages during compact etc.
 	// (mirrors Fyne line 836-839)
 	a.SetInterruptionHandler(func() string {
@@ -2071,9 +2082,127 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 // ─── Agent Lifecycle ──────────────────────────────────────────────────
 
 // Close cleans up all resources (mirrors Fyne AgentBridge.Close).
+// startA2A starts the A2A server, registers this instance, and wires the
+// remote tool so the agent can discover and delegate to other ggcode instances.
+func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Registry) {
+	// Stop any existing A2A server from a previous setupAgent call.
+	b.stopA2A()
+
+	if cfg.A2A.Disabled {
+		return
+	}
+
+	a2aReg, err := a2a.NewRegistry()
+	if err != nil {
+		log.Printf("[a2a] failed to create registry: %v", err)
+		return
+	}
+
+	if cfg.A2A.IsLANDiscovery() {
+		a2aReg.EnableLANDiscovery()
+	}
+
+	handler := a2a.NewTaskHandler(b.workingDir, ag, reg,
+		a2a.WithMaxTasks(cfg.A2A.MaxTasks),
+		a2a.WithTimeout(parseA2ATimeout(cfg.A2A.TaskTimeout)),
+	)
+
+	srv := a2a.NewServer(a2a.ServerConfig{
+		Host:    cfg.A2A.Host,
+		Port:    cfg.A2A.Port,
+		APIKey:  cfg.A2A.EffectiveAPIKey(),
+		APIKeys: cfg.A2A.Auth.APIKeys,
+	}, handler)
+
+	if err := srv.Start(); err != nil {
+		log.Printf("[a2a] failed to start server: %v", err)
+		return
+	}
+
+	// Register this instance
+	instance := a2a.InstanceInfo{
+		ID:           a2a.GenerateInstanceID(),
+		PID:          os.Getpid(),
+		Workspace:    b.workingDir,
+		StartedAt:    time.Now().Format(time.RFC3339),
+		Endpoint:     srv.Endpoint(),
+		AgentCardURL: srv.Endpoint() + "/.well-known/agent.json",
+		Status:       "ready",
+	}
+	if err := a2aReg.Register(instance); err != nil {
+		log.Printf("[a2a] failed to register: %v", err)
+		srv.Stop()
+		return
+	}
+
+	// Register remote tool for agent-to-agent discovery
+	apiKey := cfg.A2A.EffectiveAPIKey()
+	remoteTool := a2a.NewRemoteTool(a2aReg, apiKey)
+	_ = reg.Register(remoteTool)
+
+	// MCP bridge tools for external clients
+	bridgeClient := a2a.NewClient(srv.Endpoint(), apiKey)
+	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
+		_ = reg.Register(t)
+	}
+
+	// Background cache refresh
+	refreshCtx, refreshCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				remoteTool.RefreshCache()
+			case <-refreshCtx.Done():
+				return
+			}
+		}
+	}()
+
+	b.a2aServer = srv
+	b.a2aRegistry = a2aReg
+	b.a2aRemoteTool = remoteTool
+	b.a2aRefreshCancel = refreshCancel
+
+	log.Printf("[a2a] server started at %s (lan_discovery=%v)", srv.Endpoint(), cfg.A2A.IsLANDiscovery())
+}
+
+// stopA2A shuts down the A2A server and cleans up.
+func (b *ChatBridge) stopA2A() {
+	if b.a2aRefreshCancel != nil {
+		b.a2aRefreshCancel()
+		b.a2aRefreshCancel = nil
+	}
+	if b.a2aRegistry != nil {
+		_ = b.a2aRegistry.Unregister()
+		b.a2aRegistry = nil
+	}
+	if b.a2aServer != nil {
+		b.a2aServer.Stop()
+		b.a2aServer = nil
+	}
+	b.a2aRemoteTool = nil
+}
+
+func parseA2ATimeout(s string) time.Duration {
+	if s == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
+}
+
 func (b *ChatBridge) Close() {
 	// Clean up ephemeral empty session before shutting down.
 	b.cleanupEphemeralSession()
+
+	// Stop A2A server
+	b.stopA2A()
 
 	b.mu.Lock()
 	if b.metricCancel != nil {
