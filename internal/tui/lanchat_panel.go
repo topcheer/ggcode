@@ -509,3 +509,23 @@ func (m *Model) renderLanChatMessage(msg lanchat.Message) string {
 	}
 	return fmt.Sprintf("  [%s] %s%s %s: %s", ts, icon, senderStyle.Render(msg.FromNick), dmTag, contentStyle.Render(msg.Content))
 }
+
+// handleNickCommand processes /nick <name> from the main chat input.
+func (m Model) handleNickCommand(parts []string) {
+	if m.lanChatHub == nil {
+		m.chatWriteSystem(nextSystemID(), "LAN chat is not available (A2A not enabled)")
+		return
+	}
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		// Show current nick
+		current := m.lanChatHub.HumanNick()
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Current LAN chat nickname: %s (agent: %s)", current, m.lanChatHub.AgentNick()))
+		return
+	}
+	nick := strings.TrimSpace(parts[1])
+	if err := m.lanChatHub.SetNick(nick); err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to set nickname: %v", err))
+		return
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("LAN chat nickname set to: %s (agent: %s)", nick, m.lanChatHub.AgentNick()))
+}

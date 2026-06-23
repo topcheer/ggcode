@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +92,25 @@ func (h *Hub) SetAttachments(am *AttachmentManager) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.attachments = am
+}
+
+// SetSessionID switches nick persistence to a per-session directory.
+// This loads the nick from <baseDir>/sessions/<sessionID>/lanchat-nick
+// if it exists, overriding the global nick. Subsequent SetNick calls persist
+// to this session-scoped path. If sessionID is empty, the global path is used.
+func (h *Hub) SetSessionID(baseDir, sessionID string) {
+	if sessionID == "" || baseDir == "" {
+		return
+	}
+	sessionDir := filepath.Join(baseDir, "sessions", sessionID)
+	h.mu.Lock()
+	h.store = NewStore(sessionDir)
+	// Try to load session-specific nick
+	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
+		h.humanNick = persisted
+		h.agentNick = AgentNick(persisted)
+	}
+	h.mu.Unlock()
 }
 
 // Attachments returns the attachment manager (nil if not enabled).

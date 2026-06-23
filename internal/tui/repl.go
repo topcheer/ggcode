@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -683,6 +684,13 @@ func (r *REPL) Run() error {
 				traceMark("create session")
 			}
 		}
+	}
+	// Switch lanchat nick persistence to per-session path
+	if r.model.lanChatHub != nil && r.model.session != nil {
+		r.model.lanChatHub.SetSessionID(
+			filepath.Join(config.HomeDir(), "lanchat"),
+			r.model.session.ID,
+		)
 	}
 	r.primeInitialWindowSize(term.GetSize)
 	traceMark("prime initial window size")

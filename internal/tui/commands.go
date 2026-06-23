@@ -179,7 +179,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	cmd := parts[0]
 	switch cmd {
 	// Panel / UI commands — always safe
-	case "/lang", "/model", "/provider", "/impersonate", "/chat",
+	case "/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
 		"/skills", "/stats", "/sessions", "/mcp",
@@ -359,6 +359,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleInspectorCommand(parts)
 		case "/chat":
 			m.openLanChatPanel()
+			return nil
+		case "/nick":
+			m.handleNickCommand(parts)
 			return nil
 		case "/image":
 			return m.handleImageCommand(parts)
