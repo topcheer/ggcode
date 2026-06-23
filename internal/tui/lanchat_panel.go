@@ -155,7 +155,7 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleLanChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	p := m.lanChatPanel
 
 	// If approval popup is open, handle its keys
@@ -222,7 +222,7 @@ func (m *Model) handleLanChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	p := m.lanChatPanel
 	pending := m.lanChatHub.PendingApprovals()
 
@@ -262,7 +262,7 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleLanChatSend() (tea.Model, tea.Cmd) {
+func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 	p := m.lanChatPanel
 	text := strings.TrimSpace(p.input)
 	p.input = ""

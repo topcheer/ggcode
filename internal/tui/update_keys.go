@@ -192,8 +192,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	if m.lanChatPanel != nil {
-		model, cmd := m.handleLanChatKey(msg)
-		return model.(Model), cmd
+		return m.handleLanChatKey(msg)
 	}
 
 	if m.pendingPairingChallenge() != nil {
