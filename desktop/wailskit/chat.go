@@ -2183,7 +2183,15 @@ func (b *ChatBridge) stopA2A() {
 		b.a2aServer.Stop()
 		b.a2aServer = nil
 	}
-	b.a2aRemoteTool = nil
+	// Unregister A2A tools so they don't reference a stopped server/registry.
+	if b.a2aRemoteTool != nil {
+		b.registry.Unregister(b.a2aRemoteTool.Name())
+		b.a2aRemoteTool = nil
+	}
+	// Unregister MCP bridge tools so they don't reference a stopped server/registry.
+	for _, name := range []string{"a2a_discover", "a2a_send_task", "a2a_get_task", "a2a_list_tasks", "a2a_cancel_task"} {
+		b.registry.Unregister(name)
+	}
 }
 
 func parseA2ATimeout(s string) time.Duration {
