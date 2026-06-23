@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -721,6 +722,40 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 	}
 	trace.Mark("start a2a")
+
+	// Start LAN chat if A2A server is running.
+	var lanchatHub *lanchat.Hub
+	if a2aServer != nil && !cfg.A2A.Disabled {
+		chatStore := lanchat.NewStore(filepath.Join(config.HomeDir(), "lanchat"))
+		lanchatHub = lanchat.NewHub(
+			a2aRegistry.SelfID(),
+			"cli",
+			a2aServer.Endpoint(),
+			cfg.A2A.EffectiveAPIKey(),
+			chatStore,
+		)
+		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)
+		// Sync peers from A2A registry
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				<-ticker.C
+				instances := a2aRegistry.CachedInstances()
+				peers := make([]lanchat.Participant, 0, len(instances))
+				for _, inst := range instances {
+					peers = append(peers, lanchat.Participant{
+						NodeID:   inst.ID,
+						Mode:     "cli",
+						Endpoint: inst.Endpoint,
+						Online:   true,
+						LastSeen: time.Now().Unix(),
+					})
+				}
+				lanchatHub.UpdatePeers(peers)
+			}
+		}()
+	}
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)

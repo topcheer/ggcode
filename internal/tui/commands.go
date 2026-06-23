@@ -357,6 +357,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handlePluginsCommand()
 		case "/inspector":
 			return m.handleInspectorCommand(parts)
+		case "/chat":
+			m.openLanChatPanel()
+			return nil
 		case "/image":
 			return m.handleImageCommand(parts)
 		case "/mcp":

@@ -28,6 +28,7 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/knight"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -177,6 +178,10 @@ type Model struct {
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
 	impersonatePanel                *impersonatePanelState
+	lanChatPanel                    *lanChatPanelState
+	lanChatHub                      *lanchat.Hub
+	lanChatNotice                   string
+	lanChatUnread                   int
 	qrOverlay                       *qrOverlayState
 	tunnelStarting                  bool
 	tunnelGeneration                uint64
@@ -934,6 +939,7 @@ func (m *Model) hasActivePanel() bool {
 		m.harnessContextPrompt != nil ||
 		m.harnessPanel != nil ||
 		m.impersonatePanel != nil ||
+		m.lanChatPanel != nil ||
 		m.skillsPanel != nil ||
 		m.streamPanel != nil ||
 		len(m.langOptions) > 0
@@ -999,7 +1005,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeHarnessPanel()
 	case m.impersonatePanel != nil:
 		m.closeImpersonatePanel()
-
+	case m.lanChatPanel != nil:
+		m.closeLanChatPanel()
 	case len(m.langOptions) > 0:
 		m.langOptions = nil
 	default:

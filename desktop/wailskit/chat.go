@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -119,6 +121,7 @@ type ChatBridge struct {
 	a2aRegistry      *a2a.Registry
 	a2aRemoteTool    *a2a.RemoteTool
 	a2aRefreshCancel context.CancelFunc
+	lanchatHub       *lanchat.Hub
 
 	// Pending approval/ask_user requests from agent
 	interactions *agentruntime.InteractionBroker
@@ -2165,6 +2168,39 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	b.a2aRegistry = a2aReg
 	b.a2aRemoteTool = remoteTool
 	b.a2aRefreshCancel = refreshCancel
+
+	// Mount lanchat handlers on the A2A server mux.
+	chatStore := lanchat.NewStore(filepath.Join(config.HomeDir(), "lanchat"))
+	b.lanchatHub = lanchat.NewHub(
+		a2aReg.SelfID(),
+		"gui",
+		srv.Endpoint(),
+		cfg.A2A.EffectiveAPIKey(),
+		chatStore,
+	)
+	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)
+	// Sync peers from A2A registry
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			<-ticker.C
+			if b.a2aRegistry == nil {
+				return
+			}
+			instances := b.a2aRegistry.CachedInstances()
+			peers := make([]lanchat.Participant, 0, len(instances))
+			for _, inst := range instances {
+				peers = append(peers, lanchat.Participant{
+					NodeID:   inst.ID,
+					Mode:     "gui",
+					Endpoint: inst.Endpoint,
+					Online:   true,
+				})
+			}
+			b.lanchatHub.UpdatePeers(peers)
+		}
+	}()
 
 	log.Printf("[a2a] server started at %s (lan_discovery=%v)", srv.Endpoint(), cfg.A2A.IsLANDiscovery())
 }

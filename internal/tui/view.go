@@ -56,6 +56,11 @@ func (m Model) View() tea.View {
 		availableHeight = 8
 	}
 
+	lanChatBar := m.renderLanChatNotice()
+	if lanChatBar != "" {
+		availableHeight -= lipgloss.Height(lanChatBar)
+	}
+
 	debug.Log("layout", "vh=%d h=%d s=%d c=%d a=%d sb=%d d=%d",
 		m.viewHeight(),
 		lipgloss.Height(header), lipgloss.Height(startupBanner), lipgloss.Height(composer),
@@ -64,7 +69,10 @@ func (m Model) View() tea.View {
 
 	conversation := m.renderConversationPanel(availableHeight)
 
-	sections := make([]string, 0, 7)
+	sections := make([]string, 0, 8)
+	if lanChatBar != "" {
+		sections = append(sections, lanChatBar)
+	}
 	if header != "" {
 		sections = append(sections, header)
 	}
@@ -144,6 +152,11 @@ func (m Model) conversationPanelHeight() int {
 	}
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
+	}
+
+	lanChatBar := m.renderLanChatNotice()
+	if lanChatBar != "" {
+		availableHeight -= lipgloss.Height(lanChatBar)
 	}
 
 	if availableHeight < 8 {

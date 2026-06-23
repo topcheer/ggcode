@@ -27,6 +27,7 @@ type Server struct {
 	extendedCard         json.RawMessage // optional extended agent card
 	apiKeys              []string
 	server               *http.Server
+	mux                  *http.ServeMux // exposed for additional route mounting
 	port                 int
 	done                 chan struct{}
 	pushConfigs          map[string]PushNotificationConfig // by ID
@@ -93,6 +94,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	mux.HandleFunc("/.well-known/agent.json", s.a2aMiddleware(s.handleAgentCard))
 	mux.HandleFunc("/.well-known/a2a.json", s.a2aMiddleware(s.handleAgentCard))
 	mux.HandleFunc("/", s.a2aMiddleware(s.handleRPC))
+	s.mux = mux
 
 	host := cfg.Host
 	if host == "" {
@@ -152,6 +154,17 @@ func (s *Server) Start() error {
 
 // Port returns the actual port (only valid after Start).
 func (s *Server) Port() int { return s.port }
+
+// Mux returns the HTTP mux for additional route mounting (e.g. lanchat).
+func (s *Server) Mux() *http.ServeMux { return s.mux }
+
+// APIKey returns the primary API key (first if multiple).
+func (s *Server) APIKey() string {
+	if len(s.apiKeys) > 0 {
+		return s.apiKeys[0]
+	}
+	return ""
+}
 
 // Endpoint returns the base URL of the server.
 func (s *Server) Endpoint() string { return s.card.URL }

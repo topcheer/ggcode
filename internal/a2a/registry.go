@@ -152,6 +152,13 @@ func (r *Registry) removeStaleFiles(pid int, workspace string, currentID string)
 }
 
 // Unregister removes this instance from the registry and stops mDNS.
+// SelfID returns this instance's ID.
+func (r *Registry) SelfID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.selfID
+}
+
 func (r *Registry) Unregister() error {
 	if r.mdnsSvc != nil {
 		r.mdnsSvc.stop()

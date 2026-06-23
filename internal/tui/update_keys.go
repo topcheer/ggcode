@@ -191,6 +191,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handleHarnessPanelKey(msg)
 	}
 
+	if m.lanChatPanel != nil {
+		model, cmd := m.handleLanChatKey(msg)
+		return model.(Model), cmd
+	}
+
 	if m.pendingPairingChallenge() != nil {
 		switch msg.String() {
 		case "esc":

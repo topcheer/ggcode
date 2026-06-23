@@ -195,7 +195,8 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
-	"/inspector", "/image", "/init", "/harness", "/exit", "/quit",
+	"/inspector", "/image",
+	"/chat", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 }
 
@@ -237,6 +238,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/checkpoints": "List checkpoints",
 	"/plugins":     "List loaded plugins",
 	"/inspector":   "Open inspector panel (sessions|checkpoints|memory|plugins|config|status)",
+	"/chat":        "Open LAN chat panel",
 	"/image":       "Attach an image",
 	"/init":        "Create GGCODE.md",
 	"/harness":     "Run harness workflow commands",
@@ -268,6 +270,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
 	"/inspector":   "<sessions|checkpoints|memory|plugins|config|status>",
+	"/chat":        "(@mention message | /nick <name>)",
 	"/knight":      "<on|off|status|run|skills|budget|...>",
 	"/tmux":        "<enter [session] [--setup [layout]]|status|split|test|build|verify|popup|list|logs|layouts|layout|setup|save-layout|delete-layout|rename-layout|refresh|restore|rerun|prune|capture|stop|close|focus>",
 	"/resume":      "<session-id>",

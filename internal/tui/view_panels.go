@@ -70,6 +70,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderHarnessPanel()
 	case m.impersonatePanel != nil:
 		return m.renderImpersonatePanel()
+	case m.lanChatPanel != nil:
+		return m.renderLanChatPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingPairingChallenge() != nil:
