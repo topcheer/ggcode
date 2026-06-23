@@ -87,4 +87,6 @@ type NickChange struct {
 const maxHistoryPerSession = 100
 
 // ageOffline marks a participant offline if not seen within this duration.
-var ageOffline = 5 * time.Minute
+// Kept short because A2A registry already does PID liveness checks —
+// this is only a grace period for discovery gaps (mDNS flakiness etc).
+var ageOffline = 60 * time.Second

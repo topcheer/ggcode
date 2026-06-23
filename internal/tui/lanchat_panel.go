@@ -357,7 +357,7 @@ func (m *Model) refreshMentionList() {
 		if !part.Online {
 			continue
 		}
-		// Human target
+		// Human target (only if nick is known)
 		if part.HumanNick != "" {
 			t := mentionTarget{NodeID: part.NodeID, Nick: part.HumanNick, Role: lanchat.RoleHuman}
 			if p.mentionQuery == "" || strings.HasPrefix(strings.ToLower(t.Nick), strings.ToLower(p.mentionQuery)) {
@@ -401,7 +401,7 @@ func (m *Model) renderLanChatPanel() string {
 			if part.Online {
 				nick := part.HumanNick
 				if nick == "" {
-					nick = part.NodeID[:8]
+					nick = "(unknown)"
 				}
 				nicks = append(nicks, nick)
 			}
