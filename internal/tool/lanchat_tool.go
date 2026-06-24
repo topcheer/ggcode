@@ -44,6 +44,11 @@ func (t LanChatTool) Parameters() json.RawMessage {
 				"type": "boolean",
 				"description": "If true, send as the agent role instead of human (for 'send' action). Default: false."
 			},
+			"to_role": {
+				"type": "string",
+				"enum": ["human", "agent"],
+				"description": "Direct messages only: target the recipient's human user or their agent. Messages to 'agent' trigger the recipient's approval flow. Default: 'human'. Ignored for broadcasts."
+			},
 			"message_id": {
 				"type": "string",
 				"description": "Message ID to approve or reject (for 'approve'/'reject' actions)"
@@ -75,6 +80,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		Message   string `json:"message"`
 		To        string `json:"to"`
 		AsAgent   bool   `json:"as_agent"`
+		ToRole    string `json:"to_role"`
 		MessageID string `json:"message_id"`
 		Reason    string `json:"reason"`
 		Limit     int    `json:"limit"`
@@ -87,7 +93,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	case "list":
 		return t.doList(), nil
 	case "send":
-		return t.doSend(ctx, args.Message, args.To, args.AsAgent)
+		return t.doSend(ctx, args.Message, args.To, args.AsAgent, args.ToRole)
 	case "history":
 		return t.doHistory(args.Limit), nil
 	case "pending":
@@ -140,22 +146,26 @@ func (t LanChatTool) doList() Result {
 	return Result{Content: fmt.Sprintf("Participants (%d):\n%s\n", len(peers), string(out))}
 }
 
-func (t LanChatTool) doSend(ctx context.Context, content, toNodeID string, asAgent bool) (Result, error) {
+func (t LanChatTool) doSend(ctx context.Context, content, toNodeID string, asAgent bool, toRole string) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for send"}, nil
 	}
 
+	// Default toRole to human for direct messages
+	if toRole == "" {
+		toRole = lanchat.RoleHuman
+	}
+
 	var err error
 	if toNodeID != "" {
-		// Direct message
-		toRole := lanchat.RoleHuman
+		// Direct message — choose sender method by asAgent
 		if asAgent {
 			err = t.Hub.SendAsAgent(ctx, toNodeID, toRole, content)
 		} else {
 			err = t.Hub.SendDirect(ctx, toNodeID, toRole, content, nil)
 		}
 	} else {
-		// Broadcast
+		// Broadcast — toRole is meaningless for broadcasts
 		if asAgent {
 			err = t.Hub.SendAsAgent(ctx, "", "", content)
 		} else {
