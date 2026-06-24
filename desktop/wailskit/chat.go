@@ -230,13 +230,20 @@ func (b *ChatBridge) LanChatMessages() ([]lanchat.Message, error) {
 
 // LanChatSend broadcasts or sends a direct message.
 // If toNodeID is empty, broadcasts to all peers. If toRole is "agent", sends to agent.
-func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string) error {
+// If asAgent is true, sends from the agent role instead of human.
+func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
 	}
 	ctx := context.Background()
 	if toNodeID == "" {
+		if asAgent {
+			return b.lanchatHub.SendAsAgent(ctx, "", "", content)
+		}
 		return b.lanchatHub.SendBroadcast(ctx, content, nil)
+	}
+	if asAgent {
+		return b.lanchatHub.SendAsAgent(ctx, toNodeID, toRole, content)
 	}
 	return b.lanchatHub.SendDirect(ctx, toNodeID, toRole, content, nil)
 }
@@ -2256,8 +2263,45 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	)
 	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)
-	// Sync peers from A2A registry
+
+	// Register lanchat tool so the agent can autonomously send/approve messages.
+	b.registry.Register(tool.LanChatTool{Hub: b.lanchatHub})
+
+	// Wire Hub callbacks → Wails events for real-time push to frontend.
+	b.lanchatHub.SetCallbacks(
+		func(msg lanchat.Message) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:message", msg)
+			}
+		},
+		func(r lanchat.Receipt) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:receipt", r)
+			}
+		},
+		func(p lanchat.Participant) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:participant_added", p)
+			}
+		},
+		func(nodeID, humanNick string) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:participant_removed", map[string]string{"node_id": nodeID, "nick": humanNick})
+			}
+		},
+		func(ap lanchat.PendingAgentMsg) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:approval_request", ap)
+			}
+		},
+	)
+
+	// Sync peers from A2A registry — initial sync after 3s, then every 15s.
 	safego.Go("desktop.a2a-peer-sync", func() {
+		// Initial sync after 3s (let mDNS browser warm up)
+		time.Sleep(3 * time.Second)
+		b.syncLanChatPeers()
+
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -2265,20 +2309,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 			if b.a2aRegistry == nil {
 				return
 			}
-			instances := b.a2aRegistry.CachedInstances()
-			if instances == nil {
-				continue // cache not populated yet
-			}
-			peers := make([]lanchat.Participant, 0, len(instances))
-			for _, inst := range instances {
-				peers = append(peers, lanchat.Participant{
-					NodeID:   inst.ID,
-					Mode:     "gui",
-					Endpoint: inst.Endpoint,
-					Online:   true,
-				})
-			}
-			b.lanchatHub.UpdatePeers(peers)
+			b.syncLanChatPeers()
 		}
 	})
 
@@ -2308,6 +2339,29 @@ func (b *ChatBridge) stopA2A() {
 	for _, name := range []string{"a2a_discover", "a2a_send_task", "a2a_get_task", "a2a_list_tasks", "a2a_cancel_task"} {
 		b.registry.Unregister(name)
 	}
+	// Unregister lanchat tool so it doesn't reference a stopped hub.
+	b.registry.Unregister("lanchat")
+}
+
+// syncLanChatPeers pulls A2A registry instances and pushes them to the lanchat hub.
+func (b *ChatBridge) syncLanChatPeers() {
+	if b.a2aRegistry == nil || b.lanchatHub == nil {
+		return
+	}
+	instances := b.a2aRegistry.CachedInstances()
+	if instances == nil {
+		return
+	}
+	peers := make([]lanchat.Participant, 0, len(instances))
+	for _, inst := range instances {
+		peers = append(peers, lanchat.Participant{
+			NodeID:   inst.ID,
+			Mode:     "gui",
+			Endpoint: inst.Endpoint,
+			Online:   true,
+		})
+	}
+	b.lanchatHub.UpdatePeers(peers)
 }
 
 func parseA2ATimeout(s string) time.Duration {

@@ -516,11 +516,11 @@ func (a *App) LanChatMessages() ([]lanchat.Message, error) {
 }
 
 // LanChatSend sends a LAN chat message (broadcast if toNodeID is empty).
-func (a *App) LanChatSend(content, toNodeID, toRole string) error {
+func (a *App) LanChatSend(content, toNodeID, toRole string, asAgent bool) error {
 	if a.chat == nil {
 		return fmt.Errorf("chat not available")
 	}
-	return a.chat.LanChatSend(content, toNodeID, toRole)
+	return a.chat.LanChatSend(content, toNodeID, toRole, asAgent)
 }
 
 // LanChatSetNick changes the user's nickname.

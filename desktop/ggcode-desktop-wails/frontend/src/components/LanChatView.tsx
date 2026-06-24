@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { LanChatParticipant, LanChatMessage, LanChatPendingApproval } from '../types'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 interface Props {
   onUnreadChange?: (count: number) => void
@@ -8,225 +9,366 @@ interface Props {
 export function LanChatView({ onUnreadChange }: Props) {
   const [messages, setMessages] = useState<LanChatMessage[]>([])
   const [participants, setParticipants] = useState<LanChatParticipant[]>([])
-  const [pending, setPending] = useState<LanChatPendingApproval[]>([])
-  const [input, setInput] = useState('')
-  const [self, setSelf] = useState<LanChatParticipant | null>(null)
-  const [nickEdit, setNickEdit] = useState('')
-  const [showNickEdit, setShowNickEdit] = useState(false)
-  const [unread, setUnread] = useState(0)
+  const [pendingApprovals, setPendingApprovals] = useState<LanChatPendingApproval[]>([])
+  const [inputText, setInputText] = useState('')
+  const [nick, setNick] = useState('')
+  const [selectedParticipant, setSelectedParticipant] = useState<string>('')
+  const [sendAsAgent, setSendAsAgent] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false)
+  const [selfNodeID, setSelfNodeID] = useState('')
 
-  const poll = useCallback(async () => {
+  // Track unread count for the NavRail badge.
+  const unreadCount = useRef(0)
+  const updateUnread = useCallback(() => {
+    onUnreadChange?.(unreadCount.current)
+  }, [onUnreadChange])
+
+  // --- Initial load ---
+  useEffect(() => {
+    let mounted = true
+
+    async function loadAll() {
+      try {
+        const msgs = await (window as any).LanChatMessages()
+        const parts = await (window as any).LanChatParticipants()
+        const pending = await (window as any).LanChatPendingApprovals()
+        const myNick = await (window as any).LanChatNick()
+        const self = await (window as any).LanChatSelf()
+        if (mounted) {
+          setMessages(msgs || [])
+          setParticipants(parts || [])
+          setPendingApprovals(pending || [])
+          setNick(myNick || '')
+          setSelfNodeID(self?.node_id || '')
+          setHasInitiallyLoaded(true)
+        }
+      } catch (e) {
+        console.error('LAN Chat initial load failed:', e)
+      }
+    }
+
+    loadAll()
+
+    return () => { mounted = false }
+  }, [])
+
+  // --- Real-time event listeners ---
+  useEffect(() => {
+    if (!hasInitiallyLoaded) return
+
+    // Listen for new messages
+    const offMessage = EventsOn('lanchat:message', (_msg: any) => {
+      setMessages(prev => [...prev, _msg])
+      unreadCount.current++
+      updateUnread()
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      }, 50)
+    })
+
+    // Listen for receipt status updates
+    const offReceipt = EventsOn('lanchat:receipt', (receipt: any) => {
+      // Update message status in-place if we track it
+      console.log('[LAN Chat] receipt:', receipt)
+    })
+
+    // Listen for participant changes
+    const offAddParticipant = EventsOn('lanchat:participant_added', async () => {
+      // Refresh participants from backend
+      try {
+        const parts = await (window as any).LanChatParticipants()
+        setParticipants(parts || [])
+      } catch {}
+    })
+
+    const offRemoveParticipant = EventsOn('lanchat:participant_removed', async () => {
+      try {
+        const parts = await (window as any).LanChatParticipants()
+        setParticipants(parts || [])
+      } catch {}
+    })
+
+    // Listen for approval requests (most important for agent interaction)
+    const offApproval = EventsOn('lanchat:approval_request', async () => {
+      try {
+        const pending = await (window as any).LanChatPendingApprovals()
+        setPendingApprovals(pending || [])
+      } catch {}
+    })
+
+    // Periodic refresh as a safety net (every 30s, less aggressive than before)
+    const interval = setInterval(async () => {
+      try {
+        const pending = await (window as any).LanChatPendingApprovals()
+        setPendingApprovals(pending || [])
+      } catch {}
+    }, 30000)
+
+    return () => {
+      offMessage()
+      offReceipt()
+      offAddParticipant()
+      offRemoveParticipant()
+      offApproval()
+      clearInterval(interval)
+    }
+  }, [hasInitiallyLoaded, updateUnread])
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // Reset unread when user interacts
+  useEffect(() => {
+    unreadCount.current = 0
+    updateUnread()
+  }, [inputText, selectedParticipant, updateUnread])
+
+  // --- Actions ---
+  const handleSend = useCallback(async () => {
+    if (!inputText.trim()) return
     try {
-      const msgs = await (window as any).ggcode.LanChatMessages()
-      setMessages(msgs || [])
-      const parts = await (window as any).ggcode.LanChatParticipants()
-      setParticipants(parts || [])
-      const pend = await (window as any).ggcode.LanChatPendingApprovals()
-      setPending(pend || [])
-      const s = await (window as any).ggcode.LanChatSelf()
-      setSelf(s)
-    } catch {
-      // LAN chat not available
+      let target = selectedParticipant
+      let toRole = 'human'
+
+      // Parse @mention: "@nick message" sends DM to that nick's agent
+      const mentionMatch = inputText.match(/^@(\S+)\s+(.*)/)
+      if (mentionMatch) {
+        const mentionedNick = mentionMatch[1]
+        const content = mentionMatch[2]
+        const found = participants.find(p =>
+          p.human_nick === mentionedNick || p.agent_nick === mentionedNick
+        )
+        if (found) {
+          target = found.node_id
+          toRole = mentionedNick === found.agent_nick ? 'agent' : 'human'
+          await (window as any).LanChatSend(content, target, toRole, sendAsAgent)
+        } else {
+          await (window as any).LanChatSend(inputText, '', '', sendAsAgent)
+        }
+      } else {
+        await (window as any).LanChatSend(inputText, target, toRole, sendAsAgent)
+      }
+      setInputText('')
+    } catch (e) {
+      console.error('Send failed:', e)
+    }
+  }, [inputText, selectedParticipant, participants, sendAsAgent])
+
+  const handleApprove = useCallback(async (messageId: string) => {
+    try {
+      await (window as any).LanChatApprove(messageId)
+      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
+    } catch (e) {
+      console.error('Approve failed:', e)
     }
   }, [])
 
-  useEffect(() => {
-    poll()
-    const interval = setInterval(poll, 3000)
-    return () => clearInterval(interval)
-  }, [poll])
-
-  useEffect(() => {
-    onUnreadChange?.(unread)
-  }, [unread, onUnreadChange])
-
-  const handleSend = async () => {
-    const text = input.trim()
-    if (!text) return
-
-    if (text.startsWith('/nick ')) {
-      const nick = text.slice(6).trim()
-      if (nick) {
-        await (window as any).ggcode.LanChatSetNick(nick)
-        setSelf(prev => prev ? { ...prev, human_nick: nick, agent_nick: nick + '_agent' } : prev)
-      }
-      setInput('')
-      return
+  const handleReject = useCallback(async (messageId: string, reason: string = '') => {
+    try {
+      await (window as any).LanChatReject(messageId, reason)
+      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
+    } catch (e) {
+      console.error('Reject failed:', e)
     }
+  }, [])
 
-    // Parse @mention
-    if (text.startsWith('@')) {
-      const spaceIdx = text.indexOf(' ')
-      if (spaceIdx > 0) {
-        const mention = text.slice(1, spaceIdx)
-        const content = text.slice(spaceIdx + 1).trim()
-        const target = participants.find(p => p.human_nick === mention || p.agent_nick === mention)
-        if (target) {
-          const role = mention.endsWith('_agent') ? 'agent' : 'human'
-          await (window as any).ggcode.LanChatSend(content, target.node_id, role)
-        }
-      }
-    } else {
-      // Broadcast
-      await (window as any).ggcode.LanChatSend(text, '', '')
+  const handleNickChange = useCallback(async () => {
+    const newNick = prompt('Enter new nickname:', nick)
+    if (!newNick || newNick === nick) return
+    try {
+      await (window as any).LanChatSetNick(newNick)
+      setNick(newNick)
+    } catch (e) {
+      console.error('Nick change failed:', e)
     }
-    setInput('')
-    setUnread(0)
-  }
-
-  const handleApprove = async (id: string) => {
-    await (window as any).ggcode.LanChatApprove(id)
-    setPending(pending.filter(p => p.message.id !== id))
-  }
-
-  const handleReject = async (id: string) => {
-    await (window as any).ggcode.LanChatReject(id, 'rejected')
-    setPending(pending.filter(p => p.message.id !== id))
-  }
-
-  const handleSaveNick = async () => {
-    if (nickEdit.trim()) {
-      await (window as any).ggcode.LanChatSetNick(nickEdit.trim())
-      setSelf(prev => prev ? { ...prev, human_nick: nickEdit.trim(), agent_nick: nickEdit.trim() + '_agent' } : prev)
-    }
-    setShowNickEdit(false)
-  }
+  }, [nick])
 
   return (
-    <div style={{ display: 'flex', height: '100%', background: 'var(--color-bg)' }}>
-      {/* Sidebar: participants */}
-      <div style={{ width: 200, borderRight: '1px solid var(--color-border)', overflowY: 'auto', padding: 8 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-secondary)' }}>
-          Online ({participants.filter(p => p.online).length})
-        </div>
-        {self && (
-          <div style={{ marginBottom: 12, padding: 8, background: 'var(--color-surface)', borderRadius: 8 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>
-              👤 {self.human_nick} <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>(you)</span>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>🤖 {self.agent_nick}</div>
-            <button
-              onClick={() => { setNickEdit(self.human_nick); setShowNickEdit(!showNickEdit) }}
-              style={{ marginTop: 4, fontSize: 11, color: 'var(--color-primary)', cursor: 'pointer', background: 'none', border: 'none' }}
-            >
-              Edit nickname
-            </button>
-            {showNickEdit && (
-              <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
-                <input
-                  value={nickEdit}
-                  onChange={e => setNickEdit(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSaveNick()}
-                  style={{ fontSize: 12, flex: 1, padding: '2px 4px' }}
-                  autoFocus
-                />
-                <button onClick={handleSaveNick} style={{ fontSize: 11 }}>OK</button>
-              </div>
-            )}
-          </div>
-        )}
-        {participants.filter(p => p.node_id !== self?.node_id).map(p => (
-          <div key={p.node_id} style={{ marginBottom: 6, padding: 6, fontSize: 12 }}>
-            <div style={{ fontWeight: 500, color: p.online ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
-              {p.online ? '●' : '○'} 👤 {p.human_nick}
-            </div>
-            <div style={{ color: 'var(--text-tertiary)' }}>🤖 {p.agent_nick}</div>
-          </div>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
+        <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>LAN Chat</span>
+        <button
+          onClick={handleNickChange}
+          style={{
+            padding: '2px 8px',
+            fontSize: '12px',
+            border: '1px solid var(--border-color)',
+            borderRadius: '4px',
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer'
+          }}
+        >
+          {nick || 'unnamed'}
+        </button>
+        <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
+          ({participants.filter(p => p.online).length} online)
+        </span>
       </div>
 
-      {/* Main: messages + input */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-          {messages.length === 0 && (
-            <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', marginTop: 40 }}>
-              No messages yet. Start chatting!
-            </div>
-          )}
-          {messages.map(msg => (
+      {/* Approval requests */}
+      {pendingApprovals.length > 0 && (
+        <div style={{ borderBottom: '1px solid var(--border-color)', padding: '8px 16px', flexShrink: 0 }}>
+          {pendingApprovals.map(p => (
             <div
-              key={msg.id}
+              key={p.message.id}
               style={{
-                marginBottom: 8,
-                display: 'flex',
-                justifyContent: msg.from_node_id === self?.node_id ? 'flex-end' : 'flex-start',
+                padding: '8px 12px',
+                marginBottom: '4px',
+                borderRadius: '6px',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-color)',
+                fontSize: '13px'
               }}
             >
-              <div
-                style={{
-                  maxWidth: '70%',
-                  padding: '8px 14px',
-                  borderRadius: 12,
-                  background: msg.from_node_id === self?.node_id
-                    ? 'var(--color-primary)'
-                    : msg.from_role === 'agent'
-                      ? 'var(--color-surface-elevated)'
-                      : 'var(--color-surface)',
-                  color: msg.from_node_id === self?.node_id ? '#fff' : 'var(--text-primary)',
-                }}
-              >
-                {msg.from_node_id !== self?.node_id && (
-                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2, opacity: 0.8 }}>
-                    {msg.from_role === 'agent' ? '🤖' : '👤'} {msg.from_nick}
-                    {!msg.to_node_id ? '' : msg.to_role === 'agent' ? ' → agent' : ' → you'}
-                  </div>
-                )}
-                <div style={{ fontSize: 14 }}>{msg.content}</div>
-                {msg.attachments && msg.attachments.length > 0 && (
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
-                    {msg.attachments.map(a => (
-                      <div key={a.id}>📎 {a.name} ({Math.round(a.size / 1024)}KB)</div>
-                    ))}
-                  </div>
-                )}
+              <div style={{ marginBottom: '4px' }}>
+                <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>@agent</span>
+                <span style={{ color: 'var(--text-secondary)' }}> request from </span>
+                <span style={{ fontWeight: 500 }}>{p.message.from_nick}</span>
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Pending approvals */}
-        {pending.length > 0 && (
-          <div style={{ padding: 8, background: 'var(--color-surface)', borderTop: '1px solid var(--color-border)' }}>
-            {pending.map(p => (
-              <div key={p.message.id} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: 8, borderRadius: 8,
-                background: 'rgba(251, 191, 36, 0.1)', marginBottom: 4,
-              }}>
-                <div style={{ flex: 1, fontSize: 13 }}>
-                  <strong>📨 {p.message.from_nick}</strong> → your agent:
-                  <div style={{ marginTop: 2 }}>{p.message.content}</div>
-                </div>
+              <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                {p.message.content}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   onClick={() => handleApprove(p.message.id)}
-                  style={{ padding: '4px 12px', background: '#22c55e', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}
+                  style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: 'var(--color-primary)', color: '#fff', cursor: 'pointer' }}
                 >
                   Approve
                 </button>
                 <button
                   onClick={() => handleReject(p.message.id)}
-                  style={{ padding: '4px 12px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}
+                  style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
                 >
                   Reject
                 </button>
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ))}
+        </div>
+      )}
 
-        {/* Input */}
-        <div style={{ padding: 12, borderTop: '1px solid var(--color-border)', display: 'flex', gap: 8 }}>
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
+        {messages.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
+            No messages yet. Start a conversation with other ggcode users on your network.
+          </div>
+        ) : (
+          messages.map((msg, i) => {
+            const isSelf = msg.from_node_id === selfNodeID
+            const fromNick = msg.from_nick || 'unknown'
+            return (
+              <div
+                key={msg.id || i}
+                style={{
+                  marginBottom: '8px',
+                  display: 'flex',
+                  flexDirection: isSelf ? 'row-reverse' : 'row'
+                }}
+              >
+                <div style={{
+                  maxWidth: '70%',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  background: isSelf ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                  color: isSelf ? '#fff' : 'var(--text-primary)',
+                  fontSize: '13px',
+                  lineHeight: '1.4'
+                }}>
+                  {!isSelf && (
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: '2px' }}>
+                      {fromNick} {msg.from_role === 'agent' && <span style={{ color: 'var(--color-primary)' }}>agent</span>}
+                    </div>
+                  )}
+                  {msg.content}
+                </div>
+              </div>
+            )
+          })
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+          <select
+            value={selectedParticipant}
+            onChange={e => setSelectedParticipant(e.target.value)}
+            style={{
+              flex: 1,
+              padding: '4px 8px',
+              fontSize: '12px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)'
+            }}
+          >
+            <option value="">Broadcast</option>
+            {participants.filter(p => p.node_id !== selfNodeID).map(p => (
+              <option key={p.node_id} value={p.node_id}>
+                {p.human_nick || p.agent_nick || p.node_id.slice(0, 12)}
+              </option>
+            ))}
+          </select>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px',
+            fontSize: '12px',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap'
+          }}>
+            <input
+              type="checkbox"
+              checked={sendAsAgent}
+              onChange={e => setSendAsAgent(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            as agent
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
           <input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSend()}
-            placeholder="Type a message... (@mention for direct, /nick to rename)"
-            style={{ flex: 1, padding: '8px 12px', fontSize: 14, borderRadius: 8, border: '1px solid var(--color-border)', background: 'var(--color-surface)' }}
+            type="text"
+            value={inputText}
+            onChange={e => setInputText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder="Type a message... (@nick for DM)"
+            style={{
+              flex: 1,
+              padding: '6px 10px',
+              fontSize: '13px',
+              border: '1px solid var(--border-color)',
+              borderRadius: '6px',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              outline: 'none'
+            }}
           />
           <button
             onClick={handleSend}
-            style={{ padding: '8px 20px', background: 'var(--color-primary)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+            style={{
+              padding: '6px 16px',
+              fontSize: '13px',
+              border: 'none',
+              borderRadius: '6px',
+              background: 'var(--color-primary)',
+              color: '#fff',
+              cursor: 'pointer'
+            }}
           >
             Send
           </button>
