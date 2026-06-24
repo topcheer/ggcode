@@ -907,6 +907,8 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 		MessageID:  originalMsg.ID,
 		Status:     status,
 		FromNodeID: h.nodeID,
+		ToNodeID:   originalMsg.FromNodeID, // route back to original sender
+		ToRole:     originalMsg.FromRole,   // original sender's role
 		Timestamp:  time.Now().UnixMilli(),
 		Reason:     reason,
 	}

@@ -186,7 +186,6 @@ export function LanChatView({ onUnreadChange }: Props) {
     })
 
     const offReceipt = EventsOn('lanchat:receipt', (r: any) => {
-      // Show receipt as a system message in the broadcast room
       const labels: Record<string, string> = {
         'delivered': 'delivered',
         'pending': 'pending approval',
@@ -206,7 +205,18 @@ export function LanChatView({ onUnreadChange }: Props) {
         content: `[${label}]`,
         timestamp: Date.now(),
       }
-      addMessageToRoom('broadcast', sysMsg, activeRoomRef.current === 'broadcast')
+      // Route receipt to the correct DM room based on FromNodeID (the remote peer
+      // that reported the receipt). If the original message was a broadcast, route
+      // to the broadcast room.
+      const myID = selfNodeIDRef.current
+      let roomKey = 'broadcast'
+      if (r.from_node_id && r.from_node_id !== myID) {
+        // Receipt from a remote peer — this is a DM acknowledgement.
+        // Use to_role if available (newer receipts), otherwise default to 'human'.
+        const role = r.to_role || 'human'
+        roomKey = roomKeyForDM(r.from_node_id, role)
+      }
+      addMessageToRoom(roomKey, sysMsg, activeRoomRef.current === roomKey)
     })
 
     const offAddP = EventsOn('lanchat:participant_added', refreshParticipants)

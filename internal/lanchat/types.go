@@ -77,7 +77,9 @@ type Attachment struct {
 type Receipt struct {
 	MessageID  string `json:"message_id"`
 	Status     string `json:"status"`
-	FromNodeID string `json:"from_node_id"`
+	FromNodeID string `json:"from_node_id"` // node reporting the receipt (the original receiver)
+	ToNodeID   string `json:"to_node_id"`   // original sender (for DM routing on the receiving side)
+	ToRole     string `json:"to_role"`      // original sender's role (human/agent)
 	Timestamp  int64  `json:"timestamp"`
 	Reason     string `json:"reason,omitempty"`
 }
