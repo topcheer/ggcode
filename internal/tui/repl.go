@@ -105,9 +105,17 @@ func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
 	r.model.SetA2AHandler(h)
 }
 
-// SetLanChatHub connects the LAN chat hub for /chat panel support.
+// SetLanChatHub connects the LAN chat hub for /chat panel support and
+// registers the lanchat tool so the agent can send messages, list
+// participants, and manage approvals programmatically.
 func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 	r.model.SetLanChatHub(hub, r.sendTUI)
+	if r.agent != nil && hub != nil {
+		tools := r.agent.ToolRegistry()
+		if tools != nil {
+			tools.Register(tool.LanChatTool{Hub: hub})
+		}
+	}
 }
 
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
