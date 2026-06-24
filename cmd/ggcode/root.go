@@ -1168,11 +1168,6 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return nil, nil, nil, fmt.Errorf("a2a registry: %w", err)
 	}
 
-	// Enable LAN discovery via mDNS if configured.
-	if cfg.A2A.IsLANDiscovery() {
-		a2aReg.EnableLANDiscovery()
-	}
-
 	handler := a2a.NewTaskHandler(workingDir, ag, reg,
 		a2a.WithMaxTasks(cfg.A2A.MaxTasks),
 		a2a.WithTimeout(parseA2ATimeout(cfg.A2A.TaskTimeout)),

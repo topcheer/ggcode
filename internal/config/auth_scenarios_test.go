@@ -347,8 +347,7 @@ func TestA2AHostDefault(t *testing.T) {
 		yaml     string
 		expected string
 	}{
-		{"no auth, lan_discovery default → 0.0.0.0", "", "0.0.0.0"},
-		{"lan_discovery: false → 127.0.0.1", "a2a:\n  lan_discovery: false\n", "127.0.0.1"},
+		{"no auth, mDNS always on → 0.0.0.0", "", "0.0.0.0"},
 		{"with auth.api_key → 0.0.0.0", "a2a:\n  auth:\n    api_key: key\n", "0.0.0.0"},
 		{"with oauth2 → 0.0.0.0", "a2a:\n  auth:\n    oauth2:\n      provider: github\n", "0.0.0.0"},
 		{"explicit host override", "a2a:\n  host: 192.168.1.1\n  auth:\n    api_key: key\n", "192.168.1.1"},

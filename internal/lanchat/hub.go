@@ -263,7 +263,8 @@ func (h *Hub) SetNick(nick string) error {
 }
 
 // UpdatePeers synchronizes the peer list from A2A registry discovery results.
-// New peers trigger the onParticipantAdd callback; removed peers trigger onParticipantRm.
+// Only verified peers (successful presence exchange) trigger join/leave callbacks.
+// Unverified peers are tracked internally but never surfaced to the UI.
 func (h *Hub) UpdatePeers(participants []Participant) {
 	h.mu.Lock()
 
@@ -279,7 +280,8 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		seen[p.NodeID] = true
 		existing, ok := h.peers[p.NodeID]
 		if !ok {
-			// New peer
+			// New peer — start as unverified (HumanNick empty).
+			// Will be promoted to verified after presence exchange.
 			cp := p
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
@@ -302,16 +304,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			existing.Mode = p.Mode
 			existing.Endpoint = p.Endpoint
 			existing.Online = true
-			// Don't refresh LastSeen here — it's only meaningful when
-			// the peer actually communicates with us (presence, message,
-			// receipt). mDNS discovery proves the process is registered,
-			// not that lanchat is responsive. If we refresh LastSeen
-			// here, a crashed peer that's still in the mDNS cache never goes offline.
-			// If LastSeen is stale, probe via presence exchange (heartbeat).
 			if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
 				stalePeers = append(stalePeers, *existing)
 			}
-			// If we still don't know this peer's nick, retry presence
 			if existing.HumanNick == "" {
 				emptyNickPeers = append(emptyNickPeers, *existing)
 			}
@@ -330,7 +325,11 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		isStale := time.Since(time.Unix(p.LastSeen, 0)) > ageOffline
 		if (!seen[id] || isStale) && p.Online {
 			p.Online = false
-			leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
+			// Only notify offline for peers we previously announced as online
+			// (verified via presence exchange). Unverified peers are silently removed.
+			if p.notifiedJoin && p.HumanNick != "" {
+				leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
+			}
 		}
 	}
 
@@ -357,9 +356,6 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(ep) })
 	}
 	// Heartbeat: re-probe peers whose LastSeen hasn't been updated recently.
-	// This detects peers that are still in the A2A registry (process alive)
-	// but whose lanchat HTTP server is unresponsive. sendPresence failure
-	// means LastSeen stays stale; after ageOffline they'll be marked offline.
 	for _, sp := range stalePeers {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(sp) })
 	}

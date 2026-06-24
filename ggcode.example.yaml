@@ -589,12 +589,11 @@ plugins:
 # a2a:
 #   enabled: true
 #   port: 0                    # 0 = auto-assign (recommended for multi-instance)
-#   host: ""                   # auto: 0.0.0.0 (lan_discovery is on by default)
+#   host: ""                   # defaults to 0.0.0.0 (always LAN accessible)
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
-#   lan_discovery: true        # mDNS broadcast (DEFAULT: ON, set false to disable)
 #
-#   # LAN Team Mode is on by default — no configuration needed.
+#   # mDNS discovery is always on — no configuration needed.
 #   # ggcode uses a built-in community key (ggcode-lan-a2a-v1) that lets
 #   # any ggcode instance on the same network connect automatically.
 #   # Set your own api_key for real security (all team members must share it).

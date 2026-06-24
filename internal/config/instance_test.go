@@ -713,11 +713,10 @@ func TestMergeInstance_KnightConfig_GlobalWins(t *testing.T) {
 func TestMergeInstance_A2AConfig(t *testing.T) {
 	global := &Config{}
 	instance := &Config{A2A: A2AConfig{
-		Port:         8080,
-		Host:         "0.0.0.0",
-		MaxTasks:     10,
-		TaskTimeout:  "5m",
-		LANDiscovery: boolPtr(true),
+		Port:        8080,
+		Host:        "0.0.0.0",
+		MaxTasks:    10,
+		TaskTimeout: "5m",
 		Auth: A2AAuthConfig{
 			APIKey: "test-key",
 		},
@@ -739,9 +738,6 @@ func TestMergeInstance_A2AConfig(t *testing.T) {
 	}
 	if global.A2A.TaskTimeout != "5m" {
 		t.Errorf("A2A TaskTimeout = %q, want %q", global.A2A.TaskTimeout, "5m")
-	}
-	if !global.A2A.IsLANDiscovery() {
-		t.Error("A2A LANDiscovery should be true")
 	}
 }
 

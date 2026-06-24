@@ -53,13 +53,14 @@ type Registry struct {
 // backgroundRefreshInterval is how often the background goroutine refreshes.
 const backgroundRefreshInterval = 15 * time.Second
 
-// NewRegistry creates a new registry. No local file storage is used —
-// all discovery is mDNS-based.
+// NewRegistry creates a new registry with mDNS discovery always enabled.
 func NewRegistry() (*Registry, error) {
-	return &Registry{}, nil
+	return &Registry{
+		mdnsSvc: newMDNSService(),
+	}, nil
 }
 
-// Register records self info and starts mDNS broadcasting (if enabled).
+// Register records self info and starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
@@ -67,7 +68,6 @@ func (r *Registry) Register(info InstanceInfo) error {
 	r.asyncCacheOK = false
 	r.mu.Unlock()
 
-	// Start mDNS if LAN discovery is enabled.
 	if r.mdnsSvc != nil {
 		if startErr := r.mdnsSvc.start(info); startErr != nil {
 			debug.Log("a2a.registry", "mDNS registration warning: %v", startErr)
@@ -168,12 +168,6 @@ func (r *Registry) InvalidateDiscoverCache() {
 	r.mu.Lock()
 	r.asyncCacheOK = false
 	r.mu.Unlock()
-}
-
-// EnableLANDiscovery enables mDNS broadcasting for this registry.
-// Must be called before Register.
-func (r *Registry) EnableLANDiscovery() {
-	r.mdnsSvc = newMDNSService()
 }
 
 // DiscoverByCapability returns instances whose metadata matches the given tag.

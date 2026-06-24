@@ -2180,10 +2180,6 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		return
 	}
 
-	if cfg.A2A.IsLANDiscovery() {
-		a2aReg.EnableLANDiscovery()
-	}
-
 	handler := a2a.NewTaskHandler(b.workingDir, ag, reg,
 		a2a.WithMaxTasks(cfg.A2A.MaxTasks),
 		a2a.WithTimeout(parseA2ATimeout(cfg.A2A.TaskTimeout)),
@@ -2285,7 +2281,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		}
 	})
 
-	log.Printf("[a2a] server started at %s (lan_discovery=%v)", srv.Endpoint(), cfg.A2A.IsLANDiscovery())
+	log.Printf("[a2a] server started at %s", srv.Endpoint())
 }
 
 // stopA2A shuts down the A2A server and cleans up.

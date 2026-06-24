@@ -103,8 +103,6 @@ type FullConfig struct {
 	A2APort     int    `json:"a2aPort"`
 	A2AHost     string `json:"a2aHost"`
 
-	A2ALANDiscovery bool `json:"a2aLanDiscovery"`
-
 	// Harness
 	HarnessAutoRun  string `json:"harnessAutoRun"`
 	HarnessAutoInit bool   `json:"harnessAutoInit"`
@@ -179,8 +177,6 @@ func GetFullConfig() (*FullConfig, error) {
 		A2ADisabled: cfg.A2A.Disabled,
 		A2APort:     cfg.A2A.Port,
 		A2AHost:     cfg.A2A.Host,
-
-		A2ALANDiscovery: cfg.A2A.IsLANDiscovery(),
 
 		HarnessAutoRun:  cfg.Harness.AutoRun,
 		HarnessAutoInit: cfg.Harness.AutoInit,

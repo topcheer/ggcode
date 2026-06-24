@@ -164,20 +164,14 @@ func TestDiscoverMergesAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestEnableLANDiscovery(t *testing.T) {
+func TestMDNSAlwaysEnabled(t *testing.T) {
 	r, err := NewRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Before enabling: no mdnsSvc
-	if r.mdnsSvc != nil {
-		t.Error("mdnsSvc should be nil before EnableLANDiscovery")
-	}
-
-	// Enable
-	r.EnableLANDiscovery()
+	// mDNS is always enabled now
 	if r.mdnsSvc == nil {
-		t.Error("mdnsSvc should not be nil after EnableLANDiscovery")
+		t.Error("mdnsSvc should not be nil (always enabled)")
 	}
 }

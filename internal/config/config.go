@@ -291,23 +291,21 @@ type SwarmConfig struct {
 
 // DefaultA2AAPIKey is a well-known key baked into every ggcode binary.
 // It is NOT a secret — its purpose is to ensure that only ggcode instances
-// (not random HTTP clients) can reach the A2A endpoint when users enable
-// lan_discovery without configuring their own api_key.
+// (not random HTTP clients) can reach the A2A endpoint.
 //
 // For real security, teams should set a2a.auth.api_key to their own value.
 const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 
 // A2AConfig holds A2A protocol server configuration.
-// A2A is enabled by default with lan_discovery on, so teams on the same
-// network can discover each other without any configuration.
+// A2A is enabled by default — mDNS discovery runs automatically so teams
+// on the same network can discover each other without any configuration.
 type A2AConfig struct {
-	Disabled     bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
-	Port         int           `yaml:"port"`               // 0 = auto-assign
-	Host         string        `yaml:"host"`               // default "0.0.0.0" (always, since lan_discovery defaults on)
-	MaxTasks     int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
-	TaskTimeout  string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
-	LANDiscovery *bool         `yaml:"lan_discovery"`      // mDNS broadcast (nil = default true, set false to disable)
-	Auth         A2AAuthConfig `yaml:"auth,omitempty"`
+	Disabled    bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
+	Port        int           `yaml:"port"`               // 0 = auto-assign
+	Host        string        `yaml:"host"`               // default "0.0.0.0" (always)
+	MaxTasks    int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
+	TaskTimeout string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
+	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
 }
 
 // HasAuth returns true if at least one authentication mechanism is configured.
@@ -327,15 +325,6 @@ func (c A2AConfig) EffectiveAPIKey() string {
 		return c.Auth.APIKey
 	}
 	return DefaultA2AAPIKey
-}
-
-// IsLANDiscovery returns whether LAN discovery is enabled.
-// Defaults to true when the pointer is nil (not explicitly configured).
-func (c A2AConfig) IsLANDiscovery() bool {
-	if c.LANDiscovery == nil {
-		return true
-	}
-	return *c.LANDiscovery
 }
 
 // HarnessConfig controls automatic harness routing behavior.
@@ -1081,14 +1070,9 @@ func (c *Config) Validate() error {
 		if c.A2A.TaskTimeout == "" {
 			c.A2A.TaskTimeout = "5m"
 		}
-		// Host: 0.0.0.0 when lan_discovery is on (default) or auth is configured;
-		// 127.0.0.1 only when lan_discovery is explicitly false and no auth.
+		// Host defaults to 0.0.0.0 (LAN accessible) since A2A + mDNS is always on.
 		if c.A2A.Host == "" {
-			if c.A2A.IsLANDiscovery() || c.A2A.HasAuth() {
-				c.A2A.Host = "0.0.0.0"
-			} else {
-				c.A2A.Host = "127.0.0.1"
-			}
+			c.A2A.Host = "0.0.0.0"
 		}
 	}
 	for _, dir := range c.AllowedDirs {

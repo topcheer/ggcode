@@ -176,7 +176,7 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 		ip = inst.IPs[0].String()
 	}
 
-	endpoint := fmt.Sprintf("%s:%d", ip, inst.Port)
+	endpoint := fmt.Sprintf("http://%s:%d", ip, inst.Port)
 
 	// Parse TXT records into a map.
 	txt := parseTXTFields(inst.Text)
