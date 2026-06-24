@@ -2232,8 +2232,12 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		_ = reg.Register(t)
 	}
 
-	// Background cache refresh
+	// Background cache refresh — populates CachedInstances() via mDNS discovery.
+	// Without this, peer sync goroutine below would never see any instances.
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
+	a2aReg.StartBackgroundRefresh(refreshCtx)
+
+	// Also refresh the remote tool cache periodically.
 	safego.Go("desktop.a2a-cache-refresh", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
