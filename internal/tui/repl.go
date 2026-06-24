@@ -116,6 +116,16 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			tools.Register(tool.LanChatTool{Hub: hub})
 		}
 	}
+	// Register auto-approve callback: inject the message into the TUI event
+	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
+	// handles it. This ensures "always approve" policy actually triggers the
+	// agent — without this, auto-approved messages are silently dropped
+	// because they skip the pendingApproval queue.
+	if hub != nil {
+		hub.SetOnAutoApprove(func(msg lanchat.Message) {
+			r.sendTUI(lanchatAutoApproveMsg{msg: msg})
+		})
+	}
 }
 
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {

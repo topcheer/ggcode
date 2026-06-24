@@ -21,6 +21,7 @@ type lanchatPeerJoinMsg struct{ participant lanchat.Participant }
 type lanchatPeerLeaveMsg struct{ nodeID, humanNick string }
 type lanchatApprovalReqMsg struct{ pending lanchat.PendingAgentMsg }
 type lanchatNickChangeMsg struct{ nodeID, oldNick, newNick string }
+type lanchatAutoApproveMsg struct{ msg lanchat.Message }
 
 // ---- Panel State ----
 
@@ -221,6 +222,12 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is now known as %s", old, new))
 		return m, nil
+	case lanchatAutoApproveMsg:
+		// Auto-approved message (policy=always or daemon mode) — inject into agent.
+		// Track for completed receipt when agent finishes.
+		m.lanChatPendingComplete = msg.msg.ID
+		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.msg.FromNick, msg.msg.Content)
+		return m, m.submitText(agentText, true)
 	}
 	return m, nil
 }

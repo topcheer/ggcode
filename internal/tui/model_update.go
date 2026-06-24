@@ -634,7 +634,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	// ---- LAN chat messages ----
-	case lanchatMsg, lanchatReceiptMsg, lanchatPeerJoinMsg, lanchatPeerLeaveMsg, lanchatApprovalReqMsg, lanchatNickChangeMsg:
+	case lanchatMsg, lanchatReceiptMsg, lanchatPeerJoinMsg, lanchatPeerLeaveMsg, lanchatApprovalReqMsg, lanchatNickChangeMsg, lanchatAutoApproveMsg:
 		return m.handleLanChatPanelUpdate(msg)
 
 	}
