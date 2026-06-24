@@ -161,10 +161,10 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lanchatPeerJoinMsg:
-		if m.lanChatHub != nil {
-			m.lanChatHub.UpdatePeers([]lanchat.Participant{msg.participant})
-		}
-		// System message in main chat
+		// System message in main chat — do NOT call UpdatePeers here.
+		// The Hub already processed the peer before firing the callback.
+		// Calling UpdatePeers([single_peer]) would mark all OTHER peers
+		// as "not seen" and trigger mass offline callbacks.
 		nick := msg.participant.HumanNick
 		if nick == "" {
 			nick = "(unknown)"
