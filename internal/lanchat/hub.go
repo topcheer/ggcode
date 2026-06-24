@@ -345,17 +345,23 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		}
 	}
 
-	// Mark peers offline — two cases:
-	// 1. Peer disappeared from A2A registry (process exited)
-	// 2. Peer is still in registry but lanchat server is unresponsive
-	//    (LastSeen stale beyond ageOffline despite presence heartbeats)
+	// Mark peers offline — based SOLELY on LastSeen (presence heartbeat).
+	// Do NOT use mDNS discovery absence (!seen[id]) as an offline signal:
+	// mDNS results jitter (a peer can briefly disappear for one tick then
+	// reappear), which causes endless online→offline→online flapping.
+	//
+	// Deletion: a peer is removed from the map only when BOTH conditions hold:
+	//   1. It has been offline (LastSeen stale beyond ageOffline)
+	//   2. It is no longer in the current mDNS discovery results
+	// This prevents stale entries (from restarted processes with new nodeIDs)
+	// from accumulating forever, while tolerating transient mDNS jitter.
 	type leftPeer struct {
 		nodeID, humanNick string
 	}
 	var leftPeers []leftPeer
 	for id, p := range h.peers {
 		isStale := time.Since(time.Unix(p.LastSeen, 0)) > ageOffline
-		if (!seen[id] || isStale) && p.Online {
+		if isStale && p.Online {
 			p.Online = false
 			// Only notify offline for peers we previously announced as online
 			// (verified via presence exchange). Unverified peers are silently removed.
@@ -363,9 +369,10 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 				leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
 			}
 		}
-		// Remove peers no longer in discovery results immediately.
-		// nodeIDs change on every restart so stale entries accumulate forever.
-		if !seen[id] {
+		// Delete peers that are offline AND no longer discovered via mDNS.
+		// This cleans up stale nodeIDs from restarted processes while
+		// tolerating mDNS jitter for peers that are still alive.
+		if !seen[id] && (!p.Online || isStale) {
 			delete(h.peers, id)
 		}
 	}
