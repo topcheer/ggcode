@@ -126,7 +126,7 @@ func TestMDNSServiceStartStop(t *testing.T) {
 		Status:    "ready",
 		StartedAt: "2026-04-26T10:00:00Z",
 	}
-	if err := m.start(info); err != nil {
+	if err := m.start(info, nil); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestMDNSServiceStartInvalidEndpoint(t *testing.T) {
 	info := InstanceInfo{
 		Endpoint: "invalid-no-port",
 	}
-	if err := m.start(info); err == nil {
+	if err := m.start(info, nil); err == nil {
 		t.Fatal("expected error for invalid endpoint")
 	}
 }
@@ -164,7 +164,7 @@ func TestMDNSServiceSelfExclusion(t *testing.T) {
 		Workspace: "/tmp/self",
 		Status:    "ready",
 	}
-	if err := m.start(info); err != nil {
+	if err := m.start(info, nil); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	defer m.stop()

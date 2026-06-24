@@ -44,6 +44,11 @@ type Registry struct {
 	selfInfo *InstanceInfo
 	mdnsSvc  *mdnsService // nil if LAN discovery is disabled
 
+	// interfaces controls which NICs mDNS advertises on. Set via
+	// SetInterfaces before Register. If nil, default-route auto-detection
+	// runs inside mdns.start().
+	interfaces []string
+
 	// asyncCache is populated by a background goroutine so the UI thread
 	// never blocks on mDNS lookups.
 	asyncCache   []InstanceInfo
@@ -60,16 +65,25 @@ func NewRegistry() (*Registry, error) {
 	}, nil
 }
 
+// SetInterfaces configures which network interfaces mDNS should advertise on.
+// Must be called before Register. Pass nil to auto-detect the default route.
+func (r *Registry) SetInterfaces(ifaces []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.interfaces = ifaces
+}
+
 // Register records self info and starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
 	r.selfInfo = &info
 	r.asyncCacheOK = false
+	ifaces := r.interfaces
 	r.mu.Unlock()
 
 	if r.mdnsSvc != nil {
-		if startErr := r.mdnsSvc.start(info); startErr != nil {
+		if startErr := r.mdnsSvc.start(info, ifaces); startErr != nil {
 			debug.Log("a2a.registry", "mDNS registration warning: %v", startErr)
 		}
 	}

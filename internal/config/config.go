@@ -300,11 +300,12 @@ const DefaultA2AAPIKey = "ggcode-lan-a2a-v1"
 // A2A is enabled by default — mDNS discovery runs automatically so teams
 // on the same network can discover each other without any configuration.
 type A2AConfig struct {
-	Disabled    bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
-	Port        int           `yaml:"port"`               // 0 = auto-assign
-	Host        string        `yaml:"host"`               // default "0.0.0.0" (always)
-	MaxTasks    int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
-	TaskTimeout string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
+	Disabled    bool          `yaml:"disabled,omitempty"`   // true to disable (default: enabled)
+	Port        int           `yaml:"port"`                 // 0 = auto-assign
+	Host        string        `yaml:"host"`                 // default "0.0.0.0" (always)
+	MaxTasks    int           `yaml:"max_tasks"`            // concurrent task limit (default 5)
+	TaskTimeout string        `yaml:"task_timeout"`         // per-task timeout (default "5m")
+	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
 	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
 }
 

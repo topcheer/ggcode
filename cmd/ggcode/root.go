@@ -1254,6 +1254,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		AgentCardURL: srv.Endpoint() + "/.well-known/agent.json",
 		Status:       "ready",
 	}
+	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
 		return nil, nil, nil, fmt.Errorf("a2a register: %w", err)

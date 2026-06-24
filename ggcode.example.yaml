@@ -592,6 +592,10 @@ plugins:
 #   host: ""                   # defaults to 0.0.0.0 (always LAN accessible)
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
+#   interfaces: []             # mDNS advertise interfaces (default: auto-detect default route)
+#                               # Example: ["en0"] to advertise on Wi-Fi only.
+#                               # Useful on multi-NIC machines to avoid advertising
+#                               # Docker bridge (172.17.0.1) or VPN tunnel IPs.
 #
 #   # mDNS discovery is always on — no configuration needed.
 #   # ggcode uses a built-in community key (ggcode-lan-a2a-v1) that lets

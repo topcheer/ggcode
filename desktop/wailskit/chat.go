@@ -2207,6 +2207,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		AgentCardURL: srv.Endpoint() + "/.well-known/agent.json",
 		Status:       "ready",
 	}
+	a2aReg.SetInterfaces(cfg.A2A.Interfaces)
 	if err := a2aReg.Register(instance); err != nil {
 		log.Printf("[a2a] failed to register: %v", err)
 		srv.Stop()

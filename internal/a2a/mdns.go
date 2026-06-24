@@ -34,8 +34,20 @@ func newMDNSService() *mdnsService {
 }
 
 // start broadcasts this instance via mDNS and begins continuous discovery.
-func (m *mdnsService) start(info InstanceInfo) error {
+// interfaces controls which NICs are used for advertising; if nil, the
+// default-route interface is auto-detected.
+func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 	m.info = &info
+
+	// Resolve effective interfaces (auto-detect default route if not specified).
+	effectiveIfaces := ResolveInterfaces(interfaces)
+
+	// Compute the IPs to advertise — only from the selected interfaces.
+	advertiseIPs := IPsForInterfaces(effectiveIfaces)
+	if len(advertiseIPs) == 0 {
+		debug.Log("a2a.mdns", "no IPs from interfaces %v, falling back to all", effectiveIfaces)
+		advertiseIPs = allNonLoopbackIPv4s()
+	}
 
 	// Extract port from endpoint (may include http:// scheme).
 	endpoint := info.Endpoint
@@ -63,7 +75,8 @@ func (m *mdnsService) start(info InstanceInfo) error {
 	}
 
 	srv, err := mdnslib.NewServer(mdnslib.Config{
-		Domain: mDNSDomain,
+		Domain:     mDNSDomain,
+		Interfaces: effectiveIfaces,
 	})
 	if err != nil {
 		return fmt.Errorf("mDNS server create: %w", err)
@@ -79,6 +92,7 @@ func (m *mdnsService) start(info InstanceInfo) error {
 		Name: name,
 		Port: uint16(port),
 		Text: txt,
+		IPs:  advertiseIPs, // explicitly set which IPs to advertise in A records
 	}
 
 	if err := srv.RegisterService(svc); err != nil {
@@ -116,7 +130,8 @@ func (m *mdnsService) start(info InstanceInfo) error {
 	m.server = srv
 	m.browser = browser
 
-	debug.Log("a2a.mdns", "registered as %s port=%d, browser started", name, port)
+	debug.Log("a2a.mdns", "registered as %s port=%d ifaces=%v ips=%v, browser started",
+		name, port, effectiveIfaces, advertiseIPs)
 	return nil
 }
 
@@ -164,17 +179,9 @@ func serviceInfoToInstance(inst *mdnslib.ServiceInstanceInfo) *InstanceInfo {
 		return nil
 	}
 
-	// Prefer IPv4.
-	ip := ""
-	for _, addr := range inst.IPs {
-		if addr.To4() != nil {
-			ip = addr.String()
-			break
-		}
-	}
-	if ip == "" {
-		ip = inst.IPs[0].String()
-	}
+	// Prefer an IPv4 address that's reachable on a local subnet.
+	// This avoids picking a Docker/VPN IP that the receiver can't reach.
+	ip := pickBestIP(inst.IPs)
 
 	endpoint := fmt.Sprintf("http://%s:%d", ip, inst.Port)
 
@@ -228,4 +235,65 @@ func sanitizeMDNSName(name string) string {
 		name = name[:63]
 	}
 	return name
+}
+
+// pickBestIP selects the best IP address from a list of discovered IPs.
+// Preference order:
+//  1. IPv4 addresses on a local subnet (reachable without routing)
+//  2. Any IPv4 address
+//  3. First address (IPv6 fallback)
+func pickBestIP(ips []net.IP) string {
+	// Collect local subnets once.
+	localSubnets := localSubnetList()
+
+	// Pass 1: IPv4 on a local subnet.
+	for _, addr := range ips {
+		if ip4 := addr.To4(); ip4 != nil {
+			for _, subnet := range localSubnets {
+				if subnet.Contains(ip4) {
+					return ip4.String()
+				}
+			}
+		}
+	}
+
+	// Pass 2: any IPv4.
+	for _, addr := range ips {
+		if ip4 := addr.To4(); ip4 != nil {
+			return ip4.String()
+		}
+	}
+
+	// Pass 3: fallback.
+	if len(ips) > 0 {
+		return ips[0].String()
+	}
+	return ""
+}
+
+// localSubnetList returns all local network subnets (IPv4 only) for
+// use in pickBestIP preference matching.
+func localSubnetList() []*net.IPNet {
+	var subnets []*net.IPNet
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return subnets
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				if ipNet.IP.To4() != nil {
+					subnets = append(subnets, ipNet)
+				}
+			}
+		}
+	}
+	return subnets
 }
