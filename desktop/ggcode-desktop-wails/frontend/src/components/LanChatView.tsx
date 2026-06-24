@@ -97,21 +97,12 @@ export function LanChatView({ onUnreadChange }: Props) {
       } catch {}
     })
 
-    // Periodic refresh as a safety net (every 30s, less aggressive than before)
-    const interval = setInterval(async () => {
-      try {
-        const pending = await (window as any).LanChatPendingApprovals()
-        setPendingApprovals(pending || [])
-      } catch {}
-    }, 30000)
-
     return () => {
       offMessage()
       offReceipt()
       offAddParticipant()
       offRemoveParticipant()
       offApproval()
-      clearInterval(interval)
     }
   }, [hasInitiallyLoaded, updateUnread])
 
