@@ -146,6 +146,12 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 		h.humanNick = persisted
 		h.agentNick = AgentNick(persisted)
 	}
+	// Load persisted messages into memory so they survive across restarts.
+	if h.store != nil {
+		if msgs, err := h.store.LoadRecent(sessionID, maxHistoryPerSession); err == nil {
+			h.messages = msgs
+		}
+	}
 	h.mu.Unlock()
 }
 
