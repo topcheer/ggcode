@@ -62,8 +62,8 @@ type Hub struct {
 
 // PendingAgentMsg is an incoming @agent direct message awaiting host approval.
 type PendingAgentMsg struct {
-	Message  Message
-	Received time.Time
+	Message  Message   `json:"message"`
+	Received time.Time `json:"received"`
 }
 
 // globalNickDir extracts the global lanchat dir from a session-scoped path.
