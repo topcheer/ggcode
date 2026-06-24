@@ -6,13 +6,17 @@ import (
 )
 
 // MountHandlers registers lanchat HTTP endpoints on the given mux.
-// All endpoints require the same X-API-Key auth as the A2A server.
+// All endpoints are wrapped with AuthMiddleware using the Hub's API key.
 func MountHandlers(mux *http.ServeMux, hub *Hub) {
-	mux.HandleFunc("/lanchat/message", hub.handleReceiveMessage)
-	mux.HandleFunc("/lanchat/receipt", hub.handleReceiveReceipt)
-	mux.HandleFunc("/lanchat/nick", hub.handleNickChange)
-	mux.HandleFunc("/lanchat/presence", hub.handlePresence)
-	mux.HandleFunc("/lanchat/participants", hub.handleParticipantQuery)
+	apiKey := hub.APIKey()
+	auth := func(next http.HandlerFunc) http.HandlerFunc {
+		return AuthMiddleware(apiKey, next)
+	}
+	mux.HandleFunc("/lanchat/message", auth(hub.handleReceiveMessage))
+	mux.HandleFunc("/lanchat/receipt", auth(hub.handleReceiveReceipt))
+	mux.HandleFunc("/lanchat/nick", auth(hub.handleNickChange))
+	mux.HandleFunc("/lanchat/presence", auth(hub.handlePresence))
+	mux.HandleFunc("/lanchat/participants", auth(hub.handleParticipantQuery))
 	if hub.attachments != nil {
 		mux.HandleFunc("/lanchat/attach/", hub.attachments.HandleAttachmentDownload)
 	}

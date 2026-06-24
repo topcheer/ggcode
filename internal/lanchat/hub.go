@@ -46,7 +46,8 @@ type Hub struct {
 	receipts map[string]Receipt
 
 	// store for per-session persistence
-	store *Store
+	store     *Store
+	sessionID string
 
 	// callbacks for UI integration
 	onMessage        func(Message)
@@ -128,6 +129,7 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	}
 	sessionDir := filepath.Join(baseDir, "sessions", sessionID)
 	h.mu.Lock()
+	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
 	// Try to load session-specific nick
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
@@ -142,6 +144,13 @@ func (h *Hub) Attachments() *AttachmentManager {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.attachments
+}
+
+// APIKey returns the A2A API key used for peer authentication.
+func (h *Hub) APIKey() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.apiKey
 }
 
 // SetCallbacks registers UI event callbacks.
@@ -549,15 +558,9 @@ func (h *Hub) SendBroadcast(ctx context.Context, content string, attachments []A
 // SendDirect sends a targeted message to a specific node/role.
 func (h *Hub) SendDirect(ctx context.Context, toNodeID, toRole, content string, attachments []Attachment) error {
 	h.mu.RLock()
-	fromRole := RoleHuman
-	fromNick := h.humanNick
-	// Messages from agent role use agent nick (currently disabled)
-	if false {
-		fromRole = RoleAgent
-		fromNick = h.agentNick
-	}
+	nick := h.humanNick
 	h.mu.RUnlock()
-	msg := h.newMessage(fromRole, fromNick, toNodeID, toRole, content, attachments)
+	msg := h.newMessage(RoleHuman, nick, toNodeID, toRole, content, attachments)
 	return h.deliverMessage(ctx, msg, false)
 }
 
@@ -600,10 +603,12 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 	if len(h.messages) > maxHistoryPerSession*2 {
 		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 	}
+	// Persist to session store if available
+	h.persistMessage(msg)
 	h.mu.Unlock()
 
 	if broadcast {
-		// Send to all peers
+		// Send to all peers (fire-and-forget for broadcasts)
 		h.mu.RLock()
 		peers := make([]Participant, 0, len(h.peers))
 		for _, p := range h.peers {
@@ -614,34 +619,55 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 		h.mu.RUnlock()
 
 		for _, peer := range peers {
-			safego.Go("lanchat.postToPeer", func() { h.postToPeer(ctx, peer.Endpoint, msg) })
+			safego.Go("lanchat.postToPeer", func() { h.postToPeerWithRetry(ctx, peer.Endpoint, msg, 1) })
 		}
 		return nil
 	}
 
-	// Direct message — find the target peer
+	// Direct message — find the target peer and deliver synchronously
+	// so the caller learns about delivery failures immediately.
 	h.mu.RLock()
 	peer, ok := h.peers[msg.ToNodeID]
 	h.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", msg.ToNodeID)
 	}
-	safego.Go("lanchat.postToPeer", func() { h.postToPeer(ctx, peer.Endpoint, msg) })
-	return nil
+	return h.postToPeerWithRetry(ctx, peer.Endpoint, msg, 2)
 }
 
-func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) {
+// postToPeerWithRetry sends a message to a peer, retrying up to maxRetries
+// times on transient failures. Returns an error if all attempts fail.
+func (h *Hub) postToPeerWithRetry(ctx context.Context, endpoint string, msg Message, maxRetries int) error {
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+		}
+		if err := h.postToPeer(ctx, endpoint, msg); err != nil {
+			lastErr = err
+			debug.Log("lanchat", "POST to %s failed (attempt %d/%d): %v", endpoint, attempt+1, maxRetries, err)
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) error {
 	url := strings.TrimRight(endpoint, "/") + "/lanchat/message"
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		debug.Log("lanchat", "marshal error: %v", err)
-		return
+		return fmt.Errorf("marshal: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
-		return
+		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if h.apiKey != "" {
@@ -650,10 +676,13 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) {
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		debug.Log("lanchat", "POST to %s failed: %v", endpoint, err)
-		return
+		return fmt.Errorf("POST to %s: %w", endpoint, err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("peer returned %d for %s", resp.StatusCode, endpoint)
+	}
+	return nil
 }
 
 func (h *Hub) broadcastNickChange(newNick string) {
@@ -692,6 +721,16 @@ func (h *Hub) broadcastNickChange(newNick string) {
 
 // ---- Inbound (called by HTTP handlers) ----
 
+// persistMessage saves a message to the per-session store if both store and
+// sessionID are set. Must be called with h.mu held.
+func (h *Hub) persistMessage(msg Message) {
+	if h.store != nil && h.sessionID != "" {
+		if err := h.store.Append(h.sessionID, msg); err != nil {
+			debug.Log("lanchat", "persist message: %v", err)
+		}
+	}
+}
+
 // HandleIncomingMessage processes a message received from a peer.
 func (h *Hub) HandleIncomingMessage(msg Message) {
 	h.mu.Lock()
@@ -700,6 +739,8 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	if len(h.messages) > maxHistoryPerSession*2 {
 		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 	}
+	// Persist to session store if available
+	h.persistMessage(msg)
 
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID

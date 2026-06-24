@@ -157,8 +157,21 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lanChatPanel.approvalPopup = true
 		return m, nil
 	case lanchatReceiptMsg:
-		// Receipt was already processed by the Hub's HTTP handler before
-		// firing the onReceipt callback. Do NOT call HandleReceipt here.
+		// Show receipt status as a system message in the chat panel.
+		switch msg.receipt.Status {
+		case lanchat.StatusDelivered:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [delivered] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
+		case lanchat.StatusProcessing:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [processing] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
+		case lanchat.StatusApproved:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [approved] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
+		case lanchat.StatusRejected:
+			reason := msg.receipt.Reason
+			if reason == "" {
+				reason = "(no reason given)"
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [rejected] message %s: %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))], reason))
+		}
 		return m, nil
 	case lanchatPeerJoinMsg:
 		// System message in main chat — do NOT call UpdatePeers here.

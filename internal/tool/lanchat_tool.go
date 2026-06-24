@@ -131,7 +131,7 @@ func (t LanChatTool) doList() Result {
 	for _, p := range participants {
 		lastSeen := "never"
 		if p.LastSeen > 0 {
-			lastSeen = time.Since(time.UnixMilli(p.LastSeen)).Round(time.Second).String() + " ago"
+			lastSeen = time.Since(time.Unix(p.LastSeen, 0)).Round(time.Second).String() + " ago"
 		}
 		peers = append(peers, peerInfo{
 			NodeID:    p.NodeID,
