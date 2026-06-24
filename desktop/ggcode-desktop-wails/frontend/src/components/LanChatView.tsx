@@ -55,18 +55,29 @@ function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
 /** Build contact entries from participants. */
 function buildContacts(participants: LanChatParticipant[], selfNodeID: string): ContactEntry[] {
   const contacts: ContactEntry[] = []
+  const seen = new Set<string>() // dedup by `${nick}:${role}`
   for (const p of participants) {
     if (p.node_id === selfNodeID) continue
     if (p.human_nick) {
-      contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
+      const key = `${p.human_nick}:human`
+      if (!seen.has(key)) {
+        seen.add(key)
+        contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
+      }
     }
     if (p.agent_nick) {
-      contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent' })
+      const key = `${p.agent_nick}:agent`
+      if (!seen.has(key)) {
+        seen.add(key)
+        contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent' })
+      }
     }
     if (!p.human_nick && !p.agent_nick) {
       contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human' })
     }
   }
+  // Sort alphabetically by label
+  contacts.sort((a, b) => a.label.localeCompare(b.label))
   return contacts
 }
 
