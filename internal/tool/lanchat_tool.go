@@ -18,9 +18,15 @@ type LanChatTool struct {
 func (t LanChatTool) Name() string { return "lanchat" }
 
 func (t LanChatTool) Description() string {
-	return "Interact with the LAN Chat system to communicate with other ggcode users and agents on the local network. " +
-		"Actions: 'list' participants, 'send' a message (broadcast or direct), 'history' of recent messages, " +
-		"'pending' message approvals, 'approve' or 'reject' a pending @agent message."
+	return "Send and receive messages on the LAN Chat network connecting ggcode instances on the local network. " +
+		"Use this when a user asks to message, reply, or ask something to another ggcode user or their agent visible in the LAN Chat panel (messages prefixed with [LAN Chat from <nick>]). " +
+		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for external agent delegation). " +
+		"Actions: 'list' to discover participant node IDs, 'send' to message a participant, 'history' to read recent messages, " +
+		"'pending'/'approve'/'reject' to manage @agent approvals.\n" +
+		"\nTypical workflow to reply to a LAN Chat message:\n" +
+		"1. Call lanchat(action='list') to find the target's node_id\n" +
+		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...') to reach their agent\n" +
+		"   Use to_role='human' to message the human user instead of their agent."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {
@@ -30,36 +36,36 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			"action": {
 				"type": "string",
 				"enum": ["list", "send", "history", "pending", "approve", "reject"],
-				"description": "Action to perform: list=show online participants, send=send a message, history=recent messages, pending=pending @agent approvals, approve/reject=manage pending messages"
+				"description": "list=discover participants and their node_id; send=send a message; history=recent messages; pending/list @agent approvals; approve/reject a pending message"
 			},
 			"message": {
 				"type": "string",
-				"description": "Message text to send (for 'send' action). Required for send."
+				"description": "Message text to send (required for 'send')."
 			},
 			"to": {
 				"type": "string",
-				"description": "Recipient node ID for direct messages (for 'send' action). Omit for broadcast to all."
-			},
-			"as_agent": {
-				"type": "boolean",
-				"description": "If true, send as the agent role instead of human (for 'send' action). Default: false."
+				"description": "Recipient node_id for direct message. Omit for broadcast. Find it via action='list' first."
 			},
 			"to_role": {
 				"type": "string",
 				"enum": ["human", "agent"],
-				"description": "Direct messages only: target the recipient's human user or their agent. Messages to 'agent' trigger the recipient's approval flow. Default: 'human'. Ignored for broadcasts."
+				"description": "Direct messages only. 'agent' = deliver to recipient's agent (triggers their approval + agent loop). 'human' = show in recipient's chat panel for the human to read. Default: 'human'."
+			},
+			"as_agent": {
+				"type": "boolean",
+				"description": "Sender identity. true = send as agent (fromRole=agent). false = send as the local human user. Default: false."
 			},
 			"message_id": {
 				"type": "string",
-				"description": "Message ID to approve or reject (for 'approve'/'reject' actions)"
+				"description": "ID of the pending message to approve or reject."
 			},
 			"reason": {
 				"type": "string",
-				"description": "Rejection reason (for 'reject' action)"
+				"description": "Optional rejection reason."
 			},
 			"limit": {
 				"type": "integer",
-				"description": "Max number of history messages to return (for 'history' action). Default: 20"
+				"description": "Max messages for 'history'. Default: 20."
 			},
 			"description": {
 				"type": "string",
