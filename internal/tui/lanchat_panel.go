@@ -147,13 +147,14 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lanchatApprovalReqMsg:
-		if m.lanChatPanel != nil {
-			m.lanChatPanel.approvalPopup = true
-		} else {
-			// Show system message in main chat
-			m.lanChatNotice = fmt.Sprintf("%s sent a message to your agent — /chat to view", msg.pending.Message.FromNick)
-			m.lanChatUnread++
+		// Auto-open the lanchat panel with approval popup so the user
+		// can approve/reject immediately. Previously the approval popup
+		// was only shown if the panel was already open, which meant
+		// @agent messages were silently stuck when the panel was closed.
+		if m.lanChatPanel == nil {
+			m.openLanChatPanel()
 		}
+		m.lanChatPanel.approvalPopup = true
 		return m, nil
 	case lanchatReceiptMsg:
 		// Receipt was already processed by the Hub's HTTP handler before
