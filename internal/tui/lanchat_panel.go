@@ -479,6 +479,7 @@ func (m *Model) renderLanChatPanel() string {
 			}
 		}
 		if len(nicks) > 0 {
+			sort.Strings(nicks)
 			onlineStr = strings.Join(nicks, "  ")
 		}
 	}
