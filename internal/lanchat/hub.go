@@ -291,10 +291,16 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			h.peers[p.NodeID] = &cp
 			newPeers = append(newPeers, cp)
 		} else {
-			// Update existing peer info — but DON'T overwrite nicks with
-			// empty values. A2A discovery doesn't carry lanchat nicks, so
-			// p.HumanNick/p.AgentNick are usually "". We must preserve the
-			// nicks we learned from presence/messages.
+			// Update existing peer metadata — but DON'T touch Online status.
+			// Online is driven entirely by presence/LastSeen, NOT by mDNS
+			// discovery. mDNS proves the process is alive, but lanchat
+			// responsiveness is tracked via LastSeen. If we set Online=true
+			// here, the stale check below immediately sets it back to false,
+			// causing an endless join/leave cycle every tick.
+			//
+			// Also DON'T overwrite nicks with empty values. A2A discovery
+			// doesn't carry lanchat nicks, so p.HumanNick/p.AgentNick are
+			// usually "". We must preserve nicks learned from presence.
 			if p.HumanNick != "" {
 				existing.HumanNick = p.HumanNick
 			}
@@ -303,12 +309,19 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			}
 			existing.Mode = p.Mode
 			existing.Endpoint = p.Endpoint
-			existing.Online = true
-			if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
+			// Only probe peers that are currently online (or were never seen).
+			// Offline peers that reappear via mDNS will be re-probed by the
+			// stale/heartbeat logic below.
+			if existing.Online {
+				if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
+					stalePeers = append(stalePeers, *existing)
+				}
+				if existing.HumanNick == "" {
+					emptyNickPeers = append(emptyNickPeers, *existing)
+				}
+			} else {
+				// Peer is offline but re-discovered via mDNS — probe it.
 				stalePeers = append(stalePeers, *existing)
-			}
-			if existing.HumanNick == "" {
-				emptyNickPeers = append(emptyNickPeers, *existing)
 			}
 		}
 	}
@@ -483,6 +496,7 @@ func (h *Hub) sendPresence(peer Participant) {
 		var participant Participant
 		h.mu.Lock()
 		if existing, ok := h.peers[peerInfo.NodeID]; ok {
+			wasOffline := !existing.Online
 			// Guard against empty overwrites
 			if peerInfo.HumanNick != "" {
 				existing.HumanNick = peerInfo.HumanNick
@@ -494,8 +508,9 @@ func (h *Hub) sendPresence(peer Participant) {
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
 			participant = *existing
-			// If we just learned the nick, fire the join callback
-			if existing.HumanNick != "" && !existing.notifiedJoin {
+			// Fire join callback when nick is first learned OR when peer
+			// recovers from offline (was offline, now presence succeeded).
+			if existing.HumanNick != "" && (!existing.notifiedJoin || wasOffline) {
 				existing.notifiedJoin = true
 				cb = h.onParticipantAdd
 			}
