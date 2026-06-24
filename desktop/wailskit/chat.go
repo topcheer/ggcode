@@ -2275,7 +2275,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	b.a2aRefreshCancel = refreshCancel
 
 	// Mount lanchat handlers on the A2A server mux.
-	chatStore := lanchat.NewStore(filepath.Join(config.HomeDir(), "lanchat"))
+	chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
 	b.lanchatHub = lanchat.NewHub(
 		a2aReg.SelfID(),
 		"gui",
