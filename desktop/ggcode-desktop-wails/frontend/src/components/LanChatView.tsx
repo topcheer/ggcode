@@ -7,56 +7,104 @@ interface Props {
   onUnreadChange?: (count: number) => void
 }
 
-/** Target option for the dropdown / @mention — can address human or agent of a node. */
-interface TargetOption {
-  node_id: string
-  label: string       // display label
-  nick: string        // the nick to @mention
-  to_role: string     // "human" | "agent"
+// --- Room types ---
+// Room key: "broadcast" | "dm:<nodeID>:<role>"
+interface ChatRoom {
+  messages: LanChatMessage[]
+  unread: number
 }
 
-/** Build target options from participants — includes both human and agent identities. */
-function buildTargets(participants: LanChatParticipant[], selfNodeID: string): TargetOption[] {
-  const targets: TargetOption[] = []
+interface ContactEntry {
+  node_id: string
+  label: string        // human_nick or agent_nick
+  nick: string         // for @mention
+  to_role: string      // "human" | "agent"
+}
+
+function roomKeyForDM(nodeID: string, role: string): string {
+  return `dm:${nodeID}:${role}`
+}
+
+/** Parse a room key into { nodeID, role } or null for broadcast. */
+function parseRoomKey(key: string): { nodeID: string; role: string } | null {
+  if (key === 'broadcast') return null
+  const parts = key.split(':') // ["dm", nodeID, role] but nodeID may contain ':'
+  if (parts.length < 3) return null
+  // nodeID is everything between first and last ':'
+  const role = parts[parts.length - 1]
+  const nodeID = parts.slice(1, -1).join(':')
+  return { nodeID, role }
+}
+
+/** Determine which room a message belongs to. */
+function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
+  // DM to me
+  if (msg.to_node_id === selfNodeID && msg.to_node_id !== '') {
+    return roomKeyForDM(msg.from_node_id, msg.from_role)
+  }
+  // DM from me to someone
+  if (msg.from_node_id === selfNodeID && msg.to_node_id !== '') {
+    // Need the recipient's role — but from_role is "human" (me)
+    // The to_role tells us which role of the recipient
+    return roomKeyForDM(msg.to_node_id, msg.to_role)
+  }
+  // Broadcast
+  return 'broadcast'
+}
+
+/** Build contact entries from participants. */
+function buildContacts(participants: LanChatParticipant[], selfNodeID: string): ContactEntry[] {
+  const contacts: ContactEntry[] = []
   for (const p of participants) {
     if (p.node_id === selfNodeID) continue
     if (p.human_nick) {
-      targets.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
+      contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
     }
     if (p.agent_nick) {
-      targets.push({ node_id: p.node_id, label: `${p.agent_nick} (agent)`, nick: p.agent_nick, to_role: 'agent' })
+      contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent' })
     }
-    // If no nicks at all, show node_id fallback
     if (!p.human_nick && !p.agent_nick) {
-      targets.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human' })
+      contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human' })
     }
   }
-  return targets
+  return contacts
 }
 
 export function LanChatView({ onUnreadChange }: Props) {
-  const [messages, setMessages] = useState<LanChatMessage[]>([])
   const [participants, setParticipants] = useState<LanChatParticipant[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<LanChatPendingApproval[]>([])
-  const [inputText, setInputText] = useState('')
   const [nick, setNick] = useState('')
-  const [selectedTarget, setSelectedTarget] = useState<string>('')  // "nodeID:role" or ""
-  const messagesEndRef = useRef<HTMLDivElement>(null)
   const [selfNodeID, setSelfNodeID] = useState('')
 
-  // @mention autocomplete state
-  const [mentionList, setMentionList] = useState<TargetOption[]>([])
-  const [mentionIndex, setMentionIndex] = useState(0)
-  const [mentionQuery, setMentionQuery] = useState('')
-  const [showMentions, setShowMentions] = useState(false)
+  // Room state: all messages stored per-room
+  const [rooms, setRooms] = useState<Map<string, ChatRoom>>(new Map([['broadcast', { messages: [], unread: 0 }]]))
+  const [activeRoom, setActiveRoom] = useState('broadcast')
+
+  const [inputText, setInputText] = useState('')
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const unreadCount = useRef(0)
-  const updateUnread = useCallback(() => {
-    onUnreadChange?.(unreadCount.current)
-  }, [onUnreadChange])
+  const contacts = buildContacts(participants, selfNodeID)
 
-  const targets = buildTargets(participants, selfNodeID)
+  // --- Helpers to manipulate rooms ---
+  const addMessageToRoom = useCallback((roomKey: string, msg: LanChatMessage, isActive: boolean) => {
+    setRooms(prev => {
+      const next = new Map(prev)
+      const room = next.get(roomKey) || { messages: [], unread: 0 }
+      const updated: ChatRoom = {
+        messages: [...room.messages, msg],
+        unread: isActive ? 0 : room.unread + 1,
+      }
+      next.set(roomKey, updated)
+      return next
+    })
+  }, [])
+
+  const totalUnread = Array.from(rooms.values()).reduce((sum, r) => sum + r.unread, 0)
+
+  const updateUnread = useCallback(() => {
+    onUnreadChange?.(totalUnread)
+  }, [onUnreadChange, totalUnread])
 
   // --- Initial load + event listeners ---
   useEffect(() => {
@@ -71,12 +119,23 @@ export function LanChatView({ onUnreadChange }: Props) {
           App.LanChatSelf(),
         ])
         if (mounted) {
-          setMessages((msgs as any) || [])
           setParticipants((parts as any) || [])
           setPendingApprovals((pending as any) || [])
           const s = self as any
-          setSelfNodeID(s?.node_id || '')
+          const myID = s?.node_id || ''
+          setSelfNodeID(myID)
           setNick(s?.human_nick || s?.agent_nick || '')
+
+          // Distribute initial messages into rooms
+          const msgArr = (msgs as any) || []
+          const roomMap = new Map<string, ChatRoom>([['broadcast', { messages: [], unread: 0 }]])
+          for (const msg of msgArr) {
+            const key = roomKeyForMessage(msg, myID)
+            const room = roomMap.get(key) || { messages: [], unread: 0 }
+            room.messages.push(msg)
+            roomMap.set(key, room)
+          }
+          setRooms(roomMap)
         }
       } catch (e) {
         console.error('LAN Chat initial load failed:', e)
@@ -93,9 +152,17 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
 
     const offMessage = EventsOn('lanchat:message', (msg: any) => {
-      setMessages(prev => [...prev, msg])
-      unreadCount.current++
-      updateUnread()
+      // Determine target room
+      let roomKey = 'broadcast'
+      if (msg.to_node_id && msg.to_node_id === selfNodeID) {
+        // DM to me — use sender's role
+        roomKey = roomKeyForDM(msg.from_node_id, msg.from_role)
+      } else if (msg.from_node_id === selfNodeID && msg.to_node_id) {
+        // DM from me
+        roomKey = roomKeyForDM(msg.to_node_id, msg.to_role)
+      }
+      const isActive = roomKey === activeRoom
+      addMessageToRoom(roomKey, msg as LanChatMessage, isActive)
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
       }, 50)
@@ -113,7 +180,7 @@ export function LanChatView({ onUnreadChange }: Props) {
       } catch {}
     })
 
-    // Retry participants load — peers may not be discovered yet at initial load.
+    // Retry participants load
     const retry1 = setTimeout(refreshParticipants, 5000)
     const retry2 = setTimeout(refreshParticipants, 10000)
 
@@ -129,113 +196,58 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
   }, [])
 
+  // Track totalUnread for NavRail badge
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    onUnreadChange?.(totalUnread)
+  }, [totalUnread, onUnreadChange])
 
-  useEffect(() => {
-    unreadCount.current = 0
-    updateUnread()
-  }, [inputText, selectedTarget, updateUnread])
-
-  // --- @mention autocomplete ---
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value
-    setInputText(val)
-
-    // Detect @mention: text starts with @ or has space then @
-    const atMatch = val.match(/(?:^|\s)@(\S*)$/)
-    if (atMatch) {
-      const query = atMatch[1].toLowerCase()
-      const matched = targets.filter(t =>
-        t.nick && t.nick.toLowerCase().includes(query)
-      )
-      if (matched.length > 0) {
-        setMentionList(matched)
-        setMentionQuery(atMatch[0]) // full match including @
-        setMentionIndex(0)
-        setShowMentions(true)
-        return
+  // Clear unread when switching to a room
+  const switchRoom = useCallback((key: string) => {
+    setActiveRoom(key)
+    setRooms(prev => {
+      const next = new Map(prev)
+      const room = next.get(key)
+      if (room) {
+        next.set(key, { ...room, unread: 0 })
       }
-    }
-    setShowMentions(false)
-  }
-
-  const selectMention = (target: TargetOption) => {
-    // Replace the @query with @nick
-    const newText = inputText.replace(
-      /(?:^|\s)@(\S*)$/,
-      (match, prefix) => {
-        const sep = match.startsWith(' ') ? ' ' : ''
-        return `${sep}@${target.nick} `
-      }
-    )
-    setInputText(newText)
-    setShowMentions(false)
-    inputRef.current?.focus()
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (showMentions) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setMentionIndex(i => (i + 1) % mentionList.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setMentionIndex(i => (i - 1 + mentionList.length) % mentionList.length)
-        return
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
-        selectMention(mentionList[mentionIndex])
-        return
-      }
-      if (e.key === 'Escape') {
-        setShowMentions(false)
-        return
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
+      return next
+    })
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 50)
+  }, [])
 
   // --- Actions ---
   const handleSend = useCallback(async () => {
     if (!inputText.trim()) return
     try {
-      let nodeID = ''
-      let toRole = 'human'
-
-      if (selectedTarget) {
-        const [id, role] = selectedTarget.split(':')
-        nodeID = id
-        toRole = role || 'human'
-      }
-
-      // Parse @mention: "@nick message"
-      const mentionMatch = inputText.match(/^@(\S+)\s+(.*)/)
-      if (mentionMatch) {
-        const mentionedNick = mentionMatch[1]
-        const content = mentionMatch[2]
-        const found = targets.find(t => t.nick === mentionedNick)
-        if (found) {
-          await App.LanChatSend(content, found.node_id, found.to_role, false)
+      if (activeRoom === 'broadcast') {
+        // In group chat, @nick at the start sends a DM to that person
+        const mentionMatch = inputText.match(/^@(\S+)\s+(.*)/)
+        if (mentionMatch) {
+          const mentionedNick = mentionMatch[1]
+          const content = mentionMatch[2]
+          const found = contacts.find(c => c.nick === mentionedNick)
+          if (found) {
+            await App.LanChatSend(content, found.node_id, found.to_role, false)
+          } else {
+            // Unknown nick, broadcast as-is
+            await App.LanChatSend(inputText, '', '', false)
+          }
         } else {
-          // Unknown nick, broadcast
           await App.LanChatSend(inputText, '', '', false)
         }
       } else {
-        await App.LanChatSend(inputText, nodeID, toRole, false)
+        const info = parseRoomKey(activeRoom)
+        if (info) {
+          await App.LanChatSend(inputText, info.nodeID, info.role, false)
+        }
       }
       setInputText('')
     } catch (e) {
       console.error('Send failed:', e)
     }
-  }, [inputText, selectedTarget, targets])
+  }, [inputText, activeRoom, contacts])
 
   const handleApprove = useCallback(async (messageId: string) => {
     try {
@@ -266,188 +278,213 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
   }, [nick])
 
+  const activeMessages = rooms.get(activeRoom)?.messages || []
+  const activeLabel = activeRoom === 'broadcast'
+    ? 'Group Chat'
+    : (() => {
+        const info = parseRoomKey(activeRoom)
+        if (!info) return 'Chat'
+        const c = contacts.find(c => c.node_id === info!.nodeID && c.to_role === info!.role)
+        return c ? `${c.label}${c.to_role === 'agent' ? ' (agent)' : ''}` : 'Chat'
+      })()
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
-        <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>LAN Chat</span>
-        <button
-          onClick={handleNickChange}
-          style={{
-            padding: '2px 8px',
-            fontSize: '12px',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            background: 'var(--bg-secondary)',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer'
-          }}
-        >
-          {nick || 'unnamed'}
-        </button>
-        <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-          ({targets.length} contacts)
-        </span>
-      </div>
-
-      {/* Approval requests */}
-      {pendingApprovals.length > 0 && (
-        <div style={{ borderBottom: '1px solid var(--border-color)', padding: '8px 16px', flexShrink: 0 }}>
-          {pendingApprovals.map(p => (
-            <div
-              key={p.message.id}
-              style={{
-                padding: '8px 12px',
-                marginBottom: '4px',
-                borderRadius: '6px',
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-color)',
-                fontSize: '13px'
-              }}
-            >
-              <div style={{ marginBottom: '4px' }}>
-                <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>@agent</span>
-                <span style={{ color: 'var(--text-secondary)' }}> request from </span>
-                <span style={{ fontWeight: 500 }}>{p.message.from_nick}</span>
-              </div>
-              <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                {p.message.content}
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={() => handleApprove(p.message.id)}
-                  style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: 'var(--color-primary)', color: '#fff', cursor: 'pointer' }}
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => handleReject(p.message.id)}
-                  style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
-        {messages.length === 0 ? (
-          <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
-            No messages yet. Start a conversation with other ggcode users on your network.
-          </div>
-        ) : (
-          messages.map((msg, i) => {
-            const isSelf = msg.from_node_id === selfNodeID
-            const fromNick = msg.from_nick || 'unknown'
-            return (
-              <div
-                key={msg.id || i}
-                style={{
-                  marginBottom: '8px',
-                  display: 'flex',
-                  flexDirection: isSelf ? 'row-reverse' : 'row'
-                }}
-              >
-                <div style={{
-                  maxWidth: '70%',
-                  padding: '6px 12px',
-                  borderRadius: '8px',
-                  background: isSelf ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                  color: isSelf ? '#fff' : 'var(--text-primary)',
-                  fontSize: '13px',
-                  lineHeight: '1.4'
-                }}>
-                  {!isSelf && (
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: '2px' }}>
-                      {fromNick} {msg.from_role === 'agent' && <span style={{ color: 'var(--color-primary)' }}>agent</span>}
-                    </div>
-                  )}
-                  {msg.content}
-                </div>
-              </div>
-            )
-          })
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input area */}
-      <div style={{ position: 'relative', padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
-        {/* @mention dropdown */}
-        {showMentions && mentionList.length > 0 && (
-          <div style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: '16px',
-            right: '16px',
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '6px',
-            boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
-            maxHeight: '200px',
-            overflowY: 'auto',
-            zIndex: 10,
-          }}>
-            {mentionList.map((t, i) => (
-              <div
-                key={`${t.node_id}:${t.to_role}`}
-                onClick={() => selectMention(t)}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '13px',
-                  cursor: 'pointer',
-                  background: i === mentionIndex ? 'var(--bg-tertiary)' : 'transparent',
-                  color: 'var(--text-primary)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <span>{t.label}</span>
-                {t.to_role === 'agent' && (
-                  <span style={{ fontSize: '11px', color: 'var(--color-primary)' }}>agent</span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Recipient selector */}
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
-          <select
-            value={selectedTarget}
-            onChange={e => setSelectedTarget(e.target.value)}
+    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+      {/* --- Left sidebar: contact list --- */}
+      <div style={{
+        width: '200px',
+        minWidth: '200px',
+        borderRight: '1px solid var(--border-color)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '8px 12px',
+          borderBottom: '1px solid var(--border-color)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>LAN Chat</span>
+          <button
+            onClick={handleNickChange}
             style={{
-              flex: 1,
-              padding: '4px 8px',
-              fontSize: '12px',
+              padding: '1px 6px',
+              fontSize: '11px',
               border: '1px solid var(--border-color)',
-              borderRadius: '4px',
+              borderRadius: '3px',
               background: 'var(--bg-secondary)',
-              color: 'var(--text-primary)'
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              marginLeft: 'auto',
             }}
           >
-            <option value="">Broadcast to all</option>
-            {targets.map(t => (
-              <option key={`${t.node_id}:${t.to_role}`} value={`${t.node_id}:${t.to_role}`}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+            {nick || 'unnamed'}
+          </button>
         </div>
 
-        {/* Text input */}
-        <div style={{ display: 'flex', gap: '8px' }}>
+        {/* Contact list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+          {/* Group chat */}
+          <ContactRow
+            label="# Group Chat"
+            active={activeRoom === 'broadcast'}
+            unread={rooms.get('broadcast')?.unread || 0}
+            onClick={() => switchRoom('broadcast')}
+          />
+
+          {/* Separator */}
+          <div style={{
+            padding: '6px 12px 2px',
+            fontSize: '11px',
+            color: 'var(--text-tertiary)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Direct Messages
+          </div>
+
+          {/* Contacts — show human + agent as separate entries */}
+          {contacts.length === 0 ? (
+            <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-tertiary)' }}>
+              No contacts online
+            </div>
+          ) : (
+            contacts.map(c => {
+              const key = roomKeyForDM(c.node_id, c.to_role)
+              return (
+                <ContactRow
+                  key={key}
+                  label={c.label}
+                  badge={c.to_role === 'agent' ? 'agent' : undefined}
+                  active={activeRoom === key}
+                  unread={rooms.get(key)?.unread || 0}
+                  onClick={() => switchRoom(key)}
+                />
+              )
+            })
+          )}
+        </div>
+      </div>
+
+      {/* --- Right: chat area --- */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* Chat header */}
+        <div style={{
+          padding: '8px 16px',
+          borderBottom: '1px solid var(--border-color)',
+          display: 'flex',
+          alignItems: 'center',
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            {activeLabel}
+          </span>
+        </div>
+
+        {/* Approval requests (show in any room if pending) */}
+        {pendingApprovals.length > 0 && (
+          <div style={{ borderBottom: '1px solid var(--border-color)', padding: '8px 16px', flexShrink: 0 }}>
+            {pendingApprovals.map(p => (
+              <div
+                key={p.message.id}
+                style={{
+                  padding: '8px 12px',
+                  marginBottom: '4px',
+                  borderRadius: '6px',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '13px',
+                }}
+              >
+                <div style={{ marginBottom: '4px' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>@agent</span>
+                  <span style={{ color: 'var(--text-secondary)' }}> request from </span>
+                  <span style={{ fontWeight: 500 }}>{p.message.from_nick}</span>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                  {p.message.content}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => handleApprove(p.message.id)}
+                    style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: 'var(--color-primary)', color: '#fff', cursor: 'pointer' }}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => handleReject(p.message.id)}
+                    style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
+          {activeMessages.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
+              {activeRoom === 'broadcast'
+                ? 'No messages yet. Start a conversation with everyone on your network.'
+                : 'No direct messages yet.'}
+            </div>
+          ) : (
+            activeMessages.map((msg, i) => {
+              const isSelf = msg.from_node_id === selfNodeID
+              const fromNick = msg.from_nick || 'unknown'
+              return (
+                <div
+                  key={msg.id || i}
+                  style={{
+                    marginBottom: '8px',
+                    display: 'flex',
+                    flexDirection: isSelf ? 'row-reverse' : 'row',
+                  }}
+                >
+                  <div style={{
+                    maxWidth: '70%',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: isSelf ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                    color: isSelf ? '#fff' : 'var(--text-primary)',
+                    fontSize: '13px',
+                    lineHeight: '1.4',
+                  }}>
+                    {!isSelf && (
+                      <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: '2px' }}>
+                        {fromNick} {msg.from_role === 'agent' && <span style={{ color: 'var(--color-primary)' }}>agent</span>}
+                      </div>
+                    )}
+                    {msg.content}
+                  </div>
+                </div>
+              )
+            })
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input */}
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0, display: 'flex', gap: '8px' }}>
           <input
             ref={inputRef}
             type="text"
             value={inputText}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message... (@ to mention)"
+            onChange={e => setInputText(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder={activeRoom === 'broadcast' ? 'Broadcast to all...' : `Message ${activeLabel}...`}
             style={{
               flex: 1,
               padding: '6px 10px',
@@ -456,7 +493,7 @@ export function LanChatView({ onUnreadChange }: Props) {
               borderRadius: '6px',
               background: 'var(--bg-secondary)',
               color: 'var(--text-primary)',
-              outline: 'none'
+              outline: 'none',
             }}
           />
           <button
@@ -468,13 +505,82 @@ export function LanChatView({ onUnreadChange }: Props) {
               borderRadius: '6px',
               background: 'var(--color-primary)',
               color: '#fff',
-              cursor: 'pointer'
+              cursor: 'pointer',
             }}
           >
             Send
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// --- Contact row sub-component ---
+function ContactRow({
+  label,
+  badge,
+  active,
+  unread,
+  onClick,
+}: {
+  label: string
+  badge?: string
+  active: boolean
+  unread: number
+  onClick: () => void
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: '6px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        cursor: 'pointer',
+        background: active ? 'var(--bg-tertiary)' : 'transparent',
+        borderLeft: active ? '2px solid var(--color-primary)' : '2px solid transparent',
+      }}
+    >
+      <span style={{
+        flex: 1,
+        fontSize: '13px',
+        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}>
+        {label}
+      </span>
+      {badge && (
+        <span style={{
+          fontSize: '10px',
+          padding: '1px 4px',
+          borderRadius: '3px',
+          background: 'var(--bg-secondary)',
+          color: 'var(--color-primary)',
+        }}>
+          {badge}
+        </span>
+      )}
+      {unread > 0 && (
+        <span style={{
+          minWidth: '16px',
+          height: '16px',
+          borderRadius: '8px',
+          background: '#e53e3e',
+          color: '#fff',
+          fontSize: '10px',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 4px',
+        }}>
+          {unread > 99 ? '99+' : unread}
+        </span>
+      )}
     </div>
   )
 }
