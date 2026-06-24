@@ -289,10 +289,15 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
 			if approved != nil {
-				// Inject into agent loop
+				// Inject into agent loop via submitText so that all TUI
+				// state is properly initialized (m.loading, streamBuffer,
+				// status bar, chat display, session persistence, etc.).
+				// Calling startAgent directly skips continueDisplayedNormalTextRun
+				// which sets m.loading=true — without it, update_stream.go
+				// drops ALL stream messages (!m.loading guard).
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
-				return m, m.startAgent(agentText)
+				return m, m.submitText(agentText, true)
 			}
 		}
 		return m, nil
