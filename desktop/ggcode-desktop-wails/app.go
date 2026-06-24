@@ -1307,7 +1307,6 @@ func (a *App) BindIMAdapter(name string) error {
 		return err
 	}
 	// Start the adapter after binding
-	name := name
 	safego.Go("desktop.im-start-bind", func() { a.imStartAdapter(name) })
 	return nil
 }
@@ -1321,7 +1320,6 @@ func (a *App) RebindIMAdapter(name string) error {
 		debug.Log("desktop", "IM Rebind failed: %v", err)
 		return err
 	}
-	name := name
 	safego.Go("desktop.im-start-rebind", func() { a.imStartAdapter(name) })
 	return nil
 }
