@@ -132,10 +132,10 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleLanChatKey(msg)
 	case lanchatMsg:
-		// New message received
-		if m.lanChatHub != nil {
-			m.lanChatHub.HandleIncomingMessage(msg.msg)
-		}
+		// Message was already processed by the Hub's HTTP handler before
+		// firing the onMessage callback. Do NOT call HandleIncomingMessage
+		// here — that would re-store the message and re-fire the callback,
+		// creating an infinite loop (hundreds of messages per second).
 		// If chat panel is not visible, show a notification in the main panel
 		if m.lanChatPanel == nil {
 			fromNick := msg.msg.FromNick
@@ -156,9 +156,8 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case lanchatReceiptMsg:
-		if m.lanChatHub != nil {
-			m.lanChatHub.HandleReceipt(msg.receipt)
-		}
+		// Receipt was already processed by the Hub's HTTP handler before
+		// firing the onReceipt callback. Do NOT call HandleReceipt here.
 		return m, nil
 	case lanchatPeerJoinMsg:
 		// System message in main chat — do NOT call UpdatePeers here.
