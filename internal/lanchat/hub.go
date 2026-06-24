@@ -363,9 +363,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 				leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
 			}
 		}
-		// Prune peers that have been offline longer than pruneAfter — nodeIDs
-		// change on every restart so stale entries accumulate forever otherwise.
-		if !p.Online && time.Since(time.Unix(p.LastSeen, 0)) > 10*time.Minute {
+		// Remove peers no longer in discovery results immediately.
+		// nodeIDs change on every restart so stale entries accumulate forever.
+		if !seen[id] {
 			delete(h.peers, id)
 		}
 	}
