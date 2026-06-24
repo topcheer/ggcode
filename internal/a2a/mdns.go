@@ -6,30 +6,34 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	mdnslib "github.com/topcheer/mdns"
 )
 
 const (
 	mDNSServiceType = "_ggcode._tcp"
 	mDNSDomain      = "local."
-	mDNSLookupTime  = 3 * time.Second
 )
 
 // mdnsService manages mDNS registration (broadcasting self) and
 // discovery (finding peers on the LAN) using the topcheer/mdns library.
+//
+// A persistent Browser is kept running so that the instance list is always
+// up-to-date. lookup() reads the browser's current state without any
+// network I/O, eliminating timing gaps that caused peer flickering.
 type mdnsService struct {
-	server *mdnslib.Server
-	info   *InstanceInfo
+	server  *mdnslib.Server
+	browser *mdnslib.Browser
+	info    *InstanceInfo
 }
 
 func newMDNSService() *mdnsService {
 	return &mdnsService{}
 }
 
-// start broadcasts this instance via mDNS using the pure-Go topcheer/mdns library.
+// start broadcasts this instance via mDNS and begins continuous discovery.
 func (m *mdnsService) start(info InstanceInfo) error {
 	m.info = &info
 
@@ -82,52 +86,60 @@ func (m *mdnsService) start(info InstanceInfo) error {
 		return fmt.Errorf("mDNS register: %w", err)
 	}
 
+	// Start persistent browser for continuous discovery.
+	browser, err := srv.Browse(mDNSServiceType)
+	if err != nil {
+		srv.Close()
+		return fmt.Errorf("mDNS browse: %w", err)
+	}
+	events, err := browser.Start()
+	if err != nil {
+		srv.Close()
+		return fmt.Errorf("mDNS browser start: %w", err)
+	}
+
+	// Drain events so the browser's internal instances map stays updated.
+	// The browser handles add/remove via cache events automatically.
+	safego.Go("a2a.mdns.browserDrain", func() {
+		for ev := range events {
+			if ev.Instance != nil {
+				switch ev.Action {
+				case mdnslib.EventAdd:
+					debug.Log("a2a.mdns", "discovered: %s (%s)", ev.Instance.Name, ev.Instance.Host)
+				case mdnslib.EventRemove:
+					debug.Log("a2a.mdns", "lost: %s", ev.Instance.Name)
+				}
+			}
+		}
+	})
+
 	m.server = srv
-	debug.Log("a2a.mdns", "registered as %s port=%d", name, port)
+	m.browser = browser
+
+	debug.Log("a2a.mdns", "registered as %s port=%d, browser started", name, port)
 	return nil
 }
 
-// stop shuts down the mDNS server (sends goodbye records).
+// stop shuts down the mDNS browser and server (sends goodbye records).
 func (m *mdnsService) stop() {
+	if m.browser != nil {
+		m.browser.Stop()
+		m.browser = nil
+	}
 	if m.server != nil {
 		m.server.Close()
 		m.server = nil
 	}
 }
 
-// lookup discovers other ggcode instances on the LAN via mDNS.
-// Creates a temporary browser, waits for responses, then returns results.
+// lookup returns all discovered instances (excluding self) by reading the
+// persistent browser's current state. No network I/O — instant and reliable.
 func (m *mdnsService) lookup() []InstanceInfo {
-	if m.server == nil {
+	if m.browser == nil {
 		return nil
 	}
 
-	browser, err := m.server.Browse(mDNSServiceType)
-	if err != nil {
-		debug.Log("a2a.mdns", "browse error: %v", err)
-		return nil
-	}
-
-	events, err := browser.Start()
-	if err != nil {
-		debug.Log("a2a.mdns", "browser start error: %v", err)
-		return nil
-	}
-
-	// Wait for responses to arrive.
-	timer := time.NewTimer(mDNSLookupTime)
-	defer timer.Stop()
-
-	// Drain events to keep the browser processing.
-	go func() {
-		for range events {
-		}
-	}()
-
-	<-timer.C
-	browser.Stop()
-
-	instances := browser.Instances()
+	instances := m.browser.Instances()
 	var result []InstanceInfo
 	selfID := ""
 	if m.info != nil {
@@ -142,7 +154,7 @@ func (m *mdnsService) lookup() []InstanceInfo {
 		result = append(result, *info)
 	}
 
-	debug.Log("a2a.mdns", "lookup found %d instances (after self-filter: %d)", len(instances), len(result))
+	debug.Log("a2a.mdns", "lookup: browser has %d instances (after self-filter: %d)", len(instances), len(result))
 	return result
 }
 

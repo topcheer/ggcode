@@ -2269,6 +2269,9 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 				return
 			}
 			instances := b.a2aRegistry.CachedInstances()
+			if instances == nil {
+				continue // cache not populated yet
+			}
 			peers := make([]lanchat.Participant, 0, len(instances))
 			for _, inst := range instances {
 				peers = append(peers, lanchat.Participant{

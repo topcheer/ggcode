@@ -128,7 +128,16 @@ func (r *Registry) CachedInstances() []InstanceInfo {
 // Discover() to keep the async cache fresh.
 func (r *Registry) StartBackgroundRefresh(ctx context.Context) {
 	safego.Go("a2a.registry.backgroundRefresh", func() {
-		r.refreshCache()
+		// Initial quick refreshes so cache populates fast (mDNS browser
+		// exponential backoff starts at ~1s, so retry a few times).
+		for i := 0; i < 5; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+			r.refreshCache()
+		}
 		ticker := time.NewTicker(backgroundRefreshInterval)
 		defer ticker.Stop()
 		for {

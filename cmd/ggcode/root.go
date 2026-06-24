@@ -740,6 +740,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
 				instances := a2aRegistry.CachedInstances()
+				if instances == nil {
+					return // cache not populated yet
+				}
 				peers := make([]lanchat.Participant, 0, len(instances))
 				for _, inst := range instances {
 					peers = append(peers, lanchat.Participant{
@@ -752,11 +755,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				}
 				lanchatHub.UpdatePeers(peers)
 			}
-			// Initial sync after 2s (let registry warm up)
-			time.Sleep(2 * time.Second)
+			// Initial sync after 3s (let mDNS browser warm up)
+			time.Sleep(3 * time.Second)
 			syncPeers()
-			// Then periodic every 15s
-			ticker := time.NewTicker(15 * time.Second)
+			// Then periodic every 10s
+			ticker := time.NewTicker(10 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
 				syncPeers()
