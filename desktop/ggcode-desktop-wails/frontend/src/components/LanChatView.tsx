@@ -222,6 +222,23 @@ export function LanChatView({ onUnreadChange }: Props) {
     const offAddP = EventsOn('lanchat:participant_added', refreshParticipants)
     const offRemoveP = EventsOn('lanchat:participant_removed', refreshParticipants)
 
+    const offNickChange = EventsOn('lanchat:nick_change', (d: any) => {
+      const oldNick = d.old_nick || '(unknown)'
+      const newNick = d.new_nick || '(unknown)'
+      const sysMsg: LanChatMessage = {
+        id: `nick-${d.node_id}-${Date.now()}`,
+        from_node_id: 'system',
+        from_role: 'system',
+        from_nick: '',
+        to_node_id: '',
+        to_role: '',
+        content: `${oldNick} is now known as ${newNick}`,
+        timestamp: Date.now(),
+      }
+      addMessageToRoom('broadcast', sysMsg, activeRoomRef.current === 'broadcast')
+      refreshParticipants()
+    })
+
     const offApproval = EventsOn('lanchat:approval_request', async () => {
       try {
         const pending = await App.LanChatPendingApprovals()
@@ -242,6 +259,7 @@ export function LanChatView({ onUnreadChange }: Props) {
       offAddP()
       offRemoveP()
       offApproval()
+      offNickChange()
     }
   }, [])
 

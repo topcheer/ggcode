@@ -2323,6 +2323,11 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 				b.EmitEvent("lanchat:approval_request", ap)
 			}
 		},
+		func(nodeID, oldNick, newNick string) {
+			if b.EmitEvent != nil {
+				b.EmitEvent("lanchat:nick_change", map[string]string{"node_id": nodeID, "old_nick": oldNick, "new_nick": newNick})
+			}
+		},
 	)
 
 	// Auto-approve callback: inject message into agent loop (same as manual approve)

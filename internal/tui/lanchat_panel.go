@@ -20,6 +20,7 @@ type lanchatReceiptMsg struct{ receipt lanchat.Receipt }
 type lanchatPeerJoinMsg struct{ participant lanchat.Participant }
 type lanchatPeerLeaveMsg struct{ nodeID, humanNick string }
 type lanchatApprovalReqMsg struct{ pending lanchat.PendingAgentMsg }
+type lanchatNickChangeMsg struct{ nodeID, oldNick, newNick string }
 
 // ---- Panel State ----
 
@@ -93,6 +94,12 @@ func (m *Model) SetLanChatHub(hub *lanchat.Hub, sendMsg func(tea.Msg)) {
 		func(pending lanchat.PendingAgentMsg) {
 			if sendMsg != nil {
 				sendMsg(lanchatApprovalReqMsg{pending: pending})
+			}
+		},
+		// On nick change
+		func(nodeID, oldNick, newNick string) {
+			if sendMsg != nil {
+				sendMsg(lanchatNickChangeMsg{nodeID: nodeID, oldNick: oldNick, newNick: newNick})
 			}
 		},
 	)
@@ -202,6 +209,17 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			nick = "(unknown)"
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s went offline", nick))
+		return m, nil
+	case lanchatNickChangeMsg:
+		old := msg.oldNick
+		if old == "" {
+			old = "(unknown)"
+		}
+		new := msg.newNick
+		if new == "" {
+			new = "(unknown)"
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is now known as %s", old, new))
 		return m, nil
 	}
 	return m, nil

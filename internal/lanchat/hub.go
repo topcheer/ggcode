@@ -55,6 +55,7 @@ type Hub struct {
 	onParticipantAdd func(Participant)
 	onParticipantRm  func(nodeID, humanNick string) // nodeID + nick for display
 	onApprovalReq    func(PendingAgentMsg)
+	onNickChange     func(nodeID, oldNick, newNick string)
 
 	// approval policies: key = peer's human_nick (stable across restarts)
 	approvalPolicies map[string]string // "always" | "never" | ""(ask)
@@ -176,6 +177,7 @@ func (h *Hub) SetCallbacks(
 	onParticipantAdd func(Participant),
 	onParticipantRm func(nodeID, humanNick string),
 	onApprovalReq func(PendingAgentMsg),
+	onNickChange func(nodeID, oldNick, newNick string),
 ) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -184,6 +186,7 @@ func (h *Hub) SetCallbacks(
 	h.onParticipantAdd = onParticipantAdd
 	h.onParticipantRm = onParticipantRm
 	h.onApprovalReq = onApprovalReq
+	h.onNickChange = onNickChange
 }
 
 // HumanNick returns this node's human nickname.
@@ -841,10 +844,13 @@ func (h *Hub) HandleReceipt(r Receipt) {
 	}
 }
 
-// HandleNickChange updates a peer's nickname.
+// HandleNickChange updates a peer's nickname and fires the onNickChange callback
+// so the UI can display a system message.
 func (h *Hub) HandleNickChange(change NickChange) {
 	h.mu.Lock()
+	oldNick := ""
 	if peer, ok := h.peers[change.NodeID]; ok {
+		oldNick = peer.HumanNick
 		if change.HumanNick != "" {
 			peer.HumanNick = change.HumanNick
 		}
@@ -852,7 +858,11 @@ func (h *Hub) HandleNickChange(change NickChange) {
 			peer.AgentNick = change.AgentNick
 		}
 	}
+	cb := h.onNickChange
 	h.mu.Unlock()
+	if cb != nil {
+		safego.Go("lanchat.nickChangeCb", func() { cb(change.NodeID, oldNick, change.HumanNick) })
+	}
 }
 
 // HandleParticipantQuery returns this node's participant info.
