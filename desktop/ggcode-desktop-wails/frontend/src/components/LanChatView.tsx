@@ -1,9 +1,37 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { LanChatParticipant, LanChatMessage, LanChatPendingApproval } from '../types'
+import * as App from '../../wailsjs/go/main/App'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { LanChatParticipant, LanChatMessage, LanChatPendingApproval } from '../types'
 
 interface Props {
   onUnreadChange?: (count: number) => void
+}
+
+/** Target option for the dropdown / @mention — can address human or agent of a node. */
+interface TargetOption {
+  node_id: string
+  label: string       // display label
+  nick: string        // the nick to @mention
+  to_role: string     // "human" | "agent"
+}
+
+/** Build target options from participants — includes both human and agent identities. */
+function buildTargets(participants: LanChatParticipant[], selfNodeID: string): TargetOption[] {
+  const targets: TargetOption[] = []
+  for (const p of participants) {
+    if (p.node_id === selfNodeID) continue
+    if (p.human_nick) {
+      targets.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
+    }
+    if (p.agent_nick) {
+      targets.push({ node_id: p.node_id, label: `${p.agent_nick} (agent)`, nick: p.agent_nick, to_role: 'agent' })
+    }
+    // If no nicks at all, show node_id fallback
+    if (!p.human_nick && !p.agent_nick) {
+      targets.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human' })
+    }
+  }
+  return targets
 }
 
 export function LanChatView({ onUnreadChange }: Props) {
@@ -12,36 +40,43 @@ export function LanChatView({ onUnreadChange }: Props) {
   const [pendingApprovals, setPendingApprovals] = useState<LanChatPendingApproval[]>([])
   const [inputText, setInputText] = useState('')
   const [nick, setNick] = useState('')
-  const [selectedParticipant, setSelectedParticipant] = useState<string>('')
-  const [sendAsAgent, setSendAsAgent] = useState(false)
+  const [selectedTarget, setSelectedTarget] = useState<string>('')  // "nodeID:role" or ""
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [hasInitiallyLoaded, setHasInitiallyLoaded] = useState(false)
   const [selfNodeID, setSelfNodeID] = useState('')
 
-  // Track unread count for the NavRail badge.
+  // @mention autocomplete state
+  const [mentionList, setMentionList] = useState<TargetOption[]>([])
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [showMentions, setShowMentions] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
   const unreadCount = useRef(0)
   const updateUnread = useCallback(() => {
     onUnreadChange?.(unreadCount.current)
   }, [onUnreadChange])
 
-  // --- Initial load ---
+  const targets = buildTargets(participants, selfNodeID)
+
+  // --- Initial load + event listeners ---
   useEffect(() => {
     let mounted = true
 
     async function loadAll() {
       try {
-        const msgs = await (window as any).LanChatMessages()
-        const parts = await (window as any).LanChatParticipants()
-        const pending = await (window as any).LanChatPendingApprovals()
-        const myNick = await (window as any).LanChatNick()
-        const self = await (window as any).LanChatSelf()
+        const [msgs, parts, pending, self] = await Promise.all([
+          App.LanChatMessages(),
+          App.LanChatParticipants(),
+          App.LanChatPendingApprovals(),
+          App.LanChatSelf(),
+        ])
         if (mounted) {
-          setMessages(msgs || [])
-          setParticipants(parts || [])
-          setPendingApprovals(pending || [])
-          setNick(myNick || '')
-          setSelfNodeID(self?.node_id || '')
-          setHasInitiallyLoaded(true)
+          setMessages((msgs as any) || [])
+          setParticipants((parts as any) || [])
+          setPendingApprovals((pending as any) || [])
+          const s = self as any
+          setSelfNodeID(s?.node_id || '')
+          setNick(s?.human_nick || s?.agent_nick || '')
         }
       } catch (e) {
         console.error('LAN Chat initial load failed:', e)
@@ -50,16 +85,15 @@ export function LanChatView({ onUnreadChange }: Props) {
 
     loadAll()
 
-    return () => { mounted = false }
-  }, [])
+    const refreshParticipants = async () => {
+      try {
+        const parts = await App.LanChatParticipants()
+        if (mounted) setParticipants((parts as any) || [])
+      } catch {}
+    }
 
-  // --- Real-time event listeners ---
-  useEffect(() => {
-    if (!hasInitiallyLoaded) return
-
-    // Listen for new messages
-    const offMessage = EventsOn('lanchat:message', (_msg: any) => {
-      setMessages(prev => [...prev, _msg])
+    const offMessage = EventsOn('lanchat:message', (msg: any) => {
+      setMessages(prev => [...prev, msg])
       unreadCount.current++
       updateUnread()
       setTimeout(() => {
@@ -67,90 +101,145 @@ export function LanChatView({ onUnreadChange }: Props) {
       }, 50)
     })
 
-    // Listen for receipt status updates
-    const offReceipt = EventsOn('lanchat:receipt', (receipt: any) => {
-      // Update message status in-place if we track it
-      console.log('[LAN Chat] receipt:', receipt)
-    })
+    const offReceipt = EventsOn('lanchat:receipt', (_receipt: any) => {})
 
-    // Listen for participant changes
-    const offAddParticipant = EventsOn('lanchat:participant_added', async () => {
-      // Refresh participants from backend
-      try {
-        const parts = await (window as any).LanChatParticipants()
-        setParticipants(parts || [])
-      } catch {}
-    })
+    const offAddP = EventsOn('lanchat:participant_added', refreshParticipants)
+    const offRemoveP = EventsOn('lanchat:participant_removed', refreshParticipants)
 
-    const offRemoveParticipant = EventsOn('lanchat:participant_removed', async () => {
-      try {
-        const parts = await (window as any).LanChatParticipants()
-        setParticipants(parts || [])
-      } catch {}
-    })
-
-    // Listen for approval requests (most important for agent interaction)
     const offApproval = EventsOn('lanchat:approval_request', async () => {
       try {
-        const pending = await (window as any).LanChatPendingApprovals()
-        setPendingApprovals(pending || [])
+        const pending = await App.LanChatPendingApprovals()
+        if (mounted) setPendingApprovals((pending as any) || [])
       } catch {}
     })
 
+    // Retry participants load — peers may not be discovered yet at initial load.
+    const retry1 = setTimeout(refreshParticipants, 5000)
+    const retry2 = setTimeout(refreshParticipants, 10000)
+
     return () => {
+      mounted = false
+      clearTimeout(retry1)
+      clearTimeout(retry2)
       offMessage()
       offReceipt()
-      offAddParticipant()
-      offRemoveParticipant()
+      offAddP()
+      offRemoveP()
       offApproval()
     }
-  }, [hasInitiallyLoaded, updateUnread])
+  }, [])
 
-  // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Reset unread when user interacts
   useEffect(() => {
     unreadCount.current = 0
     updateUnread()
-  }, [inputText, selectedParticipant, updateUnread])
+  }, [inputText, selectedTarget, updateUnread])
+
+  // --- @mention autocomplete ---
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setInputText(val)
+
+    // Detect @mention: text starts with @ or has space then @
+    const atMatch = val.match(/(?:^|\s)@(\S*)$/)
+    if (atMatch) {
+      const query = atMatch[1].toLowerCase()
+      const matched = targets.filter(t =>
+        t.nick && t.nick.toLowerCase().includes(query)
+      )
+      if (matched.length > 0) {
+        setMentionList(matched)
+        setMentionQuery(atMatch[0]) // full match including @
+        setMentionIndex(0)
+        setShowMentions(true)
+        return
+      }
+    }
+    setShowMentions(false)
+  }
+
+  const selectMention = (target: TargetOption) => {
+    // Replace the @query with @nick
+    const newText = inputText.replace(
+      /(?:^|\s)@(\S*)$/,
+      (match, prefix) => {
+        const sep = match.startsWith(' ') ? ' ' : ''
+        return `${sep}@${target.nick} `
+      }
+    )
+    setInputText(newText)
+    setShowMentions(false)
+    inputRef.current?.focus()
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showMentions) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex(i => (i + 1) % mentionList.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex(i => (i - 1 + mentionList.length) % mentionList.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        selectMention(mentionList[mentionIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        setShowMentions(false)
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
 
   // --- Actions ---
   const handleSend = useCallback(async () => {
     if (!inputText.trim()) return
     try {
-      let target = selectedParticipant
+      let nodeID = ''
       let toRole = 'human'
 
-      // Parse @mention: "@nick message" sends DM to that nick's agent
+      if (selectedTarget) {
+        const [id, role] = selectedTarget.split(':')
+        nodeID = id
+        toRole = role || 'human'
+      }
+
+      // Parse @mention: "@nick message"
       const mentionMatch = inputText.match(/^@(\S+)\s+(.*)/)
       if (mentionMatch) {
         const mentionedNick = mentionMatch[1]
         const content = mentionMatch[2]
-        const found = participants.find(p =>
-          p.human_nick === mentionedNick || p.agent_nick === mentionedNick
-        )
+        const found = targets.find(t => t.nick === mentionedNick)
         if (found) {
-          target = found.node_id
-          toRole = mentionedNick === found.agent_nick ? 'agent' : 'human'
-          await (window as any).LanChatSend(content, target, toRole, sendAsAgent)
+          await App.LanChatSend(content, found.node_id, found.to_role, false)
         } else {
-          await (window as any).LanChatSend(inputText, '', '', sendAsAgent)
+          // Unknown nick, broadcast
+          await App.LanChatSend(inputText, '', '', false)
         }
       } else {
-        await (window as any).LanChatSend(inputText, target, toRole, sendAsAgent)
+        await App.LanChatSend(inputText, nodeID, toRole, false)
       }
       setInputText('')
     } catch (e) {
       console.error('Send failed:', e)
     }
-  }, [inputText, selectedParticipant, participants, sendAsAgent])
+  }, [inputText, selectedTarget, targets])
 
   const handleApprove = useCallback(async (messageId: string) => {
     try {
-      await (window as any).LanChatApprove(messageId)
+      await App.LanChatApprove(messageId)
       setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
     } catch (e) {
       console.error('Approve failed:', e)
@@ -159,7 +248,7 @@ export function LanChatView({ onUnreadChange }: Props) {
 
   const handleReject = useCallback(async (messageId: string, reason: string = '') => {
     try {
-      await (window as any).LanChatReject(messageId, reason)
+      await App.LanChatReject(messageId, reason)
       setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
     } catch (e) {
       console.error('Reject failed:', e)
@@ -170,7 +259,7 @@ export function LanChatView({ onUnreadChange }: Props) {
     const newNick = prompt('Enter new nickname:', nick)
     if (!newNick || newNick === nick) return
     try {
-      await (window as any).LanChatSetNick(newNick)
+      await App.LanChatSetNick(newNick)
       setNick(newNick)
     } catch (e) {
       console.error('Nick change failed:', e)
@@ -197,7 +286,7 @@ export function LanChatView({ onUnreadChange }: Props) {
           {nick || 'unnamed'}
         </button>
         <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-          ({participants.filter(p => p.online).length} online)
+          ({targets.length} contacts)
         </span>
       </div>
 
@@ -285,12 +374,52 @@ export function LanChatView({ onUnreadChange }: Props) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
+      {/* Input area */}
+      <div style={{ position: 'relative', padding: '8px 16px', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
+        {/* @mention dropdown */}
+        {showMentions && mentionList.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: '16px',
+            right: '16px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: '6px',
+            boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
+            maxHeight: '200px',
+            overflowY: 'auto',
+            zIndex: 10,
+          }}>
+            {mentionList.map((t, i) => (
+              <div
+                key={`${t.node_id}:${t.to_role}`}
+                onClick={() => selectMention(t)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  background: i === mentionIndex ? 'var(--bg-tertiary)' : 'transparent',
+                  color: 'var(--text-primary)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <span>{t.label}</span>
+                {t.to_role === 'agent' && (
+                  <span style={{ fontSize: '11px', color: 'var(--color-primary)' }}>agent</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Recipient selector */}
         <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
           <select
-            value={selectedParticipant}
-            onChange={e => setSelectedParticipant(e.target.value)}
+            value={selectedTarget}
+            onChange={e => setSelectedTarget(e.target.value)}
             style={{
               flex: 1,
               padding: '4px 8px',
@@ -301,43 +430,24 @@ export function LanChatView({ onUnreadChange }: Props) {
               color: 'var(--text-primary)'
             }}
           >
-            <option value="">Broadcast</option>
-            {participants.filter(p => p.node_id !== selfNodeID).map(p => (
-              <option key={p.node_id} value={p.node_id}>
-                {p.human_nick || p.agent_nick || p.node_id.slice(0, 12)}
+            <option value="">Broadcast to all</option>
+            {targets.map(t => (
+              <option key={`${t.node_id}:${t.to_role}`} value={`${t.node_id}:${t.to_role}`}>
+                {t.label}
               </option>
             ))}
           </select>
-          <label style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '3px',
-            fontSize: '12px',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            whiteSpace: 'nowrap'
-          }}>
-            <input
-              type="checkbox"
-              checked={sendAsAgent}
-              onChange={e => setSendAsAgent(e.target.checked)}
-              style={{ cursor: 'pointer' }}
-            />
-            as agent
-          </label>
         </div>
+
+        {/* Text input */}
         <div style={{ display: 'flex', gap: '8px' }}>
           <input
+            ref={inputRef}
             type="text"
             value={inputText}
-            onChange={e => setInputText(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            placeholder="Type a message... (@nick for DM)"
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a message... (@ to mention)"
             style={{
               flex: 1,
               padding: '6px 10px',
