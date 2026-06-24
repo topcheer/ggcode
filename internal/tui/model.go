@@ -182,6 +182,7 @@ type Model struct {
 	lanChatHub                      *lanchat.Hub
 	lanChatNotice                   string
 	lanChatUnread                   int
+	lanChatPendingComplete          string // message ID to send "completed" receipt when agent finishes
 	qrOverlay                       *qrOverlayState
 	tunnelStarting                  bool
 	tunnelGeneration                uint64

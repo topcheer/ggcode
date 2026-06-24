@@ -51,6 +51,11 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeAgentRunID {
 		return m, nil
 	}
+	// Send "completed" receipt for lanchat messages that triggered this agent run
+	if m.lanChatPendingComplete != "" && m.lanChatHub != nil {
+		m.lanChatHub.NotifyAgentComplete(m.lanChatPendingComplete)
+		m.lanChatPendingComplete = ""
+	}
 	if m.agent != nil {
 		m.projMemFiles = m.agent.ProjectMemoryFiles()
 	}

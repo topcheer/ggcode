@@ -158,19 +158,27 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case lanchatReceiptMsg:
 		// Show receipt status as a system message in the chat panel.
+		msgID := msg.receipt.MessageID
+		if len(msgID) > 8 {
+			msgID = msgID[:8]
+		}
 		switch msg.receipt.Status {
 		case lanchat.StatusDelivered:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [delivered] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
-		case lanchat.StatusProcessing:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [processing] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [delivered] %s", msgID))
+		case lanchat.StatusPending:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [pending approval] %s", msgID))
 		case lanchat.StatusApproved:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [approved] message %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))]))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [approved] %s", msgID))
+		case lanchat.StatusProcessing:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [agent running] %s", msgID))
+		case lanchat.StatusCompleted:
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [completed] %s", msgID))
 		case lanchat.StatusRejected:
 			reason := msg.receipt.Reason
 			if reason == "" {
 				reason = "(no reason given)"
 			}
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [rejected] message %s: %s", msg.receipt.MessageID[:min(8, len(msg.receipt.MessageID))], reason))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [rejected] %s: %s", msgID, reason))
 		}
 		return m, nil
 	case lanchatPeerJoinMsg:
@@ -303,12 +311,8 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
 			if approved != nil {
-				// Inject into agent loop via submitText so that all TUI
-				// state is properly initialized (m.loading, streamBuffer,
-				// status bar, chat display, session persistence, etc.).
-				// Calling startAgent directly skips continueDisplayedNormalTextRun
-				// which sets m.loading=true — without it, update_stream.go
-				// drops ALL stream messages (!m.loading guard).
+				// Track for completed receipt when agent finishes
+				m.lanChatPendingComplete = approved.ID
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
 				return m, m.submitText(agentText, true)
@@ -323,6 +327,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
 			p.approvalPopup = false
 			if approved != nil {
+				m.lanChatPendingComplete = approved.ID
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
 				return m, m.submitText(agentText, true)

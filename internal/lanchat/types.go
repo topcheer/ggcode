@@ -17,8 +17,10 @@ const (
 // Receipt status constants.
 const (
 	StatusDelivered  = "delivered"
-	StatusApproved   = "approved"
-	StatusProcessing = "processing"
+	StatusPending    = "pending"    // waiting for host approval
+	StatusApproved   = "approved"   // host approved, agent about to run
+	StatusProcessing = "processing" // agent is running
+	StatusCompleted  = "completed"  // agent run finished
 	StatusRejected   = "rejected"
 )
 

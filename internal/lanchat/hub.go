@@ -789,15 +789,24 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 
 	// Handle auto-approve or auto-reject
 	if autoApproved {
+		// Auto-approved: approved → processing → (agent runs) → completed
+		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusApproved, "") })
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
 		if autoApproveCb != nil {
-			safego.Go("lanchat.autoApprove", func() { autoApproveCb(msg) })
+			safego.Go("lanchat.autoApprove", func() {
+				autoApproveCb(msg)
+				// After agent run finishes, send completed receipt
+				safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusCompleted, "") })
+			})
 		}
 	} else if autoRejected {
 		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusRejected, "auto-rejected by policy") })
-	} else if needsApproval && approvalCb != nil {
-		// Manual approval needed — trigger approval callback
-		safego.Go("lanchat.approvalCallback", func() { approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()}) })
+	} else if needsApproval {
+		// Manual approval needed — send pending receipt, then trigger approval callback
+		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusPending, "") })
+		if approvalCb != nil {
+			safego.Go("lanchat.approvalCallback", func() { approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()}) })
+		}
 	}
 }
 
@@ -836,7 +845,8 @@ func (h *Hub) HandleParticipantQuery() Participant {
 // ---- Approval flow ----
 
 // ApproveMessage removes a pending approval and returns the message for
-// injection into the agent loop. Also sends "processing" receipt.
+// injection into the agent loop. Sends "approved" then "processing" receipts.
+// The caller must call NotifyAgentComplete(messageID) when the agent run finishes.
 func (h *Hub) ApproveMessage(messageID string) (*Message, error) {
 	h.mu.Lock()
 	for i, pending := range h.pendingApproval {
@@ -845,7 +855,8 @@ func (h *Hub) ApproveMessage(messageID string) (*Message, error) {
 			msg := pending.Message
 			h.mu.Unlock()
 
-			// Send processing receipt
+			// Send approved then processing receipts
+			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusApproved, "") })
 			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
 			return &msg, nil
 		}
@@ -970,4 +981,24 @@ func (h *Hub) SetOnAutoApprove(cb func(Message)) {
 	h.mu.Lock()
 	h.onAutoApprove = cb
 	h.mu.Unlock()
+}
+
+// NotifyAgentComplete sends a "completed" receipt to the sender of a manually-approved
+// message after the agent run finishes. For auto-approved messages, the receipt is sent
+// automatically inside the onAutoApprove callback wrapper.
+func (h *Hub) NotifyAgentComplete(messageID string) {
+	h.mu.RLock()
+	// Find the message in history to get sender info
+	var msg *Message
+	for i := range h.messages {
+		if h.messages[i].ID == messageID {
+			msg = &h.messages[i]
+			break
+		}
+	}
+	h.mu.RUnlock()
+	if msg == nil {
+		return
+	}
+	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(*msg, StatusCompleted, "") })
 }

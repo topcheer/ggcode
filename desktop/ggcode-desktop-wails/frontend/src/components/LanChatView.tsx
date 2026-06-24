@@ -84,6 +84,12 @@ export function LanChatView({ onUnreadChange }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Refs to avoid stale closures in event handlers
+  const selfNodeIDRef = useRef('')
+  const activeRoomRef = useRef('broadcast')
+  selfNodeIDRef.current = selfNodeID
+  activeRoomRef.current = activeRoom
+
   const contacts = buildContacts(participants, selfNodeID)
 
   // --- Helpers to manipulate rooms ---
@@ -152,23 +158,45 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
 
     const offMessage = EventsOn('lanchat:message', (msg: any) => {
-      // Determine target room
+      const myID = selfNodeIDRef.current
+      const currentRoom = activeRoomRef.current
+      // Determine target room using refs (not stale state)
       let roomKey = 'broadcast'
-      if (msg.to_node_id && msg.to_node_id === selfNodeID) {
-        // DM to me — use sender's role
+      if (msg.to_node_id && msg.to_node_id === myID) {
         roomKey = roomKeyForDM(msg.from_node_id, msg.from_role)
-      } else if (msg.from_node_id === selfNodeID && msg.to_node_id) {
-        // DM from me
+      } else if (msg.from_node_id === myID && msg.to_node_id) {
         roomKey = roomKeyForDM(msg.to_node_id, msg.to_role)
       }
-      const isActive = roomKey === activeRoom
+      const isActive = roomKey === currentRoom
       addMessageToRoom(roomKey, msg as LanChatMessage, isActive)
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
       }, 50)
     })
 
-    const offReceipt = EventsOn('lanchat:receipt', (_receipt: any) => {})
+    const offReceipt = EventsOn('lanchat:receipt', (r: any) => {
+      // Show receipt as a system message in the broadcast room
+      const labels: Record<string, string> = {
+        'delivered': 'delivered',
+        'pending': 'pending approval',
+        'approved': 'approved',
+        'processing': 'agent running',
+        'completed': 'completed',
+        'rejected': `rejected${r.reason ? ': ' + r.reason : ''}`,
+      }
+      const label = labels[r.status] || r.status
+      const sysMsg: LanChatMessage = {
+        id: `receipt-${r.message_id}-${Date.now()}`,
+        from_node_id: 'system',
+        from_role: 'system',
+        from_nick: '',
+        to_node_id: '',
+        to_role: '',
+        content: `[${label}]`,
+        timestamp: Date.now(),
+      }
+      addMessageToRoom('broadcast', sysMsg, activeRoomRef.current === 'broadcast')
+    })
 
     const offAddP = EventsOn('lanchat:participant_added', refreshParticipants)
     const offRemoveP = EventsOn('lanchat:participant_removed', refreshParticipants)
