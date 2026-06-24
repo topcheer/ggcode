@@ -220,34 +220,60 @@ export function LanChatView({ onUnreadChange }: Props) {
   // --- Actions ---
   const handleSend = useCallback(async () => {
     if (!inputText.trim()) return
-    try {
-      if (activeRoom === 'broadcast') {
-        // In group chat, @nick at the start sends a DM to that person
-        const mentionMatch = inputText.match(/^@(\S+)\s+(.*)/)
-        if (mentionMatch) {
-          const mentionedNick = mentionMatch[1]
-          const content = mentionMatch[2]
-          const found = contacts.find(c => c.nick === mentionedNick)
-          if (found) {
-            await App.LanChatSend(content, found.node_id, found.to_role, false)
-          } else {
-            // Unknown nick, broadcast as-is
-            await App.LanChatSend(inputText, '', '', false)
-          }
-        } else {
-          await App.LanChatSend(inputText, '', '', false)
-        }
-      } else {
-        const info = parseRoomKey(activeRoom)
-        if (info) {
-          await App.LanChatSend(inputText, info.nodeID, info.role, false)
+    const text = inputText
+
+    let toNodeID = ''
+    let toRole = ''
+    let targetRoomKey = 'broadcast'
+    let sendContent = text
+
+    if (activeRoom === 'broadcast') {
+      const mentionMatch = text.match(/^@(\S+)\s+(.*)/)
+      if (mentionMatch) {
+        const mentionedNick = mentionMatch[1]
+        const content = mentionMatch[2]
+        const found = contacts.find(c => c.nick === mentionedNick)
+        if (found) {
+          toNodeID = found.node_id
+          toRole = found.to_role
+          targetRoomKey = roomKeyForDM(found.node_id, found.to_role)
+          sendContent = content
         }
       }
-      setInputText('')
+    } else {
+      const info = parseRoomKey(activeRoom)
+      if (info) {
+        toNodeID = info.nodeID
+        toRole = info.role
+        targetRoomKey = activeRoom
+      }
+    }
+
+    // Local echo FIRST — always show immediately, don't wait for network
+    const echoMsg: LanChatMessage = {
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      from_node_id: selfNodeID,
+      from_role: 'human',
+      from_nick: nick,
+      to_node_id: toNodeID,
+      to_role: toRole,
+      content: sendContent,
+      timestamp: Date.now(),
+    }
+    addMessageToRoom(targetRoomKey, echoMsg, true)
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 50)
+
+    setInputText('')
+
+    // Then send to backend
+    try {
+      await App.LanChatSend(sendContent, toNodeID, toRole, false)
     } catch (e) {
       console.error('Send failed:', e)
     }
-  }, [inputText, activeRoom, contacts])
+  }, [inputText, activeRoom, contacts, selfNodeID, nick, addMessageToRoom])
 
   const handleApprove = useCallback(async (messageId: string) => {
     try {
