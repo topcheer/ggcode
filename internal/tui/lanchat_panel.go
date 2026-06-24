@@ -331,7 +331,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "esc":
 		p.approvalPopup = false
 		return m, nil
-	case "enter", "y":
+	case "enter", "y", "Y":
 		if len(pending) > 0 {
 			approved, _ := m.lanChatHub.ApproveMessage(pending[p.approvalIdx].Message.ID)
 			p.approvalPopup = false
@@ -344,7 +344,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case "a":
+	case "a", "A":
 		// Always Approve — set policy then approve this message
 		if len(pending) > 0 {
 			msg := pending[p.approvalIdx].Message
@@ -359,7 +359,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case "n", "r":
+	case "n", "N", "r", "R":
 		if len(pending) > 0 {
 			m.lanChatHub.RejectMessage(pending[p.approvalIdx].Message.ID, "rejected by host")
 			p.approvalPopup = false
