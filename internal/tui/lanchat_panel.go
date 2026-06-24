@@ -216,7 +216,8 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	}
 
-	switch msg.String() {
+	keyStr := msg.String()
+	switch keyStr {
 	case "esc", "ctrl+c":
 		m.closeLanChatPanel()
 		return m, nil
@@ -224,7 +225,9 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleLanChatSend()
 	case "backspace":
 		if len(p.input) > 0 {
-			p.input = p.input[:len(p.input)-1]
+			// Remove last rune (handles multi-byte chars)
+			runes := []rune(p.input)
+			p.input = string(runes[:len(runes)-1])
 			// If we're in mention mode and deleted the @, exit
 			if p.mentionMode && !strings.Contains(p.input, "@") {
 				p.mentionMode = false
@@ -232,29 +235,41 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case "@":
-		p.input += "@"
-		p.mentionMode = true
-		p.mentionQuery = ""
-		p.mentionIdx = 0
-		m.refreshMentionList()
-		return m, nil
 	case "tab":
-		// Tab outside mention mode = no-op (was previously broken)
+		// Tab outside mention mode = no-op
 		return m, nil
 	case "up", "down":
 		// Up/down outside mention mode = no-op
 		return m, nil
 	default:
-		if len(msg.String()) == 1 {
-			p.input += msg.String()
-			// Update mention query
-			if p.mentionMode {
-				atIdx := strings.LastIndex(p.input, "@")
-				if atIdx >= 0 {
-					p.mentionQuery = p.input[atIdx+1:]
-					m.refreshMentionList()
-				}
+		// Use msg.Key().Text for printable text — handles space, multi-byte
+		// chars (Chinese, etc.), and IME input correctly.
+		// msg.String() returns named keys like "space" for spacebar,
+		// which is useless for text input.
+		text := ""
+		if msg.Key().Text != "" {
+			text = msg.Key().Text
+		} else if len(keyStr) == 1 {
+			text = keyStr
+		}
+		if text == "" {
+			return m, nil
+		}
+		p.input += text
+		// Handle @mention activation
+		if text == "@" && !p.mentionMode {
+			p.mentionMode = true
+			p.mentionQuery = ""
+			p.mentionIdx = 0
+			m.refreshMentionList()
+			return m, nil
+		}
+		// Update mention query while typing after @
+		if p.mentionMode {
+			atIdx := strings.LastIndex(p.input, "@")
+			if atIdx >= 0 {
+				p.mentionQuery = p.input[atIdx+1:]
+				m.refreshMentionList()
 			}
 		}
 		return m, nil
@@ -365,9 +380,14 @@ func (m *Model) refreshMentionList() {
 		return
 	}
 
+	selfID := m.lanChatHub.NodeID()
 	all := m.lanChatHub.Participants()
 	var targets []mentionTarget
 	for _, part := range all {
+		// Exclude self from mention list
+		if part.NodeID == selfID {
+			continue
+		}
 		if !part.Online {
 			continue
 		}
@@ -484,7 +504,7 @@ func (m *Model) renderLanChatPanel() string {
 	// Input line
 	body = append(body, "")
 	inputStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
-	hint := "[Tab] @mention  [Esc] Close"
+	hint := "[@] Mention  [Esc] Close"
 	if p.mentionMode {
 		hint = "[Enter/Tab] Select  [Up/Down] Navigate  [Esc] Cancel"
 	}
