@@ -315,6 +315,20 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "a":
+		// Always Approve — set policy then approve this message
+		if len(pending) > 0 {
+			msg := pending[p.approvalIdx].Message
+			m.lanChatHub.SetApprovalPolicy(msg.FromNick, "always")
+			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
+			p.approvalPopup = false
+			if approved != nil {
+				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
+				m.closeLanChatPanel()
+				return m, m.submitText(agentText, true)
+			}
+		}
+		return m, nil
 	case "n", "r":
 		if len(pending) > 0 {
 			m.lanChatHub.RejectMessage(pending[p.approvalIdx].Message.ID, "rejected by host")
@@ -493,7 +507,7 @@ func (m *Model) renderLanChatPanel() string {
 		if len(pending) > 0 {
 			body = append(body, "")
 			current := pending[p.approvalIdx]
-			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve  [N] Reject  [Esc] Close",
+			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve Once  [A] Always Approve  [N] Reject  [Esc] Close",
 				current.Message.FromNick, current.Message.Content)
 			popupStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FBBF24")).

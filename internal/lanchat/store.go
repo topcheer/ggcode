@@ -147,3 +147,32 @@ func SaveNick(dir, nick string) error {
 	}
 	return os.WriteFile(filepath.Join(dir, "lanchat-nick"), []byte(nick), 0o644)
 }
+
+// LoadApprovalPolicies reads persisted approval policies from <dir>/approval-policies.json.
+// Returns map[peerNodeID]policy. Missing file returns empty map + nil error.
+func LoadApprovalPolicies(dir string) (map[string]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "approval-policies.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	var policies map[string]string
+	if err := json.Unmarshal(data, &policies); err != nil {
+		return map[string]string{}, nil
+	}
+	return policies, nil
+}
+
+// SaveApprovalPolicies persists approval policies to <dir>/approval-policies.json.
+func SaveApprovalPolicies(dir string, policies map[string]string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(policies, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "approval-policies.json"), data, 0o644)
+}

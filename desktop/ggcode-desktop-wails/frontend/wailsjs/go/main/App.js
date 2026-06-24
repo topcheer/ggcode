@@ -142,6 +142,46 @@ export function IsWorking() {
   return window['go']['main']['App']['IsWorking']();
 }
 
+export function LanChatApprovalPolicies() {
+  return window['go']['main']['App']['LanChatApprovalPolicies']();
+}
+
+export function LanChatApprove(arg1) {
+  return window['go']['main']['App']['LanChatApprove'](arg1);
+}
+
+export function LanChatMessages() {
+  return window['go']['main']['App']['LanChatMessages']();
+}
+
+export function LanChatParticipants() {
+  return window['go']['main']['App']['LanChatParticipants']();
+}
+
+export function LanChatPendingApprovals() {
+  return window['go']['main']['App']['LanChatPendingApprovals']();
+}
+
+export function LanChatReject(arg1, arg2) {
+  return window['go']['main']['App']['LanChatReject'](arg1, arg2);
+}
+
+export function LanChatSelf() {
+  return window['go']['main']['App']['LanChatSelf']();
+}
+
+export function LanChatSend(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['LanChatSend'](arg1, arg2, arg3, arg4);
+}
+
+export function LanChatSetApprovalPolicy(arg1, arg2) {
+  return window['go']['main']['App']['LanChatSetApprovalPolicy'](arg1, arg2);
+}
+
+export function LanChatSetNick(arg1) {
+  return window['go']['main']['App']['LanChatSetNick'](arg1);
+}
+
 export function ListFiles(arg1) {
   return window['go']['main']['App']['ListFiles'](arg1);
 }

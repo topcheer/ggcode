@@ -563,6 +563,23 @@ func (a *App) LanChatSelf() (lanchat.Participant, error) {
 	return a.chat.LanChatSelf()
 }
 
+// LanChatSetApprovalPolicy sets the approval policy for a peer by nick.
+// policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
+func (a *App) LanChatSetApprovalPolicy(peerNick string, policy string) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatSetApprovalPolicy(peerNick, policy)
+}
+
+// LanChatApprovalPolicies returns all persisted approval policies.
+func (a *App) LanChatApprovalPolicies() (map[string]string, error) {
+	if a.chat == nil {
+		return nil, fmt.Errorf("chat not available")
+	}
+	return a.chat.LanChatApprovalPolicies()
+}
+
 func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error {
 	if a.chat == nil {
 		return nil

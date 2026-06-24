@@ -727,9 +727,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var lanchatHub *lanchat.Hub
 	if a2aServer != nil && !cfg.A2A.Disabled {
 		chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
+		chatMode := "cli"
+		// In daemon-follow mode, auto-approve agent messages
 		lanchatHub = lanchat.NewHub(
 			a2aRegistry.SelfID(),
-			"cli",
+			chatMode,
 			a2aServer.Endpoint(),
 			cfg.A2A.EffectiveAPIKey(),
 			chatStore,

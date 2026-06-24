@@ -284,6 +284,16 @@ export function LanChatView({ onUnreadChange }: Props) {
     }
   }, [])
 
+  const handleAlwaysApprove = useCallback(async (fromNick: string, messageId: string) => {
+    try {
+      await App.LanChatSetApprovalPolicy(fromNick, 'always')
+      await App.LanChatApprove(messageId)
+      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
+    } catch (e) {
+      console.error('Always approve failed:', e)
+    }
+  }, [])
+
   const handleReject = useCallback(async (messageId: string, reason: string = '') => {
     try {
       await App.LanChatReject(messageId, reason)
@@ -320,7 +330,7 @@ export function LanChatView({ onUnreadChange }: Props) {
       <div style={{
         width: '200px',
         minWidth: '200px',
-        borderRight: '1px solid var(--border-color)',
+        borderRight: '1px solid rgba(255,255,255,0.15)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -439,11 +449,17 @@ export function LanChatView({ onUnreadChange }: Props) {
                     onClick={() => handleApprove(p.message.id)}
                     style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: 'var(--color-primary)', color: '#fff', cursor: 'pointer' }}
                   >
-                    Approve
+                    Approve Once
+                  </button>
+                  <button
+                    onClick={() => handleAlwaysApprove(p.message.from_nick, p.message.id)}
+                    style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: '#2f855a', color: '#fff', cursor: 'pointer' }}
+                  >
+                    Always Approve
                   </button>
                   <button
                     onClick={() => handleReject(p.message.id)}
-                    style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid var(--border-color)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                    style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
                   >
                     Reject
                   </button>

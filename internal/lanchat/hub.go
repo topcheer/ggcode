@@ -56,6 +56,13 @@ type Hub struct {
 	onParticipantRm  func(nodeID, humanNick string) // nodeID + nick for display
 	onApprovalReq    func(PendingAgentMsg)
 
+	// approval policies: key = peer's human_nick (stable across restarts)
+	approvalPolicies map[string]string // "always" | "never" | ""(ask)
+
+	// onAutoApprove is called when a message is auto-approved (by policy or daemon mode)
+	// so the host can inject it into the agent loop.
+	onAutoApprove func(Message)
+
 	// HTTP client for peer communication
 	httpClient *http.Client
 }
@@ -92,20 +99,23 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store) *Hub {
 		globalExisted = true
 	}
 	if !globalExisted {
-		// Save the random nick globally so the user can see what they got
-		// and override with /nick if desired.
 		_ = SaveNick(store.dir, nick)
 	}
+
+	// Load persisted approval policies (keyed by peer nick)
+	policies, _ := LoadApprovalPolicies(store.dir)
+
 	return &Hub{
-		nodeID:    nodeID,
-		humanNick: nick,
-		agentNick: AgentNick(nick),
-		mode:      mode,
-		endpoint:  endpoint,
-		apiKey:    apiKey,
-		peers:     make(map[string]*Participant),
-		receipts:  make(map[string]Receipt),
-		store:     store,
+		nodeID:           nodeID,
+		humanNick:        nick,
+		agentNick:        AgentNick(nick),
+		mode:             mode,
+		endpoint:         endpoint,
+		apiKey:           apiKey,
+		peers:            make(map[string]*Participant),
+		receipts:         make(map[string]Receipt),
+		store:            store,
+		approvalPolicies: policies,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -744,17 +754,32 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
+
+	// Determine approval action based on policy or daemon mode
+	autoApproved := false
+	autoRejected := false
 	if needsApproval {
+		policy := h.approvalPolicies[msg.FromNick]
+		if policy == "always" || h.mode == "daemon" {
+			// Auto-approve: daemon mode defaults to approve, or explicit policy
+			autoApproved = true
+		} else if policy == "never" {
+			autoRejected = true
+		}
+	}
+
+	// Only queue for manual approval if not auto-handled
+	if needsApproval && !autoApproved && !autoRejected {
 		pending := PendingAgentMsg{Message: msg, Received: time.Now()}
 		h.pendingApproval = append(h.pendingApproval, pending)
 	}
 
+	autoApproveCb := h.onAutoApprove
 	callback := h.onMessage
 	approvalCb := h.onApprovalReq
 	h.mu.Unlock()
 
 	// Fire callbacks asynchronously so we never block the HTTP handler.
-	// A slow or blocked TUI event loop must not freeze message reception.
 	if callback != nil {
 		safego.Go("lanchat.messageCallback", func() { callback(msg) })
 	}
@@ -762,8 +787,16 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// Send delivered receipt immediately
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusDelivered, "") })
 
-	// If it's an @agent message, trigger approval callback
-	if needsApproval && approvalCb != nil {
+	// Handle auto-approve or auto-reject
+	if autoApproved {
+		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusProcessing, "") })
+		if autoApproveCb != nil {
+			safego.Go("lanchat.autoApprove", func() { autoApproveCb(msg) })
+		}
+	} else if autoRejected {
+		safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusRejected, "auto-rejected by policy") })
+	} else if needsApproval && approvalCb != nil {
+		// Manual approval needed — trigger approval callback
 		safego.Go("lanchat.approvalCallback", func() { approvalCb(PendingAgentMsg{Message: msg, Received: time.Now()}) })
 	}
 }
@@ -886,4 +919,55 @@ func (h *Hub) LoadHistory(sessionID string) ([]Message, error) {
 // PersistMessage saves a message to the per-session store.
 func (h *Hub) PersistMessage(sessionID string, msg Message) error {
 	return h.store.Append(sessionID, msg)
+}
+
+// ---- Approval Policy ----
+
+// SetApprovalPolicy sets the approval policy for a peer (by nick) and persists it.
+// policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
+func (h *Hub) SetApprovalPolicy(peerNick string, policy string) {
+	h.mu.Lock()
+	if h.approvalPolicies == nil {
+		h.approvalPolicies = make(map[string]string)
+	}
+	if policy == "" {
+		delete(h.approvalPolicies, peerNick)
+	} else {
+		h.approvalPolicies[peerNick] = policy
+	}
+	dir := ""
+	if h.store != nil {
+		dir = h.store.dir
+	}
+	h.mu.Unlock()
+
+	// Persist outside lock
+	if dir != "" {
+		h.mu.RLock()
+		policies := make(map[string]string, len(h.approvalPolicies))
+		for k, v := range h.approvalPolicies {
+			policies[k] = v
+		}
+		h.mu.RUnlock()
+		_ = SaveApprovalPolicies(dir, policies)
+	}
+}
+
+// GetApprovalPolicies returns a copy of all approval policies.
+func (h *Hub) GetApprovalPolicies() map[string]string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make(map[string]string, len(h.approvalPolicies))
+	for k, v := range h.approvalPolicies {
+		result[k] = v
+	}
+	return result
+}
+
+// SetOnAutoApprove registers the callback invoked when a message is auto-approved
+// (by policy or daemon mode). The host uses this to inject the message into the agent loop.
+func (h *Hub) SetOnAutoApprove(cb func(Message)) {
+	h.mu.Lock()
+	h.onAutoApprove = cb
+	h.mu.Unlock()
 }

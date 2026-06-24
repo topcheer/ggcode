@@ -289,6 +289,24 @@ func (b *ChatBridge) LanChatReject(messageID, reason string) error {
 	return b.lanchatHub.RejectMessage(messageID, reason)
 }
 
+// LanChatSetApprovalPolicy sets the approval policy for a peer (by nick).
+// policy: "always" (auto-approve), "never" (auto-reject), "" (ask).
+func (b *ChatBridge) LanChatSetApprovalPolicy(peerNick string, policy string) error {
+	if b.lanchatHub == nil {
+		return fmt.Errorf("LAN chat not available")
+	}
+	b.lanchatHub.SetApprovalPolicy(peerNick, policy)
+	return nil
+}
+
+// LanChatApprovalPolicies returns all persisted approval policies.
+func (b *ChatBridge) LanChatApprovalPolicies() (map[string]string, error) {
+	if b.lanchatHub == nil {
+		return nil, fmt.Errorf("LAN chat not available")
+	}
+	return b.lanchatHub.GetApprovalPolicies(), nil
+}
+
 // LanChatSelf returns this node's own participant info.
 func (b *ChatBridge) LanChatSelf() (lanchat.Participant, error) {
 	if b.lanchatHub == nil {
@@ -2299,6 +2317,12 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 			}
 		},
 	)
+
+	// Auto-approve callback: inject message into agent loop (same as manual approve)
+	b.lanchatHub.SetOnAutoApprove(func(msg lanchat.Message) {
+		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.FromNick, msg.Content)
+		_ = b.SendMessage(agentText)
+	})
 
 	// Sync peers from A2A registry — initial sync after 3s, then every 15s.
 	safego.Go("desktop.a2a-peer-sync", func() {
