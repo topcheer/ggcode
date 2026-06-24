@@ -607,10 +607,17 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 	store := b.sessionStore
 	tunnelHost := b.tunnelHost
 	onSessionChanged := b.OnSessionChanged
+	lanChatHub := b.lanchatHub
 	b.mu.Unlock()
 
 	if tunnelHost != nil && ses != nil && store != nil {
 		tunnelHost.BindSession(ses, store)
+	}
+	if lanChatHub != nil && ses != nil {
+		lanChatHub.SetSessionID(
+			filepath.Join(config.ConfigDir(), "lanchat"),
+			ses.ID,
+		)
 	}
 	if onSessionChanged != nil {
 		onSessionChanged()
