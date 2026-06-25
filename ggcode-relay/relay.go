@@ -441,6 +441,13 @@ func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 // These are persisted to history so they survive desktop disconnections.
 // When desktop reconnects, it receives them via replay (if it supports cursors)
 // or they are delivered immediately if currently connected.
+//
+// IMPORTANT: Client messages must ALWAYS be forwarded to the server, even if
+// the event ID already exists in history (dedup). The dedup only prevents
+// duplicate SQLite persistence and duplicate broadcasts to OTHER clients.
+// The server (TUI/desktop host) must receive every user message — otherwise
+// the agent never sees mobile input. This is especially critical after a relay
+// restart where history is hydrated from SQLite and old event IDs resurface.
 func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	p.room.sendMu.Lock()
 	defer p.room.sendMu.Unlock()
@@ -459,17 +466,21 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	isNew := p.room.appendEvent(ev)
 	p.room.mu.Unlock()
 
-	if !isNew {
-		p.hub.trace("client_broadcast_dedup", p.room.token, msg)
-		return
-	}
-
-	// Forward to server if connected.
+	// Always forward to server, even if deduped. The server needs every
+	// user message to feed into the agent loop. Skipping this breaks
+	// mobile→agent delivery after relay restarts or history hydration.
 	if srv != nil {
 		srv.sendRaw(raw)
+		p.hub.stats.recordForwardToServer()
 	} else {
 		log.Printf("[relay] server offline, buffered client message room=%s event=%s",
 			shortToken(p.room.token), msg.EventID)
+	}
+
+	if !isNew {
+		p.hub.trace("client_broadcast_dedup", p.room.token, msg)
+		// Already persisted from a previous delivery; skip SQLite write.
+		return
 	}
 
 	// Persist async.
