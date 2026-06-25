@@ -33,8 +33,21 @@ func buildEchoPlugin(t *testing.T) string {
 	}
 	binaryPath := filepath.Join(pluginDir, binaryName)
 
-	// Check if already built; if not, build it
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+	// Check if already built AND compatible with the current platform.
+	// A binary committed from another OS/arch (e.g. macOS arm64) will
+	// exist but fail with "exec format error" on Linux amd64.
+	needBuild := true
+	if info, err := os.Stat(binaryPath); err == nil && info.Size() > 0 {
+		// Binary exists — verify it's executable on this platform.
+		if canExecuteBinary(binaryPath) {
+			needBuild = false
+		}
+	}
+
+	if needBuild {
+		// Remove stale binary from another platform.
+		_ = os.Remove(binaryPath)
+
 		// Run go mod tidy first to ensure go.sum is complete
 		tidyCmd := exec.Command("go", "mod", "tidy")
 		tidyCmd.Dir = pluginDir
@@ -51,6 +64,45 @@ func buildEchoPlugin(t *testing.T) string {
 	}
 
 	return binaryPath
+}
+
+// canExecuteBinary checks whether a binary file can be executed on the
+// current platform by examining its header magic bytes.
+func canExecuteBinary(path string) bool {
+	// On Windows, skip the check — .exe files are assumed compatible.
+	if runtime.GOOS == "windows" {
+		return true
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	// Read the first 4 bytes to check the magic number.
+	header := make([]byte, 4)
+	if _, err := f.Read(header); err != nil {
+		return false
+	}
+
+	// ELF (Linux): 0x7F 45 4C 46
+	if header[0] == 0x7F && header[1] == 0x45 && header[2] == 0x4C && header[3] == 0x46 {
+		return runtime.GOOS == "linux"
+	}
+	// Mach-O (macOS): 0xFE 0xED 0xFA 0xCE (32-bit), 0xFE 0xED 0xFA 0xCF (64-bit),
+	// or little-endian variants 0xCE 0xFA 0xED 0xFE / 0xCF 0xFA 0xED 0xFE
+	if (header[0] == 0xFE && (header[1] == 0xED || header[1] == 0xCF)) ||
+		(header[3] == 0xFE && (header[2] == 0xED || header[2] == 0xCF)) {
+		return runtime.GOOS == "darwin"
+	}
+	// PE (Windows): 0x4D 0x5A ("MZ")
+	if header[0] == 0x4D && header[1] == 0x5A {
+		return runtime.GOOS == "windows"
+	}
+
+	// Unknown format — let the caller try anyway.
+	return false
 }
 
 func TestEndToEnd_PluginLoadAndExecute(t *testing.T) {

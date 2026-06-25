@@ -64,3 +64,5 @@ ggcode-fixed
 /package.json
 /package-lock.json
 /node_modules/
+internal/plugin/grpc/testdata/echo-plugin/echo-plugin
+internal/plugin/grpc/testdata/echo-plugin/echo-plugin.exe
