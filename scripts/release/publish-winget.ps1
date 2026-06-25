@@ -14,7 +14,8 @@ $manifestDir = Join-Path $PWD "manifest-output"
 
 # Detect package type — CLI and Desktop have different manifest structures
 $isCli = $PackageId -like "*-cli"
-$scope = if ($isCli) { "machine" } else { "user" }
+# Both CLI and Desktop MSI are perUser (LocalAppData, no admin required)
+$scope = "user"
 Write-Host "Package: $PackageId (CLI=$isCli, Scope=$scope)"
 
 Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate

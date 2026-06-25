@@ -184,6 +184,15 @@ func (r *Registry) InvalidateDiscoverCache() {
 	r.mu.Unlock()
 }
 
+// SetCachedInstances manually sets the in-memory instance cache. This is
+// used by tests to inject instances without requiring real mDNS discovery.
+func (r *Registry) SetCachedInstances(instances []InstanceInfo) {
+	r.mu.Lock()
+	r.asyncCache = append([]InstanceInfo(nil), instances...)
+	r.asyncCacheOK = true
+	r.mu.Unlock()
+}
+
 // DiscoverByCapability returns instances whose metadata matches the given tag.
 // Tag can be a language name ("go", "typescript"), framework ("npm"), or partial workspace path.
 func (r *Registry) DiscoverByCapability(tag string) ([]InstanceInfo, error) {

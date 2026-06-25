@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,8 @@ func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 
 // registerAll writes each instance into its own per-ID file,
 // simulating each process having registered on startup.
+// It also populates the Registry cache so Discover() returns the instances
+// without requiring real mDNS.
 func (c *discoveryCluster) registerAll() {
 	c.t.Helper()
 	for _, n := range c.instances {
@@ -87,6 +90,49 @@ func (c *discoveryCluster) registerAll() {
 		data, _ := json.MarshalIndent(inst, "", "  ")
 		os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
 	}
+	c.refreshFromDisk()
+}
+
+// refreshFromDisk reads all instance JSON files from regDir and populates
+// each node's Registry cache. This simulates the real discovery flow where
+// instances are registered on disk and discovered via mDNS or file scanning.
+func (c *discoveryCluster) refreshFromDisk() {
+	c.t.Helper()
+	entries, err := os.ReadDir(c.regDir)
+	if err != nil {
+		c.t.Fatalf("read regDir %s: %v", c.regDir, err)
+	}
+	var instances []InstanceInfo
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(c.regDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var inst InstanceInfo
+		if json.Unmarshal(data, &inst); err == nil && inst.ID != "" {
+			instances = append(instances, inst)
+		}
+	}
+	// Populate each node's Registry cache.
+	for _, n := range c.instances {
+		n.registry.SetCachedInstances(instances)
+	}
+}
+
+// addInstance writes an instance JSON file and refreshes all registries.
+func (c *discoveryCluster) addInstance(inst InstanceInfo) {
+	data, _ := json.MarshalIndent(inst, "", "  ")
+	os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
+	c.refreshFromDisk()
+}
+
+// removeInstance deletes an instance JSON file and refreshes all registries.
+func (c *discoveryCluster) removeInstance(id string) {
+	os.Remove(filepath.Join(c.regDir, id+".json"))
+	c.refreshFromDisk()
 }
 
 func (c *discoveryCluster) node(name string) *discoveryNode {
@@ -244,8 +290,7 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 		Endpoint:  srvD.Endpoint(),
 		Status:    "ready",
 	}
-	instData, _ := json.MarshalIndent(newInst, "", "  ")
-	os.WriteFile(filepath.Join(c.regDir, newInst.ID+".json"), instData, 0644)
+	c.addInstance(newInst)
 
 	// A's cache is stale (10s TTL). Force refresh.
 	nodeA.remote.RefreshCache()
@@ -288,7 +333,7 @@ func TestCluster_InstanceGone(t *testing.T) {
 
 	// Stop order-service's server and remove its per-ID file.
 	c.node("order-service").server.Stop()
-	os.Remove(filepath.Join(c.regDir, "order-service-id.json"))
+	c.removeInstance("order-service-id")
 
 	// Refresh and verify.
 	nodeA.remote.RefreshCache()
