@@ -46,7 +46,15 @@ if (-not $packageExists) {
 
 # --- Step 1: Generate base manifest from existing package ---
 Write-Host "Step 1: Generating base manifest..."
-& $wingetCreate update $PackageId --version $releaseVersion --urls @("${InstallerUrl}|x64|user") --out $manifestDir --token $GitHubToken
+
+# Build URL list — must match the number of installers in the existing manifest
+$urls = @("${InstallerUrl}|x64|user")
+if ($InstallerUrlArm64) {
+    $urls += "${InstallerUrlArm64}|arm64|user"
+}
+Write-Host "  Installer URLs: $($urls -join ', ')"
+
+& $wingetCreate update $PackageId --version $releaseVersion --urls $urls --out $manifestDir --token $GitHubToken
 
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Base manifest generation failed."
