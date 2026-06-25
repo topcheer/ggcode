@@ -143,6 +143,12 @@ func (m Model) renderAutoComplete() string {
 			} else {
 				label = "📄 " + item
 			}
+		} else if m.autoCompleteKind == "lanchat" {
+			if strings.EqualFold(item, "All") || strings.EqualFold(item, "所有人") {
+				label = "📢 " + item
+			} else {
+				label = "💬 " + item
+			}
 		}
 		if len(label) > maxWidth {
 			maxWidth = len(label)
@@ -152,6 +158,13 @@ func (m Model) renderAutoComplete() string {
 	title := m.t("panel.commands")
 	if m.autoCompleteKind == "mention" {
 		title = m.t("panel.files")
+	}
+	if m.autoCompleteKind == "lanchat" {
+		if m.currentLanguage() == LangZhCN {
+			title = "LAN 聊天用户"
+		} else {
+			title = "LAN Chat Users"
+		}
 	}
 	var rows []string
 	for i, item := range items {
@@ -167,6 +180,17 @@ func (m Model) renderAutoComplete() string {
 			} else {
 				label = "📄 " + item
 				desc = m.t("label.file")
+			}
+		} else if m.autoCompleteKind == "lanchat" {
+			if strings.EqualFold(item, "All") || strings.EqualFold(item, "所有人") {
+				label = "📢 " + item
+				if m.currentLanguage() == LangZhCN {
+					desc = "广播"
+				} else {
+					desc = "broadcast"
+				}
+			} else {
+				label = "💬 " + item
 			}
 		} else if _, ok := SlashCommandDescriptions[item]; ok {
 			desc = localizeSlashDescription(m.currentLanguage(), item)

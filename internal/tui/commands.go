@@ -20,6 +20,48 @@ import (
 )
 
 func (m *Model) updateAutoComplete() {
+	// In chat mode, @ triggers LAN Chat user list (not file mentions).
+	// IMPORTANT: The user list only shows while the user is actively typing
+	// the @nick portion (before any space). Once "@nick " is complete and
+	// the user types a message, autocomplete must stay off so Enter submits.
+	if m.chatMode {
+		val := m.input.Value()
+		if strings.HasPrefix(val, "@") {
+			query := val[1:]
+			// Only show user list while typing the nick (no space yet).
+			// After "@nick " is complete, autocomplete is off.
+			if !strings.Contains(query, " ") {
+				m.refreshLanChatTargets()
+				// Filter by query prefix
+				if query != "" {
+					var filtered []string
+					// "All" / "所有人" always stays
+					if len(m.autoCompleteItems) > 0 {
+						first := m.autoCompleteItems[0]
+						if strings.EqualFold(first, "All") || strings.EqualFold(first, "所有人") {
+							filtered = append(filtered, first)
+						}
+					}
+					for _, item := range m.autoCompleteItems[1:] {
+						if strings.HasPrefix(strings.ToLower(item), strings.ToLower(query)) {
+							filtered = append(filtered, item)
+						}
+					}
+					m.autoCompleteItems = filtered
+					m.autoCompleteIndex = 0
+				}
+				if len(m.autoCompleteItems) == 0 {
+					m.autoCompleteActive = false
+				}
+				return
+			}
+		}
+		// In chat mode without @, or after @nick is complete, no autocomplete
+		m.autoCompleteActive = false
+		m.autoCompleteItems = nil
+		return
+	}
+
 	// Check for slash command
 	if active, prefix := DetectSlashCommand(m.input.Value(), inputCursor(&m.input)); active {
 		m.refreshCommands()
@@ -121,6 +163,22 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 			replacement = "@" + selected + " "
 		}
 		value = value[:atPos] + replacement + value[cursor:]
+	}
+
+	if m.autoCompleteKind == "lanchat" {
+		// Selected a LAN Chat target
+		isAll := strings.EqualFold(selected, "All") || strings.EqualFold(selected, "所有人")
+		if isAll {
+			// Broadcast: clear the @, leave input empty for broadcast message
+			m.input.SetValue("")
+		} else {
+			m.input.SetValue("@" + selected + " ")
+		}
+		m.input.CursorEnd()
+		m.autoCompleteActive = false
+		m.autoCompleteItems = nil
+		m.autoCompleteIndex = 0
+		return nil
 	}
 
 	m.input.SetValue(value)

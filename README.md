@@ -49,6 +49,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 - **MCP integration** — connect external tools and data sources
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
+- **LAN Chat** — real-time messaging between ggcode instances on your local network
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
@@ -83,6 +84,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 | [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
 | [Delegation](docs/guide/delegation.md) | Delegate tasks to Copilot, Claude, Cursor, and other agents |
 | [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
+| [LAN Chat](docs/guide/lan-chat.md) | Real-time messaging between instances on your LAN |
 | [Configuration](docs/guide/configuration.md) | Full config file reference |
 | [Project Memory](docs/guide/project-memory.md) | GGCODE.md, AGENTS.md, CLAUDE.md |
 | [Skills](docs/guide/skills.md) | Reusable workflow patterns |

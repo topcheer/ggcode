@@ -53,6 +53,14 @@ Type a message and press Enter. ggcode will:
 2. Stream the response in real-time
 3. Execute any tool calls (file reads, searches, etc.) with your approval
 
+### Input Modes
+
+The input supports three modes:
+
+- **Normal** (`❯`): Chat with the agent (default).
+- **Shell** (`$`): Type `$` or `!` to run shell commands inline. Exits after each command.
+- **Chat** (`#`): Type `#` to send LAN Chat messages to other ggcode instances. Stays active until `Esc`.
+
 ## 4. Essential Slash Commands
 
 | Command | Description |
@@ -68,6 +76,7 @@ Type a message and press Enter. ggcode will:
 
 - [Configuration](./configuration.md) — Full config reference
 - [Providers](./providers.md) — Set up multiple providers
-- [Slash Commands](./slash-commands.md) — All available commands
+- [Slash Commands](./slash-commands.md) — All available commands and input modes
 - [Permission Modes](./modes.md) — Control agent autonomy
+- [LAN Chat](./lan-chat.md) — Real-time messaging between instances
 - [CLI Reference](./cli-reference.md) — All CLI flags and subcommands

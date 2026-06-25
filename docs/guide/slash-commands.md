@@ -87,11 +87,40 @@ Per-platform commands are available when IM adapters are configured:
 | `/whatsapp` / `/wa` | WhatsApp adapter |
 | `/twitch` | Twitch adapter |
 
+## Input Modes
+
+The TUI input supports three modes, indicated by the prompt prefix:
+
+| Mode | Trigger | Prompt | Description |
+|------|---------|--------|-------------|
+| Normal (default) | — | `❯` | Standard chat input. Messages go to the agent. |
+| Shell mode | `$` or `!` | `$` | Run shell commands inline. Output is captured and shown in the chat. Exits after each command. Press `Esc` to exit. |
+| Chat mode | `#` | `#` | Send LAN Chat messages without opening the `/chat` panel. Stays active until you press `Esc`. |
+
+**Shell and chat modes work independently of the agent.** You can enter `$` or `#`
+and send commands/messages even while the agent is running. Shell commands execute
+immediately and do not enter the agent queue. Chat messages are sent via LAN Chat
+and never reach the agent. Only normal-mode text is queued for the agent when busy.
+
+### Chat Mode (`#`)
+
+Quick-send messages to other ggcode instances on your LAN directly from the main input:
+
+1. Type `#` in an empty input to enter chat mode.
+2. A user list appears showing online participants (plus "All" for broadcast).
+3. Select a target (or "All" for broadcast), type your message, and press `Enter`.
+4. **Stays in chat mode** — type another message without re-entering the mode.
+5. Press `Esc` to exit.
+
+**Unread messages**: When there are unread LAN Chat messages, entering `#` auto-fills `@sender` so you can reply immediately.
+
+**`@` inside chat mode**: Press `@` to bring up the user list again. This does not conflict with `@file` mentions in normal mode.
+
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| `Esc` | Cancel current operation / go back |
+| `Esc` | Cancel current operation / exit shell/chat mode / go back |
 | `Ctrl+C` | Cancel current operation |
 | `Ctrl+D` | Exit ggcode |
 | `Ctrl+R` | Compact conversation |

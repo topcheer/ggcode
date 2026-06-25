@@ -49,6 +49,7 @@ ggcode
 - **MCP 集成** — 连接外部工具和数据源
 - **gRPC 插件** — 用 Go、Python、Node.js 等任意语言编写自定义工具插件
 - **多 Agent** — 并行工作、团队协作、A2A 协议
+- **局域网聊天** — 同一局域网内 ggcode 实例之间的实时消息
 - **编辑器集成** — JetBrains、Zed 等 ACP 兼容编辑器
 - **WebUI** — 内置 Web 界面，浏览器即可使用
 - **IM 集成** — 从 QQ、Telegram、Discord、Slack、飞书、钉钉 控制
@@ -83,6 +84,7 @@ ggcode
 | [ACP / 编辑器](docs/guide/acp.md) | JetBrains、Zed 等 ACP 兼容编辑器 |
 | [任务委托](docs/guide/delegation.md) | 委托任务给 Copilot、Claude、Cursor 等外部 Agent |
 | [多 Agent 模式](docs/guide/multi-agent-modes.md) | 子 Agent、团队协作 |
+| [局域网聊天](docs/guide/lan-chat.md) | 实例之间的局域网实时消息 |
 | [配置参考](docs/guide/configuration.md) | 完整配置文件说明 |
 | [项目记忆](docs/guide/project-memory.md) | GGCODE.md / AGENTS.md / CLAUDE.md |
 | [技能系统](docs/guide/skills.md) | 可复用工作流模式 |

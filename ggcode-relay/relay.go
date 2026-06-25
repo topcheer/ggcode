@@ -471,7 +471,9 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 	// mobile→agent delivery after relay restarts or history hydration.
 	if srv != nil {
 		srv.sendRaw(raw)
-		p.hub.stats.recordForwardToServer()
+		if p.hub.stats != nil {
+			p.hub.stats.recordForwardToServer()
+		}
 	} else {
 		log.Printf("[relay] server offline, buffered client message room=%s event=%s",
 			shortToken(p.room.token), msg.EventID)

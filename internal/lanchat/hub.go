@@ -103,12 +103,12 @@ func globalNickDir(sessionDir string) string {
 // WorkspaceMeta describes the workspace for presence exchange.
 // All fields are optional; empty fields are omitted from presence.
 type WorkspaceMeta struct {
-	Workspace   string
-	ProjectName string
-	Languages   []string
-	Frameworks  []string
-	HasGit      bool
-	HasTests    bool
+	Workspace   string   `json:"workspace"`
+	ProjectName string   `json:"project_name"`
+	Languages   []string `json:"languages"`
+	Frameworks  []string `json:"frameworks"`
+	HasGit      bool     `json:"has_git"`
+	HasTests    bool     `json:"has_tests"`
 }
 
 // NewHub creates a new chat hub.

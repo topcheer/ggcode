@@ -48,6 +48,7 @@ Download from GitHub Releases:
 - **IM management** — configure, enable, disable, mute, and monitor IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.)
 
 ### Collaboration
+- **LAN Chat** — real-time messaging with other ggcode instances on your local network. Multi-room view with broadcast + DM rooms, unread badges, file attachments, and @agent message approvals. See [LAN Chat](./lan-chat.md).
 - **Tunnel sharing** — share sessions to mobile devices via relay
 - **Team board** — manage swarm teammates and task assignments
 - **Sub-agent panels** — observe running sub-agents and their output

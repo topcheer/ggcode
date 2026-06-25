@@ -342,9 +342,29 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	if msg.String() == "esc" && m.previewPanel != nil && !m.subAgentFollow.isActive() {
+	if msg.String() == "esc" && m.previewPanel != nil && !m.subAgentFollow.isActive() && !m.shellMode && !m.chatMode {
 		m.closePreviewPanel()
 		return m, nil
+	}
+
+	// Esc priority: exit shell/chat mode before canceling agent.
+	// When in shell or chat mode, Esc should exit the mode, not interrupt the agent.
+	if msg.String() == "esc" && (m.shellMode || m.chatMode) {
+		if m.autoCompleteActive {
+			m.autoCompleteActive = false
+			m.autoCompleteItems = nil
+			return m, nil
+		}
+		if m.chatMode {
+			m.setChatMode(false)
+			m.input.Reset()
+			return m, nil
+		}
+		if m.shellMode {
+			m.setShellMode(false)
+			m.input.Reset()
+			return m, nil
+		}
 	}
 
 	if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") && !m.subAgentFollow.isActive() {
@@ -372,8 +392,13 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	case "ctrl+p":
 		// Removed: use arrow keys to navigate in follow mode
 	case "$", "!":
-		if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
+		if !m.shellMode && !m.chatMode && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 			m.setShellMode(true)
+			return m, nil
+		}
+	case "#":
+		if !m.chatMode && !m.shellMode && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
+			m.setChatMode(true)
 			return m, nil
 		}
 	case "ctrl+c":
@@ -522,11 +547,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			m.subAgentFollow.deactivate()
 			return m, nil
 		}
-		if m.shellMode && !m.loading {
-			m.setShellMode(false)
-			m.input.Reset()
-			return m, nil
-		}
 	case "enter":
 		// Handle pending auto-run suggestion: Enter confirms harness run (before autocomplete)
 		// Handle pending harness review: Enter approves the task
@@ -577,13 +597,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		if m.shellMode {
 			m.emitIMLocalUserText("$ " + text)
-			if m.loading || m.projectMemoryLoading {
-				m.history = append(m.history, "$ "+text)
-				m.historyIdx = len(m.history)
-				m.queuePendingSubmission(text)
-				return m, nil
-			}
 			return m, m.submitShellCommand(text, true)
+		}
+		if m.chatMode {
+			// Chat mode: send message but STAY in mode (unlike shell mode)
+			m.submitChatMessage(text)
+			return m, nil
 		}
 		m.emitIMLocalUserText(text)
 		if m.loading || m.projectMemoryLoading {

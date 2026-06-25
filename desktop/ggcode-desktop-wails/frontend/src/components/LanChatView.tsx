@@ -111,6 +111,10 @@ export function LanChatView({ onUnreadChange }: Props) {
     setRooms(prev => {
       const next = new Map(prev)
       const room = next.get(roomKey) || { messages: [], unread: 0 }
+      // Dedup: skip if message already present (race between initial load and event)
+      if (room.messages.some(m => m.id === msg.id)) {
+        return prev
+      }
       const updated: ChatRoom = {
         messages: [...room.messages, msg],
         unread: isActive ? 0 : room.unread + 1,

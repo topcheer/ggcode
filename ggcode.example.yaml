@@ -596,6 +596,10 @@ plugins:
 #                               # Example: ["en0"] to advertise on Wi-Fi only.
 #                               # Useful on multi-NIC machines to avoid advertising
 #                               # Docker bridge (172.17.0.1) or VPN tunnel IPs.
+#   lan_discovery: true          # mDNS LAN discovery (default: true). Set false to disable.
+#                               # When enabled, ggcode broadcasts its presence on the LAN
+#                               # and discovers other instances automatically. This powers
+#                               # the LAN Chat feature and A2A peer discovery.
 #
 #   # mDNS discovery is always on — no configuration needed.
 #   # ggcode uses a built-in community key (ggcode-lan-a2a-v1) that lets

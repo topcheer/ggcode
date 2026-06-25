@@ -646,7 +646,7 @@ func enCatalog(key string) string {
 	case "mode.persist_failed":
 		return "Failed to persist mode preference: %v"
 	case "input.placeholder":
-		return "Type a message... ($ / ! enters shell mode)"
+		return "Type a message... ($ shell, # chat)"
 	case "panel.model_filter.prompt":
 		return "Filter> "
 	case "panel.model_filter.placeholder":

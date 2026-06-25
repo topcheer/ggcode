@@ -125,7 +125,7 @@ func (m Model) renderLanChatNotice() string {
 	text := m.lanChatNotice
 	if text == "" {
 		if m.lanChatUnread > 0 {
-			text = fmt.Sprintf("[LAN Chat] %d unread message(s) — /chat to view", m.lanChatUnread)
+			text = fmt.Sprintf("[LAN Chat] %d unread message(s) — # to reply, /chat to view", m.lanChatUnread)
 		}
 	} else {
 		text = fmt.Sprintf("[LAN Chat] %s", text)
@@ -151,7 +151,11 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fromNick = "(unknown)"
 			}
 			m.lanChatUnread++
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s: %s — /chat to reply", fromNick, msg.msg.Content))
+			// Track last sender for # chat mode pre-fill
+			m.lanChatLastSenderNick = msg.msg.FromNick
+			m.lanChatLastSenderRole = msg.msg.ToRole
+			m.lanChatLastSenderNodeID = msg.msg.FromNodeID
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s: %s — # to reply", fromNick, msg.msg.Content))
 		}
 		return m, nil
 	case lanchatApprovalReqMsg:

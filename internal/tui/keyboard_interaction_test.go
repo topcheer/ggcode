@@ -150,14 +150,14 @@ func TestScenario_DoesNotEnterShellModeWhenInputNonEmpty(t *testing.T) {
 	}
 }
 
-func TestScenario_DoesNotEnterShellModeWhenLoading(t *testing.T) {
+func TestScenario_EnterShellModeWhileLoading(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "!"})
 	m = updated.(Model)
-	if m.shellMode {
-		t.Error("should NOT enter shell mode while loading")
+	if !m.shellMode {
+		t.Error("should enter shell mode even while agent is loading")
 	}
 }
 

@@ -386,7 +386,7 @@ func TestLangCommandSwitchesToChinese(t *testing.T) {
 	if m.currentLanguage() != LangZhCN {
 		t.Fatalf("expected zh-CN, got %s", m.currentLanguage())
 	}
-	if m.input.Placeholder != "输入消息...（$ / ! 进入 shell 模式）" {
+	if m.input.Placeholder != "输入消息...（$ shell，# 聊天）" {
 		t.Fatalf("expected localized placeholder, got %q", m.input.Placeholder)
 	}
 	if !strings.Contains(renderedOutput(&m), "已切换语言为") {

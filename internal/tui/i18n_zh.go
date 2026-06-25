@@ -654,7 +654,7 @@ func zhCatalog(key string) string {
 	case "mode.persist_failed":
 		return "持久化模式偏好失败：%v"
 	case "input.placeholder":
-		return "输入消息...（$ / ! 进入 shell 模式）"
+		return "输入消息...（$ shell，# 聊天）"
 	case "panel.model_filter.prompt":
 		return "筛选> "
 	case "panel.model_filter.placeholder":

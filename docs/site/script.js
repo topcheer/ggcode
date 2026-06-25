@@ -88,6 +88,9 @@
       "features.im.title": "IM 桥接",
       "features.im.text":
         "从 QQ、Telegram、Discord、Slack、飞书、钉钉控制。你的 Agent 触手可及。",
+      "features.lanchat.title": "局域网聊天",
+      "features.lanchat.text":
+        "局域网内 ggcode 实例之间的实时消息。输入 # 即可聊天。",
       "features.modes.title": "权限模式",
       "features.modes.text":
         "五种信任级别，从完全监督到自动驾驶。检查点和 /undo 让变更可逆。",

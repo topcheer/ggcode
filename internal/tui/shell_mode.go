@@ -59,6 +59,15 @@ func (m *Model) syncComposerMode() {
 		}
 		return
 	}
+	if m.chatMode {
+		m.input.Prompt = "# "
+		if m.currentLanguage() == LangZhCN {
+			m.input.Placeholder = "输入 LAN Chat 消息...（@ 选用户，Esc 退出）"
+		} else {
+			m.input.Placeholder = "Message LAN Chat... (@ to pick user, Esc to exit)"
+		}
+		return
+	}
 	m.input.Prompt = "❯ "
 	m.input.Placeholder = m.t("input.placeholder")
 }
@@ -89,18 +98,24 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		Kind:        tunnel.MessageKindShellCommand,
 	})
 	m.appendUserMessage("$ " + command)
-	m.loading = true
+	m.shellRunning = true
 	m.runCanceled = false
 	m.runFailed = false
-	m.statusActivity = shellStatusActivity(m.currentLanguage())
-	m.statusToolName = ""
-	m.statusToolArg = relativizeResult(command)
-	m.statusToolCount = 0
+	// Only manage loading/status if agent is not already running.
+	// When agent is busy, shell runs independently without touching shared state.
+	if !m.loading {
+		m.shellOwnedLoading = true
+		m.loading = true
+		m.statusActivity = shellStatusActivity(m.currentLanguage())
+		m.statusToolName = ""
+		m.statusToolArg = relativizeResult(command)
+		m.statusToolCount = 0
+	}
 	m.streamBuffer = nil
 	m.shellBuffer = &bytes.Buffer{}
 	m.shellOutputID = ""
 	m.streamPrefixWritten = false
-	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startShellCommand(command))
+	return tea.Batch(m.startLoadingSpinner(shellStatusActivity(m.currentLanguage())), m.startShellCommand(command))
 }
 
 func (m *Model) appendShellChunk(chunk string) {

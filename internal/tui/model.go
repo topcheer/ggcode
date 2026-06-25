@@ -83,6 +83,12 @@ type Model struct {
 	chatList                        *chat.List // virtual-scrolling conversation list
 	chatStyles                      chat.Styles
 	shellMode                       bool
+	shellRunning                    bool // true while a $ shell command is executing (independent of agent loading)
+	shellOwnedLoading               bool // true when shell set m.loading (agent wasn't running)
+	chatMode                        bool // LAN Chat quick-send mode (# prefix)
+	lanChatLastSenderNick           string
+	lanChatLastSenderRole           string
+	lanChatLastSenderNodeID         string
 	loading                         bool
 	loopStart                       time.Time // when current agent loop started (user sent message)
 	quitting                        bool
