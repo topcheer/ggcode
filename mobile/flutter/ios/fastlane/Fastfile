@@ -496,6 +496,32 @@ platform :ios do
     else
       UI.message("No pending versions to reject")
     end
+
+    # Always clean up stale review submission items from non-COMPLETE submissions.
+    # This prevents the "ReviewSubmission creation concurrency limit is reached" error
+    # that occurs when stale READY_FOR_REVIEW submissions accumulate across CI runs.
+    stale_cleanup = 0
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    submissions.each do |sub|
+      next if sub.state == "COMPLETE"
+      begin
+        sub_items = client.get_review_submission_items(review_submission_id: sub.id).to_models
+        sub_items.each do |item|
+          begin
+            client.tunes_request_client.delete("v1/reviewSubmissionItems/#{item.id}")
+            stale_cleanup += 1
+          rescue => e
+            UI.message("  Stale cleanup item #{item.id}: #{e.message}")
+          end
+        end
+      rescue => e
+        UI.message("  Stale cleanup for #{sub.id}: #{e.message}")
+      end
+    end
+    if stale_cleanup > 0
+      UI.success("Cleaned up #{stale_cleanup} stale review submission item(s)")
+      sleep 5
+    end
   end
 
   def _submit_build_for_review(client, app, build)
@@ -528,6 +554,14 @@ platform :ios do
     if ios_version.version_string != v
       client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: v })
     end
+
+    # Ensure usesIdfa is set — required for App Store submission.
+    # null = not yet declared, which blocks submission with "not in valid state".
+    if ios_version.uses_idfa.nil?
+      client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { usesIdfa: false })
+      UI.success("Set usesIdfa to false")
+    end
+
     UI.success("Version: #{v} (#{ios_version.id})")
 
     # 2. Associate build
@@ -592,14 +626,34 @@ platform :ios do
 
     # 4. Submit — find usable submission or create new one
     submissions = client.get_review_submissions(app_id: app.id).to_models
-    # Find a submission that's empty (ready for items) or create a new one.
-    # After _cancel_pending_review, old submissions should be COMPLETE or gone.
+    # Look for a submission we can reuse:
+    #   - state nil/empty: brand new, never used
+    #   - state "READY_FOR_REVIEW": has items from a previous attempt, but
+    #     not yet submitted. Reuse it by clearing old items first.
+    # Apple's concurrency limit is 5 non-COMPLETE review submissions,
+    # so we MUST reuse instead of creating new ones.
     usable = submissions.find { |s| s.state.nil? || s.state.empty? }
+    usable ||= submissions.find { |s| s.state == "READY_FOR_REVIEW" }
 
     if usable
-      UI.message("Adding version to existing submission #{usable.id}...")
+      UI.message("Using submission #{usable.id} (state: #{usable.state || 'new'})...")
+      # Clear any existing items from this submission (stale version references)
+      begin
+        existing_items = client.get_review_submission_items(review_submission_id: usable.id).to_models
+        existing_items.each do |item|
+          begin
+            client.tunes_request_client.delete("v1/reviewSubmissionItems/#{item.id}")
+            UI.message("  Cleared stale item #{item.id}")
+          rescue => e
+            UI.message("  Clear item #{item.id}: #{e.message}")
+          end
+        end
+      rescue => e
+        UI.message("Get items for #{usable.id}: #{e.message}")
+      end
+      # Add the current version as an item
       client.post_review_submission_item(review_submission_id: usable.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{usable.id}!")
+      UI.success("Added version #{v} to submission #{usable.id}!")
     else
       UI.message("Creating new submission...")
       resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
