@@ -22,7 +22,7 @@ func TestOAuthHandler_canonicalProviderID(t *testing.T) {
 	h := NewOAuthHandler("test-server", "https://example.com/mcp", nil)
 	h.state = &oauthState{
 		protectedResourceMeta: &ProtectedResourceMetadata{
-			Resource: "https://api.example.com/mcp/",
+			Resource: StringOrArray{"https://api.example.com/mcp/"},
 		},
 		authorizationServerMeta: &AuthorizationServerMetadata{
 			Issuer: "HTTPS://AUTH.EXAMPLE.COM/",
@@ -85,7 +85,7 @@ func TestBuildProtectedResourceWellKnown(t *testing.T) {
 
 func TestOAuthHandler_discoverProtectedResource(t *testing.T) {
 	metadata := ProtectedResourceMetadata{
-		Resource:             "https://example.com",
+		Resource:             StringOrArray{"https://example.com"},
 		AuthorizationServers: []string{"https://auth.example.com"},
 	}
 	body, _ := json.Marshal(metadata)
@@ -143,7 +143,7 @@ func TestOAuthHandler_FullDiscovery(t *testing.T) {
 	authBody, _ := json.Marshal(authMeta)
 
 	protectedMeta := ProtectedResourceMetadata{
-		Resource:             "https://example.com",
+		Resource:             StringOrArray{"https://example.com"},
 		AuthorizationServers: []string{"https://auth.example.com"},
 	}
 	protectedBody, _ := json.Marshal(protectedMeta)
@@ -278,7 +278,7 @@ func TestOAuthHandler_GetAccessToken_UsesCanonicalSharedTokenAfterDiscovery(t *t
 	h := NewOAuthHandler("different-server-name", "https://api.example.com/mcp", store)
 	h.state = &oauthState{
 		protectedResourceMeta: &ProtectedResourceMetadata{
-			Resource: "https://api.example.com/mcp",
+			Resource: StringOrArray{"https://api.example.com/mcp"},
 		},
 		authorizationServerMeta: &AuthorizationServerMetadata{
 			Issuer: "https://auth.example.com",

@@ -17,12 +17,39 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// StringOrArray represents a JSON value that can be either a string or array of strings.
+// Per RFC 9728, the "resource" field in protected resource metadata can be either format.
+type StringOrArray []string
+
+func (s *StringOrArray) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*s = []string{single}
+		return nil
+	}
+	// Fall back to array
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*s = arr
+	return nil
+}
+
+func (s StringOrArray) First() string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
+}
+
 // ProtectedResourceMetadata represents RFC 9728 protected resource metadata.
 type ProtectedResourceMetadata struct {
-	Resource               string   `json:"resource"`
-	AuthorizationServers   []string `json:"authorization_servers"`
-	ScopesSupported        []string `json:"scopes_supported,omitempty"`
-	BearerMethodsSupported []string `json:"bearer_methods_supported,omitempty"`
+	Resource               StringOrArray `json:"resource"`
+	AuthorizationServers   []string      `json:"authorization_servers"`
+	ScopesSupported        []string      `json:"scopes_supported,omitempty"`
+	BearerMethodsSupported []string      `json:"bearer_methods_supported,omitempty"`
 }
 
 // AuthorizationServerMetadata represents RFC 8414 authorization server metadata.
@@ -136,7 +163,7 @@ func (h *OAuthHandler) canonicalResource() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.state != nil && h.state.protectedResourceMeta != nil {
-		if resource := normalizeOAuthIdentity(h.state.protectedResourceMeta.Resource); resource != "" {
+		if resource := normalizeOAuthIdentity(h.state.protectedResourceMeta.Resource.First()); resource != "" {
 			return resource
 		}
 	}
@@ -215,7 +242,7 @@ func (h *OAuthHandler) hydrateStateFromInfo(info *auth.Info) {
 	}
 	if h.state.protectedResourceMeta == nil && strings.TrimSpace(info.OAuthResource) != "" {
 		h.state.protectedResourceMeta = &ProtectedResourceMetadata{
-			Resource: strings.TrimSpace(info.OAuthResource),
+			Resource: StringOrArray{strings.TrimSpace(info.OAuthResource)},
 		}
 	}
 	if h.state.authorizationServerMeta == nil && strings.TrimSpace(info.OAuthIssuer) != "" {
