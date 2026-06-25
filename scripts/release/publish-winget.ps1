@@ -14,7 +14,7 @@ $manifestDir = Join-Path $PWD "manifest-output"
 
 # Detect package type — CLI and Desktop have different manifest structures
 $isCli = $PackageId -like "*-cli"
-# Both CLI and Desktop MSI are perUser (LocalAppData, no admin required)
+# All MSI installers are perUser (LocalAppData, no admin required)
 $scope = "user"
 Write-Host "Package: $PackageId (CLI=$isCli, Scope=$scope)"
 
@@ -50,7 +50,9 @@ if (-not $packageExists) {
     exit 0
 }
 
-# --- Step 1: Generate base manifest from existing package ---
+# --- Step 1: Generate base manifest via wingetcreate update ---
+# wingetcreate downloads each MSI, computes SHA256, extracts ProductCode/UpgradeCode,
+# and preserves the manifest structure from the previous version.
 Write-Host "Step 1: Generating base manifest..."
 
 # Build URL list — must match the number of installers in the existing manifest
@@ -67,169 +69,97 @@ if ($LASTEXITCODE -ne 0) {
     exit 0
 }
 
-# --- Step 2: Download installers and extract MSI properties ---
-Write-Host "Step 2: Downloading installers and extracting MSI properties..."
+# --- Step 2: Patch the generated installer YAML with missing top-level fields ---
+# wingetcreate update --urls only populates per-installer fields. We need to add
+# top-level ProductCode, AppsAndFeaturesEntries (Desktop) and Commands (CLI) to
+# match the structure wingetbot validation expects.
+Write-Host "Step 2: Patching installer YAML with top-level fields..."
 
-$installers = @()
-
-# Helper: extract ProductCode, UpgradeCode, DisplayName from MSI
-function Get-MsiProperties {
-    param([string]$MsiPath)
-
-    $props = @{}
-    try {
-        $windowsInstaller = New-Object -ComObject WindowsInstaller.Installer
-        $database = $windowsInstaller.OpenDatabase($MsiPath, 0)
-        $view = $database.OpenView("SELECT `Property`, `Value` FROM Property WHERE `Property` IN ('ProductCode', 'UpgradeCode', 'ProductName', 'ProductVersion', 'Manufacturer')")
-        $view.Execute()
-        while ($true) {
-            $record = $view.Fetch()
-            if ($null -eq $record) { break }
-            $props[$record.StringData(1)] = $record.StringData(2)
-        }
-    } catch {
-        Write-Warning "Failed to extract MSI properties: $_"
-    }
-    return $props
-}
-
-# x64 installer
-$x64Path = Join-Path $PWD "x64.msi"
-Invoke-WebRequest -Uri $InstallerUrl -OutFile $x64Path -UseBasicParsing
-$x64Hash = (Get-FileHash $x64Path -Algorithm SHA256).Hash.ToUpper()
-$x64Props = Get-MsiProperties -MsiPath $x64Path
-Write-Host "  x64 SHA256: $x64Hash"
-Write-Host "  x64 ProductCode: $($x64Props['ProductCode'])"
-Write-Host "  x64 UpgradeCode: $($x64Props['UpgradeCode'])"
-$installers += @{
-    Arch         = "x64"
-    Url          = $InstallerUrl
-    Sha256       = $x64Hash
-    ProductCode  = $x64Props['ProductCode']
-    UpgradeCode  = $x64Props['UpgradeCode']
-}
-
-# arm64 installer
-if ($InstallerUrlArm64) {
-    $arm64Path = Join-Path $PWD "arm64.msi"
-    Invoke-WebRequest -Uri $InstallerUrlArm64 -OutFile $arm64Path -UseBasicParsing
-    $arm64Hash = (Get-FileHash $arm64Path -Algorithm SHA256).Hash.ToUpper()
-    $arm64Props = Get-MsiProperties -MsiPath $arm64Path
-    Write-Host "  arm64 SHA256: $arm64Hash"
-    Write-Host "  arm64 ProductCode: $($arm64Props['ProductCode'])"
-    $installers += @{
-        Arch         = "arm64"
-        Url          = $InstallerUrlArm64
-        Sha256       = $arm64Hash
-        ProductCode  = $arm64Props['ProductCode']
-        UpgradeCode  = $arm64Props['UpgradeCode']
-    }
-}
-
-# --- Step 3: Extract shared metadata ---
 $installerFile = Get-ChildItem -Path $manifestDir -Filter "*.installer.yaml" -Recurse | Select-Object -First 1
 if (-not $installerFile) {
-    Write-Warning "Could not find installer YAML template."
+    Write-Warning "Could not find installer YAML."
     exit 0
 }
 
-# Use first installer's metadata for top-level fields
-$topProductCode = $installers[0].ProductCode
-$topUpgradeCode = $installers[0].UpgradeCode
+$yaml = Get-Content -Path $installerFile.FullName -Raw
+Write-Host "  Generated installer YAML is $($yaml.Length) bytes"
+
+# Extract the first per-installer ProductCode (wingetcreate already extracted it from the MSI)
+$productCodeMatch = [regex]::Match($yaml, "ProductCode:\s*['""]?(\{[0-9A-Fa-f-]+\})['""]?")
+$productCode = if ($productCodeMatch.Success) { $productCodeMatch.Groups[1].Value } else { "" }
+Write-Host "  Extracted ProductCode from installer entry: $productCode"
+
+# Extract UpgradeCode if present
+$upgradeCodeMatch = [regex]::Match($yaml, "UpgradeCode:\s*['""]?(\{[0-9A-Fa-f-]+\})['""]?")
+$upgradeCode = if ($upgradeCodeMatch.Success) { $upgradeCodeMatch.Groups[1].Value } else { "" }
+Write-Host "  Extracted UpgradeCode: $upgradeCode"
+
+# Check if top-level ProductCode already exists (wingetcreate may add it in newer versions)
+$hasTopLevelProductCode = $yaml -match "(?m)^ProductCode:"
+$hasTopLevelAppsAndFeatures = $yaml -match "(?m)^AppsAndFeaturesEntries:"
+$hasCommands = $yaml -match "(?m)^Commands:"
+
+Write-Host "  Top-level ProductCode: $(if ($hasTopLevelProductCode) {'present'} else {'MISSING'})"
+Write-Host "  Top-level AppsAndFeaturesEntries: $(if ($hasTopLevelAppsAndFeatures) {'present'} else {'MISSING'})"
+Write-Host "  Commands: $(if ($hasCommands) {'present'} else {'MISSING'})"
+
+# Determine display name and publisher
 $displayName = if ($isCli) { "ggcode" } else { "GGCode Desktop" }
-if ($x64Props['ProductName']) { $displayName = $x64Props['ProductName'] }
-if (-not $isCli -and $displayName -eq "ggcode") { $displayName = "GGCode Desktop" }
 $publisher = "GG AI Studio"
-if ($x64Props['Manufacturer']) { $publisher = $x64Props['Manufacturer'] }
 
-Write-Host "Step 3: ProductCode=$topProductCode UpgradeCode=$topUpgradeCode DisplayName=$displayName Publisher=$publisher"
+$lines = $yaml -split "`n"
+$result = @()
+$insertedTopLevel = $false
 
-# --- Step 4: Write complete installer YAML ---
-Write-Host "Step 4: Writing complete installer YAML..."
+foreach ($line in $lines) {
+    # Insert top-level fields just before "Installers:" section
+    if ($line -match "^Installers:" -and -not $insertedTopLevel) {
+        # Add Commands for CLI if missing
+        if ($isCli -and -not $hasCommands) {
+            $result += "Commands:"
+            $result += "- ggcode"
+        }
 
-# Build top-level fields — CLI and Desktop have different required properties
-$sharedFields = @"
-PackageIdentifier: $PackageId
-PackageVersion: $releaseVersion
-Platform:
-- Windows.Desktop
-InstallerType: wix
-Scope: $scope
-InstallModes:
-- interactive
-- silent
-- silentWithProgress
-UpgradeBehavior: install
-"@
+        # Add top-level ProductCode and AppsAndFeaturesEntries for Desktop if missing
+        if (-not $isCli) {
+            if (-not $hasTopLevelProductCode -and $productCode) {
+                $result += "ProductCode: '$productCode'"
+            }
+            if (-not $hasTopLevelAppsAndFeatures -and $productCode) {
+                $result += "AppsAndFeaturesEntries:"
+                $result += "- DisplayName: $displayName"
+                $result += "  Publisher: $publisher"
+                $result += "  ProductCode: '$productCode'"
+                if ($upgradeCode) {
+                    $result += "  UpgradeCode: '$upgradeCode'"
+                }
+                $result += "  InstallerType: wix"
+            }
+        }
 
-if ($isCli) {
-    # CLI: has Commands, no MinimumOSVersion/InstallerSwitches
-    $sharedFields += @"
-Commands:
-- ggcode
-"@
-} else {
-    # Desktop: user scope, has MinimumOSVersion, InstallerSwitches, ProductCode, AppsAndFeaturesEntries
-    $sharedFields += @"
-MinimumOSVersion: 10.0.17763.0
-InstallerSwitches:
-  Silent: /qn
-  SilentWithProgress: /qb
-ProductCode: '$topProductCode'
-AppsAndFeaturesEntries:
-- DisplayName: $displayName
-  Publisher: $publisher
-  ProductCode: '$topProductCode'
-  UpgradeCode: '$topUpgradeCode'
-  InstallerType: wix
-"@
+        $insertedTopLevel = $true
+    }
+
+    $result += $line
 }
 
-$yaml = @"
-# Created using wingetcreate
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+$patchedYaml = ($result -join "`n")
+Set-Content -Path $installerFile.FullName -Value $patchedYaml -NoNewline
+Write-Host "  Patched installer YAML written ($(($patchedYaml -split "`n").Count) lines)"
 
-$sharedFields
-Installers:
-"@
-
-foreach ($inst in $installers) {
-    $yaml += @"
-
-- Architecture: $($inst.Arch)
-  InstallerUrl: $($inst.Url)
-  InstallerSha256: $($inst.Sha256)
-  InstallerType: wix
-  Scope: $scope
-  ProductCode: '$($inst.ProductCode)'
-  AppsAndFeaturesEntries:
-  - DisplayName: $displayName
-    Publisher: $publisher
-    ProductCode: '$($inst.ProductCode)'
-    UpgradeCode: '$($inst.UpgradeCode)'
-    InstallerType: wix
-"@
-}
-
-$yaml += @"
-
-ManifestType: installer
-ManifestVersion: 1.12.0
-ReleaseDate: $(Get-Date -Format "yyyy-MM-dd")
-"@
-
-Set-Content -Path $installerFile.FullName -Value $yaml -NoNewline
-Write-Host "  Wrote complete installer YAML with $($installers.Count) installer(s)"
-
-# --- Step 5: Submit the manifest ---
+# --- Step 3: Submit the manifest ---
 $yamlDir = Split-Path -Parent $installerFile.FullName
-Write-Host "Step 5: Submitting manifest from $yamlDir to winget-pkgs..."
+Write-Host "Step 3: Submitting manifest from $yamlDir to winget-pkgs..."
 & $wingetCreate submit $yamlDir --token $GitHubToken --no-open
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Manifest submitted successfully!"
 } else {
-    Write-Warning "Manifest submission failed. The release assets are still available at the GitHub Release URL."
+    Write-Warning "Manifest submission failed (exit code $LASTEXITCODE)."
+    Write-Host "  Dumping patched YAML for debugging:"
+    Write-Host "  ---"
+    Get-Content $installerFile.FullName | ForEach-Object { Write-Host "  $_" }
+    Write-Host "  ---"
 }
 
 exit 0
