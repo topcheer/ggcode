@@ -163,7 +163,7 @@ UpgradeBehavior: install
 "@
 
 if ($isCli) {
-    # CLI: machine scope, has Commands, no MinimumOSVersion/InstallerSwitches
+    # CLI: has Commands, no MinimumOSVersion/InstallerSwitches
     $sharedFields += @"
 Commands:
 - ggcode
