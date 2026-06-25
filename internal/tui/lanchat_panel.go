@@ -170,23 +170,35 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msgID) > 8 {
 			msgID = msgID[:8]
 		}
+		// Include who sent the receipt (from nick) for clarity.
+		fromLabel := msg.receipt.FromNick
+		if fromLabel == "" {
+			fromLabel = msg.receipt.FromNodeID
+			if len(fromLabel) > 8 {
+				fromLabel = fromLabel[:8]
+			}
+		}
+		suffix := msgID
+		if fromLabel != "" {
+			suffix = fmt.Sprintf("%s from %s", msgID, fromLabel)
+		}
 		switch msg.receipt.Status {
 		case lanchat.StatusDelivered:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [delivered] %s", msgID))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [delivered] %s", suffix))
 		case lanchat.StatusPending:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [pending approval] %s", msgID))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [pending approval] %s", suffix))
 		case lanchat.StatusApproved:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [approved] %s", msgID))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [approved] %s", suffix))
 		case lanchat.StatusProcessing:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [agent running] %s", msgID))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [agent running] %s", suffix))
 		case lanchat.StatusCompleted:
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [completed] %s", msgID))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [completed] %s", suffix))
 		case lanchat.StatusRejected:
 			reason := msg.receipt.Reason
 			if reason == "" {
 				reason = "(no reason given)"
 			}
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [rejected] %s: %s", msgID, reason))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  [rejected] %s: %s", suffix, reason))
 		}
 		return m, nil
 	case lanchatPeerJoinMsg:
@@ -202,7 +214,20 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Trim http:// prefix for display
 		ep = strings.TrimPrefix(ep, "http://")
 		ep = strings.TrimPrefix(ep, "https://")
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)", nick, ep))
+		// Include workspace/project name if available
+		wsInfo := ""
+		if msg.participant.ProjectName != "" {
+			wsInfo = fmt.Sprintf(" · %s", msg.participant.ProjectName)
+		} else if msg.participant.Workspace != "" {
+			parts := strings.Split(msg.participant.Workspace, "/")
+			if len(parts) > 0 {
+				wsInfo = fmt.Sprintf(" · %s", parts[len(parts)-1])
+			}
+		}
+		if len(msg.participant.Languages) > 0 {
+			wsInfo += fmt.Sprintf(" [%s]", strings.Join(msg.participant.Languages, ","))
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)%s", nick, ep, wsInfo))
 		return m, nil
 	case lanchatPeerLeaveMsg:
 		nick := msg.humanNick

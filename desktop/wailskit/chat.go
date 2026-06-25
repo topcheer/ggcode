@@ -625,6 +625,8 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 }
 
 // LoadSession loads an existing session by ID.
+// Releases the previous session's lock (if any), cleans up ephemeral
+// sessions, then acquires a lock on the target session before loading.
 func (b *ChatBridge) LoadSession(id string) error {
 	if b.sessionStore == nil {
 		store, err := session.NewDefaultStore()
@@ -633,8 +635,38 @@ func (b *ChatBridge) LoadSession(id string) error {
 		}
 		b.sessionStore = store
 	}
+
+	// Release old session's lock + clean up ephemeral empty session.
+	// This mirrors ClearCurrentSession but without resetting currentSes
+	// to nil first (we want a smooth transition).
+	b.mu.Lock()
+	oldEphemeral := b.sessionEphemeral
+	oldSes := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+
+	if oldEphemeral && oldSes != nil && store != nil {
+		_ = agentruntime.DeleteSessionIfEmpty(store, oldSes)
+	}
+	b.sessionEphemeral = false
+	if b.sessionLock != nil {
+		b.sessionLock.Release()
+		b.sessionLock = nil
+	}
+
+	// Acquire lock on the target session.
+	storeDir, _ := session.DefaultDir()
+	lock, lockErr := session.TryAcquireSessionLock(storeDir, id)
+	if lockErr != nil || lock == nil || !lock.Acquired() {
+		return fmt.Errorf("session is locked by another instance: %s", id)
+	}
+	b.sessionLock = lock
+
 	state, err := agentruntime.LoadSession(b.sessionStore, id)
 	if err != nil {
+		// Release the lock since we failed to load.
+		b.sessionLock.Release()
+		b.sessionLock = nil
 		return fmt.Errorf("load session: %w", err)
 	}
 	b.ResetAgent()
@@ -703,6 +735,14 @@ func (b *ChatBridge) StartNewSession() (string, error) {
 	if b.currentSes == nil {
 		return "", fmt.Errorf("new session was not initialized")
 	}
+
+	// Acquire lock on the newly created session.
+	storeDir, _ := session.DefaultDir()
+	lock, _ := session.TryAcquireSessionLock(storeDir, b.currentSes.ID)
+	if lock != nil && lock.Acquired() {
+		b.sessionLock = lock
+	}
+
 	return b.currentSes.ID, nil
 }
 
@@ -2289,6 +2329,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		srv.Endpoint(),
 		cfg.A2A.EffectiveAPIKey(),
 		chatStore,
+		lanchat.DetectWorkspaceMeta(b.workingDir),
 	)
 	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)

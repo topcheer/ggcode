@@ -126,6 +126,16 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
           Sessions
         </span>
+        <div style={{ flex: 1 }} />
+        <button onClick={handleNew} title={t('sidebar.newSession')} style={{
+          width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+          background: 'var(--color-primary)', color: '#fff',
+          border: 'none', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <Plus size={15} />
+        </button>
       </div>
 
       {/* Search */}
@@ -231,12 +241,6 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         padding: 'var(--spacing-xs) var(--spacing-sm)',
         borderTop: '1px solid var(--color-border)',
       }}>
-        <button onClick={handleNew} style={{
-          padding: '4px 10px', borderRadius: 'var(--radius-sm)',
-          background: 'var(--color-primary)', color: '#fff',
-          border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-          display: 'flex', alignItems: 'center', gap: 4,
-        }}><Plus size={14} /> New</button>
         <div style={{ flex: 1 }} />
         {onShare && (
           <button onClick={onShare} title="Share with mobile" style={{

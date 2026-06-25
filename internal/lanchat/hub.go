@@ -30,6 +30,14 @@ type Hub struct {
 	endpoint  string // this node's HTTP endpoint (http://ip:port)
 	apiKey    string // A2A API key for peer auth
 
+	// workspace metadata (populated by caller, shared via presence)
+	workspace   string
+	projectName string
+	languages   []string
+	frameworks  []string
+	hasGit      bool
+	hasTests    bool
+
 	// peers discovered via A2A registry callbacks
 	peers map[string]*Participant // key = NodeID
 
@@ -60,6 +68,13 @@ type Hub struct {
 	// approval policies: key = peer's human_nick (stable across restarts)
 	approvalPolicies map[string]string // "always" | "never" | ""(ask)
 
+	// notifiedNicks tracks human nicks that have already been announced as
+	// "is online" to the UI. This prevents duplicate notifications when the
+	// same user restarts their process (new NodeID, same nick) or when
+	// presence heartbeat flapping causes repeated join/leave cycles.
+	// Keyed by HumanNick because that's the identity the user cares about.
+	notifiedNicks map[string]bool
+
 	// onAutoApprove is called when a message is auto-approved (by policy or daemon mode)
 	// so the host can inject it into the agent loop.
 	onAutoApprove func(Message)
@@ -85,6 +100,17 @@ func globalNickDir(sessionDir string) string {
 	return sessionDir[:idx]
 }
 
+// WorkspaceMeta describes the workspace for presence exchange.
+// All fields are optional; empty fields are omitted from presence.
+type WorkspaceMeta struct {
+	Workspace   string
+	ProjectName string
+	Languages   []string
+	Frameworks  []string
+	HasGit      bool
+	HasTests    bool
+}
+
 // NewHub creates a new chat hub.
 // Nickname resolution:
 //  1. If a global nick exists at store.dir/lanchat-nick, use it as the default
@@ -92,7 +118,7 @@ func globalNickDir(sessionDir string) string {
 //  2. If not, generate a random nick and save it globally.
 //
 // Per-session override happens later via SetSessionID.
-func NewHub(nodeID, mode, endpoint, apiKey string, store *Store) *Hub {
+func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMeta) *Hub {
 	nick := RandomNick()
 	globalExisted := false
 	if persisted, err := LoadNick(store.dir); err == nil && persisted != "" {
@@ -113,10 +139,17 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store) *Hub {
 		mode:             mode,
 		endpoint:         endpoint,
 		apiKey:           apiKey,
+		workspace:        ws.Workspace,
+		projectName:      ws.ProjectName,
+		languages:        ws.Languages,
+		frameworks:       ws.Frameworks,
+		hasGit:           ws.HasGit,
+		hasTests:         ws.HasTests,
 		peers:            make(map[string]*Participant),
 		receipts:         make(map[string]Receipt),
 		store:            store,
 		approvalPolicies: policies,
+		notifiedNicks:    make(map[string]bool),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -203,6 +236,20 @@ func (h *Hub) AgentNick() string {
 	return h.agentNick
 }
 
+// SetWorkspaceMeta updates the workspace metadata for this node.
+// Call this when switching workspaces so that subsequent presence
+// exchanges announce the new project info.
+func (h *Hub) SetWorkspaceMeta(ws WorkspaceMeta) {
+	h.mu.Lock()
+	h.workspace = ws.Workspace
+	h.projectName = ws.ProjectName
+	h.languages = ws.Languages
+	h.frameworks = ws.Frameworks
+	h.hasGit = ws.HasGit
+	h.hasTests = ws.HasTests
+	h.mu.Unlock()
+}
+
 // NodeID returns this node's ID.
 func (h *Hub) NodeID() string {
 	return h.nodeID
@@ -213,14 +260,57 @@ func (h *Hub) SelfParticipant() Participant {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return Participant{
-		NodeID:    h.nodeID,
-		HumanNick: h.humanNick,
-		AgentNick: h.agentNick,
-		Mode:      h.mode,
-		Endpoint:  h.endpoint,
-		Online:    true,
-		LastSeen:  time.Now().Unix(),
+		NodeID:      h.nodeID,
+		HumanNick:   h.humanNick,
+		AgentNick:   h.agentNick,
+		Mode:        h.mode,
+		Endpoint:    h.endpoint,
+		Online:      true,
+		LastSeen:    time.Now().Unix(),
+		Workspace:   h.workspace,
+		ProjectName: h.projectName,
+		Languages:   h.languages,
+		Frameworks:  h.frameworks,
+		HasGit:      h.hasGit,
+		HasTests:    h.hasTests,
 	}
+}
+
+// shouldNotifyJoin returns true if we should fire the "is online" callback
+// for this nick. It deduplicates by nick so that restarts (new NodeID,
+// same nick) and heartbeat flapping don't produce duplicate notifications.
+// Caller must hold h.mu.
+func (h *Hub) shouldNotifyJoin(nick string) bool {
+	nick = strings.TrimSpace(nick)
+	if nick == "" {
+		return false
+	}
+	if h.notifiedNicks[nick] {
+		return false
+	}
+	h.notifiedNicks[nick] = true
+	return true
+}
+
+// shouldNotifyLeave returns true if we should fire the "went offline" callback
+// for this nick. It suppresses the notification when another online peer with
+// the same nick still exists (e.g. user has two instances, one restarted).
+// Caller must hold h.mu.
+func (h *Hub) shouldNotifyLeave(nick, excludeNodeID string) bool {
+	nick = strings.TrimSpace(nick)
+	if nick == "" {
+		return false
+	}
+	for id, p := range h.peers {
+		if id == excludeNodeID {
+			continue
+		}
+		if p.Online && strings.TrimSpace(p.HumanNick) == nick {
+			return false // another instance with same nick is still online
+		}
+	}
+	delete(h.notifiedNicks, nick)
+	return true
 }
 
 // Participants returns all known participants (self + peers).
@@ -313,7 +403,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			cp := p
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
-			if cp.HumanNick != "" {
+			// Only mark for join notification if the nick is genuinely new
+			// (not already announced from another nodeID with the same nick).
+			if cp.HumanNick != "" && h.shouldNotifyJoin(cp.HumanNick) {
 				cp.notifiedJoin = true // will fire callback below
 			}
 			h.peers[p.NodeID] = &cp
@@ -373,8 +465,9 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		if isStale && p.Online {
 			p.Online = false
 			// Only notify offline for peers we previously announced as online
-			// (verified via presence exchange). Unverified peers are silently removed.
-			if p.notifiedJoin && p.HumanNick != "" {
+			// (verified via presence exchange), AND no other online peer with
+			// the same nick still exists.
+			if p.notifiedJoin && p.HumanNick != "" && h.shouldNotifyLeave(p.HumanNick, id) {
 				leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
 			}
 		}
@@ -465,14 +558,17 @@ func (h *Hub) HandlePresence(p Participant) {
 	existing, ok := h.peers[p.NodeID]
 	needCallback := false
 	if !ok {
-		// Truly new peer — create and fire callback
+		// Truly new peer — create and fire callback (if nick is genuinely new)
 		cp := p
 		cp.Online = true
 		cp.LastSeen = time.Now().Unix()
+		if cp.HumanNick != "" && h.shouldNotifyJoin(cp.HumanNick) {
+			cp.notifiedJoin = true
+			needCallback = true
+		}
 		h.peers[p.NodeID] = &cp
-		needCallback = p.HumanNick != ""
 	} else {
-		// Update existing — protect learned nicks from empty overwrites
+		// Update existing — protect learned nicks and workspace info from empty overwrites
 		if p.HumanNick != "" {
 			existing.HumanNick = p.HumanNick
 		}
@@ -483,9 +579,28 @@ func (h *Hub) HandlePresence(p Participant) {
 		existing.Endpoint = p.Endpoint
 		existing.Online = true
 		existing.LastSeen = time.Now().Unix()
+		// Update workspace metadata (always overwrite — workspace changes are meaningful)
+		if p.Workspace != "" {
+			existing.Workspace = p.Workspace
+		}
+		if p.ProjectName != "" {
+			existing.ProjectName = p.ProjectName
+		}
+		if p.Languages != nil {
+			existing.Languages = p.Languages
+		}
+		if p.Frameworks != nil {
+			existing.Frameworks = p.Frameworks
+		}
+		if p.HasGit {
+			existing.HasGit = true
+		}
+		if p.HasTests {
+			existing.HasTests = true
+		}
 		// If we previously didn't know the nick but now we do, fire callback
 		// so the join notification shows the real name.
-		if existing.HumanNick != "" && !existing.notifiedJoin {
+		if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
 			needCallback = true
 			existing.notifiedJoin = true
 		}
@@ -536,7 +651,6 @@ func (h *Hub) sendPresence(peer Participant) {
 		var participant Participant
 		h.mu.Lock()
 		if existing, ok := h.peers[peerInfo.NodeID]; ok {
-			wasOffline := !existing.Online
 			// Guard against empty overwrites
 			if peerInfo.HumanNick != "" {
 				existing.HumanNick = peerInfo.HumanNick
@@ -547,10 +661,30 @@ func (h *Hub) sendPresence(peer Participant) {
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
+			// Update workspace metadata from peer's response
+			if peerInfo.Workspace != "" {
+				existing.Workspace = peerInfo.Workspace
+			}
+			if peerInfo.ProjectName != "" {
+				existing.ProjectName = peerInfo.ProjectName
+			}
+			if peerInfo.Languages != nil {
+				existing.Languages = peerInfo.Languages
+			}
+			if peerInfo.Frameworks != nil {
+				existing.Frameworks = peerInfo.Frameworks
+			}
+			if peerInfo.HasGit {
+				existing.HasGit = true
+			}
+			if peerInfo.HasTests {
+				existing.HasTests = true
+			}
 			participant = *existing
-			// Fire join callback when nick is first learned OR when peer
-			// recovers from offline (was offline, now presence succeeded).
-			if existing.HumanNick != "" && (!existing.notifiedJoin || wasOffline) {
+			// Fire join callback only if we haven't already announced this nick.
+			// The wasOffline re-join was removed — it caused duplicate "is online"
+			// notifications every time a presence heartbeat recovered.
+			if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
 				existing.notifiedJoin = true
 				cb = h.onParticipantAdd
 			}
@@ -805,7 +939,14 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 		safego.Go("lanchat.messageCallback", func() { callback(msg) })
 	}
 
-	// Send delivered receipt immediately
+	// Broadcast messages (no specific recipient) are fire-and-forget.
+	// They do NOT generate any receipt — there is no single sender expecting
+	// confirmation, and sending receipts from every receiver creates noise.
+	if msg.IsBroadcast() {
+		return
+	}
+
+	// Send delivered receipt immediately (direct messages only)
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(msg, StatusDelivered, "") })
 
 	// Handle auto-approve or auto-reject
@@ -919,10 +1060,22 @@ func (h *Hub) GetReceipt(messageID string) (Receipt, bool) {
 }
 
 func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
+	// Determine which of our nicks to include based on the original message's
+	// target role. If the message was sent to our agent, the receipt comes
+	// from our agent nick; otherwise from our human nick.
+	fromNick := h.humanNick
+	fromRole := RoleHuman
+	if originalMsg.ToRole == RoleAgent {
+		fromNick = h.agentNick
+		fromRole = RoleAgent
+	}
+
 	r := Receipt{
 		MessageID:  originalMsg.ID,
 		Status:     status,
 		FromNodeID: h.nodeID,
+		FromNick:   fromNick,
+		FromRole:   fromRole,
 		ToNodeID:   originalMsg.FromNodeID, // route back to original sender
 		ToRole:     originalMsg.ToRole,     // original message's target role (agent/human) — routes receipt to the same DM room
 		Timestamp:  time.Now().UnixMilli(),

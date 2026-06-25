@@ -19,6 +19,9 @@ interface ContactEntry {
   label: string        // human_nick or agent_nick
   nick: string         // for @mention
   to_role: string      // "human" | "agent"
+  workspace?: string   // e.g. "/Volumes/new/ggai/mdns"
+  project_name?: string // e.g. "mdns"
+  languages?: string[]
 }
 
 function roomKeyForDM(nodeID: string, role: string): string {
@@ -62,18 +65,18 @@ function buildContacts(participants: LanChatParticipant[], selfNodeID: string): 
       const key = `${p.human_nick}:human`
       if (!seen.has(key)) {
         seen.add(key)
-        contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human' })
+        contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human', workspace: p.workspace, project_name: p.project_name, languages: p.languages })
       }
     }
     if (p.agent_nick) {
       const key = `${p.agent_nick}:agent`
       if (!seen.has(key)) {
         seen.add(key)
-        contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent' })
+        contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent', workspace: p.workspace, project_name: p.project_name, languages: p.languages })
       }
     }
     if (!p.human_nick && !p.agent_nick) {
-      contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human' })
+      contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human', workspace: p.workspace, project_name: p.project_name })
     }
   }
   // Sort alphabetically by label
@@ -195,11 +198,15 @@ export function LanChatView({ onUnreadChange }: Props) {
         'rejected': `rejected${r.reason ? ': ' + r.reason : ''}`,
       }
       const label = labels[r.status] || r.status
+      // Use the receipt's from_nick and from_role so the UI shows who
+      // acknowledged the message instead of "unknown".
+      const fromNick = r.from_nick || 'peer'
+      const fromRole = r.from_role || 'human'
       const sysMsg: LanChatMessage = {
         id: `receipt-${r.message_id}-${Date.now()}`,
-        from_node_id: 'system',
-        from_role: 'system',
-        from_nick: '',
+        from_node_id: r.from_node_id || 'system',
+        from_role: fromRole,
+        from_nick: fromNick,
         to_node_id: '',
         to_role: '',
         content: `[${label}]`,
@@ -463,6 +470,7 @@ export function LanChatView({ onUnreadChange }: Props) {
                   key={key}
                   label={c.label}
                   badge={c.to_role === 'agent' ? 'agent' : undefined}
+                  subtitle={c.project_name || (c.workspace ? c.workspace.split('/').pop() : undefined)}
                   active={activeRoom === key}
                   unread={rooms.get(key)?.unread || 0}
                   onClick={() => switchRoom(key)}
@@ -631,12 +639,14 @@ function ContactRow({
   badge,
   active,
   unread,
+  subtitle,
   onClick,
 }: {
   label: string
   badge?: string
   active: boolean
   unread: number
+  subtitle?: string
   onClick: () => void
 }) {
   return (
@@ -652,16 +662,28 @@ function ContactRow({
         borderLeft: active ? '2px solid var(--color-primary)' : '2px solid transparent',
       }}
     >
-      <span style={{
-        flex: 1,
-        fontSize: '13px',
-        color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        {label}
-      </span>
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <div style={{
+          fontSize: '13px',
+          color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </div>
+        {subtitle && (
+          <div style={{
+            fontSize: '10px',
+            color: 'var(--text-tertiary)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {subtitle}
+          </div>
+        )}
+      </div>
       {badge && (
         <span style={{
           fontSize: '10px',

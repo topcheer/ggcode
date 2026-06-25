@@ -1,3 +1,143 @@
+export namespace lanchat {
+	
+	export class Attachment {
+	    id: string;
+	    name: string;
+	    size: number;
+	    mime_type: string;
+	    url: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Attachment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.mime_type = source["mime_type"];
+	        this.url = source["url"];
+	    }
+	}
+	export class Message {
+	    id: string;
+	    from_node_id: string;
+	    from_role: string;
+	    from_nick: string;
+	    to_node_id: string;
+	    to_role: string;
+	    content: string;
+	    attachments?: Attachment[];
+	    timestamp: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Message(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.from_node_id = source["from_node_id"];
+	        this.from_role = source["from_role"];
+	        this.from_nick = source["from_nick"];
+	        this.to_node_id = source["to_node_id"];
+	        this.to_role = source["to_role"];
+	        this.content = source["content"];
+	        this.attachments = this.convertValues(source["attachments"], Attachment);
+	        this.timestamp = source["timestamp"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Participant {
+	    node_id: string;
+	    human_nick: string;
+	    agent_nick: string;
+	    mode: string;
+	    endpoint: string;
+	    online: boolean;
+	    last_seen: number;
+	    workspace?: string;
+	    project_name?: string;
+	    languages?: string[];
+	    frameworks?: string[];
+	    has_git?: boolean;
+	    has_tests?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Participant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.node_id = source["node_id"];
+	        this.human_nick = source["human_nick"];
+	        this.agent_nick = source["agent_nick"];
+	        this.mode = source["mode"];
+	        this.endpoint = source["endpoint"];
+	        this.online = source["online"];
+	        this.last_seen = source["last_seen"];
+	        this.workspace = source["workspace"];
+	        this.project_name = source["project_name"];
+	        this.languages = source["languages"];
+	        this.frameworks = source["frameworks"];
+	        this.has_git = source["has_git"];
+	        this.has_tests = source["has_tests"];
+	    }
+	}
+	export class PendingAgentMsg {
+	    message: Message;
+	    // Go type: time
+	    received: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new PendingAgentMsg(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message = this.convertValues(source["message"], Message);
+	        this.received = this.convertValues(source["received"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace main {
 	
 	export class ClipboardAttachment {
@@ -294,7 +434,6 @@ export namespace wailskit {
 	    a2aDisabled: boolean;
 	    a2aPort: number;
 	    a2aHost: string;
-	    a2aLanDiscovery: boolean;
 	    harnessAutoRun: string;
 	    harnessAutoInit: boolean;
 	    streamEncoder: string;
@@ -332,7 +471,6 @@ export namespace wailskit {
 	        this.a2aDisabled = source["a2aDisabled"];
 	        this.a2aPort = source["a2aPort"];
 	        this.a2aHost = source["a2aHost"];
-	        this.a2aLanDiscovery = source["a2aLanDiscovery"];
 	        this.harnessAutoRun = source["harnessAutoRun"];
 	        this.harnessAutoInit = source["harnessAutoInit"];
 	        this.streamEncoder = source["streamEncoder"];

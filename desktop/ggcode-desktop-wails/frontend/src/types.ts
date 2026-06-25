@@ -53,6 +53,12 @@ export interface LanChatParticipant {
   endpoint: string
   online: boolean
   last_seen: number
+  workspace?: string
+  project_name?: string
+  languages?: string[]
+  frameworks?: string[]
+  has_git?: boolean
+  has_tests?: boolean
 }
 
 export interface LanChatMessage {

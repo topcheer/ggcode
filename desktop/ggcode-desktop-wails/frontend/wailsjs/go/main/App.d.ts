@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {wailskit} from '../models';
 import {swarm} from '../models';
+import {lanchat} from '../models';
 
 export function AddCustomEndpoint(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
 
@@ -73,6 +74,26 @@ export function InstallLSPServer(arg1:string,arg2:string):Promise<wailskit.LSPIn
 export function IsSharing():Promise<boolean>;
 
 export function IsWorking():Promise<boolean>;
+
+export function LanChatApprovalPolicies():Promise<Record<string, string>>;
+
+export function LanChatApprove(arg1:string):Promise<void>;
+
+export function LanChatMessages():Promise<Array<lanchat.Message>>;
+
+export function LanChatParticipants():Promise<Array<lanchat.Participant>>;
+
+export function LanChatPendingApprovals():Promise<Array<lanchat.PendingAgentMsg>>;
+
+export function LanChatReject(arg1:string,arg2:string):Promise<void>;
+
+export function LanChatSelf():Promise<lanchat.Participant>;
+
+export function LanChatSend(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
+
+export function LanChatSetApprovalPolicy(arg1:string,arg2:string):Promise<void>;
+
+export function LanChatSetNick(arg1:string):Promise<void>;
 
 export function ListFiles(arg1:string):Promise<Array<Record<string, any>>>;
 

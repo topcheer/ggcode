@@ -735,6 +735,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aServer.Endpoint(),
 			cfg.A2A.EffectiveAPIKey(),
 			chatStore,
+			lanchat.DetectWorkspaceMeta(workingDir),
 		)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
 		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)

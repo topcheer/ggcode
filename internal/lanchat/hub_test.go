@@ -101,7 +101,7 @@ func TestLoadSaveNick(t *testing.T) {
 func TestHubParticipants(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
-	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store)
+	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
 	parts := hub.Participants()
 	if len(parts) != 1 {
@@ -123,7 +123,7 @@ func TestHubParticipants(t *testing.T) {
 func TestHubSetNick(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
-	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store)
+	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
 	origNick := hub.HumanNick()
 	if err := hub.SetNick("Alice"); err != nil {
@@ -152,7 +152,7 @@ func TestHubSetNick(t *testing.T) {
 func TestHubApprovalFlow(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
-	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store)
+	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
 	// Simulate an incoming @agent message
 	msg := Message{
@@ -191,7 +191,7 @@ func TestHubApprovalFlow(t *testing.T) {
 func TestHubRejectFlow(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)
-	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store)
+	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
 	msg := Message{
 		ID:         "msg-2",

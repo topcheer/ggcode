@@ -84,10 +84,21 @@ func (a *App) startup(ctx context.Context) {
 	// Load shared desktop config (same file as Fyne desktop)
 	a.dc = wailskit.LoadDesktopConfig()
 
-	// Restore last workspace
+	// Restore last workspace — but verify it still exists.
+	// Desktop uses a cached workspace path; if the directory was moved or
+	// deleted since last run, we must not silently continue with a stale path.
 	if a.dc.WorkDir != "" {
-		a.workDir = a.dc.WorkDir
-		_ = os.Chdir(a.workDir)
+		if info, err := os.Stat(a.dc.WorkDir); err == nil && info.IsDir() {
+			a.workDir = a.dc.WorkDir
+			_ = os.Chdir(a.workDir)
+		} else {
+			// Cached workspace no longer exists — fall back to home dir
+			// and clear the stale cache so we don't keep trying.
+			debug.Log("desktop", "cached workspace %q no longer exists, falling back to home", a.dc.WorkDir)
+			a.workDir, _ = os.UserHomeDir()
+			_ = os.Chdir(a.workDir)
+			a.dc.WorkDir = ""
+		}
 	} else {
 		a.workDir, _ = os.Getwd()
 	}
@@ -237,6 +248,13 @@ func (a *App) switchWorkspace(dir string) error {
 	if dir == "" {
 		return nil
 	}
+	// Verify target directory exists BEFORE tearing down the current workspace.
+	// This prevents destroying the current session/IM state when the user
+	// picks a non-existent path.
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("workspace directory does not exist: %s", dir)
+	}
+
 	a.stopShare()
 	a.stopIMAdapters()
 	if a.chat != nil {
@@ -245,10 +263,9 @@ func (a *App) switchWorkspace(dir string) error {
 		a.chat = nil
 		wailskit.SetChatBridge(nil)
 	}
+	// chdir is guaranteed to succeed because we verified the dir above.
 	a.workDir = dir
-	if err := os.Chdir(dir); err != nil {
-		return err
-	}
+	_ = os.Chdir(dir)
 	a.initWorkspace(dir)
 	return nil
 }
