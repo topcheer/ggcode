@@ -557,9 +557,13 @@ platform :ios do
 
     # Ensure usesIdfa is set — required for App Store submission.
     # null = not yet declared, which blocks submission with "not in valid state".
-    if ios_version.uses_idfa.nil?
+    # Spaceship doesn't expose uses_idfa as a Ruby accessor, so always patch
+    # unconditionally — Apple's API is idempotent.
+    begin
       client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { usesIdfa: false })
-      UI.success("Set usesIdfa to false")
+      UI.success("Ensured usesIdfa = false")
+    rescue => e
+      UI.message("usesIdfa patch: #{e.message}")
     end
 
     UI.success("Version: #{v} (#{ios_version.id})")
