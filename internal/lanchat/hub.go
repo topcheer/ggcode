@@ -924,7 +924,7 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 		Status:     status,
 		FromNodeID: h.nodeID,
 		ToNodeID:   originalMsg.FromNodeID, // route back to original sender
-		ToRole:     originalMsg.FromRole,   // original sender's role
+		ToRole:     originalMsg.ToRole,     // original message's target role (agent/human) — routes receipt to the same DM room
 		Timestamp:  time.Now().UnixMilli(),
 		Reason:     reason,
 	}
