@@ -112,6 +112,16 @@ $result = @()
 $insertedTopLevel = $false
 
 foreach ($line in $lines) {
+    # Force top-level Scope to user (wingetcreate inherits from old manifest which may be machine)
+    if ($line -match "^Scope:\s*(.+)$") {
+        $oldScope = $matches[1].Trim()
+        if ($oldScope -ne $scope) {
+            Write-Host "  Overriding top-level Scope: $oldScope -> $scope"
+            $result += "Scope: $scope"
+            continue
+        }
+    }
+
     # Insert top-level fields just before "Installers:" section
     if ($line -match "^Installers:" -and -not $insertedTopLevel) {
         # Add Commands for CLI if missing
