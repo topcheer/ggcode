@@ -12,6 +12,11 @@ $releaseVersion = $Version.TrimStart("v")
 $wingetCreate = Join-Path $PWD "wingetcreate.exe"
 $manifestDir = Join-Path $PWD "manifest-output"
 
+# Detect package type — CLI and Desktop have different manifest structures
+$isCli = $PackageId -like "*-cli"
+$scope = if ($isCli) { "machine" } else { "user" }
+Write-Host "Package: $PackageId (CLI=$isCli, Scope=$scope)"
+
 Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile $wingetCreate
 
 $env:WINGET_CREATE_GITHUB_TOKEN = $GitHubToken
@@ -48,9 +53,9 @@ if (-not $packageExists) {
 Write-Host "Step 1: Generating base manifest..."
 
 # Build URL list — must match the number of installers in the existing manifest
-$urls = @("${InstallerUrl}|x64|user")
+$urls = @("${InstallerUrl}|x64|${scope}")
 if ($InstallerUrlArm64) {
-    $urls += "${InstallerUrlArm64}|arm64|user"
+    $urls += "${InstallerUrlArm64}|arm64|${scope}"
 }
 Write-Host "  Installer URLs: $($urls -join ', ')"
 
@@ -130,9 +135,9 @@ if (-not $installerFile) {
 # Use first installer's metadata for top-level fields
 $topProductCode = $installers[0].ProductCode
 $topUpgradeCode = $installers[0].UpgradeCode
-$displayName = "GGCode Desktop"
+$displayName = if ($isCli) { "ggcode" } else { "GGCode Desktop" }
 if ($x64Props['ProductName']) { $displayName = $x64Props['ProductName'] }
-if ($displayName -eq "ggcode") { $displayName = "GGCode Desktop" }
+if (-not $isCli -and $displayName -eq "ggcode") { $displayName = "GGCode Desktop" }
 $publisher = "GG AI Studio"
 if ($x64Props['Manufacturer']) { $publisher = $x64Props['Manufacturer'] }
 
@@ -141,25 +146,34 @@ Write-Host "Step 3: ProductCode=$topProductCode UpgradeCode=$topUpgradeCode Disp
 # --- Step 4: Write complete installer YAML ---
 Write-Host "Step 4: Writing complete installer YAML..."
 
-$yaml = @"
-# Created using wingetcreate
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
-
+# Build top-level fields — CLI and Desktop have different required properties
+$sharedFields = @"
 PackageIdentifier: $PackageId
 PackageVersion: $releaseVersion
 Platform:
 - Windows.Desktop
-MinimumOSVersion: 10.0.17763.0
 InstallerType: wix
-Scope: user
+Scope: $scope
 InstallModes:
 - interactive
 - silent
 - silentWithProgress
+UpgradeBehavior: install
+"@
+
+if ($isCli) {
+    # CLI: machine scope, has Commands, no MinimumOSVersion/InstallerSwitches
+    $sharedFields += @"
+Commands:
+- ggcode
+"@
+} else {
+    # Desktop: user scope, has MinimumOSVersion, InstallerSwitches, ProductCode, AppsAndFeaturesEntries
+    $sharedFields += @"
+MinimumOSVersion: 10.0.17763.0
 InstallerSwitches:
   Silent: /qn
   SilentWithProgress: /qb
-UpgradeBehavior: install
 ProductCode: '$topProductCode'
 AppsAndFeaturesEntries:
 - DisplayName: $displayName
@@ -167,6 +181,14 @@ AppsAndFeaturesEntries:
   ProductCode: '$topProductCode'
   UpgradeCode: '$topUpgradeCode'
   InstallerType: wix
+"@
+}
+
+$yaml = @"
+# Created using wingetcreate
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+
+$sharedFields
 Installers:
 "@
 
@@ -177,7 +199,7 @@ foreach ($inst in $installers) {
   InstallerUrl: $($inst.Url)
   InstallerSha256: $($inst.Sha256)
   InstallerType: wix
-  Scope: user
+  Scope: $scope
   ProductCode: '$($inst.ProductCode)'
   AppsAndFeaturesEntries:
   - DisplayName: $displayName
