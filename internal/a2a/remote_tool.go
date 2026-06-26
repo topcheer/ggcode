@@ -39,7 +39,10 @@ func NewRemoteTool(reg *Registry, apiKey string) *RemoteTool {
 func (t *RemoteTool) Name() string { return "a2a_remote" }
 
 func (t *RemoteTool) Description() string {
-	return "Call a remote ggcode instance via A2A protocol. Use this to delegate tasks to other ggcode instances running in different workspaces. The target is identified by project name (e.g. 'order-service', 'user-service')."
+	return "Delegate a code-editing task to a remote ggcode instance via A2A protocol. " +
+		"Use this for headless code tasks (e.g. \"edit file X in project Y\", \"review code in user-service\") — NOT for asking questions or chatting. " +
+		"For real-time questions, status checks, or collaboration with other agents/users on the LAN, use the 'lanchat' tool instead. " +
+		"The target is identified by project name (e.g. 'order-service', 'user-service')."
 }
 
 func (t *RemoteTool) Parameters() json.RawMessage {
@@ -257,7 +260,12 @@ func FormatRemoteAgents(instances []InstanceInfo) string {
 		name := filepath.Base(inst.Workspace)
 		sb.WriteString(fmt.Sprintf("- %s (%s) — %s\n", name, inst.Workspace, inst.Status))
 	}
-	sb.WriteString("Use a2a_remote to delegate tasks to them.")
+	sb.WriteString("\nHow to collaborate with these instances:\n")
+	sb.WriteString("- Use 'lanchat' (action='list' then action='send' with to_role='agent') for real-time communication: asking questions, checking status, coordinating tasks, notifying, or discussing. ALWAYS try lanchat FIRST for any interactive collaboration.\n")
+	sb.WriteString("- Use lanchat(action='send', to='*', as_agent=true) to broadcast a message to ALL participants at once (e.g. team-wide announcements or questions).\n")
+	sb.WriteString("- Use 'a2a_remote' ONLY for headless code-editing delegation: fire-and-forget tasks where you give a specific code instruction and wait for the result (e.g. 'edit file X', 'review code Y', 'run tests in project Z').\n")
+	sb.WriteString("- When a remote agent goes offline or a2a_remote fails, do NOT silently fall back to another a2a_remote target — use lanchat to coordinate or notify the human about the situation.\n")
+	sb.WriteString("- Team awareness: each lanchat participant has a 'team' field. When the user mentions a team (e.g. 'ask the platform team'), call lanchat(action='list') to find participants with matching team, then message them.\n")
 	return sb.String()
 }
 

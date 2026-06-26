@@ -27,6 +27,7 @@ type Hub struct {
 	humanNick string
 	agentNick string
 	role      string // user-defined role, e.g. "frontend", "backend", "devops"
+	team      string // user-defined team, e.g. "platform", "mobile" (default: "dev-team")
 	mode      string // "tui", "gui", "daemon"
 	endpoint  string // this node's HTTP endpoint (http://ip:port)
 	apiKey    string // A2A API key for peer auth
@@ -116,6 +117,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		humanNick:        nick,
 		agentNick:        AgentNick(nick),
 		role:             DefaultRole,
+		team:             DefaultTeam,
 		mode:             mode,
 		endpoint:         endpoint,
 		apiKey:           apiKey,
@@ -168,6 +170,12 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 		h.role = persisted
 	} else {
 		_ = SaveRole(h.store.dir, h.role)
+	}
+	// Load session-specific team if previously persisted.
+	if persisted, err := LoadTeam(h.store.dir); err == nil && persisted != "" {
+		h.team = persisted
+	} else {
+		_ = SaveTeam(h.store.dir, h.team)
 	}
 	// Load persisted messages into memory so they survive across restarts.
 	if h.store != nil {
@@ -232,6 +240,13 @@ func (h *Hub) Role() string {
 	return h.role
 }
 
+// Team returns this node's user-defined team.
+func (h *Hub) Team() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.team
+}
+
 // SetWorkspaceMeta updates the workspace metadata for this node.
 // Call this when switching workspaces so that subsequent presence
 // exchanges announce the new project info.
@@ -262,6 +277,7 @@ func (h *Hub) SelfParticipant() Participant {
 		Mode:        h.mode,
 		Endpoint:    h.endpoint,
 		Role:        h.role,
+		Team:        h.team,
 		Online:      true,
 		LastSeen:    time.Now().Unix(),
 		Workspace:   h.workspace,
@@ -324,6 +340,7 @@ func (h *Hub) Participants() []Participant {
 		Mode:      h.mode,
 		Endpoint:  h.endpoint,
 		Role:      h.role,
+		Team:      h.team,
 		Online:    true,
 		LastSeen:  time.Now().Unix(),
 	}}
@@ -357,26 +374,40 @@ func (h *Hub) PendingApprovals() []PendingAgentMsg {
 // The humanNick is composed as "nick_role" (e.g. "alice_dev") so that
 // identity + role are self-evident and collision probability is low.
 // On conflict, resolveNickConflict will produce "alice_dev2", "alice_dev3", etc.
-func (h *Hub) SetNickRole(nick, role string) error {
+// SetNickRoleTeam changes the human nickname, role, and team; updates agent nick,
+// persists all three, and broadcasts the change to all peers.
+func (h *Hub) SetNickRoleTeam(nick, role, team string) error {
 	composite := nick + "_" + role
 	h.mu.Lock()
 	h.humanNick = composite
 	h.agentNick = AgentNick(composite)
 	h.role = role
+	h.team = team
 	sessionDir := h.store.dir
 	h.mu.Unlock()
 
-	// Persist nick and role to session-scoped path
+	// Persist nick, role, and team to session-scoped path
 	if err := SaveNick(sessionDir, composite); err != nil {
 		debug.Log("lanchat", "failed to persist session nick: %v", err)
 	}
 	if err := SaveRole(sessionDir, role); err != nil {
 		debug.Log("lanchat", "failed to persist session role: %v", err)
 	}
+	if err := SaveTeam(sessionDir, team); err != nil {
+		debug.Log("lanchat", "failed to persist session team: %v", err)
+	}
 
-	// Broadcast nick/role change to peers
-	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role) })
+	// Broadcast nick/role/team change to peers
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role, team) })
 	return nil
+}
+
+// SetNickRole is a backward-compatible wrapper that preserves the current team.
+func (h *Hub) SetNickRole(nick, role string) error {
+	h.mu.RLock()
+	team := h.team
+	h.mu.RUnlock()
+	return h.SetNickRoleTeam(nick, role, team)
 }
 
 // UpdatePeers synchronizes the peer list from A2A registry discovery results.
@@ -540,7 +571,7 @@ func (h *Hub) resolveNickConflict() {
 
 	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
-	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick, h.role) })
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick, h.role, h.team) })
 }
 
 // HandlePresence processes an incoming presence announcement from a peer.
@@ -569,6 +600,9 @@ func (h *Hub) HandlePresence(p Participant) {
 		}
 		if p.Role != "" {
 			existing.Role = p.Role
+		}
+		if p.Team != "" {
+			existing.Team = p.Team
 		}
 		existing.Mode = p.Mode
 		existing.Endpoint = p.Endpoint
@@ -653,6 +687,9 @@ func (h *Hub) sendPresence(peer Participant) {
 			}
 			if peerInfo.AgentNick != "" {
 				existing.AgentNick = peerInfo.AgentNick
+			}
+			if peerInfo.Team != "" {
+				existing.Team = peerInfo.Team
 			}
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
@@ -856,13 +893,14 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) erro
 	return nil
 }
 
-func (h *Hub) broadcastNickChange(newNick, newRole string) {
+func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 	h.mu.RLock()
 	change := NickChange{
 		NodeID:    h.nodeID,
 		HumanNick: newNick,
 		AgentNick: AgentNick(newNick),
 		Role:      newRole,
+		Team:      newTeam,
 		Timestamp: time.Now().UnixMilli(),
 	}
 	peers := make([]Participant, 0, len(h.peers))
@@ -1012,6 +1050,9 @@ func (h *Hub) HandleNickChange(change NickChange) {
 		}
 		if change.Role != "" {
 			peer.Role = change.Role
+		}
+		if change.Team != "" {
+			peer.Team = change.Team
 		}
 	}
 	cb := h.onNickChange

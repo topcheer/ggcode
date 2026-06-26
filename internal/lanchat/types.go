@@ -35,6 +35,7 @@ type Participant struct {
 	Mode      string `json:"mode"` // "tui", "gui", "daemon"
 	Endpoint  string `json:"endpoint"`
 	Role      string `json:"role"` // user-defined role, e.g. "frontend", "backend", "devops"
+	Team      string `json:"team"` // user-defined team, e.g. "platform", "mobile" (default: "dev-team")
 	Online    bool   `json:"online"`
 	LastSeen  int64  `json:"last_seen"`
 
@@ -105,6 +106,7 @@ type NickChange struct {
 	HumanNick string `json:"human_nick"`
 	AgentNick string `json:"agent_nick"`
 	Role      string `json:"role"` // new role
+	Team      string `json:"team"` // new team
 	Timestamp int64  `json:"timestamp"`
 }
 

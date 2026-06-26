@@ -174,6 +174,27 @@ func LoadRole(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// SaveTeam persists the team to <dir>/lanchat-team.
+func SaveTeam(dir, team string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create team dir %s: %w", dir, err)
+	}
+	return os.WriteFile(filepath.Join(dir, "lanchat-team"), []byte(team), 0o644)
+}
+
+// LoadTeam reads the team from <dir>/lanchat-team.
+// Returns "" and no error if the file does not exist.
+func LoadTeam(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "lanchat-team"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 // LoadApprovalPolicies reads persisted approval policies from <dir>/approval-policies.json.
 // Returns map[peerNodeID]policy. Missing file returns empty map + nil error.
 func LoadApprovalPolicies(dir string) (map[string]string, error) {

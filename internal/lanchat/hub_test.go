@@ -583,3 +583,164 @@ func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
 		t.Fatal("node-h should have been added by mDNS discovery")
 	}
 }
+
+// ── Team feature tests ──
+
+func TestParseNickRoleTeam(t *testing.T) {
+	tests := []struct {
+		input string
+		nick  string
+		role  string
+		team  string
+	}{
+		{"alice", "alice", "developer", "dev-team"},
+		{"alice@frontend", "alice", "frontend", "dev-team"},
+		{"alice@frontend@platform", "alice", "frontend", "platform"},
+		{"alice@@platform", "alice", "developer", "platform"},
+		{"  bob @ devops @ sre  ", "bob", "devops", "sre"},
+		{"", "", "developer", "dev-team"},
+	}
+	for _, tc := range tests {
+		nick, role, team := ParseNickRoleTeam(tc.input)
+		if nick != tc.nick || role != tc.role || team != tc.team {
+			t.Errorf("ParseNickRoleTeam(%q) = (%q, %q, %q); want (%q, %q, %q)",
+				tc.input, nick, role, team, tc.nick, tc.role, tc.team)
+		}
+	}
+}
+
+func TestParseNickRoleBackwardCompat(t *testing.T) {
+	// ParseNickRole should still work as a 2-value return
+	nick, role := ParseNickRole("alice@frontend")
+	if nick != "alice" || role != "frontend" {
+		t.Errorf("ParseNickRole backward compat failed: got (%q, %q)", nick, role)
+	}
+}
+
+func TestSetNickRoleTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Initial state: default team
+	if hub.Team() != DefaultTeam {
+		t.Fatalf("initial team should be %q, got %q", DefaultTeam, hub.Team())
+	}
+
+	// Set nick with team
+	if err := hub.SetNickRoleTeam("alice", "frontend", "platform"); err != nil {
+		t.Fatalf("SetNickRoleTeam: %v", err)
+	}
+
+	// Verify in-memory state
+	if hub.Role() != "frontend" {
+		t.Errorf("role = %q, want 'frontend'", hub.Role())
+	}
+	if hub.Team() != "platform" {
+		t.Errorf("team = %q, want 'platform'", hub.Team())
+	}
+	if hub.HumanNick() != "alice_frontend" {
+		t.Errorf("humanNick = %q, want 'alice_frontend'", hub.HumanNick())
+	}
+
+	// Verify persistence
+	loadedTeam, err := LoadTeam(tmp)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if loadedTeam != "platform" {
+		t.Errorf("persisted team = %q, want 'platform'", loadedTeam)
+	}
+
+	// Verify SelfParticipant includes team
+	self := hub.SelfParticipant()
+	if self.Team != "platform" {
+		t.Errorf("SelfParticipant team = %q, want 'platform'", self.Team)
+	}
+}
+
+func TestPresencePropagatesTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Simulate an incoming presence from a peer with a team
+	hub.HandlePresence(Participant{
+		NodeID:    "node-B",
+		HumanNick: "bob_backend",
+		AgentNick: "bob_backend_agent",
+		Endpoint:  "http://localhost:22222",
+		Role:      "backend",
+		Team:      "platform",
+	})
+
+	hub.mu.RLock()
+	peer := hub.peers["node-B"]
+	hub.mu.RUnlock()
+	if peer == nil {
+		t.Fatal("peer not added")
+	}
+	if peer.Team != "platform" {
+		t.Errorf("peer team = %q, want 'platform'", peer.Team)
+	}
+	if peer.Role != "backend" {
+		t.Errorf("peer role = %q, want 'backend'", peer.Role)
+	}
+}
+
+func TestSetNickRolePreservesTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Set nick with team first
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+
+	// Now use old SetNickRole API — should preserve team
+	hub.SetNickRole("alice", "devops")
+
+	if hub.Team() != "platform" {
+		t.Errorf("team should be preserved as 'platform', got %q", hub.Team())
+	}
+	if hub.Role() != "devops" {
+		t.Errorf("role should be 'devops', got %q", hub.Role())
+	}
+}
+
+func TestHandleNickChangeUpdatesTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Add a peer
+	hub.HandlePresence(Participant{
+		NodeID:    "node-B",
+		HumanNick: "bob_dev",
+		Endpoint:  "http://localhost:22222",
+	})
+
+	// Simulate incoming NickChange with team
+	hub.HandleNickChange(NickChange{
+		NodeID:    "node-B",
+		HumanNick: "bob_devops",
+		AgentNick: "bob_devops_agent",
+		Role:      "devops",
+		Team:      "sre",
+	})
+
+	hub.mu.RLock()
+	peer := hub.peers["node-B"]
+	hub.mu.RUnlock()
+	if peer.Team != "sre" {
+		t.Errorf("peer team should be 'sre' after nick change, got %q", peer.Team)
+	}
+	if peer.Role != "devops" {
+		t.Errorf("peer role should be 'devops', got %q", peer.Role)
+	}
+}
+
+func TestDefaultTeam(t *testing.T) {
+	if DefaultTeam != "dev-team" {
+		t.Errorf("DefaultTeam = %q, want 'dev-team'", DefaultTeam)
+	}
+}

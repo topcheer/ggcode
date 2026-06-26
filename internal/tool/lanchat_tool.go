@@ -19,15 +19,24 @@ func (t LanChatTool) Name() string { return "lanchat" }
 
 func (t LanChatTool) Description() string {
 	return "Send and receive messages on the LAN Chat network connecting ggcode instances on the local network. " +
-		"Use this when a user asks to message, reply, or ask something to another ggcode user or their agent visible in the LAN Chat panel (messages prefixed with [LAN Chat from <nick>]). " +
-		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for external agent delegation). " +
-		"Actions: 'list' to discover participants, their node IDs, and their roles (e.g. frontend, backend, devops) so you can route tasks to the right agent; " +
-		"'send' to message a participant; 'history' to read recent messages; " +
+		"This is the PRIMARY tool for real-time collaboration with other ggcode users and their agents on the LAN — " +
+		"use this FIRST (before a2a_remote or delegate) when you need to ask, notify, or check on another ggcode instance or user. " +
+		"Triggers: user mentions another participant by name or nick (e.g. \"check what mdns is doing\", \"ask ggai about...\"), " +
+		"messages prefixed with [LAN Chat from <nick>], or any reference to LAN participants.\n" +
+		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for headless code-edit delegation to other workspaces, not for asking questions).\n" +
+		"Nick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
+		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
+		"Actions: 'list' to discover participants, their node IDs, roles, and teams (e.g. frontend, backend, devops / platform, mobile) so you can route tasks to the right agent; " +
+		"'send' to message a participant (use to='*' to broadcast to ALL participants); 'broadcast' to send to ALL participants (use as_agent=true to broadcast as agent to all agents); " +
+		"'history' to read recent messages; " +
 		"'pending'/'approve'/'reject' to manage @agent approvals.\n" +
-		"\nTypical workflow to reply to a LAN Chat message:\n" +
-		"1. Call lanchat(action='list') to find the target's node_id and role\n" +
-		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...') to reach their agent\n" +
-		"   Use to_role='human' to message the human user instead of their agent."
+		"\nTeam awareness: each participant has a 'team' field. When the user mentions a team (e.g. 'ask the platform team'), use action='list' to find participants with a matching team, then collaborate with them.\n" +
+		"\nTypical workflow to collaborate with another instance:\n" +
+		"1. Call lanchat(action='list') to find the target's node_id, role, and team\n" +
+		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='What are you working on?') to reach their agent\n" +
+		"   Use to_role='human' to message the human user instead of their agent.\n" +
+		"   Use to='*' to send the same message to ALL participants (group broadcast).\n" +
+		"3. The response will appear as a [LAN Chat from <nick>] message in subsequent turns."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {
@@ -36,8 +45,8 @@ func (t LanChatTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["list", "send", "history", "pending", "approve", "reject"],
-				"description": "list=discover participants and their node_id; send=send a message; history=recent messages; pending/list @agent approvals; approve/reject a pending message"
+				"enum": ["list", "send", "broadcast", "history", "pending", "approve", "reject"],
+				"description": "list=discover participants and their node_id; send=send a DM; broadcast=send to all participants (use as_agent=true for agent broadcast); history=recent messages; pending/list @agent approvals; approve/reject a pending message"
 			},
 			"message": {
 				"type": "string",
@@ -45,7 +54,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"to": {
 				"type": "string",
-				"description": "Recipient node_id for direct message. Omit for broadcast. Find it via action='list' first."
+				"description": "Recipient node_id for direct message. Use '*' to broadcast to ALL participants. Omit for default broadcast. Find node_id via action='list' first."
 			},
 			"to_role": {
 				"type": "string",
@@ -101,6 +110,8 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return t.doList(), nil
 	case "send":
 		return t.doSend(ctx, args.Message, args.To, args.AsAgent, args.ToRole)
+	case "broadcast":
+		return t.doBroadcast(ctx, args.Message, args.AsAgent)
 	case "history":
 		return t.doHistory(args.Limit), nil
 	case "pending":
@@ -123,6 +134,7 @@ func (t LanChatTool) doList() Result {
 		HumanNick string `json:"human_nick"`
 		AgentNick string `json:"agent_nick"`
 		Role      string `json:"role"`
+		Team      string `json:"team"`
 		Mode      string `json:"mode"`
 		Online    bool   `json:"online"`
 		LastSeen  string `json:"last_seen"`
@@ -140,6 +152,7 @@ func (t LanChatTool) doList() Result {
 			HumanNick: p.HumanNick,
 			AgentNick: p.AgentNick,
 			Role:      p.Role,
+			Team:      p.Team,
 			Mode:      p.Mode,
 			Online:    p.Online,
 			LastSeen:  lastSeen,
@@ -158,6 +171,11 @@ func (t LanChatTool) doList() Result {
 func (t LanChatTool) doSend(ctx context.Context, content, toNodeID string, asAgent bool, toRole string) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for send"}, nil
+	}
+
+	// '*' means broadcast to all participants
+	if toNodeID == "*" {
+		toNodeID = ""
 	}
 
 	// Default toRole to human for direct messages
@@ -195,6 +213,26 @@ func (t LanChatTool) doSend(ctx context.Context, content, toNodeID string, asAge
 		role = "agent"
 	}
 	return Result{Content: fmt.Sprintf("Message sent to %s as %s.\n", target, role)}, nil
+}
+
+func (t LanChatTool) doBroadcast(ctx context.Context, content string, asAgent bool) (Result, error) {
+	if content == "" {
+		return Result{IsError: true, Content: "message content is required for broadcast"}, nil
+	}
+	var err error
+	if asAgent {
+		err = t.Hub.BroadcastAsAgent(ctx, content)
+	} else {
+		err = t.Hub.SendBroadcast(ctx, content, nil)
+	}
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to broadcast: %v", err)}, nil
+	}
+	role := "human"
+	if asAgent {
+		role = "agent"
+	}
+	return Result{Content: fmt.Sprintf("Broadcast sent to all participants as %s.\n", role)}, nil
 }
 
 func (t LanChatTool) doHistory(limit int) Result {

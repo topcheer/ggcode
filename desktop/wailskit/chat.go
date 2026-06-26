@@ -254,8 +254,8 @@ func (b *ChatBridge) LanChatSetNick(nick string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
 	}
-	n, r := lanchat.ParseNickRole(nick)
-	return b.lanchatHub.SetNickRole(n, r)
+	n, r, t := lanchat.ParseNickRoleTeam(nick)
+	return b.lanchatHub.SetNickRoleTeam(n, r, t)
 }
 
 // LanChatPendingApprovals returns messages awaiting host approval.
