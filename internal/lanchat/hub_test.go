@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRandomNick(t *testing.T) {
@@ -229,5 +230,300 @@ func TestMessageIsBroadcast(t *testing.T) {
 		if got := tt.msg.IsBroadcast(); got != tt.want {
 			t.Errorf("IsBroadcast = %v, want %v", got, tt.want)
 		}
+	}
+}
+
+// TestPresenceNoDuplicateJoinAfterRecovery verifies that when a peer goes
+// offline and recovers within peerDeleteAfter, no duplicate "is online"
+// notification is fired. The notifiedJoin flag must persist across the
+// offline→online transition.
+func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	joinCount := 0
+	hub.SetCallbacks(nil, nil, func(p Participant) {
+		joinCount++
+	}, nil, nil, nil)
+
+	// Simulate a peer joining via presence
+	peer := Participant{
+		NodeID:    "node-b",
+		HumanNick: "Alice_frontend",
+		Endpoint:  "http://localhost:5555",
+	}
+	hub.HandlePresence(peer)
+
+	// Wait for async callback
+	time.Sleep(50 * time.Millisecond)
+	if joinCount != 1 {
+		t.Fatalf("expected 1 join notification, got %d", joinCount)
+	}
+
+	// Mark the peer offline by aging out LastSeen
+	hub.mu.Lock()
+	if p, ok := hub.peers["node-b"]; ok {
+		p.LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
+	}
+	hub.mu.Unlock()
+
+	// Call UpdatePeers to trigger offline detection (empty list = no mDNS peers)
+	hub.UpdatePeers(nil)
+
+	// The peer should be offline but NOT deleted
+	hub.mu.RLock()
+	p, exists := hub.peers["node-b"]
+	hub.mu.RUnlock()
+	if !exists {
+		t.Fatal("peer should still exist in map (not deleted)")
+	}
+	if p.Online {
+		t.Error("peer should be marked offline")
+	}
+	if !p.notifiedJoin {
+		t.Error("notifiedJoin should still be true")
+	}
+
+	// Now simulate recovery — peer sends presence again
+	hub.HandlePresence(peer)
+	time.Sleep(50 * time.Millisecond)
+
+	// Should NOT have fired another join notification
+	if joinCount != 1 {
+		t.Errorf("expected 1 join notification (no duplicate on recovery), got %d", joinCount)
+	}
+
+	// Peer should be back online
+	hub.mu.RLock()
+	p = hub.peers["node-b"]
+	hub.mu.RUnlock()
+	if !p.Online {
+		t.Error("peer should be online after recovery")
+	}
+	if p.notifiedLeave {
+		t.Error("notifiedLeave should be reset to false on recovery")
+	}
+}
+
+// TestPresenceLeaveNotificationDelayed verifies that the leave notification
+// is delayed by offlineNotifyDelay. A peer that goes offline and stays
+// offline should only fire leave after the delay period.
+func TestPresenceLeaveNotificationDelayed(t *testing.T) {
+	// Save and restore constants
+	origDelay := offlineNotifyDelay
+	origOffline := ageOffline
+	offlineNotifyDelay = 200 * time.Millisecond
+	ageOffline = 2 * time.Second // long enough that test operations don't cause re-staleness
+	defer func() {
+		offlineNotifyDelay = origDelay
+		ageOffline = origOffline
+	}()
+
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	leaveCount := 0
+	hub.SetCallbacks(nil, nil, nil, func(nodeID, humanNick string) {
+		leaveCount++
+	}, nil, nil)
+
+	// Peer joins
+	peer := Participant{
+		NodeID:    "node-c",
+		HumanNick: "Bob_backend",
+		Endpoint:  "http://localhost:6666",
+	}
+	hub.HandlePresence(peer)
+	time.Sleep(20 * time.Millisecond)
+
+	// Age the peer and call UpdatePeers — should mark offline but NOT notify yet
+	hub.mu.Lock()
+	hub.peers["node-c"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
+	hub.mu.Unlock()
+	hub.UpdatePeers(nil)
+	time.Sleep(20 * time.Millisecond)
+
+	if leaveCount != 0 {
+		t.Errorf("leave should be delayed, but got %d notifications", leaveCount)
+	}
+
+	// Peer is offline but within the delay window
+	hub.mu.RLock()
+	p := hub.peers["node-c"]
+	hub.mu.RUnlock()
+	if p.Online {
+		t.Error("peer should be offline")
+	}
+	if p.notifiedLeave {
+		t.Error("leave should not be notified yet (within delay)")
+	}
+
+	// Wait for the delay to pass and call UpdatePeers again
+	time.Sleep(offlineNotifyDelay + 50*time.Millisecond)
+	hub.UpdatePeers(nil)
+	time.Sleep(20 * time.Millisecond)
+
+	if leaveCount != 1 {
+		t.Errorf("expected 1 leave notification after delay, got %d", leaveCount)
+	}
+}
+
+// TestPresenceLeaveSuppressedOnQuickRecovery verifies that if a peer
+// goes offline and recovers within offlineNotifyDelay, NO leave
+// notification is fired at all.
+func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
+	origDelay := offlineNotifyDelay
+	origOffline := ageOffline
+	offlineNotifyDelay = 200 * time.Millisecond
+	ageOffline = 2 * time.Second // long enough that peer doesn't re-stale during test sleeps
+	defer func() {
+		offlineNotifyDelay = origDelay
+		ageOffline = origOffline
+	}()
+
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	leaveCount := 0
+	hub.SetCallbacks(nil, nil, nil, func(nodeID, humanNick string) {
+		leaveCount++
+	}, nil, nil)
+
+	// Peer joins
+	peer := Participant{
+		NodeID:    "node-d",
+		HumanNick: "Carol_devops",
+		Endpoint:  "http://localhost:7777",
+	}
+	hub.HandlePresence(peer)
+	time.Sleep(20 * time.Millisecond)
+
+	// Peer goes stale → offline marked but leave not yet notified
+	hub.mu.Lock()
+	hub.peers["node-d"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
+	hub.mu.Unlock()
+	hub.UpdatePeers(nil)
+	time.Sleep(20 * time.Millisecond)
+
+	// Verify leave was NOT fired yet (within offlineNotifyDelay)
+	if leaveCount != 0 {
+		t.Fatalf("leave should not fire within delay, got %d", leaveCount)
+	}
+
+	// Peer recovers before offlineNotifyDelay expires
+	hub.HandlePresence(peer)
+	time.Sleep(20 * time.Millisecond)
+
+	// Wait beyond offlineNotifyDelay, then call UpdatePeers.
+	// Peer is online (LastSeen fresh from HandlePresence), so no leave.
+	time.Sleep(offlineNotifyDelay + 50*time.Millisecond)
+	hub.UpdatePeers(nil)
+	time.Sleep(20 * time.Millisecond)
+
+	if leaveCount != 0 {
+		t.Errorf("expected 0 leave notifications (quick recovery), got %d", leaveCount)
+	}
+}
+
+// TestPresencePeerDeletedAfterLongAbsence verifies that a peer is only
+// deleted from the map after peerDeleteAfter, and that deletion clears
+// notifiedNicks so a future re-appearance gets a fresh join notification.
+func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
+	origDelete := peerDeleteAfter
+	origOffline := ageOffline
+	peerDeleteAfter = 200 * time.Millisecond
+	ageOffline = 50 * time.Millisecond
+	defer func() {
+		peerDeleteAfter = origDelete
+		ageOffline = origOffline
+	}()
+
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	joinCount := 0
+	hub.SetCallbacks(nil, nil, func(p Participant) {
+		joinCount++
+	}, nil, nil, nil)
+
+	peer := Participant{
+		NodeID:    "node-e",
+		HumanNick: "Dave_frontend",
+		Endpoint:  "http://localhost:8888",
+	}
+	hub.HandlePresence(peer)
+	time.Sleep(20 * time.Millisecond)
+	if joinCount != 1 {
+		t.Fatalf("expected 1 join, got %d", joinCount)
+	}
+
+	// Age the peer well beyond peerDeleteAfter
+	hub.mu.Lock()
+	hub.peers["node-e"].LastSeen = time.Now().Add(-peerDeleteAfter - time.Hour).Unix()
+	hub.mu.Unlock()
+	hub.UpdatePeers(nil)
+
+	// Peer should be deleted
+	hub.mu.RLock()
+	_, exists := hub.peers["node-e"]
+	hub.mu.RUnlock()
+	if exists {
+		t.Fatal("peer should be deleted after peerDeleteAfter")
+	}
+
+	// notifiedNicks should be cleared for this nick
+	hub.mu.RLock()
+	inNotified := hub.notifiedNicks["Dave_frontend"]
+	hub.mu.RUnlock()
+	if inNotified {
+		t.Error("notifiedNicks should be cleared on deletion")
+	}
+
+	// Re-appearance should fire a new join notification
+	hub.HandlePresence(peer)
+	time.Sleep(20 * time.Millisecond)
+	if joinCount != 2 {
+		t.Errorf("expected 2 join notifications after delete+reappear, got %d", joinCount)
+	}
+}
+
+// TestPresenceNoMDNSBasedDeletion verifies that a peer is NOT deleted
+// just because mDNS didn't see it in the current discovery results,
+// even if it's offline.
+func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
+	origOffline := ageOffline
+	ageOffline = 2 * time.Second
+	defer func() { ageOffline = origOffline }()
+
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Peer joins via presence
+	hub.HandlePresence(Participant{
+		NodeID:    "node-f",
+		HumanNick: "Eve_testing",
+		Endpoint:  "http://localhost:9999",
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	// Age the peer so it goes offline
+	hub.mu.Lock()
+	hub.peers["node-f"].LastSeen = time.Now().Add(-ageOffline - time.Second).Unix()
+	hub.mu.Unlock()
+
+	// Call UpdatePeers with an EMPTY list (mDNS doesn't see the peer)
+	hub.UpdatePeers(nil)
+
+	// Peer should still exist — deletion is time-based only, not mDNS-based
+	hub.mu.RLock()
+	_, exists := hub.peers["node-f"]
+	hub.mu.RUnlock()
+	if !exists {
+		t.Fatal("peer should NOT be deleted based on mDNS absence alone")
 	}
 }

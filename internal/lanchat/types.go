@@ -46,10 +46,11 @@ type Participant struct {
 	HasGit      bool     `json:"has_git,omitempty"`
 	HasTests    bool     `json:"has_tests,omitempty"`
 
-	// Internal (not serialized): tracks whether we already fired
-	// onParticipantAdd for this peer. Prevents duplicate join
-	// notifications when presence exchanges complete.
-	notifiedJoin bool `json:"-"`
+	// Internal (not serialized): tracks notification state to prevent
+	// excessive online/offline churn.
+	notifiedJoin    bool  `json:"-"` // already fired onParticipantAdd
+	lastOfflineTime int64 `json:"-"` // unix nanoseconds when peer went offline (0 = never)
+	notifiedLeave   bool  `json:"-"` // already fired leave notification for current offline period
 }
 
 // Message is a chat message exchanged between nodes.
@@ -113,12 +114,26 @@ const maxHistoryPerSession = 100
 // ageOffline marks a participant offline if not seen within this duration.
 // This is the app-level liveness check: if a peer hasn't responded to
 // heartbeats or presence exchanges within this window, it's marked offline.
-var ageOffline = 60 * time.Second
+// Set to 3 minutes (was 60s) to tolerate transient probe failures that
+// caused excessive online/offline cycling.
+var ageOffline = 3 * time.Minute
 
 // presenceHeartbeat is how long without communication before we re-probe
 // a peer via sendPresence. If the probe fails (peer's lanchat server is
 // dead), LastSeen stays stale and after ageOffline the peer goes offline.
 var presenceHeartbeat = 30 * time.Second
+
+// peerDeleteAfter is how long a peer must be unreachable before it's
+// removed from the peers map entirely. Until deletion, the peer's
+// notifiedJoin flag is preserved, preventing duplicate "is online"
+// notifications on recovery from transient offline periods.
+var peerDeleteAfter = 10 * time.Minute
+
+// offlineNotifyDelay is the grace period before firing a leave notification.
+// When a peer goes offline (LastSeen stale), we wait this long before
+// notifying. If the peer recovers within this window, no notification
+// is fired — absorbing transient blips.
+var offlineNotifyDelay = 30 * time.Second
 
 // DetectWorkspaceMeta scans the working directory for language/framework
 // signals and returns a WorkspaceMeta suitable for presence exchange.

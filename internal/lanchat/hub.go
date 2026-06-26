@@ -306,7 +306,9 @@ func (h *Hub) shouldNotifyLeave(nick, excludeNodeID string) bool {
 			return false // another instance with same nick is still online
 		}
 	}
-	delete(h.notifiedNicks, nick)
+	// Don't delete from notifiedNicks here — that would allow a duplicate
+	// "is online" notification when the peer recovers. notifiedNicks is
+	// cleared only when the peer is deleted from the map after peerDeleteAfter.
 	return true
 }
 
@@ -321,6 +323,7 @@ func (h *Hub) Participants() []Participant {
 		AgentNick: h.agentNick,
 		Mode:      h.mode,
 		Endpoint:  h.endpoint,
+		Role:      h.role,
 		Online:    true,
 		LastSeen:  time.Now().Unix(),
 	}}
@@ -442,35 +445,49 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		}
 	}
 
-	// Mark peers offline — based SOLELY on LastSeen (presence heartbeat).
-	// Do NOT use mDNS discovery absence (!seen[id]) as an offline signal:
-	// mDNS results jitter (a peer can briefly disappear for one tick then
-	// reappear), which causes endless online→offline→online flapping.
+	// Offline detection + delayed leave notification.
 	//
-	// Deletion: a peer is removed from the map only when BOTH conditions hold:
-	//   1. It has been offline (LastSeen stale beyond ageOffline)
-	//   2. It is no longer in the current mDNS discovery results
-	// This prevents stale entries (from restarted processes with new nodeIDs)
-	// from accumulating forever, while tolerating transient mDNS jitter.
+	// A peer is marked offline when LastSeen is stale beyond ageOffline.
+	// But the leave notification is delayed by offlineNotifyDelay: if the
+	// peer recovers (presence probe succeeds) within that window, no
+	// notification is fired at all — transient blips are silently absorbed.
+	//
+	// Peer deletion is purely time-based (peerDeleteAfter). We NEVER delete
+	// based on mDNS absence — that caused the delete→re-create→join cycle
+	// where every mDNS jitter produced duplicate "is online" notifications.
+	// Keeping the peer in the map preserves its notifiedJoin flag, preventing
+	// re-announcement on recovery.
 	type leftPeer struct {
 		nodeID, humanNick string
 	}
 	var leftPeers []leftPeer
+	now := time.Now()
 	for id, p := range h.peers {
 		isStale := time.Since(time.Unix(p.LastSeen, 0)) > ageOffline
 		if isStale && p.Online {
 			p.Online = false
-			// Only notify offline for peers we previously announced as online
-			// (verified via presence exchange), AND no other online peer with
-			// the same nick still exists.
-			if p.notifiedJoin && p.HumanNick != "" && h.shouldNotifyLeave(p.HumanNick, id) {
-				leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
+			p.lastOfflineTime = now.UnixNano()
+			// Don't fire leave yet — wait for offlineNotifyDelay.
+		}
+		// Fire delayed leave notification: only after offlineNotifyDelay
+		// has passed since the peer went offline, and we haven't already
+		// notified. This absorbs brief offline blips.
+		if !p.Online && p.lastOfflineTime > 0 && !p.notifiedLeave {
+			if now.Sub(time.Unix(0, p.lastOfflineTime)) >= offlineNotifyDelay {
+				p.notifiedLeave = true
+				if p.notifiedJoin && p.HumanNick != "" && h.shouldNotifyLeave(p.HumanNick, id) {
+					leftPeers = append(leftPeers, leftPeer{nodeID: id, humanNick: p.HumanNick})
+				}
 			}
 		}
-		// Delete peers that are offline AND no longer discovered via mDNS.
-		// This cleans up stale nodeIDs from restarted processes while
-		// tolerating mDNS jitter for peers that are still alive.
-		if !seen[id] && (!p.Online || isStale) {
+		// Delete peers only after extended unreachability (peerDeleteAfter).
+		// This is the ONLY deletion path — mDNS absence is never used.
+		// On deletion, clear the nick from notifiedNicks so a future
+		// re-appearance (e.g. process restart) gets a fresh join notification.
+		if time.Since(time.Unix(p.LastSeen, 0)) > peerDeleteAfter {
+			if p.HumanNick != "" {
+				delete(h.notifiedNicks, strings.TrimSpace(p.HumanNick))
+			}
 			delete(h.peers, id)
 		}
 	}
@@ -578,6 +595,7 @@ func (h *Hub) HandlePresence(p Participant) {
 		existing.Endpoint = p.Endpoint
 		existing.Online = true
 		existing.LastSeen = time.Now().Unix()
+		existing.notifiedLeave = false // reset: peer recovered, future offline can notify again
 		// Update workspace metadata (always overwrite — workspace changes are meaningful)
 		if p.Workspace != "" {
 			existing.Workspace = p.Workspace
@@ -660,6 +678,7 @@ func (h *Hub) sendPresence(peer Participant) {
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
+			existing.notifiedLeave = false // reset: peer recovered
 			// Update workspace metadata from peer's response
 			if peerInfo.Workspace != "" {
 				existing.Workspace = peerInfo.Workspace
@@ -735,6 +754,15 @@ func (h *Hub) SendAsAgent(ctx context.Context, toNodeID, toRole, content string)
 	h.mu.RUnlock()
 	msg := h.newMessage(RoleAgent, nick, toNodeID, toRole, content, nil)
 	return h.deliverMessage(ctx, msg, false)
+}
+
+// BroadcastAsAgent sends a message from the agent to all peers.
+func (h *Hub) BroadcastAsAgent(ctx context.Context, content string) error {
+	h.mu.RLock()
+	nick := h.agentNick
+	h.mu.RUnlock()
+	msg := h.newMessage(RoleAgent, nick, "", "", content, nil)
+	return h.deliverMessage(ctx, msg, true)
 }
 
 func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, attachments []Attachment) Message {
@@ -910,16 +938,21 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
 
-	// Determine approval action based on policy or daemon mode
+	// Determine approval action based on policy, daemon mode, or agent-to-agent auto-approve
 	autoApproved := false
 	autoRejected := false
 	if needsApproval {
-		policy := h.approvalPolicies[msg.FromNick]
-		if policy == "always" || h.mode == "daemon" {
-			// Auto-approve: daemon mode defaults to approve, or explicit policy
+		if msg.FromRole == RoleAgent {
+			// Agent-to-agent messages are always auto-approved — no human intervention needed
 			autoApproved = true
-		} else if policy == "never" {
-			autoRejected = true
+		} else {
+			policy := h.approvalPolicies[msg.FromNick]
+			if policy == "always" || h.mode == "daemon" {
+				// Auto-approve: daemon mode defaults to approve, or explicit policy
+				autoApproved = true
+			} else if policy == "never" {
+				autoRejected = true
+			}
 		}
 	}
 
