@@ -20,6 +20,11 @@ type BindingStore interface {
 	List() ([]ChannelBinding, error)
 	ListByWorkspace(workspace string) ([]ChannelBinding, error)
 	ListByAdapter(adapter string) ([]ChannelBinding, error)
+	// BindExclusive atomically removes ALL existing bindings for the given
+	// adapter (across all workspaces) and saves the new binding. This prevents
+	// cross-process TOCTOU races where two ggcode instances in different
+	// workspaces bind the same adapter simultaneously.
+	BindExclusive(binding ChannelBinding) error
 }
 
 // compositeKey builds a map key from workspace and adapter name.
@@ -98,6 +103,24 @@ func (s *MemoryBindingStore) ListByAdapter(adapter string) ([]ChannelBinding, er
 	return out, nil
 }
 
+// BindExclusive atomically removes all existing bindings for the given adapter
+// and saves the new one under a single lock.
+func (s *MemoryBindingStore) BindExclusive(binding ChannelBinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding.Workspace = normalizeWorkspace(binding.Workspace)
+	if binding.BoundAt.IsZero() {
+		binding.BoundAt = time.Now()
+	}
+	for key, b := range s.bindings {
+		if b.Adapter == binding.Adapter {
+			delete(s.bindings, key)
+		}
+	}
+	s.bindings[compositeKey(binding.Workspace, binding.Adapter)] = binding
+	return nil
+}
+
 // JSONFileBindingStore persists bindings to a JSON file with atomic writes.
 type JSONFileBindingStore struct {
 	path string
@@ -154,6 +177,36 @@ func (s *JSONFileBindingStore) List() ([]ChannelBinding, error) {
 		out = append(out, binding)
 	}
 	return out, nil
+}
+
+// BindExclusive atomically removes all bindings for the given adapter across
+// all workspaces, then saves the new binding — under a single file lock.
+// This prevents cross-process TOCTOU where two processes read the file
+// simultaneously, each deleting the other's binding, then both writing back.
+func (s *JSONFileBindingStore) BindExclusive(binding ChannelBinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	all, err := s.readAllLocked()
+	if err != nil {
+		return err
+	}
+
+	binding.Workspace = normalizeWorkspace(binding.Workspace)
+	if binding.BoundAt.IsZero() {
+		binding.BoundAt = time.Now()
+	}
+
+	// Remove every binding for this adapter, regardless of workspace.
+	for key, b := range all {
+		if b.Adapter == binding.Adapter {
+			delete(all, key)
+		}
+	}
+
+	// Insert the new binding.
+	all[compositeKey(binding.Workspace, binding.Adapter)] = binding
+	return s.writeAllLocked(all)
 }
 
 func (s *JSONFileBindingStore) ListByWorkspace(workspace string) ([]ChannelBinding, error) {

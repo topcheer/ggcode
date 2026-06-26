@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// DefaultRole is assigned when no role is specified via /nick.
+const DefaultRole = "developer"
+
 // adjectives for random nickname generation.
 var adjectives = []string{
 	"Clever", "Brave", "Swift", "Bright", "Calm", "Bold", "Eager",
@@ -20,14 +23,14 @@ var adjectives = []string{
 
 // animals for random nickname generation.
 var animals = []string{
-	"Otter", "Falcon", "Tiger", "Wolf", "Bear", "Eagle", "Fox",
-	"Hawk", "Lion", "Panda", "Raven", "Shark", "Whale", "Owl",
-	"Lynx", "Seal", "Hare", "Cat", "Crow", "Dolphin", "Crane",
-	"Moose", "Bison", "Cobra", "Drake", "Finch", "Gecko", "Heron",
-	"Ibis", "Jaguar", "Koala", "Leopard", "Magpie", "Newt", "Orca",
-	"Panther", "Quail", "Robin", "Stoat", "Trout", "Viper", "Wombat",
-	"Yak", "Zebra", "Badger", "Coyote", "Ferret", "Grouse", "Husky",
-	"Indri", "Jackal",
+	"Otter", "Wolf", "Fox", "Bear", "Lion", "Tiger", "Eagle",
+	"Hawk", "Falcon", "Panther", "Lynx", "Owl", "Raven", "Stag",
+	"Puma", "Seal", "Heron", "Orca", "Bison", "Moose", "Panda",
+	"Cobra", "Drake", "Finch", "Gator", "Hare", "Koala", "Lamb",
+	"Magpie", "Newt", "Pika", "Quail", "Robin", "Shark", "Toad",
+	"Viper", "Whale", "Yak", "Zebra", "Crow", "Dingo", "Elk",
+	"Gull", "Hawk", "Ibis", "Jay", "Kite", "Loon", "Mink",
+	"Narwhal", "Plover",
 }
 
 // RandomNick generates a random nickname like "CleverOtter".
@@ -44,6 +47,23 @@ func AgentNick(humanNick string) string {
 		return humanNick
 	}
 	return humanNick + "_agent"
+}
+
+// ParseNickRole splits "alice@frontend" into ("alice", "frontend").
+// "alice" → ("alice", "developer").
+// The split is on the last '@' so nicks cannot contain '@'.
+func ParseNickRole(input string) (nick, role string) {
+	input = strings.TrimSpace(input)
+	idx := strings.LastIndex(input, "@")
+	if idx < 0 {
+		return input, DefaultRole
+	}
+	nick = strings.TrimSpace(input[:idx])
+	role = strings.TrimSpace(input[idx+1:])
+	if role == "" {
+		role = DefaultRole
+	}
+	return
 }
 
 // ResolveNickConflict appends a number if the nick is already taken.

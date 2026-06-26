@@ -21,10 +21,11 @@ func (t LanChatTool) Description() string {
 	return "Send and receive messages on the LAN Chat network connecting ggcode instances on the local network. " +
 		"Use this when a user asks to message, reply, or ask something to another ggcode user or their agent visible in the LAN Chat panel (messages prefixed with [LAN Chat from <nick>]). " +
 		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for external agent delegation). " +
-		"Actions: 'list' to discover participant node IDs, 'send' to message a participant, 'history' to read recent messages, " +
+		"Actions: 'list' to discover participants, their node IDs, and their roles (e.g. frontend, backend, devops) so you can route tasks to the right agent; " +
+		"'send' to message a participant; 'history' to read recent messages; " +
 		"'pending'/'approve'/'reject' to manage @agent approvals.\n" +
 		"\nTypical workflow to reply to a LAN Chat message:\n" +
-		"1. Call lanchat(action='list') to find the target's node_id\n" +
+		"1. Call lanchat(action='list') to find the target's node_id and role\n" +
 		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...') to reach their agent\n" +
 		"   Use to_role='human' to message the human user instead of their agent."
 }
@@ -121,6 +122,7 @@ func (t LanChatTool) doList() Result {
 		NodeID    string `json:"node_id"`
 		HumanNick string `json:"human_nick"`
 		AgentNick string `json:"agent_nick"`
+		Role      string `json:"role"`
 		Mode      string `json:"mode"`
 		Online    bool   `json:"online"`
 		LastSeen  string `json:"last_seen"`
@@ -137,6 +139,7 @@ func (t LanChatTool) doList() Result {
 			NodeID:    p.NodeID,
 			HumanNick: p.HumanNick,
 			AgentNick: p.AgentNick,
+			Role:      p.Role,
 			Mode:      p.Mode,
 			Online:    p.Online,
 			LastSeen:  lastSeen,

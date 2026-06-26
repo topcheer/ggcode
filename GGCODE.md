@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.83`](docs/releases/v1.3.83.md) |
+| Latest documented release | [`v1.3.84`](docs/releases/v1.3.84.md) |
 
 ## Build & Validation
 
@@ -124,7 +124,7 @@ config/                MCP preset configuration (mcporter.json)
 - **Tunnel/Broker** (`internal/tunnel/`): WebSocket tunnel broker for mobile relay. `Broker` manages connected clients, records tunnel events to session JSONL via `AppendTunnelEventToDisk()`, and replays canonical events on reconnect. Supports active session tracking (`AnnounceActiveSession`), multi-session switching (`SwitchSession`), and in-flight text recovery. `RelayClient` connects to the relay server with backpressure (30s write deadline). Protocol events include text streaming, snapshots, tool results, and session metadata.
 - **Relay server** (`ggcode-relay/`): Standalone binary that acts as a WebSocket relay between desktop instances and mobile clients. Rooms are keyed by workspace. Events are persisted to SQLite with deduplication by eventID. Client→server messages (mobile user input) are always forwarded to the server even if deduped, ensuring agent delivery after relay restarts. Supports `active_session` binding and `snapshot_reset` control events. Peer writes use blocking sends with write deadline instead of channel drops to prevent silent data loss.
 - **Auth stack** (`internal/auth/`): Full authentication subsystem — OAuth2 PKCE and Device Flow flows, OIDC Discovery with JWKS key rotation, JWT validation (HS256/RS256/ECDSA), opaque token introspection, token cache with per-`{provider}-{clientID}` isolation (`~/.ggcode/oauth-tokens/`). Provider presets for GitHub, Google, Auth0, Azure.
-- **LAN Chat** (`internal/lanchat/`): Decentralized P2P messaging between ggcode instances on the same LAN. Uses mDNS discovery (`_ggcode._tcp`) with a pure-Go implementation. Direct HTTP transport (not through a relay). Community API key (`ggcode-lan-a2a-v1`) for zero-config trust. Features: direct messages, broadcast, @agent routing with approval flow, file attachments, nick management, read receipts. TUI integration via `#` quick-send mode and `/chat` panel. Desktop GUI integration via Wails bindings.
+- **LAN Chat** (`internal/lanchat/`): Decentralized P2P messaging between ggcode instances on the same LAN. Uses mDNS discovery (`_ggcode._tcp`) with a pure-Go implementation. Direct HTTP transport (not through a relay). Community API key (`ggcode-lan-a2a-v1`) for zero-config trust. Features: direct messages, broadcast, @agent routing with approval flow, file attachments, **role-based nick management** (`/nick name@role` composes `name_role` humanNick with separate role field), conflict auto-resolution with numeric suffix, per-session persistence (no global nick), read receipts. TUI integration via `#` quick-send mode and `/chat` panel. Desktop GUI integration via Wails bindings.
 
 ## Configuration
 
@@ -253,7 +253,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
 **Cron** (3, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`
 **Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
-**LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants, send messages, read history, manage @agent approvals
+**LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants (with roles), send messages, read history, manage @agent approvals
 **Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
 
 Plus dynamically registered MCP-adapted tools and external plugin tools.

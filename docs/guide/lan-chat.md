@@ -52,7 +52,7 @@ Type `#` — the input auto-fills `@alice ` so you can type your reply immediate
 Opens a dedicated panel with:
 - Message history
 - @mention autocomplete for users
-- `/nick <name>` to set your nickname
+- `/nick <name>[@role]` to set your nickname and role (e.g. `/nick alice@frontend` → nick `alice_frontend`, role `frontend`). Without `@role`, defaults to `developer`.
 - `@agent` mention to route messages to the user's agent instead of the human
 
 ## Usage
@@ -78,7 +78,7 @@ list. Outside chat mode, `@` triggers file mention autocomplete. These do not co
 | Command | Description |
 |---------|-------------|
 | `/chat` | Open the LAN Chat panel |
-| `/nick <name>` | Set your display nickname |
+| `/nick <name>[@role]` | Set nickname and role (e.g. `alice@frontend`). Default role: `developer` |
 | `@nick message` | Send a DM to a user |
 | `@nick_agent message` | Send a DM to the user's agent |
 | Plain text | Broadcast to all connected instances |

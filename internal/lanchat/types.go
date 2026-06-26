@@ -34,6 +34,7 @@ type Participant struct {
 	AgentNick string `json:"agent_nick"`
 	Mode      string `json:"mode"` // "tui", "gui", "daemon"
 	Endpoint  string `json:"endpoint"`
+	Role      string `json:"role"` // user-defined role, e.g. "frontend", "backend", "devops"
 	Online    bool   `json:"online"`
 	LastSeen  int64  `json:"last_seen"`
 
@@ -97,11 +98,12 @@ type Receipt struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-// NickChange broadcasts a nickname update to all peers.
+// NickChange broadcasts a nickname/role update to all peers.
 type NickChange struct {
 	NodeID    string `json:"node_id"`
 	HumanNick string `json:"human_nick"`
 	AgentNick string `json:"agent_nick"`
+	Role      string `json:"role"` // new role
 	Timestamp int64  `json:"timestamp"`
 }
 

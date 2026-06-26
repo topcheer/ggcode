@@ -248,12 +248,14 @@ func (b *ChatBridge) LanChatSend(content, toNodeID, toRole string, asAgent bool)
 	return b.lanchatHub.SendDirect(ctx, toNodeID, toRole, content, nil)
 }
 
-// LanChatSetNick changes the user's nickname.
+// LanChatSetNick changes the user's nickname and role.
+// The nick string may include a role suffix: "name@role".
 func (b *ChatBridge) LanChatSetNick(nick string) error {
 	if b.lanchatHub == nil {
 		return fmt.Errorf("LAN chat not available")
 	}
-	return b.lanchatHub.SetNick(nick)
+	n, r := lanchat.ParseNickRole(nick)
+	return b.lanchatHub.SetNickRole(n, r)
 }
 
 // LanChatPendingApprovals returns messages awaiting host approval.

@@ -26,6 +26,7 @@ type Hub struct {
 	nodeID    string // this node's A2A instance ID
 	humanNick string
 	agentNick string
+	role      string // user-defined role, e.g. "frontend", "backend", "devops"
 	mode      string // "tui", "gui", "daemon"
 	endpoint  string // this node's HTTP endpoint (http://ip:port)
 	apiKey    string // A2A API key for peer auth
@@ -89,17 +90,6 @@ type PendingAgentMsg struct {
 	Received time.Time `json:"received"`
 }
 
-// globalNickDir extracts the global lanchat dir from a session-scoped path.
-// sessionDir = <baseDir>/sessions/<sessionID>
-// returns <baseDir>, or "" if the path doesn't match the expected pattern.
-func globalNickDir(sessionDir string) string {
-	idx := strings.LastIndex(sessionDir, "/sessions/")
-	if idx < 0 {
-		return ""
-	}
-	return sessionDir[:idx]
-}
-
 // WorkspaceMeta describes the workspace for presence exchange.
 // All fields are optional; empty fields are omitted from presence.
 type WorkspaceMeta struct {
@@ -111,23 +101,12 @@ type WorkspaceMeta struct {
 	HasTests    bool     `json:"has_tests"`
 }
 
-// NewHub creates a new chat hub.
-// Nickname resolution:
-//  1. If a global nick exists at store.dir/lanchat-nick, use it as the default
-//     (this is the user's preferred nick from a previous session).
-//  2. If not, generate a random nick and save it globally.
-//
-// Per-session override happens later via SetSessionID.
+// NewHub creates a new chat hub with a random nickname.
+// Each session gets its own random nick — there is no global nick.
+// SetSessionID persists the nick to the session directory when called.
 func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMeta) *Hub {
-	nick := RandomNick()
-	globalExisted := false
-	if persisted, err := LoadNick(store.dir); err == nil && persisted != "" {
-		nick = persisted
-		globalExisted = true
-	}
-	if !globalExisted {
-		_ = SaveNick(store.dir, nick)
-	}
+	baseNick := RandomNick()
+	nick := baseNick + "_" + DefaultRole
 
 	// Load persisted approval policies (keyed by peer nick)
 	policies, _ := LoadApprovalPolicies(store.dir)
@@ -136,6 +115,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		nodeID:           nodeID,
 		humanNick:        nick,
 		agentNick:        AgentNick(nick),
+		role:             DefaultRole,
 		mode:             mode,
 		endpoint:         endpoint,
 		apiKey:           apiKey,
@@ -175,10 +155,19 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	h.mu.Lock()
 	h.sessionID = sessionID
 	h.store = NewStore(sessionDir)
-	// Try to load session-specific nick
+	// Load session-specific nick if previously persisted.
 	if persisted, err := LoadNick(h.store.dir); err == nil && persisted != "" {
 		h.humanNick = persisted
 		h.agentNick = AgentNick(persisted)
+	} else {
+		// No session nick yet — persist the current random nick.
+		_ = SaveNick(h.store.dir, h.humanNick)
+	}
+	// Load session-specific role if previously persisted.
+	if persisted, err := LoadRole(h.store.dir); err == nil && persisted != "" {
+		h.role = persisted
+	} else {
+		_ = SaveRole(h.store.dir, h.role)
 	}
 	// Load persisted messages into memory so they survive across restarts.
 	if h.store != nil {
@@ -236,6 +225,13 @@ func (h *Hub) AgentNick() string {
 	return h.agentNick
 }
 
+// Role returns this node's user-defined role.
+func (h *Hub) Role() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.role
+}
+
 // SetWorkspaceMeta updates the workspace metadata for this node.
 // Call this when switching workspaces so that subsequent presence
 // exchanges announce the new project info.
@@ -265,6 +261,7 @@ func (h *Hub) SelfParticipant() Participant {
 		AgentNick:   h.agentNick,
 		Mode:        h.mode,
 		Endpoint:    h.endpoint,
+		Role:        h.role,
 		Online:      true,
 		LastSeen:    time.Now().Unix(),
 		Workspace:   h.workspace,
@@ -352,31 +349,30 @@ func (h *Hub) PendingApprovals() []PendingAgentMsg {
 	return out
 }
 
-// SetNick changes the human nickname, updates agent nick, broadcasts to peers,
-// and persists locally to both session-scoped and global paths.
-func (h *Hub) SetNick(nick string) error {
+// SetNickRole changes the human nickname and role, updates agent nick,
+// broadcasts to peers, and persists to the session-scoped path.
+// The humanNick is composed as "nick_role" (e.g. "alice_dev") so that
+// identity + role are self-evident and collision probability is low.
+// On conflict, resolveNickConflict will produce "alice_dev2", "alice_dev3", etc.
+func (h *Hub) SetNickRole(nick, role string) error {
+	composite := nick + "_" + role
 	h.mu.Lock()
-	h.humanNick = nick
-	h.agentNick = AgentNick(nick)
+	h.humanNick = composite
+	h.agentNick = AgentNick(composite)
+	h.role = role
 	sessionDir := h.store.dir
 	h.mu.Unlock()
 
-	// Persist to session-scoped path
-	if err := SaveNick(sessionDir, nick); err != nil {
+	// Persist nick and role to session-scoped path
+	if err := SaveNick(sessionDir, composite); err != nil {
 		debug.Log("lanchat", "failed to persist session nick: %v", err)
 	}
-
-	// Also persist to global path so new instances get a sensible default.
-	// We derive the global dir by stripping the /sessions/<id> suffix.
-	globalDir := globalNickDir(sessionDir)
-	if globalDir != "" && globalDir != sessionDir {
-		if err := SaveNick(globalDir, nick); err != nil {
-			debug.Log("lanchat", "failed to persist global nick: %v", err)
-		}
+	if err := SaveRole(sessionDir, role); err != nil {
+		debug.Log("lanchat", "failed to persist session role: %v", err)
 	}
 
-	// Broadcast nick change to peers
-	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(nick) })
+	// Broadcast nick/role change to peers
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(composite, role) })
 	return nil
 }
 
@@ -548,7 +544,7 @@ func (h *Hub) resolveNickConflict() {
 
 	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
-	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick) })
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick, h.role) })
 }
 
 // HandlePresence processes an incoming presence announcement from a peer.
@@ -574,6 +570,9 @@ func (h *Hub) HandlePresence(p Participant) {
 		}
 		if p.AgentNick != "" {
 			existing.AgentNick = p.AgentNick
+		}
+		if p.Role != "" {
+			existing.Role = p.Role
 		}
 		existing.Mode = p.Mode
 		existing.Endpoint = p.Endpoint
@@ -850,12 +849,13 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) erro
 	return nil
 }
 
-func (h *Hub) broadcastNickChange(newNick string) {
+func (h *Hub) broadcastNickChange(newNick, newRole string) {
 	h.mu.RLock()
 	change := NickChange{
 		NodeID:    h.nodeID,
 		HumanNick: newNick,
 		AgentNick: AgentNick(newNick),
+		Role:      newRole,
 		Timestamp: time.Now().UnixMilli(),
 	}
 	peers := make([]Participant, 0, len(h.peers))
@@ -997,6 +997,9 @@ func (h *Hub) HandleNickChange(change NickChange) {
 		}
 		if change.AgentNick != "" {
 			peer.AgentNick = change.AgentNick
+		}
+		if change.Role != "" {
+			peer.Role = change.Role
 		}
 	}
 	cb := h.onNickChange

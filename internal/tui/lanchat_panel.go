@@ -419,9 +419,10 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 
 	// Handle /nick command
 	if strings.HasPrefix(text, "/nick ") {
-		nick := strings.TrimSpace(strings.TrimPrefix(text, "/nick "))
-		if nick != "" && m.lanChatHub != nil {
-			m.lanChatHub.SetNick(nick)
+		input := strings.TrimSpace(strings.TrimPrefix(text, "/nick "))
+		if input != "" && m.lanChatHub != nil {
+			n, r := lanchat.ParseNickRole(input)
+			m.lanChatHub.SetNickRole(n, r)
 		}
 		return m, nil
 	}
@@ -644,15 +645,21 @@ func (m Model) handleNickCommand(parts []string) {
 		return
 	}
 	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-		// Show current nick
+		// Show current nick and role
 		current := m.lanChatHub.HumanNick()
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Current LAN chat nickname: %s (agent: %s)", current, m.lanChatHub.AgentNick()))
+		role := m.lanChatHub.Role()
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Current: %s (role: %s, agent: %s)", current, role, m.lanChatHub.AgentNick()))
 		return
 	}
-	nick := strings.TrimSpace(parts[1])
-	if err := m.lanChatHub.SetNick(nick); err != nil {
+	input := strings.TrimSpace(parts[1])
+	nick, role := lanchat.ParseNickRole(input)
+	if nick == "" {
+		m.chatWriteSystem(nextSystemID(), "Nickname cannot be empty (format: /nick name[@role])")
+		return
+	}
+	if err := m.lanChatHub.SetNickRole(nick, role); err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to set nickname: %v", err))
 		return
 	}
-	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("LAN chat nickname set to: %s (agent: %s)", nick, m.lanChatHub.AgentNick()))
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Set: %s (role: %s, agent: %s)", m.lanChatHub.HumanNick(), role, m.lanChatHub.AgentNick()))
 }

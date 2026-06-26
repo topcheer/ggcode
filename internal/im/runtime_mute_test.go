@@ -959,6 +959,9 @@ func (s *stubBindingStoreForMute) ListByWorkspace(ws string) ([]ChannelBinding, 
 func (s *stubBindingStoreForMute) ListByAdapter(string) ([]ChannelBinding, error) {
 	return nil, nil
 }
+func (s *stubBindingStoreForMute) BindExclusive(ChannelBinding) error {
+	return nil
+}
 
 func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
 	mgr := NewManager()

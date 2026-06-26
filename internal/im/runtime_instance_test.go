@@ -255,3 +255,20 @@ func (s *memBindingStore) ListByAdapter(adapter string) ([]ChannelBinding, error
 	}
 	return result, nil
 }
+func (s *memBindingStore) BindExclusive(binding ChannelBinding) error {
+	// Remove all existing bindings for this adapter
+	filtered := s.bindings[:0]
+	for _, b := range s.bindings {
+		if b.Adapter != binding.Adapter {
+			filtered = append(filtered, b)
+		}
+	}
+	s.bindings = filtered
+	// Append new binding
+	binding.Workspace = normalizeWorkspace(binding.Workspace)
+	if binding.BoundAt.IsZero() {
+		binding.BoundAt = time.Now()
+	}
+	s.bindings = append(s.bindings, binding)
+	return nil
+}

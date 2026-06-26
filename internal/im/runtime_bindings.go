@@ -133,38 +133,23 @@ func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 		return fmt.Errorf("binding store not configured")
 	}
 
-	// Get existing bindings for this adapter
-	existing, err := m.bindingStore.ListByAdapter(adapterName)
-	if err != nil {
-		m.mu.Unlock()
-		return fmt.Errorf("list existing bindings: %w", err)
-	}
-
-	// Remove bindings to other workspaces
-	for _, b := range existing {
-		if normalizeWorkspace(b.Workspace) != workspace {
-			if err := m.bindingStore.Delete(b.Workspace, adapterName); err != nil {
-				m.mu.Unlock()
-				return fmt.Errorf("delete old binding: %w", err)
-			}
-		}
-	}
-
-	// Create/update binding to the new workspace
+	// Atomically remove all existing bindings for this adapter (any workspace)
+	// and save the new one. This prevents cross-process TOCTOU where two
+	// instances in different workspaces could each read the file, delete the
+	// other's binding, and write back — leaving the adapter double-bound.
 	binding := ChannelBinding{
 		Adapter:   adapterName,
 		Workspace: workspace,
 		BoundAt:   time.Now(),
 	}
 
-	if err := m.bindingStore.Save(binding); err != nil {
+	if err := m.bindingStore.BindExclusive(binding); err != nil {
 		m.mu.Unlock()
-		return fmt.Errorf("save binding: %w", err)
+		return fmt.Errorf("exclusive bind: %w", err)
 	}
 
 	// Reload bindings to reflect the change
-	err = m.reloadBindingLocked()
-	if err != nil {
+	if err := m.reloadBindingLocked(); err != nil {
 		m.mu.Unlock()
 		return fmt.Errorf("reload bindings: %w", err)
 	}

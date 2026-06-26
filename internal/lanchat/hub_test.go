@@ -73,10 +73,13 @@ func TestStoreLoadEmpty(t *testing.T) {
 func TestLoadSaveNick(t *testing.T) {
 	tmp := t.TempDir()
 
-	// No persisted nick yet
-	_, err := LoadNick(tmp)
-	if err == nil {
-		t.Error("expected error loading nonexistent nick")
+	// No persisted nick yet — returns "" with no error
+	nick, err := LoadNick(tmp)
+	if err != nil {
+		t.Fatalf("LoadNick on nonexistent: %v", err)
+	}
+	if nick != "" {
+		t.Errorf("LoadNick = %q, want empty", nick)
 	}
 
 	// Save and reload
@@ -84,7 +87,7 @@ func TestLoadSaveNick(t *testing.T) {
 		t.Fatalf("SaveNick: %v", err)
 	}
 
-	nick, err := LoadNick(tmp)
+	nick, err = LoadNick(tmp)
 	if err != nil {
 		t.Fatalf("LoadNick: %v", err)
 	}
@@ -126,21 +129,21 @@ func TestHubSetNick(t *testing.T) {
 	hub := NewHub("node-a", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
 
 	origNick := hub.HumanNick()
-	if err := hub.SetNick("Alice"); err != nil {
-		t.Fatalf("SetNick: %v", err)
+	if err := hub.SetNickRole("Alice", "frontend"); err != nil {
+		t.Fatalf("SetNickRole: %v", err)
 	}
 
-	if hub.HumanNick() != "Alice" {
-		t.Errorf("HumanNick = %q, want Alice", hub.HumanNick())
+	if hub.HumanNick() != "Alice_frontend" {
+		t.Errorf("HumanNick = %q, want Alice_frontend", hub.HumanNick())
 	}
-	if hub.AgentNick() != "Alice_agent" {
-		t.Errorf("AgentNick = %q, want Alice_agent", hub.AgentNick())
+	if hub.AgentNick() != "Alice_frontend_agent" {
+		t.Errorf("AgentNick = %q, want Alice_frontend_agent", hub.AgentNick())
 	}
 
 	// Verify persisted
 	nick, _ := LoadNick(tmp)
-	if nick != "Alice" {
-		t.Errorf("persisted nick = %q, want Alice", nick)
+	if nick != "Alice_frontend" {
+		t.Errorf("persisted nick = %q, want Alice_frontend", nick)
 	}
 
 	// origNick should differ

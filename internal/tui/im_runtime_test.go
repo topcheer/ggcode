@@ -781,3 +781,4 @@ func (s *stubBSForInitOrder) Delete(_, _ string) error                          
 func (s *stubBSForInitOrder) List() ([]im.ChannelBinding, error)                    { return nil, nil }
 func (s *stubBSForInitOrder) ListByWorkspace(_ string) ([]im.ChannelBinding, error) { return nil, nil }
 func (s *stubBSForInitOrder) ListByAdapter(_ string) ([]im.ChannelBinding, error)   { return nil, nil }
+func (s *stubBSForInitOrder) BindExclusive(_ im.ChannelBinding) error               { return nil }

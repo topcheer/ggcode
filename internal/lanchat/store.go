@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -130,15 +131,6 @@ func splitLines(data []byte) [][]byte {
 	return lines
 }
 
-// LoadNick reads the persisted nickname from ~/.ggcode/lanchat-nick.
-func LoadNick(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "lanchat-nick"))
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
 // SaveNick persists the nickname to <dir>/lanchat-nick.
 // The directory is created if it does not exist.
 func SaveNick(dir, nick string) error {
@@ -146,6 +138,40 @@ func SaveNick(dir, nick string) error {
 		return fmt.Errorf("create nick dir %s: %w", dir, err)
 	}
 	return os.WriteFile(filepath.Join(dir, "lanchat-nick"), []byte(nick), 0o644)
+}
+
+// LoadNick reads the nickname from <dir>/lanchat-nick.
+// Returns "" and no error if the file does not exist.
+func LoadNick(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "lanchat-nick"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SaveRole persists the role to <dir>/lanchat-role.
+func SaveRole(dir, role string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create role dir %s: %w", dir, err)
+	}
+	return os.WriteFile(filepath.Join(dir, "lanchat-role"), []byte(role), 0o644)
+}
+
+// LoadRole reads the role from <dir>/lanchat-role.
+// Returns "" and no error if the file does not exist.
+func LoadRole(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "lanchat-role"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // LoadApprovalPolicies reads persisted approval policies from <dir>/approval-policies.json.

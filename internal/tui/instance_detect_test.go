@@ -205,3 +205,13 @@ func (s *stubBindingStore) ListByAdapter(adapter string) ([]im.ChannelBinding, e
 	}
 	return result, nil
 }
+func (s *stubBindingStore) BindExclusive(b im.ChannelBinding) error {
+	filtered := s.bindings[:0]
+	for _, existing := range s.bindings {
+		if existing.Adapter != b.Adapter {
+			filtered = append(filtered, existing)
+		}
+	}
+	s.bindings = append(filtered, b)
+	return nil
+}
