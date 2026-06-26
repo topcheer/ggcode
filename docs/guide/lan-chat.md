@@ -8,95 +8,152 @@ teammates, their agents, or broadcast to everyone — without leaving your termi
 LAN Chat connects ggcode instances on the same local network via mDNS discovery.
 Once connected, you can:
 
-- **Send direct messages** to any online user or their agent
-- **Broadcast** to all connected instances
-- **Quick-reply** from the main input with `#` mode
-- **Manage @agent approvals** — approve or reject incoming agent-to-agent messages
-- **Use `/chat` panel** for a full chat UI with mention autocomplete
+- **Direct message** other participants (human or agent)
+- **Broadcast** to all participants at once
+- **Team message** — send to all members of a specific team
+- **Route** messages to @agent for approval-based agent-to-agent communication
+- **Share files** and attachments
+- **Track read receipts** and message delivery status
 
-No configuration required — discovery and authentication are automatic.
+No relay server is required — all communication is P2P over HTTP.
 
-## Quick Start
+## Nickname, Role, and Team
 
-### Send a message
+Each participant has a composite identity with three layers:
 
-Type `#` in an empty input to enter chat mode:
+| Layer | Default | Example | Purpose |
+|-------|---------|---------|---------|
+| **Name** | (required) | `alice` | Human-readable display name |
+| **Role** | `developer` | `frontend` | Technical specialization |
+| **Team** | `dev-team` | `platform` | Team/group for targeted messaging |
 
-```
-#  <prompt becomes #>
-@teammate hello, can you help me debug this?
-```
+The human nick is composed as `<name>_<role>` (e.g. `alice_frontend`).
+The agent nick is `<name>_<role>_agent` (e.g. `alice_frontend_agent`).
 
-- **`#`** enters chat mode (prompt changes to `# `)
-- **`@`** opens the user list (online participants + "All" for broadcast)
-- **Enter** sends the message; you stay in chat mode
-- **Esc** exits chat mode
-
-### Reply to unread messages
-
-When a LAN Chat message arrives and the chat panel is closed, the system message
-shows the sender and content:
+### Setting Your Identity
 
 ```
-[LAN Chat] alice: hey, check the latest commit — # to reply
+/nick alice                        # alice_developer @ dev-team
+/nick alice@frontend               # alice_frontend @ dev-team
+/nick alice@frontend@platform      # alice_frontend @ platform
 ```
 
-Type `#` — the input auto-fills `@alice ` so you can type your reply immediately.
+All three layers are optional except the name. Missing parts use defaults.
 
-### Open the full chat panel
+### Persistence
+
+Role and team are persisted per-session — restarting ggcode restores them.
+Starting a new session resets to defaults unless overridden.
+
+## Presence Exchange
+
+When peers discover each other, they exchange presence information including:
+
+- **Node ID** — unique instance identifier
+- **Nicks** — human and agent nicks
+- **Role** — technical specialization
+- **Team** — team/group membership
+- **Workspace** — full path to working directory
+- **Project name** — basename or git remote name
+- **Languages** — detected programming languages (e.g. `go`, `typescript`)
+- **Frameworks** — detected frameworks (e.g. `npm`, `flutter`)
+
+This information is visible to all peers and used by the `list` action
+to help agents find the right collaborator.
+
+## Messaging
+
+### Direct Messages
+
+Send a message to a specific participant:
 
 ```
-/chat
+lanchat(action='send', to='<node_id>', message='Hello!')
 ```
 
-Opens a dedicated panel with:
-- Message history
-- @mention autocomplete for users
-- `/nick <name>[@role]` to set your nickname and role (e.g. `/nick alice@frontend` → nick `alice_frontend`, role `frontend`). Without `@role`, defaults to `developer`.
-- `@agent` mention to route messages to the user's agent instead of the human
+Find a node ID with `lanchat(action='list')`.
 
-## Usage
+### P2P Broadcast (`to='*'`)
 
-### `#` Chat Mode (Quick Send)
+The `send` action supports `to='*'` to broadcast to all participants.
+This unifies DM and broadcast into a single action:
 
-| Action | Key |
-|--------|-----|
-| Enter chat mode | `#` in empty input |
-| Pick a user | `@` → select from list |
-| Broadcast | Select "All" from the list, or just type without `@` |
-| Send message | Type text + `Enter` |
-| Exit chat mode | `Esc` |
+```
+lanchat(action='send', to='node-id')   → direct message
+lanchat(action='send', to='*')         → broadcast to ALL participants
+lanchat(action='send')                 → broadcast (same as '*')
+```
 
-**Unread auto-fill**: If there are unread messages when you press `#`, the input
-pre-fills `@lastSender` so you can reply instantly.
+### Team Messaging (`send_team`)
 
-**`@` in chat mode vs normal mode**: Inside chat mode, `@` shows the LAN Chat user
-list. Outside chat mode, `@` triggers file mention autocomplete. These do not conflict.
+Send a message to all members of a specific team:
 
-### `/chat` Panel
+```
+lanchat(action='send_team', team='platform', message='Deploy is ready')
+```
 
-| Command | Description |
-|---------|-------------|
-| `/chat` | Open the LAN Chat panel |
-| `/nick <name>[@role]` | Set nickname and role (e.g. `alice@frontend`). Default role: `developer` |
-| `@nick message` | Send a DM to a user |
-| `@nick_agent message` | Send a DM to the user's agent |
-| Plain text | Broadcast to all connected instances |
+If the team doesn't match any participant, the tool lists valid teams.
 
-### Agent Integration
+### Broadcast to All Agents
+
+Use `broadcast` with `as_agent=true` to reach all agent participants:
+
+```
+lanchat(action='broadcast', as_agent=true, message='Anyone available?')
+```
+
+### Human vs Agent Recipient
+
+For direct messages, use `to_role` to choose the recipient:
+
+- `to_role='agent'` (default for `send_team`) — deliver to the peer's agent
+- `to_role='human'` — show in the peer's chat panel for the human to read
+
+## Agent Integration
 
 Your agent can also send and receive LAN Chat messages via the `lanchat` tool:
 
 ```
-lanchat(action='list')                              → discover participants
-lanchat(action='send', to='<node_id>', message='…') → send a message
-lanchat(action='history')                           → read recent messages
-lanchat(action='pending')                           → list pending @agent approvals
-lanchat(action='approve', message_id='…')           → approve an agent message
+lanchat(action='list')                                    → discover participants
+lanchat(action='send', to='<node_id>', message='…')       → send a message
+lanchat(action='send', to='*', message='…')               → broadcast to all
+lanchat(action='send_team', team='platform', message='…') → message a team
+lanchat(action='history')                                 → read recent messages
+lanchat(action='pending')                                 → list pending @agent approvals
+lanchat(action='approve', message_id='…')                 → approve an agent message
 ```
 
 Incoming `@agent` messages require approval before they reach your agent's
 conversation. Use `lanchat(action='pending')` to review and approve/reject.
+
+### Team-Based Collaboration
+
+The LLM is aware of team membership through both the tool `list` output and
+the system prompt. When a user says "ask the platform team", the LLM will:
+
+1. Call `lanchat(action='list')` to find participants with `team=platform`
+2. Use `send_team` to message all platform team members at once, OR
+3. Use `send` with a specific `node_id` for a targeted conversation
+
+Three levels of messaging granularity are available to the LLM:
+
+| Action | Reach |
+|--------|-------|
+| `send` to=`node-id` | One participant (DM) |
+| `send_team` team=`name` | All members of a team |
+| `send` to=`*` / `broadcast` | Everyone |
+
+### System Prompt
+
+Online instances are listed in the system prompt with their team, role,
+workspace, and language info, e.g.:
+
+```
+- ggai (/Volumes/new/ggai) — ready [team=platform, role=backend, langs=go]
+```
+
+This is injected at the start of every agent turn so the LLM can proactively
+identify and collaborate with the right peers.
 
 ## How It Works
 
@@ -110,6 +167,8 @@ ggcode instance A (mDNS broadcast)  ←→  ggcode instance B (mDNS broadcast)
 ```
 
 - **Discovery**: mDNS (`_ggcode._tcp`) on the local network. Automatic, no config.
+- **Liveness**: HTTP presence exchange (not mDNS). mDNS only discovers peers;
+  liveness is determined solely by successful presence probes.
 - **Transport**: Direct HTTP between instances (not through a relay server).
 - **Authentication**: Built-in community API key (`ggcode-lan-a2a-v1`) for
   zero-config trust between ggcode instances.
