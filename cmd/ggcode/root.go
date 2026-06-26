@@ -750,10 +750,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				for _, inst := range instances {
 					peers = append(peers, lanchat.Participant{
 						NodeID:   inst.ID,
-						Mode:     "cli",
 						Endpoint: inst.Endpoint,
-						Online:   true,
-						LastSeen: time.Now().Unix(),
 					})
 				}
 				lanchatHub.UpdatePeers(peers)

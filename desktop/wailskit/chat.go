@@ -2439,9 +2439,7 @@ func (b *ChatBridge) syncLanChatPeers() {
 	for _, inst := range instances {
 		peers = append(peers, lanchat.Participant{
 			NodeID:   inst.ID,
-			Mode:     "gui",
 			Endpoint: inst.Endpoint,
-			Online:   true,
 		})
 	}
 	b.lanchatHub.UpdatePeers(peers)

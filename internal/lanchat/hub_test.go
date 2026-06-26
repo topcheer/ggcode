@@ -527,3 +527,59 @@ func TestPresenceNoMDNSBasedDeletion(t *testing.T) {
 		t.Fatal("peer should NOT be deleted based on mDNS absence alone")
 	}
 }
+
+// TestPresenceHeartbeatProbesAllPeers verifies that UpdatePeers probes
+// ALL known peers whose LastSeen is stale — even peers that are NOT in
+// the current mDNS discovery results. This ensures liveness checking is
+// decoupled from mDNS: a peer missed by mDNS but alive on HTTP still
+// gets probed and stays online.
+func TestPresenceHeartbeatProbesAllPeers(t *testing.T) {
+	origHeartbeat := presenceHeartbeat
+	presenceHeartbeat = 50 * time.Millisecond
+	defer func() { presenceHeartbeat = origHeartbeat }()
+
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
+
+	// Add a peer directly to the hub (simulating one discovered earlier)
+	hub.mu.Lock()
+	hub.peers["node-g"] = &Participant{
+		NodeID:    "node-g",
+		HumanNick: "Frank_backend",
+		Endpoint:  "http://localhost:11111",
+		Online:    true,
+		LastSeen:  time.Now().Unix(), // fresh now
+	}
+	hub.mu.Unlock()
+
+	// Wait until LastSeen is stale beyond presenceHeartbeat
+	time.Sleep(presenceHeartbeat + 20*time.Millisecond)
+
+	// Call UpdatePeers with a DIFFERENT peer (node-h), NOT node-g.
+	// mDNS "discovers" only node-h, completely missing node-g.
+	hub.UpdatePeers([]Participant{
+		{NodeID: "node-h", Endpoint: "http://localhost:22222"},
+	})
+
+	// node-g should STILL exist in the hub (not deleted)
+	hub.mu.RLock()
+	g, existsG := hub.peers["node-g"]
+	hub.mu.RUnlock()
+	if !existsG {
+		t.Fatal("node-g should still exist in hub even though mDNS missed it")
+	}
+
+	// node-g should still be online (within ageOffline window)
+	if !g.Online {
+		t.Error("node-g should be online — it was recently added and within ageOffline")
+	}
+
+	// node-h should have been added by mDNS discovery
+	hub.mu.RLock()
+	_, existsH := hub.peers["node-h"]
+	hub.mu.RUnlock()
+	if !existsH {
+		t.Fatal("node-h should have been added by mDNS discovery")
+	}
+}

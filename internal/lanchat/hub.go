@@ -385,78 +385,60 @@ func (h *Hub) SetNickRole(nick, role string) error {
 func (h *Hub) UpdatePeers(participants []Participant) {
 	h.mu.Lock()
 
-	seen := make(map[string]bool)
 	var newPeers []Participant
-	var emptyNickPeers []Participant // existing online peers with unknown nick
-	var stalePeers []Participant     // peers whose LastSeen is older than heartbeatThreshold
 
+	// ── Loop 1: mDNS discovery — ONLY adds new peers and updates endpoint ──
+	// mDNS is a stateless discovery service. Its results jitter between ticks:
+	// a peer may appear, disappear, and reappear without any real state change.
+	// Therefore mDNS is used SOLELY for initial peer discovery (learning the
+	// NodeID + Endpoint of a new peer). It must NEVER influence liveness:
+	//   - No LastSeen updates (liveness is HTTP presence only)
+	//   - No Online status changes
+	//   - No deletion based on mDNS absence
 	for _, p := range participants {
 		if p.NodeID == h.nodeID {
 			continue // skip self
 		}
-		seen[p.NodeID] = true
 		existing, ok := h.peers[p.NodeID]
 		if !ok {
-			// New peer — start as unverified (HumanNick empty).
-			// Will be promoted to verified after presence exchange.
+			// New peer discovered via mDNS — add with optimistic initial state.
+			// Online=true is provisional; confirmed by sendPresence below.
 			cp := p
 			cp.Online = true
 			cp.LastSeen = time.Now().Unix()
-			// Only mark for join notification if the nick is genuinely new
-			// (not already announced from another nodeID with the same nick).
-			if cp.HumanNick != "" && h.shouldNotifyJoin(cp.HumanNick) {
-				cp.notifiedJoin = true // will fire callback below
-			}
 			h.peers[p.NodeID] = &cp
 			newPeers = append(newPeers, cp)
 		} else {
-			// Update existing peer metadata — but DON'T touch Online status.
-			// Online is driven entirely by presence/LastSeen, NOT by mDNS
-			// discovery. mDNS proves the process is alive, but lanchat
-			// responsiveness is tracked via LastSeen. If we set Online=true
-			// here, the stale check below immediately sets it back to false,
-			// causing an endless join/leave cycle every tick.
-			//
-			// Also DON'T overwrite nicks with empty values. A2A discovery
-			// doesn't carry lanchat nicks, so p.HumanNick/p.AgentNick are
-			// usually "". We must preserve nicks learned from presence.
-			if p.HumanNick != "" {
-				existing.HumanNick = p.HumanNick
+			// Existing peer — update endpoint metadata only.
+			// Don't touch Online, LastSeen, or nicks.
+			if p.Endpoint != "" {
+				existing.Endpoint = p.Endpoint
 			}
-			if p.AgentNick != "" {
-				existing.AgentNick = p.AgentNick
-			}
-			existing.Mode = p.Mode
-			existing.Endpoint = p.Endpoint
-			// Only probe peers that are currently online (or were never seen).
-			// Offline peers that reappear via mDNS will be re-probed by the
-			// stale/heartbeat logic below.
-			if existing.Online {
-				if time.Since(time.Unix(existing.LastSeen, 0)) > presenceHeartbeat {
-					stalePeers = append(stalePeers, *existing)
-				}
-				if existing.HumanNick == "" {
-					emptyNickPeers = append(emptyNickPeers, *existing)
-				}
-			} else {
-				// Peer is offline but re-discovered via mDNS — probe it.
-				stalePeers = append(stalePeers, *existing)
+			if p.Mode != "" {
+				existing.Mode = p.Mode
 			}
 		}
 	}
 
-	// Offline detection + delayed leave notification.
-	//
-	// A peer is marked offline when LastSeen is stale beyond ageOffline.
-	// But the leave notification is delayed by offlineNotifyDelay: if the
-	// peer recovers (presence probe succeeds) within that window, no
-	// notification is fired at all — transient blips are silently absorbed.
-	//
-	// Peer deletion is purely time-based (peerDeleteAfter). We NEVER delete
-	// based on mDNS absence — that caused the delete→re-create→join cycle
-	// where every mDNS jitter produced duplicate "is online" notifications.
-	// Keeping the peer in the map preserves its notifiedJoin flag, preventing
-	// re-announcement on recovery.
+	// ── Loop 2: Heartbeat probe — iterate ALL known peers ──
+	// This is decoupled from mDNS. We probe every peer whose LastSeen is
+	// older than presenceHeartbeat, regardless of whether mDNS sees them.
+	// This ensures a peer missed by mDNS (but alive on HTTP) still gets
+	// probed and stays online.
+	var stalePeers []Participant     // peers needing a presence probe
+	var emptyNickPeers []Participant // online peers with unknown nick
+	for _, p := range h.peers {
+		if p.HumanNick == "" {
+			emptyNickPeers = append(emptyNickPeers, *p)
+		}
+		if time.Since(time.Unix(p.LastSeen, 0)) > presenceHeartbeat {
+			stalePeers = append(stalePeers, *p)
+		}
+	}
+
+	// ── Loop 3: Offline detection + delayed leave + deletion ──
+	// All time-based, driven by LastSeen which is only updated by
+	// successful HTTP presence exchange. mDNS has zero influence here.
 	type leftPeer struct {
 		nodeID, humanNick string
 	}
@@ -481,9 +463,6 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			}
 		}
 		// Delete peers only after extended unreachability (peerDeleteAfter).
-		// This is the ONLY deletion path — mDNS absence is never used.
-		// On deletion, clear the nick from notifiedNicks so a future
-		// re-appearance (e.g. process restart) gets a fresh join notification.
 		if time.Since(time.Unix(p.LastSeen, 0)) > peerDeleteAfter {
 			if p.HumanNick != "" {
 				delete(h.notifiedNicks, strings.TrimSpace(p.HumanNick))
@@ -509,12 +488,12 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 		// Proactively send our presence to the new peer
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(np) })
 	}
-	// Also retry presence for existing online peers whose nick we still
-	// don't know (presence exchange may have failed on a previous tick).
+	// Retry presence for peers whose nick we still don't know.
 	for _, ep := range emptyNickPeers {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(ep) })
 	}
-	// Heartbeat: re-probe peers whose LastSeen hasn't been updated recently.
+	// Heartbeat: probe all peers whose LastSeen is stale.
+	// This is the SOLE liveness mechanism — independent of mDNS.
 	for _, sp := range stalePeers {
 		safego.Go("lanchat.sendPresence", func() { h.sendPresence(sp) })
 	}
