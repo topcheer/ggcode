@@ -744,3 +744,164 @@ func TestDefaultTeam(t *testing.T) {
 		t.Errorf("DefaultTeam = %q, want 'dev-team'", DefaultTeam)
 	}
 }
+
+func TestSelfParticipantIncludesWorkspaceAndTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{
+		Workspace:   "/home/alice/project",
+		ProjectName: "project",
+		Languages:   []string{"go", "typescript"},
+	})
+
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+	self := hub.SelfParticipant()
+
+	if self.Team != "platform" {
+		t.Errorf("SelfParticipant team = %q, want 'platform'", self.Team)
+	}
+	if self.Workspace != "/home/alice/project" {
+		t.Errorf("SelfParticipant workspace = %q, want '/home/alice/project'", self.Workspace)
+	}
+	if self.Role != "frontend" {
+		t.Errorf("SelfParticipant role = %q, want 'frontend'", self.Role)
+	}
+	if len(self.Languages) != 2 {
+		t.Errorf("SelfParticipant languages len = %d, want 2", len(self.Languages))
+	}
+}
+
+func TestParticipantsIncludeTeam(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{})
+
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+	hub.HandlePresence(Participant{
+		NodeID:    "node-B",
+		HumanNick: "bob_backend",
+		Endpoint:  "http://localhost:22222",
+		Role:      "backend",
+		Team:      "platform",
+	})
+	hub.HandlePresence(Participant{
+		NodeID:    "node-C",
+		HumanNick: "charlie_devops",
+		Endpoint:  "http://localhost:33333",
+		Role:      "devops",
+		Team:      "sre",
+	})
+
+	participants := hub.Participants()
+	if len(participants) != 3 {
+		t.Fatalf("expected 3 participants, got %d", len(participants))
+	}
+
+	teamMap := make(map[string]int)
+	for _, p := range participants {
+		teamMap[p.Team]++
+	}
+	if teamMap["platform"] != 2 {
+		t.Errorf("platform team count = %d, want 2", teamMap["platform"])
+	}
+	if teamMap["sre"] != 1 {
+		t.Errorf("sre team count = %d, want 1", teamMap["sre"])
+	}
+}
+
+func TestPresencePropagatesTeamViaHandlePresence(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{})
+
+	// Peer initially has no team
+	hub.HandlePresence(Participant{
+		NodeID:    "node-B",
+		HumanNick: "bob_dev",
+		Endpoint:  "http://localhost:22222",
+		Role:      "developer",
+		// Team intentionally omitted
+	})
+
+	hub.mu.RLock()
+	peer := hub.peers["node-B"]
+	hub.mu.RUnlock()
+	if peer.Team != "" {
+		t.Errorf("peer team should be empty initially, got %q", peer.Team)
+	}
+
+	// Peer sends updated presence with team
+	hub.HandlePresence(Participant{
+		NodeID:    "node-B",
+		HumanNick: "bob_dev",
+		Endpoint:  "http://localhost:22222",
+		Role:      "developer",
+		Team:      "platform",
+	})
+
+	hub.mu.RLock()
+	peer = hub.peers["node-B"]
+	hub.mu.RUnlock()
+	if peer.Team != "platform" {
+		t.Errorf("peer team should be 'platform' after update, got %q", peer.Team)
+	}
+}
+
+func TestTeamPersistenceAcrossSessionReload(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{})
+
+	// SetSessionID creates a session-scoped store at <baseDir>/sessions/<sessionID>
+	hub.SetSessionID(tmp, "session-1")
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+
+	// Verify persisted to session dir
+	sessionDir := filepath.Join(tmp, "sessions", "session-1")
+	loadedTeam, err := LoadTeam(sessionDir)
+	if err != nil {
+		t.Fatalf("LoadTeam: %v", err)
+	}
+	if loadedTeam != "platform" {
+		t.Fatalf("persisted team = %q, want 'platform'", loadedTeam)
+	}
+	loadedRole, err := LoadRole(sessionDir)
+	if err != nil {
+		t.Fatalf("LoadRole: %v", err)
+	}
+	if loadedRole != "frontend" {
+		t.Fatalf("persisted role = %q, want 'frontend'", loadedRole)
+	}
+
+	// Simulate session reload — SetSessionID should restore from disk
+	hub2 := NewHub("node-A", "tui", "http://localhost:11111", "", NewStore(tmp), WorkspaceMeta{})
+	hub2.SetSessionID(tmp, "session-1")
+
+	if hub2.Team() != "platform" {
+		t.Errorf("after reload, team = %q, want 'platform'", hub2.Team())
+	}
+	if hub2.Role() != "frontend" {
+		t.Errorf("after reload, role = %q, want 'frontend'", hub2.Role())
+	}
+}
+
+func TestParseNickRoleTeamEmptyParts(t *testing.T) {
+	// Empty role between two @ signs should default
+	nick, role, team := ParseNickRoleTeam("alice@@platform")
+	if nick != "alice" {
+		t.Errorf("nick = %q, want 'alice'", nick)
+	}
+	if role != DefaultRole {
+		t.Errorf("role = %q, want %q", role, DefaultRole)
+	}
+	if team != "platform" {
+		t.Errorf("team = %q, want 'platform'", team)
+	}
+
+	// Empty team after @
+	nick, role, team = ParseNickRoleTeam("alice@frontend@")
+	if nick != "alice" || role != "frontend" || team != DefaultTeam {
+		t.Errorf("ParseNickRoleTeam('alice@frontend@') = (%q, %q, %q), want (%q, %q, %q)",
+			nick, role, team, "alice", "frontend", DefaultTeam)
+	}
+}
