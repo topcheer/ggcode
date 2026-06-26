@@ -236,6 +236,15 @@ func (t *RemoteTool) discover() ([]InstanceInfo, error) {
 	return instances, nil
 }
 
+// RemoteAgentMeta holds enrichment data (from lanchat presence) for a remote
+// agent instance, used to make the system prompt more informative.
+type RemoteAgentMeta struct {
+	Team        string   // e.g. "platform", "mobile"
+	Role        string   // e.g. "frontend", "backend", "devops"
+	Languages   []string // e.g. ["go", "typescript"]
+	ProjectName string   // short project identifier
+}
+
 // RemoteAgentSummary returns a human-readable summary of other online
 // ggcode instances, suitable for injection into the system prompt.
 // Returns empty string if no other instances are online.
@@ -244,13 +253,16 @@ func (t *RemoteTool) RemoteAgentSummary() string {
 	if err != nil || len(instances) == 0 {
 		return ""
 	}
-	return FormatRemoteAgents(instances)
+	return FormatRemoteAgents(instances, nil)
 }
 
 // FormatRemoteAgents formats a list of discovered instances into a
 // system-prompt-friendly summary. Exported so non-RemoteTool callers
 // (e.g. daemon, desktop) can use it directly from a Registry.
-func FormatRemoteAgents(instances []InstanceInfo) string {
+//
+// meta is optional enrichment data keyed by instance ID (from lanchat
+// presence exchange). Pass nil if lanchat is not available.
+func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMeta) string {
 	if len(instances) == 0 {
 		return ""
 	}
@@ -258,7 +270,23 @@ func FormatRemoteAgents(instances []InstanceInfo) string {
 	sb.WriteString(fmt.Sprintf("The following %d ggcode instance(s) are online in other workspaces:\n", len(instances)))
 	for _, inst := range instances {
 		name := filepath.Base(inst.Workspace)
-		sb.WriteString(fmt.Sprintf("- %s (%s) — %s\n", name, inst.Workspace, inst.Status))
+		line := fmt.Sprintf("- %s (%s) — %s", name, inst.Workspace, inst.Status)
+		if m, ok := meta[inst.ID]; ok {
+			var extras []string
+			if m.Team != "" && m.Team != "dev-team" {
+				extras = append(extras, "team="+m.Team)
+			}
+			if m.Role != "" && m.Role != "developer" {
+				extras = append(extras, "role="+m.Role)
+			}
+			if len(m.Languages) > 0 {
+				extras = append(extras, "langs="+strings.Join(m.Languages, "+"))
+			}
+			if len(extras) > 0 {
+				line += " [" + strings.Join(extras, ", ") + "]"
+			}
+		}
+		sb.WriteString(line + "\n")
 	}
 	sb.WriteString("\nHow to collaborate with these instances:\n")
 	sb.WriteString("- Use 'lanchat' (action='list' then action='send' with to_role='agent') for real-time communication: asking questions, checking status, coordinating tasks, notifying, or discussing. ALWAYS try lanchat FIRST for any interactive collaboration.\n")

@@ -223,7 +223,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
 			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
 			}
 		}
 		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
@@ -235,7 +235,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		remoteAgentsInfo := ""
 		if a2aReg != nil {
 			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{

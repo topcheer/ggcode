@@ -72,6 +72,7 @@ export namespace lanchat {
 	    agent_nick: string;
 	    mode: string;
 	    endpoint: string;
+	    role: string;
 	    online: boolean;
 	    last_seen: number;
 	    workspace?: string;
@@ -92,6 +93,7 @@ export namespace lanchat {
 	        this.agent_nick = source["agent_nick"];
 	        this.mode = source["mode"];
 	        this.endpoint = source["endpoint"];
+	        this.role = source["role"];
 	        this.online = source["online"];
 	        this.last_seen = source["last_seen"];
 	        this.workspace = source["workspace"];

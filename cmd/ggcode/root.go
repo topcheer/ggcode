@@ -500,15 +500,39 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	trace.Mark("collect tool names")
 
-	// Declare early so buildCurrentSystemPrompt closure can reference it.
+	// Declare early so buildCurrentSystemPrompt closure can reference them.
 	var a2aRegistry *a2a.Registry
+	var lanchatHub *lanchat.Hub
+
+	// buildRemoteAgentMeta returns enrichment data (team, role, languages)
+	// from lanchat presence exchange, keyed by instance ID. Returns nil if
+	// lanchat is not available or no peers are known yet.
+	buildRemoteAgentMeta := func() map[string]a2a.RemoteAgentMeta {
+		if lanchatHub == nil {
+			return nil
+		}
+		participants := lanchatHub.Participants()
+		if len(participants) == 0 {
+			return nil
+		}
+		meta := make(map[string]a2a.RemoteAgentMeta, len(participants))
+		for _, p := range participants {
+			meta[p.NodeID] = a2a.RemoteAgentMeta{
+				Team:        p.Team,
+				Role:        p.Role,
+				Languages:   p.Languages,
+				ProjectName: p.ProjectName,
+			}
+		}
+		return meta
+	}
 
 	buildCurrentSystemPrompt := func() (string, []string) {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
 			// Read async cache only — never block the UI thread on disk I/O.
 			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, buildRemoteAgentMeta())
 			}
 		}
 		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
@@ -522,7 +546,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
 			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, buildRemoteAgentMeta())
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
@@ -724,7 +748,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	trace.Mark("start a2a")
 
 	// Start LAN chat if A2A server is running.
-	var lanchatHub *lanchat.Hub
+	// lanchatHub is declared above (before buildCurrentSystemPrompt) so the
+	// prompt builder closure can read lanchat presence meta for enrichment.
 	if a2aServer != nil && !cfg.A2A.Disabled {
 		chatStore := lanchat.NewStore(filepath.Join(config.ConfigDir(), "lanchat"))
 		chatMode := "cli"
@@ -834,7 +859,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
 			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, buildRemoteAgentMeta())
 			}
 		}
 		return agentruntime.BuildSubAgentSystemPrompt(agentruntime.SubAgentPromptContext{
@@ -901,7 +926,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		remoteAgentsInfo := ""
 		if a2aRegistry != nil {
 			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances)
+				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, buildRemoteAgentMeta())
 			}
 		}
 		return agentruntime.BuildTeammateSystemPrompt(agentruntime.SubAgentPromptContext{

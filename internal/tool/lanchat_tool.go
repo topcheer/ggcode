@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/lanchat"
@@ -26,17 +27,24 @@ func (t LanChatTool) Description() string {
 		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for headless code-edit delegation to other workspaces, not for asking questions).\n" +
 		"Nick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
 		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
-		"Actions: 'list' to discover participants, their node IDs, roles, and teams (e.g. frontend, backend, devops / platform, mobile) so you can route tasks to the right agent; " +
-		"'send' to message a participant (use to='*' to broadcast to ALL participants); 'broadcast' to send to ALL participants (use as_agent=true to broadcast as agent to all agents); " +
+		"Actions: 'list' to discover participants, their node IDs, roles, teams, and project info (languages, workspace); " +
+		"'send' to message a participant (use to='*' to broadcast to ALL participants); 'broadcast' to send to ALL participants; " +
+		"'send_team' to message all members of a specific team (filtered by the 'team' field); " +
 		"'history' to read recent messages; " +
 		"'pending'/'approve'/'reject' to manage @agent approvals.\n" +
-		"\nTeam awareness: each participant has a 'team' field. When the user mentions a team (e.g. 'ask the platform team'), use action='list' to find participants with a matching team, then collaborate with them.\n" +
-		"\nTypical workflow to collaborate with another instance:\n" +
-		"1. Call lanchat(action='list') to find the target's node_id, role, and team\n" +
-		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='What are you working on?') to reach their agent\n" +
+		"\nTeam awareness: each participant has a 'team' field (e.g. 'platform', 'mobile', 'dev-team'). " +
+		"When a user mentions a team (e.g. 'ask the platform team'), use action='send_team' with team='platform' to reach all members, " +
+		"or use action='list' first to see who's in which team.\n" +
+		"\nTypical collaboration workflow:\n" +
+		"1. Call lanchat(action='list') to find the target's node_id, role, team, and project info\n" +
+		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...') to reach their agent\n" +
 		"   Use to_role='human' to message the human user instead of their agent.\n" +
 		"   Use to='*' to send the same message to ALL participants (group broadcast).\n" +
-		"3. The response will appear as a [LAN Chat from <nick>] message in subsequent turns."
+		"3. The response will appear as a [LAN Chat from <nick>] message in subsequent turns.\n" +
+		"\nWhen to use lanchat vs a2a_remote:\n" +
+		"- lanchat: real-time communication — asking questions, coordinating tasks, checking status, discussing approach.\n" +
+		"- a2a_remote: headless code-editing delegation — fire-and-forget tasks with a specific code instruction.\n" +
+		"- When in doubt, use lanchat first. You can always follow up with a2a_remote for the actual code work."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {
@@ -45,16 +53,20 @@ func (t LanChatTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["list", "send", "broadcast", "history", "pending", "approve", "reject"],
-				"description": "list=discover participants and their node_id; send=send a DM; broadcast=send to all participants (use as_agent=true for agent broadcast); history=recent messages; pending/list @agent approvals; approve/reject a pending message"
+				"enum": ["list", "send", "broadcast", "send_team", "history", "pending", "approve", "reject"],
+				"description": "list=discover participants and their node_id; send=send a DM; broadcast=send to all participants; send_team=send to all members of a team; history=recent messages; pending/list @agent approvals; approve/reject a pending message"
 			},
 			"message": {
 				"type": "string",
-				"description": "Message text to send (required for 'send')."
+				"description": "Message text to send (required for 'send', 'broadcast', 'send_team')."
 			},
 			"to": {
 				"type": "string",
 				"description": "Recipient node_id for direct message. Use '*' to broadcast to ALL participants. Omit for default broadcast. Find node_id via action='list' first."
+			},
+			"team": {
+				"type": "string",
+				"description": "Team name for 'send_team' action (e.g. 'platform', 'mobile'). Find valid team values via action='list'."
 			},
 			"to_role": {
 				"type": "string",
@@ -95,6 +107,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		Action    string `json:"action"`
 		Message   string `json:"message"`
 		To        string `json:"to"`
+		Team      string `json:"team"`
 		AsAgent   bool   `json:"as_agent"`
 		ToRole    string `json:"to_role"`
 		MessageID string `json:"message_id"`
@@ -112,6 +125,8 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return t.doSend(ctx, args.Message, args.To, args.AsAgent, args.ToRole)
 	case "broadcast":
 		return t.doBroadcast(ctx, args.Message, args.AsAgent)
+	case "send_team":
+		return t.doSendTeam(ctx, args.Message, args.Team, args.AsAgent)
 	case "history":
 		return t.doHistory(args.Limit), nil
 	case "pending":
@@ -121,7 +136,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	case "reject":
 		return t.doReject(args.MessageID, args.Reason)
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, history, pending, approve, reject)", args.Action)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, broadcast, send_team, history, pending, approve, reject)", args.Action)}, nil
 	}
 }
 
@@ -130,15 +145,18 @@ func (t LanChatTool) doList() Result {
 	selfNodeID := t.Hub.NodeID()
 
 	type peerInfo struct {
-		NodeID    string `json:"node_id"`
-		HumanNick string `json:"human_nick"`
-		AgentNick string `json:"agent_nick"`
-		Role      string `json:"role"`
-		Team      string `json:"team"`
-		Mode      string `json:"mode"`
-		Online    bool   `json:"online"`
-		LastSeen  string `json:"last_seen"`
-		Self      bool   `json:"self"`
+		NodeID      string   `json:"node_id"`
+		HumanNick   string   `json:"human_nick"`
+		AgentNick   string   `json:"agent_nick"`
+		Role        string   `json:"role"`
+		Team        string   `json:"team"`
+		Mode        string   `json:"mode"`
+		Online      bool     `json:"online"`
+		LastSeen    string   `json:"last_seen"`
+		Workspace   string   `json:"workspace,omitempty"`
+		ProjectName string   `json:"project_name,omitempty"`
+		Languages   []string `json:"languages,omitempty"`
+		Self        bool     `json:"self"`
 	}
 
 	var peers []peerInfo
@@ -148,15 +166,18 @@ func (t LanChatTool) doList() Result {
 			lastSeen = time.Since(time.Unix(p.LastSeen, 0)).Round(time.Second).String() + " ago"
 		}
 		peers = append(peers, peerInfo{
-			NodeID:    p.NodeID,
-			HumanNick: p.HumanNick,
-			AgentNick: p.AgentNick,
-			Role:      p.Role,
-			Team:      p.Team,
-			Mode:      p.Mode,
-			Online:    p.Online,
-			LastSeen:  lastSeen,
-			Self:      p.NodeID == selfNodeID,
+			NodeID:      p.NodeID,
+			HumanNick:   p.HumanNick,
+			AgentNick:   p.AgentNick,
+			Role:        p.Role,
+			Team:        p.Team,
+			Mode:        p.Mode,
+			Online:      p.Online,
+			LastSeen:    lastSeen,
+			Workspace:   p.Workspace,
+			ProjectName: p.ProjectName,
+			Languages:   p.Languages,
+			Self:        p.NodeID == selfNodeID,
 		})
 	}
 
@@ -233,6 +254,80 @@ func (t LanChatTool) doBroadcast(ctx context.Context, content string, asAgent bo
 		role = "agent"
 	}
 	return Result{Content: fmt.Sprintf("Broadcast sent to all participants as %s.\n", role)}, nil
+}
+
+// doSendTeam sends a message to all participants belonging to a specific team.
+// It iterates participants, filters by the team field, and sends individual DMs
+// to each matching member. If no team matches, returns an error listing valid teams.
+func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAgent bool) (Result, error) {
+	if content == "" {
+		return Result{IsError: true, Content: "message content is required for send_team"}, nil
+	}
+	if team == "" {
+		return Result{IsError: true, Content: "team is required for send_team (use action='list' to see valid teams)"}, nil
+	}
+
+	participants := t.Hub.Participants()
+	selfNodeID := t.Hub.NodeID()
+
+	var members []string
+	var teamsSeen = make(map[string]bool)
+	for _, p := range participants {
+		if p.Team != "" {
+			teamsSeen[p.Team] = true
+		}
+		if p.NodeID == selfNodeID {
+			continue // skip self
+		}
+		if !p.Online {
+			continue
+		}
+		if p.Team == team {
+			members = append(members, p.NodeID)
+		}
+	}
+
+	if len(members) == 0 {
+		validTeams := make([]string, 0, len(teamsSeen))
+		for tk := range teamsSeen {
+			validTeams = append(validTeams, tk)
+		}
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"No online participants in team %q. Valid teams: %s",
+			team, strings.Join(validTeams, ", "),
+		)}, nil
+	}
+
+	// Send to each team member
+	toRole := lanchat.RoleAgent // default: reach their agent for team coordination
+	var errors []string
+	sent := 0
+	for _, nodeID := range members {
+		var err error
+		if asAgent {
+			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
+		} else {
+			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
+		}
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
+		} else {
+			sent++
+		}
+	}
+
+	if sent == 0 {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"Failed to send to any member of team %q: %s",
+			team, strings.Join(errors, "; "),
+		)}, nil
+	}
+
+	result := fmt.Sprintf("Sent to %d/%d members of team %q", sent, len(members), team)
+	if len(errors) > 0 {
+		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
+	}
+	return Result{Content: result + ".\n"}, nil
 }
 
 func (t LanChatTool) doHistory(limit int) Result {
