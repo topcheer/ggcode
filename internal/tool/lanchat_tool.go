@@ -153,6 +153,7 @@ func (t LanChatTool) doList() Result {
 		Mode        string   `json:"mode"`
 		Online      bool     `json:"online"`
 		LastSeen    string   `json:"last_seen"`
+		Endpoint    string   `json:"endpoint,omitempty"`
 		Workspace   string   `json:"workspace,omitempty"`
 		ProjectName string   `json:"project_name,omitempty"`
 		Languages   []string `json:"languages,omitempty"`
@@ -174,6 +175,7 @@ func (t LanChatTool) doList() Result {
 			Mode:        p.Mode,
 			Online:      p.Online,
 			LastSeen:    lastSeen,
+			Endpoint:    p.Endpoint,
 			Workspace:   p.Workspace,
 			ProjectName: p.ProjectName,
 			Languages:   p.Languages,

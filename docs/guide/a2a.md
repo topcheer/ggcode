@@ -57,7 +57,6 @@ a2a:
       cert_file: ".ggcode/certs/server.pem"
       key_file: ".ggcode/certs/server.key"
       ca_file: ".ggcode/certs/ca.pem"
-    allow_unauthenticated: false           # Explicitly allow all (default: false)
   lan_discovery: false                     # mDNS broadcast for LAN discovery
 ```
 
@@ -94,11 +93,12 @@ a2a:
 
 All team members must use the same key.
 
-### Host Auto-Selection
+### Host Binding
 
-- **Auth configured** or **`lan_discovery: true`** → binds to `0.0.0.0` (LAN accessible)
-- **No auth, no lan_discovery** → binds to `127.0.0.1` (localhost only)
-- Override with an explicit `host` value
+- **Always binds to `0.0.0.0`** (LAN accessible)
+- Loopback addresses (`127.0.0.1`, `::1`, `localhost`) are automatically overridden to `0.0.0.0`
+- This ensures mDNS peer discovery and LAN Chat always work
+- A built-in community key (`ggcode-lan-a2a-v1`) provides authentication even without explicit auth config
 
 ### Instance-Level Override
 

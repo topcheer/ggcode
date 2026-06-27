@@ -2,75 +2,42 @@ package a2a
 
 import (
 	"net"
-)
 
-var localInterfaceIPs = func() []net.IP {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var ips []net.IP
-	for _, iface := range interfaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			switch v := addr.(type) {
-			case *net.IPNet:
-				if v.IP != nil {
-					ips = append(ips, v.IP)
-				}
-			case *net.IPAddr:
-				if v.IP != nil {
-					ips = append(ips, v.IP)
-				}
-			}
-		}
-	}
-	return ips
-}
+	"github.com/topcheer/ggcode/internal/debug"
+)
 
 // PreferredIP returns the preferred outbound IP address on the default route.
 // This is the IP that other machines on the same LAN can reach.
 // Falls back to 127.0.0.1 if no suitable address is found.
 func PreferredIP() string {
-	// Dial a non-routable address — doesn't actually send traffic,
+	// Method 1: Dial a non-routable address — doesn't actually send traffic,
 	// just lets the OS pick the default-route source IP.
 	conn, err := net.Dial("udp", "8.8.8.8:53")
-	if err != nil {
-		return "127.0.0.1"
-	}
-	defer conn.Close()
-
-	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || addr.IP == nil {
-		return "127.0.0.1"
-	}
-
-	// Skip loopback — means no real network interface available.
-	if addr.IP.IsLoopback() {
-		return "127.0.0.1"
-	}
-
-	return addr.IP.String()
-}
-
-func isLocalRequestHost(host string) bool {
-	if host == "" || host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() {
-		return true
-	}
-	for _, localIP := range localInterfaceIPs() {
-		if localIP != nil && localIP.Equal(ip) {
-			return true
+	if err == nil {
+		defer conn.Close()
+		addr, ok := conn.LocalAddr().(*net.UDPAddr)
+		if ok && addr.IP != nil && !addr.IP.IsLoopback() {
+			return addr.IP.String()
 		}
 	}
-	return false
+
+	debug.Log("a2a.ip", "UDP dial method failed (%v), falling back to interface scan", err)
+
+	// Method 2: Scan interfaces for the first non-loopback IPv4 on an
+	// interface that matches the default route. This handles cases where
+	// the UDP dial fails (e.g., Windows firewall, VPN, no connectivity).
+	if defIface := DefaultRouteInterface(); defIface != "" {
+		if ips := InterfaceIPv4s(defIface); len(ips) > 0 {
+			debug.Log("a2a.ip", "using IP from default route interface %s: %s", defIface, ips[0])
+			return ips[0].String()
+		}
+	}
+
+	// Method 3: Last resort — first non-loopback IPv4 on any interface.
+	for _, ip := range allNonLoopbackIPv4s() {
+		debug.Log("a2a.ip", "using fallback non-loopback IP: %s", ip)
+		return ip.String()
+	}
+
+	return "127.0.0.1"
 }

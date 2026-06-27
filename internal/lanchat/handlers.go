@@ -22,18 +22,31 @@ func MountHandlers(mux *http.ServeMux, hub *Hub) {
 	}
 }
 
+// communityKey is the built-in shared key for zero-config LAN Chat.
+// It is always accepted regardless of the configured A2A API key.
+const communityKey = "ggcode-lan-a2a-v1"
+
 // AuthMiddleware wraps an http.HandlerFunc with API key validation.
-// If apiKey is empty, no auth is enforced.
+// Accepts either the configured API key or the built-in community key
+// (for zero-config LAN Chat between instances with different auth configs).
 func AuthMiddleware(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if apiKey != "" {
-			key := r.Header.Get("X-API-Key")
-			if key != apiKey {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		key := r.Header.Get("X-API-Key")
+		if key == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
-		next(w, r)
+		// Accept the community key always.
+		if key == communityKey {
+			next(w, r)
+			return
+		}
+		// Accept the configured key if set.
+		if apiKey != "" && key == apiKey {
+			next(w, r)
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
 }
 

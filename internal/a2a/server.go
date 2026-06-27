@@ -22,25 +22,24 @@ import (
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
-	handler              *TaskHandler
-	card                 AgentCard
-	extendedCard         json.RawMessage // optional extended agent card
-	apiKeys              []string
-	server               *http.Server
-	mux                  *http.ServeMux // exposed for additional route mounting
-	port                 int
-	done                 chan struct{}
-	pushConfigs          map[string]PushNotificationConfig // by ID
-	pushMu               sync.RWMutex
-	tokenValidator       *auth.TokenValidator // OAuth2/OIDC token validation
-	mtlsEnabled          bool
-	tlsConfig            *tls.Config // TLS config for mTLS (set via SetTLSConfig)
-	allowUnauthenticated bool        // explicit opt-in to allow all origins without auth
+	handler        *TaskHandler
+	card           AgentCard
+	extendedCard   json.RawMessage // optional extended agent card
+	apiKeys        []string
+	server         *http.Server
+	mux            *http.ServeMux // exposed for additional route mounting
+	port           int
+	done           chan struct{}
+	pushConfigs    map[string]PushNotificationConfig // by ID
+	pushMu         sync.RWMutex
+	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
+	mtlsEnabled    bool
+	tlsConfig      *tls.Config // TLS config for mTLS (set via SetTLSConfig)
 }
 
 // ServerConfig holds A2A server configuration.
 type ServerConfig struct {
-	Host     string   // bind address (default "127.0.0.1")
+	Host     string   // bind address (default "0.0.0.0")
 	Port     int      // 0 = auto-assign
 	APIKey   string   // single key (legacy, merged into APIKeys)
 	APIKeys  []string // multiple keys (any match authenticates)
@@ -98,7 +97,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 
 	host := cfg.Host
 	if host == "" {
-		host = "127.0.0.1"
+		host = "0.0.0.0"
 	}
 
 	s.server = &http.Server{
@@ -271,14 +270,11 @@ func (s *Server) authenticate(r *http.Request) bool {
 		return false
 	}
 
-	// 4) No auth configured: allow only localhost, reject remote.
-	// Set allow_unauthenticated: true in config to explicitly allow all origins.
+	// 4) No auth configured: allow all connections.
+	// A2A + mDNS is always-on by design; instances without explicit auth
+	// rely on LAN isolation for security.
 	if len(s.apiKeys) == 0 && s.tokenValidator == nil && !s.mtlsEnabled {
-		if s.allowUnauthenticated {
-			return true
-		}
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		return isLocalRequestHost(host)
+		return true
 	}
 
 	return false
@@ -690,12 +686,6 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
-}
-
-// SetAllowUnauthenticated allows remote unauthenticated access.
-// By default, only localhost requests are allowed without auth.
-func (s *Server) SetAllowUnauthenticated(v bool) {
-	s.allowUnauthenticated = v
 }
 
 // SetTokenValidator installs an OAuth2/OIDC token validator.

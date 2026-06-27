@@ -13,7 +13,8 @@ import (
 type SessionLock struct {
 	storeDir  string
 	sessionID string
-	holderPID int      // 0 = we hold it; >0 = PID of holder
+	acquired  bool     // true = we hold the lock; false = held by another process
+	holderPID int      // PID of the holder when acquired==false (0 if unknown)
 	file      *os.File // kept open to hold the flock (unix) or lock (windows)
 }
 

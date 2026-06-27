@@ -812,8 +812,6 @@ func (a *configAccess) getA2AAuth(key string) (string, error) {
 			"ca_file":   auth.MTLS.CAFile,
 		})
 		return string(b), nil
-	case "a2a.auth.allow_unauthenticated":
-		return strconv.FormatBool(auth.AllowUnauthenticated), nil
 	default:
 		return "", fmt.Errorf("unknown a2a auth key: %q", key)
 	}
@@ -823,13 +821,6 @@ func (a *configAccess) setA2AAuth(key, value string) error {
 	switch key {
 	case "a2a.auth.api_key":
 		return a.setA2ASecret("api_key", value)
-	case "a2a.auth.allow_unauthenticated":
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("invalid boolean: %w", err)
-		}
-		a.cfg.A2A.Auth.AllowUnauthenticated = b
-		return a.saveAndPatch("a2a.auth.allow_unauthenticated", value)
 	case "a2a.auth.oauth2":
 		var oauth2 config.A2AOAuth2Config
 		if err := json.Unmarshal([]byte(value), &oauth2); err != nil {

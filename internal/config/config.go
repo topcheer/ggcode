@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -318,6 +319,20 @@ func (c A2AConfig) HasAuth() bool {
 		c.Auth.MTLS != nil
 }
 
+// isLoopbackHost reports whether the given host string is a loopback address
+// (127.0.0.1, ::1, localhost). Such addresses make the A2A server unreachable
+// from the LAN, breaking mDNS peer discovery and LAN Chat.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
 // EffectiveAPIKey returns the user-configured API key if set, otherwise
 // the built-in default key. This ensures that even without explicit auth
 // config, ggcode instances can authenticate to each other on a LAN.
@@ -372,11 +387,6 @@ type A2AAuthConfig struct {
 
 	// Mutual TLS for machine-to-machine. No secrets needed.
 	MTLS *A2AMTLSConfig `yaml:"mtls,omitempty"`
-
-	// AllowUnauthenticated allows all requests without authentication.
-	// By default, unauthenticated requests are only allowed from localhost.
-	// Set to true to allow remote unauthenticated access (NOT recommended for production).
-	AllowUnauthenticated bool `yaml:"allow_unauthenticated,omitempty"`
 
 	// HMACSecret is the shared secret for HS256/HS384/HS512 JWT signing.
 	// MUST NOT be the clientID (which is public). Set this only if your IdP
@@ -1072,7 +1082,9 @@ func (c *Config) Validate() error {
 			c.A2A.TaskTimeout = "5m"
 		}
 		// Host defaults to 0.0.0.0 (LAN accessible) since A2A + mDNS is always on.
-		if c.A2A.Host == "" {
+		// Loopback addresses are overridden to 0.0.0.0 so mDNS discovery and
+		// LAN Chat work correctly.
+		if c.A2A.Host == "" || isLoopbackHost(c.A2A.Host) {
 			c.A2A.Host = "0.0.0.0"
 		}
 	}

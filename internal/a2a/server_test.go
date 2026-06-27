@@ -1,7 +1,6 @@
 package a2a
 
 import (
-	"net"
 	"net/http/httptest"
 	"testing"
 )
@@ -59,51 +58,24 @@ func TestAuthenticateMergedAPIKeyAndAPIKeys(t *testing.T) {
 }
 
 func TestAuthenticateNoKeys(t *testing.T) {
+	// With no auth configured at all, all requests are allowed.
+	// A2A + mDNS is always-on by design; EffectiveAPIKey() provides the
+	// community key in production, so this scenario only arises in tests
+	// where apiKeys is explicitly empty.
 	srv := &Server{
 		apiKeys: nil,
 	}
 
-	// No auth configured + localhost → allow (default localhost-only policy)
 	r := httptest.NewRequest("POST", "/", nil)
 	r.RemoteAddr = "127.0.0.1:12345"
 	if !srv.authenticate(r) {
-		t.Error("no auth configured + localhost should allow")
+		t.Error("no auth configured should allow localhost")
 	}
 
-	// No auth configured + remote → deny
 	r2 := httptest.NewRequest("POST", "/", nil)
 	r2.RemoteAddr = "192.168.1.100:12345"
-	if srv.authenticate(r2) {
-		t.Error("no auth configured + remote should deny")
-	}
-}
-
-func TestAuthenticateNoKeysAllowsLocalInterfaceIP(t *testing.T) {
-	origLocalIPs := localInterfaceIPs
-	localInterfaceIPs = func() []net.IP {
-		return []net.IP{net.ParseIP("192.168.1.50")}
-	}
-	defer func() { localInterfaceIPs = origLocalIPs }()
-
-	srv := &Server{apiKeys: nil}
-	r := httptest.NewRequest("POST", "/", nil)
-	r.RemoteAddr = "192.168.1.50:12345"
-	if !srv.authenticate(r) {
-		t.Error("same-host interface IP should be treated as local")
-	}
-}
-
-func TestAuthenticateNoKeysAllowUnauthenticated(t *testing.T) {
-	srv := &Server{
-		apiKeys:              nil,
-		allowUnauthenticated: true,
-	}
-
-	// Explicit opt-in: allow all
-	r := httptest.NewRequest("POST", "/", nil)
-	r.RemoteAddr = "192.168.1.100:12345"
-	if !srv.authenticate(r) {
-		t.Error("allowUnauthenticated=true should allow remote")
+	if !srv.authenticate(r2) {
+		t.Error("no auth configured should allow remote (always-on A2A)")
 	}
 }
 

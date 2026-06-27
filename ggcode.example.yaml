@@ -590,6 +590,9 @@ plugins:
 #   enabled: true
 #   port: 0                    # 0 = auto-assign (recommended for multi-instance)
 #   host: ""                   # defaults to 0.0.0.0 (always LAN accessible)
+#                               # Loopback addresses (127.0.0.1, ::1, localhost) are
+#                               # automatically overridden to 0.0.0.0 because mDNS
+#                               # and LAN Chat require LAN reachability.
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
 #   interfaces: []             # mDNS advertise interfaces (default: auto-detect default route)
@@ -608,8 +611,9 @@ plugins:
 #
 #   # Authentication — multiple schemes can be enabled simultaneously.
 #   # Server advertises enabled schemes in the agent card; clients auto-negotiate.
-#   # When at least one auth method is configured, host defaults to 0.0.0.0 (LAN accessible).
-#   # Without auth, host defaults to 127.0.0.1 (localhost only) for safety.
+#   # Host is always 0.0.0.0 (LAN accessible) since mDNS discovery is always on.
+#   # Loopback addresses are overridden to 0.0.0.0 to ensure LAN Chat and peer
+#   # discovery work correctly.
 #   auth:
 #     # --- API Key (simplest) ---
 #     api_key: "my-secret-key"   # shared secret (supports ${ENV_VAR} expansion)

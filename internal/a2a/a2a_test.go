@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -28,6 +29,25 @@ import (
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+// newTestRequest creates an HTTP request with the test API key for direct HTTP calls.
+func newTestRequest(method, url string, body io.Reader) *http.Request {
+	req, _ := http.NewRequest(method, url, body)
+	req.Header.Set("X-API-Key", "test-key")
+	return req
+}
+
+// testGet performs an authenticated GET request.
+func testGet(url string) (*http.Response, error) {
+	return http.DefaultClient.Do(newTestRequest("GET", url, nil))
+}
+
+// testPost performs an authenticated POST request.
+func testPost(url, contentType string, body io.Reader) (*http.Response, error) {
+	req := newTestRequest("POST", url, body)
+	req.Header.Set("Content-Type", contentType)
+	return http.DefaultClient.Do(req)
+}
 
 func TestTaskStateIsTerminal(t *testing.T) {
 	terminals := []TaskState{TaskStateCompleted, TaskStateFailed, TaskStateCanceled, TaskStateRejected}
@@ -189,7 +209,7 @@ func TestAgentCardEndpoint(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	resp, err := http.Get("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/agent.json")
+	resp, err := testGet("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/agent.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +240,7 @@ func TestAgentCardEndpoint(t *testing.T) {
 
 func TestAgentCardNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -245,13 +265,13 @@ func TestAgentCardNoAuth(t *testing.T) {
 
 func TestAgentCardMethodReject(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	resp, err := http.Post("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/.well-known/agent.json", "", nil)
+	resp, err := testPost("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/.well-known/agent.json", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,6 +290,7 @@ func TestAuthRejectsInvalidKey(t *testing.T) {
 	defer srv.Stop()
 
 	req, _ := http.NewRequest("POST", "http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", nil)
+	req.Header.Set("X-API-Key", "test-key")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -282,13 +303,13 @@ func TestAuthRejectsInvalidKey(t *testing.T) {
 
 func TestRPCRejectsBadJSON(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	resp, err := http.Post("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", nil)
+	resp, err := testPost("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,14 +324,14 @@ func TestRPCRejectsBadJSON(t *testing.T) {
 
 func TestRPCRejectsInvalidVersion(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
 	body, _ := json.Marshal(map[string]interface{}{"jsonrpc": "1.0", "id": 1, "method": "test"})
-	resp, err := http.Post("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", bytes.NewReader(body))
+	resp, err := testPost("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,14 +346,14 @@ func TestRPCRejectsInvalidVersion(t *testing.T) {
 
 func TestRPCMethodNotFound(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
 	body, _ := json.Marshal(JSONRPCRequest{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "nonexistent"})
-	resp, err := http.Post("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", bytes.NewReader(body))
+	resp, err := testPost("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port())+"/", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +368,7 @@ func TestRPCMethodNotFound(t *testing.T) {
 
 func TestClientDiscover(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +386,7 @@ func TestClientDiscover(t *testing.T) {
 
 func TestClientGetTaskNotFound(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -999,7 +1020,7 @@ func TestRequestInputRejectsNonWorking(t *testing.T) {
 
 func TestClientResubscribe(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1321,7 +1342,7 @@ func TestCleanupExpiredTasks(t *testing.T) {
 
 func TestClientDisconnectCancelsWait(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil, WithTimeout(30*time.Second))
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1384,13 +1405,13 @@ func TestSSECommentLines(t *testing.T) {
 
 func TestWellKnownA2AJSON(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	resp, err := http.Get("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
+	resp, err := testGet("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1411,13 +1432,13 @@ func TestWellKnownA2AJSON(t *testing.T) {
 
 func TestA2AVersionHeader(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	resp, err := http.Get("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
+	resp, err := testGet("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1507,7 +1528,7 @@ func TestPushNotificationConfigSerialization(t *testing.T) {
 
 func TestPushNotificationCRUD(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1527,7 +1548,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 		Method:  "tasks/pushNotificationConfig/set",
 		Params:  mustMarshal(cfg),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(setBody))
+	resp, err := testPost(base, "application/json", bytes.NewReader(setBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1552,7 +1573,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 		Method:  "tasks/pushNotificationConfig/get",
 		Params:  mustMarshal(map[string]string{"id": pushID}),
 	})
-	resp, err = http.Post(base, "application/json", bytes.NewReader(getBody))
+	resp, err = testPost(base, "application/json", bytes.NewReader(getBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1570,7 +1591,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 		Method:  "tasks/pushNotificationConfig/list",
 		Params:  json.RawMessage(`{}`),
 	})
-	resp, err = http.Post(base, "application/json", bytes.NewReader(listBody))
+	resp, err = testPost(base, "application/json", bytes.NewReader(listBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1588,7 +1609,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 		Method:  "tasks/pushNotificationConfig/delete",
 		Params:  mustMarshal(map[string]string{"id": pushID}),
 	})
-	resp, err = http.Post(base, "application/json", bytes.NewReader(delBody))
+	resp, err = testPost(base, "application/json", bytes.NewReader(delBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1600,7 +1621,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 	}
 
 	// Get after delete → should fail
-	resp, err = http.Post(base, "application/json", bytes.NewReader(getBody))
+	resp, err = testPost(base, "application/json", bytes.NewReader(getBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1613,7 +1634,7 @@ func TestPushNotificationCRUD(t *testing.T) {
 
 func TestAcceptedOutputModesValidation(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1631,7 +1652,7 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 			Configuration: &SendMessageConfig{AcceptedOutputModes: []string{"image/png"}},
 		}),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1656,7 +1677,7 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 			Configuration: &SendMessageConfig{AcceptedOutputModes: []string{"text/plain"}},
 		}),
 	})
-	resp2, err := http.Post(base, "application/json", bytes.NewReader(body2))
+	resp2, err := testPost(base, "application/json", bytes.NewReader(body2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1671,7 +1692,7 @@ func TestAcceptedOutputModesValidation(t *testing.T) {
 
 func TestHistoryLengthFilter(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1705,7 +1726,7 @@ func TestHistoryLengthFilter(t *testing.T) {
 		Method:  "tasks/get",
 		Params:  mustMarshal(GetTaskParams{ID: task.ID, HistoryLength: &hl}),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1733,7 +1754,7 @@ func TestHistoryLengthFilter(t *testing.T) {
 		Method:  "tasks/get",
 		Params:  mustMarshal(GetTaskParams{ID: task.ID, HistoryLength: &hl0}),
 	})
-	resp0, err := http.Post(base, "application/json", bytes.NewReader(body0))
+	resp0, err := testPost(base, "application/json", bytes.NewReader(body0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1752,7 +1773,7 @@ func TestHistoryLengthFilter(t *testing.T) {
 
 func TestGetExtendedAgentCardNotConfigured(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1766,7 +1787,7 @@ func TestGetExtendedAgentCardNotConfigured(t *testing.T) {
 		Method:  "agent/getExtendedCard",
 		Params:  json.RawMessage(`{}`),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1783,7 +1804,7 @@ func TestGetExtendedAgentCardNotConfigured(t *testing.T) {
 
 func TestGetExtendedAgentCard(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	srv.SetExtendedCard(json.RawMessage(`{"custom":"data"}`))
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
@@ -1798,7 +1819,7 @@ func TestGetExtendedAgentCard(t *testing.T) {
 		Method:  "agent/getExtendedCard",
 		Params:  json.RawMessage(`{}`),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1815,7 +1836,7 @@ func TestGetExtendedAgentCard(t *testing.T) {
 	}
 
 	// Verify capability flag via agent card endpoint
-	resp2, _ := http.Get(base + "/.well-known/a2a.json")
+	resp2, _ := testGet(base + "/.well-known/a2a.json")
 	var card AgentCard
 	json.NewDecoder(resp2.Body).Decode(&card)
 	resp2.Body.Close()
@@ -1911,7 +1932,7 @@ func TestActiveTasks(t *testing.T) {
 
 func TestListTasksRPC(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1933,7 +1954,7 @@ func TestListTasksRPC(t *testing.T) {
 		Method:  "tasks/list",
 		Params:  json.RawMessage(`{}`),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2193,18 +2214,18 @@ func TestOAuthFlowsSerialization(t *testing.T) {
 
 func TestServerAuthenticateNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
-	// No auth configured → localhost allowed, remote denied
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
+	// No auth configured → all requests denied (including localhost)
 	req, _ := http.NewRequest("POST", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
-	if !srv.authenticate(req) {
-		t.Error("expected no-auth + localhost to allow")
+	if srv.authenticate(req) {
+		t.Error("expected no-auth to deny even localhost")
 	}
 
 	req2, _ := http.NewRequest("POST", "/", nil)
 	req2.RemoteAddr = "10.0.0.1:12345"
 	if srv.authenticate(req2) {
-		t.Error("expected no-auth + remote to deny")
+		t.Error("expected no-auth to deny remote")
 	}
 }
 
@@ -2244,7 +2265,7 @@ func TestServerAuthenticateBearerToken(t *testing.T) {
 
 func TestServerAuthenticateMTLS(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	srv.SetMTLSEnabled(true)
 
 	// No TLS → reject
@@ -2590,13 +2611,13 @@ func TestClientNegotiateAuthMultiSchemeFallback(t *testing.T) {
 
 func TestSendMessageE2E(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "test-key")
 
 	task, err := client.SendMessage(context.Background(), SkillFileSearch, "test")
 	if err != nil {
@@ -2629,13 +2650,13 @@ func TestBearerTokenSentToServer(t *testing.T) {
 
 func TestSSEStreamE2E(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Stop()
 
-	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "test-key")
 
 	ch, err := client.SendMessageStream(context.Background(), SkillFileSearch, "stream test")
 	if err != nil {
@@ -2655,7 +2676,7 @@ func TestSSEStreamE2E(t *testing.T) {
 
 func TestResubscribeRPC(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -2669,7 +2690,7 @@ func TestResubscribeRPC(t *testing.T) {
 		Method:  "tasks/resubscribe",
 		Params:  mustMarshal(map[string]string{"id": "nonexistent-task"}),
 	})
-	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	resp, err := testPost(base, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2687,7 +2708,7 @@ func TestResubscribeRPC(t *testing.T) {
 
 func TestAgentCardSecurityNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key
 	if len(srv.card.SecuritySchemes) != 0 {
 		t.Errorf("expected no schemes, got %v", srv.card.SecuritySchemes)
 	}
@@ -2712,7 +2733,7 @@ func TestAgentCardSecurityAPIKeyOnly(t *testing.T) {
 
 func TestAgentCardSecurityOAuth2Only(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key, only OAuth2
 	tv, _ := auth.NewTokenValidator("test", "https://example.com")
 	srv.SetTokenValidator(tv)
 	if _, ok := srv.card.SecuritySchemes["bearer"]; !ok {
@@ -2725,7 +2746,7 @@ func TestAgentCardSecurityOAuth2Only(t *testing.T) {
 
 func TestAgentCardSecurityMTLSOnly(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	srv.SetMTLSEnabled(true)
 	if _, ok := srv.card.SecuritySchemes["mutualTLS"]; !ok {
 		t.Error("expected mutualTLS scheme after SetMTLSEnabled")
@@ -2756,7 +2777,7 @@ func TestAgentCardSecurityMultiScheme(t *testing.T) {
 
 func TestAgentCardSecurityUpdatedDynamically(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0}, handler) // No API key initially
 
 	// Initially no auth
 	if len(srv.card.SecuritySchemes) != 0 {
@@ -2779,7 +2800,7 @@ func TestAgentCardSecurityUpdatedDynamically(t *testing.T) {
 
 func TestServerMTLSSetsTLSConfig(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 
 	// Generate self-signed cert for testing
 	cert, key := generateTestCert(t)
@@ -2811,7 +2832,7 @@ func TestServerMTLSSetsTLSConfig(t *testing.T) {
 
 func TestServerStartWithTLS(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 
 	cert, key := generateTestCert(t)
 	certFile := filepath.Join(t.TempDir(), "cert.pem")
@@ -2879,7 +2900,7 @@ func (m *mockTokenProvider) GetToken(ctx context.Context) (string, string, time.
 func TestClientAutoTokenAcquisition(t *testing.T) {
 	// Server requiring bearer auth
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
 	srv.SetTokenValidator(tv)
 	srv.Start()
@@ -2916,7 +2937,7 @@ func TestClientAutoTokenAcquisition(t *testing.T) {
 
 func TestClientNoTokenProviderFailsBearer(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
 	srv.SetTokenValidator(tv)
 	srv.Start()
@@ -2936,7 +2957,7 @@ func TestClientNoTokenProviderFailsBearer(t *testing.T) {
 
 func TestClientExistingTokenSkipsProvider(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
 	srv.SetTokenValidator(tv)
 	srv.Start()
@@ -2964,7 +2985,7 @@ func TestClientExistingTokenSkipsProvider(t *testing.T) {
 
 func TestClientTokenProviderError(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
-	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
 	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
 	srv.SetTokenValidator(tv)
 	srv.Start()

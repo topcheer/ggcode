@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.85`](docs/releases/v1.3.85.md) |
+| Latest documented release | [`v1.3.86`](docs/releases/v1.3.86.md) |
 
 ## Build & Validation
 
@@ -151,9 +151,8 @@ Key concepts:
   - **`a2a.auth.oauth2`**: OAuth2 + PKCE or Device Flow (`provider`, `client_id`, `client_secret`, `issuer_url`, `flow`, `scopes`)
   - **`a2a.auth.oidc`**: OpenID Connect layer on OAuth2 (same fields + `openid` scope)
   - **`a2a.auth.mtls`**: Mutual TLS (`cert_file`, `key_file`, `ca_file`)
-  - **`a2a.auth.allow_unauthenticated`**: Explicitly allow all origins without auth (default: false). Without this, only localhost is allowed when no auth is configured.
-- **`a2a.lan_discovery`**: Enable mDNS broadcast for LAN peer discovery (default `true`). Powers LAN Chat and A2A peer discovery. Uses built-in community key when no auth is configured.
-- **`a2a.host`**: Auto — `0.0.0.0` when auth is configured (LAN accessible), `127.0.0.1` without auth (localhost only). Override with explicit value.
+- **`a2a.lan_discovery`**: Enable mDNS broadcast for LAN peer discovery (default `true`). Powers LAN Chat and A2A peer discovery. Always uses built-in community key (`ggcode-lan-a2a-v1`) as fallback via `EffectiveAPIKey()`.
+- **`a2a.host`**: Always `0.0.0.0` (LAN accessible). Loopback addresses (`127.0.0.1`, `::1`, `localhost`) are automatically overridden to `0.0.0.0` because mDNS discovery and LAN Chat require LAN reachability. Override with explicit non-loopback value if needed.
 - **`a2a.api_key`**: Legacy API key field (still works, `a2a.auth.api_key` takes priority)
 - **API keys**: Use `${ENV_VAR}` syntax for env var expansion (e.g., `${ANTHROPIC_API_KEY}`)
 

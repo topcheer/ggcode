@@ -352,6 +352,10 @@ func TestA2AHostDefault(t *testing.T) {
 		{"with oauth2 → 0.0.0.0", "a2a:\n  auth:\n    oauth2:\n      provider: github\n", "0.0.0.0"},
 		{"explicit host override", "a2a:\n  host: 192.168.1.1\n  auth:\n    api_key: key\n", "192.168.1.1"},
 		{"empty explicit host with auth → 0.0.0.0", "a2a:\n  host: \"\"\n  auth:\n    api_key: key\n", "0.0.0.0"},
+		// Loopback addresses are overridden to 0.0.0.0 so mDNS + lanchat work.
+		{"legacy 127.0.0.1 → overridden to 0.0.0.0", "a2a:\n  host: 127.0.0.1\n", "0.0.0.0"},
+		{"legacy localhost → overridden to 0.0.0.0", "a2a:\n  host: localhost\n", "0.0.0.0"},
+		{"legacy ::1 → overridden to 0.0.0.0", "a2a:\n  host: \"::1\"\n", "0.0.0.0"},
 	}
 
 	for _, tt := range tests {

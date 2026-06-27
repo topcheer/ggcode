@@ -28,6 +28,7 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 		return &SessionLock{
 			storeDir:  storeDir,
 			sessionID: sessionID,
+			acquired:  false,
 			holderPID: pid,
 		}, nil
 	}
@@ -42,7 +43,7 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 	return &SessionLock{
 		storeDir:  storeDir,
 		sessionID: sessionID,
-		holderPID: 0, // 0 means we hold it
+		acquired:  true,
 		file:      f,
 	}, nil
 }
@@ -50,7 +51,7 @@ func TryAcquireSessionLock(storeDir, sessionID string) (*SessionLock, error) {
 // Acquired reports whether this lock was successfully acquired (true)
 // or whether another process holds it (false).
 func (l *SessionLock) Acquired() bool {
-	return l != nil && l.holderPID == 0
+	return l != nil && l.acquired
 }
 
 // HolderPID returns the PID of the process holding the lock, or 0 if
@@ -65,7 +66,7 @@ func (l *SessionLock) HolderPID() int {
 // Release releases the session lock, closes the underlying file descriptor,
 // and removes the lock file.
 func (l *SessionLock) Release() {
-	if l == nil || l.holderPID != 0 || l.file == nil {
+	if l == nil || !l.acquired || l.file == nil {
 		return // not our lock to release
 	}
 	syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)

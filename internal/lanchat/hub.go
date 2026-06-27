@@ -691,6 +691,9 @@ func (h *Hub) sendPresence(peer Participant) {
 			if peerInfo.Team != "" {
 				existing.Team = peerInfo.Team
 			}
+			if peerInfo.Role != "" {
+				existing.Role = peerInfo.Role
+			}
 			existing.Mode = peerInfo.Mode
 			existing.Online = true
 			existing.LastSeen = time.Now().Unix()
@@ -1150,9 +1153,7 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 	data, _ := json.Marshal(r)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
-	if h.apiKey != "" {
-		req.Header.Set("X-API-Key", h.apiKey)
-	}
+	req.Header.Set("X-API-Key", communityKey)
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return

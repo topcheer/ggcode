@@ -107,7 +107,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/topcheer/ggcode-acp-go v0.1.5 // indirect
-	github.com/topcheer/mdns v0.0.0-20260623161405-3e3f915456db // indirect
+	github.com/topcheer/mdns v1.2.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.59.0 // indirect

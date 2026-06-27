@@ -73,11 +73,54 @@ func defaultRouteInterfaceWindows() string {
 	if err != nil {
 		return ""
 	}
+	// Windows netstat -rn IPv4 route table format:
+	//   Network Destination  Netmask  Gateway  Interface  Metric
+	//          0.0.0.0         0.0.0.0   GW_IP   IF_IP      METRIC
+	// The "Interface" column (index 3) is an IP address, not an interface
+	// name like on Linux/macOS. We need to resolve this IP back to an
+	// interface name that net.InterfaceByName can use.
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[0] == "0.0.0.0" {
-			// The interface column is typically the last meaningful field.
-			return fields[len(fields)-1]
+		if len(fields) >= 4 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
+			ifaceIP := fields[3] // Interface column = source IP for default route
+			// Find the interface that owns this IP address.
+			if name := interfaceNameByIP(ifaceIP); name != "" {
+				return name
+			}
+			// Fallback: return the IP itself so IPsForInterfaces can
+			// still resolve it via allNonLoopbackIPv4s filtering.
+			return ""
+		}
+	}
+	return ""
+}
+
+// interfaceNameByIP finds the network interface name that has the given IP.
+func interfaceNameByIP(ipStr string) string {
+	target := net.ParseIP(ipStr)
+	if target == nil {
+		return ""
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && ip.Equal(target) {
+				return iface.Name
+			}
 		}
 	}
 	return ""

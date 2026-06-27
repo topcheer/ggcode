@@ -30,7 +30,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
 	github.com/topcheer/ggcode-acp-go v0.1.5
-	github.com/topcheer/mdns v0.0.0-20260623161405-3e3f915456db
+	github.com/topcheer/mdns v1.2.1
 	github.com/young2j/oxmltotext v1.0.3
 	github.com/yuin/goldmark v1.8.2
 	go.mau.fi/whatsmeow v0.0.0-20260504140538-51dcc5e33be0
