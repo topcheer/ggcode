@@ -215,6 +215,18 @@ func (a *Agent) AddMessage(msg provider.Message) {
 	a.contextManager.Add(msg)
 }
 
+// ReconcileToolCalls checks the conversation history for unpaired tool_use
+// blocks (tool_calls without matching tool_result blocks across ALL assistant
+// messages) and adds cancelled tool_result entries to keep the conversation
+// valid for LLM APIs.
+// See context.Manager.ReconcileToolCalls() for details.
+func (a *Agent) ReconcileToolCalls() bool {
+	if a.contextManager == nil {
+		return false
+	}
+	return a.contextManager.ReconcileToolCalls()
+}
+
 // SetProjectMemoryFiles seeds the set of already-loaded project memory files so
 // path-triggered dynamic loading can avoid reinjecting startup guidance.
 func (a *Agent) SetProjectMemoryFiles(files []string) {
@@ -445,6 +457,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Role:    "user",
 		Content: content,
 	})
+
+	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
+	// blocks (no matching tool_result blocks in subsequent messages), add a user
+	// message with cancelled tool_result entries. This handles both session
+	// restoration from file and runtime interruption where the agent loop was
+	// cancelled before tool results could be added.
+	if a.ReconcileToolCalls() {
+		debug.Log("agent", "RunStreamWithContent: reconciled unpaired tool_calls")
+	}
 
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()

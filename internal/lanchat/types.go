@@ -47,6 +47,11 @@ type Participant struct {
 	HasGit      bool     `json:"has_git,omitempty"`
 	HasTests    bool     `json:"has_tests,omitempty"`
 
+	// AgentBusy indicates whether the agent on this node is currently
+	// processing a task. Propagated via presence exchange so peers know
+	// which agents are available and which are occupied.
+	AgentBusy bool `json:"agent_busy,omitempty"`
+
 	// Internal (not serialized): tracks notification state to prevent
 	// excessive online/offline churn.
 	notifiedJoin    bool  `json:"-"` // already fired onParticipantAdd

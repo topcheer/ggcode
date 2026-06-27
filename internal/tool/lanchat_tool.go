@@ -27,19 +27,25 @@ func (t LanChatTool) Description() string {
 		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for headless code-edit delegation to other workspaces, not for asking questions).\n" +
 		"Nick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
 		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
-		"Actions: 'list' to discover participants, their node IDs, roles, teams, and project info (languages, workspace); " +
-		"'send' to message a participant (use to='*' to broadcast to ALL participants); 'broadcast' to send to ALL participants; " +
-		"'send_team' to message all members of a specific team (filtered by the 'team' field); " +
-		"'history' to read recent messages; " +
-		"'pending'/'approve'/'reject' to manage @agent approvals.\n" +
+		"Messaging actions (choose by scope):\n" +
+		"- 'send' (to=<node_id>): DM one participant. Requires the target's node_id from action='list'.\n" +
+		"- 'send_team' (team=<name>): broadcast to all members of a specific team. Requires the 'team' parameter.\n" +
+		"- 'broadcast': broadcast to ALL participants on the LAN (no filtering). Do NOT use 'team' with this action.\n" +
+		"Note: 'send' with to='*' is equivalent to 'broadcast' — prefer the explicit 'broadcast' action for clarity.\n" +
+		"Other actions: 'list' to discover participants; 'history' to read recent messages; 'pending'/'approve'/'reject' to manage @agent approvals.\n" +
+		"\nAgent availability: each participant in the 'list' output has an 'agent_busy' field (true/false). " +
+		"When deciding which agent to contact for a task, prefer participants with agent_busy=false (idle agents). " +
+		"A busy agent (agent_busy=true) is currently processing a request and may respond with delay. " +
+		"If all agents in a team are busy, you can still send a message — it will be queued.\n" +
 		"\nTeam awareness: each participant has a 'team' field (e.g. 'platform', 'mobile', 'dev-team'). " +
 		"When a user mentions a team (e.g. 'ask the platform team'), use action='send_team' with team='platform' to reach all members, " +
 		"or use action='list' first to see who's in which team.\n" +
 		"\nTypical collaboration workflow:\n" +
 		"1. Call lanchat(action='list') to find the target's node_id, role, team, and project info\n" +
-		"2. Call lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...') to reach their agent\n" +
-		"   Use to_role='human' to message the human user instead of their agent.\n" +
-		"   Use to='*' to send the same message to ALL participants (group broadcast).\n" +
+		"2a. For a DM: lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...')\n" +
+		"    Use to_role='human' to message the human user instead of their agent.\n" +
+		"2b. For a team broadcast: lanchat(action='send_team', team='platform', message='...')\n" +
+		"2c. For a global broadcast: lanchat(action='broadcast', message='...')\n" +
 		"3. The response will appear as a [LAN Chat from <nick>] message in subsequent turns.\n" +
 		"\nWhen to use lanchat vs a2a_remote:\n" +
 		"- lanchat: real-time communication — asking questions, coordinating tasks, checking status, discussing approach.\n" +
@@ -54,7 +60,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			"action": {
 				"type": "string",
 				"enum": ["list", "send", "broadcast", "send_team", "history", "pending", "approve", "reject"],
-				"description": "list=discover participants and their node_id; send=send a DM; broadcast=send to all participants; send_team=send to all members of a team; history=recent messages; pending/list @agent approvals; approve/reject a pending message"
+				"description": "list=discover participants and their node_id; send=DM one participant (requires 'to'); broadcast=send to ALL participants (no 'to' or 'team' needed); send_team=send to all members of a team (requires 'team'); history=recent messages; pending=list @agent approvals; approve/reject a pending message (requires 'message_id'). Choose by scope: DM=send, team=send_team, everyone=broadcast."
 			},
 			"message": {
 				"type": "string",
@@ -62,11 +68,11 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"to": {
 				"type": "string",
-				"description": "Recipient node_id for direct message. Use '*' to broadcast to ALL participants. Omit for default broadcast. Find node_id via action='list' first."
+				"description": "Recipient node_id for 'send' action (DM). Find via action='list'. Using to='*' is equivalent to action='broadcast' — prefer 'broadcast' for clarity. Ignored by 'broadcast' and 'send_team' actions."
 			},
 			"team": {
 				"type": "string",
-				"description": "Team name for 'send_team' action (e.g. 'platform', 'mobile'). Find valid team values via action='list'."
+				"description": "Required for 'send_team' action only. Team name to broadcast to (e.g. 'platform', 'mobile'). Ignored by all other actions. Find valid team values via action='list'."
 			},
 			"to_role": {
 				"type": "string",
@@ -157,6 +163,7 @@ func (t LanChatTool) doList() Result {
 		Workspace   string   `json:"workspace,omitempty"`
 		ProjectName string   `json:"project_name,omitempty"`
 		Languages   []string `json:"languages,omitempty"`
+		AgentBusy   bool     `json:"agent_busy"`
 		Self        bool     `json:"self"`
 	}
 
@@ -179,6 +186,7 @@ func (t LanChatTool) doList() Result {
 			Workspace:   p.Workspace,
 			ProjectName: p.ProjectName,
 			Languages:   p.Languages,
+			AgentBusy:   p.AgentBusy,
 			Self:        p.NodeID == selfNodeID,
 		})
 	}

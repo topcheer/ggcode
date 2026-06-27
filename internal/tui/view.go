@@ -61,11 +61,13 @@ func (m Model) View() tea.View {
 		availableHeight -= lipgloss.Height(lanChatBar)
 	}
 
-	debug.Log("layout", "vh=%d h=%d s=%d c=%d a=%d sb=%d d=%d",
-		m.viewHeight(),
-		lipgloss.Height(header), lipgloss.Height(startupBanner), lipgloss.Height(composer),
-		lipgloss.Height(actionPanel), lipgloss.Height(statusBar), lipgloss.Height(deviceBanner))
-	debug.Log("layout", "avail=%d", availableHeight)
+	if debug.IsVerbose("layout") {
+		debug.Log("layout", "vh=%d h=%d s=%d c=%d a=%d sb=%d d=%d",
+			m.viewHeight(),
+			lipgloss.Height(header), lipgloss.Height(startupBanner), lipgloss.Height(composer),
+			lipgloss.Height(actionPanel), lipgloss.Height(statusBar), lipgloss.Height(deviceBanner))
+		debug.Log("layout", "avail=%d", availableHeight)
+	}
 
 	conversation := m.renderConversationPanel(availableHeight)
 

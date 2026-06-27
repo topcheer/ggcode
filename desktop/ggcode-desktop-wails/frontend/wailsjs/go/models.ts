@@ -73,6 +73,7 @@ export namespace lanchat {
 	    mode: string;
 	    endpoint: string;
 	    role: string;
+	    team: string;
 	    online: boolean;
 	    last_seen: number;
 	    workspace?: string;
@@ -81,6 +82,7 @@ export namespace lanchat {
 	    frameworks?: string[];
 	    has_git?: boolean;
 	    has_tests?: boolean;
+	    agent_busy?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Participant(source);
@@ -94,6 +96,7 @@ export namespace lanchat {
 	        this.mode = source["mode"];
 	        this.endpoint = source["endpoint"];
 	        this.role = source["role"];
+	        this.team = source["team"];
 	        this.online = source["online"];
 	        this.last_seen = source["last_seen"];
 	        this.workspace = source["workspace"];
@@ -102,6 +105,7 @@ export namespace lanchat {
 	        this.frameworks = source["frameworks"];
 	        this.has_git = source["has_git"];
 	        this.has_tests = source["has_tests"];
+	        this.agent_busy = source["agent_busy"];
 	    }
 	}
 	export class PendingAgentMsg {
@@ -792,6 +796,7 @@ export namespace wailskit {
 	    model: string;
 	    msgCount: number;
 	    updatedAt: string;
+	    locked: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionInfo(source);
@@ -806,6 +811,7 @@ export namespace wailskit {
 	        this.model = source["model"];
 	        this.msgCount = source["msgCount"];
 	        this.updatedAt = source["updatedAt"];
+	        this.locked = source["locked"];
 	    }
 	}
 	export class SessionMessage {

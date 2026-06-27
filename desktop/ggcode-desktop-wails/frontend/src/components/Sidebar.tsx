@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Plus, Search, Smartphone, Trash2 } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
@@ -19,6 +19,7 @@ interface SessionItem {
   workspace: string
   model: string
   msgCount: number
+  locked: boolean
 }
 
 function relativeTime(dateStr: string, t: (key: any, params?: Record<string, string | number>) => string): string {
@@ -60,6 +61,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           workspace: s.Workspace || s.workspace || '',
           model: s.Model || s.model || '',
           msgCount: s.MsgCount || s.msgCount || 0,
+          locked: s.Locked || s.locked || false,
         })))
       } catch (e) {
         showToast?.('error', `Failed to load sessions: ${e instanceof Error ? e.message : String(e)}`)
@@ -91,17 +93,29 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     try {
       const id = await App.NewSession()
       const list = await App.ListSessions()
-      setSessions(list || [])
+      setSessions((list as any[] || []).map((s: any) => ({
+        id: s.ID || s.id || '',
+        title: s.Title || s.title || t('sidebar.untitled'),
+        updatedAt: s.UpdatedAt || s.updatedAt || '',
+        workspace: s.Workspace || s.workspace || '',
+        model: s.Model || s.model || '',
+        msgCount: s.MsgCount || s.msgCount || 0,
+        locked: s.Locked || s.locked || false,
+      })))
       onSessionSelect?.(id || '')
     } catch (e) {
       showToast?.('error', `Failed to create session: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  const handleSelect = async (id: string) => {
+  const handleSelect = async (s: SessionItem) => {
+    if (s.locked) {
+      showToast?.('info', 'This session is locked by another instance')
+      return
+    }
     try {
-      await App.LoadSession(id)
-      onSessionSelect?.(id)
+      await App.LoadSession(s.id)
+      onSessionSelect?.(s.id)
     } catch (e) {
       showToast?.('error', `Failed to open session: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -175,14 +189,15 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         {filtered.map(s => (
           <div
             key={s.id}
-            onClick={() => handleSelect(s.id)}
+            onClick={() => handleSelect(s)}
             onMouseEnter={() => setHoveredSessionId(s.id)}
             onMouseLeave={() => setHoveredSessionId(prev => prev === s.id ? null : prev)}
             style={{
               padding: 'var(--spacing-sm) var(--spacing-md)',
               background: s.id === activeSessionId ? 'var(--color-card)' : 'transparent',
               borderLeft: s.id === activeSessionId ? '2px solid var(--color-primary)' : '2px solid transparent',
-              cursor: 'pointer',
+              cursor: s.locked ? 'not-allowed' : 'pointer',
+              opacity: s.locked ? 0.5 : 1,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'flex-start',
@@ -202,6 +217,9 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
               }}>
                 {s.title || t('sidebar.untitled')}
               </span>
+              {s.locked && (
+                <Lock size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginRight: 2 }} />
+              )}
               <button
                 onClick={e => handleDelete(e, s.id)}
                 style={{

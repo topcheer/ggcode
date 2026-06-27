@@ -639,9 +639,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	}
 
-	// Skip spinnerMsg — it fires every tick and would flood the log.
+	// Skip spinnerMsg and blinkMsg — they fire every tick and would flood the log.
 	if _, isSpinner := msg.(spinnerMsg); !isSpinner {
-		debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+		msgType := fmt.Sprintf("%T", msg)
+		if !strings.Contains(msgType, "Blink") {
+			debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+		}
 	}
 	keyMsg, isKeyPress := msg.(tea.KeyPressMsg)
 	if !isKeyPress {

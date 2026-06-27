@@ -12,10 +12,11 @@ import (
 // UserItem renders a user message with a prefix icon.
 type UserItem struct {
 	CachedItem
-	id     string
-	text   string
-	prefix string
-	styles Styles
+	id       string
+	text     string
+	prefix   string
+	styles   Styles
+	markdown bool // render text as markdown instead of plain text
 }
 
 // NewUserItem creates a new user message item.
@@ -25,6 +26,19 @@ func NewUserItem(id, text string, styles Styles) *UserItem {
 		text:   text,
 		prefix: styles.UserPrefix,
 		styles: styles,
+	}
+}
+
+// NewMarkdownUserItem creates a user message item that renders its content as
+// markdown. Used for messages that may contain structured text (e.g. LAN Chat
+// agent-to-agent messages with markdown formatting).
+func NewMarkdownUserItem(id, text string, styles Styles) *UserItem {
+	return &UserItem{
+		id:       id,
+		text:     text,
+		prefix:   styles.UserPrefix,
+		styles:   styles,
+		markdown: true,
 	}
 }
 
@@ -51,7 +65,14 @@ func (u *UserItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	lines := wrapLines(u.text, contentWidth)
+	var content string
+	if u.markdown {
+		content = markdown.Render(u.text, contentWidth)
+	} else {
+		content = strings.Join(wrapLines(u.text, contentWidth), "\n")
+	}
+
+	lines := strings.Split(content, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
 		if i == 0 {

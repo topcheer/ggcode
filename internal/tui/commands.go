@@ -527,6 +527,15 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 	return m.continueDisplayedNormalTextRun(text)
 }
 
+// submitLanChatAgentText submits text from a LAN Chat agent as a user message
+// with markdown rendering (agent-to-agent messages often contain structured text).
+func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
+	m.chatWriteUserMarkdown(nextChatID(), text)
+	m.chatListScrollToBottom()
+	m.appendUserMessage(text)
+	return m.continueDisplayedNormalTextRun(text)
+}
+
 func (m *Model) continueDisplayedNormalTextRun(text string) tea.Cmd {
 	m.streamBuffer = &bytes.Buffer{}
 	m.shellBuffer = nil

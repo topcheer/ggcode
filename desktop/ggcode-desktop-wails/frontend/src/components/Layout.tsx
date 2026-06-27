@@ -27,7 +27,7 @@ import * as App from '../../wailsjs/go/main/App'
 // Inner layout that uses useTranslation (must be inside I18nProvider)
 function LayoutInner() {
   const [view, setView] = useState<ViewMode>('chat')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
@@ -111,6 +111,25 @@ function LayoutInner() {
     load()
     return () => { cancelled = true }
   }, [setLocale])
+
+  // Sync active session ID on mount — the backend may have auto-loaded
+  // a session in EnsureSession before this React component mounted, so
+  // the session:changed event was missed. Poll once on startup.
+  useEffect(() => {
+    let cancelled = false
+    // Small delay to let the backend finish EnsureSession
+    const timer = setTimeout(() => {
+      if (cancelled) return
+      App.GetCurrentSessionID().then((id: any) => {
+        if (cancelled) return
+        const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
+        if (sid) {
+          setActiveSessionId(sid)
+        }
+      }).catch(() => {})
+    }, 500)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [])
 
   // Refresh status bar when config changes (e.g. after settings save)
   useEffect(() => {
@@ -202,8 +221,15 @@ function LayoutInner() {
     const offTunnelSessionChanged = EventsOn('tunnel:session_changed', (data: any) => {
       showToast('info', data?.message || 'Mobile sharing stopped. Scan again to reconnect.')
     })
+    // Backend loaded a session on startup (or via EnsureSession) — sync frontend state
+    const offSessionChanged = EventsOn('session:changed', (data: any) => {
+      const sid = data?.sessionId
+      if (sid && sid !== activeSessionId) {
+        setActiveSessionId(sid)
+      }
+    })
     return () => {
-      for (const off of [offApprovalRequest, offAskUserRequest, offPairing, offPairingDone, offApprovalCancel, offAskUserCancel, offTunnelSessionChanged]) {
+      for (const off of [offApprovalRequest, offAskUserRequest, offPairing, offPairingDone, offApprovalCancel, offAskUserCancel, offTunnelSessionChanged, offSessionChanged]) {
         if (typeof off === 'function') off()
       }
     }

@@ -63,6 +63,10 @@ func (m *Model) appendUserMessage(text string) {
 func (m *Model) startAgent(text string) tea.Cmd {
 	debug.Log("tui", "startAgent called: text=%s", util.Truncate(text, 200))
 	m.usageTurnIndex++
+	// Notify LAN Chat peers that our agent is now busy
+	if m.lanChatHub != nil {
+		m.lanChatHub.SetAgentBusy(true)
+	}
 	// Ensure the agent's provider is in sync with the current config.
 	// This handles the case where the user set an API key in the provider
 	// panel but hasn't explicitly activated — the key should still take effect.
@@ -114,6 +118,10 @@ func (m *Model) startAgent(text string) tea.Cmd {
 // This avoids blocking the TUI update loop with filesystem I/O.
 func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	m.usageTurnIndex++
+	// Notify LAN Chat peers that our agent is now busy
+	if m.lanChatHub != nil {
+		m.lanChatHub.SetAgentBusy(true)
+	}
 	m.rebuildSystemPrompt()
 	img := m.pendingImage
 	m.pendingImage = nil

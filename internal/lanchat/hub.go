@@ -40,6 +40,10 @@ type Hub struct {
 	hasGit      bool
 	hasTests    bool
 
+	// agentBusy tracks whether the local agent is currently running.
+	// Propagated to peers via presence exchange.
+	agentBusy bool
+
 	// peers discovered via A2A registry callbacks
 	peers map[string]*Participant // key = NodeID
 
@@ -286,6 +290,30 @@ func (h *Hub) SelfParticipant() Participant {
 		Frameworks:  h.frameworks,
 		HasGit:      h.hasGit,
 		HasTests:    h.hasTests,
+		AgentBusy:   h.agentBusy,
+	}
+}
+
+// SetAgentBusy updates the local agent's busy state and broadcasts presence
+// to all online peers so they know whether this node's agent is available.
+func (h *Hub) SetAgentBusy(busy bool) {
+	h.mu.Lock()
+	if h.agentBusy == busy {
+		h.mu.Unlock()
+		return
+	}
+	h.agentBusy = busy
+	peers := make([]Participant, 0, len(h.peers))
+	for _, p := range h.peers {
+		if p.Online {
+			peers = append(peers, *p)
+		}
+	}
+	h.mu.Unlock()
+
+	// Notify peers of the state change
+	for _, peer := range peers {
+		safego.Go("lanchat.agentBusyPresence", func() { h.sendPresence(peer) })
 	}
 }
 
@@ -628,6 +656,8 @@ func (h *Hub) HandlePresence(p Participant) {
 		if p.HasTests {
 			existing.HasTests = true
 		}
+		// Update agent busy state (always overwrite — busy state changes are meaningful)
+		existing.AgentBusy = p.AgentBusy
 		// If we previously didn't know the nick but now we do, fire callback
 		// so the join notification shows the real name.
 		if existing.HumanNick != "" && !existing.notifiedJoin && h.shouldNotifyJoin(existing.HumanNick) {
@@ -947,16 +977,21 @@ func (h *Hub) persistMessage(msg Message) {
 // HandleIncomingMessage processes a message received from a peer.
 func (h *Hub) HandleIncomingMessage(msg Message) {
 	h.mu.Lock()
-	// Store message
+	// Store message in in-memory history
 	h.messages = append(h.messages, msg)
 	if len(h.messages) > maxHistoryPerSession*2 {
 		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 	}
-	// Persist to session store if available
-	h.persistMessage(msg)
 
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
+
+	// Agent-directed messages are injected into the agent loop, which persists
+	// them to the session JSONL. Skip lanchat store persistence to avoid
+	// duplicate storage. Regular (human-to-human) messages are persisted here.
+	if !needsApproval {
+		h.persistMessage(msg)
+	}
 
 	// Determine approval action based on policy, daemon mode, or agent-to-agent auto-approve
 	autoApproved := false
@@ -987,8 +1022,11 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	approvalCb := h.onApprovalReq
 	h.mu.Unlock()
 
-	// Fire callbacks asynchronously so we never block the HTTP handler.
-	if callback != nil {
+	// Fire onMessage callback for regular messages only.
+	// Agent-directed messages are injected into the agent loop (via
+	// onAutoApprove or manual approval) and will appear as user messages —
+	// firing onMessage here would cause duplicate rendering in the UI.
+	if callback != nil && !needsApproval {
 		safego.Go("lanchat.messageCallback", func() { callback(msg) })
 	}
 

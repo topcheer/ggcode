@@ -88,6 +88,10 @@ type Store interface {
 	// given workspace, or nil if none exists.
 	LatestForWorkspace(workspace string) (*Session, error)
 
+	// ListForWorkspace returns all sessions for the given workspace,
+	// sorted by UpdatedAt descending (most recent first).
+	ListForWorkspace(workspace string) ([]*Session, error)
+
 	// AppendCheckpoint persists a checkpoint of compacted messages after summarize.
 	// The checkpoint allows --resume to skip re-compacting old history.
 	AppendCheckpoint(s *Session, compactedMessages []provider.Message, tokenCount int) error
@@ -738,6 +742,44 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 		}
 	}
 	return nil, nil
+}
+
+// ListForWorkspace returns all sessions for the given workspace,
+// sorted by UpdatedAt descending (most recent first).
+// Uses the index directly (not List) for fast listing.
+func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, err := s.loadIndex()
+	if err != nil {
+		return nil, err
+	}
+
+	// Normalize the workspace for comparison.
+	normalizedWorkspace := NormalizeWorkspacePath(workspace)
+
+	// Sort by UpdatedAt descending.
+	sort.Slice(idx, func(i, j int) bool {
+		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
+	})
+
+	result := make([]*Session, 0, len(idx))
+	for _, e := range idx {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
+			result = append(result, &Session{
+				ID:        e.ID,
+				Title:     e.Title,
+				CreatedAt: e.CreatedAt,
+				UpdatedAt: e.UpdatedAt,
+				Workspace: e.Workspace,
+				Vendor:    e.Vendor,
+				Endpoint:  e.Endpoint,
+				Model:     e.Model,
+			})
+		}
+	}
+	return result, nil
 }
 
 // ExportMarkdown renders a session as a markdown document.

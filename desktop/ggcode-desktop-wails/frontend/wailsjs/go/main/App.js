@@ -66,6 +66,10 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetCurrentSessionID() {
+  return window['go']['main']['App']['GetCurrentSessionID']();
+}
+
 export function GetEndpointDetails(arg1, arg2) {
   return window['go']['main']['App']['GetEndpointDetails'](arg1, arg2);
 }

@@ -154,6 +154,11 @@ func (a *App) initWorkspace(dir string) {
 	}
 	chat.OnSessionChanged = func() {
 		a.bindCurrentIMSession()
+		if a.ctx != nil && chat != nil {
+			runtime.EventsEmit(a.ctx, "session:changed", map[string]string{
+				"sessionId": chat.CurrentSessionID(),
+			})
+		}
 	}
 	chat.EmitEvent = func(name string, payload ...interface{}) {
 		if a.ctx != nil {
@@ -772,7 +777,18 @@ func (a *App) AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) 
 
 // ListSessions returns sessions for the current workspace.
 func (a *App) ListSessions() ([]wailskit.SessionInfo, error) {
-	return wailskit.ListSessions(a.workDir)
+	return wailskit.ListSessions(a.workDir, a.chat)
+}
+
+// GetCurrentSessionID returns the ID of the currently active session,
+// or empty string if no session is loaded. Called by the frontend on mount
+// to sync state (the session:changed event may fire before the listener
+// is registered).
+func (a *App) GetCurrentSessionID() (string, error) {
+	if a.chat == nil {
+		return "", nil
+	}
+	return a.chat.CurrentSessionID(), nil
 }
 
 // DeleteSession removes a session by ID.

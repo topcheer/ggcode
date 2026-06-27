@@ -37,6 +37,8 @@ export function GetAvailableModels():Promise<Array<string>>;
 
 export function GetConfig():Promise<wailskit.FullConfig>;
 
+export function GetCurrentSessionID():Promise<string>;
+
 export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;

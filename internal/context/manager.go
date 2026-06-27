@@ -35,6 +35,7 @@ type ContextManager interface {
 	Clear()
 	UsageRatio() float64
 	AutoCompactThreshold() int
+	ReconcileToolCalls() bool
 }
 
 // CompactSnapshot is an immutable point-in-time view used by background
@@ -150,6 +151,262 @@ func (m *Manager) Add(msg provider.Message) {
 	}
 	debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t",
 		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.contextWindow, ratio, m.baselineAvailable)
+}
+
+// ReconcileToolCalls checks whether any assistant message in the conversation
+// has unpaired tool_use blocks (i.e. tool_calls without matching tool_result
+// blocks in subsequent messages). If so, it inserts user messages containing
+// the actual tool results at the correct position (before the next assistant),
+// preserving real execution output rather than dropping it.
+//
+// This handles two scenarios:
+//  1. Session restoration from file: the process crashed while a tool was
+//     still pending, so the session file contains an assistant message with
+//     tool_use but no tool_result (or tool_results placed after another
+//     assistant message).
+//  2. Runtime interruption: the user interrupted (e.g. Ctrl+C) while the
+//     agent was about to execute tools, and the next user message starts
+//     a new agent run without the cancelled tool_results having been added.
+//
+// Returns true if any messages were inserted or moved.
+// Returns true if any cancelled tool_result entries were added.
+func (m *Manager) ReconcileToolCalls() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// ── Phase 0: clean orphan tool_results ──
+	// Tool_results whose tool_id has no matching tool_use in the preceding
+	// assistant message (or any open tool_call) are orphaned. Remove them.
+	m.removeOrphanToolResults()
+
+	// ── Phase 1: collect information ──
+	type lateResult struct {
+		msgIdx int
+		block  provider.ContentBlock
+	}
+	type needFix struct {
+		insertBefore int
+		lateBlocks   []lateResult
+		missingIDs   []struct{ id, name string }
+	}
+	var fixes []needFix
+
+	for idx := range m.messages {
+		if m.messages[idx].Role != "assistant" {
+			continue
+		}
+		toolIDs := make(map[string]string)
+		for _, block := range m.messages[idx].Content {
+			if block.Type == "tool_use" {
+				toolIDs[block.ToolID] = block.ToolName
+			}
+		}
+		if len(toolIDs) == 0 {
+			continue
+		}
+
+		// Find the next assistant boundary.
+		nextAssistantIdx := len(m.messages)
+		for j := idx + 1; j < len(m.messages); j++ {
+			if m.messages[j].Role == "assistant" {
+				nextAssistantIdx = j
+				break
+			}
+		}
+
+		// Collect tool_results BEFORE the next assistant -> properly placed.
+		for j := idx + 1; j < nextAssistantIdx; j++ {
+			for _, block := range m.messages[j].Content {
+				if block.Type == "tool_result" {
+					delete(toolIDs, block.ToolID)
+				}
+			}
+		}
+
+		if len(toolIDs) == 0 {
+			continue
+		}
+
+		// Check for LATE results (after next assistant).
+		var late []lateResult
+		var missingIDs []struct{ id, name string }
+		for id, name := range toolIDs {
+			foundLate := false
+			for j := nextAssistantIdx; j < len(m.messages); j++ {
+				for _, block := range m.messages[j].Content {
+					if block.Type == "tool_result" && block.ToolID == id {
+						late = append(late, lateResult{msgIdx: j, block: block})
+						foundLate = true
+						break
+					}
+				}
+				if foundLate {
+					break
+				}
+			}
+			if !foundLate {
+				missingIDs = append(missingIDs, struct{ id, name string }{id, name})
+			}
+		}
+
+		if len(late) == 0 && len(missingIDs) == 0 {
+			continue
+		}
+
+		fixes = append(fixes, needFix{
+			insertBefore: nextAssistantIdx,
+			lateBlocks:   late,
+			missingIDs:   missingIDs,
+		})
+	}
+
+	if len(fixes) == 0 {
+		return false
+	}
+
+	// ── Phase 2: apply fixes ──
+	oldMsgs := m.messages
+
+	staleMsgIdxs := make(map[int]bool)
+	var insertions []struct {
+		insertBefore int
+		msg          provider.Message
+	}
+	for _, fix := range fixes {
+		for _, lr := range fix.lateBlocks {
+			staleMsgIdxs[lr.msgIdx] = true
+		}
+		var content []provider.ContentBlock
+		seen := make(map[string]bool)
+		for _, lr := range fix.lateBlocks {
+			if !seen[lr.block.ToolID] {
+				content = append(content, lr.block)
+				seen[lr.block.ToolID] = true
+			}
+		}
+		for _, m := range fix.missingIDs {
+			if !seen[m.id] {
+				name := m.name
+				if name == "" {
+					name = "unknown"
+				}
+				content = append(content, provider.ToolResultNamedBlock(
+					m.id, name,
+					"operation cancelled - tool call was interrupted before it could complete",
+					true,
+				))
+				seen[m.id] = true
+			}
+		}
+		if len(content) > 0 {
+			insertions = append(insertions, struct {
+				insertBefore int
+				msg          provider.Message
+			}{insertBefore: fix.insertBefore, msg: provider.Message{Role: "user", Content: content}})
+		}
+	}
+
+	newMsgs := make([]provider.Message, 0, len(oldMsgs)+len(insertions))
+	for i, m := range oldMsgs {
+		for _, ins := range insertions {
+			if ins.insertBefore == i {
+				newMsgs = append(newMsgs, ins.msg)
+			}
+		}
+		if staleMsgIdxs[i] {
+			continue
+		}
+		newMsgs = append(newMsgs, m)
+	}
+	for _, ins := range insertions {
+		if ins.insertBefore == len(oldMsgs) {
+			newMsgs = append(newMsgs, ins.msg)
+		}
+	}
+
+	m.messages = newMsgs
+	m.version++
+	m.tokens = 0
+	for _, msg := range m.messages {
+		m.tokens += m.countTokens(msg)
+	}
+	if m.baselineAvailable {
+		m.baselineDelta = 0
+	}
+
+	lateCount := 0
+	cancelledCount := 0
+	for _, fix := range fixes {
+		lateCount += len(fix.lateBlocks)
+		cancelledCount += len(fix.missingIDs)
+	}
+	debug.Log("ctx", "ReconcileToolCalls: relocated %d late tool_result(s), added %d cancelled, removed %d stale messages",
+		lateCount, cancelledCount, len(staleMsgIdxs))
+	return true
+}
+
+// removeOrphanToolResults removes tool_result blocks whose tool_id has no
+// matching tool_use in any preceding assistant message. These are orphaned
+// tool_results that trigger 'tool message without preceding tool_calls' errors.
+func (m *Manager) removeOrphanToolResults() {
+	openToolIDs := make(map[string]bool)
+	changed := false
+
+	for i := 0; i < len(m.messages); i++ {
+		msg := m.messages[i]
+		if msg.Role == "assistant" {
+			for _, b := range msg.Content {
+				if b.Type == "tool_use" {
+					openToolIDs[b.ToolID] = true
+				}
+			}
+		}
+
+		// Check if this message contains orphan tool_results.
+		hasToolResult := false
+		allOrphan := true
+		var kept []provider.ContentBlock
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" {
+				hasToolResult = true
+				if openToolIDs[b.ToolID] {
+					openToolIDs[b.ToolID] = false
+					kept = append(kept, b)
+					allOrphan = false
+				} else {
+					debug.Log("ctx", "removeOrphanToolResults: removing orphan tool_result id=%s name=%s at msg[%d]",
+						b.ToolID, b.ToolName, i)
+				}
+			} else {
+				kept = append(kept, b)
+				if b.Type == "tool_use" {
+					allOrphan = false
+				}
+			}
+		}
+
+		if hasToolResult {
+			if allOrphan || len(kept) == 0 {
+				m.messages = append(m.messages[:i], m.messages[i+1:]...)
+				i--
+				changed = true
+			} else if len(kept) < len(msg.Content) {
+				m.messages[i] = msg
+				m.messages[i].Content = kept
+				changed = true
+			}
+		}
+	}
+	if changed {
+		m.version++
+		m.tokens = 0
+		for _, msg := range m.messages {
+			m.tokens += m.countTokens(msg)
+		}
+		if m.baselineAvailable {
+			m.baselineDelta = 0
+		}
+	}
 }
 
 // UpdateFirstSystemMessage replaces the first system message in the context.

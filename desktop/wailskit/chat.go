@@ -473,6 +473,11 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		}
 	}
 
+	// Notify LAN Chat peers that our agent is now busy
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetAgentBusy(true)
+	}
+
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
 		if b.OnStreamEvent == nil {
 			return
@@ -491,6 +496,11 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		b.flushTunnelTextStream(broker, false)
 		broker.PushStatus(tunnel.StatusIdle, "")
 		broker.PushActivity("")
+	}
+
+	// Notify LAN Chat peers that our agent is now idle
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetAgentBusy(false)
 	}
 
 	// Signal run complete (the entire agent run, not just one turn)
@@ -2342,6 +2352,12 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	// Wire Hub callbacks → Wails events for real-time push to frontend.
 	b.lanchatHub.SetCallbacks(
 		func(msg lanchat.Message) {
+			// Agent-directed messages are injected into the agent loop via
+			// onAutoApprove and will appear as user messages. Skip the
+			// lanchat:message event to avoid duplicate rendering in the UI.
+			if msg.IsDirectToAgent() && b.lanchatHub != nil && msg.ToNodeID == b.lanchatHub.NodeID() {
+				return
+			}
 			if b.EmitEvent != nil {
 				b.EmitEvent("lanchat:message", msg)
 			}

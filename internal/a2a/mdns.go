@@ -169,7 +169,9 @@ func (m *mdnsService) lookup() []InstanceInfo {
 		result = append(result, *info)
 	}
 
-	debug.Log("a2a.mdns", "lookup: browser has %d instances (after self-filter: %d)", len(instances), len(result))
+	if debug.IsVerbose("a2a.mdns") {
+		debug.Log("a2a.mdns", "lookup: browser has %d instances (after self-filter: %d)", len(instances), len(result))
+	}
 	return result
 }
 

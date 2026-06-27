@@ -48,8 +48,10 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		return style.Render(placeholder)
 	}
 
-	debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
-		panelHeight, innerW, innerH, m.chatList.Len())
+	if debug.IsVerbose("layout") {
+		debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
+			panelHeight, innerW, innerH, m.chatList.Len())
+	}
 
 	if m.chatList != nil {
 		m.chatList.SetSize(innerW, innerH)

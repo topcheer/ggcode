@@ -193,4 +193,10 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	for _, msg := range ses.Messages {
 		agentInst.AddMessage(msg)
 	}
+	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
+	// blocks (no matching tool_result blocks in subsequent messages), add a user
+	// message with cancelled tool_result entries. This handles session files saved
+	// while a tool execution was still pending (e.g. the process crashed or was
+	// interrupted).
+	agentInst.ReconcileToolCalls()
 }

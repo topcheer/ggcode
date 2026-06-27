@@ -19,11 +19,14 @@ type SessionInfo struct {
 	Model     string `json:"model"`
 	MsgCount  int    `json:"msgCount"`
 	UpdatedAt string `json:"updatedAt"`
+	Locked    bool   `json:"locked"`
 }
 
 // ListSessions returns sessions for the given workspace, sorted by UpdatedAt descending.
 // If workingDir is empty, returns all sessions.
-func ListSessions(workingDir string) ([]SessionInfo, error) {
+// The session currently held by the provided ChatBridge (if non-nil) is never
+// reported as locked, since TryAcquireSessionLock would see the current process's own flock.
+func ListSessions(workingDir string, bridge *ChatBridge) ([]SessionInfo, error) {
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return nil, fmt.Errorf("open session store: %w", err)
@@ -34,8 +37,26 @@ func ListSessions(workingDir string) ([]SessionInfo, error) {
 	}
 
 	summaries := agentruntime.SummarizeWorkspaceSessions(sessions, workingDir)
+	storeDir, _ := session.DefaultDir()
+
+	// Determine the session the current process already holds — skip lock check for it.
+	activeID := ""
+	if bridge != nil {
+		activeID = bridge.CurrentSessionID()
+	}
+
 	result := make([]SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
+		locked := false
+		if s.ID != activeID {
+			if lock, err := session.TryAcquireSessionLock(storeDir, s.ID); err == nil && lock != nil {
+				if lock.Acquired() {
+					lock.Release()
+				} else {
+					locked = true
+				}
+			}
+		}
 		result = append(result, SessionInfo{
 			ID:        s.ID,
 			Title:     s.Title,
@@ -44,6 +65,7 @@ func ListSessions(workingDir string) ([]SessionInfo, error) {
 			Model:     s.Model,
 			MsgCount:  s.MsgCount,
 			UpdatedAt: s.UpdatedAt.Format(time.DateTime),
+			Locked:    locked,
 		})
 	}
 	return result, nil

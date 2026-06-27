@@ -21,6 +21,12 @@ func (m *Model) chatWriteUser(id, text string) {
 	m.chatWrite(chat.NewUserItem(id, text, m.chatStyles))
 }
 
+// chatWriteUserMarkdown appends a user message that renders its content as
+// markdown. Used for LAN Chat agent-to-agent messages that contain structured text.
+func (m *Model) chatWriteUserMarkdown(id, text string) {
+	m.chatWrite(chat.NewMarkdownUserItem(id, text, m.chatStyles))
+}
+
 // chatWriteSystem appends a system/status message to chatList.
 func (m *Model) chatWriteSystem(id, text string) {
 	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))

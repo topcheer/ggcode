@@ -648,45 +648,30 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		trace.Mark("pick resume session")
 	} else if resumeID == "" {
-		// Auto-load: try to resume the most recent workspace session.
+		// Auto-load: find the most recent unlocked workspace session.
+		// Walk sessions from newest to oldest; first one we can lock wins.
+		// If all are locked by other instances, create a new session.
 		workspace := workingDir
-		latest, err := store.LatestForWorkspace(workspace)
-		if err == nil && latest != nil {
+		sessions, err := store.ListForWorkspace(workspace)
+		if err != nil {
+			debug.Log("root", "ListForWorkspace error: %v", err)
+		}
+		if len(sessions) > 0 {
 			storeDir, _ := session.DefaultDir()
-			lock, lockErr := session.TryAcquireSessionLock(storeDir, latest.ID)
-			if lockErr == nil && lock != nil && lock.Acquired() {
-				// Got the lock — auto-resume this session.
-				// Store the lock for the REPL to hold.
-				replPendingSessionLock = lock
-				resumeID = latest.ID
-				trace.Mark("auto-load session")
-			} else if lock != nil && !lock.Acquired() {
-				// Session is locked by another instance — show picker.
-				pid := lock.HolderPID()
-				fmt.Fprintf(os.Stderr, "\n  Latest session %s is active in another instance (PID %d).\n", latest.ID[:8], pid)
-				selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
-				if err != nil {
-					return err
+			for _, ses := range sessions {
+				lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
+				if lockErr == nil && lock != nil && lock.Acquired() {
+					replPendingSessionLock = lock
+					resumeID = ses.ID
+					trace.Mark("auto-load session")
+					break
 				}
-				if selectedID == "" {
-					// User chose "new session" from picker (or picker was empty).
-					// Leave resumeID empty so the REPL creates a new session.
-				} else {
-					// Try to acquire a lock on the user-selected session.
-					// If the lock fails (race condition: another instance grabbed
-					// it between the picker check and now), do NOT load it —
-					// fall through to creating a new session instead.
-					lock2, lockErr2 := session.TryAcquireSessionLock(storeDir, selectedID)
-					if lockErr2 == nil && lock2 != nil && lock2.Acquired() {
-						replPendingSessionLock = lock2
-						resumeID = selectedID
-					} else {
-						fmt.Fprintf(os.Stderr, "  Session %s is locked by another instance. Starting a new session.\n", selectedID[:8])
-					}
-				}
-				trace.Mark("pick resume session (locked)")
+			}
+			if resumeID == "" {
+				fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
 			}
 		}
+		trace.Mark("pick resume session")
 	}
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)

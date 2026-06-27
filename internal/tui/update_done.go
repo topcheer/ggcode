@@ -13,6 +13,10 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	finalIMText := m.pendingIMStreamText()
 	m.loading = false
 	m.remoteInboundAdapter = "" // reset per-channel suppression after agent run
+	// Notify LAN Chat peers that our agent is now idle
+	if m.lanChatHub != nil {
+		m.lanChatHub.SetAgentBusy(false)
+	}
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
@@ -61,6 +65,10 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	}
 	m.loading = false
 	m.remoteInboundAdapter = "" // reset per-channel suppression
+	// Notify LAN Chat peers that our agent is now idle
+	if m.lanChatHub != nil {
+		m.lanChatHub.SetAgentBusy(false)
+	}
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil

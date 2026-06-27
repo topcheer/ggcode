@@ -144,7 +144,16 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// firing the onMessage callback. Do NOT call HandleIncomingMessage
 		// here — that would re-store the message and re-fire the callback,
 		// creating an infinite loop (hundreds of messages per second).
-		// If chat panel is not visible, show a notification in the main panel
+		//
+		// Agent-directed messages (@agent) are handled separately via
+		// the approval flow and injected into the agent loop — they will
+		// appear as user messages in the conversation. Skip the system
+		// notification to avoid duplicate rendering.
+		if msg.msg.IsDirectToAgent() && msg.msg.ToNodeID == m.lanChatHub.NodeID() {
+			return m, nil
+		}
+		// Regular message — show a notification in the main panel if
+		// the chat panel is not visible.
 		if m.lanChatPanel == nil {
 			fromNick := msg.msg.FromNick
 			if fromNick == "" {
@@ -369,7 +378,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.lanChatPendingComplete = approved.ID
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
-				return m, m.submitText(agentText, true)
+				return m, m.submitLanChatAgentText(agentText)
 			}
 		}
 		return m, nil
@@ -384,7 +393,7 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.lanChatPendingComplete = approved.ID
 				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
 				m.closeLanChatPanel()
-				return m, m.submitText(agentText, true)
+				return m, m.submitLanChatAgentText(agentText)
 			}
 		}
 		return m, nil

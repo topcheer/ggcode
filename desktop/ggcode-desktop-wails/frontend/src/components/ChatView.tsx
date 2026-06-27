@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -256,6 +256,31 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [teamBoard, setTeamBoard] = useState<TeamBoardSnapshot[]>([])
   const [teamBoardOpen, setTeamBoardOpen] = useState(false)
   const teamBoardDismissedRef = useRef(false)
+
+  // --- Identity (nick/role/team) ---
+  const [selfNick, setSelfNick] = useState('')
+  const [selfRole, setSelfRole] = useState('')
+  const [selfTeam, setSelfTeam] = useState('')
+  const [identityOpen, setIdentityOpen] = useState(false)
+  const [editNick, setEditNick] = useState('')
+  const [editRole, setEditRole] = useState('')
+  const [editTeam, setEditTeam] = useState('')
+
+  // Load identity on mount
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const s = await App.LanChatSelf() as any
+        if (mounted && s) {
+          setSelfNick(s.human_nick || '')
+          setSelfRole(s.role || '')
+          setSelfTeam(s.team || '')
+        }
+      } catch {}
+    })()
+    return () => { mounted = false }
+  }, [])
 
   const refreshTeamBoard = useCallback(async () => {
     try {
@@ -1129,6 +1154,106 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </button>
         <div style={{ flex: 1 }} />
 
+        {/* Identity pill — click to edit nickname/role/team */}
+        <button
+          onClick={() => { setEditNick(selfNick); setEditRole(selfRole); setEditTeam(selfTeam); setIdentityOpen(true) }}
+          title="Click to edit your nickname, role, and team"
+          style={{
+            padding: '2px 8px', borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-card)', border: '1px solid var(--color-border)',
+            fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+            maxWidth: 200, overflow: 'hidden', whiteSpace: 'nowrap',
+          }}
+        >
+          <User size={11} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {selfNick || 'unnamed'}{selfRole || selfTeam ? ` ${[selfRole, selfTeam].filter(Boolean).join('/')}` : ''}
+          </span>
+        </button>
+
+        {/* Identity edit modal */}
+        {identityOpen && (
+          <div
+            onClick={() => setIdentityOpen(false)}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.4)', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', zIndex: 200,
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  const combined = [editNick, editRole, editTeam].map(s => s.trim()).join('@')
+                  App.LanChatSetNick(combined).then(() => {
+                    setSelfNick(editNick.trim()); setSelfRole(editRole.trim()); setSelfTeam(editTeam.trim())
+                    setIdentityOpen(false)
+                  }).catch(() => {})
+                } else if (e.key === 'Escape') {
+                  setIdentityOpen(false)
+                }
+              }}
+              style={{
+                background: 'var(--color-card)', border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)', padding: 20, minWidth: 300, maxWidth: 360,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+              }}
+            >
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>
+                Your Identity
+              </div>
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Nickname</label>
+              <input
+                value={editNick} onChange={e => setEditNick(e.target.value)} autoFocus
+                placeholder="alice"
+                style={{ width: '100%', padding: '6px 10px', marginBottom: 12, fontSize: 13,
+                  background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
+                  fontFamily: 'var(--font-mono)' }}
+              />
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Role</label>
+              <input
+                value={editRole} onChange={e => setEditRole(e.target.value)}
+                placeholder="developer"
+                style={{ width: '100%', padding: '6px 10px', marginBottom: 12, fontSize: 13,
+                  background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
+                  fontFamily: 'var(--font-mono)' }}
+              />
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Team</label>
+              <input
+                value={editTeam} onChange={e => setEditTeam(e.target.value)}
+                placeholder="fluui"
+                style={{ width: '100%', padding: '6px 10px', marginBottom: 16, fontSize: 13,
+                  background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
+                  fontFamily: 'var(--font-mono)' }}
+              />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={() => setIdentityOpen(false)} style={{
+                  padding: '5px 14px', fontSize: 12, border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)', background: 'transparent',
+                  color: 'var(--text-secondary)', cursor: 'pointer',
+                }}>Cancel</button>
+                <button onClick={async () => {
+                  const combined = [editNick, editRole, editTeam].map(s => s.trim()).join('@')
+                  try {
+                    await App.LanChatSetNick(combined)
+                    setSelfNick(editNick.trim()); setSelfRole(editRole.trim()); setSelfTeam(editTeam.trim())
+                    setIdentityOpen(false)
+                  } catch {}
+                }} style={{
+                  padding: '5px 14px', fontSize: 12, border: 'none',
+                  borderRadius: 'var(--radius-sm)', background: 'var(--color-primary)',
+                  color: '#fff', cursor: 'pointer', fontWeight: 500,
+                }}>Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Model picker */}
         <div style={{ position: 'relative' }}>
           <button
@@ -1515,7 +1640,9 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
             ))}
           </div>
         )}
-        {msg.content}
+        {msg.source === 'lanchat' || msg.content?.startsWith('[LAN Chat from ')
+          ? <div className="markdown-body" style={{ fontSize: 13 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
+          : msg.content}
       </div>
       {(pending || failed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginRight: 4, fontSize: 11, color: failed ? 'var(--color-error)' : 'var(--text-tertiary)' }}>

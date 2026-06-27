@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.86`](docs/releases/v1.3.86.md) |
+| Latest documented release | [`v1.3.87`](docs/releases/v1.3.87.md) |
 
 ## Build & Validation
 
@@ -345,3 +345,8 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Relay client messages always forwarded**: `handleClientEncrypted()` in `relay.go` forwards client→server messages to the server even when `appendEvent()` reports dedup (isNew=false). This prevents mobile messages from being silently dropped after a relay restart when history is hydrated from SQLite. The dedup check only controls SQLite persistence and broadcast dedup, not server forwarding.
 - **snapshot_reset does not consume eventID**: `Broker.enqueueControl()` handles `snapshot_reset` without incrementing the event ordinal, ensuring event IDs remain contiguous after replay.
 - **Shell/chat modes independent of agent state**: Shell (`$`/`!`) and chat (`#`) modes can be entered and used while the agent is running. Shell commands execute immediately via `submitShellCommand` without entering the agent queue. The `shellOwnedLoading` flag tracks whether shell "owns" the loading spinner — when the agent was already busy, shell completion does not clear the agent's loading state. Only normal-mode text enters the pending submission queue when the agent is busy.
+- **LAN Chat agent availability**: Each participant's `agent_busy` field (true/false) indicates whether their agent is currently processing. The `lanchat list` output includes this field so LLMs can prefer idle agents when delegating. `Hub.SetAgentBusy()` is called automatically by TUI/Desktop on agent start/end and propagated via presence exchange.
+- **LAN Chat agent message deduplication**: Agent-directed DMs (`@agent`) skip `persistMessage()` in the Hub (session JSONL is canonical), skip the `onMessage` callback (avoids duplicate system message), and skip `lanchat:message` event emission in Desktop. The agent loop renders the message as a user message — no separate system message needed.
+- **LAN Chat messaging scope**: Three actions map to three scopes: `send` (DM, requires `to=<node_id>`), `send_team` (team broadcast, requires `team=<name>`), `broadcast` (all participants, no `to`/`team`). Using `send` with `to='*'` is equivalent to `broadcast` — prefer `broadcast` for clarity.
+- **Tool call reconciliation**: `ContextManager.ReconcileToolCalls()` runs on session restore and at the start of each `RunStreamWithContent()`. It adds cancelled `tool_result` entries for unpaired `tool_use` blocks and removes orphan `tool_result` blocks — preventing LLM API errors from providers that require all tool_use to have matching tool_result.
+- **TUI session auto-selection**: When `ggcode tui` starts without `--resume`, it iterates all workspace sessions (newest-first) via `ListForWorkspace()`, loading the first unlocked one. If all are locked, a new session is created. This enables N instances to each grab a different session automatically.
