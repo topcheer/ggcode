@@ -44,7 +44,8 @@ func (t LanChatTool) Description() string {
 		"'broadcast_all' sends to every participant on the LAN regardless of team.\n" +
 		"\nTypical collaboration workflow:\n" +
 		"1. Call lanchat(action='list') to find the target's node_id, role, team, and project info\n" +
-		"2a. For a DM: lanchat(action='send', to=<node_id>, to_role='agent', as_agent=true, message='...')\n" +
+		"2a. For a DM: lanchat(action='send', to=<node_id>, message='...')\n" +
+		"    as_agent defaults to true (you are an agent). to_role defaults to 'agent'.\n" +
 		"    Use to_role='human' to message the human user instead of their agent.\n" +
 		"2b. For multi-recipient DM: lanchat(action='send', to='id1,id2,id3', message='...')\n" +
 		"2c. For your team broadcast: lanchat(action='broadcast', message='...')\n" +
@@ -118,7 +119,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		Action    string          `json:"action"`
 		Message   string          `json:"message"`
 		Team      string          `json:"team"`
-		AsAgent   bool            `json:"as_agent"`
+		AsAgent   *bool           `json:"as_agent"`
 		ToRole    string          `json:"to_role"`
 		MessageID string          `json:"message_id"`
 		Reason    string          `json:"reason"`
@@ -129,6 +130,14 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	// as_agent defaults to true — this tool is almost always called by the
+	// agent, so messages should come from the agent identity. Only explicitly
+	// set as_agent=false should override this.
+	asAgent := true
+	if args.AsAgent != nil {
+		asAgent = *args.AsAgent
+	}
+
 	// Parse 'to' which may be a string or an array of strings
 	toNodeIDs := parseNodeIDs(args.RawTo)
 
@@ -136,13 +145,13 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	case "list":
 		return t.doList(), nil
 	case "send":
-		return t.doSend(ctx, args.Message, toNodeIDs, args.AsAgent, args.ToRole)
+		return t.doSend(ctx, args.Message, toNodeIDs, asAgent, args.ToRole)
 	case "broadcast":
-		return t.doBroadcastTeam(ctx, args.Message, args.AsAgent)
+		return t.doBroadcastTeam(ctx, args.Message, asAgent)
 	case "broadcast_all":
-		return t.doBroadcastAll(ctx, args.Message, args.AsAgent)
+		return t.doBroadcastAll(ctx, args.Message, asAgent)
 	case "send_team":
-		return t.doSendTeam(ctx, args.Message, args.Team, args.AsAgent)
+		return t.doSendTeam(ctx, args.Message, args.Team, asAgent)
 	case "history":
 		return t.doHistory(args.Limit), nil
 	case "pending":
