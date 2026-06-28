@@ -71,7 +71,7 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 			textParts = append(textParts, "_[image omitted]_")
 		case "tool_result":
 			if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
-				m.chatWriteUser(nextChatID(), text)
+				m.chatWriteUserMarkdown(nextChatID(), text)
 				textParts = nil
 			}
 			// Update the corresponding chatList tool item with the result
@@ -88,7 +88,7 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 		}
 	}
 	if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
-		m.chatWriteUser(nextChatID(), text)
+		m.chatWriteUserMarkdown(nextChatID(), text)
 	}
 }
 

@@ -73,16 +73,22 @@ lanchat(action='send', to='<node_id>', message='Hello!')
 
 Find a node ID with `lanchat(action='list')`.
 
-### P2P Broadcast (`to='*'`)
+### Messaging Scopes
 
-The `send` action supports `to='*'` to broadcast to all participants.
-This unifies DM and broadcast into a single action:
+The `lanchat` tool supports four messaging scopes:
 
 ```
-lanchat(action='send', to='node-id')   → direct message
-lanchat(action='send', to='*')         → broadcast to ALL participants
-lanchat(action='send')                 → broadcast (same as '*')
+lanchat(action='send', to='node-id')          → DM one participant
+lanchat(action='send', to='id1,id2,id3')      → DM multiple participants
+lanchat(action='broadcast', message='…')       → your team (default scoped)
+lanchat(action='send_team', team='platform')   → a specific team
+lanchat(action='broadcast_all', message='…')   → everyone on the LAN
 ```
+
+- **`send`** supports comma-separated recipients for multi-DM
+- **`broadcast`** sends to members of **your own team** only
+- **`broadcast_all`** sends to every participant regardless of team
+- **`send_team`** targets a named team (not your own)
 
 ### Team Messaging (`send_team`)
 
@@ -93,14 +99,6 @@ lanchat(action='send_team', team='platform', message='Deploy is ready')
 ```
 
 If the team doesn't match any participant, the tool lists valid teams.
-
-### Broadcast to All Agents
-
-Use `broadcast` with `as_agent=true` to reach all agent participants:
-
-```
-lanchat(action='broadcast', as_agent=true, message='Anyone available?')
-```
 
 ### Human vs Agent Recipient
 
@@ -115,8 +113,10 @@ Your agent can also send and receive LAN Chat messages via the `lanchat` tool:
 
 ```
 lanchat(action='list')                                    → discover participants
-lanchat(action='send', to='<node_id>', message='…')       → send a message
-lanchat(action='send', to='*', message='…')               → broadcast to all
+lanchat(action='send', to='<node_id>', message='…')       → send a DM
+lanchat(action='send', to='id1,id2', message='…')         → multi-recipient DM
+lanchat(action='broadcast', message='…')                  → your team
+lanchat(action='broadcast_all', message='…')              → everyone on LAN
 lanchat(action='send_team', team='platform', message='…') → message a team
 lanchat(action='history')                                 → read recent messages
 lanchat(action='pending')                                 → list pending @agent approvals

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
-import { LanChatParticipant, LanChatMessage, LanChatPendingApproval } from '../types'
+import { LanChatParticipant, LanChatMessage } from '../types'
 
 interface Props {
   onUnreadChange?: (count: number) => void
@@ -86,7 +86,6 @@ function buildContacts(participants: LanChatParticipant[], selfNodeID: string): 
 
 export function LanChatView({ onUnreadChange }: Props) {
   const [participants, setParticipants] = useState<LanChatParticipant[]>([])
-  const [pendingApprovals, setPendingApprovals] = useState<LanChatPendingApproval[]>([])
   const [nick, setNick] = useState('')
   const [selfNodeID, setSelfNodeID] = useState('')
 
@@ -136,15 +135,13 @@ export function LanChatView({ onUnreadChange }: Props) {
 
     async function loadAll() {
       try {
-        const [msgs, parts, pending, self] = await Promise.all([
+        const [msgs, parts, self] = await Promise.all([
           App.LanChatMessages(),
           App.LanChatParticipants(),
-          App.LanChatPendingApprovals(),
           App.LanChatSelf(),
         ])
         if (mounted) {
           setParticipants((parts as any) || [])
-          setPendingApprovals((pending as any) || [])
           const s = self as any
           const myID = s?.node_id || ''
           setSelfNodeID(myID)
@@ -250,10 +247,20 @@ export function LanChatView({ onUnreadChange }: Props) {
       refreshParticipants()
     })
 
-    const offApproval = EventsOn('lanchat:approval_request', async () => {
+    // Refresh self identity when session changes (nick/role/team may differ per session)
+    const offIdentityUpdate = EventsOn('lanchat:identity_updated', async () => {
       try {
-        const pending = await App.LanChatPendingApprovals()
-        if (mounted) setPendingApprovals((pending as any) || [])
+        const [s, parts] = await Promise.all([
+          App.LanChatSelf(),
+          App.LanChatParticipants(),
+        ])
+        if (mounted) {
+          const self = s as any
+          const id = self?.node_id || ''
+          setSelfNodeID(id)
+          setNick(self?.human_nick || self?.agent_nick || '')
+          setParticipants((parts as any) || [])
+        }
       } catch {}
     })
 
@@ -269,8 +276,8 @@ export function LanChatView({ onUnreadChange }: Props) {
       offReceipt()
       offAddP()
       offRemoveP()
-      offApproval()
       offNickChange()
+      offIdentityUpdate()
     }
   }, [])
 
@@ -352,34 +359,6 @@ export function LanChatView({ onUnreadChange }: Props) {
       console.error('Send failed:', e)
     }
   }, [inputText, activeRoom, contacts, selfNodeID, nick, addMessageToRoom])
-
-  const handleApprove = useCallback(async (messageId: string) => {
-    try {
-      await App.LanChatApprove(messageId)
-      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
-    } catch (e) {
-      console.error('Approve failed:', e)
-    }
-  }, [])
-
-  const handleAlwaysApprove = useCallback(async (fromNick: string, messageId: string) => {
-    try {
-      await App.LanChatSetApprovalPolicy(fromNick, 'always')
-      await App.LanChatApprove(messageId)
-      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
-    } catch (e) {
-      console.error('Always approve failed:', e)
-    }
-  }, [])
-
-  const handleReject = useCallback(async (messageId: string, reason: string = '') => {
-    try {
-      await App.LanChatReject(messageId, reason)
-      setPendingApprovals(prev => prev.filter(p => p.message.id !== messageId))
-    } catch (e) {
-      console.error('Reject failed:', e)
-    }
-  }, [])
 
   const handleNickChange = useCallback(async () => {
     const newNick = prompt('Enter new nickname:', nick)
@@ -499,54 +478,6 @@ export function LanChatView({ onUnreadChange }: Props) {
             {activeLabel}
           </span>
         </div>
-
-        {/* Approval requests (show in any room if pending) */}
-        {pendingApprovals.length > 0 && (
-          <div style={{ borderBottom: '1px solid var(--border-color)', padding: '8px 16px', flexShrink: 0 }}>
-            {pendingApprovals.map(p => (
-              <div
-                key={p.message.id}
-                style={{
-                  padding: '8px 12px',
-                  marginBottom: '4px',
-                  borderRadius: '6px',
-                  background: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-color)',
-                  fontSize: '13px',
-                }}
-              >
-                <div style={{ marginBottom: '4px' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>@agent</span>
-                  <span style={{ color: 'var(--text-secondary)' }}> request from </span>
-                  <span style={{ fontWeight: 500 }}>{p.message.from_nick}</span>
-                </div>
-                <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                  {p.message.content}
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    onClick={() => handleApprove(p.message.id)}
-                    style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: 'var(--color-primary)', color: '#fff', cursor: 'pointer' }}
-                  >
-                    Approve Once
-                  </button>
-                  <button
-                    onClick={() => handleAlwaysApprove(p.message.from_nick, p.message.id)}
-                    style={{ padding: '4px 12px', fontSize: '12px', border: 'none', borderRadius: '4px', background: '#2f855a', color: '#fff', cursor: 'pointer' }}
-                  >
-                    Always Approve
-                  </button>
-                  <button
-                    onClick={() => handleReject(p.message.id)}
-                    style={{ padding: '4px 12px', fontSize: '12px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                  >
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
 
         {/* Messages */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>

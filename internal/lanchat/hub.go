@@ -188,6 +188,16 @@ func (h *Hub) SetSessionID(baseDir, sessionID string) {
 		}
 	}
 	h.mu.Unlock()
+
+	// Re-broadcast presence so peers learn our updated identity (nick/role/team).
+	// SetSessionID may change all three when switching sessions.
+	for _, peer := range h.Participants() {
+		if peer.NodeID == h.nodeID || !peer.Online {
+			continue
+		}
+		p := peer
+		safego.Go("lanchat.presenceUpdate", func() { h.sendPresence(p) })
+	}
 }
 
 // Attachments returns the attachment manager (nil if not enabled).
@@ -977,19 +987,19 @@ func (h *Hub) persistMessage(msg Message) {
 // HandleIncomingMessage processes a message received from a peer.
 func (h *Hub) HandleIncomingMessage(msg Message) {
 	h.mu.Lock()
-	// Store message in in-memory history
-	h.messages = append(h.messages, msg)
-	if len(h.messages) > maxHistoryPerSession*2 {
-		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
-	}
 
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
 
-	// Agent-directed messages are injected into the agent loop, which persists
-	// them to the session JSONL. Skip lanchat store persistence to avoid
-	// duplicate storage. Regular (human-to-human) messages are persisted here.
+	// Agent-directed messages are injected into the agent loop and should NOT
+	// appear in the LAN Chat panel or history — they are agent context, not
+	// human conversation. Skip both in-memory history and disk persistence.
+	// Regular (human-to-human) messages are stored normally.
 	if !needsApproval {
+		h.messages = append(h.messages, msg)
+		if len(h.messages) > maxHistoryPerSession*2 {
+			h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
+		}
 		h.persistMessage(msg)
 	}
 

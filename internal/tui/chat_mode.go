@@ -118,7 +118,34 @@ func (m *Model) submitChatMessage(text string) {
 		return
 	}
 
-	// Broadcast
-	m.lanChatHub.SendBroadcast(context.Background(), text, nil)
+	// Team-scoped broadcast (default: your own team)
+	m.lanChatBroadcastTeam(context.Background(), text)
 	m.chatWriteUser(nextSystemID(), "[Broadcast] "+text)
+}
+
+// lanChatBroadcastTeam sends a message to all online members of the sender's own team.
+// Falls back to global broadcast if the team has no other online members.
+func (m *Model) lanChatBroadcastTeam(ctx context.Context, content string) {
+	hub := m.lanChatHub
+	myTeam := hub.Team()
+	if myTeam == "" {
+		myTeam = "dev-team"
+	}
+
+	selfNodeID := hub.NodeID()
+	participants := hub.Participants()
+
+	var sent int
+	for _, p := range participants {
+		if p.NodeID == selfNodeID || !p.Online || p.Team != myTeam {
+			continue
+		}
+		hub.SendDirect(ctx, p.NodeID, lanchat.RoleAgent, content, nil)
+		sent++
+	}
+
+	// If no team members found, fall back to global broadcast
+	if sent == 0 {
+		hub.SendBroadcast(ctx, content, nil)
+	}
 }

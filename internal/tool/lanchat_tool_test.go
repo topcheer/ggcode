@@ -73,7 +73,7 @@ func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
 	// With no peers, broadcast should succeed (no-op, no HTTP)
-	result, err := tool.doSend(context.Background(), "hello", "*", false, "")
+	result, err := tool.doSend(context.Background(), "hello", []string{"*"}, false, "")
 	if err != nil {
 		t.Fatalf("doSend with '*' returned error: %v", err)
 	}
@@ -86,23 +86,23 @@ func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
 	}
 }
 
-func TestLanChatSendEmptyNodeIDTriggersBroadcast(t *testing.T) {
+func TestLanChatSendEmptyNodeIDTriggersError(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
-	// Empty toNodeID is also broadcast (same as omitting "to")
-	result, err := tool.doSend(context.Background(), "hello", "", false, "")
+	// Empty toNodeID is now an error (recipient required)
+	result, err := tool.doSend(context.Background(), "hello", nil, false, "")
 	if err != nil {
-		t.Fatalf("doSend with empty toNodeID returned error: %v", err)
+		t.Fatalf("doSend with nil toNodeIDs returned error: %v", err)
 	}
-	if result.IsError {
-		t.Errorf("doSend with empty toNodeID should succeed, got error: %s", result.Content)
+	if !result.IsError {
+		t.Errorf("doSend with no recipients should return error")
 	}
 }
 
 func TestLanChatSendRequiresContent(t *testing.T) {
 	tool, _ := newTestLanChatTool(t)
 
-	result, err := tool.doSend(context.Background(), "", "node-x", false, "")
+	result, err := tool.doSend(context.Background(), "", []string{"node-x"}, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

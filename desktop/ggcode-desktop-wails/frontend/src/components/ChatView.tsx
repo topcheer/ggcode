@@ -105,8 +105,22 @@ interface ChatMessage {
   isError?: boolean
   streaming?: boolean
   timestamp: number
-  source?: string // 'im' | 'mobile' — non-UI message origin
+  source?: string // 'im' | 'mobile' | 'lanchat' — non-UI message origin
+  lanchatFrom?: string // parsed nick from [LAN Chat from xxx]:
   deliveryStatus?: 'pending' | 'sent' | 'failed'
+}
+
+/** Parse LAN Chat injection format:
+ *  "New user guidance arrived...\n\n[LAN Chat from nick]: content"
+ *  or "[LAN Chat from nick]: content"
+ *  Returns the extracted nick and cleaned content (without the prefix).
+ */
+function parseLanChatContent(raw: string): { from: string; content: string } | null {
+  const match = raw.match(/\[LAN Chat from (.+?)\]:\s*/m)
+  if (!match) return null
+  const from = match[1]
+  let content = raw.slice(match.index! + match[0].length)
+  return { from, content }
 }
 
 // Agent panel: a sub-agent or teammate has its own tab with its own message stream
@@ -199,6 +213,15 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
       streaming: !!h.streaming,
       timestamp: previous[index]?.timestamp || Date.now(),
     }
+    // Parse LAN Chat source from content for user messages loaded from history
+    if (candidate.role === 'user' && typeof candidate.content === 'string') {
+      const parsed = parseLanChatContent(candidate.content)
+      if (parsed) {
+        candidate.content = parsed.content
+        candidate.source = 'lanchat'
+        candidate.lanchatFrom = parsed.from
+      }
+    }
     const prev = previous[index]
     if (prev && sameMessageShape(prev, candidate)) {
       return prev
@@ -266,10 +289,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [editRole, setEditRole] = useState('')
   const [editTeam, setEditTeam] = useState('')
 
-  // Load identity on mount
+  // Load identity on mount, and refresh when session changes
   useEffect(() => {
     let mounted = true
-    ;(async () => {
+    const refresh = async () => {
       try {
         const s = await App.LanChatSelf() as any
         if (mounted && s) {
@@ -278,8 +301,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setSelfTeam(s.team || '')
         }
       } catch {}
-    })()
-    return () => { mounted = false }
+    }
+    refresh()
+    const off = EventsOn('lanchat:identity_updated', refresh)
+    return () => { mounted = false; off() }
   }, [])
 
   const refreshTeamBoard = useCallback(async () => {
@@ -341,6 +366,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // Load session history when sessionId changes.
   // Do not let an async history response overwrite an active live stream.
   useEffect(() => {
+    // If no sessionId from parent, try to fetch it directly from backend.
+    // This handles the race where Layout's mount polling hasn't completed yet
+    // or the session:changed event was missed.
     if (!sessionId) {
       setMessages([])
       messagesRef.current = []
@@ -348,13 +376,34 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       setStatusBar({
         vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
       })
-      return
+      // Try to fetch session ID directly from backend as fallback
+      let cancelled = false
+      App.GetCurrentSessionID().then((id: any) => {
+        if (cancelled) return
+        const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
+        if (sid) {
+          // Load history directly
+          App.GetSessionHistory().then((history: any[]) => {
+            if (cancelled || !history || history.length === 0) return
+            autoScrollByTabRef.current.main = true
+            const loaded = materializeHistory(history, [])
+            messagesRef.current = loaded
+            setMessages(loaded)
+          }).catch(() => {})
+        }
+      }).catch(() => {})
+      return () => { cancelled = true }
     }
+    // Session changed — clear old messages immediately so stale content
+    // from the previous session doesn't linger while loading.
+    setMessages([])
+    messagesRef.current = []
+    setThinking(false)
     let cancelled = false
     App.GetSessionHistory().then((history: any[]) => {
       if (cancelled || runActiveRef.current) return
       if (!history || history.length === 0) {
-        // Don't clear existing messages — backend may not have loaded yet
+        // New/empty session — nothing to load, messages already cleared above
         return
       }
       autoScrollByTabRef.current.main = true
@@ -362,7 +411,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (cancelled || runActiveRef.current) return
       messagesRef.current = loaded
       setMessages(loaded)
-      setThinking(false)
     }).catch(() => {})
     return () => { cancelled = true }
   }, [sessionId])
@@ -569,12 +617,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const p = parseJSON<{ text: string; source: string }>(raw)
           if (p?.text) {
             streamingMsgID.current = null
+            // Parse LAN Chat injection format
+            let displayContent = p.text
+            let lanchatFrom: string | undefined
+            const parsed = parseLanChatContent(p.text)
+            if (parsed) {
+              displayContent = parsed.content
+              lanchatFrom = parsed.from
+            }
             setMessages(prev => appendUserMessage(prev, {
               id: nextID(), role: 'user' as const,
-              content: p.text,
+              content: displayContent,
               timestamp: Date.now(),
-              // Show source badge for non-UI messages
-              ...(p.source ? { source: p.source } : {}),
+              ...(lanchatFrom ? { source: 'lanchat', lanchatFrom } : p.source ? { source: p.source } : {}),
             }))
           }
           break
@@ -1615,9 +1670,16 @@ function ReasoningMessage({ msg }: { msg: ChatMessage }) {
 function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void }) {
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
+  const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
+  const isMarkdown = isLanChat || msg.source === 'im' || msg.source === 'mobile'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
-      {msg.source && (
+      {msg.lanchatFrom && (
+        <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 2, marginRight: 4 }}>
+          LAN Chat from {msg.lanchatFrom}
+        </span>
+      )}
+      {!msg.lanchatFrom && msg.source && (
         <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 2, marginRight: 4 }}>
           via {msg.source === 'im' ? 'IM' : msg.source === 'mobile' ? 'Mobile' : msg.source}
         </span>
@@ -1640,7 +1702,7 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
             ))}
           </div>
         )}
-        {msg.source === 'lanchat' || msg.content?.startsWith('[LAN Chat from ')
+        {isMarkdown
           ? <div className="markdown-body" style={{ fontSize: 13 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
           : msg.content}
       </div>

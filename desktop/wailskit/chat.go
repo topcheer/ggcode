@@ -275,10 +275,14 @@ func (b *ChatBridge) LanChatApprove(messageID string) error {
 	if err != nil {
 		return err
 	}
-	// Inject into agent loop
+	// Inject into agent loop with full message rendered as a user message
 	if msg != nil {
 		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.FromNick, msg.Content)
-		return b.SendMessage(agentText)
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"text": agentText, "source": "lanchat"})
+			b.OnStreamEvent("user_message", raw)
+		}
+		return b.SendHiddenText(agentText)
 	}
 	return nil
 }
@@ -630,6 +634,12 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 			filepath.Join(config.ConfigDir(), "lanchat"),
 			ses.ID,
 		)
+		// Notify frontend that lanchat identity may have changed (nick/role/team).
+		if b.EmitEvent != nil {
+			b.EmitEvent("lanchat:identity_updated", map[string]string{
+				"session_id": ses.ID,
+			})
+		}
 	}
 	if onSessionChanged != nil {
 		onSessionChanged()
@@ -726,15 +736,37 @@ func (b *ChatBridge) saveSession() {
 	digests := b.pendingDigests
 	b.pendingDigests = nil
 	b.mu.Unlock()
-	if agent != nil {
-		_ = agentruntime.SaveAgentSessionSnapshotWithExtra(store, ses, agent, digests)
+
+	if agent == nil {
+		msgs := ses.Messages
+		if len(digests) > 0 {
+			msgs = append(msgs, digests...)
+		}
+		_ = agentruntime.SaveSessionMessages(store, ses, msgs)
 		return
 	}
-	msgs := ses.Messages
-	if len(digests) > 0 {
-		msgs = append(msgs, digests...)
+
+	agentMsgs := agent.Messages()
+
+	// Detect compaction: agent has fewer messages than session → compaction
+	// happened. The checkpoint handler already appended a checkpoint record
+	// to disk. Do NOT do a full rewrite — that would destroy pre-compaction
+	// history from the JSONL file.
+	if jsonlStore, ok := store.(*session.JSONLStore); ok && len(agentMsgs) < len(ses.Messages) {
+		log.Printf("[chat] compaction detected: agent=%d msgs vs session=%d msgs, skipping full rewrite",
+			len(agentMsgs), len(ses.Messages))
+		// Do NOT overwrite ses.Messages — that would destroy pre-compaction
+		// history in memory. The checkpoint handler already persisted the
+		// compacted state to disk. Just append new digests.
+		for _, dg := range digests {
+			ses.Messages = append(ses.Messages, dg)
+			_ = jsonlStore.AppendMessageToDisk(ses, dg)
+		}
+		return
 	}
-	_ = agentruntime.SaveSessionMessages(store, ses, msgs)
+
+	// Normal save — no compaction, safe to do full snapshot.
+	_ = agentruntime.SaveAgentSessionSnapshotWithExtra(store, ses, agent, digests)
 }
 
 func (b *ChatBridge) StartNewSession() (string, error) {
@@ -785,22 +817,29 @@ func (b *ChatBridge) EnsureSession() {
 		return // already have a session
 	}
 
-	// Try to auto-load the most recent workspace session.
-	if latest, err := b.sessionStore.LatestForWorkspace(b.workingDir); err == nil && latest != nil {
+	// Try to auto-load the most recent unlocked workspace session.
+	// Iterate all workspace sessions (newest-first) and load the first one
+	// that has actual messages and isn't locked by another instance.
+	if sessions, err := b.sessionStore.ListForWorkspace(b.workingDir); err == nil && len(sessions) > 0 {
 		storeDir, _ := session.DefaultDir()
-		lock, lockErr := session.TryAcquireSessionLock(storeDir, latest.ID)
-		if lockErr == nil && lock != nil && lock.Acquired() {
-			// Got the lock — load this session.
+		for _, s := range sessions {
+			// Skip empty sessions — they are stale auto-created sessions
+			// that should not take priority over real conversations.
+			full, loadErr := b.sessionStore.Load(s.ID)
+			if loadErr != nil || full == nil {
+				continue
+			}
+			if len(full.Messages) == 0 {
+				continue
+			}
+			lock, lockErr := session.TryAcquireSessionLock(storeDir, s.ID)
+			if lockErr != nil || lock == nil || !lock.Acquired() {
+				continue // locked by another instance, try next
+			}
 			b.sessionLock = lock
 			b.sessionEphemeral = false
-			ses, loadErr := b.sessionStore.Load(latest.ID)
-			if loadErr == nil && ses != nil {
-				b.setSessionState(agentruntime.AdoptSession(ses))
-				if b.OnSessionChanged != nil {
-					b.OnSessionChanged()
-				}
-				return
-			}
+			b.setSessionState(agentruntime.AdoptSession(full))
+			return
 		}
 	}
 
@@ -814,8 +853,10 @@ func (b *ChatBridge) EnsureSession() {
 	}
 	state, created, err := agentruntime.EnsureSession(b.sessionStore, b.currentSes, vendor, endpoint, model, b.workingDir)
 	if err != nil || !created {
+		log.Printf("[chat] EnsureSession: FAILED to create new session: err=%v created=%v", err, created)
 		return
 	}
+	log.Printf("[chat] EnsureSession: created new session %s", state.Session.ID)
 	b.setSessionState(state)
 
 	// Acquire lock on the new session too.
@@ -1165,7 +1206,41 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	a.SetInterruptionHandler(func() string {
 		return b.drainPendingInterrupt()
 	})
-	b.EnsureSession()               // mirrors Fyne setupAgent line 743
+	b.EnsureSession() // mirrors Fyne setupAgent line 743
+
+	// Restore session history into agent context — without this, the agent
+	// starts with an empty context and the first saveSession() call would
+	// overwrite the full session history with just 1-2 messages.
+	b.mu.Lock()
+	ses := b.currentSes
+	ag := b.agent
+	b.mu.Unlock()
+	if ses != nil && ag != nil && len(ses.Messages) > 0 {
+		agentruntime.RestoreSessionIntoAgent(ag, ses)
+	}
+
+	// Wire checkpoint handler — on compaction, append a checkpoint record
+	// to the JSONL file instead of letting saveSession() do a full rewrite
+	// that would destroy all pre-compaction history.
+	b.mu.Lock()
+	store := b.sessionStore
+	b.mu.Unlock()
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		ag.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+			b.mu.Lock()
+			currentSes := b.currentSes
+			b.mu.Unlock()
+			if currentSes == nil {
+				return
+			}
+			if err := jsonlStore.AppendCheckpointToDisk(currentSes, messages, tokenCount); err != nil {
+				log.Printf("[chat] checkpoint save failed: %v", err)
+			} else {
+				log.Printf("[chat] checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+			}
+		})
+	}
+
 	b.bindTunnelProjectionSession() // record events even before Share (mirrors Fyne line 303)
 	return nil
 }
@@ -1409,7 +1484,27 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 	if b.currentSes == nil {
 		return nil
 	}
-	return buildSessionHistoryFromMessages(b.currentSes.Messages)
+	msgs := buildSessionHistoryFromMessages(b.currentSes.Messages)
+	// Merge tunnel_event user_message entries — these are messages sent from
+	// mobile/tunnel that were recorded as tunnel events, not session messages.
+	// Without this, they'd be invisible when loading a saved session.
+	for _, te := range b.currentSes.TunnelEvents {
+		if te.Type != "user_message" {
+			continue
+		}
+		var data struct {
+			Text      string `json:"text"`
+			MessageID string `json:"message_id"`
+		}
+		if json.Unmarshal(te.Data, &data) != nil || data.Text == "" {
+			continue
+		}
+		msgs = append(msgs, SessionMessage{
+			Role:    "user",
+			Content: data.Text,
+		})
+	}
+	return msgs
 }
 
 func (b *ChatBridge) appendLiveUserMessage(text string) {
@@ -2215,6 +2310,9 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 }
 
 // SendHiddenText sends a hidden message to the agent without UI display.
+// SendHiddenText injects text into the agent loop without rendering it as a
+// visible user message in the chat. Used for LAN Chat agent-to-agent messages
+// where the incoming text is redundant (the agent's response is what matters).
 func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -2240,9 +2338,22 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 		}
 	}
 
-	return b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
+	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emit(ev)
 	})
+	if err != nil {
+		b.appendLiveError(err.Error())
+	}
+	// Save session after agent run (mirrors sendMessageData path)
+	b.saveSession()
+
+	// Flush tunnel state (mirrors sendMessageData path)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		b.flushTunnelTextStream(broker, false)
+		broker.PushStatus(tunnel.StatusIdle, "")
+		broker.PushActivity("")
+	}
+	return err
 }
 
 // ─── Agent Lifecycle ──────────────────────────────────────────────────
@@ -2363,6 +2474,11 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 			}
 		},
 		func(r lanchat.Receipt) {
+			// Suppress agent-to-agent receipts — only human-to-human message
+			// status should be visible to the user.
+			if r.FromRole == lanchat.RoleAgent {
+				return
+			}
 			if b.EmitEvent != nil {
 				b.EmitEvent("lanchat:receipt", r)
 			}
@@ -2392,7 +2508,12 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	// Auto-approve callback: inject message into agent loop (same as manual approve)
 	b.lanchatHub.SetOnAutoApprove(func(msg lanchat.Message) {
 		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.FromNick, msg.Content)
-		_ = b.SendMessage(agentText)
+		// Emit user_message event so the frontend renders the full message
+		if b.OnStreamEvent != nil {
+			raw, _ := json.Marshal(map[string]string{"text": agentText, "source": "lanchat"})
+			b.OnStreamEvent("user_message", raw)
+		}
+		_ = b.SendHiddenText(agentText)
 	})
 
 	// Sync peers from A2A registry — initial sync after 3s, then every 15s.
@@ -2475,6 +2596,14 @@ func parseA2ATimeout(s string) time.Duration {
 func (b *ChatBridge) Close() {
 	// Clean up ephemeral empty session before shutting down.
 	b.cleanupEphemeralSession()
+
+	// Release session lock so other instances can load it.
+	b.mu.Lock()
+	if b.sessionLock != nil {
+		b.sessionLock.Release()
+		b.sessionLock = nil
+	}
+	b.mu.Unlock()
 
 	// Stop A2A server
 	b.stopA2A()

@@ -20,6 +20,7 @@ import { TopDragBar } from './TopDragBar'
 import { ApprovalDialog, ApprovalRequest } from './ApprovalDialog'
 import { AskUserDialog, AskUserRequest } from './AskUserDialog'
 import { PairingCodeDialog, PairingRequest } from './PairingCodeDialog'
+import { LanChatApprovalDialog } from './LanChatApprovalDialog'
 import { Toast, ToastMessage, ToastType } from './Toast'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
@@ -114,21 +115,26 @@ function LayoutInner() {
 
   // Sync active session ID on mount — the backend may have auto-loaded
   // a session in EnsureSession before this React component mounted, so
-  // the session:changed event was missed. Poll once on startup.
+  // the session:changed event was missed. Retry briefly in case the
+  // backend hasn't finished initializing.
   useEffect(() => {
     let cancelled = false
-    // Small delay to let the backend finish EnsureSession
-    const timer = setTimeout(() => {
-      if (cancelled) return
+    let attempts = 0
+    const check = () => {
+      if (cancelled || attempts > 10) return
+      attempts++
       App.GetCurrentSessionID().then((id: any) => {
         if (cancelled) return
         const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
         if (sid) {
           setActiveSessionId(sid)
+        } else {
+          setTimeout(check, 100)
         }
-      }).catch(() => {})
-    }, 500)
-    return () => { cancelled = true; clearTimeout(timer) }
+      }).catch(() => setTimeout(check, 100))
+    }
+    check()
+    return () => { cancelled = true }
   }, [])
 
   // Refresh status bar when config changes (e.g. after settings save)
@@ -332,6 +338,7 @@ function LayoutInner() {
       {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
       {pairingRequest && <PairingCodeDialog request={pairingRequest} onClose={() => setPairingRequest(null)} />}
+      <LanChatApprovalDialog />
       <Toast toast={toast} onClose={dismissToast} />
     </div>
   )

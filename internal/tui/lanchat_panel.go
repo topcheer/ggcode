@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -178,17 +179,22 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lanChatPanel.approvalPopup = true
 		return m, nil
 	case lanchatReceiptMsg:
+		// Suppress receipts for agent-to-agent messages — only human-to-human
+		// message status should be visible to the user.
+		if msg.receipt.FromRole == lanchat.RoleAgent {
+			return m, nil
+		}
 		// Show receipt status as a system message in the chat panel.
 		msgID := msg.receipt.MessageID
-		if len(msgID) > 8 {
-			msgID = msgID[:8]
+		if utf8.RuneCountInString(msgID) > 8 {
+			msgID = string([]rune(msgID)[:8])
 		}
 		// Include who sent the receipt (from nick) for clarity.
 		fromLabel := msg.receipt.FromNick
 		if fromLabel == "" {
 			fromLabel = msg.receipt.FromNodeID
-			if len(fromLabel) > 8 {
-				fromLabel = fromLabel[:8]
+			if utf8.RuneCountInString(fromLabel) > 8 {
+				fromLabel = string([]rune(fromLabel)[:8])
 			}
 		}
 		suffix := msgID
@@ -265,7 +271,7 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track for completed receipt when agent finishes.
 		m.lanChatPendingComplete = msg.msg.ID
 		agentText := fmt.Sprintf("[LAN Chat from %s]: %s", msg.msg.FromNick, msg.msg.Content)
-		return m, m.submitText(agentText, true)
+		return m, m.submitLanChatAgentText(agentText)
 	}
 	return m, nil
 }
@@ -471,8 +477,8 @@ func (m Model) handleLanChatSend() (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Broadcast
-	m.lanChatHub.SendBroadcast(context.Background(), text, nil)
+	// Team-scoped broadcast (default: your own team)
+	m.lanChatBroadcastTeam(context.Background(), text)
 	return m, nil
 }
 

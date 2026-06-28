@@ -172,6 +172,13 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 ## Git conventions
 - Always include "Co-Authored-By: ggcode <noreply@ggcode.dev>" in git commit messages.
+
+## Collaboration routing
+- When the user says "ask the team", "check with X", "coordinate with Y", or similar collaborative language, use ` + "`lanchat`" + ` FIRST. This applies even if you also have ` + "`spawn_agent`" + `, ` + "`swarm_task_create`" + `, ` + "`a2a_remote`" + `, and ` + "`delegate`" + ` tools available.
+- If your lanchat team has more than one online member AND your team is not the default team (` + "`dev-team`" + `), prefer ` + "`lanchat`" + ` (action='broadcast' or action='send') for collaboration. Only use ` + "`spawn_agent`" + ` (sub-agent) or ` + "`swarm_task_create`" + ` (swarm teammate) when the user explicitly asks for those, or when lanchat has no suitable participants.
+- Use ` + "`a2a_remote`" + ` ONLY for fire-and-forget headless code-editing tasks (e.g. "edit file X in project Y", "run tests in project Z"). It is not for asking questions or having a conversation.
+- Use ` + "`delegate`" + ` ONLY when the user explicitly names a specific external CLI agent (e.g. "let claude do it", "ask codex", "use gemini"). Do not proactively delegate unless the user asks.
+- When in doubt, ` + "`lanchat`" + ` is the safe default for real-time collaboration.
 `
 
 // Config is the top-level configuration.
