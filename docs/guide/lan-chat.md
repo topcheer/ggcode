@@ -171,7 +171,10 @@ ggcode instance A (mDNS broadcast)  ←→  ggcode instance B (mDNS broadcast)
   liveness is determined solely by successful presence probes.
 - **Transport**: Direct HTTP between instances (not through a relay server).
 - **Authentication**: Built-in community API key (`ggcode-lan-a2a-v1`) for
-  zero-config trust between ggcode instances.
+  zero-config trust between ggcode instances. LAN Chat **always** uses this
+  community key for peer-to-peer communication, regardless of any configured
+  A2A auth methods (API keys, OAuth2, OIDC, mTLS). This ensures that any two
+  ggcode instances on the same LAN can communicate without coordination.
 - **Privacy**: Messages stay on your LAN — nothing goes through external servers.
 
 ## Desktop GUI
@@ -204,15 +207,16 @@ a2a:
   lan_discovery: false
 ```
 
-To use a custom API key instead of the community key:
+### Authentication
 
-```yaml
-a2a:
-  auth:
-    api_key: "your-team-secret"
-```
+LAN Chat always uses the built-in community key (`ggcode-lan-a2a-v1`) for
+all peer-to-peer communication. This is hardcoded and cannot be overridden —
+it ensures any two ggcode instances on the same LAN can always communicate
+regardless of their individual A2A authentication configuration.
 
-All team members must share the same key.
+If you configure custom A2A auth (e.g., `a2a.auth.api_key`, OAuth2, mTLS),
+those settings only affect A2A protocol (agent delegation, tool calls), not
+LAN Chat messaging.
 
 ## Related
 

@@ -42,6 +42,41 @@ ggcode
 
 New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)**.
 
+---
+
+## LAN Chat — Real-Time Team Collaboration
+
+<p align="center">
+  <strong>Zero-config P2P messaging between ggcode instances on your LAN</strong>
+</p>
+
+Every ggcode instance automatically discovers other instances on the same
+local network via mDNS — no relay server, no accounts, no configuration.
+
+| Feature | Description |
+|---------|-------------|
+| **Auto-discovery** | mDNS finds peers automatically — zero config |
+| **DM & broadcast** | Message individuals, teams, or everyone on the LAN |
+| **Agent-to-agent** | Route messages to `@agent` for cross-instance delegation |
+| **Presence** | See who's online, their project, role, team, and languages |
+| **File sharing** | Drag-and-drop attachments up to 10 MB |
+| **Read receipts** | Track message delivery and read status |
+| **Cross-platform** | Works in TUI, Desktop GUI, and daemon mode |
+| **Privacy** | Messages stay on your LAN — nothing goes through external servers |
+
+Quick example — your agent can collaborate with peers:
+```
+You: "ask the platform team to review my PR"
+Agent: lanchat(action='send_team', team='platform', message='Can you review PR #123?')
+```
+
+The built-in community key ensures interoperability regardless of
+individual A2A auth configuration.
+
+📖 **[Full LAN Chat Guide →](docs/guide/lan-chat.md)**
+
+---
+
 ## Features
 
 - **Codebase-aware** — reads, understands, and edits your entire project
@@ -49,7 +84,7 @@ New to ggcode? Read the **[Getting Started guide](docs/guide/getting-started.md)
 - **MCP integration** — connect external tools and data sources
 - **gRPC plugins** — extend ggcode with custom tools in Go, Python, Node.js, or any language
 - **Multi-agent** — spawn parallel workers, delegate to teammates, A2A protocol
-- **LAN Chat** — real-time messaging between ggcode instances on your local network
+- **[LAN Chat](docs/guide/lan-chat.md)** — zero-config P2P real-time messaging between instances on your LAN
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
