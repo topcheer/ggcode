@@ -1140,9 +1140,6 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// Create agent — mirror Fyne setupAgent exactly
 	systemPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, b.permissionMode, autoMem, projectAutoMem, commandMgr)
 	maxIter := b.cfg.MaxIterations
-	if maxIter == 0 {
-		maxIter = 200
-	}
 	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
 	core.SetConfigAgent(a)
 	core.SetConfigUINotify(func() {
