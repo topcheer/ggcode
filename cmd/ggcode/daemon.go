@@ -428,6 +428,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
+	// Cron tools — enqueue fires the prompt as a user message via the
+	// daemon bridge, which handles queuing when the agent is busy.
+	cronScheduler := agentruntime.NewWorkspaceCronScheduler(workingDir, func(prompt string) {
+		debug.Log("daemon", "[cron] firing prompt: %s", prompt)
+		bridge.SendUserMessage([]provider.ContentBlock{
+			{Type: "text", Text: prompt},
+		})
+	})
+	agentruntime.RegisterCronTools(registry, cronScheduler)
+
 	// Sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
