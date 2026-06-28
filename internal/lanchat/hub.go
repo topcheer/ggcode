@@ -704,9 +704,7 @@ func (h *Hub) sendPresence(peer Participant) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if h.apiKey != "" {
-		req.Header.Set("X-API-Key", h.apiKey)
-	}
+	req.Header.Set("X-API-Key", communityKey)
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -921,9 +919,7 @@ func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) erro
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if h.apiKey != "" {
-		req.Header.Set("X-API-Key", h.apiKey)
-	}
+	req.Header.Set("X-API-Key", communityKey)
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -960,9 +956,7 @@ func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
 			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 			req.Header.Set("Content-Type", "application/json")
-			if h.apiKey != "" {
-				req.Header.Set("X-API-Key", h.apiKey)
-			}
+			req.Header.Set("X-API-Key", communityKey)
 			resp, err := h.httpClient.Do(req)
 			if err != nil {
 				return
