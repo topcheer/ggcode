@@ -134,10 +134,10 @@ func TestNextTime_InvalidExpr(t *testing.T) {
 }
 
 func TestScheduler_SetEnqueue(t *testing.T) {
-	noop := func(string) {}
+	noop := func(string, bool) {}
 	s := NewScheduler(noop, "")
 	called := false
-	s.SetEnqueue(func(prompt string) {
+	s.SetEnqueue(func(prompt string, _ bool) {
 		called = true
 	})
 	_ = called
@@ -145,14 +145,14 @@ func TestScheduler_SetEnqueue(t *testing.T) {
 }
 
 func TestScheduler_SetEnqueue_Nil(t *testing.T) {
-	noop := func(string) {}
+	noop := func(string, bool) {}
 	s := NewScheduler(noop, "")
 	s.SetEnqueue(nil) // should not panic
 	s.Shutdown()
 }
 
 func TestScheduler_Shutdown(t *testing.T) {
-	noop := func(string) {}
+	noop := func(string, bool) {}
 	s := NewScheduler(noop, "")
 	s.Shutdown()
 	// Double shutdown should not panic

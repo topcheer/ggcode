@@ -20,7 +20,9 @@ func (t CronCreateTool) Name() string { return "cron_create" }
 func (t CronCreateTool) Description() string {
 	return "Create a scheduled job that enqueues a prompt at specified intervals. " +
 		"Use cron format (e.g. '*/5 * * * *' for every 5 minutes). " +
-		"Set recurring=false for one-shot reminders. Only recurring jobs are persisted across restarts; one-shot reminders are in-memory and will be lost if the process exits before they fire."
+		"Set recurring=false for one-shot reminders. Only recurring jobs are persisted across restarts; one-shot reminders are in-memory and will be lost if the process exits before they fire. " +
+		"By default (queue_if_busy=false), if the agent is busy when the job fires, the prompt is skipped — use this for non-critical periodic checks. " +
+		"Set queue_if_busy=true for important tasks that must run even if the agent is busy (the prompt will queue and run after the current task finishes)."
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -37,6 +39,10 @@ func (t CronCreateTool) Parameters() json.RawMessage {
 		"recurring": {
 			"type": "boolean",
 			"description": "Whether to repeat (default true). Only recurring jobs are persisted across restarts; one-shot reminders (recurring=false) are in-memory only."
+		},
+		"queue_if_busy": {
+			"type": "boolean",
+			"description": "Whether to queue the prompt if the agent is busy when the job fires. Default: false (skip if busy). Set to true for important tasks that must run even if the agent is busy — the prompt will queue and execute after the current task finishes."
 		},
 		"durable": {
 			"type": "boolean",
@@ -59,9 +65,10 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "cron_create: scheduler not available"}, nil
 	}
 	var args struct {
-		Cron      string `json:"cron"`
-		Prompt    string `json:"prompt"`
-		Recurring *bool  `json:"recurring"`
+		Cron        string `json:"cron"`
+		Prompt      string `json:"prompt"`
+		Recurring   *bool  `json:"recurring"`
+		QueueIfBusy *bool  `json:"queue_if_busy"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -78,7 +85,12 @@ func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		recurring = *args.Recurring
 	}
 
-	job, err := t.Scheduler.Create(args.Cron, args.Prompt, recurring)
+	queueIfBusy := false
+	if args.QueueIfBusy != nil {
+		queueIfBusy = *args.QueueIfBusy
+	}
+
+	job, err := t.Scheduler.Create(args.Cron, args.Prompt, recurring, queueIfBusy)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -170,12 +182,16 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 
 	var sb strings.Builder
 	for _, job := range jobs {
-		recurrent := "recurring"
+		kind := "recurring"
 		if !job.Recurring {
-			recurrent = "one-shot"
+			kind = "one-shot"
 		}
-		fmt.Fprintf(&sb, "- %s [%s] %s next=%s\n",
-			job.ID, recurrent, job.CronExpr,
+		queueMode := "skip-if-busy"
+		if job.QueueIfBusy {
+			queueMode = "queue-if-busy"
+		}
+		fmt.Fprintf(&sb, "- %s [%s, %s] %s next=%s\n",
+			job.ID, kind, queueMode, job.CronExpr,
 			job.NextFire.Format(time.RFC3339))
 	}
 	return Result{Content: sb.String()}, nil

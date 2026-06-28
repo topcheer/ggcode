@@ -14,7 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-func NewWorkspaceCronScheduler(workingDir string, enqueue func(string)) *cron.Scheduler {
+func NewWorkspaceCronScheduler(workingDir string, enqueue func(prompt string, queueIfBusy bool)) *cron.Scheduler {
 	storePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
 	scheduler := cron.NewScheduler(enqueue, storePath)
 	scheduler.Load(workingDir)

@@ -231,7 +231,7 @@ func TestCronListTool_NilScheduler(t *testing.T) {
 
 func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 	var fired []string
-	s := cron.NewScheduler(func(prompt string) { fired = append(fired, prompt) }, "")
+	s := cron.NewScheduler(func(prompt string, _ bool) { fired = append(fired, prompt) }, "")
 	defer s.Shutdown()
 	tool := CronCreateTool{Scheduler: s}
 

@@ -747,7 +747,7 @@ func TestCronPromptBusyQueuesForLater(t *testing.T) {
 	m.loading = true // agent is busy
 	m.activeAgentRunID = 1
 
-	msg := cronPromptMsg{Prompt: "check progress"}
+	msg := cronPromptMsg{Prompt: "check progress", QueueIfBusy: true}
 	next, cmd := m.Update(msg)
 	m2 := next.(Model)
 
@@ -777,7 +777,7 @@ func TestCronPromptBusyStaysHiddenWhenQueuedRunStarts(t *testing.T) {
 	m.loading = true
 	m.activeAgentRunID = 1
 
-	next, _ := m.Update(cronPromptMsg{Prompt: "check progress"})
+	next, _ := m.Update(cronPromptMsg{Prompt: "check progress", QueueIfBusy: true})
 	m2 := next.(Model)
 
 	nextModel, cmd := m2.handleAgentDoneMsg(agentDoneMsg{RunID: 1})

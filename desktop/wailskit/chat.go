@@ -896,12 +896,14 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	b.registry = core.Registry
 
-	// Cron tools — enqueue fires the prompt as a hidden user message,
-	// which queues if agent is busy (same path as IM/mobile messages).
-	b.cronScheduler = agentruntime.NewWorkspaceCronScheduler(b.workingDir, func(prompt string) {
-		log.Printf("[cron] firing prompt: %s", prompt)
-		// Use hidden submission so the cron prompt doesn't show as a
-		// normal user message — the system message in TUI marks it.
+	// Cron tools — enqueue fires the prompt as a hidden user message.
+	// If queue_if_busy=false (default) and agent is busy, skip the firing.
+	b.cronScheduler = agentruntime.NewWorkspaceCronScheduler(b.workingDir, func(prompt string, queueIfBusy bool) {
+		if !queueIfBusy && b.IsWorking() {
+			log.Printf("[cron] skipping prompt (agent busy, queue_if_busy=false): %s", prompt)
+			return
+		}
+		log.Printf("[cron] firing prompt (queue_if_busy=%v): %s", queueIfBusy, prompt)
 		b.sendMessageData(tunnel.MessageData{Text: prompt}, "cron", "")
 	})
 	agentruntime.RegisterCronTools(b.registry, b.cronScheduler)

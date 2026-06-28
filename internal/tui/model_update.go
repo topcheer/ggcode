@@ -382,23 +382,30 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case cronPromptMsg:
-		sysMsg := m.t("cron.firing")
-		m.suppressNextTunnelSystem = sysMsg
-		m.chatWriteSystem(nextSystemID(), sysMsg)
-		if broker := m.tunnelEventBroker(); broker != nil {
-			broker.PushUserMessageData(tunnel.MessageData{
-				Text:        msg.Prompt,
-				DisplayText: sysMsg,
-				Kind:        tunnel.MessageKindCron,
-			})
-		}
-		m.emitIMText(sysMsg)
 		// If agent is idle, submit the cron prompt immediately.
-		// Otherwise queue it for processing after the current run finishes.
+		// If busy and queue_if_busy=true, queue for after current run.
+		// If busy and queue_if_busy=false (default), skip this firing.
 		if !m.loading {
+			sysMsg := m.t("cron.firing")
+			m.suppressNextTunnelSystem = sysMsg
+			m.chatWriteSystem(nextSystemID(), sysMsg)
+			if broker := m.tunnelEventBroker(); broker != nil {
+				broker.PushUserMessageData(tunnel.MessageData{
+					Text:        msg.Prompt,
+					DisplayText: sysMsg,
+					Kind:        tunnel.MessageKindCron,
+				})
+			}
+			m.emitIMText(sysMsg)
 			return m, m.submitHiddenText(msg.Prompt)
 		}
-		m.queuePendingSubmissionHidden(msg.Prompt)
+		if msg.QueueIfBusy {
+			sysMsg := m.t("cron.firing")
+			m.suppressNextTunnelSystem = sysMsg
+			m.chatWriteSystem(nextSystemID(), sysMsg)
+			m.queuePendingSubmissionHidden(msg.Prompt)
+		}
+		// queue_if_busy=false and agent busy: skip silently
 		return m, nil
 
 	case skillsChangedMsg:

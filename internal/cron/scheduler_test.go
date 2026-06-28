@@ -11,11 +11,11 @@ import (
 
 func TestCreateEveryNMinutes(t *testing.T) {
 	var called atomic.Int32
-	s := NewScheduler(func(prompt string) {
+	s := NewScheduler(func(prompt string, _ bool) {
 		called.Add(1)
 	}, "")
 
-	job, err := s.Create("*/1 * * * *", "test prompt", true)
+	job, err := s.Create("*/1 * * * *", "test prompt", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestCreateEveryNMinutes(t *testing.T) {
 
 func TestCreateInvalidExpr(t *testing.T) {
 	s := NewScheduler(nil, "")
-	_, err := s.Create("invalid", "test", true)
+	_, err := s.Create("invalid", "test", true, false)
 	if err == nil {
 		t.Error("expected error for invalid cron expression")
 	}
@@ -54,12 +54,12 @@ func TestCreateInvalidExpr(t *testing.T) {
 
 func TestOneShotJob(t *testing.T) {
 	var called atomic.Int32
-	s := NewScheduler(func(prompt string) {
+	s := NewScheduler(func(prompt string, _ bool) {
 		called.Add(1)
 	}, "")
 
 	// Use a very short interval for testing: */1 minute
-	job, err := s.Create("*/1 * * * *", "test", false)
+	job, err := s.Create("*/1 * * * *", "test", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestCreatePersists(t *testing.T) {
 	s := NewScheduler(nil, storePath)
 	s.Load(wsDir)
 
-	_, err := s.Create("*/5 * * * *", "check CI", true)
+	_, err := s.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestOneShotNotPersisted(t *testing.T) {
 	s := NewScheduler(nil, storePath)
 	s.Load(wsDir)
 
-	_, err := s.Create("*/1 * * * *", "one-shot reminder", false)
+	_, err := s.Create("*/1 * * * *", "one-shot reminder", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestDeletePersists(t *testing.T) {
 	s := NewScheduler(nil, storePath)
 	s.Load(wsDir)
 
-	job, err := s.Create("*/5 * * * *", "check CI", true)
+	job, err := s.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestLoadRestoresJobs(t *testing.T) {
 	// Create a scheduler, add a recurring job
 	s1 := NewScheduler(nil, storePath)
 	s1.Load(wsDir)
-	job1, err := s1.Create("*/5 * * * *", "check CI", true)
+	job1, err := s1.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestMultipleWorkspaces(t *testing.T) {
 	// Workspace A creates a job
 	sA := NewScheduler(nil, storePath)
 	sA.Load(wsA)
-	_, err := sA.Create("*/5 * * * *", "task A", true)
+	_, err := sA.Create("*/5 * * * *", "task A", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestMultipleWorkspaces(t *testing.T) {
 	// Workspace B creates a different job
 	sB := NewScheduler(nil, storePath)
 	sB.Load(wsB)
-	_, err = sB.Create("*/10 * * * *", "task B", true)
+	_, err = sB.Create("*/10 * * * *", "task B", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

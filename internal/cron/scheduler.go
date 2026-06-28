@@ -14,12 +14,13 @@ import (
 
 // Job represents a scheduled prompt job.
 type Job struct {
-	ID        string
-	CronExpr  string
-	Prompt    string
-	Recurring bool
-	CreatedAt time.Time
-	NextFire  time.Time
+	ID          string
+	CronExpr    string
+	Prompt      string
+	Recurring   bool
+	QueueIfBusy bool // if true, queue the prompt when agent is busy; if false (default), skip
+	CreatedAt   time.Time
+	NextFire    time.Time
 }
 
 // Snapshot returns a copy of the job safe for external use.
@@ -29,11 +30,12 @@ func (j *Job) Snapshot() Job {
 
 // jobJSON is the serializable form of a Job (no timers, callbacks, etc).
 type jobJSON struct {
-	ID        string `json:"id"`
-	CronExpr  string `json:"cron_expr"`
-	Prompt    string `json:"prompt"`
-	Recurring bool   `json:"recurring"`
-	CreatedAt string `json:"created_at"`
+	ID          string `json:"id"`
+	CronExpr    string `json:"cron_expr"`
+	Prompt      string `json:"prompt"`
+	Recurring   bool   `json:"recurring"`
+	QueueIfBusy bool   `json:"queue_if_busy"`
+	CreatedAt   string `json:"created_at"`
 }
 
 // workspaceBucket groups jobs under a workspace key.
@@ -51,7 +53,7 @@ type Scheduler struct {
 	mu        sync.Mutex
 	jobs      map[string]*Job
 	nextID    int
-	enqueue   func(prompt string)
+	enqueue   func(prompt string, queueIfBusy bool)
 	timers    map[string]*time.Timer
 	storePath string
 	wsKey     string // SHA256 of current workspace dir
@@ -67,9 +69,9 @@ func workspaceKey(dir string) string {
 // NewScheduler creates a scheduler with the given enqueue callback and
 // optional persistence path. If storePath is empty, no persistence is used
 // (useful for tests).
-func NewScheduler(enqueue func(prompt string), storePath string) *Scheduler {
+func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath string) *Scheduler {
 	if enqueue == nil {
-		enqueue = func(string) {}
+		enqueue = func(string, bool) {}
 	}
 	return &Scheduler{
 		jobs:      make(map[string]*Job),
@@ -130,12 +132,13 @@ func (s *Scheduler) Load(workspaceDir string) {
 		s.mu.Lock()
 		s.nextID++
 		job := &Job{
-			ID:        jj.ID,
-			CronExpr:  jj.CronExpr,
-			Prompt:    jj.Prompt,
-			Recurring: jj.Recurring,
-			CreatedAt: createdAt,
-			NextFire:  next,
+			ID:          jj.ID,
+			CronExpr:    jj.CronExpr,
+			Prompt:      jj.Prompt,
+			Recurring:   jj.Recurring,
+			QueueIfBusy: jj.QueueIfBusy,
+			CreatedAt:   createdAt,
+			NextFire:    next,
 		}
 		s.jobs[job.ID] = job
 		// Track max ID to avoid collisions with new jobs.
@@ -180,11 +183,12 @@ func (s *Scheduler) save() error {
 			continue
 		}
 		jobs = append(jobs, jobJSON{
-			ID:        j.ID,
-			CronExpr:  j.CronExpr,
-			Prompt:    j.Prompt,
-			Recurring: j.Recurring,
-			CreatedAt: j.CreatedAt.Format(time.RFC3339),
+			ID:          j.ID,
+			CronExpr:    j.CronExpr,
+			Prompt:      j.Prompt,
+			Recurring:   j.Recurring,
+			QueueIfBusy: j.QueueIfBusy,
+			CreatedAt:   j.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	s.mu.Unlock()
@@ -220,7 +224,7 @@ func (s *Scheduler) save() error {
 //	minute hour day-of-month month day-of-week
 //
 // Supports: *, */N, N, N-M, N,M,K, N-M/S
-func (s *Scheduler) Create(cronExpr, prompt string, recurring bool) (Job, error) {
+func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy bool) (Job, error) {
 	now := time.Now()
 	next, err := NextTime(cronExpr, now)
 	if err != nil {
@@ -231,12 +235,13 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool) (Job, error)
 	s.nextID++
 	id := fmt.Sprintf("cron-%d", s.nextID)
 	job := &Job{
-		ID:        id,
-		CronExpr:  cronExpr,
-		Prompt:    prompt,
-		Recurring: recurring,
-		CreatedAt: now,
-		NextFire:  next,
+		ID:          id,
+		CronExpr:    cronExpr,
+		Prompt:      prompt,
+		Recurring:   recurring,
+		QueueIfBusy: queueIfBusy,
+		CreatedAt:   now,
+		NextFire:    next,
 	}
 	s.jobs[id] = job
 	s.mu.Unlock()
@@ -315,7 +320,7 @@ func (s *Scheduler) Get(id string) (Job, bool) {
 
 // SetEnqueue sets or replaces the enqueue callback. Use this when the
 // scheduler is created before the TUI is available.
-func (s *Scheduler) SetEnqueue(fn func(prompt string)) {
+func (s *Scheduler) SetEnqueue(fn func(prompt string, queueIfBusy bool)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if fn != nil {
@@ -330,7 +335,7 @@ func (s *Scheduler) scheduleJob(job *Job) {
 	}
 
 	timer := time.AfterFunc(delay, func() {
-		s.enqueue(job.Prompt)
+		s.enqueue(job.Prompt, job.QueueIfBusy)
 
 		s.mu.Lock()
 		if job.Recurring {
@@ -371,7 +376,7 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		delay = 0
 	}
 	s.timers[job.ID] = time.AfterFunc(delay, func() {
-		s.enqueue(job.Prompt)
+		s.enqueue(job.Prompt, job.QueueIfBusy)
 
 		s.mu.Lock()
 		if job.Recurring {

@@ -387,9 +387,9 @@ func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 
 // SetCronScheduler wires the cron scheduler and registers cron tools.
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
-	s.SetEnqueue(func(prompt string) {
+	s.SetEnqueue(func(prompt string, queueIfBusy bool) {
 		if r.program != nil {
-			r.program.Send(cronPromptMsg{Prompt: prompt})
+			r.program.Send(cronPromptMsg{Prompt: prompt, QueueIfBusy: queueIfBusy})
 		}
 	})
 	tools.Register(tool.CronCreateTool{Scheduler: s})
@@ -670,7 +670,8 @@ func (r *REPL) Program() *tea.Program {
 
 // cronPromptMsg is sent when a cron job fires, injecting a prompt into the conversation.
 type cronPromptMsg struct {
-	Prompt string
+	Prompt      string
+	QueueIfBusy bool
 }
 
 // Run starts the REPL event loop.
