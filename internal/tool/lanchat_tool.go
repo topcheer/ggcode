@@ -20,42 +20,32 @@ func (t LanChatTool) Name() string { return "lanchat" }
 
 func (t LanChatTool) Description() string {
 	return "Send and receive messages on the LAN Chat network connecting ggcode instances on the local network. " +
-		"This is the PRIMARY tool for real-time collaboration with other ggcode users and their agents on the LAN — " +
-		"use this FIRST (before a2a_remote or delegate) when you need to ask, notify, or check on another ggcode instance or user. " +
+		"This is the PRIMARY tool for real-time collaboration with other ggcode users and their agents on the LAN. " +
 		"Triggers: user mentions another participant by name or nick (e.g. \"check what mdns is doing\", \"ask ggai about...\"), " +
 		"messages prefixed with [LAN Chat from <nick>], or any reference to LAN participants.\n" +
 		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for headless code-edit delegation to other workspaces, not for asking questions).\n" +
-		"Nick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
+		"\nANTINOISE RULES (critical for efficient collaboration):\n" +
+		"- Do NOT broadcast unless the user explicitly asks to notify everyone. Broadcasts force ALL agents to process your message, creating noise cascades.\n" +
+		"- Do NOT send confirmation/acknowledgment messages (\"got it\", \"will do\", \"thanks\"). Just do the work silently.\n" +
+		"- Do NOT reply to a LAN Chat message unless you have meaningful information to share (results, answers, blocking issues). Acknowledgments are noise.\n" +
+		"- Before sending, check action='list' for agent_busy status. Do NOT message busy agents unless it's urgent — they'll see your message after their current task.\n" +
+		"- Send to the specific person you need (action='send' with their node_id), not a team broadcast. Only broadcast for announcements that truly need everyone.\n" +
+		"- One message per task. Do NOT send follow-up pings asking \"are you done?\" — check back with action='list' or wait for their response.\n" +
+		"- If you receive a broadcast or team message that is not directed at you specifically, do NOT reply unless you have actionable information.\n" +
+		"\nNick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
 		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
-		"Messaging actions (choose by scope):\n" +
-		"- 'send' (to=<node_id>): DM one or more participants. Multiple recipients: comma-separated \"id1,id2,id3\". Requires target node_id(s) from action='list'.\n" +
-		"- 'broadcast': broadcast to members of YOUR OWN team (team-scoped). This is the default broadcast — it respects team isolation.\n" +
-		"- 'broadcast_all': broadcast to ALL participants on the entire LAN, ignoring team boundaries. Use sparingly.\n" +
-		"- 'send_team' (team=<name>): broadcast to all members of a SPECIFIC team (not your own). Requires the 'team' parameter.\n" +
-		"Note: 'send' with to='*' is equivalent to 'broadcast_all'.\n" +
-		"Other actions: 'list' to discover participants; 'history' to read recent messages; 'pending'/'approve'/'reject' to manage @agent approvals.\n" +
+		"\nMessaging actions (choose by scope):\n" +
+		"- 'send' (to=<node_id>): DM one or more participants. Preferred for most communication. Multiple recipients: comma-separated \"id1,id2,id3\".\n" +
+		"- 'broadcast': broadcast to members of YOUR OWN team. Use ONLY for announcements that need everyone's attention.\n" +
+		"- 'broadcast_all': broadcast to ALL participants on the entire LAN. Almost NEVER appropriate — use only for critical announcements.\n" +
+		"- 'send_team' (team=<name>): broadcast to all members of a SPECIFIC team. Prefer targeted DMs over this.\n" +
 		"\nAgent availability: each participant in the 'list' output has an 'agent_busy' field (true/false). " +
-		"When deciding which agent to contact for a task, prefer participants with agent_busy=false (idle agents). " +
-		"A busy agent (agent_busy=true) is currently processing a request and may respond with delay. " +
-		"If all agents in a team are busy, you can still send a message — it will be queued.\n" +
-		"\nTeam awareness: each participant has a 'team' field (e.g. 'platform', 'mobile', 'dev-team'). " +
-		"'broadcast' sends to all online members of YOUR team. " +
-		"'send_team' sends to a specific team you name explicitly. " +
-		"'broadcast_all' sends to every participant on the LAN regardless of team.\n" +
-		"\nTypical collaboration workflow:\n" +
-		"1. Call lanchat(action='list') to find the target's node_id, role, team, and project info\n" +
-		"2a. For a DM: lanchat(action='send', to=<node_id>, message='...')\n" +
-		"    as_agent defaults to true (you are an agent). to_role defaults to 'agent'.\n" +
-		"    Use to_role='human' to message the human user instead of their agent.\n" +
-		"2b. For multi-recipient DM: lanchat(action='send', to='id1,id2,id3', message='...')\n" +
-		"2c. For your team broadcast: lanchat(action='broadcast', message='...')\n" +
-		"2d. For a specific team: lanchat(action='send_team', team='platform', message='...')\n" +
-		"2e. For global LAN broadcast: lanchat(action='broadcast_all', message='...')\n" +
-		"3. The response will appear as a [LAN Chat from <nick>] message in subsequent turns.\n" +
+		"Always check this before messaging. Prefer idle agents (agent_busy=false). " +
+		"If the only relevant agent is busy, send your message once and wait — do not re-send or ping.\n" +
 		"\nWhen to use lanchat vs a2a_remote:\n" +
-		"- lanchat: real-time communication — asking questions, coordinating tasks, checking status, discussing approach.\n" +
+		"- lanchat: real-time communication — asking a specific question, coordinating a specific task, reporting results.\n" +
 		"- a2a_remote: headless code-editing delegation — fire-and-forget tasks with a specific code instruction.\n" +
-		"- When in doubt, use lanchat first. You can always follow up with a2a_remote for the actual code work."
+		"- When in doubt, use a targeted DM (action='send') to the specific person you need."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {

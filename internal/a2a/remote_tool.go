@@ -289,13 +289,13 @@ func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMet
 		sb.WriteString(line + "\n")
 	}
 	sb.WriteString("\nHow to collaborate with these instances:\n")
-	sb.WriteString("- Use 'lanchat' (action='list' then action='send' with to_role='agent') for real-time communication: asking questions, checking status, coordinating tasks, notifying, or discussing. ALWAYS try lanchat FIRST for any interactive collaboration.\n")
-	sb.WriteString("- Use lanchat(action='broadcast', as_agent=true) to broadcast to YOUR team members, or action='broadcast_all' for all participants on the LAN.\n")
-	sb.WriteString("- Use lanchat(action='send', to='id1,id2', as_agent=true) to DM multiple recipients at once.\n")
-	sb.WriteString("- Use 'a2a_remote' ONLY for headless code-editing delegation: fire-and-forget tasks where you give a specific code instruction and wait for the result (e.g. 'edit file X', 'review code Y', 'run tests in project Z').\n")
+	sb.WriteString("- Use 'lanchat' (action='send' to a specific node_id) for real-time communication: asking a specific question, reporting results, or coordinating a task. Prefer targeted DMs over broadcasts.\n")
+	sb.WriteString("- Do NOT broadcast unless the user explicitly asks to notify everyone. Broadcasts force all agents to process your message.\n")
+	sb.WriteString("- Do NOT send acknowledgments via lanchat. Respond only with meaningful information or results.\n")
+	sb.WriteString("- Use 'a2a_remote' ONLY for headless code-editing delegation: fire-and-forget tasks where you give a specific code instruction and wait for the result.\n")
 	sb.WriteString("- Use 'delegate' ONLY when the user explicitly asks a specific external CLI agent (e.g. claude, codex, gemini, copilot) to do work. Do not proactively delegate unless asked.\n")
 	sb.WriteString("- When a remote agent goes offline or a2a_remote fails, do NOT silently fall back to another a2a_remote target — use lanchat to coordinate or notify the human about the situation.\n")
-	sb.WriteString("- Team awareness: each lanchat participant has a 'team' field. When the user mentions a team (e.g. 'ask the platform team'), call lanchat(action='list') to find participants with matching team, then message them.\n")
+	sb.WriteString("- Team awareness: each lanchat participant has a 'team' field. When the user mentions a team (e.g. 'ask the platform team'), call lanchat(action='list') to find participants with matching team, then DM the specific person.\n")
 	return sb.String()
 }
 
