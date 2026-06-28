@@ -29,13 +29,13 @@ func (t LanChatTool) Description() string {
 		"- Do NOT send confirmation/acknowledgment messages (\"got it\", \"will do\", \"thanks\"). Just do the work silently.\n" +
 		"- Do NOT reply to a LAN Chat message unless you have meaningful information to share (results, answers, blocking issues). Acknowledgments are noise.\n" +
 		"- Before sending, check action='list' for agent_busy status. Do NOT message busy agents unless it's urgent — they'll see your message after their current task.\n" +
-		"- Send to the specific person you need (action='send' with their node_id), not a team broadcast. Only broadcast for announcements that truly need everyone.\n" +
+		"- Send to the specific person you need (action='send' with their node_id or nick), not a team broadcast. Only broadcast for announcements that truly need everyone.\n" +
 		"- One message per task. Do NOT send follow-up pings asking \"are you done?\" — check back with action='list' or wait for their response.\n" +
 		"- If you receive a broadcast or team message that is not directed at you specifically, do NOT reply unless you have actionable information.\n" +
 		"\nNick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
 		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
 		"\nMessaging actions (choose by scope):\n" +
-		"- 'send' (to=<node_id>): DM one or more participants. Preferred for most communication. Multiple recipients: comma-separated \"id1,id2,id3\".\n" +
+		"- 'send' (to=<node_id OR nick>): DM one or more participants. You can use the participant's nick (e.g. \"dd_dev_agent\" or prefix \"dd\") or node_id. Multiple recipients: comma-separated.\n" +
 		"- 'broadcast': broadcast to members of YOUR OWN team. Use ONLY for announcements that need everyone's attention.\n" +
 		"- 'broadcast_all': broadcast to ALL participants on the entire LAN. Almost NEVER appropriate — use only for critical announcements.\n" +
 		"- 'send_team' (team=<name>): broadcast to all members of a SPECIFIC team. Prefer targeted DMs over this.\n" +
@@ -194,6 +194,81 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
+// resolveRecipients maps user-supplied identifiers (node IDs, full nicks,
+// or partial nick prefixes) to actual node IDs from the known peers list.
+//
+// Resolution order per identifier:
+//  1. Exact node_id match
+//  2. Exact human_nick or agent_nick match (case-insensitive)
+//  3. Unique prefix match on human_nick or agent_nick (e.g. "dd" matches "dd_dev_agent")
+//
+// If a prefix matches multiple peers, the first match is used. This is
+// acceptable because the LLM can see the full nicks in the list output.
+// If no match is found for any identifier, returns nil.
+func (t LanChatTool) resolveRecipients(ids []string) []string {
+	participants := t.Hub.Participants()
+
+	// Build lookup maps (case-insensitive)
+	byNodeID := make(map[string]string) // lower(nodeID) -> nodeID
+	byNick := make(map[string]string)   // lower(nick) -> nodeID
+	byPrefix := make([]struct{ nick, id string }, 0)
+
+	for _, p := range participants {
+		if p.NodeID == t.Hub.NodeID() {
+			continue // skip self
+		}
+		byNodeID[strings.ToLower(p.NodeID)] = p.NodeID
+		for _, nick := range []string{p.HumanNick, p.AgentNick} {
+			if nick == "" {
+				continue
+			}
+			lower := strings.ToLower(nick)
+			byNick[lower] = p.NodeID
+			byPrefix = append(byPrefix, struct{ nick, id string }{lower, p.NodeID})
+		}
+	}
+
+	var resolved []string
+	seen := make(map[string]bool)
+	for _, raw := range ids {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		lower := strings.ToLower(raw)
+
+		// 1. Exact node_id
+		if id, ok := byNodeID[lower]; ok {
+			if !seen[id] {
+				resolved = append(resolved, id)
+				seen[id] = true
+			}
+			continue
+		}
+		// 2. Exact nick
+		if id, ok := byNick[lower]; ok {
+			if !seen[id] {
+				resolved = append(resolved, id)
+				seen[id] = true
+			}
+			continue
+		}
+		// 3. Prefix match (first wins)
+		for _, entry := range byPrefix {
+			if strings.HasPrefix(entry.nick, lower) {
+				if !seen[entry.id] {
+					resolved = append(resolved, entry.id)
+					seen[entry.id] = true
+				}
+				break
+			}
+		}
+		// If nothing matched, skip silently — caller handles empty result
+	}
+
+	return resolved
+}
+
 func (t LanChatTool) doList() Result {
 	participants := t.Hub.Participants()
 	selfNodeID := t.Hub.NodeID()
@@ -263,6 +338,19 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return t.doBroadcastAll(ctx, content, asAgent)
 	}
 
+	// Resolve nicks to node IDs. The LLM naturally uses nicks (e.g.
+	// "dd_dev_agent") or partial nicks (e.g. "dd") as the 'to' value.
+	// We try exact node_id match first, then exact nick match, then
+	// prefix match (nick starts with the given string).
+	resolved := t.resolveRecipients(toNodeIDs)
+	if len(resolved) == 0 {
+		// No matches at all — show available participants to help
+		hint := t.doList()
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"no recipient found for: %s. Use action='list' to see valid node_ids and nicks.\n%s",
+			strings.Join(toNodeIDs, ", "), hint.Content)}, nil
+	}
+
 	// Default toRole: when sending as agent, target the recipient's agent;
 	// when sending as human, target the human chat panel.
 	if toRole == "" {
@@ -276,7 +364,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	// Send to each recipient individually
 	var errors []string
 	sent := 0
-	for _, nodeID := range toNodeIDs {
+	for _, nodeID := range resolved {
 		var err error
 		if asAgent {
 			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
