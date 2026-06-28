@@ -67,7 +67,7 @@ func (t LanChatTool) Parameters() json.RawMessage {
 			},
 			"team": {
 				"type": "string",
-				"description": "Required for 'send_team' action only. Team name to broadcast to (e.g. 'platform', 'mobile'). Ignored by all other actions. Find valid team values via action='list'."
+				"description": "Team name. Required for 'send_team'. Also used as an optional filter for 'list' to show only members of a specific team. Ignored by send/broadcast/broadcast_all."
 			},
 			"to_role": {
 				"type": "string",
@@ -133,7 +133,7 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 
 	switch args.Action {
 	case "list":
-		return t.doList(), nil
+		return t.doList(args.Team), nil
 	case "send":
 		return t.doSend(ctx, args.Message, toNodeIDs, asAgent, args.ToRole)
 	case "broadcast":
@@ -269,7 +269,7 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 	return resolved
 }
 
-func (t LanChatTool) doList() Result {
+func (t LanChatTool) doList(teamFilter string) Result {
 	participants := t.Hub.Participants()
 	selfNodeID := t.Hub.NodeID()
 
@@ -292,6 +292,10 @@ func (t LanChatTool) doList() Result {
 
 	var peers []peerInfo
 	for _, p := range participants {
+		// Apply team filter if specified
+		if teamFilter != "" && !strings.EqualFold(p.Team, teamFilter) {
+			continue
+		}
 		lastSeen := "never"
 		if p.LastSeen > 0 {
 			lastSeen = time.Since(time.Unix(p.LastSeen, 0)).Round(time.Second).String() + " ago"
@@ -314,12 +318,20 @@ func (t LanChatTool) doList() Result {
 		})
 	}
 
+	label := ""
+	if teamFilter != "" {
+		label = fmt.Sprintf(" (team: %s)", teamFilter)
+	}
+
 	if len(peers) == 0 {
+		if teamFilter != "" {
+			return Result{Content: fmt.Sprintf("No participants in team '%s'.\n", teamFilter)}
+		}
 		return Result{Content: "No LAN Chat participants discovered.\n"}
 	}
 
 	out, _ := json.MarshalIndent(peers, "", "  ")
-	return Result{Content: fmt.Sprintf("Participants (%d):\n%s\n", len(peers), string(out))}
+	return Result{Content: fmt.Sprintf("Participants (%d)%s:\n%s\n", len(peers), label, string(out))}
 }
 
 // doSend sends a direct message to one or more recipients.
@@ -345,7 +357,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	resolved := t.resolveRecipients(toNodeIDs)
 	if len(resolved) == 0 {
 		// No matches at all — show available participants to help
-		hint := t.doList()
+		hint := t.doList("")
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"no recipient found for: %s. Use action='list' to see valid node_ids and nicks.\n%s",
 			strings.Join(toNodeIDs, ", "), hint.Content)}, nil

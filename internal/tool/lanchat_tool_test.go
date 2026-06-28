@@ -35,7 +35,7 @@ func TestLanChatListIncludesTeam(t *testing.T) {
 		Online:    true,
 	})
 
-	result := tool.doList()
+	result := tool.doList("")
 	if result.IsError {
 		t.Fatalf("doList returned error: %s", result.Content)
 	}
