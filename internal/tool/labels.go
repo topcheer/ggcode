@@ -451,7 +451,7 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 	case "cron_list":
 		return describeCronListResult(trimmed), true
 	case "lanchat":
-		if pres, ok := describeLanchatResult(rawArgs, trimmed); ok {
+		if pres, ok := describeLanchatResult(rawArgs, trimmed, isError); ok {
 			return pres, true
 		}
 	}
@@ -479,19 +479,26 @@ func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (Too
 }
 
 // describeLanchatResult formats the lanchat tool result into a human-readable
-// presentation. Only the "list" action returns JSON that needs formatting;
-// other actions (send, broadcast, etc.) return plain text that doesn't need
-// special handling — in that case ok=false lets the caller fall through to
-// the default rendering.
-func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, bool) {
+// presentation. The "list" action returns JSON that needs full formatting;
+// the send/broadcast actions return a terse confirmation — we enrich it with
+// the message content and recipients extracted from rawArgs.
+func describeLanchatResult(rawArgs, trimmed string, isError bool) (ToolResultPresentation, bool) {
 	args := parseToolArgs(rawArgs)
 	action := argStr(args, "action")
 
-	// Only format the list action (returns JSON array of participants).
-	if action != "list" {
+	switch action {
+	case "list":
+		return describeLanchatListResult(trimmed)
+	case "send", "broadcast", "broadcast_all", "send_team":
+		return describeLanchatSendResult(args, action, trimmed, isError)
+	default:
 		return ToolResultPresentation{}, false
 	}
+}
 
+// describeLanchatListResult formats the JSON participant list into a
+// human-readable table.
+func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 	// Handle empty results.
 	if strings.Contains(trimmed, "No participants") || strings.Contains(trimmed, "No LAN Chat participants") {
 		return ToolResultPresentation{
@@ -533,7 +540,6 @@ func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, boo
 	var lines []string
 	lines = append(lines, header)
 	for _, p := range peers {
-		// Name prefix: self marker or online indicator
 		prefix := "  "
 		name := p.HumanNick
 		if name == "" {
@@ -543,7 +549,6 @@ func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, boo
 			name += " (you)"
 		}
 
-		// Status indicator
 		status := "offline"
 		if p.Online {
 			if p.AgentBusy {
@@ -553,7 +558,6 @@ func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, boo
 			}
 		}
 
-		// First line: name — role · team · status
 		role := p.Role
 		if role == "" {
 			role = "?"
@@ -561,7 +565,6 @@ func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, boo
 		line1 := fmt.Sprintf("%s%s — %s · %s · %s", prefix, name, role, p.Team, status)
 		lines = append(lines, line1)
 
-		// Second line: project + last seen
 		detail := ""
 		if p.ProjectName != "" {
 			detail = p.ProjectName
@@ -582,6 +585,102 @@ func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, boo
 		Payload:     strings.Join(lines, "\n"),
 		PayloadMode: "text",
 	}, true
+}
+
+// describeLanchatSendResult enriches the terse send/broadcast confirmation
+// with the message content and recipient list from rawArgs, producing a
+// readable "chat log" style display.
+func describeLanchatSendResult(args map[string]any, action, trimmed string, isError bool) (ToolResultPresentation, bool) {
+	message := argStr(args, "message")
+
+	// On error, just pass through the error text — no message to show.
+	if isError {
+		return ToolResultPresentation{
+			Summary:     compactSingleLine(trimmed),
+			Payload:     trimmed,
+			PayloadMode: "text",
+		}, true
+	}
+
+	// Build the recipient line from rawArgs.
+	toField := argStr(args, "to")
+	teamField := argStr(args, "team")
+
+	asAgent := true
+	if v, ok := args["as_agent"]; ok {
+		if b, ok2 := v.(bool); ok2 {
+			asAgent = b
+		}
+	}
+	identity := "human"
+	if asAgent {
+		identity = "agent"
+	}
+
+	var toLine string
+	switch action {
+	case "send":
+		toLine = toField
+	case "broadcast":
+		toLine = "your team"
+	case "broadcast_all":
+		toLine = "ALL participants"
+	case "send_team":
+		if teamField != "" {
+			toLine = fmt.Sprintf("team %q", teamField)
+		} else {
+			toLine = "team"
+		}
+	}
+
+	// Extract delivery stats from the result string if available.
+	// Examples: "Sent to 3/3 members of team \"X\"." → "3/3 delivered"
+	deliveryExtra := extractLanchatDeliveryInfo(trimmed)
+
+	// Build header.
+	headerParts := []string{fmt.Sprintf("To: %s", toLine)}
+	if deliveryExtra != "" {
+		headerParts = append(headerParts, deliveryExtra)
+	}
+	headerParts = append(headerParts, fmt.Sprintf("as %s", identity))
+	header := strings.Join(headerParts, "  ·  ")
+
+	// Summary is the compact one-liner.
+	summary := fmt.Sprintf("To: %s", toLine)
+
+	// If no message content in args (shouldn't happen for successful sends),
+	// fall through to raw result.
+	if message == "" {
+		return ToolResultPresentation{}, false
+	}
+
+	// Build full payload: header + blank + message content.
+	payload := header + "\n\n" + strings.TrimSpace(message)
+
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     payload,
+		PayloadMode: "text",
+	}, true
+}
+
+// extractLanchatDeliveryInfo extracts delivery statistics from the result
+// string returned by doSendTeam/doBroadcastTeam.
+// Example: "Sent to 3/5 members of team \"dev-team\"." → "3/5 delivered"
+func extractLanchatDeliveryInfo(result string) string {
+	// "Sent to N/M members of team ..." pattern.
+	if strings.HasPrefix(result, "Sent to ") {
+		rest := strings.TrimPrefix(result, "Sent to ")
+		// Extract the N/M part.
+		spaceIdx := strings.Index(rest, " ")
+		if spaceIdx > 0 {
+			ratio := rest[:spaceIdx]
+			if strings.Contains(ratio, "/") {
+				return ratio + " delivered"
+			}
+		}
+	}
+	return ""
 }
 
 // TeamCreateResultText extracts the created team name from a team_create result.
