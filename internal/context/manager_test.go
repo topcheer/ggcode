@@ -280,7 +280,7 @@ func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testi
 
 	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Show me the tool output"}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("B", 10000)}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("B", 20000)}}})
 	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Processed."}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Recent question"}}})
 	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Recent answer"}}})

@@ -58,9 +58,9 @@ type CompactResult struct {
 }
 
 const (
-	summarizeThresholdWithUsage = 0.75
-	summarizeThresholdFallback  = 0.65
-	compactTargetRatio          = 0.55
+	summarizeThresholdWithUsage = 0.88 // trigger compaction at 88% of usable budget (with usage baseline)
+	summarizeThresholdFallback  = 0.80 // trigger compaction at 80% of usable budget (fallback, no baseline)
+	compactTargetRatio          = 0.50 // compress to 50% of usable budget — leave plenty of room before re-trigger
 	summaryReserveRatio         = 0.10
 	defaultOutputReserveRatio   = 0.10
 	maxOutputReserveRatio       = 0.25

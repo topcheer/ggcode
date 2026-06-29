@@ -655,7 +655,7 @@ func TestPreCompactAppliesBetweenLLMTurnsAndPreservesNewDialogue(t *testing.T) {
 	a = NewAgent(mp, reg, "", 2)
 	defer a.Close()
 	a.ContextManager().SetContextWindow(2000)
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 7; i++ {
 		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 25))}})
 		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 25))}})
 	}
