@@ -450,6 +450,10 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return describeCronDeleteResult(trimmed), true
 	case "cron_list":
 		return describeCronListResult(trimmed), true
+	case "lanchat":
+		if pres, ok := describeLanchatResult(rawArgs, trimmed); ok {
+			return pres, true
+		}
 	}
 
 	if pres, ok := describeExternalWrappedResult(trimmed); ok {
@@ -472,6 +476,112 @@ func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (Too
 		return ToolResultPresentation{}, false
 	}
 	return DescribeToolResult(toolName, rawArgs, result, isError)
+}
+
+// describeLanchatResult formats the lanchat tool result into a human-readable
+// presentation. Only the "list" action returns JSON that needs formatting;
+// other actions (send, broadcast, etc.) return plain text that doesn't need
+// special handling — in that case ok=false lets the caller fall through to
+// the default rendering.
+func describeLanchatResult(rawArgs, trimmed string) (ToolResultPresentation, bool) {
+	args := parseToolArgs(rawArgs)
+	action := argStr(args, "action")
+
+	// Only format the list action (returns JSON array of participants).
+	if action != "list" {
+		return ToolResultPresentation{}, false
+	}
+
+	// Handle empty results.
+	if strings.Contains(trimmed, "No participants") || strings.Contains(trimmed, "No LAN Chat participants") {
+		return ToolResultPresentation{
+			Summary:     trimmed,
+			Payload:     "",
+			PayloadMode: "text",
+		}, true
+	}
+
+	// Extract the JSON array from the result.
+	// Result format: "Participants (N):\n[...JSON...]"
+	jsonStart := strings.Index(trimmed, "[")
+	if jsonStart < 0 {
+		return ToolResultPresentation{}, false
+	}
+	jsonStr := trimmed[jsonStart:]
+
+	var peers []struct {
+		NodeID      string   `json:"node_id"`
+		HumanNick   string   `json:"human_nick"`
+		AgentNick   string   `json:"agent_nick"`
+		Role        string   `json:"role"`
+		Team        string   `json:"team"`
+		Online      bool     `json:"online"`
+		LastSeen    string   `json:"last_seen"`
+		ProjectName string   `json:"project_name,omitempty"`
+		Languages   []string `json:"languages,omitempty"`
+		AgentBusy   bool     `json:"agent_busy"`
+		Self        bool     `json:"self"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &peers); err != nil || len(peers) == 0 {
+		return ToolResultPresentation{}, false
+	}
+
+	// Build header line.
+	header := fmt.Sprintf("Participants (%d)", len(peers))
+
+	// Build human-readable lines.
+	var lines []string
+	lines = append(lines, header)
+	for _, p := range peers {
+		// Name prefix: self marker or online indicator
+		prefix := "  "
+		name := p.HumanNick
+		if name == "" {
+			name = p.NodeID
+		}
+		if p.Self {
+			name += " (you)"
+		}
+
+		// Status indicator
+		status := "offline"
+		if p.Online {
+			if p.AgentBusy {
+				status = "busy"
+			} else {
+				status = "online"
+			}
+		}
+
+		// First line: name — role · team · status
+		role := p.Role
+		if role == "" {
+			role = "?"
+		}
+		line1 := fmt.Sprintf("%s%s — %s · %s · %s", prefix, name, role, p.Team, status)
+		lines = append(lines, line1)
+
+		// Second line: project + last seen
+		detail := ""
+		if p.ProjectName != "" {
+			detail = p.ProjectName
+		}
+		if p.LastSeen != "" && p.LastSeen != "never" {
+			if detail != "" {
+				detail += " · "
+			}
+			detail += "seen " + p.LastSeen
+		}
+		if detail != "" {
+			lines = append(lines, fmt.Sprintf("      %s", detail))
+		}
+	}
+
+	return ToolResultPresentation{
+		Summary:     header,
+		Payload:     strings.Join(lines, "\n"),
+		PayloadMode: "text",
+	}, true
 }
 
 // TeamCreateResultText extracts the created team name from a team_create result.

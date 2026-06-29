@@ -93,10 +93,16 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 		}, true
 
 	case provider.StreamEventToolResult:
-		content := truncateDesktopToolResult(ev.Result)
-		preview := previewDesktopToolResult(ev.Result)
-		round.NoteToolResult(ev.IsError)
+		resultText := ev.Result
 		rawArgs := string(ev.Tool.Arguments)
+		// Format lanchat list results into a human-readable list
+		// instead of raw JSON.
+		if pres, ok := toolpkg.DescribeToolResult(ev.Tool.Name, rawArgs, resultText, ev.IsError); ok && pres.Payload != "" {
+			resultText = pres.Payload
+		}
+		content := truncateDesktopToolResult(resultText)
+		preview := previewDesktopToolResult(resultText)
+		round.NoteToolResult(ev.IsError)
 		if emitter != nil {
 			emitter.EmitToolResult(ev.Tool.Name, rawArgs, content, ev.IsError)
 			emitter.TriggerTyping()

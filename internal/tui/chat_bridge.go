@@ -339,6 +339,13 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
 			return present.Summary
 		}
+	case "lanchat":
+		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
+			if present.Payload != "" {
+				return present.Payload
+			}
+			return present.Summary
+		}
 	}
 	return result
 }

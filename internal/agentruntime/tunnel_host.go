@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -454,6 +455,15 @@ func (h *TunnelHost) PushStreamEvent(ev provider.StreamEvent) {
 	case provider.StreamEventToolResult:
 		h.rollover(broker, false)
 		content := ev.Result
+		// Format lanchat list results into a human-readable list
+		// instead of raw JSON.
+		rawArgs := ""
+		if ev.Tool.Arguments != nil {
+			rawArgs = string(ev.Tool.Arguments)
+		}
+		if pres, ok := toolpkg.DescribeToolResult(ev.Tool.Name, rawArgs, content, ev.IsError); ok && pres.Payload != "" {
+			content = pres.Payload
+		}
 		if len([]rune(content)) > 2000 {
 			content = string([]rune(content)[:1997]) + "\n..."
 		}
