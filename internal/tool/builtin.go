@@ -81,6 +81,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Productivity
 		NewAskUserTool(),
 		NewWorkspaceTodoWrite(workingDir),
+
+		// Permission
+		NewSwitchModeTool(policy),
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {

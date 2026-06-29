@@ -118,7 +118,7 @@ func IsReadOnlyTool(name string) bool {
 // external services (LAN Chat) or are purely informational.
 func IsAlwaysAllowedTool(name string) bool {
 	switch name {
-	case "lanchat":
+	case "lanchat", "switch_mode":
 		return true
 	}
 	return false

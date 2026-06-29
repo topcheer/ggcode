@@ -246,7 +246,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Web** (2): `web_fetch`, `web_search`
 **Search**: `grep` (ripgrep-based, supports regex, glob, file type, context lines)
 **LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
-**Productivity** (3, in `builtin.go`): `ask_user`, `todo_write` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
+**Productivity** (3, in `builtin.go`): `ask_user`, `todo_write`, `switch_mode` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
 **Swarm** (10, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
