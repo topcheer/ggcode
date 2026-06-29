@@ -27,7 +27,7 @@ body {
 
 /* Markdown rendering in chat messages */
 .markdown-body {
-    font-size: 14px;
+    font-size: var(--font-size-base);
     line-height: 1.6;
     word-wrap: break-word;
     text-align: left;

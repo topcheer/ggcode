@@ -32,6 +32,12 @@
   /* Font */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+  /* Font sizes */
+  --font-size-base: 15px;    /* main content / chat messages */
+  --font-size-small: 13px;   /* secondary text, labels */
+  --font-size-tiny: 11px;    /* badges, meta info */
+  --font-size-code: 13px;    /* code blocks */
   
   /* Sizing */
   --nav-rail-width: 48px;

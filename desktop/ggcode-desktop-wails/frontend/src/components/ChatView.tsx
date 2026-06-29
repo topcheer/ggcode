@@ -1652,7 +1652,7 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning' }: { te
           textAlign: 'left',
           maxHeight: 200, overflowY: 'auto',
         }}>
-          <div className="markdown-body" style={{ fontSize: 12 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(text) }} />
+          <div className="markdown-body" style={{ fontSize: 'var(--font-size-small)' }} dangerouslySetInnerHTML={{ __html: safeMarkdown(text) }} />
         </div>
       )}
     </div>
@@ -1703,7 +1703,7 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           </div>
         )}
         {isMarkdown
-          ? <div className="markdown-body" style={{ fontSize: 13 }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
+          ? <div className="markdown-body" style={{ fontSize: 'var(--font-size-base)' }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
           : msg.content}
       </div>
       {(pending || failed) && (
@@ -1754,7 +1754,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         background: 'var(--color-card)',
         color: 'var(--text-primary)',
         lineHeight: 1.6,
-        fontSize: 14,
+        fontSize: 'var(--font-size-base)',
         textAlign: 'left',
       }}>
         <MessageContent content={msg.content || '...'} />
@@ -1935,7 +1935,7 @@ function ErrorMessage({ msg }: { msg: ChatMessage }) {
       background: 'rgba(239, 68, 68, 0.1)',
       border: '1px solid var(--color-error)',
       color: 'var(--color-error)',
-      fontSize: 13, lineHeight: 1.6,
+      fontSize: 'var(--font-size-base)', lineHeight: 1.6,
     }}>
       {msg.content}
     </div>
@@ -1947,7 +1947,7 @@ function SystemMessage({ msg }: { msg: ChatMessage }) {
     <div style={{
       padding: '4px 12px',
       color: 'var(--text-tertiary)',
-      fontSize: 11, fontStyle: 'italic',
+      fontSize: 'var(--font-size-small)', fontStyle: 'italic',
       textAlign: 'center',
     }}>
       {msg.content}
