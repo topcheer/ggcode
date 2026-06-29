@@ -41,29 +41,33 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider                provider.Provider
-	tools                   *tool.Registry
-	contextManager          ctxpkg.ContextManager
-	maxIter                 int
-	policy                  permission.PermissionPolicy
-	onApproval              ApprovalFunc
-	onUsage                 func(usage provider.TokenUsage)
-	onMetric                func(metrics.MetricEvent)
-	onCheckpoint            func(messages []provider.Message, tokenCount int)
-	onRunResult             runResultHandler
-	hookConfig              hooks.HookConfig
-	workingDir              string
-	checkpoints             *checkpoint.Manager
-	diffConfirm             DiffConfirmFunc
-	onInterrupt             interruptionHandler
-	projectMemory           map[string]struct{}
-	supportsVision          bool
-	precompact              *precompactState
-	precompactCooldownUntil time.Time // earliest next precompact; guarded by mu
-	shutdownCtx             context.Context
-	shutdownCancel          context.CancelFunc // cancels on Close()
-	probeKey                string             // "vendor|baseURL|model" for context window auto-detection
-	mu                      sync.RWMutex
+	provider                     provider.Provider
+	tools                        *tool.Registry
+	contextManager               ctxpkg.ContextManager
+	maxIter                      int
+	policy                       permission.PermissionPolicy
+	onApproval                   ApprovalFunc
+	onUsage                      func(usage provider.TokenUsage)
+	onMetric                     func(metrics.MetricEvent)
+	onCheckpoint                 func(messages []provider.Message, tokenCount int)
+	onRunResult                  runResultHandler
+	hookConfig                   hooks.HookConfig
+	workingDir                   string
+	checkpoints                  *checkpoint.Manager
+	diffConfirm                  DiffConfirmFunc
+	onInterrupt                  interruptionHandler
+	projectMemory                map[string]struct{}
+	supportsVision               bool
+	precompact                   *precompactState
+	precompactCooldownUntil      time.Time // earliest next precompact; guarded by mu
+	shutdownCtx                  context.Context
+	shutdownCancel               context.CancelFunc // cancels on Close()
+	probeKey                     string             // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal                string             // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked           bool               // true after the goal-collection instruction has been injected
+	autopilotGoalSet             bool               // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotGoalCheckedThisTurn bool               // prevents infinite goal-check loops within a single idle turn
+	mu                           sync.RWMutex
 }
 
 type providerAwareContextManager interface {
@@ -119,9 +123,35 @@ func (a *Agent) SetProbeKey(key string) {
 }
 
 // SetPermissionPolicy sets the permission policy for tool checks.
+// When switching to or from autopilot mode, the autopilot Goal state is
+// reset accordingly.
 func (a *Agent) SetPermissionPolicy(policy permission.PermissionPolicy) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Detect mode transitions involving autopilot.
+	oldMode := permission.SupervisedMode
+	if mp, ok := a.policy.(modeAwarePolicy); ok {
+		oldMode = mp.Mode()
+	}
+	newMode := permission.SupervisedMode
+	if mp, ok := policy.(modeAwarePolicy); ok {
+		newMode = mp.Mode()
+	}
+
+	// Entering autopilot: reset goal collection state.
+	if newMode == permission.AutopilotMode && oldMode != permission.AutopilotMode {
+		a.autopilotGoal = ""
+		a.autopilotGoalAsked = false
+		a.autopilotGoalSet = false
+	}
+	// Leaving autopilot: clear everything.
+	if oldMode == permission.AutopilotMode && newMode != permission.AutopilotMode {
+		a.autopilotGoal = ""
+		a.autopilotGoalAsked = false
+		a.autopilotGoalSet = false
+	}
+
 	a.policy = policy
 }
 
@@ -468,6 +498,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		debug.Log("agent", "RunStreamWithContent: reconciled unpaired tool_calls")
 	}
 
+	// Autopilot Goal collection: on the first RunStream after entering
+	// autopilot mode, inject a meta-instruction asking the LLM to propose
+	// a goal and confirm it with the user via ask_user. This works across
+	// all surfaces (TUI questionnaire, Desktop dialog, daemon IM/mobile).
+	//
+	// Also: if mode changed away from autopilot since last run, clear any
+	// stale goal. This handles TUI's cp.SetMode() which mutates the policy
+	// in-place without calling agent.SetPermissionPolicy().
+	a.clearGoalIfNotAutopilot()
+	a.maybeInjectAutopilotGoalCollection()
+
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	reactiveCompactRetries := 0
@@ -543,6 +584,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
 			a.contextManager.Add(resp.Message)
+
+			// Autopilot Goal achievement check: if the LLM declares the goal
+			// complete, clear the goal and stop. This runs before other
+			// autopilot heuristics so that GOAL_COMPLETE always wins.
+			if a.isAutopilotGoalComplete(textBuf) {
+				debug.Log("agent", "Iteration %d: autopilot goal declared complete", i+1)
+				a.clearAutopilotGoal()
+				return nil
+			}
+
 			if a.injectPendingInterruptions() {
 				idleAutopilotContinuations = 0
 				continue
@@ -561,7 +612,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: autopilotAskUserInstruction(textBuf),
+						Text: autopilotAskUserInstruction(textBuf, a.getAutopilotGoal()),
 					}},
 				})
 				continue
@@ -580,7 +631,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: autopilotContinueInstruction(textBuf),
+						Text: autopilotContinueInstruction(textBuf, a.getAutopilotGoal()),
+					}},
+				})
+				continue
+			}
+			// If we have an autopilot goal but the LLM stopped without tool
+			// calls and without explicit completion language, inject a goal
+			// check prompt to nudge it to either continue or declare done.
+			if a.hasAutopilotGoal() && !a.autopilotGoalCheckedThisTurn {
+				a.autopilotGoalCheckedThisTurn = true
+				debug.Log("agent", "Iteration %d: autopilot injecting goal check", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: autopilotGoalCheckInstruction(a.getAutopilotGoal(), textBuf),
 					}},
 				})
 				continue
@@ -590,6 +656,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			return nil
 		}
 		idleAutopilotContinuations = 0
+		// Reset the per-turn goal check flag when tool calls are present
+		// (the LLM is actively working, no need for a goal check nudge).
+		a.autopilotGoalCheckedThisTurn = false
 
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 

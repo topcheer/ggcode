@@ -3,7 +3,9 @@ package agent
 import (
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 const autopilotLoopGuardThreshold = 2
@@ -49,14 +51,35 @@ func (a *Agent) shouldAutopilotAskUser(text string) bool {
 
 // autopilotContinueInstruction builds the injected user message that nudges
 // the model to keep working instead of waiting for confirmation.
-func autopilotContinueInstruction(lastAssistantText string) string {
-	return "Autopilot: continue working on the original task. Do not stop for confirmation — pick the safest reasonable default and proceed. Do not start unrelated work. If you have completed all requested work, stop and summarize what was done.\n\nPrevious assistant message:\n" + lastAssistantText
+// If a goal is set, it is included as an anchor to prevent scope drift.
+func autopilotContinueInstruction(lastAssistantText, goal string) string {
+	msg := "Autopilot: continue working on the original task. Do not stop for confirmation — pick the safest reasonable default and proceed. Do not start unrelated work. If you have completed all requested work, stop and summarize what was done."
+	if goal != "" {
+		msg += "\n\nYour autopilot goal: " + goal + "\nKeep your next steps focused on achieving this goal."
+	}
+	msg += "\n\nPrevious assistant message:\n" + lastAssistantText
+	return msg
 }
 
 // autopilotAskUserInstruction builds the injected user message that nudges
 // the model to escalate an external blocker via ask_user.
-func autopilotAskUserInstruction(lastAssistantText string) string {
-	return "Autopilot: you reported a blocker. Either resolve it yourself with available tools, or call `ask_user` now with the specific question. Do not repeat the blocked status.\n\nPrevious assistant message:\n" + lastAssistantText
+func autopilotAskUserInstruction(lastAssistantText, goal string) string {
+	msg := "Autopilot: you reported a blocker. Either resolve it yourself with available tools, or call `ask_user` now with the specific question. Do not repeat the blocked status."
+	if goal != "" {
+		msg += "\n\nYour autopilot goal: " + goal
+	}
+	msg += "\n\nPrevious assistant message:\n" + lastAssistantText
+	return msg
+}
+
+// autopilotGoalCheckInstruction asks the LLM to evaluate whether the goal
+// has been achieved and either declare completion or continue working.
+func autopilotGoalCheckInstruction(goal, lastAssistantText string) string {
+	return "You are in autopilot mode. Evaluate your progress against the goal below.\n\n" +
+		"Goal: " + goal + "\n\n" +
+		"If the goal is fully achieved, end your response with exactly \"GOAL_COMPLETE\" on its own line, then provide a brief summary.\n" +
+		"If the goal is NOT yet achieved, continue working immediately. Do not stop — call the appropriate tools to make progress.\n\n" +
+		"Previous assistant message:\n" + lastAssistantText
 }
 
 // shouldAutopilotKeepGoing decides whether the model's text output suggests
@@ -219,4 +242,95 @@ func looksLikeExternalBlocker(text string) bool {
 		}
 	}
 	return false
+}
+
+// --- Autopilot Goal management ---
+
+// clearGoalIfNotAutopilot clears the goal if the current mode is no longer
+// autopilot. This handles TUI's cp.SetMode() which mutates the policy in
+// place without calling agent.SetPermissionPolicy().
+func (a *Agent) clearGoalIfNotAutopilot() {
+	if a.currentMode() != permission.AutopilotMode {
+		a.mu.Lock()
+		if a.autopilotGoal != "" || a.autopilotGoalSet || a.autopilotGoalAsked {
+			a.autopilotGoal = ""
+			a.autopilotGoalSet = false
+			a.autopilotGoalAsked = false
+			debug.Log("agent", "autopilot goal cleared (mode no longer autopilot)")
+		}
+		a.mu.Unlock()
+	}
+}
+
+// maybeInjectAutopilotGoalCollection is called at the start of each
+// RunStreamWithContent. On the first call after entering autopilot mode,
+// it injects a meta-instruction asking the LLM to propose and confirm
+// a goal with the user via ask_user.
+func (a *Agent) maybeInjectAutopilotGoalCollection() {
+	if a.currentMode() != permission.AutopilotMode {
+		return
+	}
+	a.mu.Lock()
+	if a.autopilotGoalAsked {
+		a.mu.Unlock()
+		return
+	}
+	a.autopilotGoalAsked = true
+	a.mu.Unlock()
+
+	debug.Log("agent", "autopilot: injecting goal collection instruction")
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "You are entering autopilot mode. Before starting work, you must define a clear, measurable Goal for this autonomous session.\n\n" +
+				"Use the `ask_user` tool to confirm the goal with the user. Present the goal concisely — 1-3 sentences defining what 'done' looks like.\n" +
+				"If the user's initial message already contains a clear, complete task description, you can use it as the goal and confirm with a brief ask_user.\n" +
+				"After the user confirms the goal, proceed with the work immediately. Do not ask for further confirmation on individual steps.\n" +
+				"When you believe the goal is achieved, end your response with \"GOAL_COMPLETE\" on its own line.",
+		}},
+	})
+}
+
+// SetAutopilotGoal stores the confirmed goal text. Called by the
+// ask_user result handler when the goal confirmation question is answered.
+func (a *Agent) SetAutopilotGoal(goal string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.autopilotGoal = goal
+	a.autopilotGoalSet = true
+	debug.Log("agent", "autopilot goal set: %s", goal)
+}
+
+// getAutopilotGoal returns the current goal text (empty if none).
+func (a *Agent) getAutopilotGoal() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.autopilotGoal
+}
+
+// hasAutopilotGoal returns true if a goal has been confirmed.
+func (a *Agent) hasAutopilotGoal() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.autopilotGoalSet && a.autopilotGoal != ""
+}
+
+// clearAutopilotGoal removes the current goal.
+func (a *Agent) clearAutopilotGoal() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.autopilotGoal = ""
+	a.autopilotGoalSet = false
+	debug.Log("agent", "autopilot goal cleared")
+}
+
+// isAutopilotGoalComplete checks if the LLM's text declares the goal
+// complete via the GOAL_COMPLETE sentinel.
+func (a *Agent) isAutopilotGoalComplete(text string) bool {
+	if !a.hasAutopilotGoal() {
+		return false
+	}
+	upper := strings.ToUpper(text)
+	return strings.Contains(upper, "GOAL_COMPLETE")
 }

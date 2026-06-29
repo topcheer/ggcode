@@ -1089,10 +1089,10 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 	if mp.streamCalls != 3 {
 		t.Fatalf("expected autopilot to continue until an explicit completion turn, got %d", mp.streamCalls)
 	}
-	if got := a.Messages(); len(got) < 4 {
+	if got := a.Messages(); len(got) < 5 {
 		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
 	}
-	lastUser := a.Messages()[2]
+	lastUser := a.Messages()[3]
 	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot:") {
 		t.Fatalf("expected synthetic autopilot continuation message, got %#v", lastUser)
 	}
@@ -1244,7 +1244,7 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 	if mp.streamCalls != 2 {
 		t.Fatalf("expected autopilot to continue after partial progress update, got %d stream calls", mp.streamCalls)
 	}
-	lastUser := a.Messages()[2]
+	lastUser := a.Messages()[3]
 	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "continue working") {
 		t.Fatalf("expected autopilot continuation message, got %#v", lastUser)
 	}
@@ -1882,5 +1882,65 @@ func TestRunStreamEmitsReasoningMetric(t *testing.T) {
 	}
 	if llmMetric.ThinkTime <= 0 {
 		t.Errorf("expected positive think time, got %v", llmMetric.ThinkTime)
+	}
+}
+
+func TestAutopilotGoalLifecycle(t *testing.T) {
+	// Test the full lifecycle: goal not set → set → check → complete → cleared.
+	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	// Initially no goal
+	if a.hasAutopilotGoal() {
+		t.Fatal("expected no goal initially")
+	}
+	if a.isAutopilotGoalComplete("anything") {
+		t.Fatal("isAutopilotGoalComplete should be false when no goal")
+	}
+
+	// Set goal
+	a.SetAutopilotGoal("Fix all failing tests in the auth module")
+	if !a.hasAutopilotGoal() {
+		t.Fatal("expected goal to be set")
+	}
+	if a.getAutopilotGoal() != "Fix all failing tests in the auth module" {
+		t.Fatalf("unexpected goal: %s", a.getAutopilotGoal())
+	}
+
+	// GOAL_COMPLETE detection
+	if !a.isAutopilotGoalComplete("All tests pass.\nGOAL_COMPLETE") {
+		t.Fatal("expected GOAL_COMPLETE to be detected")
+	}
+	if a.isAutopilotGoalComplete("Still working on it") {
+		t.Fatal("expected no false positive on GOAL_COMPLETE")
+	}
+
+	// Clear goal
+	a.clearAutopilotGoal()
+	if a.hasAutopilotGoal() {
+		t.Fatal("expected goal to be cleared")
+	}
+}
+
+func TestAutopilotGoalClearedOnModeSwitch(t *testing.T) {
+	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
+
+	// Enter autopilot and set a goal
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("Do something autonomous")
+	if !a.hasAutopilotGoal() {
+		t.Fatal("expected goal to be set")
+	}
+
+	// Switch to auto mode — goal should be cleared
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode))
+	if a.hasAutopilotGoal() {
+		t.Fatal("expected goal to be cleared after leaving autopilot")
+	}
+
+	// Switch back to autopilot — goal should still be empty
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	if a.hasAutopilotGoal() {
+		t.Fatal("expected no goal after re-entering autopilot")
 	}
 }
