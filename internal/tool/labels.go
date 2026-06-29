@@ -491,6 +491,10 @@ func describeLanchatResult(rawArgs, trimmed string, isError bool) (ToolResultPre
 		return describeLanchatListResult(trimmed)
 	case "send", "broadcast", "broadcast_all", "send_team":
 		return describeLanchatSendResult(args, action, trimmed, isError)
+	case "history":
+		return describeLanchatHistoryResult(trimmed)
+	case "pending":
+		return describeLanchatPendingResult(trimmed)
 	default:
 		return ToolResultPresentation{}, false
 	}
@@ -681,6 +685,106 @@ func extractLanchatDeliveryInfo(result string) string {
 		}
 	}
 	return ""
+}
+
+// describeLanchatHistoryResult formats the JSON message history into a
+// chat-log style display.
+func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool) {
+	if strings.Contains(trimmed, "No messages in history") {
+		return ToolResultPresentation{
+			Summary:     trimmed,
+			PayloadMode: "text",
+		}, true
+	}
+
+	jsonStart := strings.Index(trimmed, "[")
+	if jsonStart < 0 {
+		return ToolResultPresentation{}, false
+	}
+	jsonStr := trimmed[jsonStart:]
+
+	var msgs []struct {
+		From   string `json:"from"`
+		Role   string `json:"role"`
+		To     string `json:"to"`
+		Body   string `json:"content"`
+		Time   string `json:"time"`
+		Direct bool   `json:"direct"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &msgs); err != nil || len(msgs) == 0 {
+		return ToolResultPresentation{}, false
+	}
+
+	header := fmt.Sprintf("History (%d messages)", len(msgs))
+
+	var lines []string
+	lines = append(lines, header)
+	for _, m := range msgs {
+		direction := "→"
+		target := m.To
+		if target == "" || target == "all" {
+			target = "all"
+		}
+
+		line1 := fmt.Sprintf("  %s  %s %s %s", m.Time, m.From, direction, target)
+		lines = append(lines, line1)
+		lines = append(lines, fmt.Sprintf("       %s", m.Body))
+	}
+
+	return ToolResultPresentation{
+		Summary:     header,
+		Payload:     strings.Join(lines, "\n"),
+		PayloadMode: "text",
+	}, true
+}
+
+// describeLanchatPendingResult formats the JSON pending approvals list into
+// a human-readable display with message_id (needed for approve/reject).
+func describeLanchatPendingResult(trimmed string) (ToolResultPresentation, bool) {
+	if strings.Contains(trimmed, "No pending") {
+		return ToolResultPresentation{
+			Summary:     trimmed,
+			PayloadMode: "text",
+		}, true
+	}
+
+	jsonStart := strings.Index(trimmed, "[")
+	if jsonStart < 0 {
+		return ToolResultPresentation{}, false
+	}
+	jsonStr := trimmed[jsonStart:]
+
+	var items []struct {
+		ID       string `json:"message_id"`
+		From     string `json:"from"`
+		FromRole string `json:"from_role"`
+		Content  string `json:"content"`
+		Received string `json:"received"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &items); err != nil || len(items) == 0 {
+		return ToolResultPresentation{}, false
+	}
+
+	header := fmt.Sprintf("Pending approvals (%d)", len(items))
+
+	var lines []string
+	lines = append(lines, header)
+	for _, p := range items {
+		role := p.FromRole
+		if role == "" {
+			role = "?"
+		}
+		line1 := fmt.Sprintf("  %s (%s) — %s", p.From, role, p.Received)
+		lines = append(lines, line1)
+		lines = append(lines, fmt.Sprintf("       %s", p.Content))
+		lines = append(lines, fmt.Sprintf("       id: %s", p.ID))
+	}
+
+	return ToolResultPresentation{
+		Summary:     header,
+		Payload:     strings.Join(lines, "\n"),
+		PayloadMode: "text",
+	}, true
 }
 
 // TeamCreateResultText extracts the created team name from a team_create result.
