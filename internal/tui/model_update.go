@@ -559,6 +559,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case mcpOAuthResultMsg:
 		return m.handleMcpOAuthResultMsg(msg)
 
+	case mcpHealthCheckTickMsg:
+		return m.handleMcpHealthCheckTick(msg)
+
 	case setProgramMsg:
 		debug.Log("tui", "setProgramMsg received, program was nil=%v", m.program == nil)
 		m.program = msg.Program

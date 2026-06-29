@@ -113,11 +113,12 @@ type OAuthHandler struct {
 	httpClient *http.Client
 	store      *auth.Store
 
-	mu            sync.Mutex
-	state         *oauthState
-	callbackCh    chan oauthCallbackResult
-	callbackSrv   *http.Server
-	skipCanonical bool // set by ForceReauth to skip shared credential fallback
+	mu                sync.Mutex
+	state             *oauthState
+	callbackCh        chan oauthCallbackResult
+	callbackSrv       *http.Server
+	skipCanonical     bool   // set by ForceReauth to skip shared credential fallback
+	healthCheckStatus string // human-readable status for MCP panel display
 }
 
 // NewOAuthHandler creates a new OAuth handler for an MCP server.
@@ -677,15 +678,14 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 // newly-registered client_id is visible to the AS. Some providers (Railway)
 // have eventual consistency between the DCR endpoint and the AS, causing
 // "invalid_client" errors if the user opens the authorize URL too soon.
+//
+// Retries indefinitely until the client_id is recognized or the context is
+// cancelled. Updates healthCheckStatus for MCP panel display.
 func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, clientID, redirectURI string) error {
-	const maxRetries = 5
-	const initialDelay = 1 * time.Second
-
-	// Build a minimal authorize URL for the probe. We don't need PKCE/state
-	// — we just want to see if the AS recognizes the client_id.
+	// Build a minimal authorize URL for the probe.
 	probeURL, err := url.Parse(authEndpoint)
 	if err != nil {
-		return nil // if we can't parse, skip the check
+		return nil
 	}
 	q := probeURL.Query()
 	q.Set("client_id", clientID)
@@ -693,21 +693,22 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 	q.Set("redirect_uri", redirectURI)
 	probeURL.RawQuery = q.Encode()
 
-	delay := initialDelay
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-			delay = delay * 3 / 2 // exponential-ish backoff
+	const maxDelay = 10 * time.Second
+	delay := 2 * time.Second
+	attempt := 0
+
+	for {
+		attempt++
+		select {
+		case <-ctx.Done():
+			h.setHealthCheckStatus("")
+			return ctx.Err()
+		case <-time.After(delay):
 		}
 
-		// Use a HEAD-like GET with redirect-following disabled so we can
-		// inspect the raw response. A valid client_id typically gets 302
-		// (redirect to login) or 200 (login page HTML). An invalid one
-		// gets 400/401 with "invalid_client" in the body.
+		// GET with redirect-following disabled. A valid client_id gets 302
+		// (redirect to login) or 200 (login page). Invalid gets 400/401
+		// with "invalid_client" in the body.
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
 		if err != nil {
 			return err
@@ -716,7 +717,9 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 
 		resp, err := h.httpClient.Do(req)
 		if err != nil {
-			debug.Log("mcp-oauth", "client_id health check attempt=%d error=%v", attempt+1, err)
+			h.setHealthCheckStatus(fmt.Sprintf("Verifying OAuth client (attempt %d, retrying)...", attempt))
+			debug.Log("mcp-oauth", "client_id health check attempt=%d error=%v", attempt, err)
+			delay = minDuration(delay*3/2, maxDelay)
 			continue
 		}
 		body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
@@ -725,23 +728,37 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 		bodyStr := string(body)
 		switch {
 		case resp.StatusCode >= 300 && resp.StatusCode < 400:
-			// Redirect = client recognized, being sent to login page
-			debug.Log("mcp-oauth", "client_id health check OK (302 redirect) attempt=%d client_id=%s", attempt+1, clientID)
+			h.setHealthCheckStatus("")
+			debug.Log("mcp-oauth", "client_id health check OK (302) attempt=%d", attempt)
 			return nil
 		case resp.StatusCode == 200 && !strings.Contains(bodyStr, "invalid_client"):
-			// 200 = login/consent page rendered
-			debug.Log("mcp-oauth", "client_id health check OK (200) attempt=%d client_id=%s", attempt+1, clientID)
+			h.setHealthCheckStatus("")
+			debug.Log("mcp-oauth", "client_id health check OK (200) attempt=%d", attempt)
 			return nil
 		case strings.Contains(bodyStr, "invalid_client"):
-			debug.Log("mcp-oauth", "client_id health check FAIL (invalid_client) attempt=%d status=%d, retrying in %s", attempt+1, resp.StatusCode, delay)
+			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
+			debug.Log("mcp-oauth", "client_id health check invalid_client attempt=%d, retrying in %s", attempt, delay)
+			delay = minDuration(delay*3/2, maxDelay)
 			continue
 		default:
-			// Unknown response — assume client is OK to avoid blocking
-			debug.Log("mcp-oauth", "client_id health check UNKNOWN attempt=%d status=%d, assuming OK", attempt+1, resp.StatusCode)
+			h.setHealthCheckStatus("")
+			debug.Log("mcp-oauth", "client_id health check UNKNOWN status=%d, assuming OK", resp.StatusCode)
 			return nil
 		}
 	}
-	return fmt.Errorf("client_id not recognized after %d retries", maxRetries)
+}
+
+func (h *OAuthHandler) setHealthCheckStatus(s string) {
+	h.mu.Lock()
+	h.healthCheckStatus = s
+	h.mu.Unlock()
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // StartAuthFlow initiates the authorization code + PKCE flow.
@@ -1027,6 +1044,14 @@ func (e *OAuthRequiredError) Error() string {
 // ServerName returns the name of the MCP server this handler is for.
 func (h *OAuthHandler) ServerName() string {
 	return h.serverName
+}
+
+// HealthCheckStatus returns a human-readable status string for display in
+// the MCP panel during OAuth client_id health checks.
+func (h *OAuthHandler) HealthCheckStatus() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.healthCheckStatus
 }
 
 // Close cleans up the callback server.

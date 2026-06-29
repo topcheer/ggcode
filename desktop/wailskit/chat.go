@@ -1258,7 +1258,7 @@ func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openU
 	}
 
 	handler := oauthErr.Handler
-	startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	startCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	if handler.SupportsDCR() {

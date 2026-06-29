@@ -595,7 +595,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			handler := pending.Handler
 			serverName := pending.ServerName
 			safego.Go("daemon.mcpOAuth.handle", func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				defer cancel()
 				if handler.SupportsDCR() {
 					_ = handler.RegisterClient(ctx)

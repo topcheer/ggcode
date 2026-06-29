@@ -4,6 +4,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/mcp"
 )
 
 // handleMcpServersMsg handles the corresponding message case.
@@ -13,11 +16,13 @@ func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 	if m.mcpManager != nil {
 		if pending := m.mcpManager.PendingOAuth(); pending != nil {
 			m.mcpManager.ClearPendingOAuth()
-			return m, m.startMCPOAuth(pending)
+			if m.mcpPanel != nil && pending.Handler != nil && pending.Handler.SupportsDCR() {
+				m.mcpPanel.message = fmt.Sprintf("Connecting to %s (verifying OAuth client)...", pending.ServerName)
+			}
+			return m, tea.Batch(m.startMCPOAuth(pending), m.pollMCPHealthCheck(pending.Handler, pending.ServerName))
 		}
 	}
 	return m, nil
-
 }
 
 // handleMcpInstallResultMsg handles the corresponding message case.
@@ -103,4 +108,35 @@ func (m Model) handleMcpUninstallResultMsg(msg mcpUninstallResultMsg) (Model, te
 	}
 	return m, nil
 
+}
+
+// mcpHealthCheckTickMsg refreshes the MCP panel message with the current
+// health check status from the OAuth handler.
+type mcpHealthCheckTickMsg struct {
+	serverName string
+	handler    *mcp.OAuthHandler
+}
+
+// pollMCPHealthCheck emits periodic ticks to update the MCP panel with the
+// latest health check status. Stops when the handler's status clears.
+func (m Model) pollMCPHealthCheck(handler *mcp.OAuthHandler, serverName string) tea.Cmd {
+	if handler == nil {
+		return nil
+	}
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return mcpHealthCheckTickMsg{serverName: serverName, handler: handler}
+	})
+}
+
+func (m Model) handleMcpHealthCheckTick(msg mcpHealthCheckTickMsg) (Model, tea.Cmd) {
+	status := msg.handler.HealthCheckStatus()
+	if status == "" {
+		// Health check passed (or not running). Stop polling.
+		return m, nil
+	}
+	if m.mcpPanel != nil {
+		m.mcpPanel.message = fmt.Sprintf("%s: %s", msg.serverName, status)
+	}
+	// Continue polling
+	return m, m.pollMCPHealthCheck(msg.handler, msg.serverName)
 }
