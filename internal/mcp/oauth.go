@@ -656,8 +656,92 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 
 	h.mu.Lock()
 	h.state.clientRegistration = &reg
+	authEndpoint := h.state.authorizationServerMeta.AuthorizationEndpoint
 	h.mu.Unlock()
+
+	// Health check: some authorization servers (e.g. Railway) have eventual
+	// consistency — the DCR returns a client_id immediately, but the
+	// authorization endpoint doesn't know about it for a few seconds. If we
+	// hand the user an authorize URL before the server has synced, the browser
+	// shows "invalid_client". Probe the authorize endpoint with a throwaway
+	// request to confirm the client_id is live before returning.
+	if reg.ClientID != "" && authEndpoint != "" {
+		if err := h.waitForClientID(ctx, authEndpoint, reg.ClientID, redirectURI); err != nil {
+			debug.Log("mcp-oauth", "client_id health check failed server=%s client_id=%s: %v (continuing anyway)", h.serverName, reg.ClientID, err)
+		}
+	}
 	return nil
+}
+
+// waitForClientID probes the authorization endpoint to confirm that the
+// newly-registered client_id is visible to the AS. Some providers (Railway)
+// have eventual consistency between the DCR endpoint and the AS, causing
+// "invalid_client" errors if the user opens the authorize URL too soon.
+func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, clientID, redirectURI string) error {
+	const maxRetries = 5
+	const initialDelay = 1 * time.Second
+
+	// Build a minimal authorize URL for the probe. We don't need PKCE/state
+	// — we just want to see if the AS recognizes the client_id.
+	probeURL, err := url.Parse(authEndpoint)
+	if err != nil {
+		return nil // if we can't parse, skip the check
+	}
+	q := probeURL.Query()
+	q.Set("client_id", clientID)
+	q.Set("response_type", "code")
+	q.Set("redirect_uri", redirectURI)
+	probeURL.RawQuery = q.Encode()
+
+	delay := initialDelay
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			delay = delay * 3 / 2 // exponential-ish backoff
+		}
+
+		// Use a HEAD-like GET with redirect-following disabled so we can
+		// inspect the raw response. A valid client_id typically gets 302
+		// (redirect to login) or 200 (login page HTML). An invalid one
+		// gets 400/401 with "invalid_client" in the body.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "text/html,application/json")
+
+		resp, err := h.httpClient.Do(req)
+		if err != nil {
+			debug.Log("mcp-oauth", "client_id health check attempt=%d error=%v", attempt+1, err)
+			continue
+		}
+		body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
+		resp.Body.Close()
+
+		bodyStr := string(body)
+		switch {
+		case resp.StatusCode >= 300 && resp.StatusCode < 400:
+			// Redirect = client recognized, being sent to login page
+			debug.Log("mcp-oauth", "client_id health check OK (302 redirect) attempt=%d client_id=%s", attempt+1, clientID)
+			return nil
+		case resp.StatusCode == 200 && !strings.Contains(bodyStr, "invalid_client"):
+			// 200 = login/consent page rendered
+			debug.Log("mcp-oauth", "client_id health check OK (200) attempt=%d client_id=%s", attempt+1, clientID)
+			return nil
+		case strings.Contains(bodyStr, "invalid_client"):
+			debug.Log("mcp-oauth", "client_id health check FAIL (invalid_client) attempt=%d status=%d, retrying in %s", attempt+1, resp.StatusCode, delay)
+			continue
+		default:
+			// Unknown response — assume client is OK to avoid blocking
+			debug.Log("mcp-oauth", "client_id health check UNKNOWN attempt=%d status=%d, assuming OK", attempt+1, resp.StatusCode)
+			return nil
+		}
+	}
+	return fmt.Errorf("client_id not recognized after %d retries", maxRetries)
 }
 
 // StartAuthFlow initiates the authorization code + PKCE flow.
