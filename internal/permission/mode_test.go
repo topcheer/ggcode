@@ -110,6 +110,24 @@ func TestPlanModeDeniesWrites(t *testing.T) {
 	if err != nil || d != Deny {
 		t.Errorf("PlanMode: write_command_input should be Deny, got %v err=%v", d, err)
 	}
+
+	// lanchat should be allowed in plan mode (always-allowed tool)
+	d, err = policy.Check("lanchat", json.RawMessage(`{"action":"list"}`))
+	if err != nil || d != Allow {
+		t.Errorf("PlanMode: lanchat should be Allow, got %v err=%v", d, err)
+	}
+}
+
+func TestLanchatAlwaysAllowed(t *testing.T) {
+	// lanchat must be allowed in every permission mode without approval
+	lanchatInput := json.RawMessage(`{"action":"list"}`)
+	for _, mode := range ValidPermissionModes {
+		policy := NewConfigPolicyWithMode(nil, []string{"."}, mode)
+		d, err := policy.Check("lanchat", lanchatInput)
+		if err != nil || d != Allow {
+			t.Errorf("%s: lanchat should be Allow, got %v err=%v", mode.String(), d, err)
+		}
+	}
 }
 
 func TestAutoModeDeniesDangerous(t *testing.T) {
