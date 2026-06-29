@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.90`](docs/releases/v1.3.90.md) |
+| Latest documented release | [`v1.3.91`](docs/releases/v1.3.91.md) |
 
 ## Build & Validation
 
@@ -231,7 +231,7 @@ Available in any IM channel connected to a ggcode daemon:
 | Mode | Behavior |
 |------|----------|
 | `supervised` | Default. Respects per-tool rules, asks for unspecified tools |
-| `plan` | Read-only: allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes/commands |
+| `plan` | Read-only: allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`, LSP tools, read-only git/web tools; denies writes/commands. `lanchat` is always allowed (see `IsAlwaysAllowedTool`) |
 | `auto` | Allows safe operations, denies dangerous ones automatically |
 | `bypass` | Allows almost everything, warns on critical operations |
 | `autopilot` | Bypass permissions + automatically continues when model asks for input; escalates external blockers to `ask_user` |
@@ -350,3 +350,8 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **LAN Chat messaging scope**: Three actions map to three scopes: `send` (DM, requires `to=<node_id>`), `send_team` (team broadcast, requires `team=<name>`), `broadcast` (all participants, no `to`/`team`). Using `send` with `to='*'` is equivalent to `broadcast` — prefer `broadcast` for clarity.
 - **Tool call reconciliation**: `ContextManager.ReconcileToolCalls()` runs on session restore and at the start of each `RunStreamWithContent()`. It adds cancelled `tool_result` entries for unpaired `tool_use` blocks and removes orphan `tool_result` blocks — preventing LLM API errors from providers that require all tool_use to have matching tool_result.
 - **TUI session auto-selection**: When `ggcode tui` starts without `--resume`, it iterates all workspace sessions (newest-first) via `ListForWorkspace()`, loading the first unlocked one. If all are locked, a new session is created. This enables N instances to each grab a different session automatically.
+- **MCP protocol version negotiation**: The MCP client sends `2025-11-25` (latest) during initialize and accepts all known versions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`). The server's negotiated version is stored in `Client.negotiatedVersion`. Unknown versions are rejected.
+- **MCP OAuth DCR health check**: After Dynamic Client Registration, the client polls the authorize endpoint with PKCE params to wait for the client_id to propagate. All 4xx responses are retried (not just 200). The retry loop is infinite with a status display in the MCP panel.
+- **Microcompact vs precompact**: Microcompact (context exceeds soft limit) is now silent — no user message. Only LLM-triggered precompact (explicit compaction request) shows a system message. A 2-minute cooldown after precompact prevents tight compaction loops. Auto-compact thresholds raised from 0.65/0.75 to 0.80/0.88 of context window.
+- **Fuzzy line match for edit_file**: When exact `old_text` matching fails, `edit_file` falls back to fuzzy matching — stripping leading whitespace and comparing line content. This handles tab/space mismatches in the original file.
+- **lanchat always allowed**: The `lanchat` tool is always allowed in every permission mode (including plan mode) via `IsAlwaysAllowedTool()`. It is checked before mode-specific rules in `ConfigPolicy.Check()`.
