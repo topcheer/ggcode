@@ -47,6 +47,11 @@ type Hub struct {
 	// peers discovered via A2A registry callbacks
 	peers map[string]*Participant // key = NodeID
 
+	// archive is a ring buffer of peers that were deleted after extended
+	// unreachability. Used to correlate returning peers with their previous
+	// identity (new NodeID, same team/role/nicks). FIFO, max 500 entries.
+	archive []ArchivedPeer
+
 	// messages received (in-memory, for UI display)
 	messages []Message
 
@@ -389,6 +394,84 @@ func (h *Hub) Participants() []Participant {
 	return result
 }
 
+// archivePeer adds a snapshot of the participant to the archive ring
+// buffer. If the archive is full (maxArchiveEntries), the oldest entry
+// is evicted (FIFO). Must be called with h.mu held.
+func (h *Hub) archivePeer(p *Participant) {
+	entry := ArchivedPeer{
+		NodeID:      p.NodeID,
+		HumanNick:   p.HumanNick,
+		AgentNick:   p.AgentNick,
+		Role:        p.Role,
+		Team:        p.Team,
+		Workspace:   p.Workspace,
+		ProjectName: p.ProjectName,
+		Languages:   p.Languages,
+		LastSeen:    p.LastSeen,
+		ArchivedAt:  time.Now().Unix(),
+	}
+	h.archive = append(h.archive, entry)
+	if len(h.archive) > maxArchiveEntries {
+		h.archive = h.archive[len(h.archive)-maxArchiveEntries:]
+	}
+	debug.Log("lanchat", "archived peer %s (%s)", p.NodeID, p.HumanNick)
+}
+
+// Archive returns a copy of the archived peer snapshots (FIFO order).
+func (h *Hub) Archive() []ArchivedPeer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]ArchivedPeer, len(h.archive))
+	copy(result, h.archive)
+	return result
+}
+
+// LookupArchiveByNodeID searches the archive for a peer with the given
+// node_id. Returns nil if not found.
+func (h *Hub) LookupArchiveByNodeID(nodeID string) *ArchivedPeer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for i := range h.archive {
+		if h.archive[i].NodeID == nodeID {
+			ap := h.archive[i]
+			return &ap
+		}
+	}
+	return nil
+}
+
+// LookupArchiveByTeamRole searches the archive for peers matching the
+// given team AND role. Returns the most recent match (last added), or
+// nil if none found.
+func (h *Hub) LookupArchiveByTeamRole(team, role string) *ArchivedPeer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for i := len(h.archive) - 1; i >= 0; i-- {
+		if h.archive[i].Team == team && h.archive[i].Role == role {
+			ap := h.archive[i]
+			return &ap
+		}
+	}
+	return nil
+}
+
+// LookupArchiveByNick searches the archive for a peer with the given
+// human_nick or agent_nick (case-insensitive). Returns the most recent
+// match, or nil if not found.
+func (h *Hub) LookupArchiveByNick(nick string) *ArchivedPeer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	lower := strings.ToLower(nick)
+	for i := len(h.archive) - 1; i >= 0; i-- {
+		if strings.ToLower(h.archive[i].HumanNick) == lower ||
+			strings.ToLower(h.archive[i].AgentNick) == lower {
+			ap := h.archive[i]
+			return &ap
+		}
+	}
+	return nil
+}
+
 // Messages returns a copy of all received messages.
 func (h *Hub) Messages() []Message {
 	h.mu.RLock()
@@ -536,6 +619,10 @@ func (h *Hub) UpdatePeers(participants []Participant) {
 			if p.HumanNick != "" {
 				delete(h.notifiedNicks, strings.TrimSpace(p.HumanNick))
 			}
+			// Archive the peer before deletion so long-running agents
+			// can correlate it with a returning peer (new NodeID, same
+			// team/role/nicks).
+			h.archivePeer(p)
 			delete(h.peers, id)
 		}
 	}

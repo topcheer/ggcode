@@ -198,12 +198,13 @@ func dedupStrings(in []string) []string {
 // or partial nick prefixes) to actual node IDs from the known peers list.
 //
 // Resolution order per identifier:
-//  1. Exact node_id match
-//  2. Exact human_nick or agent_nick match (case-insensitive)
-//  3. Unique prefix match on human_nick or agent_nick (e.g. "dd" matches "dd_dev_agent")
+//  1. Exact node_id match in active peers
+//  2. Exact human_nick or agent_nick match in active peers (case-insensitive)
+//  3. Unique prefix match on human_nick or agent_nick
+//  4. Archive fallback: look up the identifier in the archive ring buffer.
+//     If found, use the archived peer's team+role to find a currently
+//     active peer (the peer may have restarted with a new NodeID).
 //
-// If a prefix matches multiple peers, the first match is used. This is
-// acceptable because the LLM can see the full nicks in the list output.
 // If no match is found for any identifier, returns nil.
 func (t LanChatTool) resolveRecipients(ids []string) []string {
 	participants := t.Hub.Participants()
@@ -212,6 +213,9 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 	byNodeID := make(map[string]string) // lower(nodeID) -> nodeID
 	byNick := make(map[string]string)   // lower(nick) -> nodeID
 	byPrefix := make([]struct{ nick, id string }, 0)
+
+	// Also build team+role index for archive fallback
+	byTeamRole := make(map[string]string) // "team|role" -> nodeID
 
 	for _, p := range participants {
 		if p.NodeID == t.Hub.NodeID() {
@@ -226,8 +230,15 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 			byNick[lower] = p.NodeID
 			byPrefix = append(byPrefix, struct{ nick, id string }{lower, p.NodeID})
 		}
+		if p.Team != "" && p.Role != "" {
+			key := p.Team + "|" + p.Role
+			if _, exists := byTeamRole[key]; !exists {
+				byTeamRole[key] = p.NodeID
+			}
+		}
 	}
 
+	var unresolved []string
 	var resolved []string
 	seen := make(map[string]bool)
 	for _, raw := range ids {
@@ -254,13 +265,46 @@ func (t LanChatTool) resolveRecipients(ids []string) []string {
 			continue
 		}
 		// 3. Prefix match (first wins)
+		found := false
 		for _, entry := range byPrefix {
 			if strings.HasPrefix(entry.nick, lower) {
 				if !seen[entry.id] {
 					resolved = append(resolved, entry.id)
 					seen[entry.id] = true
 				}
+				found = true
 				break
+			}
+		}
+		if found {
+			continue
+		}
+
+		// Not found in active peers — try archive fallback
+		unresolved = append(unresolved, raw)
+	}
+
+	// 4. Archive fallback: for each unresolved identifier, search the
+	//    archive ring buffer. If found, use team+role to find the peer's
+	//    current NodeID in the active peers map.
+	for _, raw := range unresolved {
+		// Try archive by node_id
+		ap := t.Hub.LookupArchiveByNodeID(raw)
+		if ap == nil {
+			// Try archive by nick
+			ap = t.Hub.LookupArchiveByNick(raw)
+		}
+
+		if ap != nil && ap.Team != "" && ap.Role != "" {
+			// Found in archive — try to find a currently active peer
+			// with the same team+role (the peer may have restarted)
+			key := ap.Team + "|" + ap.Role
+			if id, ok := byTeamRole[key]; ok {
+				if !seen[id] {
+					resolved = append(resolved, id)
+					seen[id] = true
+				}
+				continue
 			}
 		}
 		// If nothing matched, skip silently — caller handles empty result

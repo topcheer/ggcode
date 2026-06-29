@@ -142,6 +142,27 @@ var peerDeleteAfter = 10 * time.Minute
 // is fired — absorbing transient blips.
 var offlineNotifyDelay = 30 * time.Second
 
+// maxArchiveEntries is the maximum number of archived peers kept in the
+// ring buffer. When full, the oldest entry is evicted (FIFO).
+const maxArchiveEntries = 500
+
+// ArchivedPeer is a snapshot of a participant stored when the peer is
+// deleted from the active peers map (after peerDeleteAfter). This allows
+// long-running agents to correlate a returning peer (new NodeID) with its
+// previous identity (same team + role, or same nicks).
+type ArchivedPeer struct {
+	NodeID      string   `json:"node_id"`
+	HumanNick   string   `json:"human_nick"`
+	AgentNick   string   `json:"agent_nick"`
+	Role        string   `json:"role"`
+	Team        string   `json:"team"`
+	Workspace   string   `json:"workspace,omitempty"`
+	ProjectName string   `json:"project_name,omitempty"`
+	Languages   []string `json:"languages,omitempty"`
+	LastSeen    int64    `json:"last_seen"`
+	ArchivedAt  int64    `json:"archived_at"` // unix seconds when the peer was archived
+}
+
 // DetectWorkspaceMeta scans the working directory for language/framework
 // signals and returns a WorkspaceMeta suitable for presence exchange.
 // This is a lightweight version that doesn't import the a2a package.
