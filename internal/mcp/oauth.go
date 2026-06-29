@@ -682,6 +682,17 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 // Retries indefinitely until the client_id is recognized or the context is
 // cancelled. Updates healthCheckStatus for MCP panel display.
 func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, clientID, redirectURI string) error {
+	// Generate a dummy PKCE pair for the probe. Many AS (Railway, etc.)
+	// require PKCE on ALL authorize requests, so the probe must include
+	// code_challenge + code_challenge_method=S256 to avoid being rejected
+	// with "invalid_request: requires PKCE" before the client_id is even
+	// validated.
+	probeVerifier, err := auth.GenerateCodeVerifier()
+	if err != nil {
+		return nil
+	}
+	probeChallenge := auth.GenerateCodeChallenge(probeVerifier)
+
 	// Build a minimal authorize URL for the probe.
 	probeURL, err := url.Parse(authEndpoint)
 	if err != nil {
@@ -691,6 +702,8 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 	q.Set("client_id", clientID)
 	q.Set("response_type", "code")
 	q.Set("redirect_uri", redirectURI)
+	q.Set("code_challenge", probeChallenge)
+	q.Set("code_challenge_method", "S256")
 	probeURL.RawQuery = q.Encode()
 
 	const maxDelay = 10 * time.Second
@@ -731,13 +744,20 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			h.setHealthCheckStatus("")
 			debug.Log("mcp-oauth", "client_id health check OK (302) attempt=%d", attempt)
 			return nil
-		case resp.StatusCode == 200 && !strings.Contains(bodyStr, "invalid_client"):
+		case resp.StatusCode == 200 && !strings.Contains(bodyStr, "invalid_client") && !strings.Contains(bodyStr, "invalid_request"):
 			h.setHealthCheckStatus("")
 			debug.Log("mcp-oauth", "client_id health check OK (200) attempt=%d", attempt)
 			return nil
 		case strings.Contains(bodyStr, "invalid_client"):
 			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
 			debug.Log("mcp-oauth", "client_id health check invalid_client attempt=%d, retrying in %s", attempt, delay)
+			delay = minDuration(delay*3/2, maxDelay)
+			continue
+		case resp.StatusCode >= 400 && resp.StatusCode < 500:
+			// Other 4xx errors — could be transient server-side issues during
+			// DCR propagation. Log the body for debugging and retry.
+			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
+			debug.Log("mcp-oauth", "client_id health check 4xx status=%d body=%s attempt=%d, retrying in %s", resp.StatusCode, truncateForLog(bodyStr, 200), attempt, delay)
 			delay = minDuration(delay*3/2, maxDelay)
 			continue
 		default:
@@ -759,6 +779,13 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // StartAuthFlow initiates the authorization code + PKCE flow.
