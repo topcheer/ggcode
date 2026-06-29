@@ -141,10 +141,10 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
-	// Only print the "Auto-compressing" message and attempt microcompact.
-	// Microcompact is cheap (local, no LLM call) and always worth trying.
+	// Run microcompact silently — it's a cheap local operation (no LLM call)
+	// that truncates old tool_result blocks. It should happen as frequently
+	// as needed without showing the user a message.
 	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
-	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", tokens)})
 	changed := false
 	if cm, ok := a.contextManager.(microcompacter); ok {
 		changed = cm.Microcompact()
@@ -161,11 +161,12 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	}
 
 	if newTokens < threshold {
-		return nil
+		return nil // microcompact was enough — stay silent, no cooldown needed
 	}
 
-	// Microcompact wasn't enough — schedule background precompact.
-	// Set a cooldown so we don't immediately retry after this attempt.
+	// Microcompact wasn't enough — schedule background precompact (LLM summarization).
+	// Print the message and set a cooldown so we don't immediately retry.
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", newTokens)})
 	const precompactCooldown = 2 * time.Minute
 	a.mu.Lock()
 	a.precompactCooldownUntil = time.Now().Add(precompactCooldown)
