@@ -1064,7 +1064,7 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 			{
 				Message: provider.Message{
 					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and found the issue.")},
+					Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and fixed the root cause.")},
 				},
 			},
 			{
@@ -1093,7 +1093,7 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
 	}
 	lastUser := a.Messages()[2]
-	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot is enabled") {
+	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot:") {
 		t.Fatalf("expected synthetic autopilot continuation message, got %#v", lastUser)
 	}
 	if len(events) < 5 || events[len(events)-2].Type != provider.StreamEventText || events[len(events)-2].Text != "Completed the implementation after inspecting the tests first." {
@@ -1147,7 +1147,7 @@ func TestRunStreamInterruptOverridesAutopilotContinuation(t *testing.T) {
 			if strings.Contains(block.Text, "Use option B.") {
 				sawInterrupt = true
 			}
-			if strings.Contains(block.Text, "Autopilot is enabled. Do not wait for user confirmation.") {
+			if strings.Contains(block.Text, "Autopilot: continue working") {
 				sawAutopilotInstruction = true
 			}
 		}
@@ -1245,8 +1245,8 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 		t.Fatalf("expected autopilot to continue after partial progress update, got %d stream calls", mp.streamCalls)
 	}
 	lastUser := a.Messages()[2]
-	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "partial progress") {
-		t.Fatalf("expected stronger synthetic continuation message, got %#v", lastUser)
+	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "continue working") {
+		t.Fatalf("expected autopilot continuation message, got %#v", lastUser)
 	}
 }
 

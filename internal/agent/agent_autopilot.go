@@ -50,13 +50,13 @@ func (a *Agent) shouldAutopilotAskUser(text string) bool {
 // autopilotContinueInstruction builds the injected user message that nudges
 // the model to keep working instead of waiting for confirmation.
 func autopilotContinueInstruction(lastAssistantText string) string {
-	return "Autopilot is enabled. Do not wait for user confirmation when a safe, reasonable next step is available. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do. If you only made partial progress, keep going instead of stopping for a progress update. If progress is blocked on a user action or external step that you cannot do yourself, use `ask_user` instead of repeating a blocked or waiting status.\n\nPrevious assistant message:\n" + lastAssistantText
+	return "Autopilot: continue working on the original task. Do not stop for confirmation — pick the safest reasonable default and proceed. Do not start unrelated work. If you have completed all requested work, stop and summarize what was done.\n\nPrevious assistant message:\n" + lastAssistantText
 }
 
 // autopilotAskUserInstruction builds the injected user message that nudges
 // the model to escalate an external blocker via ask_user.
 func autopilotAskUserInstruction(lastAssistantText string) string {
-	return "Autopilot is enabled. The previous assistant message indicates progress is blocked on a user action or external step. If you can perform that step yourself with the available tools, do it now. Otherwise, call the `ask_user` tool immediately with the specific action or information needed. Do not repeat a blocked or waiting summary.\n\nPrevious assistant message:\n" + lastAssistantText
+	return "Autopilot: you reported a blocker. Either resolve it yourself with available tools, or call `ask_user` now with the specific question. Do not repeat the blocked status.\n\nPrevious assistant message:\n" + lastAssistantText
 }
 
 // shouldAutopilotKeepGoing decides whether the model's text output suggests
@@ -163,10 +163,12 @@ func looksLikeMoreWorkRemaining(text string) bool {
 	if strings.Contains(trimmed, "no remaining work") || strings.Contains(trimmed, "nothing more to do") {
 		return false
 	}
+	// "todo" alone is too broad — it could be "todo_write" reference or a
+	// mention of unrelated TODOs in code. Require action-oriented markers.
 	markers := []string{
 		"next step", "next i", "next i'll", "still need", "still needs", "need to", "needs more",
-		"follow up", "follow-up", "continue with", "continue by", "identified", "more to do",
-		"another step", "hotspot", "todo", "then i can", "then i'll", "remaining work",
+		"follow up", "follow-up", "continue with", "continue by", "more to do",
+		"another step", "then i can", "then i'll", "remaining work",
 		"接下来", "下一步", "还需要", "仍需", "还有", "后续", "继续", "再处理", "剩余",
 	}
 	for _, marker := range markers {
@@ -182,11 +184,14 @@ func looksLikeProgressUpdate(text string) bool {
 	if trimmed == "" {
 		return false
 	}
+	// Action verbs that indicate the model is actively working on something
+	// and likely has more steps to complete. Exclude passive inspection-only
+	// verbs ("I checked", "I looked at") that may indicate completion.
 	markers := []string{
-		"i inspected", "i checked", "i traced", "i investigated", "i analyzed", "i found",
 		"i fixed", "i updated", "i changed", "i refactored", "i implemented", "i added",
-		"identified", "root cause", "inspection shows",
-		"我检查了", "我排查了", "我分析了", "我定位到", "我发现了", "我修复了", "我更新了", "我添加了",
+		"i removed", "i deleted", "i moved", "i renamed", "i created", "i replaced",
+		"root cause", "inspection shows",
+		"我修复了", "我更新了", "我添加了", "我删除了", "我移动了", "我重命名了",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {

@@ -56,7 +56,23 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		}
 	}
 	if mode == permission.AutopilotMode {
-		prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+		prompt += "\n\n## Autopilot\n" +
+			"You are in autopilot mode — work autonomously until the original task is fully complete.\n" +
+			"\n" +
+			"**Staying on task:**\n" +
+			"- Keep your work strictly within the scope of the user's original request. Do not start tangential improvements, refactoring, or cleanup unless it is a prerequisite for the task.\n" +
+			"- If you notice unrelated issues, note them but do not fix them unless the user explicitly asked.\n" +
+			"- Before starting each step, verify it directly serves the original task. If it does not, skip it.\n" +
+			"\n" +
+			"**Continuing autonomously:**\n" +
+			"- Do not stop to ask the user for preferences or confirmation if a reasonable default exists.\n" +
+			"- Choose the safest reversible assumption, state it briefly if useful, and keep going.\n" +
+			"- If you only made partial progress, continue immediately — do not stop for a progress update.\n" +
+			"- After completing the requested work, stop and summarize what was done. Do not look for additional work to fill the time.\n" +
+			"\n" +
+			"**When to escalate:**\n" +
+			"- If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly.\n" +
+			"- Do not report that you are blocked and waiting — either resolve it yourself or call `ask_user`."
 	}
 	if strings.TrimSpace(remoteAgentsInfo) != "" {
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
