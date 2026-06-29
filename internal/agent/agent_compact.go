@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -124,12 +125,24 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	// results when it completes and reduce the token count.
 	a.mu.Lock()
 	precompactRunning := a.precompact != nil
+	cooldownUntil := a.precompactCooldownUntil
 	a.mu.Unlock()
 	if precompactRunning {
 		debug.Log("agent", "maybeAutoCompact: SKIP (precompact already running, tokens=%d)", tokens)
 		return nil
 	}
 
+	// Cooldown: after a precompact attempt (success or failure), wait before
+	// trying again. This prevents a tight loop where compaction completes but
+	// doesn't reduce enough, immediately triggering another expensive LLM
+	// summarization that produces the same result.
+	if time.Now().Before(cooldownUntil) {
+		debug.Log("agent", "maybeAutoCompact: SKIP (cooldown active, %s remaining, tokens=%d)", time.Until(cooldownUntil).Round(time.Second), tokens)
+		return nil
+	}
+
+	// Only print the "Auto-compressing" message and attempt microcompact.
+	// Microcompact is cheap (local, no LLM call) and always worth trying.
 	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", tokens)})
 	changed := false
@@ -151,7 +164,14 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
-	debug.Log("agent", "maybeAutoCompact: scheduling background precompact after microcompact tokens=%d threshold=%d", newTokens, threshold)
+	// Microcompact wasn't enough — schedule background precompact.
+	// Set a cooldown so we don't immediately retry after this attempt.
+	const precompactCooldown = 2 * time.Minute
+	a.mu.Lock()
+	a.precompactCooldownUntil = time.Now().Add(precompactCooldown)
+	a.mu.Unlock()
+
+	debug.Log("agent", "maybeAutoCompact: scheduling background precompact after microcompact tokens=%d threshold=%d cooldown=%s", newTokens, threshold, precompactCooldown)
 	a.StartPreCompact()
 	return nil
 }

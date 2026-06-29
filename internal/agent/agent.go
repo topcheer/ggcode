@@ -41,28 +41,29 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider       provider.Provider
-	tools          *tool.Registry
-	contextManager ctxpkg.ContextManager
-	maxIter        int
-	policy         permission.PermissionPolicy
-	onApproval     ApprovalFunc
-	onUsage        func(usage provider.TokenUsage)
-	onMetric       func(metrics.MetricEvent)
-	onCheckpoint   func(messages []provider.Message, tokenCount int)
-	onRunResult    runResultHandler
-	hookConfig     hooks.HookConfig
-	workingDir     string
-	checkpoints    *checkpoint.Manager
-	diffConfirm    DiffConfirmFunc
-	onInterrupt    interruptionHandler
-	projectMemory  map[string]struct{}
-	supportsVision bool
-	precompact     *precompactState
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc // cancels on Close()
-	probeKey       string             // "vendor|baseURL|model" for context window auto-detection
-	mu             sync.RWMutex
+	provider                provider.Provider
+	tools                   *tool.Registry
+	contextManager          ctxpkg.ContextManager
+	maxIter                 int
+	policy                  permission.PermissionPolicy
+	onApproval              ApprovalFunc
+	onUsage                 func(usage provider.TokenUsage)
+	onMetric                func(metrics.MetricEvent)
+	onCheckpoint            func(messages []provider.Message, tokenCount int)
+	onRunResult             runResultHandler
+	hookConfig              hooks.HookConfig
+	workingDir              string
+	checkpoints             *checkpoint.Manager
+	diffConfirm             DiffConfirmFunc
+	onInterrupt             interruptionHandler
+	projectMemory           map[string]struct{}
+	supportsVision          bool
+	precompact              *precompactState
+	precompactCooldownUntil time.Time // earliest next precompact; guarded by mu
+	shutdownCtx             context.Context
+	shutdownCancel          context.CancelFunc // cancels on Close()
+	probeKey                string             // "vendor|baseURL|model" for context window auto-detection
+	mu                      sync.RWMutex
 }
 
 type providerAwareContextManager interface {
