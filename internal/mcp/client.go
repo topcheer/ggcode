@@ -28,28 +28,29 @@ import (
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name         string
-	transport    string
-	command      string
-	args         []string
-	env          map[string]string
-	url          string
-	headers      map[string]string
-	cmd          *exec.Cmd
-	procCancel   context.CancelFunc
-	stdin        io.WriteCloser
-	stdout       io.Reader
-	reader       *bufio.Reader // reused stdout reader
-	httpClient   *http.Client
-	wsConn       *websocket.Conn
-	sessionID    string
-	mu           sync.Mutex
-	stderrMu     sync.RWMutex
-	stderrBuf    strings.Builder
-	abortOnce    sync.Once
-	nextID       atomic.Int64
-	closed       bool
-	oauthHandler *OAuthHandler
+	name              string
+	transport         string
+	command           string
+	args              []string
+	env               map[string]string
+	url               string
+	headers           map[string]string
+	cmd               *exec.Cmd
+	procCancel        context.CancelFunc
+	stdin             io.WriteCloser
+	stdout            io.Reader
+	reader            *bufio.Reader // reused stdout reader
+	httpClient        *http.Client
+	wsConn            *websocket.Conn
+	sessionID         string
+	negotiatedVersion string // protocol version agreed upon during initialize
+	mu                sync.Mutex
+	stderrMu          sync.RWMutex
+	stderrBuf         strings.Builder
+	abortOnce         sync.Once
+	nextID            atomic.Int64
+	closed            bool
+	oauthHandler      *OAuthHandler
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -145,16 +146,49 @@ func (c *Client) Start(ctx context.Context) error {
 	return nil
 }
 
+// latestMCPProtocolVersion is the latest MCP protocol version this client
+// supports. The client sends this during initialize; the server may negotiate
+// down to an older version.
+const latestMCPProtocolVersion = "2025-11-25"
+
+// knownMCPProtocolVersions lists all protocol versions this client accepts.
+// If the server negotiates to a version not in this set, initialization fails.
+var knownMCPProtocolVersions = map[string]bool{
+	"2024-11-05": true,
+	"2025-03-26": true,
+	"2025-06-18": true,
+	"2025-11-25": true,
+}
+
+// NegotiatedVersion returns the MCP protocol version agreed upon during
+// initialize, or empty string if not yet initialized.
+func (c *Client) NegotiatedVersion() string {
+	return c.negotiatedVersion
+}
+
 // Initialize sends the initialize request and returns server capabilities.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	params := InitializeParams{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: latestMCPProtocolVersion,
 		ClientInfo:      Implementation{Name: "ggcode", Version: "0.1.0"},
 	}
 	var result InitializeResult
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", c.name, err)
 	}
+
+	// Version negotiation: the server may respond with the same version
+	// (if it supports ours) or a different one (its latest supported).
+	// We accept any known version; reject unknown versions.
+	serverVersion := result.ProtocolVersion
+	if serverVersion == "" {
+		return nil, fmt.Errorf("mcp[%s]: server returned empty protocolVersion", c.name)
+	}
+	if !knownMCPProtocolVersions[serverVersion] {
+		return nil, fmt.Errorf("mcp[%s]: unsupported protocol version %q (client supports %s)",
+			c.name, serverVersion, latestMCPProtocolVersion)
+	}
+	c.negotiatedVersion = serverVersion
 
 	// Send initialized notification
 	notif := Notification{

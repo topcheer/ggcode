@@ -138,7 +138,7 @@ func TestCallToolResultFields(t *testing.T) {
 
 func TestInitializeParams(t *testing.T) {
 	p := InitializeParams{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: latestMCPProtocolVersion,
 		ClientInfo:      Implementation{Name: "ggcode", Version: "0.1.0"},
 	}
 	data, err := json.Marshal(p)
@@ -147,7 +147,7 @@ func TestInitializeParams(t *testing.T) {
 	}
 	var m map[string]interface{}
 	json.Unmarshal(data, &m)
-	if m["protocolVersion"] != "2024-11-05" {
+	if m["protocolVersion"] != latestMCPProtocolVersion {
 		t.Errorf("protocolVersion = %v", m["protocolVersion"])
 	}
 }
@@ -213,7 +213,7 @@ func TestHTTPClientLifecycle(t *testing.T) {
 		case "initialize":
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Mcp-Session-Id", "test-session")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"` + latestMCPProtocolVersion + `","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
@@ -282,7 +282,7 @@ func TestWebSocketClientLifecycle(t *testing.T) {
 					"jsonrpc": "2.0",
 					"id":      1,
 					"result": map[string]any{
-						"protocolVersion": "2024-11-05",
+						"protocolVersion": latestMCPProtocolVersion,
 						"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 						"serverInfo":      map[string]any{"name": "mock", "version": "1.0.0"},
 					},

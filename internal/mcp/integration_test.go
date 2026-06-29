@@ -27,7 +27,7 @@ func TestClientInitializeProtocol(t *testing.T) {
 		t.Error("empty marshaled request")
 	}
 
-	initResp := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"0.1.0"}}}`
+	initResp := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"mock","version":"0.1.0"}}}`
 	var resp Response
 	if err := json.Unmarshal([]byte(initResp), &resp); err != nil {
 		t.Fatal(err)
