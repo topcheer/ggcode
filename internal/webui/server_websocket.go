@@ -122,12 +122,19 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		unsub = s.chatBridge.Subscribe(func(event provider.StreamEvent) {
 			send(streamEventToJSON(event))
 		})
-		defer unsub()
+		// Note: unsub is called explicitly in the read-error path before
+		// closing writeCh to avoid send-on-closed-channel panic. There is
+		// no defer unsub() here because the return path handles it.
 	}
 
 	for {
 		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
+			// Unsubscribe BEFORE closing writeCh so no callback tries to
+			// send on a closed channel (send-on-closed-channel panics).
+			if unsub != nil {
+				unsub()
+			}
 			close(writeCh)
 			<-writeDone
 			return
@@ -278,8 +285,9 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 }
 
 func (s *Server) wsSend(conn *websocket.Conn, msg interface{}) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Use Lock (not RLock) — gorilla/websocket forbids concurrent writes.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := conn.WriteJSON(msg); err != nil {
 		debug.Log("webui", "ws write error: %v", err)
 	}

@@ -1248,20 +1248,21 @@ func (h *Hub) GetReceipt(messageID string) (Receipt, bool) {
 }
 
 func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
-	// Determine which of our nicks to include based on the original message's
-	// target role. If the message was sent to our agent, the receipt comes
-	// from our agent nick; otherwise from our human nick.
+	// Read nicks under lock — SetSessionID may change them concurrently.
+	h.mu.RLock()
 	fromNick := h.humanNick
 	fromRole := RoleHuman
 	if originalMsg.ToRole == RoleAgent {
 		fromNick = h.agentNick
 		fromRole = RoleAgent
 	}
+	nodeID := h.nodeID
+	h.mu.RUnlock()
 
 	r := Receipt{
 		MessageID:  originalMsg.ID,
 		Status:     status,
-		FromNodeID: h.nodeID,
+		FromNodeID: nodeID,
 		FromNick:   fromNick,
 		FromRole:   fromRole,
 		ToNodeID:   originalMsg.FromNodeID, // route back to original sender

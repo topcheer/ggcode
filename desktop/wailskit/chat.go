@@ -404,11 +404,15 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	b.cancelled = false
 	b.usageTurnIndex++
 	turnID, _ := b.startDesktopTurnLocked()
+	b.mu.Unlock()
+
+	// Emit user_message event outside the lock to avoid holding b.mu during
+	// Wails EventsEmit (which could deadlock if the frontend callback
+	// invokes another bound method on this ChatBridge).
 	if b.OnStreamEvent != nil && source != "desktop" {
 		raw, _ := json.Marshal(map[string]string{"turn_id": turnID, "message_id": fmt.Sprintf("user-%s", turnID), "text": userMsg, "source": source})
 		b.OnStreamEvent("user_message", raw)
 	}
-	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()

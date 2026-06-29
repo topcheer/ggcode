@@ -268,6 +268,36 @@ func (b *DaemonBridge) tryQueueInterruption(content []provider.ContentBlock, log
 	return true
 }
 
+// tryQueueOrBeginRun atomically checks if the agent is busy and either
+// queues the interruption or begins a new run slot. This eliminates the
+// TOCTOU window between tryQueueInterruption and beginRunSlot.
+// Returns (nil, true) if queued, (ctx, false) if a new run was begun.
+func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPrefix string) (context.Context, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cancelFunc != nil {
+		debug.Log("daemon-bridge", "%squeuing interruption: %s", logPrefix, truncateStr(extractText(content), 80))
+		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
+		return nil, true
+	}
+	// Begin run slot (inline of beginRunSlot logic)
+	ctx, cancel := context.WithCancel(context.Background())
+	b.pendingInterruptions = b.pendingInterruptions[:0]
+	b.agent.SetInterruptionHandler(func() string {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.pendingInterruptions) == 0 {
+			return ""
+		}
+		next := b.pendingInterruptions[0]
+		b.pendingInterruptions = b.pendingInterruptions[1:]
+		debug.Log("daemon-bridge", "interruption handler returning: %s", truncateStr(extractText(next.Content), 80))
+		return extractText(next.Content)
+	})
+	b.cancelFunc = cancel
+	return ctx, false
+}
+
 func (b *DaemonBridge) beginRunSlot() context.Context {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -395,16 +425,19 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.emitter.TriggerTyping()
 
 	// Notify follow sink of user message
-	if b.followSink != nil {
-		b.followSink.OnUserMessage(text)
+	b.mu.Lock()
+	sink := b.followSink
+	b.mu.Unlock()
+	if sink != nil {
+		sink.OnUserMessage(text)
 	}
 
 	content = []provider.ContentBlock{{Type: "text", Text: text}}
-	if b.tryQueueInterruption(content, "") {
+	ctx2, queued := b.tryQueueOrBeginRun(content, "")
+	if queued {
 		return nil
 	}
 	b.notifyRunStateChange(true)
-	ctx2 := b.beginRunSlot()
 	b.runQueuedLoop(ctx2, content, "", func(ctx context.Context, text string) bool {
 		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
 			return b.tryHarnessAutoRun(ctx, text) != nil
@@ -572,6 +605,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	round := &daemonRoundState{}
 	b.mu.Lock()
 	b.usageTurnIndex++
+	sink := b.followSink
 	b.mu.Unlock()
 
 	// Save user message to session
@@ -592,8 +626,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// Accumulate text, do NOT send to IM per-token
 			round.AppendText(event.Text)
 			b.emitter.TriggerTyping()
-			if b.followSink != nil {
-				b.followSink.OnStreamText(event.Text)
+			if sink != nil {
+				sink.OnStreamText(event.Text)
 			}
 
 		case provider.StreamEventToolCallDone:
@@ -654,8 +688,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				})
 			}
 			b.emitter.TriggerTyping()
-			if b.followSink != nil {
-				b.followSink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
+			if sink != nil {
+				sink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
 			}
 
 		case provider.StreamEventDone:
@@ -680,16 +714,16 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// Save assistant messages to session
 			b.appendAssistantMessages()
 			round.Reset()
-			if b.followSink != nil {
-				b.followSink.OnRoundDone()
+			if sink != nil {
+				sink.OnRoundDone()
 			}
 
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
 				b.emitter.EmitText(provider.UserFacingError(event.Error))
 			}
-			if b.followSink != nil {
-				b.followSink.OnError(event.Error)
+			if sink != nil {
+				sink.OnError(event.Error)
 			}
 		}
 	})
@@ -1183,11 +1217,15 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		}
 	}
 
-	if b.tryQueueInterruption(content, "webchat: ") {
+	// tryQueueOrBeginRun atomically checks if the agent is busy (queue
+	// the interruption) or idle (begin a new run slot). This eliminates
+	// the TOCTOU window between separate tryQueueInterruption and
+	// beginRunSlot calls.
+	ctx2, queued := b.tryQueueOrBeginRun(content, "webchat: ")
+	if queued {
 		return
 	}
 	b.notifyRunStateChange(true)
-	ctx2 := b.beginRunSlot()
 
 	// Start the run outside the lock
 	safego.Go("im.daemonBridge.run", func() {

@@ -451,13 +451,13 @@ func (b *Broker) resetSession() string {
 // ─── Session lifecycle ───
 
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
+	b.sessionMu.Lock()
 	// Don't let an empty Title overwrite a non-empty cached Title.
-	// Replay events contain old session_info without Title; we must not
-	// let them clobber the correct Title set by PrepareOnlineShare.
 	if data.Title == "" && b.cachedSessionInfo.Title != "" {
 		data.Title = b.cachedSessionInfo.Title
 	}
 	b.cachedSessionInfo = data
+	b.sessionMu.Unlock()
 	b.enqueue(EventSessionInfo, data)
 }
 
@@ -471,11 +471,10 @@ func (b *Broker) SendThemeChange(theme string) {
 
 func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	if snapshot.SessionInfo != (SessionInfoData{}) {
-		// Preserve Title from cached session info — snapshot providers
-		// (TUI/Desktop) don't always include Title, but PrepareOnlineShare
-		// already set it correctly. Without this, the empty Title in the
-		// snapshot overwrites the correct one.
-		if snapshot.SessionInfo.Title == "" && b.cachedSessionInfo.Title != "" {
+		b.sessionMu.RLock()
+		cachedTitle := b.cachedSessionInfo.Title
+		b.sessionMu.RUnlock()
+		if snapshot.SessionInfo.Title == "" && cachedTitle != "" {
 			snapshot.SessionInfo.Title = b.cachedSessionInfo.Title
 		}
 		b.SendSessionInfo(snapshot.SessionInfo)
@@ -1606,12 +1605,17 @@ func (b *Broker) enqueueRecorded(msg GatewayMessage) {
 	// When replaying old session_info events that lack Title (recorded
 	// before Title was added to the protocol), fill in the cached Title
 	// so mobile always receives the correct session title.
-	if msg.Type == EventSessionInfo && b.cachedSessionInfo.Title != "" {
-		var info SessionInfoData
-		if err := json.Unmarshal(msg.Data, &info); err == nil && info.Title == "" {
-			info.Title = b.cachedSessionInfo.Title
-			if dataBytes, err := json.Marshal(info); err == nil {
-				msg.Data = dataBytes
+	if msg.Type == EventSessionInfo {
+		b.sessionMu.RLock()
+		cachedTitle := b.cachedSessionInfo.Title
+		b.sessionMu.RUnlock()
+		if cachedTitle != "" {
+			var info SessionInfoData
+			if err := json.Unmarshal(msg.Data, &info); err == nil && info.Title == "" {
+				info.Title = cachedTitle
+				if dataBytes, err := json.Marshal(info); err == nil {
+					msg.Data = dataBytes
+				}
 			}
 		}
 	}
