@@ -4,6 +4,7 @@ package wailskit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -495,39 +496,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	if err != nil {
 		b.appendLiveError(err.Error())
 	}
-	// Save session after each message (mirrors Fyne bridge)
-	b.saveSession()
-
-	// Mirror TUI handleDoneMsg: always push idle + clear activity
-	// when the entire agent run finishes (success or error).
-	if broker := b.currentTunnelBroker(); broker != nil {
-		b.flushTunnelTextStream(broker, false)
-		broker.PushStatus(tunnel.StatusIdle, "")
-		broker.PushActivity("")
-	}
-
-	// Notify LAN Chat peers that our agent is now idle
-	if b.lanchatHub != nil {
-		b.lanchatHub.SetAgentBusy(false)
-	}
-
-	// Signal run complete (the entire agent run, not just one turn)
-	if b.metricCollector != nil {
-		b.metricCollector.Flush()
-	}
-	b.emitTurnDigest()
-	b.resetTunnelRoundState()
-	if b.OnStreamEvent != nil {
-		b.mu.Lock()
-		turnID := b.desktopTurnID
-		assistantID := b.desktopAssistantID
-		b.mu.Unlock()
-		raw, _ := json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": ""})
-		if err != nil {
-			raw, _ = json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": err.Error()})
-		}
-		b.OnStreamEvent("run_done", raw)
-	}
+	b.finishRun(err)
 
 	return err
 }
@@ -553,11 +522,44 @@ func (b *ChatBridge) Cancel() {
 		b.OnStreamEvent("ask_user:cancel", json.RawMessage(`{}`))
 	}
 
-	// Push cancelled status to mobile (mirrors Fyne line 1108-1115)
+	// Flush tunnel + emit run_done so frontend/mobile know we're idle.
+	b.finishRun(context.Canceled)
+}
+
+// finishRun performs all post-run cleanup: flush tunnel text, push idle
+// status to mobile, emit run_done to frontend, and notify LAN Chat peers.
+// err is the agent run result (may be nil for success or context.Canceled).
+func (b *ChatBridge) finishRun(err error) {
+	b.saveSession()
+
+	// Flush tunnel state
 	if broker := b.currentTunnelBroker(); broker != nil {
 		b.flushTunnelTextStream(broker, false)
-		broker.PushStatus(tunnel.StatusIdle, "cancelled")
+		broker.PushStatus(tunnel.StatusIdle, "")
 		broker.PushActivity("")
+	}
+
+	// Notify LAN Chat peers that our agent is now idle
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetAgentBusy(false)
+	}
+
+	// Signal run complete
+	if b.metricCollector != nil {
+		b.metricCollector.Flush()
+	}
+	b.emitTurnDigest()
+	b.resetTunnelRoundState()
+	if b.OnStreamEvent != nil {
+		b.mu.Lock()
+		turnID := b.desktopTurnID
+		assistantID := b.desktopAssistantID
+		b.mu.Unlock()
+		raw, _ := json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": ""})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			raw, _ = json.Marshal(map[string]interface{}{"turn_id": turnID, "message_id": assistantID, "error": err.Error()})
+		}
+		b.OnStreamEvent("run_done", raw)
 	}
 }
 
@@ -2333,6 +2335,11 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.usageTurnIndex++
 	b.mu.Unlock()
 
+	// Notify LAN Chat peers that our agent is now busy
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetAgentBusy(true)
+	}
+
 	defer func() {
 		b.mu.Lock()
 		b.cancel = nil
@@ -2341,6 +2348,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 
 	if b.agent == nil {
 		if err := b.InitAgent(ctx); err != nil {
+			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}
@@ -2348,18 +2356,7 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emit(ev)
 	})
-	if err != nil {
-		b.appendLiveError(err.Error())
-	}
-	// Save session after agent run (mirrors sendMessageData path)
-	b.saveSession()
-
-	// Flush tunnel state (mirrors sendMessageData path)
-	if broker := b.currentTunnelBroker(); broker != nil {
-		b.flushTunnelTextStream(broker, false)
-		broker.PushStatus(tunnel.StatusIdle, "")
-		broker.PushActivity("")
-	}
+	b.finishRun(err)
 	return err
 }
 
@@ -2870,6 +2867,11 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	b.startTime = time.Now()
 	b.mu.Unlock()
 
+	// Notify LAN Chat peers that our agent is now busy
+	if b.lanchatHub != nil {
+		b.lanchatHub.SetAgentBusy(true)
+	}
+
 	defer func() {
 		b.mu.Lock()
 		b.cancel = nil
@@ -2889,6 +2891,7 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 
 	if b.agent == nil {
 		if err := b.InitAgent(ctx); err != nil {
+			b.finishRun(err)
 			return fmt.Errorf("init agent: %w", err)
 		}
 	}
@@ -2902,9 +2905,11 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		}
 	}
 
-	return b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
+	err := b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
 		b.emit(ev)
 	})
+	b.finishRun(err)
+	return err
 }
 
 // GetAvailableModels returns the list of models available for the current endpoint.
