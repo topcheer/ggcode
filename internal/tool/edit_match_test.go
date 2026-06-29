@@ -388,3 +388,41 @@ func TestFindMatchLineNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveOldText_FuzzyLineMatch(t *testing.T) {
+	// File uses 4-space indent, old_text uses tab indent.
+	// This should be caught by normalizeIndentation, but if not,
+	// the fuzzy line match should still succeed.
+	content := "    fn main() {\n    \tprintln!(\"hello\");\n    }\n"
+	oldText := "\tfn main() {\n\t\tprintln!(\"hello\");\n\t}\n"
+	mr := resolveOldText(content, oldText)
+	if mr.canonical == "" {
+		t.Fatal("expected fuzzy match to succeed for tab/space indentation mismatch")
+	}
+	if !strings.Contains(mr.canonical, "fn main()") {
+		t.Errorf("canonical should contain the file's actual text; got %q", mr.canonical)
+	}
+}
+
+func TestTryFuzzyLineMatch_MixedIndentation(t *testing.T) {
+	// File uses mixed tab+space, old_text uses spaces only.
+	content := "\tpub fn start(&mut self) {\n\t\tself.running = true;\n\t}\n"
+	oldText := "    pub fn start(&mut self) {\n        self.running = true;\n    }\n"
+	result := tryFuzzyLineMatch(content, oldText)
+	if result == "" {
+		t.Fatal("expected fuzzy match to find the block despite mixed indentation")
+	}
+	// Result should be the file's actual bytes.
+	if !strings.Contains(result, "\tpub fn start") {
+		t.Errorf("result should contain file's tab-indented text; got %q", result)
+	}
+}
+
+func TestTryFuzzyLineMatch_NoMatch(t *testing.T) {
+	content := "fn foo() {}\nfn bar() {}\n"
+	oldText := "fn baz() {}\nfn qux() {}\n"
+	result := tryFuzzyLineMatch(content, oldText)
+	if result != "" {
+		t.Errorf("expected no match for completely different text; got %q", result)
+	}
+}

@@ -82,6 +82,16 @@ func resolveOldText(content, oldText string) matchResult {
 		return matchResult{canonical: trimmed, transform: "trailing-whitespace-tolerant"}
 	}
 
+	// 6. Fuzzy per-line match: strip leading and trailing whitespace from
+	// every line in both the file content and old_text, then compare the
+	// trimmed text. This catches mixed indentation, inconsistent spacing,
+	// and other subtle whitespace differences that the targeted strategies
+	// above miss. The canonical form is the file's actual bytes (not the
+	// trimmed version), so the replacement targets the right location.
+	if canonical := tryFuzzyLineMatch(content, oldText); canonical != "" {
+		return matchResult{canonical: canonical, transform: "fuzzy-line-match"}
+	}
+
 	return matchResult{}
 }
 
@@ -590,4 +600,43 @@ func formatMatchLines(lines []int) string {
 		parts[i] = fmt.Sprintf("%d", n)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// tryFuzzyLineMatch compares old_text against the file content by stripping
+// leading/trailing whitespace from every line in both. This catches the most
+// common LLM edit failure: the text content is correct but whitespace (tab vs
+// space, inconsistent indentation depth, trailing spaces) prevents an exact
+// match. Returns the file's actual bytes for the matched block so the
+// replacement targets the right location.
+func tryFuzzyLineMatch(content, oldText string) string {
+	oldLines := strings.Split(oldText, "\n")
+	if len(oldLines) == 0 {
+		return ""
+	}
+
+	// Trim each old_text line for comparison.
+	trimmedOld := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		trimmedOld[i] = strings.TrimSpace(l)
+	}
+
+	fileLines := strings.Split(content, "\n")
+	nFile := len(fileLines)
+	nOld := len(trimmedOld)
+
+	// Slide a window over the file lines.
+	for start := 0; start <= nFile-nOld; start++ {
+		matched := true
+		for j := 0; j < nOld; j++ {
+			if strings.TrimSpace(fileLines[start+j]) != trimmedOld[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			// Return the file's actual bytes for this block.
+			return strings.Join(fileLines[start:start+nOld], "\n")
+		}
+	}
+	return ""
 }
