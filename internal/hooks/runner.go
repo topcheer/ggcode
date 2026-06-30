@@ -196,10 +196,10 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		method = "POST"
 	}
 
-	req, err := http.NewRequestWithContext(
-		contextWithTimeout(timeout),
-		method, h.URL, bytes.NewReader(payloadJSON),
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, h.URL, bytes.NewReader(payloadJSON))
 	if err != nil {
 		return HookResult{Allowed: true, Err: fmt.Errorf("create hook request: %w", err)}
 	}
@@ -242,14 +242,6 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 	}
 
 	return HookResult{Allowed: true, Output: string(body)}
-}
-
-func contextWithTimeout(d time.Duration) context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), d)
-	// Store cancel in a finalizer to avoid leaking the timer.
-	// The context auto-expires at the timeout, so cancel just frees resources.
-	context.AfterFunc(ctx, func() { cancel() })
-	return ctx
 }
 
 // --- Legacy dispatchers (backward compatibility) ---

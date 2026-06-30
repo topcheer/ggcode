@@ -1,5 +1,10 @@
 package hooks
 
+import (
+	"fmt"
+	"time"
+)
+
 // HookType determines how a hook is executed.
 type HookType string
 
@@ -81,4 +86,51 @@ type HookEnv struct {
 	// Stop context (on_agent_stop, on_stream_stop only)
 	StopReason string // "completed", "cancelled", "error"
 	StopError  string
+}
+
+// ValidateHooks checks a HookConfig for common misconfigurations.
+// Returns a list of error strings (empty if all valid).
+func ValidateHooks(cfg HookConfig) []string {
+	var errs []string
+
+	validate := func(event string, hooks []Hook) {
+		for i, h := range hooks {
+			prefix := fmt.Sprintf("%s[%d]", event, i)
+
+			// HTTP type must have URL
+			if h.HasType() == HookTypeHTTP && h.URL == "" {
+				errs = append(errs, fmt.Sprintf("%s: type=http requires url", prefix))
+			}
+
+			// Command type must have command
+			if h.HasType() == HookTypeCommand && h.Command == "" {
+				errs = append(errs, fmt.Sprintf("%s: type=command requires command", prefix))
+			}
+
+			// Match is required
+			if h.Match == "" {
+				errs = append(errs, fmt.Sprintf("%s: match is required", prefix))
+			}
+
+			// Timeout format check
+			if h.Timeout != "" {
+				if _, err := time.ParseDuration(h.Timeout); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: invalid timeout %q: %v", prefix, h.Timeout, err))
+				}
+			}
+
+			// inject_output only valid for post_tool_use
+			if h.InjectOutput && event != "post_tool_use" {
+				errs = append(errs, fmt.Sprintf("%s: inject_output only valid for post_tool_use", prefix))
+			}
+		}
+	}
+
+	validate("on_user_message", cfg.OnUserMessage)
+	validate("pre_tool_use", cfg.PreToolUse)
+	validate("post_tool_use", cfg.PostToolUse)
+	validate("on_agent_stop", cfg.OnAgentStop)
+	validate("on_stream_stop", cfg.OnStreamStop)
+
+	return errs
 }

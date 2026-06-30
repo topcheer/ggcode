@@ -1137,6 +1137,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("mcp server %q has unsupported transport %q", mcp.Name, transport)
 		}
 	}
+
+	// Validate hooks configuration.
+	if hookErrs := hooks.ValidateHooks(c.Hooks); len(hookErrs) > 0 {
+		return fmt.Errorf("invalid hooks config: %s", strings.Join(hookErrs, "; "))
+	}
+
 	return nil
 }
 
