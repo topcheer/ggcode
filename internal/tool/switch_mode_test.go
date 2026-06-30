@@ -72,3 +72,30 @@ func TestSwitchModeToolCaseInsensitive(t *testing.T) {
 		t.Fatalf("expected auto mode, got %s", policy.Mode())
 	}
 }
+
+// mockModeSwitcher is defined in plan_mode_tools_test.go (shared).
+
+func TestSwitchModeToolWithSwitcher(t *testing.T) {
+	policy := permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode)
+	tool := NewSwitchModeTool(policy)
+	switcher := &mockModeSwitcher{currentMode: permission.SupervisedMode}
+	tool.SetSwitcher(switcher)
+
+	// When Switcher is set, it takes priority over direct policy manipulation
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"mode":"auto","description":"switch"}`))
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.Content)
+	}
+	if switcher.currentMode != permission.AutoMode {
+		t.Fatalf("expected switcher mode to be auto, got %s", switcher.currentMode)
+	}
+
+	// Idempotent
+	result, _ = tool.Execute(context.Background(), json.RawMessage(`{"mode":"auto","description":"same"}`))
+	if result.IsError {
+		t.Fatalf("expected success on same mode, got error: %s", result.Content)
+	}
+	if switcher.currentMode != permission.AutoMode {
+		t.Fatalf("expected switcher mode to still be auto, got %s", switcher.currentMode)
+	}
+}

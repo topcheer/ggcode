@@ -14,6 +14,10 @@ type mockModeSwitcher struct {
 	previousMode permission.PermissionMode
 }
 
+func (m *mockModeSwitcher) Mode() permission.PermissionMode {
+	return m.currentMode
+}
+
 func (m *mockModeSwitcher) SetMode(mode permission.PermissionMode) {
 	m.currentMode = mode
 }

@@ -902,6 +902,15 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	}
 	b.registry = core.Registry
 
+	// Inject a desktop ModeSwitcher into the switch_mode tool so that
+	// LLM-initiated mode changes update ChatBridge.permissionMode and the
+	// agent's policy, mirroring the TUI's replModeSwitcher.
+	if sm, ok := core.Registry.Get("switch_mode"); ok {
+		if smt, ok := sm.(*tool.SwitchModeTool); ok {
+			smt.SetSwitcher(&desktopModeSwitcher{bridge: b})
+		}
+	}
+
 	// Cron tools — enqueue fires the prompt as a hidden user message.
 	// If queue_if_busy=false (default) and agent is busy, skip the firing.
 	b.cronScheduler = agentruntime.NewWorkspaceCronScheduler(b.workingDir, func(prompt string, queueIfBusy bool) {
@@ -2276,6 +2285,31 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	if cfg != nil {
 		_ = cfg.SaveDefaultModePreference(modeStr)
 	}
+}
+
+// desktopModeSwitcher implements tool.ModeSwitcher for the Wails desktop app.
+// It bridges LLM-initiated mode changes (via switch_mode tool) to the
+// ChatBridge's SetPermissionMode, which updates the agent policy and UI.
+type desktopModeSwitcher struct {
+	bridge *ChatBridge
+}
+
+func (d *desktopModeSwitcher) Mode() permission.PermissionMode {
+	return d.bridge.permissionMode
+}
+
+func (d *desktopModeSwitcher) SetMode(mode permission.PermissionMode) {
+	d.bridge.SetPermissionMode(mode.String())
+}
+
+func (d *desktopModeSwitcher) RememberMode(mode permission.PermissionMode) permission.PermissionMode {
+	// switch_mode doesn't use RememberMode/RestoreMode — those are for
+	// enter_plan_mode/exit_plan_mode. Return the current mode as-is.
+	return d.bridge.permissionMode
+}
+
+func (d *desktopModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
+	return fallback
 }
 
 // ─── Pending Messages ────────────────────────────────────────────────

@@ -405,6 +405,14 @@ func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	r.planSwitcher = switcher
 	tools.Register(tool.EnterPlanModeTool{Switcher: switcher})
 	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
+
+	// Inject the same switcher into the already-registered switch_mode tool
+	// so that LLM-initiated mode changes also update the TUI badge.
+	if sm, ok := tools.Get("switch_mode"); ok {
+		if smt, ok := sm.(*tool.SwitchModeTool); ok {
+			smt.SetSwitcher(switcher)
+		}
+	}
 }
 
 // SetSendMessageTool registers the send_message tool for agent communication.
@@ -523,6 +531,13 @@ type replModeSwitcher struct {
 	model        *Model
 	program      *tea.Program
 	previousMode permission.PermissionMode
+}
+
+func (s *replModeSwitcher) Mode() permission.PermissionMode {
+	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
+		return cp.CurrentMode()
+	}
+	return s.model.mode
 }
 
 func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {

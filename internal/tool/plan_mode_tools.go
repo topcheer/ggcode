@@ -11,6 +11,9 @@ import (
 // ModeSwitcher switches the agent's permission mode and remembers the
 // previous mode so that exit_plan_mode can restore it.
 type ModeSwitcher interface {
+	// Mode returns the current permission mode.
+	Mode() permission.PermissionMode
+	// SetMode switches to the given mode and notifies the UI.
 	SetMode(mode permission.PermissionMode)
 	// RememberMode saves the given mode as the "previous" mode so it
 	// can be restored by a later mode switch. Returns the mode that
