@@ -838,7 +838,12 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		}
 		if ctx.ToolName == "lanchat" {
 			item.noTruncate = true
-			item.markdownBody = true
+			// Only render as markdown for send/broadcast actions;
+			// list/history/pending use pre-formatted plain text.
+			if action := lanchatAction(ctx.RawArgs); action == "send" ||
+				action == "broadcast" || action == "broadcast_all" || action == "send_team" {
+				item.markdownBody = true
+			}
 		}
 		return item
 	}
@@ -1112,4 +1117,15 @@ func prettifyJSONKey(key string) string {
 	default:
 		return key
 	}
+}
+
+// lanchatAction extracts the "action" field from lanchat tool raw args.
+func lanchatAction(rawArgs string) string {
+	var v struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal([]byte(rawArgs), &v) != nil {
+		return ""
+	}
+	return v.Action
 }
