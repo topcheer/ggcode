@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -297,4 +298,107 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// FriendlyError translates a raw provider error into a human-readable message
+// with actionable advice. Returns the original error message if no pattern matches.
+func FriendlyError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	// Extract HTTP status code if available
+	statusCode := 0
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		statusCode = anthropicErr.StatusCode
+	}
+	if statusCode == 0 {
+		var openaiErr *openai.APIError
+		if errors.As(err, &openaiErr) {
+			statusCode = openaiErr.HTTPStatusCode
+		}
+	}
+	if statusCode == 0 {
+		var openaiReqErr *openai.RequestError
+		if errors.As(err, &openaiReqErr) {
+			statusCode = openaiReqErr.HTTPStatusCode
+		}
+	}
+	if statusCode == 0 {
+		for _, code := range []int{400, 401, 402, 403, 404, 408, 413, 422, 429, 500, 502, 503, 504} {
+			if strings.Contains(msg, strconv.Itoa(code)) {
+				statusCode = code
+				break
+			}
+		}
+	}
+
+	// Context overflow — special handling
+	if IsContextOverflowError(err) {
+		return "The conversation has exceeded the model's context window. " +
+			"Run /compact to compress the conversation history, or start a new session with /clear."
+	}
+
+	switch statusCode {
+	case 401:
+		return "Authentication failed (401). Your API key is invalid or expired. " +
+			"Check your API key with: config set api_key=<your-key> " +
+			"or verify the key in your provider dashboard."
+	case 402:
+		return "Payment required (402). Your API account has insufficient credits or billing. " +
+			"Add credits or update billing in your provider dashboard."
+	case 403:
+		if strings.Contains(lower, "rate limit") || strings.Contains(lower, "quota") {
+			return "Rate limit exceeded (403). You've hit your API quota. " +
+				"Wait a moment and try again, or upgrade your plan for higher limits."
+		}
+		return "Access forbidden (403). Your API key may not have permission for this model, " +
+			"or your account may be suspended. Check your provider dashboard."
+	case 404:
+		return "Model not found (404). The configured model may be deprecated or misspelled. " +
+			"Check available models with: /model"
+	case 408:
+		return "Request timed out (408). The provider took too long to respond. " +
+			"This is usually temporary — try sending your message again."
+	case 413:
+		return "Request too large (413). The message payload exceeds the server's limit. " +
+			"Run /compact to reduce conversation size, or simplify your request."
+	case 422:
+		return "Request rejected (422). The provider couldn't process the request format. " +
+			"This may be due to an unsupported feature (e.g., tool calling) for this model. " +
+			"Try a different model or simplify your request."
+	case 429:
+		return "Rate limited (429). Too many requests in a short period. " +
+			"Wait a few seconds and try again. Consider using a model with higher rate limits."
+	case 500, 502, 503, 504:
+		return fmt.Sprintf("Server error (%d). The provider is experiencing issues. "+
+			"This is temporary — please retry in a moment.", statusCode)
+	}
+
+	// Check for common network errors
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return "Connection timed out. The provider server didn't respond in time. " +
+				"Check your internet connection and try again."
+		}
+		return "Network error: unable to reach the provider server. " +
+			"Check your internet connection and try again."
+	}
+	if errors.Is(err, io.EOF) {
+		return "Connection closed unexpectedly by the provider. " +
+			"This is usually temporary — try again."
+	}
+
+	// Cancellation
+	if errors.Is(err, context.Canceled) {
+		return "Request cancelled."
+	}
+
+	// Fallback: return original error
+	return msg
 }

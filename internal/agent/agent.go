@@ -599,8 +599,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				idleAutopilotContinuations = 0
 				continue
 			}
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-			return err
+			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
+			return friendlyErr
 		}
 		reactiveCompactRetries = 0
 
