@@ -40,6 +40,29 @@ Bypass permissions plus automatically continues when the model asks for input. E
 ggcode --bypass  # then switch to autopilot via /mode
 ```
 
+#### Goal-Directed Execution
+
+In autopilot mode, the agent starts each session by defining a **Goal** via `ask_user`. The Goal is a concise 1-3 sentence definition of what "done" looks like. The agent then:
+
+1. Works autonomously until the Goal is fully achieved
+2. Anchors all work to the original task to prevent scope drift
+3. Does not stop for preferences or confirmation when a reasonable default exists
+4. Escalates to `ask_user` only when blocked on an external dependency
+5. Ends with `GOAL_COMPLETE` when the Goal is genuinely achieved
+
+This means you can start a session, confirm the Goal, and walk away — the agent will work through to completion.
+
+## Session-Scoped Persistence
+
+Permission mode is **persisted per session**, not globally:
+
+- **New session**: uses the global `default_mode` from config (or `supervised` if unset)
+- **Switching mode mid-session**: saves to session metadata (`session.PermissionMode`), **not** to global config
+- **Resuming a session**: restores the mode that was active when the session was last used
+- **Multiple instances**: each session tracks its own mode independently
+
+This means switching to `bypass` in one session won't affect other sessions or future new sessions. To change the global default, edit `default_mode` in `ggcode.yaml` or use `config set default_mode=bypass`.
+
 ## Mode Indicator
 
 The active mode is shown in the TUI status bar:

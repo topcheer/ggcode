@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -40,6 +41,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui/cmdpane"
 	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 // REPL connects the agent to the TUI model.
@@ -64,6 +66,10 @@ type REPL struct {
 	knightStartupHint   string                              // one-time hint shown at startup (e.g. lock conflict)
 	metricCollector     *metrics.Collector
 	metricCancel        context.CancelFunc
+	workingDir          string
+	cfg                 *config.Config
+	agentBusy           atomic.Bool
+	preExecCleanup      func() // called before syscall.Exec restart/tmux-enter
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -73,6 +79,10 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 		model: m,
 		agent: a,
 	}
+	// Share the agentBusy atomic between REPL and Model so that
+	// /api/status can read the live busy state (Model.loading changes
+	// happen inside the tea.Program which REPL doesn't see).
+	r.model.agentBusy = &r.agentBusy
 	if a != nil {
 		a.SetUsageHandler(r.recordSessionUsage)
 		collectorCtx, collectorCancel := context.WithCancel(context.Background())
@@ -153,9 +163,22 @@ func (r *REPL) SetSessionLock(lock *session.SessionLock) {
 	r.sessionLock = lock
 }
 
+// SetPreExecCleanup registers a cleanup function called before syscall.Exec
+// (restart / tmux-enter). Since syscall.Exec replaces the process image,
+// deferred cleanups never fire — this hook ensures port files are removed.
+func (r *REPL) SetPreExecCleanup(fn func()) {
+	r.preExecCleanup = fn
+}
+
 // SetConfig passes the config to the model for /model and /provider commands.
 func (r *REPL) SetConfig(cfg *config.Config) {
+	r.cfg = cfg
 	r.model.SetConfig(cfg)
+}
+
+// SetWorkingDir stores the workspace path for RuntimeStatus reporting.
+func (r *REPL) SetWorkingDir(wd string) {
+	r.workingDir = wd
 }
 
 // OnConfigProviderChanged is called by the config tool after a provider change.
@@ -397,7 +420,54 @@ func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	tools.Register(tool.CronListTool{Scheduler: s})
 }
 
+// RuntimeStatus returns current runtime state for external monitoring
+// via the WebUI /api/status endpoint.
+func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
+	m := webui.RuntimeStatus{
+		PID:            os.Getpid(),
+		Workspace:      r.workingDir,
+		AgentBusy:      r.agentBusy.Load(),
+		PermissionMode: r.model.mode.String(),
+	}
+	if r.cfg != nil {
+		m.Vendor = r.cfg.Vendor
+		m.Endpoint = r.cfg.Endpoint
+		m.Model = r.cfg.Model
+		m.Language = r.cfg.Language
+	}
+
+	// IM adapter status
+	if r.model.imManager != nil {
+		snap := r.model.imManager.Snapshot()
+		for _, a := range snap.Adapters {
+			m.IMAdapters = append(m.IMAdapters, webui.IMAdapterInfo{
+				Name:    a.Name,
+				Type:    string(a.Platform),
+				Online:  a.Healthy,
+				Muted:   a.Status == "muted",
+				Channel: a.ContactURI,
+			})
+		}
+	}
+
+	// Mobile tunnel connection status
+	if r.model.tunnelSession != nil {
+		m.MobileConn.Connected = r.model.tunnelBroker != nil && r.model.tunnelBroker.SessionID() != ""
+		if info := r.model.tunnelSession.Info(); info != nil {
+			m.MobileConn.RelayURL = info.ConnectURL
+			m.MobileConn.ConnectCode = info.RoomID
+		}
+		if r.model.tunnelBroker != nil {
+			m.MobileConn.SessionID = r.model.tunnelBroker.SessionID()
+		}
+	}
+
+	return m
+}
+
 // SetPlanModeTools registers plan mode tools with a mode switcher that
+// updates both the Model's mode and the ConfigPolicy. The switcher
+// remembers the previous mode so exit_plan_mode can restore it.
 // updates both the Model's mode and the ConfigPolicy. The switcher
 // remembers the previous mode so exit_plan_mode can restore it.
 func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
@@ -1111,6 +1181,18 @@ func (r *REPL) loadSession(id string) {
 
 	agentruntime.RestoreSessionIntoAgent(r.agent, ses)
 	r.model.SetSession(ses, r.store)
+
+	// Restore session-scoped permission mode (if set).
+	// This overrides the global default_mode for this session only.
+	if ses.PermissionMode != "" {
+		sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
+		if cp, ok := r.model.policy.(*permission.ConfigPolicy); ok {
+			cp.SetMode(sessionMode)
+		}
+		r.model.mode = sessionMode
+		debug.Log("repl", "loadSession: restored permission mode %s from session", sessionMode)
+	}
+
 	r.model.rebuildConversationFromMessages(ses.Messages)
 	r.model.restoreHistoryFromMessages(ses.Messages)
 	title := ses.Title
@@ -1143,6 +1225,11 @@ func (r *REPL) execRestart() error {
 	if r.sessionLock != nil {
 		r.sessionLock.Release()
 		r.sessionLock = nil
+	}
+
+	// Clean up port file before exec — syscall.Exec skips defers.
+	if r.preExecCleanup != nil {
+		r.preExecCleanup()
 	}
 
 	// For /update: write new binary to all target paths BEFORE exec.

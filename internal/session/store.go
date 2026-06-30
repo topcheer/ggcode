@@ -41,6 +41,10 @@ type Session struct {
 	TunnelEventsComplete bool                             `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
+	// PermissionMode stores the session-scoped permission mode (e.g. "auto", "bypass").
+	// When non-empty, this overrides the global default_mode on session resume.
+	// It is never written to the config file — only persisted with the session.
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// endpointStatsMu is nested inside higher-level session/bridge locks and only
 	// guards the per-endpoint aggregate maps used by live readers/writers.
 	endpointStatsMu sync.RWMutex

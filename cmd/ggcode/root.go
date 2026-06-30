@@ -30,6 +30,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/runfile"
 
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
@@ -218,6 +219,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
+	cmd.AddCommand(newStatusCmd())
 	configureHelpRendering(cmd)
 
 	return cmd
@@ -1101,6 +1103,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		defer webuiSrv.Close()
 		// Schedule the URL display for after TUI is ready (see repl startup goroutine)
 		repl.SetWebUIReadyAddr(actualAddr, webuiSrv.Token())
+		// Expose runtime status via /api/status
+		repl.SetWorkingDir(workingDir)
+		webuiSrv.SetStatusFn(repl.RuntimeStatus)
+		// Write port file for external process discovery
+		runfile.Write(runfile.PortFile{
+			Addr:      actualAddr,
+			Token:     webuiSrv.Token(),
+			PID:       os.Getpid(),
+			SessionID: resumeID,
+			Workspace: workingDir,
+			Mode:      cfg.DefaultMode,
+		})
+		defer runfile.Remove(resumeID)
+		// Ensure cleanup on syscall.Exec restart (defers don't fire on exec)
+		repl.SetPreExecCleanup(func() { runfile.Remove(resumeID) })
 	}
 	trace.Mark("start webui")
 

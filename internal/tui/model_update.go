@@ -217,7 +217,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.streamBuffer = &bytes.Buffer{}
 			m.shellBuffer = nil
 			m.streamPrefixWritten = false
-			m.loading = true
+			m.setLoading(true)
 			m.loopStart = time.Now()
 			m.statusActivity = m.t("status.thinking")
 			m.statusToolName = ""

@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.92`](docs/releases/v1.3.92.md) |
+| Latest documented release | [`v1.3.93`](docs/releases/v1.3.93.md) |
 
 ## Build & Validation
 
@@ -93,6 +93,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   task/                Task tracking primitives
   safego/              Safe goroutine helpers with panic recovery
   restart/             Process restart support
+  runfile/             Port file management (~/.ggcode/run/<sessionID>.json) for external process discovery
   image/               Image processing, clipboard integration (platform-specific: darwin, linux, windows)
   install/             Self-update and install logic
   update/              Version checking and auto-update
@@ -109,9 +110,9 @@ config/                MCP preset configuration (mcporter.json)
 
 ## Architecture
 
-- **Agent loop** (`internal/agent/`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Split into focused files: `agent.go` (core struct, Run/RunStream), `agent_autopilot.go` (continuation), `agent_compact.go` (auto-compaction), `agent_memory.go` (memory helpers), `agent_tool.go` (tool execution, diff confirm, hooks).
+- **Agent loop** (`internal/agent/`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Split into focused files: `agent.go` (core struct, Run/RunStream), `agent_autopilot.go` (continuation + Goal-directed execution), `agent_compact.go` (auto-compaction), `agent_memory.go` (memory helpers), `agent_tool.go` (tool execution, diff confirm, hooks).
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
-- **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
+- **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`. **Mode is session-scoped**: switching mode saves to `session.PermissionMode`, not to global config. New sessions default to `cfg.DefaultMode` (or `supervised` if unset). Resuming a session restores its saved mode.
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses JSON files for event/snapshot storage.
 - **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity. Daemon bridge provides IM slash commands for adapter management (`/listim`, `/muteim <name>`, `/muteall`, `/muteself`, `/restart`, `/help`).
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback. Three input modes: normal (`❯`), shell (`$`/`!` prefix, one-shot), and chat (`#` prefix, persistent LAN Chat quick-send). **Extpane** (`internal/tui/extpane/`) opens real terminal tabs/windows for running sub-agents and teammates, streaming their output via `tail -f` logfiles. Three backends are auto-detected by priority: tmux (if `$TMUX` is set) > Kitty (`KITTY_WINDOW_ID`) > iTerm2 (`TERM_PROGRAM == "iTerm2"`). Each backend implements `CreateTab`/`CloseTab`/`SetTitle`. Safety: `maxPanes=10` hard cap, `failed[agentID]` permanent blocklist after first failure, self-window ID capture prevents killing ggcode's own tab/window.
@@ -136,7 +137,7 @@ Key concepts:
 - **`vendor`**: Provider vendor name (e.g., `zai`, `anthropic`, `openai`, `google`, `deepseek`, `openrouter`, `groq`, `mistral`, `moonshot`, `kimi`, `minimax`, `ark`, `together`, `perplexity`, `github-copilot`)
 - **`endpoint`**: Named endpoint within a vendor (e.g., `cn-coding-openai`)
 - **`model`**: Active model override
-- **`default_mode`**: Permission mode at startup (`supervised`, `plan`, `auto`, `bypass`, `autopilot`)
+- **`default_mode`**: Permission mode for **new** sessions (`supervised`, `plan`, `auto`, `bypass`, `autopilot`). Default is `supervised`. In-session mode switches are saved to session metadata, not this config.
 - **`vendors.<name>.endpoints.<name>.protocol`**: One of `openai`, `anthropic`, `gemini`, `copilot`
 - **`mcp_servers`**: List of MCP servers to start (command + args + env) or connect (URL + headers)
 - **`plugins`**: External command-based tools
@@ -355,3 +356,11 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Microcompact vs precompact**: Microcompact (context exceeds soft limit) is now silent — no user message. Only LLM-triggered precompact (explicit compaction request) shows a system message. A 2-minute cooldown after precompact prevents tight compaction loops. Auto-compact thresholds raised from 0.65/0.75 to 0.80/0.88 of context window.
 - **Fuzzy line match for edit_file**: When exact `old_text` matching fails, `edit_file` falls back to fuzzy matching — stripping leading whitespace and comparing line content. This handles tab/space mismatches in the original file.
 - **lanchat always allowed**: The `lanchat` tool is always allowed in every permission mode (including plan mode) via `IsAlwaysAllowedTool()`. It is checked before mode-specific rules in `ConfigPolicy.Check()`.
+- **Port files are session-scoped**: `~/.ggcode/run/<sessionID>.json` — one file per running instance, keyed by session ID. `readAtPath` auto-cleans stale files (dead PID or legacy format without `session_id`). Cleanup covers all exit paths: `defer` (ctrl-c/ctrl-d/SIGTERM), `preExecCleanup` hook (before `syscall.Exec` restart/tmux-enter), and auto-detection in `ReadAll`.
+- **Permission mode is session-scoped**: Mode switches persist to `session.PermissionMode`, never to global `default_mode` config. Only `config set default_mode=X` (explicit settings write) changes the global default. New sessions inherit the global default; resumed sessions restore their saved mode. Daemon has `daemonModeSwitcher` for session-scoped persistence via the `switch_mode` tool.
+- **Autopilot Goal-directed execution**: In autopilot mode, the agent defines a Goal via `ask_user` at the start of each session. The Goal defines what "done" looks like. All work must serve the Goal. The agent ends with `GOAL_COMPLETE` on its own line. Continuation heuristics anchor to the original task to prevent drift.
+- **safego.Go replaces bare goroutines**: All goroutines should use `safego.Go()` or `safego.GoWithContext()` with panic recovery. Bare `go func(){...}()` without recovery can crash the entire process on panic. The v1.3.92 concurrency fix addressed several bare goroutine locations.
+- **Microcompact is silent**: Microcompact (context exceeds 0.80 soft limit) runs silently — no user message. Only LLM-triggered precompact (explicit compaction request at 0.88 hard limit) shows a system message. A 2-minute cooldown after precompact prevents tight compaction loops.
+- **edit_file fuzzy line matching**: When exact `old_text` matching fails, `edit_file` falls back to fuzzy matching — stripping leading whitespace and comparing line content. This handles tab/space mismatches in the original file without manual normalization.
+- **MCP protocol version negotiation**: The MCP client sends `2025-11-25` (latest) during initialize and accepts all known versions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`). Unknown versions are rejected. The negotiated version is stored in `Client.negotiatedVersion`.
+- **Cron `queue_if_busy`**: `cron_create` supports `queue_if_busy` (default false). When true, the prompt is queued and runs after the current task finishes instead of being skipped when the agent is busy. Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json`; one-shot reminders are in-memory only.

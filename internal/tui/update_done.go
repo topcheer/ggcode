@@ -11,7 +11,7 @@ import (
 // handleDoneMsg handles the corresponding message case.
 func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	finalIMText := m.pendingIMStreamText()
-	m.loading = false
+	m.setLoading(false)
 	m.remoteInboundAdapter = "" // reset per-channel suppression after agent run
 	// Notify LAN Chat peers that our agent is now idle
 	if m.lanChatHub != nil {
@@ -63,7 +63,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if m.agent != nil {
 		m.projMemFiles = m.agent.ProjectMemoryFiles()
 	}
-	m.loading = false
+	m.setLoading(false)
 	m.remoteInboundAdapter = "" // reset per-channel suppression
 	// Notify LAN Chat peers that our agent is now idle
 	if m.lanChatHub != nil {
@@ -106,7 +106,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runFailed = true
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
@@ -136,7 +136,7 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.runFailed = true
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil

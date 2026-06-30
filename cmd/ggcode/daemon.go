@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/restart"
+	"github.com/topcheer/ggcode/internal/runfile"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -377,6 +379,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for _, msg := range ses.Messages {
 			ag.AddMessage(msg)
 		}
+		// Restore session-scoped permission mode (if set).
+		if ses.PermissionMode != "" {
+			sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
+			if cp, ok := policy.(*permission.ConfigPolicy); ok {
+				cp.SetMode(sessionMode)
+			}
+			mode = sessionMode
+			debug.Log("daemon", "restored permission mode %s from session", sessionMode)
+		}
 	} else {
 		vendor := cfg.Vendor
 		endpoint := cfg.Endpoint
@@ -428,6 +439,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
+	// Wire switch_mode tool to persist mode changes to session metadata
+	if sm, ok := registry.Get("switch_mode"); ok {
+		if smt, ok := sm.(*tool.SwitchModeTool); ok {
+			if cp, ok := policy.(*permission.ConfigPolicy); ok {
+				smt.SetSwitcher(&daemonModeSwitcher{policy: cp, ses: ses, store: store})
+			}
+		}
+	}
+
 	// Cron tools — enqueue fires the prompt as a user message via the
 	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
 	// skip the firing instead of interrupting.
@@ -457,6 +477,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Set bridge on manager
 	imMgr.SetBridge(bridge)
+
+	// Track agent busy state for /api/status
+	var agentBusy atomic.Bool
+	bridge.SetRunStateHook(func(busy bool) { agentBusy.Store(busy) })
+
+	// Mobile connection status callback (set when tunnel connects)
+	statusMu := &sync.Mutex{}
+	var mobileConnectedFn func() (bool, string)
 
 	// Start mobile tunnel if requested
 	var tunnelSession *tunnel.Session
@@ -501,12 +529,22 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 			// Wire hooks for status/activity push
 			ctrl := newDaemonTunnelShareController(result.Broker, bridge, sessionInfo, core.Tunnel)
-			bridge.SetRunStateHook(ctrl.HandleRunState)
+			bridge.SetRunStateHook(func(busy bool) {
+				agentBusy.Store(busy)
+				ctrl.HandleRunState(busy)
+			})
 			bridge.SetUserMessageHook(ctrl.HandleUserMessage)
 			unsubscribeTunnel := bridge.Subscribe(ctrl.HandleStreamEvent)
 			defer unsubscribeTunnel()
 			defer bridge.SetRunStateHook(nil)
 			defer bridge.SetUserMessageHook(nil)
+			// Wire mobile connection status for /api/status
+			statusMu.Lock()
+			mobileConnectedFn = func() (bool, string) {
+				sid := result.Broker.SessionID()
+				return sid != "", sid
+			}
+			statusMu.Unlock()
 
 			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
 			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", result.ConnectURL)
@@ -1100,10 +1138,57 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			url += "#token=" + tk
 		}
 		fmt.Fprintf(os.Stderr, "\x1b[34m\u2B21 WebUI:\x1b[0m \x1b[32m%s\x1b[0m\r\n", url)
+		// Write port file for external process discovery
+		runfile.Write(runfile.PortFile{
+			Addr:      actualAddr,
+			Token:     webuiSrv.Token(),
+			PID:       os.Getpid(),
+			SessionID: ses.ID,
+			Workspace: workingDir,
+			Mode:      cfg.DefaultMode,
+		})
+		defer runfile.Remove(ses.ID)
 	} else {
 		fmt.Fprintf(os.Stderr, "WebUI start failed: %v\r\n", webuiErr)
 	}
 	defer webuiSrv.Close()
+
+	// Expose runtime status via /api/status
+	webuiSrv.SetStatusFn(func() webui.RuntimeStatus {
+		st := webui.RuntimeStatus{
+			PID:            os.Getpid(),
+			Workspace:      workingDir,
+			AgentBusy:      agentBusy.Load(),
+			PermissionMode: policy.Mode().String(),
+		}
+		if cfg != nil {
+			st.Vendor = cfg.Vendor
+			st.Endpoint = cfg.Endpoint
+			st.Model = cfg.Model
+			st.Language = cfg.Language
+		}
+		// IM adapters
+		if imMgr != nil {
+			snap := imMgr.Snapshot()
+			for _, a := range snap.Adapters {
+				st.IMAdapters = append(st.IMAdapters, webui.IMAdapterInfo{
+					Name:    a.Name,
+					Type:    string(a.Platform),
+					Online:  a.Healthy,
+					Channel: a.ContactURI,
+				})
+			}
+		}
+		// Mobile tunnel (set when tunnel connects)
+		statusMu.Lock()
+		if mobileConnectedFn != nil {
+			connected, sid := mobileConnectedFn()
+			st.MobileConn.Connected = connected
+			st.MobileConn.SessionID = sid
+		}
+		statusMu.Unlock()
+		return st
+	})
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -1266,6 +1351,9 @@ loop:
 			sessionLock.Release()
 			sessionLock = nil
 		}
+
+		// Clean up port file before exec — syscall.Exec skips defers.
+		runfile.Remove(ses.ID)
 
 		var args []string
 		if cfgFile != "" {
@@ -1868,4 +1956,38 @@ func writeClipboard(text string) {
 	}
 	cmd.Stdin = strings.NewReader(text)
 	_ = cmd.Run()
+}
+
+// daemonModeSwitcher implements tool.ModeSwitcher to persist permission mode
+// changes to session metadata in daemon mode.
+type daemonModeSwitcher struct {
+	policy *permission.ConfigPolicy
+	ses    *session.Session
+	store  session.Store
+}
+
+func (s *daemonModeSwitcher) Mode() permission.PermissionMode {
+	if s.policy == nil {
+		return permission.DefaultMode
+	}
+	return s.policy.CurrentMode()
+}
+
+func (s *daemonModeSwitcher) SetMode(mode permission.PermissionMode) {
+	if s.policy != nil {
+		s.policy.SetMode(mode)
+	}
+	// Persist to session, not to global config.
+	if s.ses != nil && s.store != nil {
+		s.ses.PermissionMode = mode.String()
+		_ = s.store.Save(s.ses)
+	}
+}
+
+func (s *daemonModeSwitcher) RememberMode(mode permission.PermissionMode) permission.PermissionMode {
+	return permission.SupervisedMode
+}
+
+func (s *daemonModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
+	return fallback
 }

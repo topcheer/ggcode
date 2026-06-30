@@ -11,7 +11,7 @@ func (m Model) handleCompactResultMsg(msg compactResultMsg) (Model, tea.Cmd) {
 	} else {
 		m.chatWriteSystem(nextSystemID(), msg.text)
 	}
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.statusActivity = ""
 	m.chatListScrollToBottom()

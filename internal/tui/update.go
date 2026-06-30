@@ -42,7 +42,7 @@ func (m *Model) handleUpdateCommand() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("update.unavailable"))
 		return nil
 	}
-	m.loading = true
+	m.setLoading(true)
 	m.statusActivity = m.t("update.preparing")
 	m.statusToolName = ""
 	m.statusToolArg = ""
@@ -101,7 +101,7 @@ func (m Model) updateStatusSummary() string {
 }
 
 func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.statusActivity = ""
 	m.statusToolName = ""

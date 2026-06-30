@@ -978,7 +978,7 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		m.streamBuffer = nil
 		m.shellBuffer = nil
 		m.streamPrefixWritten = false
-		m.loading = true
+		m.setLoading(true)
 		m.loopStart = time.Now()
 		m.statusActivity = m.t("status.thinking")
 		m.statusToolName = ""

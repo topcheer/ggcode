@@ -20,7 +20,7 @@ func (m Model) handleHarnessPanelRefreshResultMsg(msg harnessPanelRefreshResultM
 
 // handleAutoRunCheckResultMsg handles the corresponding message case.
 func (m Model) handleAutoRunCheckResultMsg(msg autoRunCheckResultMsg) (Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.statusActivity = ""
 	m.statusToolName = ""
@@ -61,7 +61,7 @@ func (m Model) handleHarnessRunResultMsg(msg harnessRunResultMsg) (Model, tea.Cm
 		m.appendHarnessLogChunk(chunk)
 	}
 	m.flushHarnessLogRemainder()
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.chatFinishAllRunningTools()
 	m.cancelFunc = nil
@@ -128,7 +128,7 @@ func (m Model) handleHarnessRunResultMsg(msg harnessRunResultMsg) (Model, tea.Cm
 
 // handleHarnessReviewResultMsg handles the corresponding message case.
 func (m Model) handleHarnessReviewResultMsg(msg harnessReviewResultMsg) (Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	if msg.Err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Review failed for task %s: %v", msg.TaskID, msg.Err))
@@ -154,7 +154,7 @@ func (m Model) handleHarnessReviewResultMsg(msg harnessReviewResultMsg) (Model, 
 
 // handleHarnessPromoteResultMsg handles the corresponding message case.
 func (m Model) handleHarnessPromoteResultMsg(msg harnessPromoteResultMsg) (Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	if msg.Err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promote failed for task %s: %v", msg.TaskID, msg.Err))
@@ -173,7 +173,7 @@ func (m Model) handleHarnessPromoteResultMsg(msg harnessPromoteResultMsg) (Model
 
 // handleKnightTaskResultMsg handles the corresponding message case.
 func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.cancelFunc = nil
 	m.statusActivity = ""
@@ -194,7 +194,7 @@ func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (Model, tea.Cm
 
 // handleKnightProjectProposalResultMsg handles the corresponding message case.
 func (m Model) handleKnightProjectProposalResultMsg(msg knightProjectProposalResultMsg) (Model, tea.Cmd) {
-	m.loading = false
+	m.setLoading(false)
 	m.spinner.Stop()
 	m.cancelFunc = nil
 	m.statusActivity = ""

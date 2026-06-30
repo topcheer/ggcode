@@ -703,6 +703,21 @@ func (b *ChatBridge) LoadSession(id string) error {
 		return fmt.Errorf("init agent for session load: %w", err)
 	}
 	agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
+
+	// Restore session-scoped permission mode (if set).
+	if state.Session.PermissionMode != "" {
+		sessionMode := permission.ParsePermissionMode(state.Session.PermissionMode)
+		b.mu.Lock()
+		b.permissionMode = sessionMode
+		agent := b.agent
+		b.mu.Unlock()
+		if agent != nil {
+			policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, sessionMode)
+			agent.SetPermissionPolicy(policy)
+		}
+		b.refreshSystemPrompt()
+	}
+
 	return nil
 }
 
@@ -2272,7 +2287,8 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	b.mu.Lock()
 	b.permissionMode = mode
 	agent := b.agent
-	cfg := b.cfg
+	ses := b.currentSes
+	store := b.sessionStore
 	b.mu.Unlock()
 	if agent != nil {
 		policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
@@ -2281,9 +2297,12 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 		// autopilot continue instructions that may still be in context.
 		b.refreshSystemPrompt()
 	}
-	// Persist to config file (mirrors TUI/Fyne SaveDefaultModePreference)
-	if cfg != nil {
-		_ = cfg.SaveDefaultModePreference(modeStr)
+	// Persist to session metadata, NOT to global config.
+	// This ensures switching mode in one session doesn't affect
+	// other sessions or future new sessions.
+	if ses != nil && store != nil {
+		ses.PermissionMode = modeStr
+		_ = store.Save(ses)
 	}
 }
 

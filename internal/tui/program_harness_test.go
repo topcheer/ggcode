@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,9 +10,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 type harnessBarrierMsg struct {
@@ -175,9 +175,10 @@ func waitForProgramState(t *testing.T, h *liveProgramHarness, predicate func(Mod
 
 func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
 	m := newTestModel()
-	cfg := config.DefaultConfig()
-	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
-	m.config = cfg
+	// Mode is now persisted to session metadata, not config file.
+	ses := session.NewSession("", "", "")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
+	m.session = ses
 
 	h := startLiveProgramHarness(t, m)
 	defer h.close()
@@ -194,13 +195,8 @@ func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
 	if state.mode != permission.PlanMode {
 		t.Fatalf("expected live program mode %v, got %v", permission.PlanMode, state.mode)
 	}
-
-	loaded, err := config.Load(cfg.FilePath)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if loaded.DefaultMode != permission.PlanMode.String() {
-		t.Fatalf("expected persisted mode %q, got %q", permission.PlanMode.String(), loaded.DefaultMode)
+	if ses.PermissionMode != permission.PlanMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.PlanMode.String(), ses.PermissionMode)
 	}
 }
 

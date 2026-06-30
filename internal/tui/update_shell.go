@@ -29,7 +29,7 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	// Only clear loading if shell "owns" it (agent wasn't running when shell started).
 	if m.shellOwnedLoading {
 		m.shellOwnedLoading = false
-		m.loading = false
+		m.setLoading(false)
 		m.statusActivity = ""
 		m.statusToolName = ""
 		m.statusToolArg = ""

@@ -61,6 +61,15 @@ When peers discover each other, they exchange presence information including:
 This information is visible to all peers and used by the `list` action
 to help agents find the right collaborator.
 
+### Agent Availability
+
+Each participant has an `agent_busy` field (true/false) in their presence,
+indicating whether their agent is currently processing. The `list` output
+includes this field so LLMs can **prefer idle agents** when delegating.
+
+`Hub.SetAgentBusy()` is called automatically by TUI/Desktop on agent start/end
+and propagated via presence exchange.
+
 ## Messaging
 
 ### Direct Messages
@@ -217,6 +226,17 @@ regardless of their individual A2A authentication configuration.
 If you configure custom A2A auth (e.g., `a2a.auth.api_key`, OAuth2, mTLS),
 those settings only affect A2A protocol (agent delegation, tool calls), not
 LAN Chat messaging.
+
+## Anti-Noise Guidelines
+
+To keep LAN Chat productive and avoid cascading noise:
+
+- **Don't broadcast** unless the user explicitly asks to notify everyone
+- **Don't send acknowledgments** ("got it", "will do", "thanks") — just do the work
+- **Check `agent_busy`** before messaging — prefer idle agents
+- **One message per task** — don't send follow-up pings asking "are you done?"
+- **DM the specific person**, not the team, unless truly team-wide
+- **Don't reply to broadcasts** unless you have actionable information
 
 ## Related
 

@@ -43,17 +43,23 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 }
 
 func (m *Model) persistModePreference() {
-	if m.config == nil {
-		return
-	}
-	if err := m.config.SaveDefaultModePreference(m.mode.String()); err != nil {
-		m.chatWriteSystem(nextSystemID(), m.t("mode.persist_failed", err))
+	modeStr := m.mode.String()
+	// Persist to session metadata, NOT to global config.
+	// This ensures switching mode in one session doesn't affect
+	// other sessions or future new sessions.
+	if m.session != nil {
+		m.session.PermissionMode = modeStr
+		if m.sessionStore != nil {
+			if err := m.sessionStore.Save(m.session); err != nil {
+				m.chatWriteSystem(nextSystemID(), m.t("mode.persist_failed", err))
+			}
+		}
 	}
 }
 
 func (m *Model) handleCompactCommand() tea.Cmd {
 	// Enter loading state and start spinner immediately.
-	m.loading = true
+	m.setLoading(true)
 	m.statusActivity = m.t("status.compacting")
 
 	return tea.Batch(
@@ -443,7 +449,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight running: %s", goal))
-		m.loading = true
+		m.setLoading(true)
 		m.spinner.Start("Knight task")
 		m.statusActivity = "Knight task"
 		m.statusToolName = "knight"
@@ -468,7 +474,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("📝 Knight drafting project proposal: %s", goal))
-		m.loading = true
+		m.setLoading(true)
 		m.spinner.Start("Knight proposal")
 		m.statusActivity = "Knight proposal"
 		m.statusToolName = "knight"

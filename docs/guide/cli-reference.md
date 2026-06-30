@@ -97,6 +97,35 @@ Test LLM provider connectivity and list available models:
 ggcode llm-probe                       # Test current provider
 ```
 
+### Status
+
+```bash
+ggcode status              # List all running instances
+ggcode status list         # Same as above (explicit)
+ggcode status list --agent # Show only agent busy/idle status
+ggcode status list --im    # Show only IM adapter status
+ggcode status list --mobile # Show only mobile tunnel connections
+ggcode status list --json  # JSON output for scripting
+ggcode status get [workspace] # Detailed status for a specific workspace
+```
+
+The status command reads port files from `~/.ggcode/run/<sessionID>.json`. Each running
+ggcode instance (TUI, daemon, desktop) writes its own port file keyed by session ID.
+Multiple instances in the same workspace each appear as separate entries.
+
+| Column | Description |
+|--------|-------------|
+| PID | OS process ID |
+| WORKSPACE | Working directory |
+| SESSION | Session ID (truncated) |
+| MODE | Permission mode |
+| AGENT | `busy` or `idle` |
+| IM | Number of IM adapters (online count in parentheses) |
+| MOBILE | Mobile tunnel connection status |
+| MODEL | Active LLM model |
+
+Stale port files (from crashed or killed processes) are automatically cleaned up on read.
+
 ### completion
 
 Generate shell completion scripts:

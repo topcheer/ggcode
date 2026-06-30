@@ -105,7 +105,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	// When agent is busy, shell runs independently without touching shared state.
 	if !m.loading {
 		m.shellOwnedLoading = true
-		m.loading = true
+		m.setLoading(true)
 		m.statusActivity = shellStatusActivity(m.currentLanguage())
 		m.statusToolName = ""
 		m.statusToolArg = relativizeResult(command)

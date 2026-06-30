@@ -2030,10 +2030,10 @@ func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
 
 func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	m := newTestModel()
-	path := filepath.Join(t.TempDir(), "ggcode.yaml")
-	cfg := config.DefaultConfig()
-	cfg.FilePath = path
-	m.config = cfg
+	// Mode is now persisted to session metadata, not config file.
+	ses := session.NewSession("", "", "")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
+	m.session = ses
 
 	next, cmd := m.handleModeSwitch()
 	m = next.(Model)
@@ -2041,12 +2041,11 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command from mode switch")
 	}
-	loaded, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if m.mode != permission.PlanMode {
+		t.Fatalf("expected in-memory mode %v, got %v", permission.PlanMode, m.mode)
 	}
-	if loaded.DefaultMode != permission.PlanMode.String() {
-		t.Fatalf("expected persisted mode %q, got %q", permission.PlanMode.String(), loaded.DefaultMode)
+	if ses.PermissionMode != permission.PlanMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.PlanMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful mode persistence, got %q", renderedOutput(&m))
@@ -2055,21 +2054,20 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 
 func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	m := newTestModel()
-	path := filepath.Join(t.TempDir(), "ggcode.yaml")
-	cfg := config.DefaultConfig()
-	cfg.FilePath = path
-	m.config = cfg
+	// Mode is now persisted to session metadata, not config file.
+	ses := session.NewSession("", "", "")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
+	m.session = ses
 
 	cmd := m.handleModeCommand([]string{"/mode", "auto"})
 	if cmd != nil {
 		t.Fatal("expected no command from /mode set")
 	}
-	loaded, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if m.mode != permission.AutoMode {
+		t.Fatalf("expected in-memory mode %v, got %v", permission.AutoMode, m.mode)
 	}
-	if loaded.DefaultMode != permission.AutoMode.String() {
-		t.Fatalf("expected persisted mode %q, got %q", permission.AutoMode.String(), loaded.DefaultMode)
+	if ses.PermissionMode != permission.AutoMode.String() {
+		t.Fatalf("expected session.PermissionMode %q, got %q", permission.AutoMode.String(), ses.PermissionMode)
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful /mode persistence, got %q", renderedOutput(&m))

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -90,7 +91,8 @@ type Model struct {
 	lanChatLastSenderRole           string
 	lanChatLastSenderNodeID         string
 	loading                         bool
-	loopStart                       time.Time // when current agent loop started (user sent message)
+	agentBusy                       *atomic.Bool // shared with REPL for /api/status
+	loopStart                       time.Time    // when current agent loop started (user sent message)
 	quitting                        bool
 	restartRequested                bool
 	restartDebug                    bool
@@ -537,6 +539,15 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		extPaneMgr:             extpane.NewManager(),
 		petEnabled:             true,
 		pet:                    &petState{},
+	}
+}
+
+// setLoading updates both the model's loading field and the shared atomic
+// used by /api/status for external process visibility.
+func (m *Model) setLoading(val bool) {
+	m.loading = val
+	if m.agentBusy != nil {
+		m.agentBusy.Store(val)
 	}
 }
 

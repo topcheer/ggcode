@@ -27,7 +27,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.loading = true
+	m.setLoading(true)
 	m.runCanceled = false
 	m.runFailed = false
 	m.statusActivity = m.t("command.harness_status_starting_run")
@@ -75,7 +75,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.loading = true
+	m.setLoading(true)
 	m.runCanceled = false
 	m.runFailed = false
 	m.statusActivity = m.t("command.harness_status_starting_rerun")

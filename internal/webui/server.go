@@ -60,6 +60,40 @@ type KnightActionFunc func(action, skillName string, params map[string]interface
 // KnightSkillContentFunc reads the raw content of a skill file by name and staging flag.
 type KnightSkillContentFunc func(name string, staging bool) (string, error)
 
+// RuntimeStatusFunc returns live runtime state for the /api/status endpoint.
+type RuntimeStatusFunc func() RuntimeStatus
+
+// RuntimeStatus is the JSON response for /api/status — external process visibility.
+type RuntimeStatus struct {
+	PID            int             `json:"pid"`
+	Workspace      string          `json:"workspace"`
+	AgentBusy      bool            `json:"agent_busy"`
+	PermissionMode string          `json:"permission_mode"`
+	Vendor         string          `json:"vendor"`
+	Endpoint       string          `json:"endpoint"`
+	Model          string          `json:"model"`
+	Language       string          `json:"language"`
+	IMAdapters     []IMAdapterInfo `json:"im_adapters"`
+	MobileConn     MobileConnInfo  `json:"mobile"`
+}
+
+// IMAdapterInfo describes one IM adapter's status.
+type IMAdapterInfo struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Online  bool   `json:"online"`
+	Muted   bool   `json:"muted"`
+	Channel string `json:"channel,omitempty"`
+}
+
+// MobileConnInfo describes the mobile tunnel connection status.
+type MobileConnInfo struct {
+	Connected   bool   `json:"connected"`
+	RelayURL    string `json:"relay_url,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	ConnectCode string `json:"connect_code,omitempty"`
+}
+
 // KnightStatus holds all Knight state exposed via the WebUI API.
 type KnightStatus struct {
 	Enabled bool              `json:"enabled"`
@@ -145,6 +179,7 @@ type Server struct {
 	knightStatusFn  KnightStatusFunc       // returns Knight agent status
 	knightActionFn  KnightActionFunc       // performs actions on Knight skills
 	knightContentFn KnightSkillContentFunc // reads skill file content
+	statusFn        RuntimeStatusFunc      // returns live runtime state for /api/status
 	sessionStore    session.Store
 	workspace       string // current ggcode working directory
 	saveScope       string // "global" or "instance" -- where config saves go
@@ -196,6 +231,11 @@ func (s *Server) SetKnightActionFn(fn KnightActionFunc) {
 // SetKnightSkillContentFn sets the callback for reading skill file content.
 func (s *Server) SetKnightSkillContentFn(fn KnightSkillContentFunc) {
 	s.knightContentFn = fn
+}
+
+// SetStatusFn sets the runtime status provider for /api/status.
+func (s *Server) SetStatusFn(fn RuntimeStatusFunc) {
+	s.statusFn = fn
 }
 
 // SetSessionStore sets the session store for browsing history.
@@ -308,6 +348,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/knight/skills", a(s.handleKnightSkills))
 	s.mux.HandleFunc("/api/knight/action", a(s.handleKnightAction))
 	s.mux.HandleFunc("/api/knight/skill-content", a(s.handleKnightSkillContent))
+	s.mux.HandleFunc("/api/status", a(s.handleStatus))
+}
+
+// handleStatus returns live runtime state for external monitoring.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.statusFn != nil {
+		writeJSON(w, s.statusFn())
+		return
+	}
+	// Fallback: return what we know from the server itself
+	writeJSON(w, RuntimeStatus{
+		PID:       0,
+		Workspace: s.workspace,
+	})
 }
 
 // --- Helpers ---

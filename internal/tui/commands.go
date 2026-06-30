@@ -486,7 +486,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 					expanded := custom.Expand(vars)
 					m.chatWriteSystem(nextSystemID(), m.t("command.custom", cmdName))
 					m.chatWriteSystem(nextSystemID(), expanded)
-					m.loading = true
+					m.setLoading(true)
 					m.loopStart = time.Now()
 					// Reset status bar state
 					m.statusActivity = m.t("status.thinking")
@@ -543,7 +543,7 @@ func (m *Model) continueDisplayedNormalTextRun(text string) tea.Cmd {
 	m.streamBuffer = &bytes.Buffer{}
 	m.shellBuffer = nil
 	m.streamPrefixWritten = false
-	m.loading = true
+	m.setLoading(true)
 	m.loopStart = time.Now()
 	// Reset status bar state
 	m.statusActivity = m.t("status.thinking")
@@ -577,7 +577,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamPrefixWritten = false
-	m.loading = true
+	m.setLoading(true)
 	m.loopStart = time.Now()
 	m.statusActivity = m.t("init.collecting")
 	m.statusToolName = ""
@@ -616,7 +616,7 @@ func (m *Model) startAutoRunCheck(text string, displayText string, displayInChat
 		classifierProvider = m.agent.Provider()
 	}
 
-	m.loading = true
+	m.setLoading(true)
 	m.loopStart = time.Now()
 	m.statusActivity = "Checking harness routing..."
 	m.statusToolName = ""
@@ -680,7 +680,7 @@ func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
-	m.loading = true
+	m.setLoading(true)
 	m.loopStart = time.Now()
 	m.runCanceled = false
 	m.runFailed = false

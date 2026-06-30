@@ -25,7 +25,7 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `endpoint` | string | Named endpoint key within the vendor (e.g. `default`, NOT a URL) |
 | `model` | string | Model override (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
-| `default_mode` | string | Permission mode at startup: `supervised`, `plan`, `auto`, `bypass`, `autopilot` |
+| `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
 | `language` | string | Interface language: `en` or `zh-CN` |
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
 | `allowed_dirs` | []string | Directories the agent may access |
@@ -163,6 +163,29 @@ tool_permissions:
 | `allow` | Auto-approve |
 | `ask` | Prompt for confirmation |
 | `deny` | Auto-deny |
+
+## Session-Scoped Permission Mode
+
+The `default_mode` setting only applies to **new sessions**. When you switch
+modes mid-session (via `/mode`, Tab key, or the `switch_mode` tool), the mode
+is saved to the session's metadata — not to this config file. This means:
+
+- Switching to `bypass` in one session doesn't affect other sessions
+- Resuming a session restores the mode that was active when it was last used
+- To change the global default for all future sessions, edit `default_mode` here
+  or use `config set default_mode=bypass`
+
+See [Permission Modes](./modes.md) for details.
+
+## Cron Jobs
+
+Cron jobs support a `queue_if_busy` parameter (default: `false`):
+
+- `queue_if_busy: false` — If the agent is busy when the job fires, the prompt is **skipped**. Use for non-critical periodic checks.
+- `queue_if_busy: true` — The prompt is **queued** and runs after the current task finishes. Use for important tasks that must run.
+
+Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json` (grouped by workspace).
+One-shot reminders are in-memory only and will be lost if the process exits before they fire.
 
 ## A2A (Agent-to-Agent)
 
