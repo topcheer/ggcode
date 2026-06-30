@@ -22,7 +22,9 @@ import (
 func (m *Model) handleClearChat() {
 	// Save current session first.
 	if m.session != nil && m.sessionStore != nil {
-		m.sessionStore.Save(m.session)
+		oldSes := m.session
+		oldStore := m.sessionStore
+		safego.Go("tui.clearChat.sessionSave", func() { _ = oldStore.Save(oldSes) })
 	}
 
 	// Create new session.

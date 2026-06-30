@@ -797,17 +797,28 @@ func TestMergeInstance_SwarmConfig(t *testing.T) {
 }
 
 func TestMergeInstance_HookConfig(t *testing.T) {
-	global := &Config{}
+	// Instance hooks should be appended to global hooks, not replace them.
+	global := &Config{Hooks: hooks.HookConfig{
+		PreToolUse:  []hooks.Hook{{Command: "echo global-pre"}},
+		PostToolUse: []hooks.Hook{{Command: "echo global-post"}},
+	}}
 	instance := &Config{Hooks: hooks.HookConfig{
-		PreToolUse:  []hooks.Hook{{Command: "echo pre"}},
-		PostToolUse: []hooks.Hook{{Command: "echo post"}},
+		PreToolUse:  []hooks.Hook{{Command: "echo instance-pre"}},
+		PostToolUse: []hooks.Hook{{Command: "echo instance-post"}},
 	}}
 	MergeInstance(global, instance)
-	if len(global.Hooks.PreToolUse) != 1 {
-		t.Errorf("Hooks PreToolUse len = %d, want 1", len(global.Hooks.PreToolUse))
+	if len(global.Hooks.PreToolUse) != 2 {
+		t.Errorf("Hooks PreToolUse len = %d, want 2 (global + instance appended)", len(global.Hooks.PreToolUse))
 	}
-	if len(global.Hooks.PostToolUse) != 1 {
-		t.Errorf("Hooks PostToolUse len = %d, want 1", len(global.Hooks.PostToolUse))
+	if len(global.Hooks.PostToolUse) != 2 {
+		t.Errorf("Hooks PostToolUse len = %d, want 2 (global + instance appended)", len(global.Hooks.PostToolUse))
+	}
+	// Global hooks should come first, instance hooks after
+	if global.Hooks.PreToolUse[0].Command != "echo global-pre" {
+		t.Errorf("First pre hook should be global, got %q", global.Hooks.PreToolUse[0].Command)
+	}
+	if global.Hooks.PreToolUse[1].Command != "echo instance-pre" {
+		t.Errorf("Second pre hook should be instance, got %q", global.Hooks.PreToolUse[1].Command)
 	}
 }
 

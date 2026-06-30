@@ -1176,6 +1176,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 		b.OnConfigProviderChanged()
 	})
 	a.SetPermissionPolicy(policy)
+	a.SetHookConfig(b.cfg.Hooks)
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
 	a.SetUsageHandler(func(usage provider.TokenUsage) {
@@ -2317,7 +2318,7 @@ func (b *ChatBridge) SetPermissionMode(modeStr string) {
 	// other sessions or future new sessions.
 	if ses != nil && store != nil {
 		ses.PermissionMode = modeStr
-		_ = store.Save(ses)
+		_ = store.AppendMetaToDisk(ses)
 	}
 }
 
@@ -2378,7 +2379,9 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 			b.currentSes.Messages = append(b.currentSes.Messages, msg)
 			b.currentSes.UpdatedAt = time.Now()
 			if b.sessionStore != nil {
-				_ = b.sessionStore.Save(b.currentSes)
+				ses := b.currentSes
+				store := b.sessionStore
+				safego.Go("desktop.drainPending.sessionSave", func() { _ = store.Save(ses) })
 			}
 		}
 		b.mu.Unlock()
@@ -2969,7 +2972,9 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		b.currentSes.Messages = append(b.currentSes.Messages, msg)
 		b.currentSes.UpdatedAt = time.Now()
 		if b.sessionStore != nil {
-			_ = b.sessionStore.Save(b.currentSes)
+			ses := b.currentSes
+			store := b.sessionStore
+			safego.Go("desktop.startRun.sessionSave", func() { _ = store.Save(ses) })
 		}
 	}
 

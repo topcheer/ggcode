@@ -50,7 +50,7 @@ func (m *Model) persistModePreference() {
 	if m.session != nil {
 		m.session.PermissionMode = modeStr
 		if m.sessionStore != nil {
-			if err := m.sessionStore.Save(m.session); err != nil {
+			if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
 				m.chatWriteSystem(nextSystemID(), m.t("mode.persist_failed", err))
 			}
 		}
@@ -65,7 +65,7 @@ func (m *Model) persistSidebarPreference() {
 		visible := m.sidebarVisible
 		m.session.SidebarVisible = &visible
 		if m.sessionStore != nil {
-			_ = m.sessionStore.Save(m.session)
+			_ = m.sessionStore.AppendMetaToDisk(m.session)
 		}
 	}
 }
@@ -316,7 +316,7 @@ func (m *Model) syncSessionSelection() {
 	m.session.Endpoint = m.config.Endpoint
 	m.session.Model = m.config.Model
 	if m.sessionStore != nil {
-		_ = m.sessionStore.Save(m.session)
+		_ = m.sessionStore.AppendMetaToDisk(m.session)
 	}
 }
 

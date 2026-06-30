@@ -489,6 +489,52 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 
+	// on_user_message hook (synchronous, can block).
+	userText := ""
+	for _, b := range content {
+		if b.Type == "text" {
+			userText += b.Text
+		}
+	}
+	a.mu.RLock()
+	hookCfg := a.hookConfig
+	workDir := a.workingDir
+	a.mu.RUnlock()
+	userMsgResult := hooks.RunUserMessageHooks(hookCfg.OnUserMessage, hooks.HookEnv{
+		Event:       hooks.EventOnUserMessage,
+		Workspace:   workDir,
+		WorkingDir:  workDir,
+		UserMessage: userText,
+	})
+	if !userMsgResult.Allowed {
+		onEvent(provider.StreamEvent{
+			Type:  provider.StreamEventError,
+			Error: fmt.Errorf("%s", userMsgResult.Output),
+		})
+		return fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
+	}
+
+	// on_agent_stop hook (async, fire-and-forget on return).
+	defer func() {
+		stopReason := "completed"
+		stopError := ""
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				stopReason = "cancelled"
+			} else {
+				stopReason = "error"
+				stopError = err.Error()
+			}
+		}
+		hooks.RunAgentStopHooks(hookCfg, hooks.HookEnv{
+			Event:      hooks.EventOnAgentStop,
+			Workspace:  workDir,
+			WorkingDir: workDir,
+			StopReason: stopReason,
+			StopError:  stopError,
+		})
+	}()
+
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
 	// blocks (no matching tool_result blocks in subsequent messages), add a user
 	// message with cancelled tool_result entries. This handles both session
@@ -923,6 +969,18 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				Duration:  now.Sub(llmStartTime),
 			})
 			onEvent(event)
+
+			// on_stream_stop hook (async fire-and-forget).
+			a.mu.RLock()
+			streamHookCfg := a.hookConfig
+			streamWorkDir := a.workingDir
+			a.mu.RUnlock()
+			hooks.RunStreamStopHooks(streamHookCfg, hooks.HookEnv{
+				Event:      hooks.EventOnStreamStop,
+				Workspace:  streamWorkDir,
+				WorkingDir: streamWorkDir,
+				StopReason: "completed",
+			})
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
 			return nil, assistantTextBuf.String(), nil, fmt.Errorf("chat error: %w", event.Error)

@@ -104,6 +104,11 @@ type Store interface {
 	// AppendCheckpoint persists a checkpoint of compacted messages after summarize.
 	// The checkpoint allows --resume to skip re-compacting old history.
 	AppendCheckpoint(s *Session, compactedMessages []provider.Message, tokenCount int) error
+
+	// AppendMetaToDisk appends a single meta record to the session's JSONL file
+	// without rewriting the entire file. Use this for lightweight metadata updates
+	// (e.g., permission_mode, sidebar_visible) instead of Save.
+	AppendMetaToDisk(s *Session) error
 }
 
 // indexEntry is a lightweight record for fast session listing.

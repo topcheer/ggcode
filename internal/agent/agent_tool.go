@@ -131,13 +131,22 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
+	toolStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
+	toolDur := time.Since(toolStart)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
 
 	// Post-tool-use hooks
-	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, env)
+	postEnv := env
+	postEnv.ToolSuccess = !result.IsError
+	if result.IsError {
+		postEnv.ToolError = truncateString(result.Content, 500)
+	}
+	postEnv.ToolResult = truncateString(result.Content, 4096)
+	postEnv.ToolDuration = toolDur.String()
+	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, postEnv)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
@@ -174,7 +183,9 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
 
+	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
+	multiDur := time.Since(multiStart)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
@@ -194,7 +205,14 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
-	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, env)
+	postEnv := env
+	postEnv.ToolSuccess = !result.IsError
+	if result.IsError {
+		postEnv.ToolError = truncateString(result.Content, 500)
+	}
+	postEnv.ToolResult = truncateString(result.Content, 4096)
+	postEnv.ToolDuration = multiDur.String()
+	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, postEnv)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
@@ -249,7 +267,9 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	}
 
 	// Execute the actual tool (with panic recovery)
+	fileStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
+	fileDur := time.Since(fileStart)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
@@ -260,7 +280,14 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	}
 
 	// Post-tool-use hooks
-	postResult := hooks.RunPostHooks(hookCfg2.PostToolUse, env)
+	postEnv := env
+	postEnv.ToolSuccess = !result.IsError
+	if result.IsError {
+		postEnv.ToolError = truncateString(result.Content, 500)
+	}
+	postEnv.ToolResult = truncateString(result.Content, 4096)
+	postEnv.ToolDuration = fileDur.String()
+	postResult := hooks.RunPostHooks(hookCfg2.PostToolUse, postEnv)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}

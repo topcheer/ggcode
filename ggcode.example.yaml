@@ -557,6 +557,90 @@ mcp_servers:
     env:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
 
+# Hooks: run shell commands or HTTP webhooks on agent lifecycle events.
+#
+# Events (5):
+#   on_user_message  — before LLM call (sync, can block)
+#   pre_tool_use     — before tool execution (sync, can block)
+#   post_tool_use    — after tool execution (sync, can inject output)
+#   on_agent_stop    — agent loop ends (async fire-and-forget)
+#   on_stream_stop   — LLM stream completes (async fire-and-forget)
+#
+# Hook types:
+#   command (default) — local shell command
+#   http              — HTTP POST webhook
+#
+# Blocking semantics:
+#   command: exit code 2 = block (stderr → agent as block reason)
+#   http:    HTTP 403    = block (response body → agent as block reason)
+#   Non-blocking events (post_tool_use, on_agent_stop, on_stream_stop) ignore block.
+#
+# Standardized payload (JSON):
+#   Sent as POST body (http), GGCODE_HOOK_PAYLOAD env var + stdin (command).
+#   See docs/guide/hooks.md for full schema.
+#
+# Match patterns (for tool events):
+#   "write_file"              — exact tool name
+#   "write_*"                 — glob
+#   "write_file|edit_file"    — pipe (OR)
+#   "run_command(git commit*)"— tool name + argument substring
+#   "*"                       — match all (for non-tool events)
+#
+# Environment variables (all hooks):
+#   GGCODE_HOOK_PAYLOAD  — full JSON payload (see docs/guide/hooks.md)
+#   GGCODE_HOOK_EVENT    — event name
+#   GGCODE_TOOL_NAME     — tool name (tool events only)
+#   GGCODE_RAW_INPUT     — raw JSON tool arguments
+#   GGCODE_TOOL_SUCCESS  — "true"/"false" (post_tool_use only)
+#   GGCODE_TOOL_ERROR    — error message (post_tool_use only)
+#   GGCODE_TOOL_RESULT   — tool output, 4KB max (post_tool_use only)
+#   GGCODE_TOOL_DURATION — execution duration (post_tool_use only)
+#
+# Template variables (use ${VAR} in command string):
+#   ${TOOL_NAME}, ${FILE_PATH}, ${WORKING_DIR}, ${RAW_INPUT}, ${EVENT}
+#   ${TOOL_SUCCESS}, ${TOOL_ERROR}, ${TOOL_RESULT}, ${TOOL_DURATION}, ${PAYLOAD}
+hooks:
+  # Before user message reaches the LLM — sync, can block.
+  on_user_message:
+    - match: "*"
+      type: http
+      url: "https://audit.example.com/message"
+      secret: "my-hmac-key"  # HMAC-SHA256 signature in X-GGCode-Signature header
+
+  # Before tool execution — sync, can block (exit 2 / HTTP 403).
+  pre_tool_use:
+    # Block destructive shell commands (command type)
+    - match: "run_command(rm -rf *)"
+      command: "echo 'Destructive command blocked' >&2; exit 2"
+
+    # Security scan before write (http type)
+    - match: "write_file"
+      type: http
+      url: "https://security.example.com/scan"
+      timeout: "5s"
+
+  # After tool execution — sync, can inject output.
+  post_tool_use:
+    # Auto-format Go files after writing
+    - match: "write_file|edit_file"
+      command: "gofmt -w ${FILE_PATH} 2>/dev/null; goimports -w ${FILE_PATH} 2>/dev/null"
+
+    # Notify external service on any tool completion (http type)
+    - match: "*"
+      type: http
+      url: "https://hooks.slack.com/services/..."
+
+  # Agent loop ends — async fire-and-forget.
+  on_agent_stop:
+    - match: "*"
+      type: http
+      url: "https://ci.example.com/agent-done"
+
+  # LLM stream completes — async fire-and-forget.
+  on_stream_stop:
+    - match: "*"
+      command: "echo 'stream complete' >> /tmp/ggcode-streams.log"
+
 # External tool plugins
 plugins:
   - name: my-tools

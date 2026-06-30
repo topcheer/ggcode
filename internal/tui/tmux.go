@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tmux"
 )
 
@@ -206,8 +207,10 @@ func (m *Model) enterTmuxSession(sessionName, setupLayout string) tea.Cmd {
 	if sessionName = sanitizeTmuxSessionName(sessionName); sessionName == "" {
 		sessionName = defaultTmuxSessionName(m.tmuxWorkspace())
 	}
-	if m.sessionStore != nil {
-		_ = m.sessionStore.Save(m.session)
+	if m.sessionStore != nil && m.session != nil {
+		ses := m.session
+		store := m.sessionStore
+		safego.Go("tui.tmux.sessionSave", func() { _ = store.Save(ses) })
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Entering tmux session %q and resuming session %s...", sessionName, m.session.ID))
 	m.tmuxExecRequested = true

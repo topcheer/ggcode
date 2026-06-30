@@ -343,13 +343,14 @@ func mergeSwarmConfig(global, instance *SwarmConfig) {
 	}
 }
 
-// mergeHookConfig merges instance hook config into global.
+// mergeHookConfig merges instance hook config into global by appending.
+// Instance hooks are added after global hooks (instance hooks run later).
 func mergeHookConfig(global, instance *hooks.HookConfig) {
-	if len(global.PreToolUse) == 0 && len(instance.PreToolUse) > 0 {
-		global.PreToolUse = instance.PreToolUse
+	if len(instance.PreToolUse) > 0 {
+		global.PreToolUse = append(global.PreToolUse, instance.PreToolUse...)
 	}
-	if len(global.PostToolUse) == 0 && len(instance.PostToolUse) > 0 {
-		global.PostToolUse = instance.PostToolUse
+	if len(instance.PostToolUse) > 0 {
+		global.PostToolUse = append(global.PostToolUse, instance.PostToolUse...)
 	}
 }
 

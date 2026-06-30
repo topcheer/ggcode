@@ -292,6 +292,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
+	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
 	ag.SetSupportsVision(resolved.SupportsVision)
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
@@ -1989,7 +1990,7 @@ func (s *daemonModeSwitcher) SetMode(mode permission.PermissionMode) {
 	// Persist to session, not to global config.
 	if s.ses != nil && s.store != nil {
 		s.ses.PermissionMode = mode.String()
-		_ = s.store.Save(s.ses)
+		_ = s.store.AppendMetaToDisk(s.ses)
 	}
 }
 

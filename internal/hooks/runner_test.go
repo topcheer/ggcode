@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -117,5 +118,82 @@ func TestRunPostHooks_NoInject(t *testing.T) {
 	result := RunPostHooks([]Hook{h}, env)
 	if result.Output != "" {
 		t.Errorf("expected no output injection, got %q", result.Output)
+	}
+}
+
+func TestRunPostHooks_ToolResultFields(t *testing.T) {
+	h := Hook{
+		Match:        "run_command",
+		Command:      "echo \"${TOOL_SUCCESS}|${TOOL_ERROR}|${TOOL_DURATION}\"",
+		InjectOutput: true,
+	}
+	env := HookEnv{
+		ToolName:     "run_command",
+		RawInput:     `{}`,
+		ToolSuccess:  false,
+		ToolError:    "command not found",
+		ToolDuration: "5ms",
+	}
+	result := RunPostHooks([]Hook{h}, env)
+	if !strings.Contains(result.Output, "false") {
+		t.Errorf("expected TOOL_SUCCESS=false in output, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "command not found") {
+		t.Errorf("expected TOOL_ERROR in output, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "5ms") {
+		t.Errorf("expected TOOL_DURATION in output, got %q", result.Output)
+	}
+}
+
+func TestRunPostHooks_EnvVars(t *testing.T) {
+	h := Hook{
+		Match:        "run_command",
+		Command:      "echo $GGCODE_TOOL_SUCCESS:$GGCODE_TOOL_NAME",
+		InjectOutput: true,
+	}
+	env := HookEnv{
+		ToolName:    "run_command",
+		RawInput:    `{}`,
+		ToolSuccess: true,
+	}
+	result := RunPostHooks([]Hook{h}, env)
+	if !strings.Contains(result.Output, "true") {
+		t.Errorf("expected GGCODE_TOOL_SUCCESS=true in output, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "run_command") {
+		t.Errorf("expected GGCODE_TOOL_NAME in output, got %q", result.Output)
+	}
+}
+
+func TestRunPreHooks_MultipleHooks(t *testing.T) {
+	hooks := []Hook{
+		{Match: "write_file", Command: "echo first"},
+		{Match: "write_file", Command: "exit 2"},
+		{Match: "write_file", Command: "echo should-not-run"},
+	}
+	env := HookEnv{ToolName: "write_file", RawInput: `{}`}
+	result := RunPreHooks(hooks, env)
+	if result.Allowed {
+		t.Error("expected second hook to block execution")
+	}
+}
+
+func TestRunPostHooks_MultipleInject(t *testing.T) {
+	hooks := []Hook{
+		{Match: "write_file", Command: "echo first", InjectOutput: true},
+		{Match: "write_file", Command: "echo second", InjectOutput: true},
+		{Match: "write_file", Command: "echo no-inject", InjectOutput: false},
+	}
+	env := HookEnv{ToolName: "write_file", RawInput: `{}`}
+	result := RunPostHooks(hooks, env)
+	if !strings.Contains(result.Output, "first") {
+		t.Errorf("expected 'first' in output, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "second") {
+		t.Errorf("expected 'second' in output, got %q", result.Output)
+	}
+	if strings.Contains(result.Output, "no-inject") {
+		t.Errorf("expected 'no-inject' to NOT be in output, got %q", result.Output)
 	}
 }
