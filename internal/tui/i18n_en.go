@@ -92,6 +92,8 @@ func enCatalog(key string) string {
 		return "compact"
 	case "label.total":
 		return "total"
+	case "label.cost":
+		return "est. cost"
 	case "label.approval_policy":
 		return "approval"
 	case "label.tool_policy":

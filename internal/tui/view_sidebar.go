@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -70,7 +71,34 @@ func (m Model) renderSidebarSessionUsageSection() string {
 		renderUsageRow(m.t("label.cache_write"), humanizeTokenCount(usage.CacheWrite)),
 		renderUsageRow(m.t("label.cache_hit"), fmt.Sprintf("%d%%", usage.CacheHitPercent())),
 	}
+	// Estimated cost row — only show if we have usage and pricing data.
+	if usage.Total() > 0 && m.session != nil {
+		if costStr := m.sidebarEstimatedCost(usage); costStr != "" {
+			rows = append(rows, renderUsageRow(m.t("label.cost"), costStr))
+		}
+	}
 	return strings.Join(rows, "\n")
+}
+
+// sidebarEstimatedCost computes the estimated USD cost for the session's
+// token usage using the built-in pricing table.
+func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
+	if m.session == nil {
+		return ""
+	}
+	pt := cost.DefaultPricingTable()
+	rate, ok := pt.Get(m.session.Vendor, m.session.Model)
+	if !ok {
+		return ""
+	}
+	totalCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
+		float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
+		float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
+		float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
+	if totalCost <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("$%.4f", totalCost)
 }
 
 func (m Model) renderSidebarMetricsSection() string {

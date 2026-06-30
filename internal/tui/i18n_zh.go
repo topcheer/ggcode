@@ -90,6 +90,8 @@ func zhCatalog(key string) string {
 		return "压缩"
 	case "label.total":
 		return "总计"
+	case "label.cost":
+		return "预估费用"
 	case "label.approval_policy":
 		return "审批"
 	case "label.tool_policy":
