@@ -419,7 +419,10 @@ internal/
     safego.go              # Panic recovery wrappers for goroutines (GoSafe, GoSafeWait)
 
   session/                 # Session persistence
-    store.go               # Store: save/load sessions as JSONL with tunnel event recording
+    store.go               # Store: save/load sessions as JSONL with tunnel event recording.
+                           #   Meta record persists: permission_mode, sidebar_visible (*bool),
+                           #   title, workspace, vendor, endpoint, model, token usage.
+                           #   Checkpoint support for summarize compaction.
     lock.go                # Session file locking (cross-platform)
     lock_unix.go           # Unix flock-based locking
     lock_windows.go        # Windows LockFileEx-based locking

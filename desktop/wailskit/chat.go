@@ -1278,6 +1278,21 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	return nil
 }
 
+// SetIMManager injects the IM runtime manager into the im tool so the LLM
+// can manage adapters (status, mute/unmute, disable/enable, send).
+func (b *ChatBridge) SetIMManager(mgr tool.IMManager) {
+	if mgr == nil {
+		return
+	}
+	if imt, ok := b.registry.Get("im"); ok {
+		if imTool, ok := imt.(tool.IMTool); ok {
+			imTool.Manager = mgr
+			b.registry.Unregister("im")
+			b.registry.Register(imTool)
+		}
+	}
+}
+
 func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openURL func(string) error) (*MCPOAuthStartResult, error) {
 	if b == nil || b.mcpManager == nil {
 		return nil, fmt.Errorf("MCP manager not initialized")

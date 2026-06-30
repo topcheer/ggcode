@@ -45,6 +45,11 @@ type Session struct {
 	// When non-empty, this overrides the global default_mode on session resume.
 	// It is never written to the config file — only persisted with the session.
 	PermissionMode string `json:"permission_mode,omitempty"`
+	// SidebarVisible stores the session-scoped sidebar visibility preference.
+	// When non-nil, this overrides the global sidebar_visible on session resume.
+	// It is never written to the config file — only persisted with the session.
+	// Uses *bool to distinguish "never set" (nil) from "explicitly hidden" (false).
+	SidebarVisible *bool `json:"sidebar_visible,omitempty"`
 	// endpointStatsMu is nested inside higher-level session/bridge locks and only
 	// guards the per-endpoint aggregate maps used by live readers/writers.
 	endpointStatsMu sync.RWMutex
@@ -264,6 +269,9 @@ type jsonlRecord struct {
 	UsageEntry *UsageEntry `json:"usage_entry,omitempty"`
 	// MetricEvent: performance metric record (type == "metric").
 	MetricEvent *metrics.MetricEvent `json:"metric_event,omitempty"`
+	// Session-scoped preferences.
+	PermissionMode string `json:"permission_mode,omitempty"`
+	SidebarVisible *bool  `json:"sidebar_visible,omitempty"`
 	// Checkpoint fields: compacted messages snapshot after summarize.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
@@ -332,6 +340,8 @@ func (s *JSONLStore) Save(ses *Session) error {
 		CreatedAt:            ses.CreatedAt,
 		UpdatedAt:            ses.UpdatedAt,
 		TunnelEventsComplete: ses.TunnelEventsComplete,
+		PermissionMode:       ses.PermissionMode,
+		SidebarVisible:       ses.SidebarVisible,
 	}
 	if err := enc.Encode(meta); err != nil {
 		f.Close()
@@ -484,6 +494,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		ses.CreatedAt = rec.CreatedAt
 		ses.UpdatedAt = rec.UpdatedAt
 		ses.TunnelEventsComplete = rec.TunnelEventsComplete
+		if rec.PermissionMode != "" {
+			ses.PermissionMode = rec.PermissionMode
+		}
+		if rec.SidebarVisible != nil {
+			ses.SidebarVisible = rec.SidebarVisible
+		}
 	}
 
 	// Build messages
@@ -956,6 +972,8 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		CreatedAt:            ses.CreatedAt,
 		UpdatedAt:            ses.UpdatedAt,
 		TunnelEventsComplete: ses.TunnelEventsComplete,
+		PermissionMode:       ses.PermissionMode,
+		SidebarVisible:       ses.SidebarVisible,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
@@ -1032,6 +1050,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		CreatedAt:            ses.CreatedAt,
 		UpdatedAt:            ses.UpdatedAt,
 		TunnelEventsComplete: ses.TunnelEventsComplete,
+		PermissionMode:       ses.PermissionMode,
+		SidebarVisible:       ses.SidebarVisible,
 	}
 	if err := enc.Encode(meta); err != nil {
 		os.Remove(path)

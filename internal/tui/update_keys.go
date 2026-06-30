@@ -41,9 +41,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 	if msg.String() == "ctrl+r" {
 		m.sidebarVisible = !m.sidebarVisible
-		if m.config != nil {
-			_ = m.config.SaveSidebarPreference(m.sidebarVisible)
-		}
+		m.persistSidebarPreference()
 		m.relayoutAfterSidebarChange()
 		return m, nil
 	}

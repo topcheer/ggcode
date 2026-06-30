@@ -130,6 +130,18 @@ func TestLanchatAlwaysAllowed(t *testing.T) {
 	}
 }
 
+func TestIMToolAlwaysAllowed(t *testing.T) {
+	// im must be allowed in every permission mode without approval
+	imInput := json.RawMessage(`{"action":"status"}`)
+	for _, mode := range ValidPermissionModes {
+		policy := NewConfigPolicyWithMode(nil, []string{"."}, mode)
+		d, err := policy.Check("im", imInput)
+		if err != nil || d != Allow {
+			t.Errorf("%s: im should be Allow, got %v err=%v", mode.String(), d, err)
+		}
+	}
+}
+
 func TestAutoModeDeniesDangerous(t *testing.T) {
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, AutoMode)
 

@@ -1142,6 +1142,8 @@ func (a *App) startIMAdapters() {
 			lang = cfg.Language
 		}
 		a.chat.Emitter = im.NewIMEmitter(a.imManager, lang, a.workDir)
+		// Wire IM tool to the runtime manager
+		a.chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
 	}
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{

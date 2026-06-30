@@ -1090,18 +1090,31 @@ func TestSetConfigAppliesPersistedSidebarVisibility(t *testing.T) {
 	m.SetConfig(cfg)
 
 	if m.sidebarVisible {
-		t.Fatal("expected sidebar visibility to follow persisted config")
+		t.Fatal("expected sidebar visibility to follow persisted config as default")
 	}
 }
 
-func TestCtrlRPersistsSidebarVisibility(t *testing.T) {
+func TestCtrlRPersistsSidebarVisibilityToSession(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 	cfg := config.DefaultConfig()
 	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
 	visible := true
 	cfg.UI.SidebarVisible = &visible
+	// Save the config with sidebar_visible=true so we can verify it stays unchanged
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save config: %v", err)
+	}
 	m.SetConfig(cfg)
+
+	// Set up a session so persistence goes to session, not global config
+	ses := &session.Session{ID: "test-sidebar-ses"}
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	m.session = ses
+	m.sessionStore = store
 
 	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+r"})
 	m = model.(Model)
@@ -1109,12 +1122,18 @@ func TestCtrlRPersistsSidebarVisibility(t *testing.T) {
 		t.Fatal("expected ctrl+r to hide sidebar")
 	}
 
+	// Session should have the sidebar preference saved
+	if ses.SidebarVisible == nil || *ses.SidebarVisible {
+		t.Fatal("expected session.SidebarVisible to be false after ctrl+r")
+	}
+
+	// Global config should NOT be modified — reload from disk
 	loaded, err := config.Load(cfg.FilePath)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded.SidebarVisible() {
-		t.Fatal("expected persisted sidebar preference to be false after ctrl+r")
+	if !loaded.SidebarVisible() {
+		t.Fatal("global config sidebar_visible should remain unchanged (true)")
 	}
 }
 

@@ -115,10 +115,10 @@ func IsReadOnlyTool(name string) bool {
 // IsAlwaysAllowedTool returns true if the tool is safe to run without approval
 // in ALL permission modes, including plan mode. These are tools that have no
 // side effects on the local filesystem or system state — they communicate with
-// external services (LAN Chat) or are purely informational.
+// external services (LAN Chat, IM) or are purely informational.
 func IsAlwaysAllowedTool(name string) bool {
 	switch name {
-	case "lanchat", "switch_mode":
+	case "lanchat", "switch_mode", "im":
 		return true
 	}
 	return false

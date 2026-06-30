@@ -57,6 +57,19 @@ func (m *Model) persistModePreference() {
 	}
 }
 
+// persistSidebarPreference saves the sidebar visibility to the current session,
+// not to the global config. This ensures toggling the sidebar in one session
+// doesn't affect other sessions or future new sessions.
+func (m *Model) persistSidebarPreference() {
+	if m.session != nil {
+		visible := m.sidebarVisible
+		m.session.SidebarVisible = &visible
+		if m.sessionStore != nil {
+			_ = m.sessionStore.Save(m.session)
+		}
+	}
+}
+
 func (m *Model) handleCompactCommand() tea.Cmd {
 	// Enter loading state and start spinner immediately.
 	m.setLoading(true)

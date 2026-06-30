@@ -16,7 +16,7 @@ Best for exploring an unfamiliar codebase or working with sensitive code.
 
 ### `plan`
 
-Read-only mode — allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes and command execution. The agent can only read and search.
+Read-only mode — allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes and command execution. The agent can only read and search. The `lanchat` and `im` tools are always allowed (communication tools with no filesystem impact).
 
 Best for code review, exploration, and planning before implementation.
 
@@ -54,12 +54,13 @@ This means you can start a session, confirm the Goal, and walk away — the agen
 
 ## Session-Scoped Persistence
 
-Permission mode is **persisted per session**, not globally:
+Permission mode and sidebar visibility are **persisted per session** in the session JSONL meta record, not globally:
 
-- **New session**: uses the global `default_mode` from config (or `supervised` if unset)
-- **Switching mode mid-session**: saves to session metadata (`session.PermissionMode`), **not** to global config
-- **Resuming a session**: restores the mode that was active when the session was last used
-- **Multiple instances**: each session tracks its own mode independently
+- **New session**: uses the global `default_mode` from config (or `supervised` if unset); sidebar uses global `sidebar_visible` config
+- **Switching mode mid-session**: saves to `session.PermissionMode` in the JSONL file, **not** to global config
+- **Ctrl+R (toggle sidebar)**: saves to `session.SidebarVisible` (`*bool`) in the JSONL file, **not** to global config
+- **Resuming a session**: restores the mode and sidebar visibility that were active when the session was last used
+- **Multiple instances**: each session tracks its own mode and sidebar state independently
 
 This means switching to `bypass` in one session won't affect other sessions or future new sessions. To change the global default, edit `default_mode` in `ggcode.yaml` or use `config set default_mode=bypass`.
 

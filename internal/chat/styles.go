@@ -315,7 +315,7 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 	}
 
 	truncated := false
-	if len(wrapped) > maxLines {
+	if maxLines > 0 && len(wrapped) > maxLines {
 		truncated = true
 		hidden := len(wrapped) - maxLines
 		wrapped = wrapped[len(wrapped)-maxLines:]

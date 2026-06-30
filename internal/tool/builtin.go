@@ -84,6 +84,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Permission
 		NewSwitchModeTool(policy),
+
+		// IM (manager injected post-registration via SetManager)
+		IMTool{},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {

@@ -29,6 +29,7 @@ type BaseToolItem struct {
 	suppressBody   bool // hide body entirely (e.g., save_memory)
 	suppressHeader bool // hide header entirely (e.g., read_command_output)
 	formatJSON     bool // parse JSON result and render as formatted key-value pairs
+	noTruncate     bool // render body without line limit (e.g., lanchat)
 	styles         Styles
 	fileBodyMode   string // "" default, "linecount" for read/write, "editdiff" for edit
 	lang           string // "zh-CN", "en"
@@ -152,7 +153,11 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		return t.styles.ToolBody.Render(formatted)
 	}
 
-	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
+	maxLines := ToolBodyMaxLines
+	if t.noTruncate {
+		maxLines = 0 // 0 = unlimited
+	}
+	body, _ := FormatBody(t.result, width, maxLines)
 	return t.styles.ToolBody.Render(body)
 }
 
@@ -830,6 +835,10 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		if ctx.ToolName == "cron_create" {
 			item.formatJSON = false
 			item.fileBodyMode = "cronbody"
+		}
+		if ctx.ToolName == "lanchat" {
+			item.noTruncate = true
+			item.markdownBody = true
 		}
 		return item
 	}

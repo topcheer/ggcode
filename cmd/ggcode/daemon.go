@@ -448,6 +448,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
+	// Wire IM tool to the runtime manager
+	if imt, ok := registry.Get("im"); ok {
+		if imTool, ok := imt.(tool.IMTool); ok {
+			imTool.Manager = im.NewToolManagerAdapter(imMgr)
+			registry.Unregister("im")
+			registry.Register(imTool)
+		}
+	}
+
 	// Cron tools — enqueue fires the prompt as a user message via the
 	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
 	// skip the firing instead of interrupting.

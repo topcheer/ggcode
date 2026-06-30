@@ -226,6 +226,18 @@ func (r *REPL) SetIMManager(mgr *im.Manager) {
 	r.model.SetIMManager(mgr)
 	if mgr != nil {
 		mgr.SetBridge(newTUIIMBridge(func() *tea.Program { return r.program }))
+		// Inject IM manager into the tool so LLM can manage adapters
+		if r.agent != nil {
+			if tools := r.agent.ToolRegistry(); tools != nil {
+				if t, ok := tools.Get("im"); ok {
+					if imTool, ok := t.(tool.IMTool); ok {
+						imTool.Manager = im.NewToolManagerAdapter(mgr)
+						tools.Unregister("im")
+						tools.Register(imTool)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -1191,6 +1203,13 @@ func (r *REPL) loadSession(id string) {
 		}
 		r.model.mode = sessionMode
 		debug.Log("repl", "loadSession: restored permission mode %s from session", sessionMode)
+	}
+
+	// Restore session-scoped sidebar visibility (if set).
+	// This overrides the global sidebar_visible for this session only.
+	if ses.SidebarVisible != nil {
+		r.model.sidebarVisible = *ses.SidebarVisible
+		debug.Log("repl", "loadSession: restored sidebar_visible=%v from session", *ses.SidebarVisible)
 	}
 
 	r.model.rebuildConversationFromMessages(ses.Messages)
