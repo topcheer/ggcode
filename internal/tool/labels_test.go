@@ -712,11 +712,12 @@ func TestShortenID(t *testing.T) {
 }
 
 func TestRelativizePath(t *testing.T) {
+	// RelativizePath is now a pass-through — path is returned as-is.
 	tests := []struct {
 		path, workDir, want string
 	}{
-		{"/tmp/project/main.go", "/tmp/project", "main.go"},
-		{"/tmp/project/sub/test.go", "/tmp/project", "sub/test.go"},
+		{"/tmp/project/main.go", "/tmp/project", "/tmp/project/main.go"},
+		{"/tmp/project/sub/test.go", "/tmp/project", "/tmp/project/sub/test.go"},
 		{"/other/path/test.go", "/tmp/project", "/other/path/test.go"},
 		{"/tmp/test.go", "", "/tmp/test.go"},
 	}

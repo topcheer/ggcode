@@ -54,8 +54,8 @@ func (t LanChatTool) Parameters() json.RawMessage {
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["list", "send", "broadcast", "broadcast_all", "send_team", "history", "pending", "approve", "reject"],
-				"description": "list=discover participants; send=DM one or more participants (requires 'to', supports comma-separated); broadcast=send to YOUR team members (team-scoped default); broadcast_all=send to ALL participants on the LAN; send_team=send to a specific team (requires 'team'); history=recent messages; pending=list @agent approvals; approve/reject a pending message (requires 'message_id'). Choose by scope: DM=send, your team=broadcast, specific team=send_team, everyone=broadcast_all."
+				"enum": ["list", "send", "broadcast", "broadcast_all", "send_team", "history", "pending", "approve", "reject", "set_identity"],
+				"description": "list=discover participants; send=DM one or more participants (requires 'to', supports comma-separated); broadcast=send to YOUR team members (team-scoped default); broadcast_all=send to ALL participants on the LAN; send_team=send to a specific team (requires 'team'); history=recent messages; pending=list @agent approvals; approve/reject a pending message (requires 'message_id'); set_identity=change your own nick, role, and/or team (requires at least one of 'nick', 'role', 'team'). Choose by scope: DM=send, your team=broadcast, specific team=send_team, everyone=broadcast_all."
 			},
 			"message": {
 				"type": "string",
@@ -65,9 +65,17 @@ func (t LanChatTool) Parameters() json.RawMessage {
 				"type": "string",
 				"description": "Recipient node_id(s) for 'send' action (DM). Single recipient: \"node-id\". Multiple recipients: comma-separated \"id1,id2,id3\". Using to='*' is equivalent to action='broadcast_all'. Find via action='list'. Ignored by broadcast/broadcast_all/send_team actions."
 			},
+			"nick": {
+				"type": "string",
+				"description": "New nickname for set_identity (e.g. 'alice', 'bob'). Combined with role to form the composite nick 'nick_role'. Optional — only provided fields are changed."
+			},
+			"role": {
+				"type": "string",
+				"description": "New role for set_identity (e.g. 'developer', 'frontend', 'devops'). Optional."
+			},
 			"team": {
 				"type": "string",
-				"description": "Team name. Required for 'send_team'. Also used as an optional filter for 'list' to show only members of a specific team. Ignored by send/broadcast/broadcast_all."
+				"description": "Team name. Required for 'send_team'. Also used as an optional filter for 'list' to show only members of a specific team. For 'set_identity', changes your team membership. Ignored by send/broadcast/broadcast_all."
 			},
 			"to_role": {
 				"type": "string",
@@ -109,6 +117,8 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		Action    string          `json:"action"`
 		Message   string          `json:"message"`
 		Team      string          `json:"team"`
+		Nick      string          `json:"nick"`
+		Role      string          `json:"role"`
 		AsAgent   *bool           `json:"as_agent"`
 		ToRole    string          `json:"to_role"`
 		MessageID string          `json:"message_id"`
@@ -148,10 +158,12 @@ func (t LanChatTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return t.doPending(), nil
 	case "approve":
 		return t.doApprove(ctx, args.MessageID)
+	case "set_identity":
+		return t.doSetIdentity(args.Nick, args.Role, args.Team)
 	case "reject":
 		return t.doReject(args.MessageID, args.Reason)
 	default:
-		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, broadcast, broadcast_all, send_team, history, pending, approve, reject)", args.Action)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s (valid: list, send, broadcast, broadcast_all, send_team, history, pending, approve, reject, set_identity)", args.Action)}, nil
 	}
 }
 
@@ -666,4 +678,37 @@ func (t LanChatTool) doReject(messageID, reason string) (Result, error) {
 	}
 
 	return Result{Content: fmt.Sprintf("Rejected message %s", messageID)}, nil
+}
+
+func (t LanChatTool) doSetIdentity(nick, role, team string) (Result, error) {
+	if nick == "" && role == "" && team == "" {
+		return Result{IsError: true, Content: "at least one of 'nick', 'role', or 'team' is required for set_identity"}, nil
+	}
+
+	// Merge with current values for fields not provided
+	curNick := t.Hub.HumanNick()
+	curRole := t.Hub.Role()
+	curTeam := t.Hub.Team()
+
+	// HumanNick is a composite "name_role" — extract the name part
+	if nick == "" {
+		if idx := strings.LastIndex(curNick, "_"); idx >= 0 {
+			nick = curNick[:idx]
+		} else {
+			nick = curNick
+		}
+	}
+	if role == "" {
+		role = curRole
+	}
+	if team == "" {
+		team = curTeam
+	}
+
+	if err := t.Hub.SetNickRoleTeam(nick, role, team); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to set identity: %v", err)}, nil
+	}
+
+	composite := nick + "_" + role
+	return Result{Content: fmt.Sprintf("Identity updated: nick=%s, role=%s, team=%s (composite: %s)\n", nick, role, team, composite)}, nil
 }

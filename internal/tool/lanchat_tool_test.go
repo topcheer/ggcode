@@ -195,3 +195,61 @@ func TestLanChatSendTeamSkipsSelf(t *testing.T) {
 		t.Errorf("send_team with only self should error (0 members after skipping self)")
 	}
 }
+
+func TestLanChatSetIdentity(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+
+	// Change all three
+	result, err := tool.doSetIdentity("bob", "backend", "infra")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("doSetIdentity returned error: %s", result.Content)
+	}
+	if got := hub.HumanNick(); got != "bob_backend" {
+		t.Errorf("HumanNick = %q, want %q", got, "bob_backend")
+	}
+	if got := hub.Role(); got != "backend" {
+		t.Errorf("Role = %q, want %q", got, "backend")
+	}
+	if got := hub.Team(); got != "infra" {
+		t.Errorf("Team = %q, want %q", got, "infra")
+	}
+}
+
+func TestLanChatSetIdentityPartial(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+	hub.SetNickRoleTeam("alice", "frontend", "platform")
+
+	// Only change role, keep nick and team
+	result, err := tool.doSetIdentity("", "backend", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("doSetIdentity returned error: %s", result.Content)
+	}
+	if got := hub.HumanNick(); got != "alice_backend" {
+		t.Errorf("HumanNick = %q, want %q", got, "alice_backend")
+	}
+	if got := hub.Role(); got != "backend" {
+		t.Errorf("Role = %q, want %q", got, "backend")
+	}
+	if got := hub.Team(); got != "platform" {
+		t.Errorf("Team = %q, want %q", got, "platform")
+	}
+}
+
+func TestLanChatSetIdentityRequiresOne(t *testing.T) {
+	tool, _ := newTestLanChatTool(t)
+
+	result, err := tool.doSetIdentity("", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Errorf("doSetIdentity with all empty should return error")
+	}
+}

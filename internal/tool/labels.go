@@ -3,7 +3,6 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1324,19 +1323,10 @@ func askUserTarget(args map[string]any) string {
 	return ""
 }
 
-// RelativizePath tries to make an absolute path relative to workingDir.
-func RelativizePath(path, workingDir string) string {
-	if workingDir == "" {
-		return path
-	}
-	rel, err := filepath.Rel(workingDir, path)
-	if err != nil {
-		return path
-	}
-	if strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return path
-	}
-	return rel
+// RelativizePath is kept for API compatibility but no longer performs
+// path replacement. Absolute paths are shown as-is.
+func RelativizePath(path, _ string) string {
+	return path
 }
 
 // ghosttyLabel produces a display label for ghostty tool calls.

@@ -636,10 +636,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
-			// If we have an autopilot goal but the LLM stopped without tool
-			// calls and without explicit completion language, inject a goal
-			// check prompt to nudge it to either continue or declare done.
-			if a.hasAutopilotGoal() && !a.autopilotGoalCheckedThisTurn {
+			// If we are in autopilot mode and have a goal but the LLM stopped
+			// without tool calls and without explicit completion language,
+			// inject a goal check prompt to nudge it to either continue or
+			// declare done.
+			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.autopilotGoalCheckedThisTurn {
 				a.autopilotGoalCheckedThisTurn = true
 				debug.Log("agent", "Iteration %d: autopilot injecting goal check", i+1)
 				a.contextManager.Add(provider.Message{
