@@ -431,6 +431,13 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 	a.hookConfig = cfg
 }
 
+// GetHookConfig returns the current hook configuration (thread-safe).
+func (a *Agent) GetHookConfig() hooks.HookConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.hookConfig
+}
+
 // SetCheckpointHandler sets a callback invoked after summarize compaction
 // to persist the compacted message state.
 func (a *Agent) SetCheckpointHandler(fn func(messages []provider.Message, tokenCount int)) {

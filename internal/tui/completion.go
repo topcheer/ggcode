@@ -198,6 +198,7 @@ var SlashCommands = []string{
 	"/inspector", "/image",
 	"/chat", "/nick", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
+	"/diff", "/hooks",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -259,6 +260,8 @@ var SlashCommandDescriptions = map[string]string{
 	"/share":       "Share session to mobile (QR code tunnel)",
 	"/unshare":     "Stop sharing (disconnect mobile)",
 	"/tunnel":      "Share session to mobile (QR code tunnel)",
+	"/diff":        "Show git diff in chat (supports --cached, <file>, --stat)",
+	"/hooks":       "Show configured hooks (all events, types, match patterns)",
 }
 
 // SlashCommandPlaceholders maps commands that accept optional arguments.
@@ -322,6 +325,8 @@ var SlashCommandPlaceholders = map[string]string{
 	"/todo":        "<subcommand>",
 	"/undo":        "",
 	"/update":      "[check|force]",
+	"/diff":        "[--cached|--stat|<file>]",
+	"/hooks":       "",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

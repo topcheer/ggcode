@@ -237,6 +237,10 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.knight")
 	case "/stream":
 		return tr(lang, "slash.stream")
+	case "/diff":
+		return tr(lang, "slash.diff")
+	case "/hooks":
+		return tr(lang, "slash.hooks")
 	default:
 		return cmd
 	}

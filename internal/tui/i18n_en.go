@@ -1107,6 +1107,10 @@ func enCatalog(key string) string {
 		return "Manage autonomous background agent"
 	case "slash.stream":
 		return "Configure streaming output mode"
+	case "slash.diff":
+		return "Show git diff in chat (supports --cached, <file>, --stat)"
+	case "slash.hooks":
+		return "Show configured hooks (all events, types, match patterns)"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
