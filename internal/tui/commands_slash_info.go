@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/version"
@@ -304,6 +305,58 @@ func (m *Model) handleHooksCommand() tea.Cmd {
 		for _, e := range errs {
 			sb.WriteString("  - " + e + "\n")
 		}
+	}
+
+	m.chatWriteSystem(nextSystemID(), sb.String())
+	return nil
+}
+
+// handleCostCommand displays the session token usage and estimated cost.
+func (m *Model) handleCostCommand() tea.Cmd {
+	if m.session == nil {
+		m.chatWriteSystem(nextSystemID(), "No active session.")
+		return nil
+	}
+
+	usage := m.session.TokenUsage
+	if usage.Total() == 0 {
+		usage = m.sidebarSessionUsage()
+	}
+
+	if usage.Total() == 0 {
+		m.chatWriteSystem(nextSystemID(), "No token usage recorded yet for this session.")
+		return nil
+	}
+
+	model := m.session.Model
+	vendor := m.session.Vendor
+
+	var sb strings.Builder
+	sb.WriteString("Session Cost Breakdown:\n\n")
+	sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n\n", model, vendor))
+	sb.WriteString(fmt.Sprintf("  Input tokens:       %s\n", humanizeTokenCount(usage.InputTokens)))
+	sb.WriteString(fmt.Sprintf("  Output tokens:      %s\n", humanizeTokenCount(usage.OutputTokens)))
+	if usage.CacheRead > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache read:         %s\n", humanizeTokenCount(usage.CacheRead)))
+	}
+	if usage.CacheWrite > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache write:        %s\n", humanizeTokenCount(usage.CacheWrite)))
+	}
+	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n\n", humanizeTokenCount(usage.Total())))
+
+	// Estimate cost using pricing table
+	pricing := cost.DefaultPricingTable()
+	rate, found := pricing.Get(vendor, model)
+
+	if found {
+		estimatedCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
+			float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
+			float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
+			float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
+		sb.WriteString(fmt.Sprintf("  Estimated cost:     $%.4f\n", estimatedCost))
+		sb.WriteString(fmt.Sprintf("  (rate: $%.2f/M in, $%.2f/M out)\n", rate.InputPerM, rate.OutputPerM))
+	} else {
+		sb.WriteString("  Estimated cost:     (no pricing data for this model)\n")
 	}
 
 	m.chatWriteSystem(nextSystemID(), sb.String())

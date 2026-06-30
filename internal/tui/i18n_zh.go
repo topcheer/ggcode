@@ -1097,6 +1097,8 @@ func zhCatalog(key string) string {
 		return "在聊天中显示 git diff（支持 --cached、<文件>、--stat）"
 	case "slash.hooks":
 		return "显示已配置的 hooks（所有事件、类型、匹配规则）"
+	case "slash.cost":
+		return "显示本次会话的 token 用量和预估费用"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":

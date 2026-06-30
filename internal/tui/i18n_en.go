@@ -1111,6 +1111,8 @@ func enCatalog(key string) string {
 		return "Show git diff in chat (supports --cached, <file>, --stat)"
 	case "slash.hooks":
 		return "Show configured hooks (all events, types, match patterns)"
+	case "slash.cost":
+		return "Show session token usage and estimated cost"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":

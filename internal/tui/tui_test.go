@@ -561,9 +561,6 @@ func TestHelpText(t *testing.T) {
 	if !strings.Contains(h, "/help, /?") {
 		t.Error("expected /? alias in help text")
 	}
-	if strings.Contains(h, "/cost") {
-		t.Error("expected cost command to be removed from help text")
-	}
 	if !strings.Contains(h, "/init") {
 		t.Error("expected /init in help text")
 	}

@@ -244,7 +244,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks":
+		"/diff", "/hooks", "/cost":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -473,6 +473,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleDiffCommand(parts)
 		case "/hooks":
 			return m.handleHooksCommand()
+		case "/cost":
+			return m.handleCostCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
