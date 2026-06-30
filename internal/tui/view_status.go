@@ -147,8 +147,12 @@ func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
-		m.t("hint.help"),
 	}
+	// Context window usage indicator — show when agent exists.
+	if ctxLabel := m.contextUsageHint(); ctxLabel != "" {
+		hints = append(hints, ctxLabel)
+	}
+	hints = append(hints, m.t("hint.help"))
 	if m.sidebarAvailableByWidth() && !m.sidebarEnabled() {
 		hints = append(hints, m.t("hint.ctrlr_sidebar"))
 	}
@@ -254,4 +258,45 @@ func (m Model) renderComposerInput() string {
 		v += hint
 	}
 	return v
+}
+
+// contextUsageHint returns a colored context window usage string for the composer hints.
+// Shows "ctx 12.3K/128K (10%)" with color coding: green <50%, yellow <80%, red >=80%.
+func (m Model) contextUsageHint() string {
+	if m.agent == nil {
+		return ""
+	}
+	cm := m.agent.ContextManager()
+	if cm == nil {
+		return ""
+	}
+	cw := cm.ContextWindow()
+	if cw <= 0 {
+		return ""
+	}
+	tokens := cm.TokenCount()
+	ratio := float64(tokens) / float64(cw)
+
+	// Color based on usage level.
+	var color string
+	var bar string
+	switch {
+	case ratio >= 0.80:
+		color = "196" // red
+		bar = "█"
+	case ratio >= 0.50:
+		color = "214" // orange/yellow
+		bar = "▓"
+	default:
+		color = "46" // green
+		bar = "░"
+	}
+
+	label := fmt.Sprintf("%s ctx %s/%s (%.0f%%)",
+		bar,
+		humanizeTokenCount(tokens),
+		humanizeTokenCount(cw),
+		ratio*100,
+	)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(label)
 }
