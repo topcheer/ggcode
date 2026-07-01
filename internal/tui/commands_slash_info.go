@@ -314,7 +314,9 @@ func (m *Model) handleHooksCommand() tea.Cmd {
 	return nil
 }
 
-// handleCostCommand displays the session token usage and estimated cost.
+// handleCostCommand displays the session token usage and estimated cost,
+// grouped by model. A session may use multiple models if the user switches
+// mid-session; each model's contribution is shown separately.
 func (m *Model) handleCostCommand() tea.Cmd {
 	if m.session == nil {
 		m.chatWriteSystem(nextSystemID(), "No active session.")
@@ -331,45 +333,94 @@ func (m *Model) handleCostCommand() tea.Cmd {
 		return nil
 	}
 
-	model := m.session.Model
-	vendor := m.session.Vendor
+	// Group UsageHistory by vendor+model for per-model breakdown.
+	type modelGroup struct {
+		model    string
+		vendor   string
+		endpoint string
+		usage    provider.TokenUsage
+	}
+	groups := map[string]*modelGroup{}
+	var groupOrder []string
+
+	for _, entry := range m.session.UsageHistory {
+		key := entry.Vendor + "/" + entry.Model
+		g, ok := groups[key]
+		if !ok {
+			g = &modelGroup{
+				model:    entry.Model,
+				vendor:   entry.Vendor,
+				endpoint: entry.Endpoint,
+			}
+			groups[key] = g
+			groupOrder = append(groupOrder, key)
+		}
+		g.usage = g.usage.Add(entry.Usage)
+	}
+
+	// Fallback: if no UsageHistory entries, use the session-level aggregate.
+	if len(groups) == 0 {
+		groups[""] = &modelGroup{
+			model:  m.session.Model,
+			vendor: m.session.Vendor,
+			usage:  usage,
+		}
+		groupOrder = []string{""}
+	}
 
 	var sb strings.Builder
 	sb.WriteString("Session Cost Breakdown:\n\n")
-	sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n\n", model, vendor))
-	sb.WriteString(fmt.Sprintf("  Input tokens:       %s\n", humanizeTokenCount(usage.InputTokens)))
-	sb.WriteString(fmt.Sprintf("  Output tokens:      %s\n", humanizeTokenCount(usage.OutputTokens)))
-	if usage.CacheRead > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read:         %s\n", humanizeTokenCount(usage.CacheRead)))
-	}
-	if usage.CacheWrite > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache write:        %s\n", humanizeTokenCount(usage.CacheWrite)))
-	}
-	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n\n", humanizeTokenCount(usage.Total())))
 
-	// Estimate cost using pricing table
-	endpoint := m.session.Endpoint
-	rate := resolveRate(vendor, endpoint, model)
+	var grandCost float64
+	var hasMeteredRate bool
 
-	if rate.IsKnown() {
-		if !rate.IsMetered() {
-			planLabel := rate.Plan
-			if planLabel == "" {
-				planLabel = string(rate.Type)
-			}
-			sb.WriteString(fmt.Sprintf("  Estimated cost:     included in %s\n", planLabel))
-			sb.WriteString(fmt.Sprintf("  (billing: %s, not per-token)\n", rate.Type))
-		} else {
-			estimatedCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
-				float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
-				float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
-				float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
-			sb.WriteString(fmt.Sprintf("  Estimated cost:     $%.4f\n", estimatedCost))
-			sb.WriteString(fmt.Sprintf("  (rate: $%.2f/M in, $%.2f/M out)\n", rate.InputPerM, rate.OutputPerM))
+	for _, key := range groupOrder {
+		g := groups[key]
+		gu := g.usage
+		if gu.Total() == 0 {
+			continue
 		}
-	} else {
-		sb.WriteString("  Estimated cost:     (no pricing data available)\n")
-		sb.WriteString("  (configure custom rates via pricing table Merge())\n")
+
+		// Model header
+		sb.WriteString(fmt.Sprintf("  %s (%s)\n", g.model, g.vendor))
+		sb.WriteString(fmt.Sprintf("    Input tokens:       %s\n", humanizeTokenCount(gu.InputTokens)))
+		sb.WriteString(fmt.Sprintf("    Output tokens:      %s\n", humanizeTokenCount(gu.OutputTokens)))
+		if gu.CacheRead > 0 {
+			sb.WriteString(fmt.Sprintf("    Cache read:         %s\n", humanizeTokenCount(gu.CacheRead)))
+		}
+		if gu.CacheWrite > 0 {
+			sb.WriteString(fmt.Sprintf("    Cache write:        %s\n", humanizeTokenCount(gu.CacheWrite)))
+		}
+
+		// Cost estimate for this model
+		rate := resolveRate(g.vendor, g.endpoint, g.model)
+		if rate.IsKnown() {
+			if !rate.IsMetered() {
+				planLabel := rate.Plan
+				if planLabel == "" {
+					planLabel = string(rate.Type)
+				}
+				sb.WriteString(fmt.Sprintf("    Cost:               included in %s\n\n", planLabel))
+			} else {
+				hasMeteredRate = true
+				modelCost := float64(gu.InputTokens)*rate.InputPerM/1e6 +
+					float64(gu.OutputTokens)*rate.OutputPerM/1e6 +
+					float64(gu.CacheRead)*rate.CacheReadPerM/1e6 +
+					float64(gu.CacheWrite)*rate.CacheWritePerM/1e6
+				grandCost += modelCost
+				sb.WriteString(fmt.Sprintf("    Cost:               $%.4f\n", modelCost))
+				sb.WriteString(fmt.Sprintf("    (rate: $%.2f/M in, $%.2f/M out)\n\n", rate.InputPerM, rate.OutputPerM))
+			}
+		} else {
+			sb.WriteString("    Cost:               (no pricing data)\n\n")
+		}
+	}
+
+	// Grand totals
+	sb.WriteString("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n")
+	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n", humanizeTokenCount(usage.Total())))
+	if hasMeteredRate && grandCost > 0 {
+		sb.WriteString(fmt.Sprintf("  Total estimated:    $%.4f\n", grandCost))
 	}
 
 	m.chatWriteSystem(nextSystemID(), sb.String())
