@@ -201,6 +201,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	case agentReasoningDoneMsg:
 		m.chatFinishReasoning()
+		// Reset streamPrefixWritten so the next LLM turn (which may produce
+		// new reasoning or text) creates a fresh assistant bubble instead of
+		// appending to the previous turn's collapsed reasoning block.
+		m.streamPrefixWritten = false
 		return m, spinnerCmd
 
 	case agentInterruptMsg:

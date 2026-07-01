@@ -447,6 +447,15 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			flushBatch()
 			m.program.Send(agentReasoningDoneMsg{})
 			writingStatusSent = false
+			// Reset reasoning buffer so the next LLM turn starts fresh.
+			// Without this, fullReasoningBuf accumulates across turns and
+			// causes duplicate reasoning display (turn N's reasoning gets
+			// prepended to turn N+1's, producing the "identical thinking
+			// content" effect where the second block is a superset of the
+			// first).
+			batchMu.Lock()
+			fullReasoningBuf.Reset()
+			batchMu.Unlock()
 			switch {
 			case round.AskUserText != "":
 				m.program.Send(agentAskUserMsg{RunID: runID, Text: round.AskUserText})
