@@ -443,6 +443,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleLangCommand(parts)
 		case "/memory":
 			return m.handleMemoryCommand(parts)
+		case "/reflect":
+			return m.handleReflectCommand()
 		case "/undo":
 			return m.handleUndoCommand()
 		case "/files":

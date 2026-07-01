@@ -288,6 +288,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			debug.Log("daemon", "Knight scenario record failed: %v", scenarioErr)
 		}
 	})
+	setupDaemonReflection(ag, workingDir)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))

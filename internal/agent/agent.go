@@ -67,6 +67,7 @@ type Agent struct {
 	autopilotGoalAsked           bool               // true after the goal-collection instruction has been injected
 	autopilotGoalSet             bool               // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotGoalCheckedThisTurn bool               // prevents infinite goal-check loops within a single idle turn
+	reflectionFunc               ReflectionFunc     // called after each run with accumulated stats
 	mu                           sync.RWMutex
 }
 
@@ -482,7 +483,19 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+
+	// Extract user prompt text for stats tracking
+	userPromptForStats := ""
+	for _, b := range content {
+		if b.Type == "text" {
+			userPromptForStats += b.Text
+		}
+	}
+	runStats := newRunStats(userPromptForStats)
+
 	defer func() {
+		runStats.finalize(err)
+		a.maybeReflect(runStats)
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()
@@ -569,6 +582,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	consecutiveEmptyResponses := 0
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
+		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -739,6 +753,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 				return err
 			}
+			// Track tool call for reflection stats
+			runStats.recordToolCall(tc.Name)
+			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
 			// Check for project memory but defer injection
 			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
 				if deferredMemoryContent == "" {

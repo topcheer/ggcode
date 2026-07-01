@@ -513,7 +513,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		_ = os.Unsetenv("GGCODE_TMUX_SETUP_LAYOUT")
 	}
 
-	return Model{
+	m := Model{
 		input:                  ta,
 		chatList:               chat.NewList(80, 20),
 		chatStyles:             chat.DefaultStyles(),
@@ -548,6 +548,12 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		petEnabled:             true,
 		pet:                    &petState{},
 	}
+
+	if a != nil {
+		setupReflection(a)
+	}
+
+	return m
 }
 
 // setLoading updates both the model's loading field and the shared atomic
