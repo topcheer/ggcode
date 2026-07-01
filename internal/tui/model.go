@@ -723,6 +723,12 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.sessionStore = store
 	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.lastMetricDigestTurn = m.usageTurnIndex
+	// Sync the session's model/vendor/endpoint to the current config.
+	// When resuming an old session, the session's stored model may differ
+	// from the config's current model. The agent always uses the config
+	// model, so the session must be updated to match — otherwise usage
+	// records and /cost display the wrong model.
+	m.syncSessionSelection()
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
@@ -752,12 +758,24 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
 	store := m.sessionStore
+	// Use the ACTUAL model the agent is running with (activeModel),
+	// not the session-stored model which may be stale after a model
+	// switch. activeModel is set by setActiveRuntimeSelection() every
+	// time the provider is activated, so it always reflects reality.
+	model := m.activeModel
+	vendor := m.activeVendor
+	endpoint := m.activeEndpoint
+	if model == "" {
+		model = ses.Model
+		vendor = ses.Vendor
+		endpoint = ses.Endpoint
+	}
 	entry := session.UsageEntry{
 		Timestamp: time.Now(),
 		TurnIndex: m.usageTurnIndex,
-		Model:     ses.Model,
-		Vendor:    ses.Vendor,
-		Endpoint:  ses.Endpoint,
+		Model:     model,
+		Vendor:    vendor,
+		Endpoint:  endpoint,
 		Usage:     usage,
 	}
 	mu.Unlock()
