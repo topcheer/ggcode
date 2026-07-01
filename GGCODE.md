@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.97`](docs/releases/v1.3.97.md) |
+| Latest documented release | [`v1.3.98`](docs/releases/v1.3.98.md) |
 
 ## Build & Validation
 
@@ -83,8 +83,8 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   checkpoint/          In-memory file checkpointing for undo/revert support
   permission/          Permission modes + per-tool policy enforcement + sandbox + dangerous tool classification
   plugin/              External tool plugins (command-based, MCP-based)
-  hooks/               Pre/post hooks runner
-  cost/                Token usage tracking (local TokenUsage type to avoid circular deps)
+  hooks/               Pre/post hooks runner (5 events: agent start/stop, stream start/stop, tool use; command + HTTP types; HMAC-signed JSON payload)
+  cost/                Token usage tracking + billing-type detection (per-token, subscription/coding plan, free; endpoint-based coding plan lookup)
   auth/                Full auth stack: GitHub Copilot token mgmt, OAuth2 PKCE/Device Flow, OIDC Discovery, JWT validation (HS256/RS256/ECDSA), JWKS polling, token introspection, token cache with per-client isolation
   chat/                Chat utilities and shared types
   markdown/            Markdown rendering helpers
@@ -149,6 +149,7 @@ Key concepts:
 - **`allowed_dirs`**: Directories the agent may access
 - **`max_iterations`**: Agent loop limit per user turn (0 = unlimited)
 - **`im.output_mode`**: IM tool result delivery granularity: `verbose` (default), `quiet`, `summary`
+- **`hooks`**: Lifecycle hooks for 5 events (`on_agent_start`, `on_agent_stop`, `on_stream_start`, `on_stream_stop`, `on_tool_use`). Each event accepts a list of hooks with `type: command` or `type: http`. Payload via stdin. HTTP hooks support HMAC-SHA256 signature. See [`docs/guide/hooks.md`](docs/guide/hooks.md).
 - **`a2a.auth`**: A2A server authentication — multiple schemes can be enabled simultaneously:
   - **`a2a.auth.api_key`**: Shared secret (simplest)
   - **`a2a.auth.api_keys`**: List of additional keys — any match authenticates. Supports `${ENV_VAR}` expansion per entry.
@@ -259,6 +260,22 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants (with role, team, workspace, languages), send messages (DM, `to='*'` broadcast, `send_team` team-targeted), read history, manage @agent approvals
 **IM** (1, in `builtin.go`): `im` — status (list adapters), mute/unmute (drop/reconnect adapter), disable/enable, send (with `auto_start` for muted/disabled adapters). Always allowed in all permission modes. Manager injected post-registration via `im.NewToolManagerAdapter()`.
 **Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show help (categorized: Session, Model, Development, Integrations, System) |
+| `/cost` | Session token usage + estimated cost or coding plan name |
+| `/diff` | Git diff in chat (`--cached`, `--stat`, `<file>`) |
+| `/hooks` | View configured hooks + validation status |
+| `/mode` | Show or switch permission mode |
+| `/compact` | Trigger context compaction |
+| `/model` | Switch model |
+| `/vendor` | Switch vendor/endpoint |
+| `/mcp` | MCP server management |
+| `/session` | Session list / switch / new |
+| `/clear` | Clear current conversation |
 
 Plus dynamically registered MCP-adapted tools and external plugin tools.
 
