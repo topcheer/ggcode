@@ -40,18 +40,36 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	}
 
 	// Prefix match (handles versioned model names like "gpt-4o-2024-08-06")
+	// Pick the longest matching prefix for specificity (gpt-4o wins over gpt-4).
+	bestKey := ""
+	var bestRate ModelRate
 	for k, v := range models {
-		if strings.HasPrefix(lowerModel, strings.ToLower(k)) ||
-			strings.HasPrefix(strings.ToLower(k), lowerModel) {
-			return v, true
+		lk := strings.ToLower(k)
+		if strings.HasPrefix(lowerModel, lk) || strings.HasPrefix(lk, lowerModel) {
+			if len(lk) > len(bestKey) {
+				bestKey = lk
+				bestRate = v
+			}
 		}
 	}
+	if bestKey != "" {
+		return bestRate, true
+	}
 
-	// Suffix match (handles "glm-4-flash" matching "glm-4")
+	// Suffix match (handles "anthropic/claude-sonnet-4" matching "claude-sonnet-4")
+	// Pick the longest matching suffix for specificity.
+	bestKey = ""
 	for k, v := range models {
-		if strings.HasSuffix(lowerModel, strings.ToLower(k)) {
-			return v, true
+		lk := strings.ToLower(k)
+		if strings.HasSuffix(lowerModel, lk) {
+			if len(lk) > len(bestKey) {
+				bestKey = lk
+				bestRate = v
+			}
 		}
+	}
+	if bestKey != "" {
+		return bestRate, true
 	}
 
 	return ModelRate{}, false
