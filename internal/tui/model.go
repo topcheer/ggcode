@@ -778,6 +778,10 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 		Endpoint:  endpoint,
 		Usage:     usage,
 	}
+	// Keep in-memory UsageHistory in sync with disk. AppendUsageEntry
+	// only writes to the JSONL file; without this append, /cost reads
+	// stale data that only reflects what was loaded at startup.
+	ses.UsageHistory = append(ses.UsageHistory, entry)
 	mu.Unlock()
 
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
@@ -799,9 +803,15 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		return
 	}
 	ev.TurnIndex = m.usageTurnIndex
-	ev.Model = m.session.Model
-	ev.Vendor = m.session.Vendor
-	ev.Endpoint = m.session.Endpoint
+	// Use activeModel (actual running model) instead of potentially stale ses.Model
+	ev.Model = m.activeModel
+	ev.Vendor = m.activeVendor
+	ev.Endpoint = m.activeEndpoint
+	if ev.Model == "" {
+		ev.Model = m.session.Model
+		ev.Vendor = m.session.Vendor
+		ev.Endpoint = m.session.Endpoint
+	}
 	m.session.Metrics = append(m.session.Metrics, ev)
 	m.session.AppendMetricForEndpoint(m.session.Vendor, m.session.Endpoint, ev)
 	m.session.UpdatedAt = time.Now()
