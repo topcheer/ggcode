@@ -244,7 +244,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost":
+		"/diff", "/hooks", "/cost", "/retry", "/edit", "/copy", "/context":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -286,6 +286,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return nil
 		case "/retry":
 			return m.handleRetryCommand()
+		case "/edit":
+			return m.handleEditCommand()
 		case "/stats":
 			m.openStatsPanel()
 			return nil
@@ -830,4 +832,24 @@ func (m *Model) handleRetryCommand() tea.Cmd {
 	text := m.lastUserSubmission
 	m.lastUserSubmission = "" // clear to avoid retry loop
 	return m.submitText(text, true)
+}
+
+// handleEditCommand loads the last user prompt into the input box for editing.
+// The user can then modify the text and press Enter to submit.
+func (m *Model) handleEditCommand() tea.Cmd {
+	if m.lastUserSubmission == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("command.edit_empty"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("command.edit_busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	m.input.SetValue(m.lastUserSubmission)
+	m.input.CursorEnd()
+	m.chatWriteSystem(nextSystemID(), m.t("command.edit_ready"))
+	m.chatListScrollToBottom()
+	return nil
 }

@@ -200,12 +200,14 @@ var SlashCommands = []string{
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 	"/diff", "/hooks", "/cost", "/review", "/copy", "/context",
 	"/retry",
+	"/edit",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
 var SlashCommandDescriptions = map[string]string{
 	"/help":        "Show help message",
 	"/retry":       "Retry last submission after error",
+	"/edit":        "Edit and resend last submission",
 	"/?":           "Show help message",
 	"/sessions":    "List saved sessions",
 	"/resume":      "Resume a previous session",
@@ -335,6 +337,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/diff":        "[--cached|--stat|<file>]",
 	"/review":      "[--cached|--staged]",
 	"/retry":       "",
+	"/edit":        "",
 	"/hooks":       "",
 	"/cost":        "",
 	"/copy":        "",

@@ -787,6 +787,12 @@ func enCatalog(key string) string {
 		return "No previous submission to retry."
 	case "command.retry_busy":
 		return "Agent is busy. Wait for the current run to finish before retrying."
+	case "command.edit_empty":
+		return "No previous submission to edit."
+	case "command.edit_busy":
+		return "Agent is busy. Wait for the current run to finish before editing."
+	case "command.edit_ready":
+		return "Loaded last submission — edit and press Enter to send."
 	case "command.help_hint":
 		return "Type /help for available commands\n\n"
 	case "command.usage.allow":

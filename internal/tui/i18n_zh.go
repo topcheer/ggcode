@@ -795,6 +795,12 @@ func zhCatalog(key string) string {
 		return "没有可重试的上一次提交。"
 	case "command.retry_busy":
 		return "Agent 正在运行，请等待当前任务完成后再重试。"
+	case "command.edit_empty":
+		return "没有可编辑的上一次提交。"
+	case "command.edit_busy":
+		return "Agent 正在运行，请等待当前任务完成后再编辑。"
+	case "command.edit_ready":
+		return "已加载上一次提交，编辑后按回车发送。"
 	case "command.help_hint":
 		return "输入 /help 查看可用命令\n\n"
 	case "command.usage.allow":
