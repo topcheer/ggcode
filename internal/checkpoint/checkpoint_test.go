@@ -133,3 +133,53 @@ func TestClear(t *testing.T) {
 		t.Error("expected empty after clear")
 	}
 }
+
+func TestModifiedFiles(t *testing.T) {
+	m := NewManager(50)
+
+	// Three edits to two files + one new file
+	m.Save("/src/main.go", "old1", "new1", "edit_file")
+	m.Save("/src/main.go", "new1", "new2", "edit_file")
+	m.Save("/src/util.go", "oldutil", "newutil", "write_file")
+	m.Save("/src/new.go", "", "fresh", "write_file")
+
+	files := m.ModifiedFiles()
+	if len(files) != 3 {
+		t.Fatalf("expected 3 unique files, got %d", len(files))
+	}
+
+	// Order should be by first modification: main.go, util.go, new.go
+	if files[0].Path != "/src/main.go" {
+		t.Errorf("expected main.go first, got %s", files[0].Path)
+	}
+	if files[0].Edits != 2 {
+		t.Errorf("expected 2 edits for main.go, got %d", files[0].Edits)
+	}
+	if files[0].IsNew {
+		t.Error("main.go should not be new")
+	}
+
+	if files[1].Path != "/src/util.go" || files[1].Edits != 1 {
+		t.Errorf("unexpected util.go: %+v", files[1])
+	}
+
+	if files[2].Path != "/src/new.go" || !files[2].IsNew {
+		t.Errorf("expected new.go to be marked as new: %+v", files[2])
+	}
+
+	// LastTool should reflect the most recent edit for each file
+	if files[0].LastTool != "edit_file" {
+		t.Errorf("expected last tool edit_file for main.go, got %s", files[0].LastTool)
+	}
+	if files[2].LastTool != "write_file" {
+		t.Errorf("expected last tool write_file for new.go, got %s", files[2].LastTool)
+	}
+}
+
+func TestModifiedFilesEmpty(t *testing.T) {
+	m := NewManager(50)
+	files := m.ModifiedFiles()
+	if len(files) != 0 {
+		t.Errorf("expected empty slice, got %d items", len(files))
+	}
+}

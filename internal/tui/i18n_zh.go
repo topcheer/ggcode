@@ -861,6 +861,16 @@ func zhCatalog(key string) string {
 		return "已撤销 %s 对 %s 的修改（检查点 %s）\n"
 	case "checkpoint.none":
 		return "没有检查点。\n\n"
+	case "files.disabled":
+		return "检查点功能未启用。\n\n"
+	case "files.none":
+		return "本次会话中 agent 未修改任何文件。\n\n"
+	case "files.title":
+		return "Agent 修改的文件（%d 个文件，%d 次编辑）：\n\n"
+	case "files.item":
+		return "  %s  %d 次编辑  最后: %s%s\n"
+	case "files.hint":
+		return "\n使用 /undo 撤销最近一次编辑，/checkpoints 查看详情。\n\n"
 	case "checkpoint.list.title":
 		return "检查点（%d）：\n\n"
 	case "checkpoint.list.item":
@@ -1055,6 +1065,8 @@ func zhCatalog(key string) string {
 		return "管理记忆"
 	case "slash.undo":
 		return "撤销最近一次文件修改"
+	case "slash.files":
+		return "查看 agent 修改的文件"
 	case "slash.checkpoints":
 		return "列出检查点"
 	case "slash.allow":

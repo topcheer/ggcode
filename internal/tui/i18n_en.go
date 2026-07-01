@@ -853,6 +853,16 @@ func enCatalog(key string) string {
 		return "Undid %s on %s (checkpoint %s)\n"
 	case "checkpoint.none":
 		return "No checkpoints.\n\n"
+	case "files.disabled":
+		return "Checkpointing not enabled.\n\n"
+	case "files.none":
+		return "No files modified by agent in this session.\n\n"
+	case "files.title":
+		return "Files modified by agent (%d files, %d edits):\n\n"
+	case "files.item":
+		return "  %s  %d edits  last: %s%s\n"
+	case "files.hint":
+		return "\nUse /undo to revert the most recent edit, /checkpoints for details.\n\n"
 	case "checkpoint.list.title":
 		return "Checkpoints (%d):\n\n"
 	case "checkpoint.list.item":
@@ -1047,6 +1057,8 @@ func enCatalog(key string) string {
 		return "Manage memory"
 	case "slash.undo":
 		return "Undo last file edit"
+	case "slash.files":
+		return "Show files modified by agent"
 	case "slash.checkpoints":
 		return "List checkpoints"
 	case "slash.allow":

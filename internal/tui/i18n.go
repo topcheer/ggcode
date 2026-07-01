@@ -163,6 +163,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.memory")
 	case "/undo":
 		return tr(lang, "slash.undo")
+	case "/files":
+		return tr(lang, "slash.files")
 	case "/checkpoints":
 		return tr(lang, "slash.checkpoints")
 	case "/allow":

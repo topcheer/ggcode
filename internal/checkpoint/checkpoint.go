@@ -106,6 +106,45 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	return cp, nil
 }
 
+// FileSummary summarizes the edits made to a single file.
+type FileSummary struct {
+	Path     string
+	Edits    int
+	LastTool string
+	IsNew    bool // true if the first checkpoint had empty OldContent
+}
+
+// ModifiedFiles returns a summary of unique files modified via checkpoints,
+// ordered by first modification time (oldest first).
+func (m *Manager) ModifiedFiles() []FileSummary {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	order := make([]string, 0, len(m.checkpoints))
+	summary := make(map[string]*FileSummary)
+
+	for _, cp := range m.checkpoints {
+		fs, ok := summary[cp.FilePath]
+		if !ok {
+			fs = &FileSummary{
+				Path:     cp.FilePath,
+				IsNew:    cp.OldContent == "",
+				LastTool: cp.ToolCall,
+			}
+			summary[cp.FilePath] = fs
+			order = append(order, cp.FilePath)
+		}
+		fs.Edits++
+		fs.LastTool = cp.ToolCall
+	}
+
+	out := make([]FileSummary, 0, len(order))
+	for _, p := range order {
+		out = append(out, *summary[p])
+	}
+	return out
+}
+
 // List returns all checkpoints (most recent last).
 func (m *Manager) List() []Checkpoint {
 	m.mu.Lock()

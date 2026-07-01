@@ -97,6 +97,38 @@ func (m *Model) exportSession(id string) tea.Cmd {
 	}
 }
 
+func (m *Model) handleFilesCommand() tea.Cmd {
+	cpMgr := m.agent.CheckpointManager()
+	if cpMgr == nil {
+		return func() tea.Msg {
+			return streamMsg(m.t("files.disabled"))
+		}
+	}
+	files := cpMgr.ModifiedFiles()
+	if len(files) == 0 {
+		return func() tea.Msg {
+			return streamMsg(m.t("files.none"))
+		}
+	}
+	totalEdits := 0
+	for _, f := range files {
+		totalEdits += f.Edits
+	}
+	var b strings.Builder
+	b.WriteString(m.t("files.title", len(files), totalEdits))
+	for _, f := range files {
+		newFlag := ""
+		if f.IsNew {
+			newFlag = " (new)"
+		}
+		b.WriteString(m.t("files.item", f.Path, f.Edits, f.LastTool, newFlag))
+	}
+	b.WriteString(m.t("files.hint"))
+	return func() tea.Msg {
+		return streamMsg(b.String())
+	}
+}
+
 func (m *Model) handleCheckpointsCommand() tea.Cmd {
 	m.openInspectorPanel(inspectorPanelCheckpoints)
 	return nil
