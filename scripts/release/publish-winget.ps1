@@ -38,6 +38,32 @@ try {
     Write-Warning "PR search failed: $_. Proceeding with submission."
 }
 
+# --- Cleanup: close stale PRs from older versions ---
+Write-Host "Checking for stale PRs (older versions of $PackageId)..."
+try {
+    $staleQuery = "repo:microsoft/winget-pkgs type:pr state:open $PackageId in:title"
+    $staleResponse = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$([uri]::EscapeDataString($staleQuery))" -Headers @{ Authorization = "token $GitHubToken"; Accept = "application/vnd.github+json" } -ErrorAction Stop
+    $closedCount = 0
+    foreach ($item in $staleResponse.items) {
+        if ($item.title -match "version $releaseVersion") {
+            continue
+        }
+        Write-Host "  Closing stale PR #$($item.number): $($item.title)"
+        $headers = @{ Authorization = "token $GitHubToken"; Accept = "application/vnd.github+json" }
+        Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/issues/$($item.number)" -Method Patch -Headers $headers -Body (@{ state = "closed" } | ConvertTo-Json) -ErrorAction SilentlyContinue | Out-Null
+        $commentBody = "Closing stale PR — superseded by version $releaseVersion. Only the latest version PR is kept active."
+        Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/issues/$($item.number)/comments" -Method Post -Headers $headers -Body (@{ body = $commentBody } | ConvertTo-Json) -ErrorAction SilentlyContinue | Out-Null
+        $closedCount++
+    }
+    if ($closedCount -gt 0) {
+        Write-Host "  Closed $closedCount stale PR(s)."
+    } else {
+        Write-Host "  No stale PRs found."
+    }
+} catch {
+    Write-Warning "Stale PR cleanup failed: $_. Continuing with submission."
+}
+
 # Check if package already exists
 & $wingetCreate show $PackageId | Out-Null
 $packageExists = $LASTEXITCODE -eq 0
