@@ -795,8 +795,8 @@ func (m *Manager) Microcompact() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.tokenCountLocked() <= m.compactTargetTokens() {
-		debug.Log("ctx", "Microcompact: SKIP tokens=%d <= target=%d", m.tokenCountLocked(), m.compactTargetTokens())
+	if m.tokenCountLocked() <= m.microcompactTargetTokens() {
+		debug.Log("ctx", "Microcompact: SKIP tokens=%d <= target=%d", m.tokenCountLocked(), m.microcompactTargetTokens())
 		return false
 	}
 
@@ -814,7 +814,7 @@ func (m *Manager) Microcompact() bool {
 
 	changed := false
 	currentTokens := m.tokenCountLocked()
-	targetTokens := m.compactTargetTokens()
+	targetTokens := m.microcompactTargetTokens()
 	compactedCount := 0
 
 	debug.Log("ctx", "Microcompact: START tokens=%d target=%d msgs=%d groups=%d protected_from=%d",
@@ -1061,6 +1061,15 @@ func (m *Manager) compactTargetTokens() int {
 		return minSummaryReserve
 	}
 	return target
+}
+
+// microcompactTargetTokens returns the target for Microcompact tool-result
+// truncation. Microcompact only truncates overly large tool_result blocks —
+// it must NOT aggressively compress conversation content. Target is set to
+// the auto-compact threshold: truncate just enough to get below threshold.
+// If that's not enough, Summarize takes over for full LLM summarization.
+func (m *Manager) microcompactTargetTokens() int {
+	return m.autoCompactThresholdLocked()
 }
 
 // summaryReserveTokens returns the token budget reserved for the summary
