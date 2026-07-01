@@ -136,6 +136,16 @@ func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
 	return store.Delete(ses.ID)
 }
 
+// SaveSessionMessages overwrites ses.Messages with the given messages and
+// does a FULL Save() rewrite of the JSONL file.
+//
+// ⚠️ WARNING: This is a destructive operation. If `messages` is the compacted
+// version from agent.Messages(), all pre-compaction message records will be
+// permanently lost from the JSONL file.
+//
+// In the TUI path, prefer persistFullSessionMessages() (incremental append).
+// This function is retained for the desktop non-compaction path and initial
+// session creation only.
 func SaveSessionMessages(store session.Store, ses *session.Session, messages []provider.Message) error {
 	if store == nil || ses == nil {
 		return nil
@@ -190,9 +200,10 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if agentInst == nil || ses == nil {
 		return
 	}
-	// Use ContextMessages (last checkpoint + post-checkpoint) for agent
-	// context restoration, not the full ses.Messages which is for rendering.
-	// This ensures the agent sees the compacted history, not the full log.
+	// ⚠️ Use ContextMessages (compacted checkpoint + post-checkpoint),
+	// NOT ses.Messages. ses.Messages is the full conversation history
+	// for TUI rendering — feeding it to the agent would bypass compaction
+	// and send the entire raw history to the LLM.
 	msgs := ses.ContextMessages
 	if len(msgs) == 0 {
 		msgs = ses.Messages // fallback when no checkpoint exists

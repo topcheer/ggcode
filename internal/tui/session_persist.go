@@ -7,14 +7,18 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// persistFullSessionMessages appends only NEW messages (since the last persist)
-// to the JSONL file. It does NOT call Save() (full rewrite), which would
-// destroy pre-compaction message history.
+// persistFullSessionMessages appends only NEW messages (since the last
+// persist) to the JSONL file using AppendMessageToDisk().
 //
-// The agent's context manager may compact messages (replacing earlier turns
+// ⚠️ CRITICAL: This function must NEVER call Save() or
+// SaveAgentSessionSnapshot(). Those methods do a full file rewrite using
+// agent.Messages() (which is the COMPACTED version). That would permanently
+// destroy pre-compaction message records from the JSONL file.
+//
+// The agent's context manager compacts messages (replacing earlier turns
 // with a summary), but ses.Messages must retain ALL messages for correct
-// rendering on session reload. Compaction only affects what gets sent to the
-// LLM, not what gets persisted.
+// rendering on session reload. Compaction only affects the LLM context
+// (ses.ContextMessages / agent context manager), not what gets persisted.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
 		return

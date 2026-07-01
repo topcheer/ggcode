@@ -36,11 +36,24 @@ type Session struct {
 	UsageHistory    []UsageEntry                     `json:"usage_history,omitempty"`
 	Metrics         []metrics.MetricEvent            `json:"metrics,omitempty"`
 	EndpointMetrics map[string][]metrics.MetricEvent `json:"endpoint_metrics,omitempty"`
-	Messages        []provider.Message               `json:"messages,omitempty"`
-	// ContextMessages holds the messages for agent context restoration on
-	// session reload. It contains the last checkpoint (compacted) messages
-	// plus any messages appended after that checkpoint. If no checkpoint
-	// exists, it equals Messages. Not persisted — computed by loadSession.
+	// Messages holds ALL message records from the JSONL file — the full
+	// conversation history from the very first user message to the latest.
+	// This is what the TUI renders. It is NEVER overwritten by compaction.
+	//
+	// ⚠️ DO NOT assign agent.Messages() (compacted) to this field.
+	// ⚠️ DO NOT call Save() to persist this — Save() rewrites the entire
+	//    file and will destroy pre-compaction message records.
+	// Use AppendMessageToDisk() for incremental writes only.
+	Messages []provider.Message `json:"messages,omitempty"`
+
+	// ContextMessages holds the compacted messages for LLM context
+	// restoration: last checkpoint + post-checkpoint messages. This is
+	// what gets fed to the agent on session reload so the LLM sees the
+	// summarized history, not the full log. Computed by loadSession(),
+	// not persisted to JSONL.
+	//
+	// ⚠️ Only RestoreSessionIntoAgent() should read this field.
+	// ⚠️ TUI rendering must use Messages, NOT ContextMessages.
 	ContextMessages      []provider.Message `json:"-"`
 	TunnelEvents         []TunnelEvent      `json:"tunnel_events,omitempty"`
 	TunnelEventsComplete bool               `json:"tunnel_events_complete,omitempty"`
@@ -319,6 +332,17 @@ func (s *Session) HasUserInteraction() bool {
 
 // Save writes the full session as a JSONL file (atomic).
 // If the session has no user interaction, the file is deleted instead.
+//
+// ⚠️ WARNING: Save() REWRITES the entire JSONL file from scratch using
+// ses.Messages. If ses.Messages has been replaced by compacted messages
+// (e.g. via agent.Messages()), all pre-compaction message records will
+// be PERMANENTLY LOST.
+//
+// For incremental message persistence after each agent turn, use
+// AppendMessageToDisk() instead. Save() should only be used for:
+//   - Initial session creation
+//   - Full metadata refresh
+//   - Desktop non-compaction path (with explicit guard)
 func (s *JSONLStore) Save(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -536,16 +560,27 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 
-	// Build ses.Messages from ALL message records — this is the full
-	// conversation history used for rendering on session reload.
+	// ── ses.Messages: ALL message records from the file (for rendering) ──
+	// This is the FULL conversation history. Every message record ever
+	// appended to the JSONL file is loaded here, regardless of checkpoints.
+	// The TUI uses this to render the complete conversation on reload.
+	//
+	// ⚠️ Never filter or truncate this by checkpoint — that would silently
+	// destroy conversation history the user expects to see.
 	for _, rec := range allMessages {
 		if rec.Message != nil {
 			ses.Messages = append(ses.Messages, *rec.Message)
 		}
 	}
 
-	// Build ContextMessages for agent restoration: last checkpoint (compacted)
-	// + post-checkpoint message records. This is what gets sent to the LLM.
+	// ── ses.ContextMessages: compacted context for agent (for LLM) ──
+	// Contains the LAST checkpoint (compaction summary) + messages appended
+	// after that checkpoint. This is what RestoreSessionIntoAgent() feeds to
+	// the agent so the LLM sees the summarized context, not the full log.
+	//
+	// ⚠️ This is SEPARATE from ses.Messages. Do not conflate the two:
+	//   ses.Messages       → TUI rendering (full history)
+	//   ses.ContextMessages → agent LLM context (compacted)
 	if haveCheckpoint && len(lastCpMessages) > 0 {
 		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
 		copy(ses.ContextMessages, lastCpMessages)

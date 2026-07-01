@@ -263,11 +263,16 @@ type Model struct {
 	lastResizeAt         time.Time
 	sidebarVisible       bool
 
-	exitConfirmPending    bool
-	cancelConfirmPending  bool
-	pending               *pendingQueue
-	sessionMu             *sync.Mutex
-	persistedMsgCount     int // number of messages already written to JSONL disk
+	exitConfirmPending   bool
+	cancelConfirmPending bool
+	pending              *pendingQueue
+	sessionMu            *sync.Mutex
+	// persistedMsgCount tracks how many messages from ses.Messages have been
+	// written to the JSONL file via AppendMessageToDisk(). Used by
+	// persistFullSessionMessages() to only append NEW messages.
+	// ⚠️ Must be updated whenever messages are appended to disk outside of
+	// persistFullSessionMessages() (e.g. submitMessage).
+	persistedMsgCount     int
 	projectMemoryLoading  bool
 	runCanceled           bool
 	runFailed             bool

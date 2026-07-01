@@ -35,6 +35,10 @@ func (m *Model) appendUserMessage(text string) {
 	// Mutate Session object under sessionMutex to prevent data races
 	// with checkpoint handler and other readers.
 	m.session.Messages = append(m.session.Messages, msg)
+	// Increment persistedMsgCount: this message is immediately persisted
+	// via AppendMessageToDisk below, so mark it as already on disk.
+	// ⚠️ If you remove or skip this increment, persistFullSessionMessages()
+	// will re-append this message to the JSONL file (duplicate record).
 	m.persistedMsgCount++
 	m.session.UpdatedAt = time.Now()
 	// Auto-generate title from first user message
