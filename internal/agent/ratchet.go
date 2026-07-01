@@ -316,7 +316,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: ratchetSystemPrompt}}},
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: userPrompt.String()}}},
 	}, nil)
-	if err != nil {
+	if err != nil || resp == nil {
 		return nil, fmt.Errorf("ratchet LLM call failed: %w", err)
 	}
 
@@ -342,7 +342,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 	return &output, nil
 }
 
-// runRatchet is the full pipeline: match → LLM generalize → store.
+// runRatchet is the full pipeline: match -> generalize with retry -> store.
 // Called from reflection after a run with errors.
 func (a *Agent) runRatchet(stats *RunStats) {
 	if len(stats.Errors) == 0 {
@@ -364,23 +364,14 @@ func (a *Agent) runRatchet(stats *RunStats) {
 
 	debug.Log("ratchet", "processing %d unmatched errors (%d matched)", len(unmatched), len(matched))
 
-	existingRules := rs.Rules()
-	output, err := a.ProcessErrorsWithLLM(unmatched, existingRules)
-	if err != nil {
-		debug.Log("ratchet", "LLM generalization failed: %v", err)
-		return
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-	for _, result := range output.Results {
-		if result.Action == "new" && result.Rule != "" && result.MatchPattern != "" {
-			rs.AddRule(Rule{
-				Category:     result.Category,
-				Rule:         result.Rule,
-				MatchPattern: result.MatchPattern,
-				FixHint:      result.FixHint,
-			})
-		}
+	newRules := a.generalizeErrorsWithRetry(ctx, unmatched, "reflection")
+	for _, r := range newRules {
+		rs.AddRule(r)
 	}
+	debug.Log("ratchet", "learned %d new rules from reflection", len(newRules))
 }
 
 func truncStr(s string, maxLen int) string {
@@ -433,7 +424,7 @@ func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, 
 	}
 
 	// All retries exhausted
-	debug.Log("ratchet", "⚠️ generalization failed after %d attempts for %d errors (verify cmd: %s): %v",
+	debug.Log("ratchet", "generalization failed after %d attempts for %d errors (cmd: %s): %v",
 		maxRetries+1, len(errors), verifyCmd, lastErr)
 	return nil
 }
