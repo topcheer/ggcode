@@ -1221,54 +1221,55 @@ func zhCatalog(key string) string {
 		return "升级 ggcode"
 	case "help.text":
 		return `可用命令：
+
+会话与历史：
   /help, /?          显示帮助
   /sessions          列出已保存会话
   /resume <id>       恢复历史会话
   /export <id>       导出会话为 Markdown 文件
-  /model [name]      打开模型面板或直接切换
-  /provider [vendor] 打开供应商管理界面
-  /qq                打开 QQ 绑定面板
-  /telegram          打开 Telegram 绑定面板
-  /pc                打开 PC 绑定面板
-  /discord           打开 Discord 绑定面板
-  /feishu            打开飞书绑定面板
-  /slack             打开 Slack 绑定面板
-  /dingtalk          打开钉钉绑定面板
-  /im                打开统一 IM 渠道面板
-  /lang [code]       选择或切换界面语言
-  /skills            浏览可用 skills
   /clear             清空对话历史
-  /mcp               显示已连接的 MCP 服务器和工具
-  /memory            显示已加载记忆
-  /memory list       列出自动记忆条目
-  /memory clear      清空自动记忆
+  /compact           手动压缩对话历史
   /undo              撤销最近一次文件修改（回滚检查点）
   /checkpoints       列出所有文件修改检查点
 
-  /allow <tool>      永久允许某个工具
-  /plugins           列出已加载插件及其工具
-  /image <path>      附加图片文件
+模型与供应商：
+  /model [name]      打开模型面板或直接切换
+  /provider [vendor] 打开供应商管理界面
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+
+开发工具：
+  /diff [opts]       在聊天中显示 git diff（--cached、--stat、<文件>）
+  /cost              显示本次会话 token 用量和预估费用
+  /hooks             显示已配置的 hooks
   /init              基于当前项目生成 GGCODE.md
   /harness ...       运行 harness 控制面命令
-  /agents            列出子 Agent
-  /agent <id>        查看子 Agent 详情
-  /agent cancel <id> 取消子 Agent
-
-  /compact           压缩对话历史
   /todo              查看 todo 列表
   /todo clear        清空 todo 列表
-  /bug               生成 bug 诊断信息
+
+集成：
+  /im                打开统一 IM 渠道面板
+  /mcp               显示已连接的 MCP 服务器和工具
+  /plugins           列出已加载插件及其工具
+  /skills            浏览可用 skills
+  /memory            显示已加载记忆
+  /agents            列出子 Agent
+
+系统：
+  /lang [code]       选择或切换界面语言
   /config            显示当前配置
   /config set <k> <v> 设置配置项
   /status            显示当前状态
   /update            升级到最新正式版本
   /restart           重启 ggcode（使用最新二进制）
+  /bug               生成 bug 诊断信息
   /exit, /quit       退出 ggcode
 
 键盘快捷键：
   Tab                在补全或确认选项中切换
   Shift+Tab          反向切换补全，否则切换权限模式
+  Ctrl+R             切换侧边栏
+  Ctrl+N/P           新建/上一个会话
+  Ctrl+T             打开隧道（手机共享）
   Enter              发送消息 / 应用当前选择
   Esc                取消补全 / 在空闲 shell 模式下退出命令模式
   ↑/↓                 浏览命令历史（或补全）
@@ -1276,6 +1277,7 @@ func zhCatalog(key string) string {
   Ctrl+C             取消当前活动；空闲时先清空输入，再次按下退出
   Ctrl+D             立即退出
   $ / !              进入 shell 模式
+  #                  进入 LAN Chat 快捷发送模式
 
 鼠标：
   Option+拖拽 / Shift+拖拽  选择文本复制（绕过应用鼠标捕获）

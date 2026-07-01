@@ -567,6 +567,18 @@ func TestHelpText(t *testing.T) {
 	if !strings.Contains(h, "/harness") {
 		t.Error("expected /harness in help text")
 	}
+	// New commands should be documented
+	for _, cmd := range []string{"/diff", "/cost", "/hooks"} {
+		if !strings.Contains(h, cmd) {
+			t.Errorf("expected %s in help text", cmd)
+		}
+	}
+	// Keyboard shortcuts should be documented
+	for _, key := range []string{"Ctrl+R", "Ctrl+N/P", "Ctrl+T"} {
+		if !strings.Contains(h, key) {
+			t.Errorf("expected %s in help text keyboard shortcuts", key)
+		}
+	}
 }
 
 func TestProviderCommandOpensProviderPanel(t *testing.T) {

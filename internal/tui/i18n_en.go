@@ -1237,61 +1237,63 @@ func enCatalog(key string) string {
 		return "Update ggcode"
 	case "help.text":
 		return `Available commands:
+
+Session & History:
   /help, /?          Show this help message
   /sessions          List all saved sessions
   /resume <id>       Resume a previous session
   /export <id>       Export session to markdown file
-  /model [name]      Open model panel or switch directly
-  /provider [vendor] Open provider manager
-  /qq                Open QQ binding panel
-  /telegram          Open Telegram binding panel
-  /pc                Open PC binding panel
-  /discord           Open Discord binding panel
-  /feishu            Open Feishu binding panel
-  /slack             Open Slack binding panel
-  /dingtalk          Open DingTalk binding panel
-  /im                Open unified IM channels panel
-  /lang [code]       Choose or switch interface language
-  /skills            Browse available skills
   /clear             Clear conversation history
-  /mcp               Show connected MCP servers and tools
-  /memory            Show loaded memory files
-  /memory list       List auto memory entries
-  /memory clear      Clear all auto memories
+  /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)
   /checkpoints       List all file edit checkpoints
 
-  /allow <tool>      Always allow a specific tool
-  /plugins           List loaded plugins and their tools
-  /image <path>      Attach an image file
+Model & Provider:
+  /model [name]      Open model panel or switch directly
+  /provider [vendor] Open provider manager
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+
+Development:
+  /diff [opts]       Show git diff in chat (--cached, --stat, <file>)
+  /cost              Show session token usage and estimated cost
+  /hooks             Show configured hooks
   /init              Generate GGCODE.md from the current project
   /harness ...       Run harness control-plane commands
-  /agents            List sub-agents
-  /agent <id>        Show sub-agent details
-  /agent cancel <id> Cancel a sub-agent
-
-  /compact           Compress conversation history
   /todo              View todo list
   /todo clear        Clear todo list
-  /bug               Report a bug with diagnostics
+
+Integrations:
+  /im                Open unified IM channels panel
+  /mcp               Show connected MCP servers and tools
+  /plugins           List loaded plugins and their tools
+  /skills            Browse available skills
+  /memory            Show loaded memory files
+  /agents            List sub-agents
+
+System:
+  /lang [code]       Choose or switch interface language
   /config            Show current configuration
   /config set <k> <v> Set a config value
   /status            Show current status
   /update            Update ggcode to the latest release
   /restart           Restart ggcode (picks up latest binary)
+  /bug               Report a bug with diagnostics
   /exit, /quit       Exit ggcode
 
 Keyboard shortcuts:
   Tab                Cycle autocomplete or approval choices
   Shift+Tab          Reverse cycle autocomplete, otherwise toggle permission mode
+  Ctrl+R             Toggle sidebar
+  Ctrl+N/P           New/previous session
+  Ctrl+T             Open tunnel (mobile sharing)
   Enter              Send message / apply current selection
   Esc                Cancel autocomplete / exit idle shell mode
-  ↑/↓                 Browse command history (or autocomplete)
+  Up/Down            Browse command history (or autocomplete)
   PgUp/PgDn          Scroll conversation output
   Ctrl+C             Cancel current activity, otherwise clear input then press again to exit
   Ctrl+D             Exit immediately
   $ / !              Enter shell mode
+  #                  Enter LAN Chat quick-send mode
 
 Mouse:
   Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
