@@ -284,6 +284,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/help", "/?":
 			m.chatWriteSystem(nextSystemID(), m.helpText())
 			return nil
+		case "/retry":
+			return m.handleRetryCommand()
 		case "/stats":
 			m.openStatsPanel()
 			return nil
@@ -624,6 +626,9 @@ func (m *Model) startAutoRunCheck(text string, displayText string, displayInChat
 		m.appendUserMessage(text)
 	}
 
+	// Store for /retry
+	m.lastUserSubmission = text
+
 	cfg := m.config
 	workDir, _ := os.Getwd()
 	var classifierProvider provider.Provider
@@ -806,4 +811,23 @@ func (m *Model) applyStrictWriteGuard() {
 		cp.SetOverride(tool, permission.Deny)
 	}
 	debug.Log("auto-run", "strict write guard enabled: denied %v", writeTools)
+}
+
+// handleRetryCommand re-submits the last user prompt. Useful when the agent
+// failed due to a transient error (rate limit, network timeout) and the user
+// wants to try again without retyping.
+func (m *Model) handleRetryCommand() tea.Cmd {
+	if m.lastUserSubmission == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("command.retry_empty"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("command.retry_busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	text := m.lastUserSubmission
+	m.lastUserSubmission = "" // clear to avoid retry loop
+	return m.submitText(text, true)
 }

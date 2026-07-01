@@ -270,6 +270,7 @@ type Model struct {
 	projectMemoryLoading  bool
 	runCanceled           bool
 	runFailed             bool
+	lastUserSubmission    string // last non-slash user prompt, for /retry
 	activeAgentRunID      int
 	activeShellRunID      int
 	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd

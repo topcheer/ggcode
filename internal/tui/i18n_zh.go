@@ -791,6 +791,10 @@ func zhCatalog(key string) string {
 		return "已加载内置模型。"
 	case "command.unknown":
 		return "未知命令：%s\n"
+	case "command.retry_empty":
+		return "没有可重试的上一次提交。"
+	case "command.retry_busy":
+		return "Agent 正在运行，请等待当前任务完成后再重试。"
 	case "command.help_hint":
 		return "输入 /help 查看可用命令\n\n"
 	case "command.usage.allow":

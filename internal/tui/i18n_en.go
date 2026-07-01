@@ -783,6 +783,10 @@ func enCatalog(key string) string {
 		return "Loaded built-in models."
 	case "command.unknown":
 		return "Unknown command: %s\n"
+	case "command.retry_empty":
+		return "No previous submission to retry."
+	case "command.retry_busy":
+		return "Agent is busy. Wait for the current run to finish before retrying."
 	case "command.help_hint":
 		return "Type /help for available commands\n\n"
 	case "command.usage.allow":

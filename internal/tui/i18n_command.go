@@ -107,6 +107,7 @@ func enCommandModule() map[string]string {
   /undo              Undo the last file edit (checkpoint rollback)
   /files             Show files modified by agent in this session
   /checkpoints       List all file edit checkpoints
+  /retry             Retry the last submission after an error
 
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
@@ -248,6 +249,7 @@ func zhCommandModule() map[string]string {
   /undo              撤销最近一次文件修改（回滚检查点）
   /files             查看 agent 在本次会话中修改的文件
   /checkpoints       列出所有文件修改检查点
+  /retry             重试上一次提交（出错后无需重新输入）
 
   /allow <tool>      永久允许某个工具
   /plugins           列出已加载插件及其工具
