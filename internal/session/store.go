@@ -953,18 +953,16 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 }
 
 // AppendTunnelEventToDisk persists a canonical tunnel event to the session's
-// JSONL file and updates the index, but does NOT mutate the Session object.
+// JSONL file. Does NOT call updateIndex — tunnel events don't change session
+// metadata (title, model, workspace) that appears in the session index.
+// This avoids 222K+ unnecessary index reads+writes per session.
 func (s *JSONLStore) AppendTunnelEventToDisk(ses *Session, ev TunnelEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
 	rec := jsonlRecord{Type: "tunnel_event", SessionID: ses.ID, TunnelEvent: &ev}
-	if err := appendRecordLine(path, rec); err != nil {
-		return err
-	}
-
-	return s.updateIndex(ses)
+	return appendRecordLine(path, rec)
 }
 
 // AppendMetaToDisk persists the latest session metadata as an additional meta
@@ -1016,6 +1014,7 @@ func (s *JSONLStore) AppendUsageEntry(ses *Session, entry UsageEntry) error {
 }
 
 // AppendMetric persists a performance metric record to the session's JSONL file.
+// Does NOT call updateIndex — metrics don't change session index data.
 func (s *JSONLStore) AppendMetric(ses *Session, m metrics.MetricEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1209,15 +1208,19 @@ func appendRecordLine(path string, rec jsonlRecord) error {
 	if err := enc.Encode(rec); err != nil {
 		return err
 	}
+	// O_APPEND guarantees atomic appends at the OS level on POSIX systems.
+	// We intentionally skip f.Sync() (fsync) here for performance:
+	//   - Save() (full session rewrite via atomic rename) doesn't fsync either.
+	//   - The data reaches disk via the OS buffer cache within seconds.
+	//   - The only risk is power loss losing the last few buffered appends,
+	//     which is acceptable for session event logs.
+	// Previously every tunnel_event (222K+ per session) did an fsync, causing
+	// significant latency on the agent streaming path.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
 	}
