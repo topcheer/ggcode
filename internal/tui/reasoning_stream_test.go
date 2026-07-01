@@ -65,13 +65,12 @@ func TestHandleAgentReasoningMsgUsesAccumulatedReasoningText(t *testing.T) {
 	}
 }
 
-// TestReasoningDoneMsgResetsStreamPrefixWritten ensures that after
-// agentReasoningDoneMsg fires (end of an LLM turn), streamPrefixWritten is
-// reset so the next turn creates a fresh assistant bubble instead of
-// appending to the collapsed reasoning block. This is a regression test for
-// the "duplicate reasoning across turns" bug where turn N+1's reasoning was
-// prepended to turn N's, producing a superset effect.
-func TestReasoningDoneMsgResetsStreamPrefixWritten(t *testing.T) {
+// TestReasoningDoneMsgDoesNotResetStreamPrefixWritten ensures that after
+// agentReasoningDoneMsg fires (end of an LLM turn), streamPrefixWritten stays
+// true so the next turn's reasoning/text appends to the same assistant bubble.
+// Resetting it caused reasoning to disappear and broke the visual association
+// between reasoning and text.
+func TestReasoningDoneMsgDoesNotResetStreamPrefixWritten(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 5
@@ -88,7 +87,7 @@ func TestReasoningDoneMsgResetsStreamPrefixWritten(t *testing.T) {
 	updatedModel, _ := m.Update(agentReasoningDoneMsg{})
 	m = updatedModel.(Model)
 
-	if m.streamPrefixWritten {
-		t.Fatal("streamPrefixWritten should be false after agentReasoningDoneMsg")
+	if !m.streamPrefixWritten {
+		t.Fatal("streamPrefixWritten should remain true after agentReasoningDoneMsg")
 	}
 }
