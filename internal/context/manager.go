@@ -69,6 +69,8 @@ const (
 
 	// Recent conversation budget: fixed 15K tokens kept verbatim after
 	// summarization. Covers the last few conversation rounds.
+	// For small context windows (<150K), capped at 10% of contextWindow
+	// to avoid dominating the available space.
 	recentBudgetFixed = 15000
 
 	// Post-compaction done check: the summarization loop continues until
@@ -942,7 +944,12 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 		return summaryPlan{}, false
 	}
 
+	// Recent conversation budget: 15K fixed, but capped at 10% of
+	// contextWindow for small contexts to avoid dominating available space.
 	recentBudget := recentBudgetFixed
+	if cw := m.contextWindow; cw > 0 && recentBudget > cw/10 {
+		recentBudget = cw / 10
+	}
 
 	keepStart := len(m.messages)
 	recentTokens := 0
