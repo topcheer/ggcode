@@ -349,12 +349,22 @@ func (m *Model) handleCostCommand() tea.Cmd {
 	rate, found := pricing.Get(vendor, model)
 
 	if found {
-		estimatedCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
-			float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
-			float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
-			float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
-		sb.WriteString(fmt.Sprintf("  Estimated cost:     $%.4f\n", estimatedCost))
-		sb.WriteString(fmt.Sprintf("  (rate: $%.2f/M in, $%.2f/M out)\n", rate.InputPerM, rate.OutputPerM))
+		if !rate.IsMetered() {
+			// Subscription / bundled / free — no per-token cost
+			planLabel := rate.Plan
+			if planLabel == "" {
+				planLabel = string(rate.Type)
+			}
+			sb.WriteString(fmt.Sprintf("  Estimated cost:     included in %s\n", planLabel))
+			sb.WriteString(fmt.Sprintf("  (billing: %s, not per-token)\n", rate.Type))
+		} else {
+			estimatedCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
+				float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
+				float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
+				float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
+			sb.WriteString(fmt.Sprintf("  Estimated cost:     $%.4f\n", estimatedCost))
+			sb.WriteString(fmt.Sprintf("  (rate: $%.2f/M in, $%.2f/M out)\n", rate.InputPerM, rate.OutputPerM))
+		}
 	} else {
 		sb.WriteString("  Estimated cost:     (no pricing data for this model)\n")
 	}

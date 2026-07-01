@@ -2,12 +2,37 @@ package cost
 
 import "strings"
 
+// PricingType indicates how a model is billed.
+type PricingType string
+
+const (
+	// PricingPerToken: standard per-million-token billing (default).
+	PricingPerToken PricingType = "per_token"
+	// PricingSubscription: flat-rate subscription, no per-token cost.
+	// Display "included in plan" instead of dollar amount.
+	PricingSubscription PricingType = "subscription"
+	// PricingBundled: included in a bundle (e.g., Google One AI Premium).
+	// Same as subscription but with different display wording.
+	PricingBundled PricingType = "bundled"
+	// PricingFree: free tier, no cost.
+	PricingFree PricingType = "free"
+)
+
 // ModelRate holds per-million-token pricing for a single model.
+// For subscription/bundled/free models, the per-token fields are zero
+// and PricingType indicates the billing model.
 type ModelRate struct {
-	InputPerM      float64 `json:"input_per_m"`
-	OutputPerM     float64 `json:"output_per_m"`
-	CacheReadPerM  float64 `json:"cache_read_per_m"`
-	CacheWritePerM float64 `json:"cache_write_per_m"`
+	InputPerM      float64     `json:"input_per_m"`
+	OutputPerM     float64     `json:"output_per_m"`
+	CacheReadPerM  float64     `json:"cache_read_per_m"`
+	CacheWritePerM float64     `json:"cache_write_per_m"`
+	Type           PricingType `json:"type,omitempty"`
+	Plan           string      `json:"plan,omitempty"` // e.g., "GitHub Copilot", "Claude Max"
+}
+
+// IsMetered returns true if the model is billed per-token.
+func (r ModelRate) IsMetered() bool {
+	return r.Type == "" || r.Type == PricingPerToken
 }
 
 // PricingTable maps provider+model to pricing rates.
@@ -184,6 +209,29 @@ func DefaultPricingTable() PricingTable {
 		"perplexity": {
 			"sonar-pro": {InputPerM: 3.0, OutputPerM: 15.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
 			"sonar":     {InputPerM: 1.0, OutputPerM: 1.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
+		},
+		// GitHub Copilot — flat-rate subscription, no per-token cost.
+		// Copilot Pro = $10/mo, Copilot Business = $19/user/mo.
+		// All models listed in copilot vendor defaults are included.
+		"github-copilot": {
+			"claude-haiku-4.5":       {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"claude-opus-4.5":        {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"claude-opus-4.7":        {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"claude-sonnet-4.5":      {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"claude-sonnet-4.6":      {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gemini-2.5-pro":         {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gemini-3-flash-preview": {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gemini-3.1-pro-preview": {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-3.5-turbo":          {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-4":                  {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-4-0125-preview":     {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-4.1":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-4o":                 {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"gpt-4o-mini":            {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"o1":                     {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"o3":                     {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"o3-mini":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
+			"o4-mini":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
 		},
 	}
 }

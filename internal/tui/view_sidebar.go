@@ -81,14 +81,19 @@ func (m Model) renderSidebarSessionUsageSection() string {
 }
 
 // sidebarEstimatedCost computes the estimated USD cost for the session's
-// token usage using the built-in pricing table.
+// token usage using the built-in pricing table. Returns empty string when
+// the model is unmetered (subscription/bundled/free) or has no pricing data.
 func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 	if m.session == nil {
 		return ""
 	}
 	pt := cost.DefaultPricingTable()
 	rate, ok := pt.Get(m.session.Vendor, m.session.Model)
-	if !ok {
+	if !ok || !rate.IsMetered() {
+		// For subscription models, show plan name instead of dollar amount
+		if ok && rate.Plan != "" {
+			return rate.Plan
+		}
 		return ""
 	}
 	totalCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +

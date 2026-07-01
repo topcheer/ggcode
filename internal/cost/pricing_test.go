@@ -113,11 +113,75 @@ func TestPricingTable_AllProvidersPresent(t *testing.T) {
 		"anthropic", "openai", "gemini", "deepseek",
 		"moonshot", "kimi", "groq", "mistral",
 		"zhipu", "zai", "minimax", "ark",
-		"together", "perplexity",
+		"together", "perplexity", "github-copilot",
 	}
 	for _, p := range expected {
 		if _, ok := pt[p]; !ok {
 			t.Errorf("expected provider %q in pricing table", p)
 		}
+	}
+}
+
+func TestPricingTable_CopilotIsSubscription(t *testing.T) {
+	pt := DefaultPricingTable()
+	rate, ok := pt.Get("github-copilot", "gpt-4o")
+	if !ok {
+		t.Fatal("expected match for github-copilot/gpt-4o")
+	}
+	if rate.IsMetered() {
+		t.Error("github-copilot models should be subscription, not metered")
+	}
+	if rate.Type != PricingSubscription {
+		t.Errorf("expected type=%s, got %s", PricingSubscription, rate.Type)
+	}
+	if rate.Plan != "GitHub Copilot" {
+		t.Errorf("expected plan 'GitHub Copilot', got %q", rate.Plan)
+	}
+}
+
+func TestPricingTable_AnthropicIsMetered(t *testing.T) {
+	pt := DefaultPricingTable()
+	rate, ok := pt.Get("anthropic", "claude-sonnet-4")
+	if !ok {
+		t.Fatal("expected match for anthropic/claude-sonnet-4")
+	}
+	if !rate.IsMetered() {
+		t.Error("anthropic models should be metered (per-token)")
+	}
+}
+
+func TestPricingTable_CopilotClaudeModels(t *testing.T) {
+	pt := DefaultPricingTable()
+	// Copilot uses renamed Claude models — verify they're all subscription
+	for _, model := range []string{"claude-sonnet-4.5", "claude-opus-4.5", "claude-haiku-4.5"} {
+		rate, ok := pt.Get("github-copilot", model)
+		if !ok {
+			t.Errorf("expected github-copilot/%s in pricing table", model)
+			continue
+		}
+		if rate.IsMetered() {
+			t.Errorf("github-copilot/%s should be subscription", model)
+		}
+	}
+}
+
+func TestModelRate_IsMetered(t *testing.T) {
+	tests := []struct {
+		name string
+		rate ModelRate
+		want bool
+	}{
+		{"empty type (default)", ModelRate{InputPerM: 3.0}, true},
+		{"explicit per_token", ModelRate{Type: PricingPerToken, InputPerM: 3.0}, true},
+		{"subscription", ModelRate{Type: PricingSubscription}, false},
+		{"bundled", ModelRate{Type: PricingBundled}, false},
+		{"free", ModelRate{Type: PricingFree}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.rate.IsMetered(); got != tt.want {
+				t.Errorf("IsMetered() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
