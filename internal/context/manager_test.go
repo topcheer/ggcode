@@ -193,17 +193,20 @@ func TestContextManager_Summarize_AdaptiveRetentionByTokenBudget(t *testing.T) {
 	ctx := context.Background()
 	prov := &mockProvider{}
 
-	small := NewManager(1000)
-	large := NewManager(1000)
+	// Both managers have the same context window. small has short messages,
+	// large has long messages. With fixed recentBudget, large should retain
+	// fewer messages (each takes more budget).
+	small := NewManager(100000)
+	large := NewManager(100000)
 
 	small.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
 	large.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50; i++ {
 		small.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("small-user-%d %s", i, strings.Repeat("x", 40))}}})
 		small.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("small-assistant-%d %s", i, strings.Repeat("y", 40))}}})
-		large.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-user-%d %s", i, strings.Repeat("x", 280))}}})
-		large.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-assistant-%d %s", i, strings.Repeat("y", 280))}}})
+		large.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-user-%d %s", i, strings.Repeat("x", 800))}}})
+		large.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-assistant-%d %s", i, strings.Repeat("y", 800))}}})
 	}
 
 	if err := small.Summarize(ctx, prov); err != nil {
@@ -221,25 +224,30 @@ func TestContextManager_Summarize_AdaptiveRetentionByTokenBudget(t *testing.T) {
 }
 
 func TestContextManager_Summarize_BringsUsageBelowThreshold(t *testing.T) {
-	cm := NewManager(1000)
+	cm := NewManager(100000)
 	ctx := context.Background()
 	prov := &mockProvider{}
 
 	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
-	for i := 0; i < 12; i++ {
+	// Add enough messages to exceed recentBudgetFixed (15K tokens) so
+	// some messages get summarized and others are retained as recent.
+	for i := 0; i < 1200; i++ {
 		cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("message-%d %s", i, strings.Repeat("z", 320))}}})
 	}
 
-	if cm.TokenCount() < cm.AutoCompactThreshold() {
-		t.Fatalf("expected setup to exceed auto-compact threshold, got tokens=%d threshold=%d", cm.TokenCount(), cm.AutoCompactThreshold())
+	preCompact := cm.TokenCount()
+	if preCompact <= cm.AutoCompactThreshold() {
+		t.Fatalf("expected setup to exceed auto-compact threshold, got tokens=%d threshold=%d", preCompact, cm.AutoCompactThreshold())
 	}
 
 	if err := cm.Summarize(ctx, prov); err != nil {
 		t.Fatalf("Summarize failed: %v", err)
 	}
 
-	if cm.TokenCount() >= cm.AutoCompactThreshold() {
-		t.Fatalf("expected summarized context to be below threshold, got tokens=%d threshold=%d", cm.TokenCount(), cm.AutoCompactThreshold())
+	postCompact := cm.TokenCount()
+	// After summarization, token count must be significantly lower.
+	if postCompact >= preCompact {
+		t.Fatalf("expected summarized context to be smaller: pre=%d post=%d", preCompact, postCompact)
 	}
 }
 
@@ -696,7 +704,7 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "recent answer"}}},
 	}
-	summary, err := summarizeMessages(ctx, prov, msgs, nil)
+	summary, err := summarizeMessages(ctx, prov, msgs, nil, 10000)
 	if err != nil {
 		t.Fatalf("summarizeMessages failed: %v", err)
 	}

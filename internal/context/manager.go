@@ -58,9 +58,25 @@ type CompactResult struct {
 }
 
 const (
-	summarizeThreshold        = 0.93 // trigger compaction at 93% of usable budget
-	compactTargetRatio        = 0.50 // compress to 50% of usable budget — leave plenty of room before re-trigger
-	summaryReserveRatio       = 0.10
+	// Compaction trigger: 100% of usable budget. outputReserve and
+	// safetyMargin already account for headroom — no need to trigger early.
+	summarizeThreshold = 1.0
+
+	// Summary output cap: 5% of contextWindow. For 200K context the
+	// summary is at most ~10K tokens — enough to capture key decisions,
+	// file paths, code structure, and pending work.
+	maxSummaryOutputRatio = 0.05
+
+	// Recent conversation budget: fixed 15K tokens kept verbatim after
+	// summarization. Covers the last few conversation rounds.
+	recentBudgetFixed = 15000
+
+	// Post-compaction done check: the summarization loop continues until
+	// total tokens fall below this fraction of usable budget. Since
+	// post-compaction size ≈ systemTokens + summary + recent ≈ 65K,
+	// 0.60 (~102K for 200K context) provides ample safety margin.
+	compactDoneRatio = 0.60
+
 	defaultOutputReserveRatio = 0.10
 	maxOutputReserveRatio     = 0.25
 	safetyMarginRatio         = 0.05
@@ -629,7 +645,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		debug.Log("ctx", "Summarize: pass=%d old_msgs=%d recent_msgs=%d has_system=%t",
 			pass, len(plan.oldMsgs), len(plan.recentMsgs), plan.hasSystem)
 
-		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage)
+		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens())
 		if err != nil {
 			debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 			return err
@@ -914,12 +930,10 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 
 	plan := summaryPlan{origLen: len(m.messages)}
 	start := 0
-	systemTokens := 0
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
 		plan.hasSystem = true
 		plan.systemMsg = m.messages[0]
 		start = 1
-		systemTokens = m.countTokens(plan.systemMsg)
 	}
 
 	plan.allMsgs = append([]provider.Message(nil), m.messages...)
@@ -928,10 +942,7 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 		return summaryPlan{}, false
 	}
 
-	recentBudget := m.compactTargetTokens() - systemTokens - m.summaryReserveTokens()
-	if recentBudget < 0 {
-		recentBudget = 0
-	}
+	recentBudget := recentBudgetFixed
 
 	keepStart := len(m.messages)
 	recentTokens := 0
@@ -975,7 +986,7 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 	return plan, len(plan.oldMsgs) > 0
 }
 
-func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage)) (string, error) {
+func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int) (string, error) {
 	current := append([]provider.Message(nil), msgs...)
 	for attempt := 0; attempt <= maxPTLRetries; attempt++ {
 		payload := buildSummaryPayload(current)
@@ -984,7 +995,9 @@ func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provi
 				Role: "system",
 				Content: []provider.ContentBlock{{
 					Type: "text",
-					Text: `You are summarizing a conversation between a user and an AI coding assistant. Produce a concise, structured summary that preserves the information most critical for continuing work.
+					Text: fmt.Sprintf(`You are summarizing a conversation between a user and an AI coding assistant. Produce a concise, structured summary that preserves the information most critical for continuing work.
+
+Your summary must be under %d tokens. Be extremely concise.
 
 Focus on preserving:
 - Key decisions made and WHY (rationale, trade-offs considered)
@@ -1000,7 +1013,7 @@ You may omit:
 - Repeated status checks or confirmations
 - Tool call mechanics (focus on what was done, not which tool was used)
 
-Format: Use clear sections with bullet points. Be specific with names, paths, and values.`,
+Format: Use clear sections with bullet points. Be specific with names, paths, and values.`, summaryTokenLimit),
 				}},
 			},
 			{
@@ -1043,19 +1056,20 @@ func (m *Manager) compactTargetTokens() int {
 	if budget <= 0 {
 		return 0
 	}
-	target := int(float64(budget) * compactTargetRatio)
+	target := int(float64(budget) * compactDoneRatio)
 	if target < minSummaryReserve {
 		return minSummaryReserve
 	}
 	return target
 }
 
+// summaryReserveTokens returns the token budget reserved for the summary
+// LLM call's output. Capped at maxSummaryOutputRatio (5%) of contextWindow.
 func (m *Manager) summaryReserveTokens() int {
-	budget := m.usablePromptBudgetLocked()
-	if budget <= 0 {
+	if m.contextWindow <= 0 {
 		return minSummaryReserve
 	}
-	reserve := int(float64(budget) * summaryReserveRatio)
+	reserve := int(float64(m.contextWindow) * maxSummaryOutputRatio)
 	if reserve < minSummaryReserve {
 		return minSummaryReserve
 	}
