@@ -446,6 +446,9 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// Single-pass scan: track the last checkpoint and all post-checkpoint records.
 	// We only keep lightweight non-checkpoint records; checkpoint messages are
 	// stored once for the latest checkpoint only.
+	// IMPORTANT: usage and metric records are cumulative history — they must
+	// NOT be cleared when a checkpoint is encountered. Only message/tunnel/cost
+	// entries follow checkpoint semantics (avoid replaying old messages).
 	type lightweightEntry struct {
 		recType string
 		record  jsonlRecord
@@ -454,6 +457,8 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		metaRecords    []jsonlRecord // always accumulate meta for metadata
 		lastCpMessages []provider.Message
 		postCPEntries  []lightweightEntry // entries after the last checkpoint
+		allUsage       []jsonlRecord      // ALL usage records (never cleared by checkpoint)
+		allMetrics     []jsonlRecord      // ALL metric records (never cleared by checkpoint)
 		haveCheckpoint bool
 	)
 
@@ -475,13 +480,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			lastCpMessages = rec.CheckpointMessages
 			postCPEntries = nil
 			haveCheckpoint = true
-		case "message", "cost", "tunnel_event", "usage", "metric":
-			if haveCheckpoint {
-				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
-			} else {
-				// No checkpoint yet — treat as legacy
-				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
-			}
+		case "usage":
+			// Usage records are cumulative token history — never discard.
+			allUsage = append(allUsage, rec)
+		case "metric":
+			// Metric records are cumulative performance history — never discard.
+			allMetrics = append(allMetrics, rec)
+		case "message", "cost", "tunnel_event":
+			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -527,14 +533,20 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			if e.record.TunnelEvent != nil {
 				ses.TunnelEvents = append(ses.TunnelEvents, *e.record.TunnelEvent)
 			}
-		case "usage":
-			if e.record.UsageEntry != nil {
-				ses.UsageHistory = append(ses.UsageHistory, *e.record.UsageEntry)
-			}
-		case "metric":
-			if e.record.MetricEvent != nil {
-				ses.Metrics = append(ses.Metrics, *e.record.MetricEvent)
-			}
+		}
+	}
+
+	// Apply ALL usage records (preserved across checkpoints)
+	for _, rec := range allUsage {
+		if rec.UsageEntry != nil {
+			ses.UsageHistory = append(ses.UsageHistory, *rec.UsageEntry)
+		}
+	}
+
+	// Apply ALL metric records (preserved across checkpoints)
+	for _, rec := range allMetrics {
+		if rec.MetricEvent != nil {
+			ses.Metrics = append(ses.Metrics, *rec.MetricEvent)
 		}
 	}
 

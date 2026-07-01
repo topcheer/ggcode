@@ -885,13 +885,17 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Usage entries before checkpoint are lost (checkpoint resets),
-	// but entries after checkpoint should survive.
-	if len(loaded.UsageHistory) != 1 {
-		t.Fatalf("expected 1 usage entry after checkpoint, got %d", len(loaded.UsageHistory))
+	// Usage entries are cumulative token history — ALL should survive across
+	// checkpoint, not just the ones after it. This ensures /cost shows
+	// accurate per-model breakdowns even after compaction.
+	if len(loaded.UsageHistory) != 2 {
+		t.Fatalf("expected 2 usage entries (all preserved across checkpoint), got %d", len(loaded.UsageHistory))
 	}
-	if loaded.UsageHistory[0].TurnIndex != 2 {
-		t.Errorf("turn index: got %d, want 2", loaded.UsageHistory[0].TurnIndex)
+	if loaded.UsageHistory[0].TurnIndex != 1 {
+		t.Errorf("entry 0 turn index: got %d, want 1", loaded.UsageHistory[0].TurnIndex)
+	}
+	if loaded.UsageHistory[1].TurnIndex != 2 {
+		t.Errorf("entry 1 turn index: got %d, want 2", loaded.UsageHistory[1].TurnIndex)
 	}
 }
 
