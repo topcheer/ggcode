@@ -127,6 +127,20 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case streamMsg:
 		return m.handleStreamMsg(msg, spinnerCmd)
 
+	case reviewReadyMsg:
+		// The /review command prepared the full prompt text; start the agent with it.
+		m.chatWriteUser(nextChatID(), "/review")
+		m.appendUserMessage("/review")
+		m.streamBuffer = &bytes.Buffer{}
+		m.streamPrefixWritten = false
+		m.setLoading(true)
+		m.loopStart = time.Now()
+		m.statusActivity = m.t("status.thinking")
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		return m, m.startAgent(msg.text)
+
 	case compactResultMsg:
 		return m.handleCompactResultMsg(msg)
 

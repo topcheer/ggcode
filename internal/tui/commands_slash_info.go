@@ -405,3 +405,67 @@ func resolveRate(vendor, endpoint, model string) cost.ModelRate {
 	// 4. Unknown — no hardcoded per-token prices
 	return cost.ModelRate{}
 }
+
+// handleReviewCommand runs a code review on the current working tree changes.
+// It gathers the git diff and sends it to the agent with a structured review prompt.
+// Supports: /review, /review --cached, /review --staged
+func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
+	diffArgs := []string{"diff"}
+	if len(parts) > 1 {
+		for _, p := range parts[1:] {
+			if p == "--staged" {
+				p = "--cached"
+			}
+			diffArgs = append(diffArgs, p)
+		}
+	}
+
+	return func() tea.Msg {
+		// Get diff
+		cmd := exec.Command("git", diffArgs...)
+		cmd.Dir = workingDirFromModel(m)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return streamMsg(fmt.Sprintf("git diff error: %v", err))
+		}
+
+		diff := strings.TrimSpace(string(output))
+		if diff == "" {
+			return streamMsg("No changes to review (working tree clean).")
+		}
+
+		// Truncate very large diffs for the prompt
+		maxLines := 500
+		lines := strings.Split(diff, "\n")
+		truncated := false
+		if len(lines) > maxLines {
+			diff = strings.Join(lines[:maxLines], "\n")
+			truncated = true
+		}
+
+		// Build review prompt
+		var prompt strings.Builder
+		prompt.WriteString("Review the following git diff. Focus on:\n")
+		prompt.WriteString("1. **Bugs**: Logic errors, edge cases, nil dereferences, off-by-one\n")
+		prompt.WriteString("2. **Security**: Injection, path traversal, secrets in code\n")
+		prompt.WriteString("3. **Race conditions**: Concurrent access without proper locking\n")
+		prompt.WriteString("4. **Resource leaks**: Unclosed files, goroutine leaks, missing defers\n")
+		prompt.WriteString("5. **API consistency**: Breaking changes, missing error handling\n\n")
+		prompt.WriteString("Be concise. Only mention issues that matter — skip style nits.\n")
+		prompt.WriteString("Format: `<severity> <file>:<line> — <issue>` (severity: critical/high/medium/low)\n")
+		prompt.WriteString("If no issues found, say \"LGTM\" and explain why the changes look correct.\n\n")
+		prompt.WriteString("```diff\n")
+		prompt.WriteString(diff)
+		prompt.WriteString("\n```")
+		if truncated {
+			prompt.WriteString(fmt.Sprintf("\n\n(diff truncated: showing first %d of %d lines)", maxLines, len(lines)))
+		}
+
+		return reviewReadyMsg{text: prompt.String()}
+	}
+}
+
+// reviewReadyMsg carries the expanded review text to be sent to the agent.
+type reviewReadyMsg struct {
+	text string
+}

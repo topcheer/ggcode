@@ -1115,6 +1115,8 @@ func enCatalog(key string) string {
 		return "Show configured hooks (all events, types, match patterns)"
 	case "slash.cost":
 		return "Show session token usage and estimated cost"
+	case "slash.review":
+		return "AI code review of current changes (bugs, security, races)"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
@@ -1255,6 +1257,7 @@ Model & Provider:
 
 Development:
   /diff [opts]       Show git diff in chat (--cached, --stat, <file>)
+  /review [opts]     AI code review of current changes (--cached, --staged)
   /cost              Show session token usage and estimated cost
   /hooks             Show configured hooks
   /init              Generate GGCODE.md from the current project

@@ -1101,6 +1101,8 @@ func zhCatalog(key string) string {
 		return "显示已配置的 hooks（所有事件、类型、匹配规则）"
 	case "slash.cost":
 		return "显示本次会话的 token 用量和预估费用"
+	case "slash.review":
+		return "AI 代码审查（检查 bug、安全问题、竞态条件）"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
@@ -1239,6 +1241,7 @@ func zhCatalog(key string) string {
 
 开发工具：
   /diff [opts]       在聊天中显示 git diff（--cached、--stat、<文件>）
+  /review [opts]     AI 代码审查当前变更（--cached、--staged）
   /cost              显示本次会话 token 用量和预估费用
   /hooks             显示已配置的 hooks
   /init              基于当前项目生成 GGCODE.md

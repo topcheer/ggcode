@@ -243,6 +243,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.hooks")
 	case "/cost":
 		return tr(lang, "slash.cost")
+	case "/review":
+		return tr(lang, "slash.review")
 	default:
 		return cmd
 	}

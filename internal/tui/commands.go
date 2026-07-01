@@ -471,6 +471,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleTunnelCommand(text)
 		case "/diff":
 			return m.handleDiffCommand(parts)
+		case "/review":
+			return m.handleReviewCommand(parts)
 		case "/hooks":
 			return m.handleHooksCommand()
 		case "/cost":

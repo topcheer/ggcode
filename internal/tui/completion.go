@@ -198,7 +198,7 @@ var SlashCommands = []string{
 	"/inspector", "/image",
 	"/chat", "/nick", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
-	"/diff", "/hooks", "/cost",
+	"/diff", "/hooks", "/cost", "/review",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -263,6 +263,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/diff":        "Show git diff in chat (supports --cached, <file>, --stat)",
 	"/hooks":       "Show configured hooks (all events, types, match patterns)",
 	"/cost":        "Show session token usage and estimated cost",
+	"/review":      "AI code review of current git diff (bugs, security, races)",
 }
 
 // SlashCommandPlaceholders maps commands that accept optional arguments.
@@ -327,6 +328,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/undo":        "",
 	"/update":      "[check|force]",
 	"/diff":        "[--cached|--stat|<file>]",
+	"/review":      "[--cached|--staged]",
 	"/hooks":       "",
 	"/cost":        "",
 }
