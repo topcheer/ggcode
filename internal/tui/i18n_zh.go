@@ -1287,6 +1287,12 @@ func zhCatalog(key string) string {
   PgUp/PgDn          滚动对话输出
   Ctrl+C             取消当前活动；空闲时先清空输入，再次按下退出
   Ctrl+D             立即退出
+  Ctrl+A / Ctrl+E    光标移到行首 / 行尾
+  Ctrl+K             删除光标到行尾的内容
+  Ctrl+U             删除行首到光标的内容
+  Ctrl+W             删除光标前的单词
+  Ctrl+Backspace     移除最后一张附加图片
+  Shift+Enter        插入换行（tmux 中用 Ctrl+J 或 Alt+Enter）
   $ / !              进入 shell 模式
   #                  进入 LAN Chat 快捷发送模式
 

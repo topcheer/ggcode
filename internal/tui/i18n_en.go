@@ -1303,6 +1303,12 @@ Keyboard shortcuts:
   PgUp/PgDn          Scroll conversation output
   Ctrl+C             Cancel current activity, otherwise clear input then press again to exit
   Ctrl+D             Exit immediately
+  Ctrl+A / Ctrl+E    Move cursor to start / end of line
+  Ctrl+K             Delete from cursor to end of line
+  Ctrl+U             Delete from start of line to cursor
+  Ctrl+W             Delete word before cursor
+  Ctrl+Backspace     Remove last attached image
+  Shift+Enter        Insert newline (Ctrl+J or Alt+Enter in tmux)
   $ / !              Enter shell mode
   #                  Enter LAN Chat quick-send mode
 

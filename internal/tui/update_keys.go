@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -636,6 +637,32 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.input.InsertRune('\n')
 		m.updateAutoComplete()
 		return m, nil
+
+	// Readline-style editing shortcuts.
+	// These match standard terminal/shell conventions (bash, zsh, emacs).
+	case "ctrl+a":
+		// Move cursor to start of line
+		m.input.CursorStart()
+		return m, nil
+	case "ctrl+e":
+		// Move cursor to end of line
+		m.input.CursorEnd()
+		return m, nil
+	case "ctrl+k":
+		// Delete from cursor to end of line
+		deleteFromCursorToEnd(&m.input)
+		m.inputHint = ""
+		return m, nil
+	case "ctrl+u":
+		// Delete from start of line to cursor
+		deleteFromLineStartToCursor(&m.input)
+		m.inputHint = ""
+		return m, nil
+	case "ctrl+w":
+		// Delete the word before cursor
+		deleteWordBeforeCursor(&m.input)
+		m.inputHint = ""
+		return m, nil
 	}
 
 	// Forward unmatched keys to text input (was the catchall in original Update)
@@ -649,4 +676,80 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 	return m, combineCmds(spinnerCmd, cmd)
 
+}
+
+// ---------------------------------------------------------------------------
+// Readline-style textarea helpers
+// ---------------------------------------------------------------------------
+
+// deleteFromCursorToEnd deletes from the cursor position to the end of the
+// current line (Ctrl+K behavior).
+func deleteFromCursorToEnd(ta *textarea.Model) {
+	line := ta.Line()
+	col := ta.Column()
+	val := ta.Value()
+	lines := strings.Split(val, "\n")
+	if line < 0 || line >= len(lines) {
+		return
+	}
+	if col >= len(lines[line]) {
+		return
+	}
+	lines[line] = lines[line][:col]
+	ta.SetValue(strings.Join(lines, "\n"))
+}
+
+// deleteFromLineStartToCursor deletes from the start of the current line to
+// the cursor position (Ctrl+U behavior).
+func deleteFromLineStartToCursor(ta *textarea.Model) {
+	line := ta.Line()
+	col := ta.Column()
+	val := ta.Value()
+	lines := strings.Split(val, "\n")
+	if line < 0 || line >= len(lines) {
+		return
+	}
+	if col == 0 {
+		return
+	}
+	if col > len(lines[line]) {
+		col = len(lines[line])
+	}
+	lines[line] = lines[line][col:]
+	ta.SetValue(strings.Join(lines, "\n"))
+}
+
+// deleteWordBeforeCursor deletes the word before the cursor (Ctrl+W behavior).
+// Matches bash/zsh backward-kill-word: deletes trailing whitespace, the word,
+// and any preceding whitespace between the word and the previous word.
+func deleteWordBeforeCursor(ta *textarea.Model) {
+	val := ta.Value()
+	lines := strings.Split(val, "\n")
+	line := ta.Line()
+	col := ta.Column()
+	if line < 0 || line >= len(lines) {
+		return
+	}
+	currentLine := lines[line]
+	if col > len(currentLine) {
+		col = len(currentLine)
+	}
+	if col == 0 {
+		return
+	}
+	pos := col
+	// Skip trailing whitespace before cursor
+	for pos > 0 && (currentLine[pos-1] == ' ' || currentLine[pos-1] == '\t') {
+		pos--
+	}
+	// Skip word characters
+	for pos > 0 && currentLine[pos-1] != ' ' && currentLine[pos-1] != '\t' {
+		pos--
+	}
+	// Skip preceding whitespace between this word and the previous word
+	for pos > 0 && (currentLine[pos-1] == ' ' || currentLine[pos-1] == '\t') {
+		pos--
+	}
+	lines[line] = currentLine[:pos] + currentLine[col:]
+	ta.SetValue(strings.Join(lines, "\n"))
 }
