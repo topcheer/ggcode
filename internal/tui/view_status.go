@@ -284,7 +284,7 @@ func (m Model) renderAttachmentBar() string {
 		Render(strings.Join(names, " · "))
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("8")).
-		Render("Ctrl+Backspace to remove")
+		Render("Ctrl+Backspace to remove · /image clear")
 	return fmt.Sprintf("%s %s  %s", label, body, hint)
 }
 

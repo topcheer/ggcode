@@ -418,8 +418,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// Ctrl+V works on macOS/Linux but is intercepted by most Windows terminals.
 		// Ctrl+Shift+V works on Windows terminals that intercept Ctrl+V.
 		return m, m.handleClipboardPaste()
-	case "ctrl+backspace":
+	case "ctrl+backspace", "ctrl+h":
 		// Remove the last attached image (if any).
+		// Ctrl+Backspace on many terminals (especially Windows Terminal)
+		// sends \x08 which Bubble Tea interprets as ctrl+h, so handle both.
 		if _, ok := m.popPendingImage(); ok {
 			return m, nil
 		}

@@ -245,8 +245,36 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("image.formats"))
 		return nil
 	}
-	if strings.EqualFold(parts[1], "paste") {
+	switch strings.ToLower(parts[1]) {
+	case "paste":
 		return m.handleClipboardPaste()
+	case "remove", "rm", "del", "delete":
+		if img, ok := m.popPendingImage(); ok {
+			m.chatWriteSystem(nextSystemID(), "Removed: "+img.filename)
+		} else {
+			m.chatWriteSystem(nextSystemID(), "No images attached.")
+		}
+		return nil
+	case "clear", "reset":
+		n := m.pendingImageCount()
+		m.clearPendingImages()
+		if n > 0 {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Cleared %d image(s).", n))
+		} else {
+			m.chatWriteSystem(nextSystemID(), "No images attached.")
+		}
+		return nil
+	case "list":
+		if m.pendingImageCount() == 0 {
+			m.chatWriteSystem(nextSystemID(), "No images attached.")
+			return nil
+		}
+		var names []string
+		for i, img := range m.pendingImages {
+			names = append(names, fmt.Sprintf("  %d. %s", i+1, img.filename))
+		}
+		m.chatWriteSystem(nextSystemID(), "Attached images:\n"+strings.Join(names, "\n"))
+		return nil
 	}
 	path := parts[1]
 	return func() tea.Msg {
