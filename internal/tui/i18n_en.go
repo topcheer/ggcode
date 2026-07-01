@@ -568,6 +568,8 @@ func enCatalog(key string) string {
 		return "Ctrl+C clear/exit"
 	case "hint.image_attached":
 		return "image attached"
+	case "hint.image_attached_count":
+		return "%d image(s) attached"
 	case "hint.follow_panel":
 		return "Ctrl+N follow"
 	case "hint.unfollow_panel":

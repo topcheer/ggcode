@@ -300,6 +300,8 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {
 	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil
 }
 
+// stripImagePlaceholder removes a leading image placeholder from a value.
+// Kept for backward compatibility with test callers.
 func stripImagePlaceholder(value, placeholder string) string {
 	trimmed := strings.TrimSpace(value)
 	placeholder = strings.TrimSpace(placeholder)
@@ -315,23 +317,23 @@ func stripImagePlaceholder(value, placeholder string) string {
 	return trimmed
 }
 
-func (m *Model) stripPendingImagePlaceholder(value string) string {
-	if m.pendingImage == nil {
-		return strings.TrimSpace(value)
-	}
-	return stripImagePlaceholder(value, m.pendingImage.placeholder)
+// pendingImageCount returns the number of attached images.
+func (m *Model) pendingImageCount() int {
+	return len(m.pendingImages)
 }
 
-func (m *Model) setComposerImagePlaceholder(msg imageAttachedMsg) {
-	draft := m.input.Value()
-	if m.pendingImage != nil {
-		draft = stripImagePlaceholder(draft, m.pendingImage.placeholder)
+// clearPendingImages removes all attached images.
+func (m *Model) clearPendingImages() {
+	m.pendingImages = nil
+}
+
+// popPendingImage removes and returns the last attached image, if any.
+func (m *Model) popPendingImage() (*imageAttachedMsg, bool) {
+	n := len(m.pendingImages)
+	if n == 0 {
+		return nil, false
 	}
-	draft = strings.TrimSpace(draft)
-	if draft == "" {
-		m.input.SetValue(msg.placeholder + " ")
-	} else {
-		m.input.SetValue(msg.placeholder + " " + draft)
-	}
-	composerCursorEnd(&m.input)
+	last := m.pendingImages[n-1]
+	m.pendingImages = m.pendingImages[:n-1]
+	return &last, true
 }

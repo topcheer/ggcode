@@ -262,7 +262,7 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 		return imageAttachedMsg{
 			placeholder: placeholder,
 			img:         img,
-			filename:    path,
+			filename:    filepath.Base(path),
 			sourcePath:  sourcePath,
 		}
 	}

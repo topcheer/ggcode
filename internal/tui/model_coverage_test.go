@@ -380,65 +380,40 @@ func TestRestorePendingInput_EmptyNoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// stripPendingImagePlaceholder
+// pendingImages (multi-image support)
 // ---------------------------------------------------------------------------
 
-func TestStripPendingImagePlaceholder_NoPendingImage(t *testing.T) {
+func TestPendingImages_AppendAndCount(t *testing.T) {
 	m := NewModel(nil, nil)
-	// No pending image → value returned as-is (trimmed)
-	got := m.stripPendingImagePlaceholder("  hello  ")
-	if got != "hello" {
-		t.Fatalf("expected 'hello', got %q", got)
+	if m.pendingImageCount() != 0 {
+		t.Fatalf("expected 0 images, got %d", m.pendingImageCount())
+	}
+	m.pendingImages = append(m.pendingImages, imageAttachedMsg{filename: "a.png"})
+	m.pendingImages = append(m.pendingImages, imageAttachedMsg{filename: "b.png"})
+	if m.pendingImageCount() != 2 {
+		t.Fatalf("expected 2 images, got %d", m.pendingImageCount())
 	}
 }
 
-func TestStripPendingImagePlaceholder_WithPendingImage(t *testing.T) {
+func TestPendingImages_PopLast(t *testing.T) {
 	m := NewModel(nil, nil)
-	m.pendingImage = &imageAttachedMsg{placeholder: "[img.png]"}
-	got := m.stripPendingImagePlaceholder("[img.png] my text")
-	if got != "my text" {
-		t.Fatalf("expected 'my text', got %q", got)
+	m.pendingImages = append(m.pendingImages, imageAttachedMsg{filename: "a.png"})
+	m.pendingImages = append(m.pendingImages, imageAttachedMsg{filename: "b.png"})
+	img, ok := m.popPendingImage()
+	if !ok || img.filename != "b.png" {
+		t.Fatalf("expected b.png, got %v %v", img, ok)
+	}
+	if m.pendingImageCount() != 1 {
+		t.Fatalf("expected 1 remaining, got %d", m.pendingImageCount())
 	}
 }
 
-// ---------------------------------------------------------------------------
-// setComposerImagePlaceholder
-// ---------------------------------------------------------------------------
-
-func TestSetComposerImagePlaceholder_EmptyDraft(t *testing.T) {
+func TestPendingImages_Clear(t *testing.T) {
 	m := NewModel(nil, nil)
-	m.input.SetValue("")
-	m.setComposerImagePlaceholder(imageAttachedMsg{placeholder: "[photo.jpg]"})
-	// Should be "placeholder + space"
-	if !strings.HasPrefix(m.input.Value(), "[photo.jpg]") {
-		t.Fatalf("expected placeholder prefix, got %q", m.input.Value())
-	}
-}
-
-func TestSetComposerImagePlaceholder_ExistingDraft(t *testing.T) {
-	m := NewModel(nil, nil)
-	m.input.SetValue("describe this")
-	m.setComposerImagePlaceholder(imageAttachedMsg{placeholder: "[img.png]"})
-	val := m.input.Value()
-	if !strings.HasPrefix(val, "[img.png]") {
-		t.Fatalf("expected placeholder prefix, got %q", val)
-	}
-	if !strings.Contains(val, "describe this") {
-		t.Fatalf("expected draft preserved, got %q", val)
-	}
-}
-
-func TestSetComposerImagePlaceholder_ReplacesOldPlaceholder(t *testing.T) {
-	m := NewModel(nil, nil)
-	m.pendingImage = &imageAttachedMsg{placeholder: "[old.png]"}
-	m.input.SetValue("[old.png] some text")
-	m.setComposerImagePlaceholder(imageAttachedMsg{placeholder: "[new.png]"})
-	val := m.input.Value()
-	if !strings.HasPrefix(val, "[new.png]") {
-		t.Fatalf("expected new placeholder prefix, got %q", val)
-	}
-	if !strings.Contains(val, "some text") {
-		t.Fatalf("expected text preserved, got %q", val)
+	m.pendingImages = append(m.pendingImages, imageAttachedMsg{filename: "a.png"})
+	m.clearPendingImages()
+	if m.pendingImageCount() != 0 {
+		t.Fatalf("expected 0 after clear, got %d", m.pendingImageCount())
 	}
 }
 

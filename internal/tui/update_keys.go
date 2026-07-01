@@ -418,6 +418,15 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// Ctrl+V works on macOS/Linux but is intercepted by most Windows terminals.
 		// Ctrl+Shift+V works on Windows terminals that intercept Ctrl+V.
 		return m, m.handleClipboardPaste()
+	case "ctrl+backspace":
+		// Remove the last attached image (if any).
+		if _, ok := m.popPendingImage(); ok {
+			return m, nil
+		}
+		// No images: fall through to normal backspace behavior
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, combineCmds(spinnerCmd, cmd)
 	case "ctrl+d":
 		m.quitting = true
 		m.shutdownAll()

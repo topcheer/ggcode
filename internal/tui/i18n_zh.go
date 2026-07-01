@@ -566,6 +566,8 @@ func zhCatalog(key string) string {
 		return "Ctrl+C 清空/退出"
 	case "hint.image_attached":
 		return "已附加图片"
+	case "hint.image_attached_count":
+		return "已附加 %d 张图片"
 	case "hint.follow_panel":
 		return "Ctrl+N 跟随"
 	case "hint.unfollow_panel":

@@ -202,7 +202,7 @@ type Model struct {
 	// Diff confirm selection list
 	diffOptions            []approvalOption
 	diffCursor             int
-	pendingImage           *imageAttachedMsg
+	pendingImages          []imageAttachedMsg
 	langOptions            []languageOption
 	langCursor             int
 	languagePromptRequired bool

@@ -167,8 +167,8 @@ func (m Model) renderComposerPanel() string {
 	if count := m.pendingSubmissionCount(); count > 0 {
 		hints = append(hints, m.t("queued.count", count))
 	}
-	if m.pendingImage != nil {
-		hints = append(hints, m.t("hint.image_attached"))
+	if n := m.pendingImageCount(); n > 0 {
+		hints = append(hints, fmt.Sprintf(m.t("hint.image_attached_count"), n))
 	}
 	// Stream status: show platform-resolution@fps when streaming
 	if m.streamManager != nil && m.streamManager.IsRunning() {
@@ -252,12 +252,40 @@ func (m Model) renderComposerPanel() string {
 }
 
 func (m Model) renderComposerInput() string {
+	var top string
+	if n := m.pendingImageCount(); n > 0 {
+		top = m.renderAttachmentBar() + "\n"
+	}
 	v := m.input.View()
 	if m.inputHint != "" && !m.loading {
 		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.inputHint)
 		v += hint
 	}
-	return v
+	return top + v
+}
+
+// renderAttachmentBar renders a compact one-line summary of attached images.
+// Format: `[img] screenshot.png · diagram.png  (Ctrl+Backspace to remove last)`
+func (m Model) renderAttachmentBar() string {
+	var names []string
+	for _, img := range m.pendingImages {
+		name := img.filename
+		if name == "" {
+			name = "image"
+		}
+		names = append(names, name)
+	}
+	label := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("3")).
+		Bold(true).
+		Render("[img]")
+	body := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("7")).
+		Render(strings.Join(names, " · "))
+	hint := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8")).
+		Render("Ctrl+Backspace to remove")
+	return fmt.Sprintf("%s %s  %s", label, body, hint)
 }
 
 // contextUsageHint returns a colored context window usage string for the composer hints.

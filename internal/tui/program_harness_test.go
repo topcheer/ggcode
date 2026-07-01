@@ -218,13 +218,13 @@ func TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand(t *testing.T) {
 	h.send(tea.KeyPressMsg{Text: "ctrl+v"})
 
 	state := waitForProgramState(t, h, func(state Model) bool {
-		return state.pendingImage != nil && strings.Contains(state.input.Value(), "ggcode-image-deadbeef.png")
+		return len(state.pendingImages) > 0
 	})
-	if state.pendingImage == nil {
+	if len(state.pendingImages) == 0 {
 		t.Fatal("expected live program clipboard paste to attach an image")
 	}
-	if state.pendingImage.sourcePath != "/tmp/ggcode-image-deadbeef.png" {
-		t.Fatalf("expected source path to survive async command, got %q", state.pendingImage.sourcePath)
+	if state.pendingImages[0].sourcePath != "/tmp/ggcode-image-deadbeef.png" {
+		t.Fatalf("expected source path to survive async command, got %q", state.pendingImages[0].sourcePath)
 	}
 }
 

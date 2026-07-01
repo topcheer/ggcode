@@ -612,8 +612,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case imageAttachedMsg:
-		m.setComposerImagePlaceholder(msg)
-		m.pendingImage = &msg
+		m.pendingImages = append(m.pendingImages, msg)
 		return m, nil
 
 	case statusMsg:

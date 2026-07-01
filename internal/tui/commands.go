@@ -209,7 +209,7 @@ func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInC
 	if m.knight != nil && strings.TrimSpace(text) != "" {
 		m.knight.NotifyActivity()
 	}
-	text = m.stripPendingImagePlaceholder(text)
+
 	if addToHistory {
 		if text != "" {
 			m.history = append(m.history, text)
@@ -515,8 +515,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 
 	// Regular message → check auto-run routing before starting agent
 	displayText := text
-	if m.pendingImage != nil {
-		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
+	for _, img := range m.pendingImages {
+		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
 	}
 
 	if m.shouldCheckAutoRun() {

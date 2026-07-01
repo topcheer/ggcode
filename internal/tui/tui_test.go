@@ -1463,14 +1463,16 @@ func TestCtrlVPastesClipboardImage(t *testing.T) {
 		t.Fatal("expected image attachment update to be synchronous")
 	}
 	m2 := next.(Model)
-	if m2.pendingImage == nil {
+	if len(m2.pendingImages) == 0 {
 		t.Fatal("expected clipboard image to be attached")
 	}
-	if m2.pendingImage.filename != "ggcode-image-deadbeef.png" {
-		t.Fatalf("unexpected clipboard attachment filename: %q", m2.pendingImage.filename)
+	if m2.pendingImages[0].filename != "ggcode-image-deadbeef.png" {
+		t.Fatalf("unexpected clipboard attachment filename: %q", m2.pendingImages[0].filename)
 	}
-	if got := m2.input.Value(); !strings.Contains(got, "ggcode-image-deadbeef.png") {
-		t.Fatalf("expected image placeholder in input, got %q", got)
+	// With the new attachment bar approach, the image filename is NOT injected into the textarea.
+	// It's displayed as a separate attachment bar above the input.
+	if got := m2.input.Value(); strings.Contains(got, "ggcode-image-deadbeef.png") {
+		t.Fatalf("expected image NOT in textarea (shown in attachment bar), got %q", got)
 	}
 	if strings.Contains(renderedOutput(&m2), "ggcode-image-deadbeef.png") {
 		t.Fatal("expected no attachment notice in output")
@@ -1844,20 +1846,20 @@ func TestProviderEditRenderShowsPasteHint(t *testing.T) {
 	}
 }
 
-func TestSubmitTextStripsImagePlaceholderButKeepsImageDisplay(t *testing.T) {
+func TestSubmitTextWithAttachedImages(t *testing.T) {
 	m := newTestModel()
-	m.pendingImage = &imageAttachedMsg{
+	m.pendingImages = []imageAttachedMsg{{
 		placeholder: "[Image: ggcode-image-deadbeef.png, 10x10, 4B]",
 		img:         image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10},
 		filename:    "ggcode-image-deadbeef.png",
-	}
+	}}
 
-	cmd := m.submitText("[Image: ggcode-image-deadbeef.png, 10x10, 4B] 帮我看看", true)
+	cmd := m.submitText("帮我看看", true)
 	if cmd == nil {
 		t.Fatal("expected submitText to return a command")
 	}
 	if len(m.history) != 1 || m.history[0] != "帮我看看" {
-		t.Fatalf("expected history to contain text without placeholder, got %#v", m.history)
+		t.Fatalf("expected history to contain text, got %#v", m.history)
 	}
 	if !strings.Contains(renderedOutput(&m), "[Image: ggcode-image-deadbeef.png, 10x10, 4B] 帮我看看") {
 		t.Fatal("expected conversation output to show image placeholder with text")

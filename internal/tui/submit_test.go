@@ -11,13 +11,13 @@ import (
 )
 
 func TestBuildAgentSubmissionContentUsesLocalImagePathHint(t *testing.T) {
-	img := &imageAttachedMsg{
+	imgs := []imageAttachedMsg{{
 		img:        image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10},
 		filename:   "ggcode-image-deadbeef.png",
 		sourcePath: "/tmp/ggcode-image-deadbeef.png",
-	}
+	}}
 
-	content := buildAgentSubmissionContent("帮我看看", img, false)
+	content := buildAgentSubmissionContent("帮我看看", imgs, false)
 	if len(content) != 1 {
 		t.Fatalf("expected text-only fallback content, got %d blocks", len(content))
 	}
@@ -27,13 +27,13 @@ func TestBuildAgentSubmissionContentUsesLocalImagePathHint(t *testing.T) {
 }
 
 func TestBuildAgentSubmissionContentAddsImageBlockWhenEnabled(t *testing.T) {
-	img := &imageAttachedMsg{
+	imgs := []imageAttachedMsg{{
 		img:        image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10},
 		filename:   "ggcode-image-deadbeef.png",
 		sourcePath: "/tmp/ggcode-image-deadbeef.png",
-	}
+	}}
 
-	content := buildAgentSubmissionContent("帮我看看", img, true)
+	content := buildAgentSubmissionContent("帮我看看", imgs, true)
 	if len(content) != 2 {
 		t.Fatalf("expected text + image content, got %d blocks", len(content))
 	}
@@ -42,6 +42,22 @@ func TestBuildAgentSubmissionContentAddsImageBlockWhenEnabled(t *testing.T) {
 	}
 	if !strings.Contains(content[0].Text, "Prefer native vision understanding first") {
 		t.Fatalf("expected prompt to prefer native vision, got %q", content[0].Text)
+	}
+}
+
+func TestBuildAgentSubmissionContentMultipleImages(t *testing.T) {
+	imgs := []imageAttachedMsg{
+		{img: image.Image{Data: []byte{0x89}, MIME: image.MIMEPNG, Width: 10, Height: 10}, filename: "a.png", sourcePath: "/tmp/a.png"},
+		{img: image.Image{Data: []byte{0x89}, MIME: image.MIMEPNG, Width: 20, Height: 20}, filename: "b.png", sourcePath: "/tmp/b.png"},
+	}
+
+	content := buildAgentSubmissionContent("compare these", imgs, true)
+	// Should be: 1 text block + 2 image blocks
+	if len(content) != 3 {
+		t.Fatalf("expected 3 blocks (text + 2 images), got %d", len(content))
+	}
+	if content[1].Type != "image" || content[2].Type != "image" {
+		t.Fatalf("expected blocks 2,3 to be image type, got %q %q", content[1].Type, content[2].Type)
 	}
 }
 

@@ -73,9 +73,9 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	m.ensureProviderSync()
 	m.rebuildSystemPrompt()
 
-	// Capture and clear pending image
-	img := m.pendingImage
-	m.pendingImage = nil
+	// Capture and clear pending images
+	imgs := m.pendingImages
+	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	m.activeAgentRunID++
@@ -93,9 +93,6 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					m.metricCollectorFlush()
 				}
 				if m.agent != nil {
-					// Start background pre-compact only after the round-complete
-					// signal is queued so its own metrics don't contaminate the
-					// just-finished turn digest.
 					defer m.agent.StartPreCompact()
 				}
 				if m.program != nil {
@@ -105,7 +102,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 			}()
 
 			m.pushInitialTunnelRunState()
-			if err := m.runAgentSubmission(ctx, runID, text, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
+			if err := m.runAgentSubmission(ctx, runID, text, imgs); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
 		})
@@ -123,8 +120,8 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 		m.lanChatHub.SetAgentBusy(true)
 	}
 	m.rebuildSystemPrompt()
-	img := m.pendingImage
-	m.pendingImage = nil
+	imgs := m.pendingImages
+	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	m.activeAgentRunID++
@@ -160,7 +157,7 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 				return
 			}
 
-			if err := m.runAgentSubmission(ctx, runID, expandedMsg, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
+			if err := m.runAgentSubmission(ctx, runID, expandedMsg, imgs); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
 		})
@@ -175,9 +172,9 @@ func (m *Model) pushInitialTunnelRunState() {
 	m.pushTunnelCurrentActivity()
 }
 
-func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, img *imageAttachedMsg) error {
-	content := buildAgentSubmissionContent(text, img, false)
-	if img == nil {
+func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, imgs []imageAttachedMsg) error {
+	content := buildAgentSubmissionContent(text, imgs, false)
+	if len(imgs) == 0 {
 		_, err := m.runAgentWithContent(ctx, runID, content)
 		return err
 	}
@@ -187,7 +184,7 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 		return err
 	}
 
-	streamErrSent, err := m.runAgentWithContent(ctx, runID, buildAgentSubmissionContent(text, img, true))
+	streamErrSent, err := m.runAgentWithContent(ctx, runID, buildAgentSubmissionContent(text, imgs, true))
 	if err == nil || errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -492,29 +489,38 @@ func buildBatchedStreamMessages(runID int, text, reasoning string, status []agen
 
 type agentIMRoundState = im.SummaryRoundState
 
-func buildAgentSubmissionContent(text string, img *imageAttachedMsg, includeImage bool) []provider.ContentBlock {
+func buildAgentSubmissionContent(text string, imgs []imageAttachedMsg, includeImage bool) []provider.ContentBlock {
 	prompt := strings.TrimSpace(text)
-	if img == nil {
+	if len(imgs) == 0 {
 		return []provider.ContentBlock{provider.TextBlock(prompt)}
 	}
 
-	imagePath := strings.TrimSpace(img.sourcePath)
-	if imagePath == "" {
-		imagePath = strings.TrimSpace(img.filename)
+	// Build path hints for all attached images
+	var pathHints []string
+	for _, img := range imgs {
+		imagePath := strings.TrimSpace(img.sourcePath)
+		if imagePath == "" {
+			imagePath = strings.TrimSpace(img.filename)
+		}
+		if imagePath != "" {
+			pathHints = append(pathHints, imagePath)
+		}
 	}
-	if imagePath != "" {
-		pathHint := "\n\n[Attached image path: " + imagePath + "]"
+	if len(pathHints) > 0 {
+		pathHint := "\n\n[Attached image path(s): " + strings.Join(pathHints, ", ") + "]"
 		if includeImage {
-			pathHint += "\nAn image is attached directly to this message. Prefer native vision understanding first. Only use external image-analysis tools if direct image understanding is unavailable or clearly insufficient."
+			pathHint += "\nImage(s) are attached directly to this message. Prefer native vision understanding first. Only use external image-analysis tools if direct image understanding is unavailable or clearly insufficient."
 		} else {
-			pathHint += "\nIf direct multimodal image input is unavailable, inspect this local image path with available tools."
+			pathHint += "\nIf direct multimodal image input is unavailable, inspect these local image paths with available tools."
 		}
 		prompt = strings.TrimSpace(prompt + pathHint)
 	}
 
 	content := []provider.ContentBlock{provider.TextBlock(prompt)}
 	if includeImage {
-		content = append(content, provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)))
+		for _, img := range imgs {
+			content = append(content, provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)))
+		}
 	}
 	return content
 }
