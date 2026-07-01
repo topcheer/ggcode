@@ -5,8 +5,13 @@ import (
 )
 
 func TestTrackerRecord(t *testing.T) {
-	pricing := DefaultPricingTable()
-	tr := NewTracker("anthropic", "claude-sonnet-4-20250514", pricing)
+	// Use custom pricing since DefaultPricingTable no longer has hardcoded prices
+	pricing := PricingTable{
+		"anthropic": {
+			"claude-sonnet-4": {Type: PricingPerToken, InputPerM: 3.0, OutputPerM: 15.0},
+		},
+	}
+	tr := NewTracker("anthropic", "claude-sonnet-4", pricing)
 
 	tr.Record(TokenUsage{InputTokens: 1000, OutputTokens: 500})
 	sc := tr.SessionCost()
@@ -29,8 +34,12 @@ func TestTrackerRecord(t *testing.T) {
 }
 
 func TestTrackerMultipleRecords(t *testing.T) {
-	pricing := DefaultPricingTable()
-	tr := NewTracker("anthropic", "claude-sonnet-4-20250514", pricing)
+	pricing := PricingTable{
+		"anthropic": {
+			"claude-sonnet-4": {Type: PricingPerToken, InputPerM: 3.0, OutputPerM: 15.0},
+		},
+	}
+	tr := NewTracker("anthropic", "claude-sonnet-4", pricing)
 
 	tr.Record(TokenUsage{InputTokens: 1000, OutputTokens: 500})
 	tr.Record(TokenUsage{InputTokens: 2000, OutputTokens: 1000})
@@ -56,11 +65,35 @@ func TestTrackerUnknownModel(t *testing.T) {
 	}
 }
 
+func TestTrackerSubscriptionModel(t *testing.T) {
+	// Subscription models should have zero cost even with token usage
+	pricing := PricingTable{
+		"github-copilot": {
+			"gpt-4o": {Type: PricingSubscription, Plan: "GitHub Copilot"},
+		},
+	}
+	tr := NewTracker("github-copilot", "gpt-4o", pricing)
+
+	tr.Record(TokenUsage{InputTokens: 10000, OutputTokens: 5000})
+	sc := tr.SessionCost()
+
+	if sc.TotalCostUSD != 0 {
+		t.Errorf("expected zero cost for subscription model, got %f", sc.TotalCostUSD)
+	}
+}
+
 func TestManagerAllCosts(t *testing.T) {
-	pricing := DefaultPricingTable()
+	pricing := PricingTable{
+		"anthropic": {
+			"claude-sonnet-4": {Type: PricingPerToken, InputPerM: 3.0, OutputPerM: 15.0},
+		},
+		"openai": {
+			"gpt-4o": {Type: PricingPerToken, InputPerM: 2.5, OutputPerM: 10.0},
+		},
+	}
 	mgr := NewManager(pricing, "")
 
-	mgr.GetOrCreateTracker("s1", "anthropic", "claude-sonnet-4-20250514").
+	mgr.GetOrCreateTracker("s1", "anthropic", "claude-sonnet-4").
 		Record(TokenUsage{InputTokens: 1000, OutputTokens: 500})
 	mgr.GetOrCreateTracker("s2", "openai", "gpt-4o").
 		Record(TokenUsage{InputTokens: 2000, OutputTokens: 1000})
@@ -76,15 +109,20 @@ func TestManagerAllCosts(t *testing.T) {
 }
 
 func TestManagerTotalCost(t *testing.T) {
-	pricing := DefaultPricingTable()
+	pricing := PricingTable{
+		"anthropic": {
+			"claude-sonnet-4": {Type: PricingPerToken, InputPerM: 3.0, OutputPerM: 15.0},
+		},
+	}
 	mgr := NewManager(pricing, "")
 
-	mgr.GetOrCreateTracker("s1", "anthropic", "claude-sonnet-4-20250514").
+	mgr.GetOrCreateTracker("s1", "anthropic", "claude-sonnet-4").
 		Record(TokenUsage{InputTokens: 1000000, OutputTokens: 0})
-	mgr.GetOrCreateTracker("s2", "anthropic", "claude-sonnet-4-20250514").
+	mgr.GetOrCreateTracker("s2", "anthropic", "claude-sonnet-4").
 		Record(TokenUsage{InputTokens: 1000000, OutputTokens: 0})
 
 	total := mgr.TotalCost()
+	// 2 * (1M * 3.0/1M) = $6.0
 	if total < 5.99 || total > 6.01 {
 		t.Errorf("total cost = %f, want ~6.0", total)
 	}
@@ -94,7 +132,7 @@ func TestPricingMerge(t *testing.T) {
 	base := DefaultPricingTable()
 	override := PricingTable{
 		"anthropic": {
-			"claude-sonnet-4-20250514": {InputPerM: 1.0, OutputPerM: 5.0},
+			"claude-sonnet-4-20250514": {Type: PricingPerToken, InputPerM: 1.0, OutputPerM: 5.0},
 		},
 	}
 	merged := base.Merge(override)
@@ -106,10 +144,10 @@ func TestPricingMerge(t *testing.T) {
 	if rate.InputPerM != 1.0 {
 		t.Errorf("input price = %f, want 1.0", rate.InputPerM)
 	}
-	// Original claude-opus should still be there
-	_, ok = merged.Get("anthropic", "claude-opus-4-20250514")
+	// Copilot entries should still be there after merge
+	rate, ok = merged.Get("github-copilot", "gpt-4o")
 	if !ok {
-		t.Error("expected claude-opus to still exist after merge")
+		t.Error("expected github-copilot/gpt-4o to still exist after merge")
 	}
 }
 

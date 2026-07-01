@@ -345,12 +345,11 @@ func (m *Model) handleCostCommand() tea.Cmd {
 	sb.WriteString(fmt.Sprintf("  Total tokens:       %s\n\n", humanizeTokenCount(usage.Total())))
 
 	// Estimate cost using pricing table
-	pricing := cost.DefaultPricingTable()
-	rate, found := pricing.Get(vendor, model)
+	endpoint := m.session.Endpoint
+	rate := resolveRate(vendor, endpoint, model)
 
-	if found {
+	if rate.IsKnown() {
 		if !rate.IsMetered() {
-			// Subscription / bundled / free — no per-token cost
 			planLabel := rate.Plan
 			if planLabel == "" {
 				planLabel = string(rate.Type)
@@ -366,9 +365,43 @@ func (m *Model) handleCostCommand() tea.Cmd {
 			sb.WriteString(fmt.Sprintf("  (rate: $%.2f/M in, $%.2f/M out)\n", rate.InputPerM, rate.OutputPerM))
 		}
 	} else {
-		sb.WriteString("  Estimated cost:     (no pricing data for this model)\n")
+		sb.WriteString("  Estimated cost:     (no pricing data available)\n")
+		sb.WriteString("  (configure custom rates via pricing table Merge())\n")
 	}
 
 	m.chatWriteSystem(nextSystemID(), sb.String())
 	return nil
+}
+
+// resolveRate determines the billing type for a session by checking:
+// 1. Explicit pricing table entry (vendor + model)
+// 2. Coding plan endpoint pattern (e.g., "cn-coding-openai")
+// 3. Subscription vendor (all endpoints are subscription)
+// 4. Falls back to PricingUnknown
+func resolveRate(vendor, endpoint, model string) cost.ModelRate {
+	pt := cost.DefaultPricingTable()
+
+	// 1. Check explicit pricing table first (covers github-copilot, glm-4.5-air free)
+	if rate, ok := pt.Get(vendor, model); ok {
+		return rate
+	}
+
+	// 2. Coding plan endpoint → subscription
+	if cost.IsCodingPlanEndpoint(endpoint) {
+		return cost.ModelRate{
+			Type: cost.PricingSubscription,
+			Plan: "Coding Plan",
+		}
+	}
+
+	// 3. Entirely subscription vendor (kimi, ark, aliyun, minimax, xiaomi-mimo)
+	if plan := cost.IsSubscriptionVendor(vendor); plan != "" {
+		return cost.ModelRate{
+			Type: cost.PricingSubscription,
+			Plan: plan,
+		}
+	}
+
+	// 4. Unknown — no hardcoded per-token prices
+	return cost.ModelRate{}
 }

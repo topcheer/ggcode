@@ -6,44 +6,52 @@ import "strings"
 type PricingType string
 
 const (
-	// PricingPerToken: standard per-million-token billing (default).
+	// PricingUnknown: no pricing data available. Display "(no pricing data)".
+	// This is the default — we do NOT hardcode per-token prices because
+	// model pricing changes frequently and stale data is worse than no data.
+	PricingUnknown PricingType = ""
+	// PricingPerToken: standard per-million-token billing.
+	// Only set when the user has explicitly configured pricing via Merge().
 	PricingPerToken PricingType = "per_token"
-	// PricingSubscription: flat-rate subscription, no per-token cost.
-	// Display "included in plan" instead of dollar amount.
+	// PricingSubscription: flat-rate subscription with monthly quota.
+	// Display "included in <Plan>" instead of dollar amount.
 	PricingSubscription PricingType = "subscription"
 	// PricingBundled: included in a bundle (e.g., Google One AI Premium).
-	// Same as subscription but with different display wording.
 	PricingBundled PricingType = "bundled"
 	// PricingFree: free tier, no cost.
 	PricingFree PricingType = "free"
 )
 
-// ModelRate holds per-million-token pricing for a single model.
+// ModelRate holds pricing info for a single model.
 // For subscription/bundled/free models, the per-token fields are zero
 // and PricingType indicates the billing model.
 type ModelRate struct {
-	InputPerM      float64     `json:"input_per_m"`
-	OutputPerM     float64     `json:"output_per_m"`
-	CacheReadPerM  float64     `json:"cache_read_per_m"`
-	CacheWritePerM float64     `json:"cache_write_per_m"`
+	InputPerM      float64     `json:"input_per_m,omitempty"`
+	OutputPerM     float64     `json:"output_per_m,omitempty"`
+	CacheReadPerM  float64     `json:"cache_read_per_m,omitempty"`
+	CacheWritePerM float64     `json:"cache_write_per_m,omitempty"`
 	Type           PricingType `json:"type,omitempty"`
-	Plan           string      `json:"plan,omitempty"` // e.g., "GitHub Copilot", "Claude Max"
+	Plan           string      `json:"plan,omitempty"` // e.g., "GitHub Copilot", "GLM Coding Plan"
 }
 
 // IsMetered returns true if the model is billed per-token.
 func (r ModelRate) IsMetered() bool {
-	return r.Type == "" || r.Type == PricingPerToken
+	return r.Type == PricingPerToken
 }
 
-// PricingTable maps provider+model to pricing rates.
+// IsKnown returns true if any pricing information is available.
+func (r ModelRate) IsKnown() bool {
+	return r.Type != PricingUnknown || r.InputPerM > 0 || r.OutputPerM > 0
+}
+
+// PricingTable maps provider+model to pricing info.
 type PricingTable map[string]map[string]ModelRate // provider → model → rate
 
 // Get returns the rate for a provider+model, or false if not found.
-// Tries exact match first, then prefix/wildcard match for versioned models.
+// Uses fuzzy matching for versioned model names.
 func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 	models, ok := t[provider]
 	if !ok {
-		// Try lowercase provider
 		models, ok = t[strings.ToLower(provider)]
 		if !ok {
 			return ModelRate{}, false
@@ -64,8 +72,7 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 		}
 	}
 
-	// Prefix match (handles versioned model names like "gpt-4o-2024-08-06")
-	// Pick the longest matching prefix for specificity (gpt-4o wins over gpt-4).
+	// Prefix match (longest wins for specificity)
 	bestKey := ""
 	var bestRate ModelRate
 	for k, v := range models {
@@ -81,8 +88,7 @@ func (t PricingTable) Get(provider, model string) (ModelRate, bool) {
 		return bestRate, true
 	}
 
-	// Suffix match (handles "anthropic/claude-sonnet-4" matching "claude-sonnet-4")
-	// Pick the longest matching suffix for specificity.
+	// Suffix match (longest wins)
 	bestKey = ""
 	for k, v := range models {
 		lk := strings.ToLower(k)
@@ -120,99 +126,53 @@ func (t PricingTable) Merge(other PricingTable) PricingTable {
 	return result
 }
 
-// DefaultPricingTable returns built-in pricing for known models.
-// Prices are per million tokens in USD, sourced from provider pricing pages.
+// IsCodingPlanEndpoint returns true if the endpoint name indicates a coding plan.
+// Coding plan endpoints use subscription billing (monthly quota), not per-token.
+// Examples: "cn-coding-openai", "global-coding-anthropic", "kimi-coding", "ark-coding"
+func IsCodingPlanEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return false
+	}
+	lower := strings.ToLower(endpoint)
+	return strings.Contains(lower, "coding") ||
+		strings.Contains(lower, "token-plan") ||
+		strings.Contains(lower, "token_plan")
+}
+
+// subscriptionVendors is the set of vendors whose built-in config is
+// entirely subscription-based (all endpoints are coding/token plans).
+var subscriptionVendors = map[string]string{
+	// vendor key → plan display name
+	// Verified via online research, see sources below.
+	"aliyun":         "Aliyun Bailian Coding Plan", // https://www.aliyun.com/benefit/scene/codingplan
+	"kimi":           "Kimi Coding Plan",           // https://www.kimi.com/zh-cn/help/membership/membership-pricing
+	"ark":            "Volcengine Ark Coding Plan", // https://www.volcengine.com/activity/codingplan
+	"minimax":        "MiniMax Token Plan",         // https://platform.minimaxi.com/docs/guides/pricing-token-plan
+	"xiaomi-mimo":    "Xiaomi MiMo Token Plan",     // https://mimo.mi.com/docs/zh-CN/tokenplan/subscription
+	"github-copilot": "GitHub Copilot",             // https://github.com/features/copilot/plans
+}
+
+// DefaultPricingTable returns built-in billing-type info for known providers.
+//
+// IMPORTANT: We deliberately do NOT hardcode per-token prices. Model pricing
+// changes frequently and stale data is misleading. This table only contains
+// billing TYPE information (subscription vs per-token vs free) that is
+// verifiable from each provider's official pricing page.
+//
+// For per-token pricing, users can configure custom rates via Merge().
 func DefaultPricingTable() PricingTable {
 	return PricingTable{
-		"anthropic": {
-			// Claude 4 family
-			"claude-sonnet-4-20250514": {InputPerM: 3.0, OutputPerM: 15.0, CacheReadPerM: 0.30, CacheWritePerM: 3.75},
-			"claude-opus-4-20250514":   {InputPerM: 15.0, OutputPerM: 75.0, CacheReadPerM: 1.50, CacheWritePerM: 18.75},
-			"claude-sonnet-4":          {InputPerM: 3.0, OutputPerM: 15.0, CacheReadPerM: 0.30, CacheWritePerM: 3.75},
-			"claude-opus-4":            {InputPerM: 15.0, OutputPerM: 75.0, CacheReadPerM: 1.50, CacheWritePerM: 18.75},
-			// Claude 3.5 family
-			"claude-haiku-3-5-20241022": {InputPerM: 0.80, OutputPerM: 4.0, CacheReadPerM: 0.08, CacheWritePerM: 1.0},
-			"claude-3-5-sonnet":         {InputPerM: 3.0, OutputPerM: 15.0, CacheReadPerM: 0.30, CacheWritePerM: 3.75},
-			"claude-3-5-haiku":          {InputPerM: 0.80, OutputPerM: 4.0, CacheReadPerM: 0.08, CacheWritePerM: 1.0},
-			// Claude 3 family
-			"claude-3-opus": {InputPerM: 15.0, OutputPerM: 75.0, CacheReadPerM: 1.50, CacheWritePerM: 18.75},
-		},
-		"openai": {
-			"gpt-4o":      {InputPerM: 2.50, OutputPerM: 10.0, CacheReadPerM: 1.25, CacheWritePerM: 0.0},
-			"gpt-4o-mini": {InputPerM: 0.15, OutputPerM: 0.60, CacheReadPerM: 0.075, CacheWritePerM: 0.30},
-			"gpt-4-turbo": {InputPerM: 10.0, OutputPerM: 30.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gpt-4":       {InputPerM: 30.0, OutputPerM: 60.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gpt-3.5":     {InputPerM: 0.50, OutputPerM: 1.50, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"o1":          {InputPerM: 15.0, OutputPerM: 60.0, CacheReadPerM: 7.50, CacheWritePerM: 0.0},
-			"o3":          {InputPerM: 2.0, OutputPerM: 8.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"o3-mini":     {InputPerM: 1.10, OutputPerM: 4.40, CacheReadPerM: 0.55, CacheWritePerM: 0.0},
-			"o4-mini":     {InputPerM: 1.10, OutputPerM: 4.40, CacheReadPerM: 0.55, CacheWritePerM: 0.0},
-		},
-		"gemini": {
-			"gemini-2.5-pro":   {InputPerM: 1.25, OutputPerM: 10.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gemini-2.5-flash": {InputPerM: 0.15, OutputPerM: 0.60, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gemini-2.0-flash": {InputPerM: 0.10, OutputPerM: 0.40, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gemini-1.5-pro":   {InputPerM: 1.25, OutputPerM: 5.0, CacheReadPerM: 0.3125, CacheWritePerM: 0.0},
-			"gemini-1.5-flash": {InputPerM: 0.075, OutputPerM: 0.30, CacheReadPerM: 0.01875, CacheWritePerM: 0.0},
-		},
-		"deepseek": {
-			"deepseek-chat":     {InputPerM: 0.27, OutputPerM: 1.10, CacheReadPerM: 0.07, CacheWritePerM: 0.27},
-			"deepseek-reasoner": {InputPerM: 0.55, OutputPerM: 2.19, CacheReadPerM: 0.14, CacheWritePerM: 0.55},
-			"deepseek-coder":    {InputPerM: 0.14, OutputPerM: 0.28, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"moonshot": {
-			"moonshot-v1-8k":   {InputPerM: 1.60, OutputPerM: 3.20, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"moonshot-v1-32k":  {InputPerM: 3.30, OutputPerM: 6.60, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"moonshot-v1-128k": {InputPerM: 8.60, OutputPerM: 17.20, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"kimi": {
-			"kimi-for-coding": {InputPerM: 1.60, OutputPerM: 3.20, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"groq": {
-			"llama-3.1-8b-instant":    {InputPerM: 0.05, OutputPerM: 0.08, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"llama-3.3-70b-versatile": {InputPerM: 0.59, OutputPerM: 0.79, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"mixtral-8x7b":            {InputPerM: 0.24, OutputPerM: 0.24, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"gemma2-9b-it":            {InputPerM: 0.20, OutputPerM: 0.20, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"mistral": {
-			"mistral-small-latest": {InputPerM: 0.20, OutputPerM: 0.60, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"mistral-large-latest": {InputPerM: 2.00, OutputPerM: 6.00, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"codestral-latest":     {InputPerM: 0.30, OutputPerM: 0.90, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"zhipu": {
-			"glm-4-plus":  {InputPerM: 0.70, OutputPerM: 0.70, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4":       {InputPerM: 0.50, OutputPerM: 0.50, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4-flash": {InputPerM: 0.10, OutputPerM: 0.10, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4-air":   {InputPerM: 0.001, OutputPerM: 0.001, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4-turbo": {InputPerM: 0.70, OutputPerM: 0.70, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-5-turbo": {InputPerM: 1.40, OutputPerM: 1.40, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"zai": {
-			"glm-5-turbo": {InputPerM: 1.40, OutputPerM: 1.40, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4-plus":  {InputPerM: 0.70, OutputPerM: 0.70, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"glm-4":       {InputPerM: 0.50, OutputPerM: 0.50, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"minimax": {
-			"abab6.5s-chat": {InputPerM: 0.43, OutputPerM: 0.43, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"abab6.5-chat":  {InputPerM: 2.90, OutputPerM: 8.60, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"ark": {
-			"doubao-pro-32k":  {InputPerM: 0.11, OutputPerM: 0.28, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"doubao-pro-128k": {InputPerM: 0.43, OutputPerM: 1.15, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"doubao-lite-32k": {InputPerM: 0.003, OutputPerM: 0.006, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"together": {
-			"llama-3.3-70b": {InputPerM: 0.88, OutputPerM: 0.88, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"qwen2.5-72b":   {InputPerM: 0.88, OutputPerM: 0.88, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"deepseek-v3":   {InputPerM: 1.25, OutputPerM: 1.25, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		"perplexity": {
-			"sonar-pro": {InputPerM: 3.0, OutputPerM: 15.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-			"sonar":     {InputPerM: 1.0, OutputPerM: 1.0, CacheReadPerM: 0.0, CacheWritePerM: 0.0},
-		},
-		// GitHub Copilot — flat-rate subscription, no per-token cost.
-		// Copilot Pro = $10/mo, Copilot Business = $19/user/mo.
-		// All models listed in copilot vendor defaults are included.
+		// Z.ai: both coding plan (subscription) and standard API (per-token).
+		// The coding plan endpoints (cn-coding-*, global-coding-*) are subscription.
+		// The standard API endpoints (cn-api-*, global-api-*) are per-token.
+		// We mark all zai models as unknown here — the actual billing type
+		// is determined by the endpoint in IsCodingPlanEndpoint().
+		// Source: https://z.ai/subscribe (Lite/Pro/Max plans from $18/mo)
+		"zai": {},
+
+		// GitHub Copilot: $10/mo (Pro), $19/user/mo (Business).
+		// All models included in subscription.
+		// Source: https://github.com/features/copilot/plans
 		"github-copilot": {
 			"claude-haiku-4.5":       {Type: PricingSubscription, Plan: "GitHub Copilot"},
 			"claude-opus-4.5":        {Type: PricingSubscription, Plan: "GitHub Copilot"},
@@ -233,5 +193,21 @@ func DefaultPricingTable() PricingTable {
 			"o3-mini":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
 			"o4-mini":                {Type: PricingSubscription, Plan: "GitHub Copilot"},
 		},
+
+		// GLM-4-Air: permanently free model on Zhipu/ZAI platform.
+		// Source: https://open.bigmodel.cn/pricing
+		"zhipu": {
+			"glm-4.5-air": {Type: PricingFree, Plan: "Zhipu Free Tier"},
+		},
 	}
+}
+
+// IsSubscriptionVendor returns the plan name if the vendor is entirely
+// subscription-based (all built-in endpoints are coding/token plans).
+// Returns empty string if the vendor is not a subscription vendor.
+func IsSubscriptionVendor(vendor string) string {
+	if plan, ok := subscriptionVendors[strings.ToLower(vendor)]; ok {
+		return plan
+	}
+	return ""
 }

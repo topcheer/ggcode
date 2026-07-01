@@ -12,7 +12,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -87,14 +86,15 @@ func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 	if m.session == nil {
 		return ""
 	}
-	pt := cost.DefaultPricingTable()
-	rate, ok := pt.Get(m.session.Vendor, m.session.Model)
-	if !ok || !rate.IsMetered() {
-		// For subscription models, show plan name instead of dollar amount
-		if ok && rate.Plan != "" {
+	rate := resolveRate(m.session.Vendor, m.session.Endpoint, m.session.Model)
+	if !rate.IsKnown() {
+		return ""
+	}
+	if !rate.IsMetered() {
+		if rate.Plan != "" {
 			return rate.Plan
 		}
-		return ""
+		return string(rate.Type)
 	}
 	totalCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
 		float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
