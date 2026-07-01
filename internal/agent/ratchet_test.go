@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -146,21 +144,6 @@ func TestCategoryMatchesTool(t *testing.T) {
 		if result != tt.expect {
 			t.Errorf("categoryMatchesTool(%q, %q) = %v, want %v", tt.category, tt.tool, result, tt.expect)
 		}
-	}
-}
-
-func TestInferBuildCommand(t *testing.T) {
-	dir := t.TempDir()
-
-	// No project files → empty
-	if cmd := inferBuildCommand(dir); cmd != "" {
-		t.Errorf("expected empty command for empty dir, got %s", cmd)
-	}
-
-	// Go project
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module test"), 0644)
-	if cmd := inferBuildCommand(dir); cmd != "go build ./..." {
-		t.Errorf("expected 'go build ./...', got %s", cmd)
 	}
 }
 

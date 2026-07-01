@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -135,7 +137,7 @@ func (rs *RuleStore) AddRule(r Rule) {
 	defer rs.mu.Unlock()
 	rs.load()
 
-	r.ID = fmt.Sprintf("r-%03d", len(rs.rules)+1)
+	r.ID = fmt.Sprintf("r-%s", shortUUID())
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
@@ -386,4 +388,59 @@ func truncStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// generalizeErrorsWithRetry wraps ProcessErrorsWithLLM with retry logic.
+// On final failure, logs a system-level debug message.
+// Returns whatever rules were successfully generalized.
+func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, verifyCmd string) []Rule {
+	const maxRetries = 2
+	rs := NewRuleStore(a.WorkingDir())
+	existingRules := []Rule{}
+	if rs != nil {
+		existingRules = rs.Rules()
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		output, err := a.ProcessErrorsWithLLM(errors, existingRules)
+		if err == nil && output != nil {
+			var rules []Rule
+			for _, result := range output.Results {
+				if result.Action == "new" && result.Rule != "" && result.MatchPattern != "" {
+					rules = append(rules, Rule{
+						Category:     result.Category,
+						Rule:         result.Rule,
+						MatchPattern: result.MatchPattern,
+						FixHint:      result.FixHint,
+					})
+				}
+			}
+			if len(rules) > 0 {
+				debug.Log("ratchet", "generalized %d rules from %d errors (attempt %d)", len(rules), len(errors), attempt+1)
+			}
+			return rules
+		}
+		lastErr = err
+		if attempt < maxRetries {
+			debug.Log("ratchet", "generalization attempt %d failed: %v, retrying...", attempt+1, err)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Duration(attempt+1) * 2 * time.Second):
+			}
+		}
+	}
+
+	// All retries exhausted
+	debug.Log("ratchet", "⚠️ generalization failed after %d attempts for %d errors (verify cmd: %s): %v",
+		maxRetries+1, len(errors), verifyCmd, lastErr)
+	return nil
+}
+
+// shortUUID returns a random 8-char hex string for rule IDs.
+func shortUUID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

@@ -68,6 +68,7 @@ type Agent struct {
 	autopilotGoalSet             bool               // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotGoalCheckedThisTurn bool               // prevents infinite goal-check loops within a single idle turn
 	reflectionFunc               ReflectionFunc     // called after each run with accumulated stats
+	loopDetector                 loopDetector       // tracks consecutive identical tool calls to detect stuck loops
 	systemPromptInjector         func() string      // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	mu                           sync.RWMutex
 }
@@ -504,6 +505,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	runStats := newRunStats(userPromptForStats)
 
+	// Reset loop detector for each new user turn.
+	a.resetLoopDetector()
+
 	defer func() {
 		runStats.finalize(err)
 		a.maybeReflect(runStats)
@@ -779,6 +783,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Track tool call for reflection stats
 			runStats.recordToolCall(tc.Name)
 			extractPathsFromToolCall(tc.Name, tc.Arguments, runStats)
+			// Check for consecutive duplicate tool calls (loop detection).
+			// If detected, inject a guidance message into the tool result.
+			var loopGuidance string
+			if guidance := a.loopDetectionInjection(tc); guidance != "" {
+				loopGuidance = guidance
+			}
 			// Check for project memory but defer injection
 			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
 				if deferredMemoryContent == "" {
@@ -811,8 +821,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
+				if loopGuidance != "" {
+					result.Content = result.Content + "\n\n" + loopGuidance
+				}
 				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
 			} else {
+				if loopGuidance != "" {
+					result.Content = result.Content + "\n\n" + loopGuidance
+				}
 				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
 			}
 
