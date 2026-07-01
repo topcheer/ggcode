@@ -288,6 +288,10 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 			}
 		}()
 		fn(s)
+		// Run ratchet: match errors against existing rules, generalize
+		// unmatched ones via LLM. This is the harness ratchet — every
+		// error becomes a rule that prevents future mistakes.
+		a.runRatchet(&s)
 	}()
 }
 

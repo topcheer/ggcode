@@ -592,6 +592,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	reactiveCompactRetries := 0
 	idleAutopilotContinuations := 0
 	consecutiveEmptyResponses := 0
+	verifyRetries := 0
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -733,6 +734,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 			idleAutopilotContinuations = 0
+			// Auto-verify: before returning, run build/test verification.
+			// If it fails, inject errors back and continue the loop.
+			// Only in non-plan modes, max 3 retries.
+			if verifyRetries < autoVerifyMaxRetries && runStats.Iterations > 1 {
+				if a.maybeAutoVerify(ctx, onEvent, textBuf) {
+					verifyRetries++
+					debug.Log("agent", "Iteration %d: auto-verify failed, continuing (retry %d/%d)", i+1, verifyRetries, autoVerifyMaxRetries)
+					continue
+				}
+			}
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
@@ -778,6 +789,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
+			// Inject matching harness rules into the result
+			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, util.Truncate(result.Content, 200), len(result.Images))
 
 			// Collect follow-up messages from tools (e.g., inline skills).

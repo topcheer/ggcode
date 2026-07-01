@@ -291,6 +291,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/lang":        "<en|zh-CN>",
 	"/memory":      "<subcommand>",
 	"/reflect":     "",
+	"/rules":       "",
 	"/image":       "<path>",
 	"/skills":      "<skill-name>",
 	"/init":        "[path]",

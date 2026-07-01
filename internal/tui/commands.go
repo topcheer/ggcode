@@ -445,6 +445,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleMemoryCommand(parts)
 		case "/reflect":
 			return m.handleReflectCommand()
+		case "/rules":
+			return m.handleRulesCommand()
 		case "/undo":
 			return m.handleUndoCommand()
 		case "/files":
