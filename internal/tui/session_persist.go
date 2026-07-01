@@ -15,10 +15,18 @@ import (
 // agent.Messages() (which is the COMPACTED version). That would permanently
 // destroy pre-compaction message records from the JSONL file.
 //
-// The agent's context manager compacts messages (replacing earlier turns
-// with a summary), but ses.Messages must retain ALL messages for correct
-// rendering on session reload. Compaction only affects the LLM context
-// (ses.ContextMessages / agent context manager), not what gets persisted.
+// APPROACH: The JSONL file is append-only. We never rewrite it. Each record
+// is an immutable event.
+//
+// After an agent run, we need to find the assistant/tool messages that were
+// added during this run and persist them. The user message was already
+// persisted by appendUserMessage().
+//
+// We use a fingerprint-matching approach: walk backwards from the end of both
+// ses.Messages and agent.Messages() to find the last overlapping message.
+// Everything in agent.Messages() after that overlap is new and should be
+// persisted. This works correctly even after compaction because the agent
+// appends new messages (assistant, tool_result) after the compacted region.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
 		return
@@ -28,35 +36,16 @@ func (m *Model) persistFullSessionMessages() {
 	ses := m.session
 	store := m.sessionStore
 
-	// Get the agent's current messages (includes any compaction summary).
 	agentMsgs := m.agent.Messages()
-	agentCount := len(agentMsgs)
+	sesMsgs := ses.Messages
 
-	// Determine which messages are new (not yet persisted to disk).
-	// persistedMsgCount tracks how many messages from the beginning of
-	// ses.Messages have been written to the JSONL file.
-	newStart := m.persistedMsgCount
-	if newStart < 0 {
-		newStart = 0
-	}
+	// Find new messages by fingerprint matching.
+	newMsgs := findNewMessages(sesMsgs, agentMsgs)
 
-	// Sync ses.Messages with agent messages if the agent has more.
-	// After compaction, agentMsgs may be SHORTER than ses.Messages —
-	// in that case we don't truncate ses.Messages, we just don't
-	// append anything new.
-	if agentCount > len(ses.Messages) {
-		// Agent has messages beyond what ses.Messages holds — append them.
-		for i := len(ses.Messages); i < agentCount; i++ {
-			ses.Messages = append(ses.Messages, agentMsgs[i])
-		}
-	}
+	// Append new messages to ses.Messages (for in-memory rendering).
+	ses.Messages = append(ses.Messages, newMsgs...)
 
-	// Collect new messages to persist.
-	var newMsgs []provider.Message
-	if newStart < len(ses.Messages) {
-		newMsgs = ses.Messages[newStart:]
-	}
-
+	// Update persistedMsgCount.
 	m.persistedMsgCount = len(ses.Messages)
 	m.sessionMutex().Unlock()
 
@@ -76,5 +65,81 @@ func (m *Model) persistFullSessionMessages() {
 		m.sessionMutex().Lock()
 		_ = agentruntime.SaveAgentSessionSnapshot(store, ses, m.agent)
 		m.sessionMutex().Unlock()
+	}
+}
+
+// findNewMessages returns messages from agentMsgs that are NOT in sesMsgs.
+//
+// Walk backwards from the end of both lists to find the overlap point.
+// Messages after the overlap in agentMsgs are new.
+//
+// Example (post-compaction):
+//
+//	sesMsgs:     [user1, asst1, tool1, asst2, user2]
+//	agentMsgs:   [summary, user1', user2, asst3, tool3]
+//	                            ^ overlap starts here (user2)
+//	newMsgs:     [asst3, tool3]
+//
+// The compacted summary and the replayed old messages (user1') are NOT
+// in sesMsgs, but they're synthetic/history — not new conversation events.
+// We skip them by only returning messages AFTER the last overlap point.
+func findNewMessages(sesMsgs, agentMsgs []provider.Message) []provider.Message {
+	if len(agentMsgs) == 0 {
+		return nil
+	}
+
+	sesLen := len(sesMsgs)
+	agentLen := len(agentMsgs)
+
+	// Walk backwards from the end of both lists to find overlap count.
+	overlap := 0
+	maxCompare := sesLen
+	if agentLen < maxCompare {
+		maxCompare = agentLen
+	}
+	for i := 0; i < maxCompare; i++ {
+		if !messagesEqual(sesMsgs[sesLen-1-i], agentMsgs[agentLen-1-i]) {
+			break
+		}
+		overlap++
+	}
+
+	// Everything in agentMsgs after the overlap is new.
+	newStart := agentLen - overlap
+	if newStart <= 0 {
+		return nil
+	}
+	return agentMsgs[newStart:]
+}
+
+// messagesEqual checks if two messages have the same content fingerprint.
+func messagesEqual(a, b provider.Message) bool {
+	if a.Role != b.Role {
+		return false
+	}
+	if len(a.Content) != len(b.Content) {
+		return false
+	}
+	for i := range a.Content {
+		if !contentBlocksEqual(a.Content[i], b.Content[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func contentBlocksEqual(a, b provider.ContentBlock) bool {
+	if a.Type != b.Type {
+		return false
+	}
+	switch a.Type {
+	case "text":
+		return a.Text == b.Text
+	case "tool_use":
+		return a.ToolID == b.ToolID && a.ToolName == b.ToolName
+	case "tool_result":
+		return a.ToolID == b.ToolID
+	default:
+		return a.Text == b.Text
 	}
 }
