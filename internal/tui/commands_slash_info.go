@@ -9,9 +9,11 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/version"
 )
 
@@ -468,4 +470,23 @@ func (m *Model) handleReviewCommand(parts []string) tea.Cmd {
 // reviewReadyMsg carries the expanded review text to be sent to the agent.
 type reviewReadyMsg struct {
 	text string
+}
+
+// handleCopyCommand copies the last assistant response to the system clipboard.
+// Usage: /copy  — copies the most recent agent reply (markdown source, not rendered).
+func (m *Model) handleCopyCommand() tea.Cmd {
+	return func() tea.Msg {
+		if m.chatList == nil {
+			return streamMsg("Chat not initialized.")
+		}
+		text := m.chatList.LastAssistantText()
+		if strings.TrimSpace(text) == "" {
+			return streamMsg("No assistant response to copy.")
+		}
+		if err := clipboard.WriteAll(text); err != nil {
+			return streamMsg(fmt.Sprintf("Clipboard error: %v", err))
+		}
+		preview := util.Truncate(strings.TrimSpace(text), 60)
+		return streamMsg(fmt.Sprintf("Copied %d chars to clipboard: %s", len(text), preview))
+	}
 }

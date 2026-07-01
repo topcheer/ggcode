@@ -477,6 +477,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleHooksCommand()
 		case "/cost":
 			return m.handleCostCommand()
+		case "/copy":
+			return m.handleCopyCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {

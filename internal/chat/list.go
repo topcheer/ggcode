@@ -106,6 +106,19 @@ func (l *List) Len() int {
 	return len(l.items)
 }
 
+// LastAssistantText returns the raw text of the most recent AssistantItem,
+// or empty string if none exists.
+func (l *List) LastAssistantText() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for i := len(l.items) - 1; i >= 0; i-- {
+		if a, ok := l.items[i].(*AssistantItem); ok {
+			return a.Text()
+		}
+	}
+	return ""
+}
+
 // Height returns the viewport height.
 func (l *List) Height() int {
 	l.mu.RLock()
