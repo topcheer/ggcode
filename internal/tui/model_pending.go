@@ -167,9 +167,12 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 		return ""
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
-	if !hidden {
-		m.appendUserMessage(text)
-	}
+	// Do NOT call appendUserMessage here. The agent's injectPendingInterruptions()
+	// adds the (wrapped) interrupt text to its contextManager, and
+	// persistFullSessionMessages() will sync+persist it. Calling appendUserMessage
+	// here would create a SECOND JSONL record for the same user input —
+	// causing duplicate user bubbles on session reload.
+	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered
 	// in the conversation when it was queued. No extra "[delivered]" hint needed.
 	return text
