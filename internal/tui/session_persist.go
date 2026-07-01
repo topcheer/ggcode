@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -15,18 +14,14 @@ import (
 // agent.Messages() (which is the COMPACTED version). That would permanently
 // destroy pre-compaction message records from the JSONL file.
 //
-// APPROACH: The JSONL file is append-only. We never rewrite it. Each record
-// is an immutable event.
+// APPROACH: The JSONL file is append-only. The agent tracks which messages
+// were added via contextManager.Add() during the current run. We get that
+// list, filter out user text messages (already persisted by
+// appendUserMessage), and append the rest (assistant responses, tool calls,
+// tool results) to ses.Messages and the JSONL file.
 //
-// After an agent run, we need to find the assistant/tool messages that were
-// added during this run and persist them. The user message was already
-// persisted by appendUserMessage().
-//
-// We use a fingerprint-matching approach: walk backwards from the end of both
-// ses.Messages and agent.Messages() to find the last overlapping message.
-// Everything in agent.Messages() after that overlap is new and should be
-// persisted. This works correctly even after compaction because the agent
-// appends new messages (assistant, tool_result) after the compacted region.
+// This is compaction-safe: ApplyCompactResult replaces m.messages directly
+// (bypassing Add), so it doesn't pollute the run-added list.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
 		return
@@ -36,16 +31,26 @@ func (m *Model) persistFullSessionMessages() {
 	ses := m.session
 	store := m.sessionStore
 
-	agentMsgs := m.agent.Messages()
-	sesMsgs := ses.Messages
+	// Get all messages the agent added during this run.
+	runAdded := m.agent.AddedSinceRunStart()
 
-	// Find new messages by fingerprint matching.
-	newMsgs := findNewMessages(sesMsgs, agentMsgs)
+	// Filter out user text messages — those were already persisted by
+	// appendUserMessage() before the agent run started. We keep:
+	//   - assistant messages (Role: "assistant")
+	//   - tool results (Role: "user" with tool_result content blocks)
+	// We skip:
+	//   - user text messages (Role: "user" with only text content blocks)
+	//     — already persisted by appendUserMessage
+	//   - system messages — internal, not conversation events
+	var newMsgs []provider.Message
+	for _, msg := range runAdded {
+		if shouldPersistMessage(msg) {
+			newMsgs = append(newMsgs, msg)
+		}
+	}
 
 	// Append new messages to ses.Messages (for in-memory rendering).
 	ses.Messages = append(ses.Messages, newMsgs...)
-
-	// Update persistedMsgCount.
 	m.persistedMsgCount = len(ses.Messages)
 	m.sessionMutex().Unlock()
 
@@ -60,86 +65,34 @@ func (m *Model) persistFullSessionMessages() {
 				debug.Log("tui", "persistFullSessionMessages: AppendMessageToDisk failed: %v", err)
 			}
 		}
-	} else {
-		// Non-JSONLStore fallback: full Save (unchanged behavior).
-		m.sessionMutex().Lock()
-		_ = agentruntime.SaveAgentSessionSnapshot(store, ses, m.agent)
-		m.sessionMutex().Unlock()
 	}
 }
 
-// findNewMessages returns messages from agentMsgs that are NOT in sesMsgs.
+// shouldPersistMessage decides whether a message added by the agent should
+// be persisted to the JSONL file.
 //
-// Walk backwards from the end of both lists to find the overlap point.
-// Messages after the overlap in agentMsgs are new.
+// We persist:
+//   - assistant messages (the LLM's responses with text and/or tool_use blocks)
+//   - user messages containing tool_result blocks (tool execution results)
 //
-// Example (post-compaction):
-//
-//	sesMsgs:     [user1, asst1, tool1, asst2, user2]
-//	agentMsgs:   [summary, user1', user2, asst3, tool3]
-//	                            ^ overlap starts here (user2)
-//	newMsgs:     [asst3, tool3]
-//
-// The compacted summary and the replayed old messages (user1') are NOT
-// in sesMsgs, but they're synthetic/history — not new conversation events.
-// We skip them by only returning messages AFTER the last overlap point.
-func findNewMessages(sesMsgs, agentMsgs []provider.Message) []provider.Message {
-	if len(agentMsgs) == 0 {
-		return nil
-	}
-
-	sesLen := len(sesMsgs)
-	agentLen := len(agentMsgs)
-
-	// Walk backwards from the end of both lists to find overlap count.
-	overlap := 0
-	maxCompare := sesLen
-	if agentLen < maxCompare {
-		maxCompare = agentLen
-	}
-	for i := 0; i < maxCompare; i++ {
-		if !messagesEqual(sesMsgs[sesLen-1-i], agentMsgs[agentLen-1-i]) {
-			break
+// We skip:
+//   - user messages with only text blocks (already persisted by appendUserMessage)
+//   - system messages (internal, not conversation events)
+//   - user messages with image-only content (already handled by appendUserMessage)
+func shouldPersistMessage(msg provider.Message) bool {
+	switch msg.Role {
+	case "assistant":
+		return true
+	case "user":
+		// Only persist user messages that contain tool_result blocks.
+		// Pure text user messages were already persisted by appendUserMessage.
+		for _, block := range msg.Content {
+			if block.Type == "tool_result" {
+				return true
+			}
 		}
-		overlap++
-	}
-
-	// Everything in agentMsgs after the overlap is new.
-	newStart := agentLen - overlap
-	if newStart <= 0 {
-		return nil
-	}
-	return agentMsgs[newStart:]
-}
-
-// messagesEqual checks if two messages have the same content fingerprint.
-func messagesEqual(a, b provider.Message) bool {
-	if a.Role != b.Role {
 		return false
-	}
-	if len(a.Content) != len(b.Content) {
-		return false
-	}
-	for i := range a.Content {
-		if !contentBlocksEqual(a.Content[i], b.Content[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func contentBlocksEqual(a, b provider.ContentBlock) bool {
-	if a.Type != b.Type {
-		return false
-	}
-	switch a.Type {
-	case "text":
-		return a.Text == b.Text
-	case "tool_use":
-		return a.ToolID == b.ToolID && a.ToolName == b.ToolName
-	case "tool_result":
-		return a.ToolID == b.ToolID
 	default:
-		return a.Text == b.Text
+		return false
 	}
 }

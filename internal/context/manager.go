@@ -112,7 +112,8 @@ func AutoCompactThresholdTokens(contextWindow int) int {
 type Manager struct {
 	mu                sync.Mutex
 	messages          []provider.Message
-	version           int64 // incremented on every mutation, enables cheap change detection
+	version           int64              // incremented on every mutation, enables cheap change detection
+	runAdded          []provider.Message // messages added via Add() since last StartRunTracking()
 	tokens            int
 	contextWindow     int
 	outputReserve     int
@@ -157,6 +158,7 @@ func (m *Manager) Add(msg provider.Message) {
 	defer m.mu.Unlock()
 	msgTokens := m.countTokens(msg)
 	m.messages = append(m.messages, msg)
+	m.runAdded = append(m.runAdded, msg)
 	m.version++
 	m.tokens += msgTokens
 	if m.baselineAvailable {
@@ -445,6 +447,31 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	m.messages = append([]provider.Message{msg}, m.messages...)
 	m.version++
 	m.tokens += newTokens
+}
+
+// StartRunTracking clears the run-added message tracking. Call this at the
+// start of each agent RunStreamWithContent. After the run, AddedSinceRunStart()
+// returns all messages that were added via Add() during this run.
+//
+// Note: ApplyCompactResult replaces m.messages directly (bypassing Add),
+// so compaction does NOT pollute runAdded. Messages added before compaction
+// but during the same run are still tracked — this is correct because they
+// are real conversation events that need to be persisted.
+func (m *Manager) StartRunTracking() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runAdded = nil
+}
+
+// AddedSinceRunStart returns messages added via Add() since the last
+// StartRunTracking(). This includes user messages, assistant responses,
+// tool results, synthetic nudges, etc. — everything the agent added.
+func (m *Manager) AddedSinceRunStart() []provider.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]provider.Message, len(m.runAdded))
+	copy(out, m.runAdded)
+	return out
 }
 
 func (m *Manager) Messages() []provider.Message {

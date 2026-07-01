@@ -302,6 +302,16 @@ func (a *Agent) Messages() []provider.Message {
 	return a.contextManager.Messages()
 }
 
+// AddedSinceRunStart returns messages added by the agent via Add() during the
+// most recent RunStreamWithContent call. Used by session persistence to
+// determine which messages need to be appended to the JSONL file.
+func (a *Agent) AddedSinceRunStart() []provider.Message {
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		return cm.AddedSinceRunStart()
+	}
+	return nil
+}
+
 // ContextManager returns the context manager for external inspection.
 func (a *Agent) SetProvider(p provider.Provider) {
 	a.mu.Lock()
@@ -495,6 +505,13 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+
+	// Start tracking messages added during this run for session persistence.
+	// persistFullSessionMessages() will use this to know which messages
+	// were added by the agent and need to be appended to the JSONL file.
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		cm.StartRunTracking()
+	}
 
 	// Extract user prompt text for stats tracking
 	userPromptForStats := ""
