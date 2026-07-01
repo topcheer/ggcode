@@ -1351,8 +1351,11 @@ loop:
 			return fmt.Errorf("restart: resolve binary: %w", err)
 		}
 		bridge.Close()
-		ses.Messages = ag.Messages()
-		_ = store.Save(ses)
+		// ⚠️ Do NOT do ses.Messages = ag.Messages() + store.Save(ses).
+		// That would rewrite the JSONL with compacted messages and destroy
+		// pre-compaction history. appendAssistantMessages already appended
+		// new messages incrementally during the session. Just update meta.
+		_ = store.AppendMetaToDisk(ses)
 
 		// Release the session lock before exec — the new process will acquire it fresh.
 		// syscall.Exec preserves FDs with flocks, so without releasing here the
@@ -1395,8 +1398,11 @@ loop:
 
 	// Save session on exit
 	bridge.Close()
-	ses.Messages = ag.Messages()
-	_ = store.Save(ses)
+	// ⚠️ Do NOT do ses.Messages = ag.Messages() + store.Save(ses).
+	// That would rewrite the JSONL with compacted messages and destroy
+	// pre-compaction history. appendAssistantMessages already appended
+	// new messages incrementally during the session. Just update meta.
+	_ = store.AppendMetaToDisk(ses)
 
 	// Release session lock on exit
 	if sessionLock != nil {

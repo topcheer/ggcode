@@ -836,23 +836,31 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 	}
 }
 
-// appendAssistantMessages saves the current agent messages to the session.
+// appendAssistantMessages saves new agent messages to the session JSONL.
+// ⚠️ Only appends new messages via AppendMessage — NEVER overwrites
+// b.sess.Messages with agent.Messages() (compacted). Overwriting would
+// lose pre-compaction history. Instead, append only what's new beyond
+// what ses.Messages already holds.
 func (b *DaemonBridge) appendAssistantMessages() {
 	if b.store == nil || b.sess == nil || b.agent == nil {
 		return
 	}
 	messages := b.agent.Messages()
-	// Append only new messages since last save
-	start := len(b.sess.Messages)
-	if start > len(messages) {
-		start = 0
+	sessLen := len(b.sess.Messages)
+	// After compaction, agent may have FEWER messages than ses.Messages.
+	// In that case, the compacted messages are already covered by the
+	// checkpoint record on disk. Only append truly new messages.
+	if len(messages) <= sessLen {
+		// Agent compacted or no new messages — nothing to append.
+		return
 	}
-	for i := start; i < len(messages); i++ {
+	// Append only new messages beyond what ses.Messages already has.
+	for i := sessLen; i < len(messages); i++ {
 		if s, ok := b.store.(*session.JSONLStore); ok {
 			_ = s.AppendMessage(b.sess, messages[i])
 		}
+		b.sess.Messages = append(b.sess.Messages, messages[i])
 	}
-	b.sess.Messages = messages
 }
 
 func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
