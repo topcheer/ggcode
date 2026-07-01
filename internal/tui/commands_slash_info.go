@@ -561,6 +561,7 @@ func (m *Model) handleContextCommand() tea.Cmd {
 		}
 
 		var sb strings.Builder
+		sb.WriteString("```\n")
 		sb.WriteString("Context Window Usage\n\n")
 		sb.WriteString(fmt.Sprintf("  %s %.1f%%\n", bar, pct))
 		sb.WriteString(fmt.Sprintf("  %s / %s tokens\n\n", humanizeTokenCount(totalTokens), humanizeTokenCount(ctxWindow)))
@@ -582,8 +583,9 @@ func (m *Model) handleContextCommand() tea.Cmd {
 		if tokensUntilCompact > 0 {
 			sb.WriteString(fmt.Sprintf("  Until compact:   %s tokens\n", humanizeTokenCount(tokensUntilCompact)))
 		} else {
-			sb.WriteString("  ⚠ Compaction threshold exceeded — will compact on next turn\n")
+			sb.WriteString("  ! Compaction threshold exceeded - will compact on next turn\n")
 		}
+		sb.WriteString("```")
 
 		return streamMsg(sb.String())
 	}
