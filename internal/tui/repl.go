@@ -70,6 +70,7 @@ type REPL struct {
 	cfg                 *config.Config
 	agentBusy           atomic.Bool
 	preExecCleanup      func() // called before syscall.Exec restart/tmux-enter
+	cronScheduler       *cron.Scheduler
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -422,6 +423,7 @@ func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 
 // SetCronScheduler wires the cron scheduler and registers cron tools.
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
+	r.cronScheduler = s
 	s.SetEnqueue(func(prompt string, queueIfBusy bool) {
 		if r.program != nil {
 			r.program.Send(cronPromptMsg{Prompt: prompt, QueueIfBusy: queueIfBusy})
@@ -1154,6 +1156,12 @@ func (r *REPL) createSession() {
 				r.sessionLock = lock
 				debug.Log("repl", "createSession: acquired lock on new session %s", ses.ID)
 			}
+		}
+
+		// Bind cron scheduler to this session for persistence
+		if r.cronScheduler != nil {
+			sessionPath, legacyPath := agentruntime.CronStorePaths(ses.ID)
+			r.cronScheduler.SetSession(sessionPath, legacyPath, r.workingDir)
 		}
 
 		debug.Log("repl", "startup timing repl.createSession total=%s", time.Since(start).Round(time.Millisecond))

@@ -80,7 +80,7 @@ func TestSummarizeWorkspaceSessions(t *testing.T) {
 
 func TestRegisterCronTools(t *testing.T) {
 	registry := tool.NewRegistry()
-	scheduler := NewWorkspaceCronScheduler(t.TempDir(), nil)
+	scheduler := NewSessionCronScheduler("test-session", t.TempDir(), nil)
 	defer scheduler.Shutdown()
 	RegisterCronTools(registry, scheduler)
 

@@ -878,7 +878,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
 
-	cronScheduler := agentruntime.NewWorkspaceCronScheduler(ag.WorkingDir(), nil) // enqueue callback wired by SetCronScheduler
+	cronScheduler := agentruntime.NewSessionCronScheduler(resumeID, workingDir, nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)

@@ -112,21 +112,20 @@ func TestGetNonexistent(t *testing.T) {
 	}
 }
 
-// --- Persistence tests ---
+// --- Persistence tests (session-scoped) ---
 
 func withTestStore(t *testing.T) (storePath string, cleanup func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
-	storePath = filepath.Join(tmpDir, "cron-jobs.json")
+	storePath = filepath.Join(tmpDir, "cron-jobs", "session-1.json")
 	return storePath, func() {}
 }
 
 func TestCreatePersists(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsDir := t.TempDir()
 
 	s := NewScheduler(nil, storePath)
-	s.Load(wsDir)
+	s.Load()
 
 	_, err := s.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
@@ -139,66 +138,44 @@ func TestCreatePersists(t *testing.T) {
 		t.Fatalf("expected store file to exist: %v", err)
 	}
 
-	var sf storeFile
-	if err := json.Unmarshal(data, &sf); err != nil {
+	var ss sessionStore
+	if err := json.Unmarshal(data, &ss); err != nil {
 		t.Fatalf("failed to parse store file: %v", err)
 	}
 
-	key := workspaceKey(wsDir)
-	bucket, ok := sf[key]
-	if !ok {
-		t.Fatal("expected workspace key in store file")
+	if len(ss.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(ss.Jobs))
 	}
-	if bucket.Workspace != wsDir {
-		t.Errorf("expected workspace %s, got %s", wsDir, bucket.Workspace)
+	if ss.Jobs[0].CronExpr != "*/5 * * * *" {
+		t.Errorf("expected cron expr */5 * * * *, got %s", ss.Jobs[0].CronExpr)
 	}
-	if len(bucket.Jobs) != 1 {
-		t.Fatalf("expected 1 job, got %d", len(bucket.Jobs))
-	}
-	if bucket.Jobs[0].CronExpr != "*/5 * * * *" {
-		t.Errorf("expected cron expr */5 * * * *, got %s", bucket.Jobs[0].CronExpr)
-	}
-	if bucket.Jobs[0].Prompt != "check CI" {
-		t.Errorf("expected prompt 'check CI', got %s", bucket.Jobs[0].Prompt)
+	if ss.Jobs[0].Prompt != "check CI" {
+		t.Errorf("expected prompt 'check CI', got %s", ss.Jobs[0].Prompt)
 	}
 }
 
 func TestOneShotNotPersisted(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsDir := t.TempDir()
 
 	s := NewScheduler(nil, storePath)
-	s.Load(wsDir)
+	s.Load()
 
 	_, err := s.Create("*/1 * * * *", "one-shot reminder", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify file was NOT written (or has no jobs)
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		// File doesn't exist — perfect, one-shot shouldn't persist
-		return
-	}
-
-	var sf storeFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatalf("failed to parse store file: %v", err)
-	}
-
-	key := workspaceKey(wsDir)
-	if _, ok := sf[key]; ok {
-		t.Error("expected no workspace entry for one-shot job")
+	// File should not exist (no recurring jobs to persist)
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Error("expected store file to not exist for one-shot job")
 	}
 }
 
 func TestDeletePersists(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsDir := t.TempDir()
 
 	s := NewScheduler(nil, storePath)
-	s.Load(wsDir)
+	s.Load()
 
 	job, err := s.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
@@ -210,30 +187,18 @@ func TestDeletePersists(t *testing.T) {
 		t.Fatal("expected delete to succeed")
 	}
 
-	// Verify file has no jobs
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		t.Fatalf("expected store file to exist: %v", err)
-	}
-
-	var sf storeFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatalf("failed to parse store file: %v", err)
-	}
-
-	key := workspaceKey(wsDir)
-	if _, ok := sf[key]; ok {
-		t.Error("expected workspace entry to be removed after deleting all jobs")
+	// File should be removed (no jobs remaining)
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Error("expected store file to be removed after deleting all jobs")
 	}
 }
 
 func TestLoadRestoresJobs(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsDir := t.TempDir()
 
 	// Create a scheduler, add a recurring job
 	s1 := NewScheduler(nil, storePath)
-	s1.Load(wsDir)
+	s1.Load()
 	job1, err := s1.Create("*/5 * * * *", "check CI", true, false)
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +207,7 @@ func TestLoadRestoresJobs(t *testing.T) {
 
 	// Create a new scheduler and load from the same store
 	s2 := NewScheduler(nil, storePath)
-	s2.Load(wsDir)
+	s2.Load()
 
 	jobs := s2.List()
 	if len(jobs) != 1 {
@@ -261,10 +226,9 @@ func TestLoadRestoresJobs(t *testing.T) {
 
 func TestLoadNoFileIsNoop(t *testing.T) {
 	storePath := "/nonexistent/path/cron-jobs.json"
-	wsDir := t.TempDir()
 
 	s := NewScheduler(nil, storePath)
-	s.Load(wsDir)
+	s.Load()
 
 	jobs := s.List()
 	if len(jobs) != 0 {
@@ -274,13 +238,13 @@ func TestLoadNoFileIsNoop(t *testing.T) {
 
 func TestLoadCorruptedFileIsNoop(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsDir := t.TempDir()
 
 	// Write corrupted JSON
+	os.MkdirAll(filepath.Dir(storePath), 0755)
 	os.WriteFile(storePath, []byte("not json"), 0644)
 
 	s := NewScheduler(nil, storePath)
-	s.Load(wsDir)
+	s.Load()
 
 	jobs := s.List()
 	if len(jobs) != 0 {
@@ -288,66 +252,128 @@ func TestLoadCorruptedFileIsNoop(t *testing.T) {
 	}
 }
 
-func TestMultipleWorkspaces(t *testing.T) {
+func TestMultipleJobsInSession(t *testing.T) {
 	storePath, _ := withTestStore(t)
-	wsA := filepath.Join(t.TempDir(), "project-a")
-	wsB := filepath.Join(t.TempDir(), "project-b")
-	os.MkdirAll(wsA, 0755)
-	os.MkdirAll(wsB, 0755)
 
-	// Workspace A creates a job
-	sA := NewScheduler(nil, storePath)
-	sA.Load(wsA)
-	_, err := sA.Create("*/5 * * * *", "task A", true, false)
+	// Create two jobs in the same session
+	s := NewScheduler(nil, storePath)
+	s.Load()
+
+	_, err := s.Create("*/5 * * * *", "task A", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sA.Shutdown()
-
-	// Workspace B creates a different job
-	sB := NewScheduler(nil, storePath)
-	sB.Load(wsB)
-	_, err = sB.Create("*/10 * * * *", "task B", true, false)
+	_, err = s.Create("*/10 * * * *", "task B", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sB.Shutdown()
+	s.Shutdown()
 
-	// Verify file has both workspaces
-	data, err := os.ReadFile(storePath)
+	// Load — should see both jobs
+	s2 := NewScheduler(nil, storePath)
+	s2.Load()
+
+	jobs := s2.List()
+	if len(jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(jobs))
+	}
+}
+
+// --- Migration tests ---
+
+func TestMigrateWorkspaceJobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldPath := filepath.Join(tmpDir, "cron-jobs.json")
+	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
+	wsDir := "/test/workspace"
+
+	// Write old-format file with this workspace's jobs
+	wsKey := workspaceKey(wsDir)
+	oldData := oldStoreFile{
+		wsKey: {
+			Workspace: wsDir,
+			Jobs: []jobJSON{
+				{ID: "cron-1", CronExpr: "*/5 * * * *", Prompt: "check CI", Recurring: true, CreatedAt: "2025-01-01T00:00:00Z"},
+				{ID: "cron-2", CronExpr: "*/10 * * * *", Prompt: "cleanup", Recurring: true, CreatedAt: "2025-01-01T01:00:00Z"},
+			},
+		},
+		"other-key": {
+			Workspace: "/other/workspace",
+			Jobs:      []jobJSON{{ID: "cron-3", CronExpr: "*/1 * * * *", Prompt: "other", Recurring: true}},
+		},
+	}
+	out, _ := json.MarshalIndent(oldData, "", "  ")
+	os.WriteFile(oldPath, out, 0644)
+
+	// Migrate
+	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
+
+	// Verify new session file has the migrated jobs
+	data, err := os.ReadFile(newPath)
 	if err != nil {
+		t.Fatalf("expected new session file: %v", err)
+	}
+	var ss sessionStore
+	if err := json.Unmarshal(data, &ss); err != nil {
 		t.Fatal(err)
 	}
-
-	var sf storeFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatal(err)
+	if len(ss.Jobs) != 2 {
+		t.Fatalf("expected 2 migrated jobs, got %d", len(ss.Jobs))
 	}
 
-	if len(sf) != 2 {
-		t.Errorf("expected 2 workspaces, got %d", len(sf))
+	// Verify old file no longer has this workspace's bucket
+	data2, _ := os.ReadFile(oldPath)
+	var oldAfter oldStoreFile
+	json.Unmarshal(data2, &oldAfter)
+	if _, ok := oldAfter[wsKey]; ok {
+		t.Error("workspace bucket should have been removed from old file")
 	}
+	if _, ok := oldAfter["other-key"]; !ok {
+		t.Error("other workspace bucket should still exist")
+	}
+}
 
-	// Workspace A loads — should only see its own job
-	sA2 := NewScheduler(nil, storePath)
-	sA2.Load(wsA)
-	jobsA := sA2.List()
-	if len(jobsA) != 1 {
-		t.Fatalf("expected 1 job for workspace A, got %d", len(jobsA))
-	}
-	if jobsA[0].Prompt != "task A" {
-		t.Errorf("expected prompt 'task A', got %s", jobsA[0].Prompt)
-	}
+func TestMigrateSkipsIfSessionFileExists(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldPath := filepath.Join(tmpDir, "cron-jobs.json")
+	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
+	wsDir := "/test/workspace"
 
-	// Workspace B loads — should only see its own job
-	sB2 := NewScheduler(nil, storePath)
-	sB2.Load(wsB)
-	jobsB := sB2.List()
-	if len(jobsB) != 1 {
-		t.Fatalf("expected 1 job for workspace B, got %d", len(jobsB))
+	// Create old file
+	wsKey := workspaceKey(wsDir)
+	oldData := oldStoreFile{
+		wsKey: {Workspace: wsDir, Jobs: []jobJSON{{ID: "cron-1", CronExpr: "*/5 * * * *", Prompt: "check CI", Recurring: true}}},
 	}
-	if jobsB[0].Prompt != "task B" {
-		t.Errorf("expected prompt 'task B', got %s", jobsB[0].Prompt)
+	out, _ := json.MarshalIndent(oldData, "", "  ")
+	os.WriteFile(oldPath, out, 0644)
+
+	// Pre-create the new session file (simulates already-migrated)
+	os.MkdirAll(filepath.Dir(newPath), 0755)
+	os.WriteFile(newPath, []byte(`{"jobs":[]}`), 0644)
+
+	// Migrate should be a no-op
+	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
+
+	// Old file should still have the bucket (migration skipped)
+	data, _ := os.ReadFile(oldPath)
+	var oldAfter oldStoreFile
+	json.Unmarshal(data, &oldAfter)
+	if _, ok := oldAfter[wsKey]; !ok {
+		t.Error("workspace bucket should still exist (migration was skipped)")
+	}
+}
+
+func TestMigrateNoOldFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldPath := filepath.Join(tmpDir, "nonexistent.json")
+	newPath := filepath.Join(tmpDir, "cron-jobs", "session-new.json")
+	wsDir := "/test/workspace"
+
+	// Should be a no-op, no panic
+	MigrateWorkspaceJobs(oldPath, newPath, wsDir)
+
+	if _, err := os.Stat(newPath); !os.IsNotExist(err) {
+		t.Error("expected no new file created")
 	}
 }
 

@@ -461,7 +461,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Cron tools — enqueue fires the prompt as a user message via the
 	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
 	// skip the firing instead of interrupting.
-	cronScheduler := agentruntime.NewWorkspaceCronScheduler(workingDir, func(prompt string, queueIfBusy bool) {
+	cronScheduler := agentruntime.NewSessionCronScheduler(ses.ID, workingDir, func(prompt string, queueIfBusy bool) {
 		if !queueIfBusy && bridge.HasActiveRun() {
 			debug.Log("daemon", "[cron] skipping prompt (agent busy, queue_if_busy=false): %s", prompt)
 			return

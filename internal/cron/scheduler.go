@@ -1,7 +1,6 @@
 package cron
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -38,15 +37,10 @@ type jobJSON struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// workspaceBucket groups jobs under a workspace key.
-type workspaceBucket struct {
-	Workspace string    `json:"workspace"`
-	Jobs      []jobJSON `json:"jobs"`
+// sessionStore is the per-session JSON file structure.
+type sessionStore struct {
+	Jobs []jobJSON `json:"jobs"`
 }
-
-// storeFile is the top-level structure persisted to disk.
-// Keyed by SHA256 of the workspace directory path.
-type storeFile map[string]workspaceBucket
 
 // Scheduler manages cron-like prompt scheduling with optional persistence.
 type Scheduler struct {
@@ -55,15 +49,7 @@ type Scheduler struct {
 	nextID    int
 	enqueue   func(prompt string, queueIfBusy bool)
 	timers    map[string]*time.Timer
-	storePath string
-	wsKey     string // SHA256 of current workspace dir
-	wsDir     string // original workspace dir path
-}
-
-// workspaceKey returns the SHA256 hex of a directory path.
-func workspaceKey(dir string) string {
-	h := sha256.Sum256([]byte(dir))
-	return fmt.Sprintf("%x", h)
+	storePath string // path to this session's JSON file
 }
 
 // NewScheduler creates a scheduler with the given enqueue callback and
@@ -81,15 +67,10 @@ func NewScheduler(enqueue func(prompt string, queueIfBusy bool), storePath strin
 	}
 }
 
-// Load reads persisted recurring jobs for the given workspace and schedules them.
+// Load reads persisted recurring jobs for this session and schedules them.
 // Must be called after NewScheduler, before any Create/Delete calls.
 // If storePath is empty or the file doesn't exist, Load is a no-op.
-func (s *Scheduler) Load(workspaceDir string) {
-	s.mu.Lock()
-	s.wsDir = workspaceDir
-	s.wsKey = workspaceKey(workspaceDir)
-	s.mu.Unlock()
-
+func (s *Scheduler) Load() {
 	if s.storePath == "" {
 		return
 	}
@@ -100,23 +81,18 @@ func (s *Scheduler) Load(workspaceDir string) {
 		return
 	}
 
-	var sf storeFile
-	if err := json.Unmarshal(data, &sf); err != nil {
+	var ss sessionStore
+	if err := json.Unmarshal(data, &ss); err != nil {
 		// Corrupted file — log and skip.
 		return
 	}
 
-	bucket, ok := sf[s.wsKey]
-	if !ok {
-		return
-	}
-
-	// Load jobs. Sort by CreatedAt for deterministic ID assignment.
-	sort.Slice(bucket.Jobs, func(i, j int) bool {
-		return bucket.Jobs[i].CreatedAt < bucket.Jobs[j].CreatedAt
+	// Sort by CreatedAt for deterministic ID assignment.
+	sort.Slice(ss.Jobs, func(i, j int) bool {
+		return ss.Jobs[i].CreatedAt < ss.Jobs[j].CreatedAt
 	})
 
-	for _, jj := range bucket.Jobs {
+	for _, jj := range ss.Jobs {
 		if !jj.Recurring {
 			continue // don't restore one-shot jobs
 		}
@@ -142,7 +118,6 @@ func (s *Scheduler) Load(workspaceDir string) {
 		}
 		s.jobs[job.ID] = job
 		// Track max ID to avoid collisions with new jobs.
-		// Parse numeric part from IDs like "cron-5".
 		var n int
 		fmt.Sscanf(job.ID, "cron-%d", &n)
 		if n > s.nextID {
@@ -154,28 +129,12 @@ func (s *Scheduler) Load(workspaceDir string) {
 	}
 }
 
-// save persists all recurring jobs for the current workspace to the store file.
-// It preserves other workspaces' data unchanged.
+// save persists all recurring jobs for this session to the store file.
 func (s *Scheduler) save() error {
 	if s.storePath == "" {
 		return nil
 	}
 
-	// Read existing file (other workspaces' data).
-	var sf storeFile
-	data, err := os.ReadFile(s.storePath)
-	if err == nil {
-		if err := json.Unmarshal(data, &sf); err != nil {
-			return fmt.Errorf("parse cron store %s: %w", s.storePath, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read cron store %s: %w", s.storePath, err)
-	}
-	if sf == nil {
-		sf = make(storeFile)
-	}
-
-	// Build current workspace's job list.
 	s.mu.Lock()
 	jobs := make([]jobJSON, 0)
 	for _, j := range s.jobs {
@@ -193,18 +152,14 @@ func (s *Scheduler) save() error {
 	}
 	s.mu.Unlock()
 
-	// Update or remove the workspace bucket.
 	if len(jobs) == 0 {
-		delete(sf, s.wsKey)
-	} else {
-		sf[s.wsKey] = workspaceBucket{
-			Workspace: s.wsDir,
-			Jobs:      jobs,
-		}
+		// Remove the file when no recurring jobs remain.
+		os.Remove(s.storePath)
+		return nil
 	}
 
-	// Write back.
-	out, err := json.MarshalIndent(sf, "", "  ")
+	ss := sessionStore{Jobs: jobs}
+	out, err := json.MarshalIndent(ss, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode cron store: %w", err)
 	}
@@ -341,7 +296,6 @@ func (s *Scheduler) scheduleJob(job *Job) {
 		if job.Recurring {
 			next, err := NextTime(job.CronExpr, time.Now())
 			if err != nil {
-				// Can't compute next fire — remove the broken job.
 				delete(s.jobs, job.ID)
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
@@ -351,8 +305,6 @@ func (s *Scheduler) scheduleJob(job *Job) {
 				return
 			}
 			job.NextFire = next
-			// Register the next timer while still holding the lock.
-			// Use scheduleJobLocked to avoid re-locking (deadlock).
 			s.scheduleJobLocked(job)
 		} else {
 			delete(s.jobs, job.ID)
@@ -398,6 +350,33 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		}
 		s.mu.Unlock()
 	})
+}
+
+// SetSession binds this scheduler to a session store path, migrating
+// from the old workspace-scoped store if needed, then loading. This is used
+// when the session ID is not yet known at scheduler creation time (e.g., TUI
+// new session or desktop lazy init).
+//
+// storePath is the per-session JSON file path.
+// oldStorePath is the legacy cron-jobs.json path (empty to skip migration).
+// workspaceDir is the working directory key for migration (empty to skip).
+func (s *Scheduler) SetSession(storePath, oldStorePath, workspaceDir string) {
+	if storePath == "" {
+		return
+	}
+
+	s.mu.Lock()
+	if s.storePath != "" {
+		s.mu.Unlock()
+		return // already bound
+	}
+	s.storePath = storePath
+	s.mu.Unlock()
+
+	// Migrate from old workspace-scoped store if present.
+	MigrateWorkspaceJobs(oldStorePath, storePath, workspaceDir)
+
+	s.Load()
 }
 
 // Shutdown stops all timers and clears all jobs. The scheduler cannot be

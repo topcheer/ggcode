@@ -647,6 +647,10 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 			})
 		}
 	}
+	if b.cronScheduler != nil && ses != nil {
+		sessionPath, legacyPath := agentruntime.CronStorePaths(ses.ID)
+		b.cronScheduler.SetSession(sessionPath, legacyPath, b.workingDir)
+	}
 	if onSessionChanged != nil {
 		onSessionChanged()
 	}
@@ -928,7 +932,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Cron tools — enqueue fires the prompt as a hidden user message.
 	// If queue_if_busy=false (default) and agent is busy, skip the firing.
-	b.cronScheduler = agentruntime.NewWorkspaceCronScheduler(b.workingDir, func(prompt string, queueIfBusy bool) {
+	b.cronScheduler = agentruntime.NewSessionCronScheduler("", b.workingDir, func(prompt string, queueIfBusy bool) {
 		if !queueIfBusy && b.IsWorking() {
 			log.Printf("[cron] skipping prompt (agent busy, queue_if_busy=false): %s", prompt)
 			return

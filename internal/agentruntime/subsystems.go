@@ -14,10 +14,31 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-func NewWorkspaceCronScheduler(workingDir string, enqueue func(prompt string, queueIfBusy bool)) *cron.Scheduler {
-	storePath := filepath.Join(config.HomeDir(), ".ggcode", "cron-jobs.json")
-	scheduler := cron.NewScheduler(enqueue, storePath)
-	scheduler.Load(workingDir)
+// CronStorePaths returns the per-session store path and the legacy
+// workspace-scoped store path for migration.
+func CronStorePaths(sessionID string) (sessionPath, legacyPath string) {
+	base := filepath.Join(config.HomeDir(), ".ggcode")
+	legacyPath = filepath.Join(base, "cron-jobs.json")
+	if sessionID != "" {
+		sessionPath = filepath.Join(base, "cron-jobs", sessionID+".json")
+	}
+	return
+}
+
+// NewSessionCronScheduler creates a cron scheduler that persists jobs
+// per-session under ~/.ggcode/cron-jobs/<sessionID>.json.
+// If sessionID is empty, the scheduler works without persistence until
+// SetSession is called.
+func NewSessionCronScheduler(sessionID, workingDir string, enqueue func(prompt string, queueIfBusy bool)) *cron.Scheduler {
+	sessionPath, legacyPath := CronStorePaths(sessionID)
+	scheduler := cron.NewScheduler(enqueue, sessionPath)
+
+	// Migrate old workspace-scoped jobs to this session (once per workspace).
+	if sessionPath != "" && workingDir != "" {
+		cron.MigrateWorkspaceJobs(legacyPath, sessionPath, workingDir)
+	}
+
+	scheduler.Load()
 	return scheduler
 }
 
