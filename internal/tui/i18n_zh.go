@@ -1107,6 +1107,8 @@ func zhCatalog(key string) string {
 		return "AI 代码审查（检查 bug、安全问题、竞态条件）"
 	case "slash.copy":
 		return "复制最近一条 AI 回复到剪贴板"
+	case "slash.context":
+		return "显示上下文窗口使用情况（token、消息、容量）"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
@@ -1248,6 +1250,7 @@ func zhCatalog(key string) string {
   /review [opts]     AI 代码审查当前变更（--cached、--staged）
   /copy              复制最近一条 AI 回复到剪贴板
   /cost              显示本次会话 token 用量和预估费用
+  /context           显示上下文窗口使用情况
   /hooks             显示已配置的 hooks
   /init              基于当前项目生成 GGCODE.md
   /harness ...       运行 harness 控制面命令

@@ -568,7 +568,7 @@ func TestHelpText(t *testing.T) {
 		t.Error("expected /harness in help text")
 	}
 	// New commands should be documented
-	for _, cmd := range []string{"/diff", "/cost", "/hooks", "/review", "/copy"} {
+	for _, cmd := range []string{"/diff", "/cost", "/hooks", "/review", "/copy", "/context"} {
 		if !strings.Contains(h, cmd) {
 			t.Errorf("expected %s in help text", cmd)
 		}

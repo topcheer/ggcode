@@ -247,6 +247,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.review")
 	case "/copy":
 		return tr(lang, "slash.copy")
+	case "/context":
+		return tr(lang, "slash.context")
 	default:
 		return cmd
 	}

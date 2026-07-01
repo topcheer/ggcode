@@ -12,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/version"
@@ -489,4 +490,126 @@ func (m *Model) handleCopyCommand() tea.Cmd {
 		preview := util.Truncate(strings.TrimSpace(text), 60)
 		return streamMsg(fmt.Sprintf("Copied %d chars to clipboard: %s", len(text), preview))
 	}
+}
+
+// handleContextCommand shows a detailed breakdown of the context window usage,
+// including system prompt size, conversation messages, token distribution,
+// and proximity to auto-compaction threshold.
+func (m *Model) handleContextCommand() tea.Cmd {
+	return func() tea.Msg {
+		if m.agent == nil {
+			return streamMsg("Agent not initialized.")
+		}
+
+		cm := m.agent.ContextManager()
+		if cm == nil {
+			return streamMsg("Context manager not available.")
+		}
+
+		ctxWindow := cm.ContextWindow()
+		if ctxWindow <= 0 {
+			return streamMsg("Context window size unknown.")
+		}
+
+		messages := cm.Messages()
+		totalTokens := cm.TokenCount()
+		usageRatio := cm.UsageRatio()
+		compactThreshold := cm.AutoCompactThreshold()
+
+		// System prompt token estimate
+		sysPrompt := m.agent.SystemPrompt()
+		sysTokens := estimateTokens(sysPrompt)
+
+		// Count messages by role
+		var userMsgs, asstMsgs, toolMsgs int
+		var userTokens, asstTokens, toolTokens int
+		for _, msg := range messages {
+			msgTokens := estimateMessageTokens(msg)
+			switch msg.Role {
+			case "user":
+				userMsgs++
+				userTokens += msgTokens
+			case "assistant":
+				asstMsgs++
+				asstTokens += msgTokens
+			case "tool":
+				toolMsgs++
+				toolTokens += msgTokens
+			}
+		}
+
+		conversationTokens := userTokens + asstTokens + toolTokens
+		remaining := ctxWindow - totalTokens
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		// Progress bar
+		pct := usageRatio * 100
+		barWidth := 20
+		filled := int(usageRatio * float64(barWidth))
+		if filled > barWidth {
+			filled = barWidth
+		}
+		var bar string
+		for i := 0; i < barWidth; i++ {
+			if i < filled {
+				bar += "█"
+			} else {
+				bar += "░"
+			}
+		}
+
+		var sb strings.Builder
+		sb.WriteString("Context Window Usage\n\n")
+		sb.WriteString(fmt.Sprintf("  %s %.1f%%\n", bar, pct))
+		sb.WriteString(fmt.Sprintf("  %s / %s tokens\n\n", humanizeTokenCount(totalTokens), humanizeTokenCount(ctxWindow)))
+
+		sb.WriteString("Breakdown:\n")
+		sb.WriteString(fmt.Sprintf("  System prompt:   %s (%d chars)\n", humanizeTokenCount(sysTokens), len(sysPrompt)))
+		sb.WriteString(fmt.Sprintf("  User messages:   %d msgs, %s tokens\n", userMsgs, humanizeTokenCount(userTokens)))
+		sb.WriteString(fmt.Sprintf("  Assistant msgs:  %d msgs, %s tokens\n", asstMsgs, humanizeTokenCount(asstTokens)))
+		if toolMsgs > 0 {
+			sb.WriteString(fmt.Sprintf("  Tool results:    %d msgs, %s tokens\n", toolMsgs, humanizeTokenCount(toolTokens)))
+		}
+		sb.WriteString(fmt.Sprintf("  Conversation:    %s tokens\n\n", humanizeTokenCount(conversationTokens)))
+
+		sb.WriteString("Capacity:\n")
+		sb.WriteString(fmt.Sprintf("  Remaining:       %s tokens\n", humanizeTokenCount(remaining)))
+		compactPct := float64(compactThreshold) / float64(ctxWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Auto-compact at: %s tokens (%.0f%%)\n", humanizeTokenCount(compactThreshold), compactPct))
+		tokensUntilCompact := compactThreshold - totalTokens
+		if tokensUntilCompact > 0 {
+			sb.WriteString(fmt.Sprintf("  Until compact:   %s tokens\n", humanizeTokenCount(tokensUntilCompact)))
+		} else {
+			sb.WriteString("  ⚠ Compaction threshold exceeded — will compact on next turn\n")
+		}
+
+		return streamMsg(sb.String())
+	}
+}
+
+// estimateTokens provides a rough token estimate (4 chars ≈ 1 token).
+func estimateTokens(text string) int {
+	if len(text) == 0 {
+		return 0
+	}
+	return (len(text) + 3) / 4
+}
+
+// estimateMessageTokens sums token estimates across all content blocks.
+func estimateMessageTokens(msg provider.Message) int {
+	var total int
+	for _, block := range msg.Content {
+		switch block.Type {
+		case "text":
+			total += estimateTokens(block.Text)
+		case "image":
+			// Vision tokens are larger; approximate as 1000 per image
+			total += 1000
+		default:
+			total += 100
+		}
+	}
+	return total
 }

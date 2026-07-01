@@ -1121,6 +1121,8 @@ func enCatalog(key string) string {
 		return "AI code review of current changes (bugs, security, races)"
 	case "slash.copy":
 		return "Copy last assistant response to clipboard"
+	case "slash.context":
+		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
@@ -1264,6 +1266,7 @@ Development:
   /review [opts]     AI code review of current changes (--cached, --staged)
   /copy              Copy last assistant response to clipboard
   /cost              Show session token usage and estimated cost
+  /context           Show context window usage breakdown
   /hooks             Show configured hooks
   /init              Generate GGCODE.md from the current project
   /harness ...       Run harness control-plane commands
