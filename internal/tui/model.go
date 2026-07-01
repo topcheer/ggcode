@@ -35,6 +35,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/stream"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -784,12 +785,17 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	ses.UsageHistory = append(ses.UsageHistory, entry)
 	mu.Unlock()
 
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendMetaToDisk(ses)
-		_ = jsonlStore.AppendUsageEntry(ses, entry)
-	} else {
-		_ = store.Save(ses)
-	}
+	// Disk I/O is async — the TUI event loop must not block on fsync.
+	// The JSONLStore mutex serializes concurrent appends from multiple
+	// goroutines, so ordering is safe.
+	safego.Go("session.usage", func() {
+		if jsonlStore, ok := store.(*session.JSONLStore); ok {
+			_ = jsonlStore.AppendMetaToDisk(ses)
+			_ = jsonlStore.AppendUsageEntry(ses, entry)
+		} else {
+			_ = store.Save(ses)
+		}
+	})
 }
 
 func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
@@ -819,11 +825,14 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 	store := m.sessionStore
 	mu.Unlock()
 
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendMetric(ses, ev)
-	} else {
-		_ = store.Save(ses)
-	}
+	// Disk I/O is async — see recordSessionUsage for rationale.
+	safego.Go("session.metric", func() {
+		if jsonlStore, ok := store.(*session.JSONLStore); ok {
+			_ = jsonlStore.AppendMetric(ses, ev)
+		} else {
+			_ = store.Save(ses)
+		}
+	})
 	m.syncStatsPanelViewport(false)
 }
 
