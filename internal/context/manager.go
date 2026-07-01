@@ -58,20 +58,19 @@ type CompactResult struct {
 }
 
 const (
-	summarizeThresholdWithUsage = 0.88 // trigger compaction at 88% of usable budget (with usage baseline)
-	summarizeThresholdFallback  = 0.80 // trigger compaction at 80% of usable budget (fallback, no baseline)
-	compactTargetRatio          = 0.50 // compress to 50% of usable budget — leave plenty of room before re-trigger
-	summaryReserveRatio         = 0.10
-	defaultOutputReserveRatio   = 0.10
-	maxOutputReserveRatio       = 0.25
-	safetyMarginRatio           = 0.05
-	minRecentGroups             = 1
-	maxSummarizePasses          = 2
-	minSummaryReserve           = 64
-	microcompactMinGain         = 32
-	toolResultMinTokens         = 96
-	maxPTLRetries               = 3
-	tokenCountTimeout           = 100 * time.Millisecond
+	summarizeThreshold        = 0.93 // trigger compaction at 93% of usable budget
+	compactTargetRatio        = 0.50 // compress to 50% of usable budget — leave plenty of room before re-trigger
+	summaryReserveRatio       = 0.10
+	defaultOutputReserveRatio = 0.10
+	maxOutputReserveRatio     = 0.25
+	safetyMarginRatio         = 0.05
+	minRecentGroups           = 1
+	maxSummarizePasses        = 2
+	minSummaryReserve         = 64
+	microcompactMinGain       = 32
+	toolResultMinTokens       = 96
+	maxPTLRetries             = 3
+	tokenCountTimeout         = 100 * time.Millisecond
 
 	// Microcompact truncation thresholds
 	truncationHeadLines  = 10
@@ -81,14 +80,14 @@ const (
 )
 
 func AutoCompactThresholdRatio() float64 {
-	return summarizeThresholdWithUsage
+	return summarizeThreshold
 }
 
 func AutoCompactThresholdTokens(contextWindow int) int {
 	if contextWindow <= 0 {
 		return 0
 	}
-	return int(float64(contextWindow) * summarizeThresholdFallback)
+	return int(float64(contextWindow) * summarizeThreshold)
 }
 
 // Manager implements ContextManager.
@@ -1078,11 +1077,7 @@ func (m *Manager) autoCompactThresholdLocked() int {
 	if budget <= 0 {
 		return 0
 	}
-	ratio := summarizeThresholdFallback
-	if m.baselineAvailable {
-		ratio = summarizeThresholdWithUsage
-	}
-	return int(float64(budget) * ratio)
+	return int(float64(budget) * summarizeThreshold)
 }
 
 func (m *Manager) usablePromptBudgetLocked() int {

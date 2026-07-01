@@ -809,17 +809,6 @@ func TestContextManager_RecordUsageUsesBaselinePlusDelta(t *testing.T) {
 	}
 }
 
-func TestContextManager_FallbackThresholdIsMoreConservativeWithoutUsageBaseline(t *testing.T) {
-	withUsage := NewManager(100000)
-	withUsage.RecordUsage(provider.TokenUsage{InputTokens: 1000})
-
-	withoutUsage := NewManager(100000)
-
-	if gotWithUsage, gotFallback := withUsage.AutoCompactThreshold(), withoutUsage.AutoCompactThreshold(); gotFallback >= gotWithUsage {
-		t.Fatalf("expected fallback threshold to trigger earlier: with_usage=%d fallback=%d", gotWithUsage, gotFallback)
-	}
-}
-
 func retainedConversationMessages(msgs []provider.Message) int {
 	count := 0
 	for i, msg := range msgs {
