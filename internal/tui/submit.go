@@ -35,6 +35,7 @@ func (m *Model) appendUserMessage(text string) {
 	// Mutate Session object under sessionMutex to prevent data races
 	// with checkpoint handler and other readers.
 	m.session.Messages = append(m.session.Messages, msg)
+	m.persistedMsgCount++
 	m.session.UpdatedAt = time.Now()
 	// Auto-generate title from first user message
 	if m.session.Title == "" || m.session.Title == "New session" {

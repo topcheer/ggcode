@@ -1983,6 +1983,12 @@ func (m *Model) recordTunnelEvent(ev tunnel.GatewayMessage) {
 		Data:     append([]byte(nil), ev.Data...),
 	}
 	m.session.TunnelEvents = append(m.session.TunnelEvents, record)
+	// Prune old tunnel events to bound memory and future Save() output.
+	// The relay server has its own SQLite persistence for full replay.
+	if len(m.session.TunnelEvents) > session.MaxTunnelEvents {
+		pruneIdx := len(m.session.TunnelEvents) - session.MaxTunnelEvents
+		m.session.TunnelEvents = m.session.TunnelEvents[pruneIdx:]
+	}
 	ses := m.session
 	store := m.sessionStore
 	m.sessionMutex().Unlock()

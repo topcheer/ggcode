@@ -1019,8 +1019,8 @@ func (r *REPL) Run() error {
 		r.model.instanceDetect.Unregister()
 	}
 	if err == nil && r.store != nil && r.model.session != nil {
-		// Save session on clean exit
-		_ = agentruntime.SaveAgentSessionSnapshot(r.store, r.model.session, r.agent)
+		// Persist new messages on clean exit (incremental, no full rewrite).
+		r.model.persistFullSessionMessages()
 	}
 
 	// Release the session lock so another instance can resume this session.

@@ -267,6 +267,7 @@ type Model struct {
 	cancelConfirmPending  bool
 	pending               *pendingQueue
 	sessionMu             *sync.Mutex
+	persistedMsgCount     int // number of messages already written to JSONL disk
 	projectMemoryLoading  bool
 	runCanceled           bool
 	runFailed             bool
@@ -723,6 +724,10 @@ func (m *Model) startContextProbe() {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	// All messages in ses.Messages were loaded from the JSONL file — they
+	// are already on disk. Mark them as persisted so persistFullSessionMessages
+	// only appends truly new messages going forward.
+	m.persistedMsgCount = len(ses.Messages)
 	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.lastMetricDigestTurn = m.usageTurnIndex
 	// Sync the session's model/vendor/endpoint to the current config.

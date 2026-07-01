@@ -190,7 +190,14 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if agentInst == nil || ses == nil {
 		return
 	}
-	for _, msg := range ses.Messages {
+	// Use ContextMessages (last checkpoint + post-checkpoint) for agent
+	// context restoration, not the full ses.Messages which is for rendering.
+	// This ensures the agent sees the compacted history, not the full log.
+	msgs := ses.ContextMessages
+	if len(msgs) == 0 {
+		msgs = ses.Messages // fallback when no checkpoint exists
+	}
+	for _, msg := range msgs {
 		agentInst.AddMessage(msg)
 	}
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use

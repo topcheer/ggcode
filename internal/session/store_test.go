@@ -268,22 +268,27 @@ func TestAppendCheckpoint(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Should have: 2 checkpoint messages + 2 post-checkpoint messages = 4
+	// Should have 4 message records total in Messages: 2 original (from Save) + 2 post-checkpoint.
 	if len(loaded.Messages) != 4 {
-		t.Fatalf("expected 4 messages (2 checkpoint + 2 post-checkpoint), got %d", len(loaded.Messages))
+		t.Fatalf("expected 4 Messages (all records), got %d", len(loaded.Messages))
 	}
 
-	// First message should be from checkpoint
-	if loaded.Messages[0].Role != "system" {
-		t.Fatalf("expected first message role 'system', got '%s'", loaded.Messages[0].Role)
+	// ContextMessages: 2 checkpoint + 2 post-checkpoint = 4.
+	if len(loaded.ContextMessages) != 4 {
+		t.Fatalf("expected 4 ContextMessages (2 checkpoint + 2 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
-	// Last message should be the post-checkpoint user message
-	lastMsg := loaded.Messages[len(loaded.Messages)-1]
-	if lastMsg.Role != "user" {
-		t.Fatalf("expected last message role 'user', got '%s'", lastMsg.Role)
+
+	// First ContextMessage should be from checkpoint
+	if loaded.ContextMessages[0].Role != "system" {
+		t.Fatalf("expected first ContextMessages role 'system', got '%s'", loaded.ContextMessages[0].Role)
 	}
-	if lastMsg.Content[0].Text != "new question" {
-		t.Fatalf("expected last message text 'new question', got '%s'", lastMsg.Content[0].Text)
+	// Last should be the post-checkpoint user message
+	lastCtx := loaded.ContextMessages[len(loaded.ContextMessages)-1]
+	if lastCtx.Role != "user" {
+		t.Fatalf("expected last ContextMessages role 'user', got '%s'", lastCtx.Role)
+	}
+	if lastCtx.Content[0].Text != "new question" {
+		t.Fatalf("expected last text 'new question', got '%s'", lastCtx.Content[0].Text)
 	}
 }
 
@@ -349,17 +354,17 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	if len(loaded.Messages) != 3 {
-		t.Fatalf("expected 3 messages (2 from cp2 + 1 post-checkpoint), got %d", len(loaded.Messages))
+	if len(loaded.ContextMessages) != 3 {
+		t.Fatalf("expected 3 ContextMessages (2 from cp2 + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
 
 	// First should be "summary v2"
-	if loaded.Messages[0].Content[0].Text != "summary v2" {
-		t.Fatalf("expected first msg 'summary v2', got '%s'", loaded.Messages[0].Content[0].Text)
+	if loaded.ContextMessages[0].Content[0].Text != "summary v2" {
+		t.Fatalf("expected first ContextMessages 'summary v2', got '%s'", loaded.ContextMessages[0].Content[0].Text)
 	}
 	// Last should be "final response"
-	if loaded.Messages[2].Content[0].Text != "final response" {
-		t.Fatalf("expected last msg 'final response', got '%s'", loaded.Messages[2].Content[0].Text)
+	if loaded.ContextMessages[2].Content[0].Text != "final response" {
+		t.Fatalf("expected last ContextMessages 'final response', got '%s'", loaded.ContextMessages[2].Content[0].Text)
 	}
 }
 
@@ -392,15 +397,15 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Messages: only the post-checkpoint message (empty checkpoint contributes 0)
-	if len(loaded.Messages) != 1 {
-		t.Fatalf("expected 1 message (empty checkpoint + 1 post-checkpoint), got %d", len(loaded.Messages))
+	// ContextMessages: empty checkpoint + 1 post-checkpoint = 1
+	if len(loaded.ContextMessages) != 1 {
+		t.Fatalf("expected 1 ContextMessages (empty checkpoint + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
-	if loaded.Messages[0].Role != "assistant" {
-		t.Fatalf("expected role 'assistant', got '%s'", loaded.Messages[0].Role)
+	if loaded.ContextMessages[0].Role != "assistant" {
+		t.Fatalf("expected ContextMessages role 'assistant', got '%s'", loaded.ContextMessages[0].Role)
 	}
-	if loaded.Messages[0].Content[0].Text != "after empty cp" {
-		t.Fatalf("expected 'after empty cp', got '%s'", loaded.Messages[0].Content[0].Text)
+	if loaded.ContextMessages[0].Content[0].Text != "after empty cp" {
+		t.Fatalf("expected 'after empty cp', got '%s'", loaded.ContextMessages[0].Content[0].Text)
 	}
 
 	// Metadata must survive past the checkpoint
@@ -448,21 +453,25 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Must have exactly the 2 checkpoint messages — no more, no less
-	if len(loaded.Messages) != 2 {
-		t.Fatalf("expected 2 messages from checkpoint, got %d", len(loaded.Messages))
+	// Must have the checkpoint messages in ContextMessages for agent restoration.
+	if len(loaded.ContextMessages) != 2 {
+		t.Fatalf("expected 2 ContextMessages from checkpoint, got %d", len(loaded.ContextMessages))
 	}
-	if loaded.Messages[0].Role != "system" {
-		t.Fatalf("expected first role 'system', got '%s'", loaded.Messages[0].Role)
+	if loaded.ContextMessages[0].Role != "system" {
+		t.Fatalf("expected first ContextMessages role 'system', got '%s'", loaded.ContextMessages[0].Role)
 	}
-	if loaded.Messages[0].Content[0].Text != "summary only" {
-		t.Fatalf("expected first text 'summary only', got '%s'", loaded.Messages[0].Content[0].Text)
+	if loaded.ContextMessages[0].Content[0].Text != "summary only" {
+		t.Fatalf("expected first text 'summary only', got '%s'", loaded.ContextMessages[0].Content[0].Text)
 	}
-	if loaded.Messages[1].Role != "user" {
-		t.Fatalf("expected second role 'user', got '%s'", loaded.Messages[1].Role)
+	if loaded.ContextMessages[1].Role != "user" {
+		t.Fatalf("expected second ContextMessages role 'user', got '%s'", loaded.ContextMessages[1].Role)
 	}
-	if loaded.Messages[1].Content[0].Text != "retained user context" {
-		t.Fatalf("expected second text 'retained user context', got '%s'", loaded.Messages[1].Content[0].Text)
+	if loaded.ContextMessages[1].Content[0].Text != "retained user context" {
+		t.Fatalf("expected second text 'retained user context', got '%s'", loaded.ContextMessages[1].Content[0].Text)
+	}
+	// ses.Messages should contain ALL message records (the original user message).
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("expected 1 message record (original), got %d", len(loaded.Messages))
 	}
 
 	// Metadata preserved through checkpoint
@@ -520,13 +529,13 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 		t.Fatalf("title lost in index: got '%s'", found.Title)
 	}
 
-	// Verify MsgCount reflects checkpoint content by loading via index ID
+	// Verify ContextMessages reflects checkpoint content on reload
 	loaded, err := store.Load(found.ID)
 	if err != nil {
 		t.Fatalf("Load after index update failed: %v", err)
 	}
-	if len(loaded.Messages) != 2 {
-		t.Fatalf("expected 2 checkpoint messages on reload, got %d", len(loaded.Messages))
+	if len(loaded.ContextMessages) != 2 {
+		t.Fatalf("expected 2 ContextMessages on reload, got %d", len(loaded.ContextMessages))
 	}
 }
 
@@ -551,11 +560,11 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if len(loaded.Messages) != 1 {
-		t.Fatalf("expected 1 checkpoint message, got %d", len(loaded.Messages))
+	if len(loaded.ContextMessages) != 1 {
+		t.Fatalf("expected 1 ContextMessages, got %d", len(loaded.ContextMessages))
 	}
-	if loaded.Messages[0].Content[0].Text != "from scratch" {
-		t.Fatalf("expected 'from scratch', got '%s'", loaded.Messages[0].Content[0].Text)
+	if loaded.ContextMessages[0].Content[0].Text != "from scratch" {
+		t.Fatalf("expected 'from scratch', got '%s'", loaded.ContextMessages[0].Content[0].Text)
 	}
 }
 

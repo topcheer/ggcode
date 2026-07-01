@@ -601,6 +601,11 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 		Data:     append([]byte(nil), ev.Data...),
 	}
 	ses.TunnelEvents = append(ses.TunnelEvents, record)
+	// Prune old tunnel events to bound memory and future Save() output.
+	if len(ses.TunnelEvents) > session.MaxTunnelEvents {
+		pruneIdx := len(ses.TunnelEvents) - session.MaxTunnelEvents
+		ses.TunnelEvents = ses.TunnelEvents[pruneIdx:]
+	}
 
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
 		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)

@@ -23,22 +23,27 @@ import (
 
 // Session represents a single conversation session.
 type Session struct {
-	ID                   string                           `json:"id"`
-	CreatedAt            time.Time                        `json:"created_at"`
-	UpdatedAt            time.Time                        `json:"updated_at"`
-	Title                string                           `json:"title"`
-	Workspace            string                           `json:"workspace,omitempty"`
-	Vendor               string                           `json:"vendor"`
-	Endpoint             string                           `json:"endpoint"`
-	Model                string                           `json:"model"`
-	TokenUsage           provider.TokenUsage              `json:"token_usage,omitempty"`
-	EndpointUsage        map[string]provider.TokenUsage   `json:"endpoint_usage,omitempty"`
-	UsageHistory         []UsageEntry                     `json:"usage_history,omitempty"`
-	Metrics              []metrics.MetricEvent            `json:"metrics,omitempty"`
-	EndpointMetrics      map[string][]metrics.MetricEvent `json:"endpoint_metrics,omitempty"`
-	Messages             []provider.Message               `json:"messages,omitempty"`
-	TunnelEvents         []TunnelEvent                    `json:"tunnel_events,omitempty"`
-	TunnelEventsComplete bool                             `json:"tunnel_events_complete,omitempty"`
+	ID              string                           `json:"id"`
+	CreatedAt       time.Time                        `json:"created_at"`
+	UpdatedAt       time.Time                        `json:"updated_at"`
+	Title           string                           `json:"title"`
+	Workspace       string                           `json:"workspace,omitempty"`
+	Vendor          string                           `json:"vendor"`
+	Endpoint        string                           `json:"endpoint"`
+	Model           string                           `json:"model"`
+	TokenUsage      provider.TokenUsage              `json:"token_usage,omitempty"`
+	EndpointUsage   map[string]provider.TokenUsage   `json:"endpoint_usage,omitempty"`
+	UsageHistory    []UsageEntry                     `json:"usage_history,omitempty"`
+	Metrics         []metrics.MetricEvent            `json:"metrics,omitempty"`
+	EndpointMetrics map[string][]metrics.MetricEvent `json:"endpoint_metrics,omitempty"`
+	Messages        []provider.Message               `json:"messages,omitempty"`
+	// ContextMessages holds the messages for agent context restoration on
+	// session reload. It contains the last checkpoint (compacted) messages
+	// plus any messages appended after that checkpoint. If no checkpoint
+	// exists, it equals Messages. Not persisted — computed by loadSession.
+	ContextMessages      []provider.Message `json:"-"`
+	TunnelEvents         []TunnelEvent      `json:"tunnel_events,omitempty"`
+	TunnelEventsComplete bool               `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 	// PermissionMode stores the session-scoped permission mode (e.g. "auto", "bypass").
@@ -139,6 +144,14 @@ type JSONLStore struct {
 }
 
 const sessionMaintenanceInterval = 30 * time.Second
+
+// MaxTunnelEvents caps the number of tunnel events kept in memory and
+// rewritten by Save(). Tunnel events are ephemeral streaming records for
+// mobile relay replay; the relay server has its own SQLite persistence
+// for full replay history. Keeping only the most recent events bounds
+// memory usage and prevents session files from growing unboundedly
+// (a long session can accumulate 200K+ events = 100MB+).
+const MaxTunnelEvents = 2000
 
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
 func NewJSONLStore(dir string) (*JSONLStore, error) {
@@ -454,12 +467,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		record  jsonlRecord
 	}
 	var (
-		metaRecords    []jsonlRecord // always accumulate meta for metadata
-		lastCpMessages []provider.Message
-		postCPEntries  []lightweightEntry // entries after the last checkpoint
-		allUsage       []jsonlRecord      // ALL usage records (never cleared by checkpoint)
-		allMetrics     []jsonlRecord      // ALL metric records (never cleared by checkpoint)
-		haveCheckpoint bool
+		metaRecords     []jsonlRecord // always accumulate meta for metadata
+		lastCpMessages  []provider.Message
+		allMessages     []jsonlRecord      // ALL message records (never discarded by checkpoint)
+		postCPEntries   []lightweightEntry // cost entries after last checkpoint
+		postCPTunnelEvs []jsonlRecord      // tunnel events after last checkpoint (bounded)
+		allUsage        []jsonlRecord      // ALL usage records (never cleared by checkpoint)
+		allMetrics      []jsonlRecord      // ALL metric records (never cleared by checkpoint)
+		haveCheckpoint  bool
 	)
 
 	for sc.Scan() {
@@ -479,6 +494,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// New checkpoint replaces any previous one; discard old post-CP entries
 			lastCpMessages = rec.CheckpointMessages
 			postCPEntries = nil
+			postCPTunnelEvs = nil
 			haveCheckpoint = true
 		case "usage":
 			// Usage records are cumulative token history — never discard.
@@ -486,8 +502,15 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "metric":
 			// Metric records are cumulative performance history — never discard.
 			allMetrics = append(allMetrics, rec)
-		case "message", "cost", "tunnel_event":
+		case "message":
+			// ALL message records are kept for full history rendering.
+			allMessages = append(allMessages, rec)
+			// Also track for ContextMessages (checkpoint + post-checkpoint).
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+		case "cost":
+			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+		case "tunnel_event":
+			postCPTunnelEvs = append(postCPTunnelEvs, rec)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -513,26 +536,40 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 
-	// Build messages
-	if haveCheckpoint && len(lastCpMessages) > 0 {
-		ses.Messages = make([]provider.Message, len(lastCpMessages))
-		copy(ses.Messages, lastCpMessages)
+	// Build ses.Messages from ALL message records — this is the full
+	// conversation history used for rendering on session reload.
+	for _, rec := range allMessages {
+		if rec.Message != nil {
+			ses.Messages = append(ses.Messages, *rec.Message)
+		}
 	}
 
+	// Build ContextMessages for agent restoration: last checkpoint (compacted)
+	// + post-checkpoint message records. This is what gets sent to the LLM.
+	if haveCheckpoint && len(lastCpMessages) > 0 {
+		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
+		copy(ses.ContextMessages, lastCpMessages)
+	}
 	for _, e := range postCPEntries {
-		switch e.recType {
-		case "message":
-			if e.record.Message != nil {
-				ses.Messages = append(ses.Messages, *e.record.Message)
-			}
-		case "cost":
-			if e.record.CostJSON != nil {
-				ses.CostJSON = []byte(e.record.CostJSON)
-			}
-		case "tunnel_event":
-			if e.record.TunnelEvent != nil {
-				ses.TunnelEvents = append(ses.TunnelEvents, *e.record.TunnelEvent)
-			}
+		if e.recType == "message" && e.record.Message != nil {
+			ses.ContextMessages = append(ses.ContextMessages, *e.record.Message)
+		}
+		if e.recType == "cost" && e.record.CostJSON != nil {
+			ses.CostJSON = []byte(e.record.CostJSON)
+		}
+	}
+	// If no checkpoint, ContextMessages = Messages (all messages go to agent).
+	if len(ses.ContextMessages) == 0 {
+		ses.ContextMessages = ses.Messages
+	}
+
+	// Apply tunnel events with a cap to bound memory and file size.
+	if len(postCPTunnelEvs) > MaxTunnelEvents {
+		postCPTunnelEvs = postCPTunnelEvs[len(postCPTunnelEvs)-MaxTunnelEvents:]
+	}
+	for _, rec := range postCPTunnelEvs {
+		if rec.TunnelEvent != nil {
+			ses.TunnelEvents = append(ses.TunnelEvents, *rec.TunnelEvent)
 		}
 	}
 
