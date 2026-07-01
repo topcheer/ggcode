@@ -68,6 +68,7 @@ type Agent struct {
 	autopilotGoalSet             bool               // true after the user has confirmed a goal (goal text is non-empty)
 	autopilotGoalCheckedThisTurn bool               // prevents infinite goal-check loops within a single idle turn
 	reflectionFunc               ReflectionFunc     // called after each run with accumulated stats
+	systemPromptInjector         func() string      // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	mu                           sync.RWMutex
 }
 
@@ -194,6 +195,16 @@ func (a *Agent) SetRunResultWithContentHandler(fn func([]provider.ContentBlock, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onRunResult = fn
+}
+
+// SetSystemPromptInjector sets a callback that returns extra text to inject
+// into the system prompt at the start of each RunStreamWithContent. This is
+// used for dynamic warnings (e.g. lanchat peers editing the same workspace).
+// If the callback returns empty string, no injection occurs.
+func (a *Agent) SetSystemPromptInjector(fn func() string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.systemPromptInjector = fn
 }
 
 // SetApprovalHandler sets a callback for interactive approval (Ask → Deny by default).
@@ -574,6 +585,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// in-place without calling agent.SetPermissionPolicy().
 	a.clearGoalIfNotAutopilot()
 	a.maybeInjectAutopilotGoalCollection()
+	a.maybeInjectDynamicSystemPrompt()
 
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()

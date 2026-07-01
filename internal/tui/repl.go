@@ -126,6 +126,14 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 		if tools != nil {
 			tools.Register(tool.LanChatTool{Hub: hub})
 		}
+		// Inject system prompt warning when lanchat peers in the same
+		// workspace are busy. Reminds the LLM to check for file conflicts
+		// before editing shared files.
+		hubCopy := hub
+		wd := r.workingDir
+		r.agent.SetSystemPromptInjector(func() string {
+			return lanchatPeerConflictWarning(hubCopy, wd)
+		})
 	}
 	// Register auto-approve callback: inject the message into the TUI event
 	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
