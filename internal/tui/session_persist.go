@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -15,19 +16,18 @@ import (
 //
 // APPROACH: The JSONL file is append-only. The agent tracks which messages
 // were added via contextManager.Add() during the current run (runAdded).
-// We persist all of them EXCEPT the leading user message that was already
-// persisted by appendUserMessage().
+// We persist all of them EXCEPT those already in ses.Messages (which were
+// persisted by appendUserMessage() before the run started).
 //
-// How we identify the already-persisted user message:
-// appendUserMessage() adds the raw user text to ses.Messages and writes it
-// to disk. Then startAgent() → RunStreamWithContent() adds the user message
-// (possibly with prefix/image annotations) via contextManager.Add().
-// Both appear at the start of runAdded. We skip the first user message
-// (by position), then persist everything else.
+// Dedup is necessary because some entry points call appendUserMessage()
+// before startAgent(), writing the user message to disk immediately. Those
+// same user messages also appear in runAdded (added by RunStreamWithContent).
+// But other entry points (submitLanChatAgentText, custom commands) skip
+// appendUserMessage() — their user messages only exist in runAdded and
+// would be lost without persisting them here.
 //
 // Compaction safety: ApplyCompactResult replaces m.messages directly
-// (bypassing Add), so it does NOT pollute runAdded. Messages added before
-// compaction but during the same run are still tracked.
+// (bypassing Add), so it does NOT pollute runAdded.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
 		return
@@ -40,25 +40,16 @@ func (m *Model) persistFullSessionMessages() {
 	// Get all messages the agent added during this run.
 	runAdded := m.agent.AddedSinceRunStart()
 
-	// The first message in runAdded is always the user submission that
-	// triggered this run. It was already persisted by appendUserMessage()
-	// before the agent run started. Skip it.
-	//
-	// Note: appendUserMessage persists the raw user text. The agent's
-	// contextManager.Add may store a modified version (with image path
-	// hints, interrupt prefixes, etc.). We skip the agent's copy and rely
-	// on the one already on disk.
-	//
-	// Everything else in runAdded needs to be persisted:
-	//   - assistant messages (LLM responses with text and/or tool_use)
-	//   - tool_result messages (role:user with tool_result content blocks)
-	//   - interrupt injections (role:user with "New user guidance..." text)
-	//   - autopilot synthetic messages (continue, ask_user, goal_check)
-	//   - empty-response nudges ("The previous response was empty...")
-	//   - deferred project memory system messages
-	newMsgs := runAdded
-	if len(newMsgs) > 0 && newMsgs[0].Role == "user" {
-		newMsgs = newMsgs[1:]
+	// Dedup against ses.Messages: skip messages already present.
+	// appendUserMessage() may have already persisted the leading user message.
+	// But other paths (lanchat, custom commands) did not — their user message
+	// must be persisted here.
+	existing := ses.Messages
+	var newMsgs []provider.Message
+	for _, msg := range runAdded {
+		if !containsMessage(existing, msg) {
+			newMsgs = append(newMsgs, msg)
+		}
 	}
 
 	// Append new messages to ses.Messages (for in-memory rendering).
@@ -78,4 +69,36 @@ func (m *Model) persistFullSessionMessages() {
 			}
 		}
 	}
+}
+
+// containsMessage checks whether msgs contains a message with the same
+// role and content fingerprint as target.
+func containsMessage(msgs []provider.Message, target provider.Message) bool {
+	for _, msg := range msgs {
+		if messageFingerprint(msg) == messageFingerprint(target) {
+			return true
+		}
+	}
+	return false
+}
+
+// messageFingerprint produces a lightweight identity hash for a message.
+// Two messages are considered "the same record" if role + all content
+// block types + text/tool IDs match.
+func messageFingerprint(msg provider.Message) string {
+	h := msg.Role
+	for _, b := range msg.Content {
+		h += "|" + b.Type
+		switch b.Type {
+		case "text":
+			h += ":" + b.Text
+		case "tool_use":
+			h += ":" + b.ToolName + ":" + b.ToolID
+		case "tool_result":
+			h += ":" + b.ToolID
+		case "image":
+			h += ":img"
+		}
+	}
+	return h
 }
