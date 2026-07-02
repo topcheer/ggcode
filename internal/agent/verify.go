@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -101,59 +100,55 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 	return true
 }
 
-// makefileTags reads TAGS from the project Makefile (if present).
-// Many Go projects use build tags (e.g. `-tags goolm`) that are required
-// for compilation. Without them, `go test` and `go build` fail with missing
-// C headers. This function extracts the TAGS value so we can inject it into
-// the LLM-proposed verification command.
-func makefileTags(workingDir string) string {
-	makefile := filepath.Join(workingDir, "Makefile")
-	data, err := os.ReadFile(makefile)
-	if err != nil {
-		return ""
-	}
-	// Match: TAGS := goolm   or   TAGS = goolm
-	re := regexp.MustCompile(`(?m)^TAGS\s*[:?]?=\s*(.+)`)
-	m := re.FindSubmatch(data)
-	if m == nil {
-		return ""
-	}
-	tags := strings.TrimSpace(strings.Trim(string(m[1]), `"`))
-	if tags == "" {
-		return ""
-	}
-	return tags
-}
+// buildVerifyContext gathers project-specific hints to help the verification
+// oracle choose the right command. This is language- and tool-agnostic:
+// it checks for common build system files and Makefile targets so the oracle
+// knows what's available, without hardcoding any single ecosystem.
+func buildVerifyContext(workingDir string) string {
+	var hints []string
 
-// injectBuildTags ensures `go` commands include the project's build tags.
-// If the LLM proposed `go test ./...` and the Makefile declares TAGS := goolm,
-// this rewrites it to `go test -tags goolm ./...`.
-func injectBuildTags(cmd, tags string) string {
-	if tags == "" {
-		return cmd
+	// Check for Makefile with common targets (works for any language)
+	makefile := filepath.Join(workingDir, "Makefile")
+	if data, err := os.ReadFile(makefile); err == nil {
+		content := string(data)
+		var targets []string
+		for _, t := range []string{"test", "verify", "check", "lint", "ci", "build"} {
+			if strings.Contains(content, t+":") {
+				targets = append(targets, t)
+			}
+		}
+		if len(targets) > 0 {
+			hints = append(hints, fmt.Sprintf("Available make targets: %s (e.g. 'make %s')", strings.Join(targets, ", "), targets[0]))
+		}
 	}
-	trimmed := strings.TrimSpace(cmd)
-	// Only inject into bare `go test`, `go build`, `go vet` commands
-	// that don't already have -tags
-	if !strings.HasPrefix(trimmed, "go ") {
-		return cmd
+
+	// Detect common build systems
+	checks := []struct {
+		file  string
+		label string
+		cmd   string
+	}{
+		{"package.json", "npm", "npm test"},
+		{"pyproject.toml", "Python", "pytest"},
+		{"setup.py", "Python", "pytest"},
+		{"Cargo.toml", "Rust", "cargo test"},
+		{"go.mod", "Go", "go test ./..."},
+		{"CMakeLists.txt", "CMake", "cmake --build . && ctest"},
+		{"pubspec.yaml", "Flutter/Dart", "flutter test"},
+		{"mix.exs", "Elixir", "mix test"},
+		{"Gemfile", "Ruby", "bundle exec rake test"},
 	}
-	if strings.Contains(trimmed, "-tags") {
-		return cmd // already has tags
+	for _, c := range checks {
+		if _, err := os.Stat(filepath.Join(workingDir, c.file)); err == nil {
+			hints = append(hints, fmt.Sprintf("Project uses %s (likely: '%s')", c.label, c.cmd))
+			break
+		}
 	}
-	parts := strings.SplitN(trimmed, " ", 3)
-	if len(parts) < 2 {
-		return cmd
+
+	if len(hints) == 0 {
+		return ""
 	}
-	subcmd := parts[1] // test, build, vet
-	if subcmd != "test" && subcmd != "build" && subcmd != "vet" {
-		return cmd
-	}
-	// Insert -tags after the subcommand
-	if len(parts) == 2 {
-		return fmt.Sprintf("go %s -tags %s", subcmd, tags)
-	}
-	return fmt.Sprintf("go %s -tags %s %s", subcmd, tags, parts[2])
+	return "Project context:\n" + strings.Join(hints, "\n")
 }
 
 // llmDecideVerifyCommand asks the LLM to output a single verification command
@@ -177,12 +172,44 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 	}
 	recent := msgs[start:]
 
+	// Build project-aware context for the verification oracle.
+	// This replaces hardcoded build-tag injection with a general approach:
+	// the oracle gets project memory (GGCODE.md, which documents required
+	// build flags) + build system hints (Makefile targets, detected ecosystem).
+	workingDir := a.WorkingDir()
+	sysText := `You are a verification oracle. Based on the recent conversation, determine the single most appropriate build/test/lint command to verify the changes made. Output ONLY the command (no explanation, no markdown fences). If no verification is needed or possible, output exactly "SKIP".`
+
+	// Include project memory excerpt (build/validation instructions)
+	fullSys := a.SystemPrompt()
+	if fullSys != "" {
+		// Extract just the build/validation relevant sections — avoid sending
+		// the entire multi-KB system prompt to keep this LLM call fast.
+		for _, marker := range []string{"Build & Validation", "Build", "Validation", "Testing", "Quick Reference"} {
+			if idx := strings.Index(fullSys, marker); idx >= 0 {
+				end := strings.Index(fullSys[idx:], "\n## ")
+				if end < 0 {
+					end = len(fullSys) - idx
+					if end > 1500 {
+						end = 1500
+					}
+				}
+				sysText += "\n\n" + fullSys[idx:idx+end]
+				break
+			}
+		}
+	}
+
+	// Add project build context hints
+	if ctx := buildVerifyContext(workingDir); ctx != "" {
+		sysText += "\n\n" + ctx
+	}
+
 	verifierMsgs := append([]provider.Message{
 		{
 			Role: "system",
 			Content: []provider.ContentBlock{{
 				Type: "text",
-				Text: `You are a verification oracle. Based on the recent conversation, determine the single most appropriate build/test/lint command to verify the changes made. Output ONLY the command (no explanation, no markdown fences). If no verification is needed or possible, output exactly "SKIP".`,
+				Text: sysText,
 			}},
 		},
 	}, recent...)
@@ -212,15 +239,6 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 		strings.Contains(lower, "> /dev/") || strings.Contains(lower, "dd if=") {
 		debug.Log("verify", "LLM proposed dangerous command, rejecting: %s", cmd)
 		return ""
-	}
-
-	// Inject build tags from Makefile if the project requires them.
-	// Without this, `go test ./...` fails on projects that use build tags
-	// (e.g. goolm for mautrix crypto C headers).
-	wd := a.WorkingDir()
-	tags := makefileTags(wd)
-	if tags != "" {
-		cmd = injectBuildTags(cmd, tags)
 	}
 
 	return cmd
