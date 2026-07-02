@@ -314,6 +314,16 @@ func (a *Agent) AddedSinceRunStart() []provider.Message {
 	return nil
 }
 
+// StartRunTracking clears the run-added message tracking. This is normally
+// called inside RunStreamWithContent, but callers can invoke it earlier
+// (e.g. before ExpandMentions) to ensure AddedSinceRunStart returns empty
+// instead of stale data from a previous run if the agent never starts.
+func (a *Agent) StartRunTracking() {
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		cm.StartRunTracking()
+	}
+}
+
 // ContextManager returns the context manager for external inspection.
 func (a *Agent) SetProvider(p provider.Provider) {
 	a.mu.Lock()

@@ -133,6 +133,9 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if errors.Is(msg.Err, context.Canceled) {
+		// Even on cancellation, persist any messages that were added
+		// before the cancel (e.g. partial assistant response, tool results).
+		m.persistFullSessionMessages()
 		return m, nil
 	}
 	m.runFailed = true

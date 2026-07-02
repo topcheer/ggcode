@@ -154,6 +154,13 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 
 			m.pushInitialTunnelRunState()
 
+			// Clear run tracking early so that if ExpandMentions fails and
+			// the agent never starts, AddedSinceRunStart returns empty
+			// instead of stale data from the previous run.
+			if m.agent != nil {
+				m.agent.StartRunTracking()
+			}
+
 			// Expand @mentions asynchronously
 			workDir, _ := os.Getwd()
 			expandedMsg, expandErr := ExpandMentions(text, workDir)
