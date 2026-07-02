@@ -209,17 +209,28 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if len(msgs) == 0 {
 		msgs = ses.Messages // fallback when no checkpoint exists
 	}
-	for _, msg := range msgs {
-		agentInst.AddMessage(msg)
-	}
-	// If we restored from a checkpoint, use its precise token count as the
-	// baseline instead of the rough local estimate. This prevents inflated
-	// context percentages (e.g. 113% shown vs 62% actual) on session resume.
-	if ses.CheckpointTokens > 0 {
+
+	if ses.CheckpointTokens > 0 && ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
+		// Phase 1: Load checkpoint messages and set precise baseline.
+		cpMsgs := msgs[:ses.CheckpointMessageCount]
+		for _, msg := range cpMsgs {
+			agentInst.AddMessage(msg)
+		}
 		if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
 			cm.SetCheckpointBaseline(ses.CheckpointTokens)
 		}
+		// Phase 2: Load post-checkpoint messages — their tokens increment
+		// baselineDelta normally (tool results, assistant responses, etc.).
+		for _, msg := range msgs[ses.CheckpointMessageCount:] {
+			agentInst.AddMessage(msg)
+		}
+	} else {
+		// No checkpoint — load all messages with local estimation.
+		for _, msg := range msgs {
+			agentInst.AddMessage(msg)
+		}
 	}
+
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
 	// blocks (no matching tool_result blocks in subsequent messages), add a user
 	// message with cancelled tool_result entries. This handles session files saved

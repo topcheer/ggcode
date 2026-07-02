@@ -54,10 +54,11 @@ type Session struct {
 	//
 	// ⚠️ Only RestoreSessionIntoAgent() should read this field.
 	// ⚠️ TUI rendering must use Messages, NOT ContextMessages.
-	ContextMessages      []provider.Message `json:"-"`
-	CheckpointTokens     int                `json:"-"`
-	TunnelEvents         []TunnelEvent      `json:"tunnel_events,omitempty"`
-	TunnelEventsComplete bool               `json:"tunnel_events_complete,omitempty"`
+	ContextMessages        []provider.Message `json:"-"`
+	CheckpointTokens       int                `json:"-"`
+	CheckpointMessageCount int                `json:"-"`
+	TunnelEvents           []TunnelEvent      `json:"tunnel_events,omitempty"`
+	TunnelEventsComplete   bool               `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 	// PermissionMode stores the session-scoped permission mode (e.g. "auto", "bypass").
@@ -588,6 +589,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
 		copy(ses.ContextMessages, lastCpMessages)
 		ses.CheckpointTokens = lastCpTokens
+		ses.CheckpointMessageCount = len(lastCpMessages)
 	}
 	for _, e := range postCPEntries {
 		if e.recType == "message" && e.record.Message != nil {

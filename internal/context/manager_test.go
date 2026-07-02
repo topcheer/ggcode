@@ -866,24 +866,40 @@ func TestContextManager_SetCheckpointBaselineZeroIgnored(t *testing.T) {
 func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
 	cm := NewManager(256000)
 
-	// Simulate restore: messages loaded, then checkpoint baseline applied.
+	// Simulate checkpoint messages loaded first.
 	cm.Add(provider.Message{
 		Role:    "system",
 		Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("s", 50000)}},
 	})
+	// Set baseline AFTER checkpoint messages, BEFORE post-checkpoint messages.
 	cm.SetCheckpointBaseline(100000)
 
-	// Adding a new message after baseline should increment from the baseline.
-	cm.Add(provider.Message{
+	// Now add post-checkpoint messages — these should increment baselineDelta.
+	postMsg := provider.Message{
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: "new message after restore"}},
-	})
+	}
+	cm.Add(postMsg)
 
 	got := cm.TokenCount()
 	// With baseline available, TokenCount = baselineTokens + baselineDelta.
-	// The delta is computed by tokenCountLocked() when baseline is available.
-	if got < 100000 {
-		t.Fatalf("expected >= 100000 after baseline + new message, got %d", got)
+	// baselineDelta should include the post-checkpoint message tokens.
+	if got <= 100000 {
+		t.Fatalf("expected > 100000 after baseline + new message, got %d", got)
+	}
+	delta := got - 100000
+	if delta < 1 {
+		t.Fatalf("expected positive delta for post-checkpoint message, got %d", delta)
+	}
+
+	// Add another message — delta should grow.
+	cm.Add(provider.Message{
+		Role:    "assistant",
+		Content: []provider.ContentBlock{{Type: "text", Text: "assistant response"}},
+	})
+	got2 := cm.TokenCount()
+	if got2 <= got {
+		t.Fatalf("expected token count to grow after second post-checkpoint message: %d -> %d", got, got2)
 	}
 }
 
