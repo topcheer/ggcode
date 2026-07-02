@@ -465,6 +465,13 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 	return s.loadSession(id)
 }
 
+// localLightweightEntry pairs a record type tag with its raw JSONL record.
+// Used internally by loadSession to track post-checkpoint entries.
+type localLightweightEntry struct {
+	recType string
+	record  jsonlRecord
+}
+
 // loadSession is the lock-free internal version of Load.
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
@@ -488,10 +495,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// IMPORTANT: usage and metric records are cumulative history — they must
 	// NOT be cleared when a checkpoint is encountered. Only message/tunnel/cost
 	// entries follow checkpoint semantics (avoid replaying old messages).
-	type lightweightEntry struct {
-		recType string
-		record  jsonlRecord
-	}
+	type lightweightEntry = localLightweightEntry
 	var (
 		metaRecords     []jsonlRecord // always accumulate meta for metadata
 		lastCpMessages  []provider.Message
@@ -563,6 +567,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.SidebarVisible = rec.SidebarVisible
 		}
 	}
+
+	// Deduplicate message records in corrupted JSONL files.
+	// A now-fixed bug (StartRunTracking after restore) caused all restored
+	// messages to be re-appended on every agent run, doubling the file on
+	// each restart. This defensive dedup ensures clean in-memory state even
+	// for files that were corrupted before the fix.
+	allMessages = dedupMessageRecords(allMessages)
+	postCPEntries = dedupLightweightEntries(postCPEntries)
 
 	// ── ses.Messages: ALL message records from the file (for rendering) ──
 	// This is the FULL conversation history. Every message record ever
@@ -1303,4 +1315,87 @@ func appendRecordLine(path string, rec jsonlRecord) error {
 		return err
 	}
 	return f.Close()
+}
+
+// messageFingerprint builds a content-based fingerprint for deduplication.
+// Two messages with the same role and identical content blocks are considered
+// duplicates regardless of their position in the JSONL file.
+func messageFingerprint(msg *provider.Message) string {
+	var sb strings.Builder
+	sb.WriteString(msg.Role)
+	sb.WriteByte('|')
+	for _, c := range msg.Content {
+		switch c.Type {
+		case "text":
+			sb.WriteString("t:")
+			sb.WriteString(c.Text)
+		case "tool_use":
+			sb.WriteString("u:")
+			sb.WriteString(c.ToolName)
+			if raw, err := json.Marshal(c.Input); err == nil {
+				sb.Write(raw)
+			}
+		case "tool_result":
+			sb.WriteString("r:")
+			sb.WriteString(c.ToolID)
+			// Cap output in fingerprint to bound memory for large results
+			out := c.Output
+			if len(out) > 200 {
+				out = out[:200]
+			}
+			sb.WriteString(out)
+		default:
+			sb.WriteString(c.Type)
+			sb.WriteByte('?')
+		}
+		sb.WriteByte(';')
+	}
+	return sb.String()
+}
+
+// dedupMessageRecords removes duplicate message records, keeping only the
+// first occurrence of each unique message. Non-message records are passed
+// through unchanged.
+func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
+	if len(records) <= 1 {
+		return records
+	}
+	seen := make(map[string]bool, len(records))
+	out := records[:0]
+	for _, rec := range records {
+		if rec.Message == nil {
+			out = append(out, rec)
+			continue
+		}
+		fp := messageFingerprint(rec.Message)
+		if seen[fp] {
+			continue
+		}
+		seen[fp] = true
+		out = append(out, rec)
+	}
+	return out
+}
+
+// dedupLightweightEntries removes duplicate message-type entries from a
+// localLightweightEntry slice. Non-message entries (cost, etc.) are kept as-is.
+func dedupLightweightEntries(entries []localLightweightEntry) []localLightweightEntry {
+	if len(entries) <= 1 {
+		return entries
+	}
+	seen := make(map[string]bool, len(entries))
+	out := entries[:0]
+	for _, e := range entries {
+		if e.recType != "message" || e.record.Message == nil {
+			out = append(out, e)
+			continue
+		}
+		fp := messageFingerprint(e.record.Message)
+		if seen[fp] {
+			continue
+		}
+		seen[fp] = true
+		out = append(out, e)
+	}
+	return out
 }
