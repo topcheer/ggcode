@@ -654,13 +654,29 @@ func TestPreCompactAppliesBetweenLLMTurnsAndPreservesNewDialogue(t *testing.T) {
 	}})
 	a = NewAgent(mp, reg, "", 2)
 	defer a.Close()
-	a.ContextManager().SetContextWindow(2000)
-	for i := 0; i < 7; i++ {
-		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 25))}})
-		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 25))}})
+	a.ContextManager().SetContextWindow(50000)
+	a.ContextManager().SetOutputReserve(100)
+	for i := 0; i < 200; i++ {
+		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 50))}})
+		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 50))}})
 	}
 
+	// Pre-release the summary so the background precompact's Chat() returns immediately.
+	close(mp.releaseSummary)
+
 	a.StartPreCompact()
+	// Wait for the background precompact to complete so consumeReadyPreCompact
+	// can apply it at the top of the first loop iteration (before any hard guard fires).
+	a.mu.RLock()
+	pc := a.precompact
+	a.mu.RUnlock()
+	if pc != nil {
+		select {
+		case <-pc.done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for precompact")
+		}
+	}
 	if err := a.RunStream(context.Background(), "first user message while compacting", func(event provider.StreamEvent) {}); err != nil {
 		t.Fatalf("RunStream failed: %v", err)
 	}
@@ -688,7 +704,8 @@ func waitForPrecompactDone(t *testing.T, a *Agent) {
 		pc := a.precompact
 		a.mu.RUnlock()
 		if pc == nil {
-			t.Fatal("expected precompact state")
+			// Precompact was already consumed (completed and applied).
+			return
 		}
 		select {
 		case <-pc.done:

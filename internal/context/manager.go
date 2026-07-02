@@ -562,6 +562,9 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// modified within the first OrigLen (stale snapshot - reject).
 	if m.version != snapshot.Version {
 		for i := range snapshot.Messages {
+			if i >= len(m.messages) {
+				return false, m.tokenCountLocked()
+			}
 			live := m.messages[i]
 			snap := snapshot.Messages[i]
 			if live.Role != snap.Role || contentFingerprint(live) != contentFingerprint(snap) {
