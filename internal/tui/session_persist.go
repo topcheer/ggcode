@@ -14,22 +14,23 @@ import (
 // agent.Messages() (which is the COMPACTED version). That would permanently
 // destroy pre-compaction message records from the JSONL file.
 //
-// APPROACH: The JSONL file is append-only. The agent tracks which messages
-// were added via contextManager.Add() during the current run (runAdded).
-// We persist all of them EXCEPT those already in ses.Messages (which were
-// persisted by appendUserMessage() before the run started).
+// APPROACH: All entry points (keyboard, lanchat, custom commands, webui,
+// tunnel, harness, autopilot) now call appendUserMessage() before starting
+// the agent. appendUserMessage writes the user message to disk immediately
+// and appends it to ses.Messages.
 //
-// Dedup is necessary because some entry points call appendUserMessage()
-// before startAgent(), writing the user message to disk immediately. Those
-// same user messages also appear in runAdded (added by RunStreamWithContent).
-// But other entry points (submitLanChatAgentText, custom commands) skip
-// appendUserMessage() — their user messages only exist in runAdded and
-// would be lost without persisting them here.
+// RunStreamWithContent calls StartRunTracking() (clearing runAdded), then
+// adds the user message via contextManager.Add() as runAdded[0]. Everything
+// after runAdded[0] (assistant responses, tool results, interrupt injections,
+// autopilot synthetic messages, etc.) needs to be persisted here.
+//
+// So we simply skip runAdded[0] (already on disk) and persist [1:].
 //
 // Compaction safety: ApplyCompactResult replaces m.messages directly
 // (bypassing Add), so it does NOT pollute runAdded.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
+		debug.Log("tui", "persistFullSessionMessages: skip (nil agent/session/store)")
 		return
 	}
 	m.sessionMutex().Lock()
@@ -40,16 +41,22 @@ func (m *Model) persistFullSessionMessages() {
 	// Get all messages the agent added during this run.
 	runAdded := m.agent.AddedSinceRunStart()
 
-	// Dedup against ses.Messages: skip messages already present.
-	// appendUserMessage() may have already persisted the leading user message.
-	// But other paths (lanchat, custom commands) did not — their user message
-	// must be persisted here.
-	existing := ses.Messages
+	// runAdded[0] is always the user submission, added by
+	// RunStreamWithContent before the loop. It was already persisted by
+	// appendUserMessage() before the agent run started.
+	//
+	// Everything else (runAdded[1:]) needs to be persisted:
+	//   - assistant messages (LLM responses with text and/or tool_use)
+	//   - tool_result messages (role:user with tool_result content blocks)
+	//   - interrupt injections (role:user with "New user guidance..." text)
+	//   - autopilot synthetic messages (continue, ask_user, goal_check)
+	//   - empty-response nudges ("The previous response was empty...")
+	//   - deferred project memory system messages
 	var newMsgs []provider.Message
-	for _, msg := range runAdded {
-		if !containsMessage(existing, msg) {
-			newMsgs = append(newMsgs, msg)
-		}
+	if len(runAdded) > 0 && runAdded[0].Role == "user" {
+		newMsgs = runAdded[1:]
+	} else {
+		newMsgs = runAdded
 	}
 
 	// Append new messages to ses.Messages (for in-memory rendering).
@@ -68,37 +75,10 @@ func (m *Model) persistFullSessionMessages() {
 				debug.Log("tui", "persistFullSessionMessages: AppendMessageToDisk failed: %v", err)
 			}
 		}
+	} else {
+		// Fallback for non-JSONL stores: full save.
+		m.sessionMutex().Lock()
+		_ = store.Save(ses)
+		m.sessionMutex().Unlock()
 	}
-}
-
-// containsMessage checks whether msgs contains a message with the same
-// role and content fingerprint as target.
-func containsMessage(msgs []provider.Message, target provider.Message) bool {
-	for _, msg := range msgs {
-		if messageFingerprint(msg) == messageFingerprint(target) {
-			return true
-		}
-	}
-	return false
-}
-
-// messageFingerprint produces a lightweight identity hash for a message.
-// Two messages are considered "the same record" if role + all content
-// block types + text/tool IDs match.
-func messageFingerprint(msg provider.Message) string {
-	h := msg.Role
-	for _, b := range msg.Content {
-		h += "|" + b.Type
-		switch b.Type {
-		case "text":
-			h += ":" + b.Text
-		case "tool_use":
-			h += ":" + b.ToolName + ":" + b.ToolID
-		case "tool_result":
-			h += ":" + b.ToolID
-		case "image":
-			h += ":img"
-		}
-	}
-	return h
 }

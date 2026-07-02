@@ -613,6 +613,22 @@ func (m *Manager) SetOutputReserve(n int) {
 	m.outputReserve = n
 }
 
+// SetCheckpointBaseline sets the initial token baseline from a session
+// checkpoint. This avoids inflated token counts on session restore where
+// the local estimator (len/4) diverges significantly from real token counts.
+// Must be called after messages are loaded but before the first LLM call.
+func (m *Manager) SetCheckpointBaseline(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.baselineTokens = tokens
+	m.baselineDelta = 0
+	m.baselineAvailable = true
+	debug.Log("ctx", "SetCheckpointBaseline: tokens=%d (replaces estimate %d)", tokens, m.tokens)
+}
+
 func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	if usage.InputTokens <= 0 {
 		return

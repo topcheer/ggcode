@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -210,6 +211,14 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	}
 	for _, msg := range msgs {
 		agentInst.AddMessage(msg)
+	}
+	// If we restored from a checkpoint, use its precise token count as the
+	// baseline instead of the rough local estimate. This prevents inflated
+	// context percentages (e.g. 113% shown vs 62% actual) on session resume.
+	if ses.CheckpointTokens > 0 {
+		if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
+			cm.SetCheckpointBaseline(ses.CheckpointTokens)
+		}
 	}
 	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
 	// blocks (no matching tool_result blocks in subsequent messages), add a user

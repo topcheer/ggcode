@@ -55,6 +55,7 @@ type Session struct {
 	// ⚠️ Only RestoreSessionIntoAgent() should read this field.
 	// ⚠️ TUI rendering must use Messages, NOT ContextMessages.
 	ContextMessages      []provider.Message `json:"-"`
+	CheckpointTokens     int                `json:"-"`
 	TunnelEvents         []TunnelEvent      `json:"tunnel_events,omitempty"`
 	TunnelEventsComplete bool               `json:"tunnel_events_complete,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
@@ -493,6 +494,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	var (
 		metaRecords     []jsonlRecord // always accumulate meta for metadata
 		lastCpMessages  []provider.Message
+		lastCpTokens    int
 		allMessages     []jsonlRecord      // ALL message records (never discarded by checkpoint)
 		postCPEntries   []lightweightEntry // cost entries after last checkpoint
 		postCPTunnelEvs []jsonlRecord      // tunnel events after last checkpoint (bounded)
@@ -517,6 +519,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "checkpoint":
 			// New checkpoint replaces any previous one; discard old post-CP entries
 			lastCpMessages = rec.CheckpointMessages
+			lastCpTokens = rec.CheckpointTokens
 			postCPEntries = nil
 			postCPTunnelEvs = nil
 			haveCheckpoint = true
@@ -584,6 +587,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	if haveCheckpoint && len(lastCpMessages) > 0 {
 		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
 		copy(ses.ContextMessages, lastCpMessages)
+		ses.CheckpointTokens = lastCpTokens
 	}
 	for _, e := range postCPEntries {
 		if e.recType == "message" && e.record.Message != nil {
