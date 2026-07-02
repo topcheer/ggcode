@@ -308,6 +308,10 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 		}
 		ai := chat.NewAssistantItem("", styles)
 		ai.SetText(text)
+		// Follow panel shows snapshots (complete text, not streaming).
+		// Mark as finished so Render() uses markdown.Render() instead of
+		// renderStreamingMarkdown(), which can mangle whitespace.
+		ai.SetFinished()
 		list.Append(ai)
 	}
 
