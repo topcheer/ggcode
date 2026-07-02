@@ -30,7 +30,7 @@ func (m *Model) appendUserMessage(text string) {
 	}
 	msg := provider.Message{
 		Role:    "user",
-		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+		Content: []provider.ContentBlock{{Type: "text", Text: strings.TrimSpace(text)}},
 	}
 	// Mutate Session object under sessionMutex to prevent data races
 	// with checkpoint handler and other readers.

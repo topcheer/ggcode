@@ -509,6 +509,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 					expanded := custom.Expand(vars)
 					m.chatWriteSystem(nextSystemID(), m.t("command.custom", cmdName))
 					m.chatWriteSystem(nextSystemID(), expanded)
+					m.appendUserMessage(expanded)
 					m.setLoading(true)
 					m.loopStart = time.Now()
 					// Reset status bar state
@@ -558,6 +559,9 @@ func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
 	// Render as a user markdown message (not a gray system note)
 	m.chatWriteUserMarkdown(nextSystemID(), text)
 	m.chatListScrollToBottom()
+	// Persist as a normal user message — lanchat messages ARE user messages,
+	// they just originate from an external agent instead of the keyboard.
+	m.appendUserMessage(text)
 	// Inject into the agent loop so the agent can process and respond
 	return m.continueDisplayedNormalTextRun(text)
 }
