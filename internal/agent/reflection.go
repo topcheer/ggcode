@@ -84,11 +84,14 @@ func (s *RunStats) recordCommand(cmd string) {
 	s.CommandsRun = append(s.CommandsRun, truncatePrompt(cmd, 200))
 }
 
-// recordError adds an error message (truncated, max 10 entries).
-func (s *RunStats) recordError(msg string) {
+// recordToolError adds a tool execution error for reflection/ratchet rule
+// extraction. The format includes the tool name so the LLM can categorize
+// the rule correctly. Max 10 entries, each truncated to 500 chars.
+func (s *RunStats) recordToolError(toolName, errMsg string) {
 	if len(s.Errors) >= 10 {
 		return
 	}
+	msg := fmt.Sprintf("%s: %s", toolName, errMsg)
 	s.Errors = append(s.Errors, truncatePrompt(msg, 500))
 }
 
@@ -96,9 +99,9 @@ func (s *RunStats) recordError(msg string) {
 func (s *RunStats) finalize(err error) {
 	s.Duration = time.Since(s.startTime)
 	s.Success = err == nil
-	if err != nil {
-		s.recordError(err.Error())
-	}
+	// Note: agent loop errors (context.Canceled, stream errors) are NOT recorded
+	// here — they are ggcode-internal and not actionable for other applications.
+	// Only tool execution errors are collected via recordToolError.
 }
 
 // ReflectionFunc is called after each RunStreamWithContent completes, with the

@@ -42,10 +42,10 @@ func TestRunStatsRecordCommand(t *testing.T) {
 	}
 }
 
-func TestRunStatsRecordErrorMaxEntries(t *testing.T) {
+func TestRunStatsRecordToolErrorMaxEntries(t *testing.T) {
 	s := newRunStats("test")
 	for i := 0; i < 15; i++ {
-		s.recordError("error")
+		s.recordToolError("run_command", "error")
 	}
 	if len(s.Errors) != 10 {
 		t.Errorf("expected max 10 errors, got %d", len(s.Errors))
@@ -73,8 +73,9 @@ func TestRunStatsFinalizeWithError(t *testing.T) {
 	if s.Success {
 		t.Error("expected success=false for error")
 	}
-	if len(s.Errors) != 1 {
-		t.Errorf("expected 1 error recorded, got %d", len(s.Errors))
+	// Agent loop errors are NOT recorded — only tool errors are collected.
+	if len(s.Errors) != 0 {
+		t.Errorf("expected 0 errors (agent loop errors not recorded), got %d", len(s.Errors))
 	}
 }
 

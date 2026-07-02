@@ -53,6 +53,7 @@ type Agent struct {
 	onRunResult                  runResultHandler
 	hookConfig                   hooks.HookConfig
 	workingDir                   string
+	sessionID                    string // current session ID; determines todo file path
 	checkpoints                  *checkpoint.Manager
 	diffConfirm                  DiffConfirmFunc
 	onInterrupt                  interruptionHandler
@@ -487,7 +488,6 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
-	a.syncContextManagerTodoPathLocked()
 }
 
 func (a *Agent) WorkingDir() string {
@@ -496,9 +496,29 @@ func (a *Agent) WorkingDir() string {
 	return a.workingDir
 }
 
+// SetSessionID sets the current session ID and propagates it to the todo tool
+// and context manager so both read/write from the same session-scoped path.
+func (a *Agent) SetSessionID(id string) {
+	// Update sessionID + context manager path atomically under one lock
+	// to avoid a TOCTOU window where sessionID is new but todoPath is stale.
+	a.mu.Lock()
+	a.sessionID = id
+	a.syncContextManagerTodoPathLocked()
+	a.mu.Unlock()
+	// Update the TodoWrite tool's session binding outside agent.mu.
+	// tools.Get acquires registry.mu and tw.SetSessionID acquires TodoWrite.mu;
+	// holding agent.mu during those calls risks deadlock if a registry or
+	// tool callback tries to call back into the agent.
+	if t, ok := a.tools.Get("todo_write"); ok {
+		if tw, ok := t.(*tool.TodoWrite); ok {
+			tw.SetSessionID(id)
+		}
+	}
+}
+
 func (a *Agent) syncContextManagerTodoPathLocked() {
 	if cm, ok := a.contextManager.(todoPathAwareContextManager); ok {
-		cm.SetTodoFilePath(tool.TodoFilePath(a.workingDir))
+		cm.SetTodoFilePath(tool.TodoFilePath(a.sessionID))
 	}
 }
 
@@ -546,6 +566,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.mu.RUnlock()
 		if fn != nil {
 			fn(content, err)
+		}
+		// Clean up session todos on agent stop. This prevents permanent todo
+		// residue when the LLM creates todos but forgets to clear them.
+		// Covers normal completion, cancellation, and error cases.
+		if t, ok := a.tools.Get("todo_write"); ok {
+			if tw, ok := t.(*tool.TodoWrite); ok {
+				tw.ClearTodos()
+			}
 		}
 	}()
 
@@ -839,6 +867,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, util.Truncate(result.Content, 200), len(result.Images))
+
+			// Record tool errors for reflection/ratchet rule extraction.
+			if result.IsError {
+				runStats.recordToolError(tc.Name, result.Content)
+			}
 
 			// Collect follow-up messages from tools (e.g., inline skills).
 			if len(result.FollowUpMessages) > 0 {
