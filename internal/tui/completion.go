@@ -201,6 +201,7 @@ var SlashCommands = []string{
 	"/diff", "/hooks", "/cost", "/review", "/copy", "/context",
 	"/retry",
 	"/edit",
+	"/regenerate", "/regen", "/branch", "/fork",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -271,6 +272,10 @@ var SlashCommandDescriptions = map[string]string{
 	"/review":      "AI code review of current git diff (bugs, security, races)",
 	"/copy":        "Copy last assistant response to clipboard",
 	"/context":     "Show context window usage breakdown",
+	"/regenerate":  "Regenerate last AI response (discard and re-run)",
+	"/regen":       "Regenerate last AI response (discard and re-run)",
+	"/branch":      "Fork current conversation into a new session",
+	"/fork":        "Fork current conversation into a new session",
 }
 
 // SlashCommandPlaceholders maps commands that accept optional arguments.
