@@ -197,9 +197,12 @@ func SaveAgentSessionSnapshotWithExtra(store session.Store, ses *session.Session
 	return SaveSessionMessages(store, ses, msgs)
 }
 
-func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
+// RestoreSessionIntoAgent loads session messages into the agent's context
+// manager and runs reconciliation + microcompaction. Returns whether
+// microcompaction occurred and the before/after token counts.
+func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (compacted bool, beforeTokens int, afterTokens int) {
 	if agentInst == nil || ses == nil {
-		return
+		return false, 0, 0
 	}
 	msgs := ses.ContextMessages
 	if len(msgs) == 0 {
@@ -235,11 +238,13 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	}
 
 	agentInst.ReconcileToolCalls()
-	agentInst.MicrocompactIfOverThreshold()
+	compacted, beforeTokens, afterTokens = agentInst.MicrocompactIfOverThreshold()
 
 	// Clear runAdded: AddMessage() during restore populated it, but these
 	// messages already exist in the JSONL file. Without this, the next
 	// persistFullSessionMessages() would re-write all of them back to disk,
 	// doubling the session file on every restart.
 	agentInst.StartRunTracking()
+
+	return compacted, beforeTokens, afterTokens
 }

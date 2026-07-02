@@ -1207,10 +1207,13 @@ func (r *REPL) loadSession(id string) {
 		}
 	}
 
-	agentruntime.RestoreSessionIntoAgent(r.agent, ses)
+	compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(r.agent, ses)
 	r.model.SetSession(ses, r.store)
 
-	// Restore session-scoped permission mode (if set).
+	if compacted {
+		r.model.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restored session was oversized (%d tokens), truncated to %d tokens to fit context window", beforeTokens, afterTokens))
+	}
+
 	// This overrides the global default_mode for this session only.
 	if ses.PermissionMode != "" {
 		sessionMode := permission.ParsePermissionMode(ses.PermissionMode)

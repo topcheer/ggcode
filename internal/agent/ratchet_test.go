@@ -91,7 +91,8 @@ func TestRuleStoreMatchingRulesForTool(t *testing.T) {
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "Use -tags goolm",
-		MatchPattern: "go build",
+		MatchPattern: "libolm.*header",
+		ToolPattern:  "go build|go test|go vet",
 		FixHint:      "Add -tags goolm",
 	})
 	rs.AddRule(Rule{
@@ -100,7 +101,7 @@ func TestRuleStoreMatchingRulesForTool(t *testing.T) {
 		MatchPattern: "git commit",
 	})
 
-	// run_command with "go build" should match the build rule
+	// run_command with "go build" should match the build rule via ToolPattern
 	matching := rs.MatchingRulesForTool("run_command", "go build -tags goolm ./...")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 matching rule, got %d", len(matching))
@@ -109,7 +110,7 @@ func TestRuleStoreMatchingRulesForTool(t *testing.T) {
 		t.Errorf("unexpected rule: %s", matching[0].Rule)
 	}
 
-	// git_commit should match the git rule
+	// git_commit should match the git rule (ToolPattern empty, falls back to MatchPattern)
 	matching = rs.MatchingRulesForTool("git_commit", "git commit -m test")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 git matching rule, got %d", len(matching))
@@ -119,6 +120,18 @@ func TestRuleStoreMatchingRulesForTool(t *testing.T) {
 	matching = rs.MatchingRulesForTool("write_file", "/some/path")
 	if len(matching) != 0 {
 		t.Errorf("expected 0 matching rules for write_file, got %d", len(matching))
+	}
+
+	// ToolPattern matching: "go test" should also match the build rule
+	matching = rs.MatchingRulesForTool("run_command", "go test ./...")
+	if len(matching) != 1 {
+		t.Errorf("expected 1 matching rule for go test via tool_pattern, got %d", len(matching))
+	}
+
+	// A command that does NOT match ToolPattern should not match
+	matching = rs.MatchingRulesForTool("run_command", "echo hello")
+	if len(matching) != 0 {
+		t.Errorf("expected 0 matching rules for echo hello, got %d", len(matching))
 	}
 }
 
@@ -167,16 +180,17 @@ func TestInjectRulesIntoResult(t *testing.T) {
 	dir := t.TempDir()
 	a := &Agent{workingDir: dir}
 
-	// Add a build rule
+	// Add a build rule with separate error and tool patterns
 	rs := NewRuleStore(dir)
 	rs.AddRule(Rule{
 		Category:     "build",
 		Rule:         "Use -tags goolm",
-		MatchPattern: "go build",
+		MatchPattern: "libolm.*header",
+		ToolPattern:  "go build|go test|go vet",
 		FixHint:      "Add -tags goolm",
 	})
 
-	// Inject for matching tool
+	// Inject for matching tool (tool args match ToolPattern)
 	result := a.injectRulesIntoResult("run_command",
 		[]byte(`{"command":"go build ./..."}`),
 		"Build succeeded")
@@ -190,11 +204,35 @@ func TestInjectRulesIntoResult(t *testing.T) {
 		t.Error("expected rule text in injected result")
 	}
 
-	// Non-matching tool should not inject
+	// Non-matching tool args should NOT inject
+	result = a.injectRulesIntoResult("run_command",
+		[]byte(`{"command":"echo hello"}`),
+		"echo output")
+	if result != "echo output" {
+		t.Error("expected no injection for non-matching command")
+	}
+
+	// Non-matching tool category should not inject
 	result = a.injectRulesIntoResult("read_file",
 		[]byte(`{"path":"/some/file"}`),
 		"File contents")
 	if result != "File contents" {
 		t.Error("expected no injection for non-matching tool")
+	}
+
+	// Backward compat: rule with only MatchPattern (no ToolPattern) should still work for injection
+	rs.AddRule(Rule{
+		Category:     "git",
+		Rule:         "Check untracked files",
+		MatchPattern: "git commit",
+	})
+	result = a.injectRulesIntoResult("git_commit",
+		[]byte(`{"message":"git commit -m test"}`),
+		"Committed")
+	if result == "Committed" {
+		t.Error("expected injected content for backward-compat rule")
+	}
+	if !contains(result, "Check untracked files") {
+		t.Error("expected backward-compat rule text in injected result")
 	}
 }

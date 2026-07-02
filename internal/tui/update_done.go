@@ -110,6 +110,11 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 // handleErrMsg handles the corresponding message case.
 func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	if errors.Is(msg.err, context.Canceled) {
+		// Even on cancellation, persist any messages that were added
+		// during the run (e.g. partial assistant response, tool results).
+		// The agent loop already fills cancelled tool_results via
+		// fillCancelledToolResults(), so the context is consistent.
+		m.persistFullSessionMessages()
 		return m, nil
 	}
 	m.runFailed = true

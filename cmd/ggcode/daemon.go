@@ -372,9 +372,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("loading session %s: %w", resumeID, err)
 		}
 		ses = existing
-		// Restore messages to agent
-		for _, msg := range ses.Messages {
-			ag.AddMessage(msg)
+		// Restore messages to agent (includes reconcile + microcompact).
+		compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(ag, ses)
+		if compacted {
+			fmt.Fprintf(os.Stderr, "Restored session was oversized (%d tokens), truncated to %d tokens to fit context window\n", beforeTokens, afterTokens)
 		}
 		// Restore session-scoped permission mode (if set).
 		if ses.PermissionMode != "" {
@@ -394,6 +395,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if err := store.Save(ses); err != nil {
 		return fmt.Errorf("saving session: %w", err)
 	}
+	ag.SetSessionID(ses.ID)
 
 	// Acquire session lock to prevent concurrent instances on the same session.
 	var sessionLock *session.SessionLock

@@ -21,10 +21,11 @@ import (
 // Rule represents a learned harness rule extracted from agent errors.
 type Rule struct {
 	ID           string    `json:"id"`
-	Category     string    `json:"category"`           // build | test | git | convention | security
-	Rule         string    `json:"rule"`               // human-readable rule text
-	MatchPattern string    `json:"match_pattern"`      // regexp to match similar errors
-	FixHint      string    `json:"fix_hint,omitempty"` // optional actionable hint
+	Category     string    `json:"category"`               // build | test | git | convention | security
+	Rule         string    `json:"rule"`                   // human-readable rule text
+	MatchPattern string    `json:"match_pattern"`          // regexp to match error OUTPUT (for auto-verify)
+	ToolPattern  string    `json:"tool_pattern,omitempty"` // regexp to match tool ARGS (for injection)
+	FixHint      string    `json:"fix_hint,omitempty"`     // optional actionable hint
 	HitCount     int       `json:"hit_count"`
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -149,7 +150,7 @@ func (rs *RuleStore) AddRule(r Rule) {
 	rs.rules = append(rs.rules, r)
 	rs.evict()
 	_ = rs.save()
-	debug.Log("ratchet", "added rule %s: %s (pattern=%s)", r.ID, r.Rule, r.MatchPattern)
+	debug.Log("ratchet", "added rule %s: %s (match=%s, tool=%s)", r.ID, r.Rule, r.MatchPattern, r.ToolPattern)
 }
 
 // Rules returns a copy of all rules.
@@ -163,7 +164,8 @@ func (rs *RuleStore) Rules() []Rule {
 }
 
 // MatchingRulesForTool returns rules whose category matches the tool name
-// and whose pattern matches the tool arguments. Used for injection.
+// and whose ToolPattern (or MatchPattern as fallback) matches the tool
+// arguments. Used for rule injection into tool results.
 func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -174,10 +176,16 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 		if !categoryMatchesTool(r.Category, toolName) {
 			continue
 		}
-		if r.MatchPattern == "" {
+		// Use ToolPattern if available; fall back to MatchPattern for
+		// backward compatibility with existing rules that only have one.
+		pattern := r.ToolPattern
+		if pattern == "" {
+			pattern = r.MatchPattern
+		}
+		if pattern == "" {
 			continue
 		}
-		re, err := regexp.Compile(r.MatchPattern)
+		re, err := regexp.Compile(pattern)
 		if err != nil {
 			continue
 		}
@@ -250,7 +258,8 @@ type ratchetResult struct {
 	Action       string `json:"action"`        // "new" | "skip"
 	Category     string `json:"category"`      // build | test | git | convention | security
 	Rule         string `json:"rule"`          // generalized rule
-	MatchPattern string `json:"match_pattern"` // regexp to match similar errors
+	MatchPattern string `json:"match_pattern"` // regexp to match error OUTPUT
+	ToolPattern  string `json:"tool_pattern"`  // regexp to match tool ARGS that trigger this error
 	FixHint      string `json:"fix_hint"`      // actionable hint
 	SkipReason   string `json:"skip_reason,omitempty"`
 }
@@ -268,11 +277,13 @@ For each error, decide:
 For "new" rules:
 - category: One of "build", "test", "git", "convention", "security"
 - rule: A concise, imperative rule (e.g., "All Go commands must use -tags goolm")
-- match_pattern: A regexp that matches similar error messages (e.g., "libolm.*C header|cannot find.*olm")
+- match_pattern: A regexp that matches the error OUTPUT messages (e.g., "libolm.*C header|cannot find.*olm")
+- tool_pattern: A regexp that matches the tool ARGS that would trigger this error (e.g., "go build|go test|go vet" for missing -tags flag). Leave empty if not applicable.
 - fix_hint: A short actionable hint (e.g., "Add -tags goolm to the go command")
 
 Rules should be GENERAL (applicable across sessions), not specific to one file.
 The match_pattern should catch the CLASS of error, not just the exact message.
+The tool_pattern should match the TOOL arguments (command string, file path) that lead to this error.
 
 Respond with JSON only. No markdown, no explanation.`
 
@@ -292,7 +303,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 	// Build existing rules summary
 	ruleSummaries := make([]string, len(existingRules))
 	for i, r := range existingRules {
-		ruleSummaries[i] = fmt.Sprintf("- [%s] %s (pattern: %s)", r.Category, r.Rule, r.MatchPattern)
+		ruleSummaries[i] = fmt.Sprintf("- [%s] %s (match: %s, tool: %s)", r.Category, r.Rule, r.MatchPattern, r.ToolPattern)
 	}
 
 	var userPrompt strings.Builder
@@ -307,7 +318,7 @@ func (a *Agent) ProcessErrorsWithLLM(errors []string, existingRules []Rule) (*ra
 		}
 	}
 	userPrompt.WriteString("\nAnalyze each error and respond with JSON:\n")
-	userPrompt.WriteString(`{"results":[{"action":"new","category":"build","rule":"...","match_pattern":"...","fix_hint":"..."},{"action":"skip","skip_reason":"..."}]}`)
+	userPrompt.WriteString(`{"results":[{"action":"new","category":"build","rule":"...","match_pattern":"...","tool_pattern":"...","fix_hint":"..."},{"action":"skip","skip_reason":"..."}]}`)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -403,6 +414,7 @@ func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, 
 						Category:     result.Category,
 						Rule:         result.Rule,
 						MatchPattern: result.MatchPattern,
+						ToolPattern:  result.ToolPattern,
 						FixHint:      result.FixHint,
 					})
 				}

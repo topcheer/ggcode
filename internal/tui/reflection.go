@@ -22,14 +22,7 @@ import (
 // Only runs with >=3 tool calls or any file edits get a memory entry.
 func setupReflection(a *agent.Agent) {
 	a.SetReflectionFunc(func(stats agent.RunStats) {
-		totalToolCalls := 0
-		for _, count := range stats.ToolCalls {
-			totalToolCalls += count
-		}
-		if totalToolCalls < 3 && len(stats.FilesEdited) == 0 && len(stats.CommandsRun) == 0 {
-			return
-		}
-		if !stats.Success && stats.Iterations <= 1 {
+		if !agent.ShouldReflect(stats) {
 			return
 		}
 
@@ -51,7 +44,7 @@ func setupReflection(a *agent.Agent) {
 		key := "run-insights"
 		existing, _, err := autoMem.LoadAll()
 		if err == nil && existing != "" {
-			insights = mergeInsights(existing, insights)
+			insights = agent.MergeInsights(existing, insights)
 		}
 
 		if err := autoMem.SaveMemory(key, insights); err != nil {
@@ -61,34 +54,6 @@ func setupReflection(a *agent.Agent) {
 				len(insights), len(stats.ToolCalls), len(stats.FilesEdited), len(stats.CommandsRun))
 		}
 	})
-}
-
-// mergeInsights appends a new run reflection to the existing insights file,
-// keeping only the most recent 10 entries to prevent unbounded growth.
-func mergeInsights(existing, newEntry string) string {
-	entries := splitRunEntries(existing)
-	entries = append(entries, newEntry)
-	if len(entries) > 10 {
-		entries = entries[len(entries)-10:]
-	}
-	return strings.Join(entries, "\n\n")
-}
-
-// splitRunEntries splits the memory file into individual run reflection blocks.
-func splitRunEntries(content string) []string {
-	parts := strings.Split(content, "## Run Reflection")
-	var entries []string
-	for i, part := range parts {
-		if i == 0 {
-			if strings.TrimSpace(part) != "" {
-				entries = append(entries, strings.TrimSpace(part))
-			}
-			continue
-		}
-		entry := "## Run Reflection" + part
-		entries = append(entries, strings.TrimSpace(entry))
-	}
-	return entries
 }
 
 // handleReflectCommand displays accumulated run insights.

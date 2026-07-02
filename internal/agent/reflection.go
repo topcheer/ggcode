@@ -304,3 +304,50 @@ func truncatePrompt(s string, maxLen int) string {
 	}
 	return s[:maxLen-3] + "..."
 }
+
+// MergeInsights appends a new run reflection to the existing insights file,
+// keeping only the most recent 10 entries to prevent unbounded growth.
+// Shared between TUI, daemon, and desktop surfaces.
+func MergeInsights(existing, newEntry string) string {
+	entries := SplitRunEntries(existing)
+	entries = append(entries, newEntry)
+	if len(entries) > 10 {
+		entries = entries[len(entries)-10:]
+	}
+	return strings.Join(entries, "\n\n")
+}
+
+// SplitRunEntries splits the memory file into individual run reflection blocks.
+// Shared between TUI, daemon, and desktop surfaces.
+func SplitRunEntries(content string) []string {
+	parts := strings.Split(content, "## Run Reflection")
+	var entries []string
+	for i, part := range parts {
+		if i == 0 {
+			if strings.TrimSpace(part) != "" {
+				entries = append(entries, strings.TrimSpace(part))
+			}
+			continue
+		}
+		entry := "## Run Reflection" + part
+		entries = append(entries, strings.TrimSpace(entry))
+	}
+	return entries
+}
+
+// ShouldReflect returns true if the run stats warrant a reflection entry.
+// Only runs with meaningful work (3+ tool calls, file edits, or commands)
+// get reflections.
+func ShouldReflect(stats RunStats) bool {
+	totalToolCalls := 0
+	for _, count := range stats.ToolCalls {
+		totalToolCalls += count
+	}
+	if totalToolCalls < 3 && len(stats.FilesEdited) == 0 && len(stats.CommandsRun) == 0 {
+		return false
+	}
+	if !stats.Success && stats.Iterations <= 1 {
+		return false
+	}
+	return true
+}

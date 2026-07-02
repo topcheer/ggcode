@@ -706,7 +706,7 @@ func (b *ChatBridge) LoadSession(id string) error {
 	if err := b.InitAgent(context.Background()); err != nil {
 		return fmt.Errorf("init agent for session load: %w", err)
 	}
-	agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
+	_, _, _ = agentruntime.RestoreSessionIntoAgent(b.agent, state.Session)
 
 	// Restore session-scoped permission mode (if set).
 	if state.Session.PermissionMode != "" {
@@ -1182,6 +1182,33 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	a.SetPermissionPolicy(policy)
 	a.SetHookConfig(b.cfg.Hooks)
 
+	// Post-run reflection — save insights to project memory so knowledge
+	// compounds across sessions. Same logic as TUI and daemon.
+	if b.workingDir != "" {
+		wd := b.workingDir
+		a.SetReflectionFunc(func(stats agent.RunStats) {
+			if !agent.ShouldReflect(stats) {
+				return
+			}
+			insights := agent.GenerateInsights(stats)
+			if insights == "" {
+				return
+			}
+			autoMem := memory.NewProjectAutoMemory(wd)
+			if autoMem == nil {
+				return
+			}
+			key := "run-insights"
+			existing, _, err := autoMem.LoadAll()
+			if err == nil && existing != "" {
+				insights = agent.MergeInsights(existing, insights)
+			}
+			if err := autoMem.SaveMemory(key, insights); err != nil {
+				log.Printf("[reflection] failed to save insights: %v", err)
+			}
+		})
+	}
+
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
 	a.SetUsageHandler(func(usage provider.TokenUsage) {
 		b.recordSessionUsage(usage)
@@ -1254,7 +1281,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	ag := b.agent
 	b.mu.Unlock()
 	if ses != nil && ag != nil && len(ses.Messages) > 0 {
-		agentruntime.RestoreSessionIntoAgent(ag, ses)
+		_, _, _ = agentruntime.RestoreSessionIntoAgent(ag, ses)
 	}
 
 	// Wire checkpoint handler — on compaction, append a checkpoint record
