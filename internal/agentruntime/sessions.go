@@ -205,15 +205,39 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if len(msgs) == 0 {
 		msgs = ses.Messages
 	}
-	for _, msg := range msgs {
-		agentInst.AddMessage(msg)
-	}
-	// Use checkpoint's precise token count as baseline to avoid inflated
-	// display from local estimator. First real LLM call overrides this.
-	if ses.CheckpointTokens > 0 {
+
+	if ses.CheckpointTokens > 0 && ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
+		cpCount := ses.CheckpointMessageCount
+
+		// 1. Add checkpoint messages (their tokens are estimated by Add(),
+		//    but we'll override with the real value next).
+		for _, msg := range msgs[:cpCount] {
+			agentInst.AddMessage(msg)
+		}
+
+		// 2. Set baseline to the real checkpoint token count.
+		//    This replaces the estimate; baselineDelta resets to 0.
 		if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
 			cm.SetCheckpointBaseline(ses.CheckpointTokens)
 		}
+
+		// 3. Add post-checkpoint messages. Since baselineAvailable=true,
+		//    each Add() increments baselineDelta with its estimated tokens.
+		//    Final: tokenCount = checkpoint_tokens + post-checkpoint estimate.
+		for _, msg := range msgs[cpCount:] {
+			agentInst.AddMessage(msg)
+		}
+	} else {
+		// No checkpoint — load all with estimation.
+		for _, msg := range msgs {
+			agentInst.AddMessage(msg)
+		}
 	}
+
 	agentInst.ReconcileToolCalls()
+
+	// Proactive microcompaction: if restored context already exceeds the
+	// soft threshold, run local compaction now to avoid a wasted API call
+	// (prompt-too-long error → reactive compact) on the first user message.
+	agentInst.MicrocompactIfOverThreshold()
 }

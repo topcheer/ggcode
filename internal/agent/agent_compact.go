@@ -19,6 +19,20 @@ type microcompacter interface {
 	Microcompact() bool
 }
 
+// MicrocompactIfOverThreshold runs local microcompaction if the current
+// context exceeds the auto-compact threshold. Used after session restore
+// to avoid sending an oversized prompt to the LLM on the first run.
+func (a *Agent) MicrocompactIfOverThreshold() {
+	threshold := a.contextManager.AutoCompactThreshold()
+	tokens := a.contextManager.TokenCount()
+	if threshold > 0 && tokens > threshold {
+		debug.Log("agent", "restore microcompact: tokens=%d threshold=%d, compacting", tokens, threshold)
+		if cm, ok := a.contextManager.(microcompacter); ok {
+			cm.Microcompact()
+		}
+	}
+}
+
 type promptBudgeter interface {
 	PromptBudget() int
 }
