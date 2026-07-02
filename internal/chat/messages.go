@@ -230,7 +230,7 @@ func (a *AssistantItem) Render(width int) string {
 	lines := strings.Split(rendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
-		if i == 0 && result == "" {
+		if i == 0 {
 			sb.WriteString(a.styles.AssistantStyle.Render(a.prefix))
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
