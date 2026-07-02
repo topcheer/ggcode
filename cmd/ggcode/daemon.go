@@ -222,13 +222,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aReg *a2a.Registry
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-		remoteAgentsInfo := ""
-		if a2aReg != nil {
-			if instances := a2aReg.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, nil)
-			}
-		}
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
+		// Remote agents info is not available in daemon mode (no lanchat hub).
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 

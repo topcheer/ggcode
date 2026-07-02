@@ -8,14 +8,13 @@ import (
 )
 
 // maybeInjectDynamicSystemPrompt calls the systemPromptInjector callback
-// (if set) and appends the returned text to the current system message.
-// This is restored before the next run by tracking the original prompt.
-//
-// Use case: when lanchat peers are active in the same workspace, inject
-// a warning telling the LLM to check for file conflicts before editing.
+// (if set) and appends the returned text to the base system prompt.
+// The base prompt is always restored first, so dynamic content never
+// accumulates across runs.
 func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	a.mu.Lock()
 	fn := a.systemPromptInjector
+	base := a.baseSystemPrompt
 	a.mu.Unlock()
 
 	if fn == nil {
@@ -23,41 +22,18 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	}
 
 	extra := strings.TrimSpace(fn())
-	if extra == "" {
-		return
+
+	newText := base
+	if extra != "" {
+		newText = base + "\n\n" + extra
 	}
 
 	cm, ok := a.contextManager.(*context.Manager)
 	if !ok {
 		return
 	}
-
-	msgs := cm.Messages()
-	for i, msg := range msgs {
-		if msg.Role != "system" {
-			continue
-		}
-		// Check if already injected (avoid double-inject on re-entry)
-		for _, block := range msg.Content {
-			if block.Type == "text" && strings.Contains(block.Text, extra) {
-				return // already present
-			}
-		}
-		// Append the extra text to the existing system message
-		var newText string
-		for _, block := range msg.Content {
-			if block.Type == "text" {
-				newText = block.Text
-				break
-			}
-		}
-		newText = newText + "\n\n" + extra
-		updated := provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: newText}},
-		}
-		cm.UpdateFirstSystemMessage(updated)
-		_ = i
-		return
-	}
+	cm.UpdateFirstSystemMessage(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: newText}},
+	})
 }

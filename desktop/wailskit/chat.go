@@ -2613,6 +2613,17 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	})
 
 	log.Printf("[a2a] server started at %s", srv.Endpoint())
+
+	// Inject dynamic lanchat peers info into the system prompt before each
+	// run (same pattern as TUI's repl.go). Shows all online peers (busy +
+	// idle), with same-workspace peers specially marked.
+	if b.agent != nil && b.lanchatHub != nil {
+		hubCopy := b.lanchatHub
+		wd := b.workingDir
+		b.agent.SetSystemPromptInjector(func() string {
+			return lanchat.FormatPeersInfo(hubCopy, wd)
+		})
+	}
 }
 
 // stopA2A shuts down the A2A server and cleans up.

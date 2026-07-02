@@ -70,6 +70,7 @@ type Agent struct {
 	reflectionFunc               ReflectionFunc     // called after each run with accumulated stats
 	loopDetector                 loopDetector       // tracks consecutive identical tool calls to detect stuck loops
 	systemPromptInjector         func() string      // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt             string             // the fully built static system prompt; used as reset base for dynamic injection
 	mu                           sync.RWMutex
 }
 
@@ -97,13 +98,14 @@ type modeAwarePolicy interface {
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
-		provider:       p,
-		tools:          tools,
-		maxIter:        maxIter,
-		contextManager: ctxpkg.NewManager(128000),
-		projectMemory:  make(map[string]struct{}),
-		shutdownCtx:    ctx,
-		shutdownCancel: cancel,
+		provider:         p,
+		tools:            tools,
+		maxIter:          maxIter,
+		contextManager:   ctxpkg.NewManager(128000),
+		projectMemory:    make(map[string]struct{}),
+		baseSystemPrompt: systemPrompt,
+		shutdownCtx:      ctx,
+		shutdownCancel:   cancel,
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -393,10 +395,11 @@ func (a *Agent) ContextManager() ctxpkg.ContextManager {
 }
 
 // UpdateSystemPrompt replaces the first system message in the context.
-// If no system message exists, it adds one.
+// Also updates baseSystemPrompt so dynamic injection resets to this base.
 func (a *Agent) UpdateSystemPrompt(text string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.baseSystemPrompt = text
 	cm, ok := a.contextManager.(*ctxpkg.Manager)
 	if !ok {
 		return

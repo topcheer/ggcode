@@ -530,14 +530,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 
 	buildCurrentSystemPrompt := func() (string, []string) {
-		remoteAgentsInfo := ""
-		if a2aRegistry != nil {
-			// Read async cache only — never block the UI thread on disk I/O.
-			if instances := a2aRegistry.CachedInstances(); len(instances) > 0 {
-				remoteAgentsInfo = a2a.FormatRemoteAgents(instances, buildRemoteAgentMeta())
-			}
-		}
-		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, remoteAgentsInfo)
+		// Remote agents info is injected dynamically via systemPromptInjector
+		// (lanchat peers), not baked into the static prompt.
+		return agentruntime.BuildInteractiveSystemPromptWithPromptRefs(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
 	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
