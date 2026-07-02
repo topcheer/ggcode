@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
@@ -34,7 +36,7 @@ type precompactState struct {
 }
 
 const (
-	precompactBackgroundTimeout = 60 * time.Second
+	precompactBackgroundTimeout = 180 * time.Second
 	// precompactStartDelay staggers the compression LLM call away from the
 	// agent's regular LLM turn to avoid API rate-limit collisions.
 	precompactStartDelay = 6 * time.Second
@@ -43,6 +45,33 @@ const (
 // precompactDelayCtx is the delay applied before the background compression
 // request fires. Tests override this to zero for fast execution.
 var precompactDelay = precompactStartDelay
+
+// isRetryableCompactError returns true for transient network/timeout errors
+// that warrant a retry from the precompact background goroutine.
+func isRetryableCompactError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false // agent shutting down
+	}
+	s := strings.ToLower(err.Error())
+	for _, keyword := range []string{
+		"context deadline exceeded",
+		"timeout awaiting response headers",
+		"connection reset by peer",
+		"unexpected eof",
+		"broken pipe",
+		"tls handshake timeout",
+		"server closed idle connection",
+		"temporary failure in name resolution",
+	} {
+		if strings.Contains(s, keyword) {
+			return true
+		}
+	}
+	return false
+}
 
 type snapshotCompactManager interface {
 	CompactSnapshot() ctxpkg.CompactSnapshot
@@ -132,6 +161,12 @@ func (a *Agent) StartPreCompact() {
 		}
 
 		result, err := snapshot.Compact(bgCtx, prov)
+		if err != nil && isRetryableCompactError(err) && a.shutdownCtx.Err() == nil {
+			debug.Log("precompact", "first attempt failed (%v), retrying...", err)
+			retryCtx, retryCancel := context.WithTimeout(a.shutdownCtx, precompactBackgroundTimeout)
+			defer retryCancel()
+			result, err = snapshot.Compact(retryCtx, prov)
+		}
 		if err != nil {
 			pc.err = err
 			debug.Log("precompact", "FAILED: %v", err)

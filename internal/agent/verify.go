@@ -74,9 +74,11 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 	}
 
 	// Inject the errors back into the agent loop
+	// Wrap output in a code block — markdown rendering collapses bare newlines.
+	output := truncStr(result.Output, 500)
 	onEvent(provider.StreamEvent{
 		Type: provider.StreamEventText,
-		Text: fmt.Sprintf("\n❌ [Verification failed: `%s`]\n%s\n", cmd, truncStr(result.Output, 500)),
+		Text: fmt.Sprintf("\n❌ [Verification failed: `%s`]\n```\n%s\n```\n", cmd, output),
 	})
 
 	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
