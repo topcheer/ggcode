@@ -817,6 +817,94 @@ func TestContextManager_RecordUsageUsesBaselinePlusDelta(t *testing.T) {
 	}
 }
 
+func TestContextManager_SetCheckpointBaseline(t *testing.T) {
+	cm := NewManager(256000)
+
+	// Add messages that would normally produce a rough estimate.
+	// Use enough text to create a meaningful divergence from the checkpoint value.
+	for i := 0; i < 50; i++ {
+		cm.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400)}},
+		})
+	}
+
+	// Before SetCheckpointBaseline, token count is from local estimation.
+	estimate := cm.TokenCount()
+	if estimate == 0 {
+		t.Fatal("expected non-zero local estimate before baseline")
+	}
+
+	// Apply checkpoint baseline — simulates session restore with known token count.
+	cm.SetCheckpointBaseline(158811)
+
+	// Token count should now reflect the checkpoint, not the estimate.
+	got := cm.TokenCount()
+	if got != 158811 {
+		t.Fatalf("expected 158811 after checkpoint baseline, got %d (estimate was %d)", got, estimate)
+	}
+}
+
+func TestContextManager_SetCheckpointBaselineZeroIgnored(t *testing.T) {
+	cm := NewManager(1000)
+	cm.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "hello world"}},
+	})
+
+	original := cm.TokenCount()
+
+	// Zero or negative should be ignored.
+	cm.SetCheckpointBaseline(0)
+	cm.SetCheckpointBaseline(-1)
+
+	if got := cm.TokenCount(); got != original {
+		t.Fatalf("expected %d (unchanged), got %d", original, got)
+	}
+}
+
+func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
+	cm := NewManager(256000)
+
+	// Simulate restore: messages loaded, then checkpoint baseline applied.
+	cm.Add(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("s", 50000)}},
+	})
+	cm.SetCheckpointBaseline(100000)
+
+	// Adding a new message after baseline should increment from the baseline.
+	cm.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "new message after restore"}},
+	})
+
+	got := cm.TokenCount()
+	// With baseline available, TokenCount = baselineTokens + baselineDelta.
+	// The delta is computed by tokenCountLocked() when baseline is available.
+	if got < 100000 {
+		t.Fatalf("expected >= 100000 after baseline + new message, got %d", got)
+	}
+}
+
+func TestContextManager_RecordUsageOverridesCheckpointBaseline(t *testing.T) {
+	cm := NewManager(256000)
+
+	cm.Add(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("s", 50000)}},
+	})
+	cm.SetCheckpointBaseline(100000)
+
+	// First real LLM call should override with actual token count.
+	cm.RecordUsage(provider.TokenUsage{InputTokens: 95000})
+
+	got := cm.TokenCount()
+	if got != 95000 {
+		t.Fatalf("expected 95000 after RecordUsage override, got %d", got)
+	}
+}
+
 func retainedConversationMessages(msgs []provider.Message) int {
 	count := 0
 	for i, msg := range msgs {
