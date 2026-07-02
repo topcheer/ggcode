@@ -240,9 +240,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			cmd := m.startAgent(text)
 			return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 		}
-		// Agent is busy — persist to session, queue for submission.
-		// queuePendingSubmission will render the user bubble.
-		m.appendUserMessage(text)
+		// Agent is busy — queue for submission. The message will be
+		// persisted by startNormalTextRun when the pending submission
+		// is drained. Calling appendUserMessage here would duplicate
+		// the message in the JSONL file.
+		// queuePendingSubmission renders the user bubble immediately.
 		m.queuePendingSubmission(text)
 		return m, nil
 

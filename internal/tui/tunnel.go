@@ -987,9 +987,10 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		cmd := m.startAgent(text)
 		return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
-	// Agent busy — persist to session, queue for submission.
-	// queuePendingSubmission will render the user bubble.
-	m.appendUserMessage(text)
+	// Agent busy — queue for submission. The message will be persisted
+	// by startNormalTextRun when the pending submission is drained,
+	// so we must NOT call appendUserMessage here (would duplicate).
+	// queuePendingSubmission renders the user bubble immediately.
 	m.queuePendingSubmission(text)
 	return m, nil
 }
