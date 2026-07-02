@@ -119,5 +119,18 @@ func FormatPeersInfo(hub *Hub, workspace string) string {
 		}
 	}
 
+	// Collaboration rules — only shown when peers exist.
+	sb.WriteString("\nCollaboration rules:\n")
+	if len(sameWSBusy) > 0 || len(sameWSIdle) > 0 {
+		sb.WriteString("- Before git commit/push: lanchat action='list' to check no teammate is mid-commit — concurrent commits cause ref lock failures.\n")
+		sb.WriteString("- Never git stash/checkout/reset in a shared workspace — it clobbers others' uncommitted changes.\n")
+		sb.WriteString("- Only edit files you own in this session; if another agent's file blocks your build, DM them instead of fixing it yourself.\n")
+		sb.WriteString("- For 3+ independent tasks: distribute to idle teammates (lanchat DM) rather than doing everything sequentially.\n")
+		sb.WriteString("- When you finish a task someone asked for: DM them the result (one concise message, no \"done?\" pings).\n")
+	} else {
+		sb.WriteString("- For cross-workspace questions: DM the specific person (action='send'). For task delegation: use a2a_remote.\n")
+		sb.WriteString("- Check agent_busy before messaging — busy agents will see your message after their current task.\n")
+	}
+
 	return strings.TrimRight(sb.String(), "\n")
 }
