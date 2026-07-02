@@ -650,6 +650,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				idleAutopilotContinuations = 0
 				continue
 			}
+			// User cancellation: return the original error (which wraps
+			// context.Canceled) so callers can detect it with errors.Is.
+			// Converting to a friendly string would break the error chain.
+			if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
+				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+				return ctx.Err()
+			}
 			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
 			return friendlyErr
