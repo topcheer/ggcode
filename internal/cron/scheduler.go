@@ -3,12 +3,13 @@ package cron
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Job represents a scheduled prompt job.
@@ -84,6 +85,7 @@ func (s *Scheduler) Load() {
 	var ss sessionStore
 	if err := json.Unmarshal(data, &ss); err != nil {
 		// Corrupted file — log and skip.
+		debug.Log("cron", "Load: failed to parse store file %s: %v", s.storePath, err)
 		return
 	}
 
@@ -126,6 +128,14 @@ func (s *Scheduler) Load() {
 		s.mu.Unlock()
 
 		s.scheduleJob(job)
+	}
+
+	loadedCount := 0
+	s.mu.Lock()
+	loadedCount = len(s.jobs)
+	s.mu.Unlock()
+	if loadedCount > 0 {
+		debug.Log("cron", "Load: restored %d recurring cron jobs from %s", loadedCount, s.storePath)
 	}
 }
 
@@ -210,9 +220,11 @@ func (s *Scheduler) Create(cronExpr, prompt string, recurring bool, queueIfBusy 
 		}
 		delete(s.jobs, id)
 		s.mu.Unlock()
+		debug.Log("cron", "Create: failed to persist job %s: %v", id, err)
 		return Job{}, err
 	}
 
+	debug.Log("cron", "Create: added job %s (expr=%s recurring=%t)", id, cronExpr, recurring)
 	return job.Snapshot(), nil
 }
 
@@ -245,8 +257,11 @@ func (s *Scheduler) DeleteWithError(id string) (bool, error) {
 			s.scheduleJobLocked(job)
 		}
 		s.mu.Unlock()
+		debug.Log("cron", "Delete: failed to persist removal of job %s: %v", id, err)
 		return true, err
 	}
+
+	debug.Log("cron", "Delete: removed job %s", id)
 	return true, nil
 }
 
@@ -300,7 +315,9 @@ func (s *Scheduler) scheduleJob(job *Job) {
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
 				if err := s.save(); err != nil {
-					log.Printf("[cron] failed to persist removal of broken job %s: %v", job.ID, err)
+					debug.Log("cron", "failed to persist removal of broken job %s: %v", job.ID, err)
+				} else {
+					debug.Log("cron", "removed broken cron job %s (invalid expression: %s)", job.ID, job.CronExpr)
 				}
 				return
 			}
@@ -338,7 +355,9 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 				delete(s.timers, job.ID)
 				s.mu.Unlock()
 				if err := s.save(); err != nil {
-					log.Printf("[cron] failed to persist removal of broken job %s: %v", job.ID, err)
+					debug.Log("cron", "failed to persist removal of broken job %s: %v", job.ID, err)
+				} else {
+					debug.Log("cron", "removed broken cron job %s (invalid expression: %s)", job.ID, job.CronExpr)
 				}
 				return
 			}

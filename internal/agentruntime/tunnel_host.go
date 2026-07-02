@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -608,9 +609,13 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 	}
 
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendTunnelEventToDisk(ses, record)
+		if err := jsonlStore.AppendTunnelEventToDisk(ses, record); err != nil {
+			debug.Log("tunnel", "TunnelHost: failed to persist tunnel event to session %s: %v", ses.ID, err)
+		}
 	} else {
-		_ = store.Save(ses)
+		if err := store.Save(ses); err != nil {
+			debug.Log("tunnel", "TunnelHost: failed to save session %s after tunnel event: %v", ses.ID, err)
+		}
 	}
 
 	// Forward to online broker if connected

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // PortFile is the JSON structure written to disk.
@@ -53,6 +55,7 @@ func Write(pf PortFile) error {
 	}
 	dir := filepath.Dir(p)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		debug.Log("runfile", "Write: failed to create run dir: %v", err)
 		return fmt.Errorf("create run dir: %w", err)
 	}
 	data, err := json.MarshalIndent(pf, "", "  ")
@@ -62,9 +65,15 @@ func Write(pf PortFile) error {
 	// Write to temp file then rename for atomicity.
 	tmp := p + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		debug.Log("runfile", "Write: failed to write port file for session %s: %v", pf.SessionID, err)
 		return fmt.Errorf("write port file: %w", err)
 	}
-	return os.Rename(tmp, p)
+	if err := os.Rename(tmp, p); err != nil {
+		debug.Log("runfile", "Write: failed to rename port file for session %s: %v", pf.SessionID, err)
+		return err
+	}
+	debug.Log("runfile", "wrote port file for session %s (pid=%d addr=%s)", pf.SessionID, pf.PID, pf.Addr)
+	return nil
 }
 
 // Remove deletes the port file for the given session ID if it exists.
@@ -133,15 +142,18 @@ func readAtPath(p string) (*PortFile, error) {
 	}
 	var pf PortFile
 	if err := json.Unmarshal(data, &pf); err != nil {
+		debug.Log("runfile", "readAtPath: failed to parse port file %s: %v", p, err)
 		return nil, fmt.Errorf("parse port file: %w", err)
 	}
 	// Auto-clean legacy port files that lack session_id (old workspace-hash format)
 	if pf.SessionID == "" {
 		_ = os.Remove(p)
+		debug.Log("runfile", "readAtPath: removed legacy port file without session_id: %s", p)
 		return nil, fmt.Errorf("legacy port file without session_id, removed")
 	}
 	if !isAlive(pf.PID) {
 		_ = os.Remove(p)
+		debug.Log("runfile", "readAtPath: removed stale port file for dead pid %d: %s", pf.PID, p)
 		return nil, fmt.Errorf("process %d is not running (stale port file, removed)", pf.PID)
 	}
 	return &pf, nil

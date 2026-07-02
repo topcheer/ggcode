@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -208,6 +209,7 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
 		// Corrupt index — keep List fast and let a later reconciliation pass rebuild it.
+		debug.Log("session", "loadIndex: corrupt session index, will rebuild: %v", err)
 		s.indexDirty = true
 		return nil, nil
 	}
@@ -448,13 +450,16 @@ func (s *JSONLStore) Save(ses *Session) error {
 
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
+		debug.Log("session", "Save: failed to close temp file for session %s: %v", ses.ID, err)
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
 	if err := os.Rename(tmp, s.sessionPath(ses.ID)); err != nil {
+		debug.Log("session", "Save: failed to rename session file for %s: %v", ses.ID, err)
 		return fmt.Errorf("renaming session file: %w", err)
 	}
 
+	debug.Log("session", "Save: wrote session %s (%d messages)", ses.ID, len(ses.Messages))
 	return s.updateIndex(ses)
 }
 

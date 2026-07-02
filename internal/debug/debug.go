@@ -241,6 +241,16 @@ var Categories = []Category{
 		Tags:        []string{"safego"},
 	},
 	{
+		Name: "cron", EnvSuffix: "CRON",
+		Description: "Cron scheduler, job lifecycle, migration",
+		Tags:        []string{"cron"},
+	},
+	{
+		Name: "runfile", EnvSuffix: "RUNFILE",
+		Description: "Port file write/read/cleanup for instance discovery",
+		Tags:        []string{"runfile"},
+	},
+	{
 		Name: "bubbletea", EnvSuffix: "BUBBLETEA",
 		Description: "Bubble Tea framework internal trace (TEA_TRACE), controlled independently via GGCODE_DEBUG_BUBBLETEA",
 		Tags:        []string{}, // not routed through debug.Log; bubbletea writes directly

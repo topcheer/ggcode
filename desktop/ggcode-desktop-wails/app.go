@@ -1070,7 +1070,7 @@ func (a *App) initIMRuntime() {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("initIMRuntime panic: %v\n", r)
+			debug.Log("desktop", "initIMRuntime panic: %v", r)
 		}
 	}()
 
@@ -1118,7 +1118,7 @@ func (a *App) initIMRuntime() {
 	// Single OnUpdate callback handles pairing + status + stream event push
 	a.imInstanceDetect = runtimeInit.InstanceDetect
 	if len(runtimeInit.OtherInstances) > 0 {
-		fmt.Printf("im: auto-muted IM channels, another instance is primary\n")
+		debug.Log("desktop", "im: auto-muted IM channels, another instance is primary")
 	}
 }
 
@@ -1185,7 +1185,7 @@ func (a *App) startIMAdapters() {
 	controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM start failed: %v", err)
-		fmt.Printf("IM adapter start error: %v\n", err)
+		debug.Log("desktop", "IM adapter start error: %v", err)
 		return
 	}
 	a.imController = controller

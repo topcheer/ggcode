@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // --- Legacy types for migration from workspace-scoped to session-scoped ---
@@ -87,8 +89,13 @@ func MigrateWorkspaceJobs(oldStorePath, newSessionPath, workspaceDir string) {
 	ss := sessionStore{Jobs: migrated}
 	out, err := json.MarshalIndent(ss, "", "  ")
 	if err != nil {
+		debug.Log("cron", "MigrateWorkspaceJobs: failed to marshal migrated jobs: %v", err)
 		return
 	}
 	os.MkdirAll(filepath.Dir(newSessionPath), 0755)
-	os.WriteFile(newSessionPath, out, 0644)
+	if err := os.WriteFile(newSessionPath, out, 0644); err != nil {
+		debug.Log("cron", "MigrateWorkspaceJobs: failed to write migrated jobs to %s: %v", newSessionPath, err)
+	} else {
+		debug.Log("cron", "MigrateWorkspaceJobs: migrated %d recurring jobs from workspace %s to session store", len(migrated), workspaceDir)
+	}
 }
