@@ -235,9 +235,11 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	}
 
 	agentInst.ReconcileToolCalls()
-
-	// Proactive microcompaction: if restored context already exceeds the
-	// soft threshold, run local compaction now to avoid a wasted API call
-	// (prompt-too-long error → reactive compact) on the first user message.
 	agentInst.MicrocompactIfOverThreshold()
+
+	// Clear runAdded: AddMessage() during restore populated it, but these
+	// messages already exist in the JSONL file. Without this, the next
+	// persistFullSessionMessages() would re-write all of them back to disk,
+	// doubling the session file on every restart.
+	agentInst.StartRunTracking()
 }
