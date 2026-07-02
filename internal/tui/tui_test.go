@@ -126,28 +126,26 @@ func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
 }
 
 func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
-	workspace := t.TempDir()
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(workspace); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	defer func() { _ = os.Chdir(prevWD) }()
-	ggDir := filepath.Join(workspace, ".ggcode")
-	if err := os.MkdirAll(ggDir, 0o755); err != nil {
+	// Isolate HOME so the session-scoped todo file lands in a temp dir.
+	origHome := os.Getenv("HOME")
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
+
+	m := newTestModel()
+	m.session = &session.Session{ID: "test-inspector-clear"}
+	todoPath := tool.TodoFilePath(m.session.ID)
+	if err := os.MkdirAll(filepath.Dir(todoPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(ggDir, "todos.json"), []byte(`[{"id":"t1","content":"work","status":"pending"}]`), 0o644); err != nil {
+	if err := os.WriteFile(todoPath, []byte(`[{"id":"t1","content":"work","status":"pending"}]`), 0o644); err != nil {
 		t.Fatalf("write todos: %v", err)
 	}
 
-	m := newTestModel()
 	m.openInspectorPanel(inspectorPanelTodos)
 	_, _ = m.handleInspectorPanelKey(tea.KeyPressMsg{Text: "c"})
 
-	if _, err := os.Stat(filepath.Join(ggDir, "todos.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(todoPath); !os.IsNotExist(err) {
 		t.Fatalf("expected todos file to be removed, err=%v", err)
 	}
 }
@@ -568,7 +566,7 @@ func TestHelpText(t *testing.T) {
 		t.Error("expected /harness in help text")
 	}
 	// New commands should be documented
-	for _, cmd := range []string{"/diff", "/cost", "/hooks", "/review", "/copy", "/context"} {
+	for _, cmd := range []string{"/diff", "/cost", "/hooks", "/review", "/copy", "/context", "/regenerate"} {
 		if !strings.Contains(h, cmd) {
 			t.Errorf("expected %s in help text", cmd)
 		}

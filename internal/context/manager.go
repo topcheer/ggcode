@@ -11,7 +11,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
-	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 // ContextManager manages conversation history, tracking tokens and auto-summarizing.
@@ -32,6 +31,7 @@ type ContextManager interface {
 	Summarize(ctx context.Context, prov provider.Provider) error
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
 	TruncateOldestGroupForRetry() bool
+	RemoveLastAssistantGroup() string
 	Clear()
 	UsageRatio() float64
 	AutoCompactThreshold() int
@@ -127,16 +127,12 @@ type Manager struct {
 
 // NewManager creates a ContextManager with the given context window limit.
 func NewManager(contextWindow int) *Manager {
-	return &Manager{contextWindow: contextWindow, todoPath: toolpkg.TodoFilePath("")}
+	return &Manager{contextWindow: contextWindow}
 }
 
 func (m *Manager) SetTodoFilePath(path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if strings.TrimSpace(path) == "" {
-		m.todoPath = toolpkg.TodoFilePath("")
-		return
-	}
 	m.todoPath = path
 }
 
@@ -565,6 +561,15 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 			if i >= len(m.messages) {
 				return false, m.tokenCountLocked()
 			}
+			// Skip the system message — it is dynamically updated (lanchat
+			// peers, memory changes, autopilot state, etc.) via
+			// UpdateFirstSystemMessage which replaces messages[0] without
+			// incrementing version.  These content-only changes are safe to
+			// ignore because we restore the live system message below after
+			// applying the compacted result.
+			if snapshot.Messages[i].Role == "system" && m.messages[i].Role == "system" {
+				continue
+			}
 			live := m.messages[i]
 			snap := snapshot.Messages[i]
 			if live.Role != snap.Role || contentFingerprint(live) != contentFingerprint(snap) {
@@ -573,9 +578,24 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		}
 	}
 
+	// Preserve the current system message. The snapshot's version may be stale
+	// due to dynamic updates during the compaction window. Overwriting it with
+	// the snapshot version would lose recent lanchat/memory/injection changes.
+	var liveSystem provider.Message
+	hasLiveSystem := false
+	if len(m.messages) > 0 && m.messages[0].Role == "system" {
+		liveSystem = m.messages[0]
+		hasLiveSystem = true
+	}
+
 	extra := append([]provider.Message(nil), m.messages[snapshot.OrigLen:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
+
+	if hasLiveSystem && len(newMsgs) > 0 && newMsgs[0].Role == "system" {
+		newMsgs[0] = liveSystem
+	}
+
 	m.messages = newMsgs
 	m.version++
 	m.recalcTokens()
@@ -805,6 +825,57 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 	m.version++
 	m.recalcTokens()
 	return true
+}
+
+// RemoveLastAssistantGroup removes the most recent assistant message and any
+// trailing tool messages that follow it. This is used by /regenerate to
+// discard the agent's last response so it can be re-generated. Returns the
+// text of the last remaining user message, or "" if no regeneration is
+// possible (no assistant message found or no preceding user message).
+func (m *Manager) RemoveLastAssistantGroup() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.messages) == 0 {
+		return ""
+	}
+	// Find the last assistant message.
+	lastAsstIdx := -1
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "assistant" {
+			lastAsstIdx = i
+			break
+		}
+	}
+	if lastAsstIdx < 0 {
+		return ""
+	}
+	// Find the last user message before the assistant message.
+	lastUserIdx := -1
+	for i := lastAsstIdx - 1; i >= 0; i-- {
+		if m.messages[i].Role == "user" {
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx < 0 {
+		return ""
+	}
+	// Extract the user message text for re-submission.
+	userText := ""
+	for _, b := range m.messages[lastUserIdx].Content {
+		if b.Type == "text" && b.Text != "" {
+			userText = b.Text
+			break
+		}
+	}
+	// Truncate: keep everything up to and including the last user message,
+	// discard the assistant response and any trailing tool messages.
+	m.messages = m.messages[:lastUserIdx+1]
+	m.version++
+	m.recalcTokens()
+	debug.Log("ctx", "RemoveLastAssistantGroup: removed %d messages from index %d, remaining=%d tokens=%d",
+		len(m.messages)-lastUserIdx-1+1, lastAsstIdx, len(m.messages), m.tokenCountLocked())
+	return userText
 }
 
 func (m *Manager) recalcTokens() {
@@ -1434,7 +1505,7 @@ func extractPostCompactStateFilePaths(text string) []string {
 func (m *Manager) readTodoSummary() string {
 	path := strings.TrimSpace(m.todoPath)
 	if path == "" {
-		path = toolpkg.TodoFilePath("")
+		return "" // no session bound — no todo summary
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

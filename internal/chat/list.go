@@ -119,6 +119,30 @@ func (l *List) LastAssistantText() string {
 	return ""
 }
 
+// TruncateAfterLastUser removes all items after the last UserItem,
+// effectively discarding the agent's most recent response and any
+// interleaved system/tool items. Returns true if items were removed.
+func (l *List) TruncateAfterLastUser() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lastUserIdx := -1
+	for i := len(l.items) - 1; i >= 0; i-- {
+		if _, ok := l.items[i].(*UserItem); ok {
+			lastUserIdx = i
+			break
+		}
+	}
+	if lastUserIdx < 0 || lastUserIdx == len(l.items)-1 {
+		return false
+	}
+	l.items = l.items[:lastUserIdx+1]
+	l.dirty = true
+	if l.follow {
+		l.scrollToEndLocked()
+	}
+	return true
+}
+
 // Height returns the viewport height.
 func (l *List) Height() int {
 	l.mu.RLock()

@@ -1265,6 +1265,14 @@ func enCatalog(key string) string {
 		return "Show current status"
 	case "slash.update":
 		return "Update ggcode"
+	case "regenerate.busy":
+		return "Cannot regenerate while the agent is running. Press Ctrl+C to cancel first."
+	case "regenerate.no_agent":
+		return "Agent not initialized."
+	case "regenerate.no_context":
+		return "Context manager not available."
+	case "regenerate.no_response":
+		return "No assistant response to regenerate."
 	case "help.text":
 		return `Available commands:
 
@@ -1277,6 +1285,7 @@ Session & History:
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)
   /checkpoints       List all file edit checkpoints
+  /regenerate        Discard last response and regenerate (alias: /regen)
 
 Model & Provider:
   /model [name]      Open model panel or switch directly

@@ -584,6 +584,79 @@ func TestContextManager_ApplyCompactResult_MicrocompactInvalidatesSnapshot(t *te
 	}
 }
 
+func TestContextManager_ApplyCompactResult_SystemMessageChangeAllowed(t *testing.T) {
+	// The system message is dynamically updated (lanchat peers, memory, etc.)
+	// via UpdateFirstSystemMessage which replaces messages[0] without incrementing
+	// version. ApplyCompactResult should NOT reject the snapshot when the system
+	// message content changed, and should preserve the LIVE system message.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "original system prompt"}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Simulate dynamic system prompt update (lanchat peers changed, etc.)
+	cm.UpdateFirstSystemMessage(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: "updated system prompt with dynamic content"}},
+	})
+
+	// Simulate agent loop appending messages after snapshot.
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
+
+	result := CompactResult{
+		Messages: []provider.Message{
+			{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "old system from snapshot"}}},
+			{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}},
+		},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected compact result to apply despite system message change")
+	}
+
+	msgs := cm.Messages()
+	if len(msgs) == 0 || msgs[0].Role != "system" {
+		t.Fatal("expected first message to be system")
+	}
+	if msgs[0].Content[0].Text != "updated system prompt with dynamic content" {
+		t.Fatalf("expected live system message to be preserved, got: %s", msgs[0].Content[0].Text)
+	}
+	// Appended message should still be there.
+	if !messageContainsTextInList(msgs, "q2") {
+		t.Fatal("expected appended message q2 to be preserved")
+	}
+}
+
+func TestContextManager_ApplyCompactResult_SystemMessageRoleMismatchStillRejected(t *testing.T) {
+	// If the message at index 0 is no longer a system message (structural change),
+	// the snapshot should still be rejected even with the system message skip.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "sys"}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Structural change: clear and re-add with different structure.
+	cm.Clear()
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "not a system message"}}})
+
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if applied {
+		t.Fatal("expected snapshot to be rejected when system message role changed to non-system")
+	}
+}
+
 func messageContainsTextInList(messages []provider.Message, want string) bool {
 	for _, msg := range messages {
 		if messageContainsText(msg, want) {
@@ -717,10 +790,10 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 }
 
 func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
-	workspace := t.TempDir()
-	ggcodeDir := filepath.Join(workspace, ".ggcode")
-	if err := os.MkdirAll(ggcodeDir, 0755); err != nil {
-		t.Fatalf("mkdir .ggcode: %v", err)
+	sessionID := "test-compact-session"
+	todoPath := toolpkg.TodoFilePath(sessionID)
+	if err := os.MkdirAll(filepath.Dir(todoPath), 0755); err != nil {
+		t.Fatalf("mkdir todos dir: %v", err)
 	}
 	todos := []map[string]string{
 		{"id": "todo-1", "content": "Finish retry logic", "status": "in_progress"},
@@ -730,12 +803,12 @@ func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal todos: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(ggcodeDir, "todos.json"), data, 0644); err != nil {
+	if err := os.WriteFile(todoPath, data, 0644); err != nil {
 		t.Fatalf("write todos: %v", err)
 	}
 
 	cm := NewManager(500)
-	cm.SetTodoFilePath(toolpkg.TodoFilePath(workspace))
+	cm.SetTodoFilePath(todoPath)
 	ctx := context.Background()
 	prov := &mockProvider{}
 
@@ -953,4 +1026,64 @@ func messageContainsText(msg provider.Message, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestRemoveLastAssistantGroup(t *testing.T) {
+	m := NewManager(100000)
+
+	// Add a conversation: user → assistant → tool → assistant → user → assistant
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}})
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi there!"}}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "What is 2+2?"}}})
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "It's 4."}}})
+	m.Add(provider.Message{Role: "tool", Content: []provider.ContentBlock{{Type: "text", Text: "calculator result: 4"}}})
+
+	beforeTokens := m.TokenCount()
+	beforeMsgs := len(m.Messages())
+
+	// Remove last assistant group
+	userText := m.RemoveLastAssistantGroup()
+
+	// Should return the last user message text
+	if userText != "What is 2+2?" {
+		t.Errorf("expected last user text 'What is 2+2?', got %q", userText)
+	}
+
+	// Should have removed 2 messages (assistant + tool)
+	afterMsgs := len(m.Messages())
+	if afterMsgs != beforeMsgs-2 {
+		t.Errorf("expected %d messages after removal, got %d", beforeMsgs-2, afterMsgs)
+	}
+
+	// Last message should now be the user message
+	msgs := m.Messages()
+	if msgs[len(msgs)-1].Role != "user" {
+		t.Errorf("expected last message to be user, got %s", msgs[len(msgs)-1].Role)
+	}
+
+	// Tokens should have decreased
+	if m.TokenCount() >= beforeTokens {
+		t.Error("expected token count to decrease after removal")
+	}
+}
+
+func TestRemoveLastAssistantGroup_NoAssistant(t *testing.T) {
+	m := NewManager(100000)
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}})
+
+	result := m.RemoveLastAssistantGroup()
+	if result != "" {
+		t.Errorf("expected empty string when no assistant message, got %q", result)
+	}
+	if len(m.Messages()) != 1 {
+		t.Error("expected messages unchanged")
+	}
+}
+
+func TestRemoveLastAssistantGroup_Empty(t *testing.T) {
+	m := NewManager(100000)
+	result := m.RemoveLastAssistantGroup()
+	if result != "" {
+		t.Errorf("expected empty string for empty context, got %q", result)
+	}
 }

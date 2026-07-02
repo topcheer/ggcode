@@ -294,3 +294,58 @@ func TestListRenderProducesExactHeightLines(t *testing.T) {
 		t.Errorf("last item should be visible at scroll end.\nRendered:\n%s", rendered)
 	}
 }
+
+func TestTruncateAfterLastUser(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 20)
+
+	l.Append(NewUserItem("u1", "hello", styles))
+	l.Append(NewSystemItem("a1", "assistant response", styles))
+	l.Append(NewSystemItem("s1", "system note", styles))
+	l.Append(NewUserItem("u2", "question", styles))
+	l.Append(NewSystemItem("a2", "answer", styles))
+	l.Append(NewSystemItem("s2", "done", styles))
+
+	if l.Len() != 6 {
+		t.Fatalf("expected 6 items, got %d", l.Len())
+	}
+
+	removed := l.TruncateAfterLastUser()
+	if !removed {
+		t.Fatal("expected removed=true")
+	}
+	if l.Len() != 4 {
+		t.Errorf("expected 4 items after truncate, got %d", l.Len())
+	}
+
+	// Last item should be the user item "u2"
+	last := l.ItemAt(l.Len() - 1)
+	if last == nil || last.ID() != "u2" {
+		t.Errorf("expected last item to be u2, got %v", last)
+	}
+}
+
+func TestTruncateAfterLastUser_NoUserItem(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 20)
+	l.Append(NewSystemItem("a1", "response", styles))
+
+	removed := l.TruncateAfterLastUser()
+	if removed {
+		t.Error("expected removed=false when no user item")
+	}
+	if l.Len() != 1 {
+		t.Error("expected items unchanged")
+	}
+}
+
+func TestTruncateAfterLastUser_LastIsUser(t *testing.T) {
+	styles := DefaultStyles()
+	l := NewList(80, 20)
+	l.Append(NewUserItem("u1", "hello", styles))
+
+	removed := l.TruncateAfterLastUser()
+	if removed {
+		t.Error("expected removed=false when last item is already user")
+	}
+}

@@ -698,3 +698,75 @@ func estimateMessageTokens(msg provider.Message) int {
 	}
 	return total
 }
+
+// handleRegenerateCommand discards the agent's most recent response and
+// re-runs the agent with the last user message. This is equivalent to
+// ChatGPT's "Regenerate" button. It removes the last assistant message
+// (and trailing tool messages) from the context manager, updates the chat
+// display, and starts a new agent run without adding a new user message.
+func (m *Model) handleRegenerateCommand() tea.Cmd {
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("regenerate.busy"))
+		return nil
+	}
+	if m.agent == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("regenerate.no_agent"))
+		return nil
+	}
+	cm := m.agent.ContextManager()
+	if cm == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("regenerate.no_context"))
+		return nil
+	}
+
+	// Remove the last assistant group from the context manager.
+	lastUserText := cm.RemoveLastAssistantGroup()
+	if lastUserText == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("regenerate.no_response"))
+		return nil
+	}
+
+	// Remove the agent's response from the chat display.
+	if m.chatList != nil {
+		m.chatList.TruncateAfterLastUser()
+	}
+
+	// Also remove the last assistant message from the session's message list
+	// so that persistFullSessionMessages doesn't write stale data.
+	m.sessionMutex().Lock()
+	if m.session != nil && len(m.session.Messages) > 0 {
+		// Find last user message index in session.
+		lastUserIdx := -1
+		for i := len(m.session.Messages) - 1; i >= 0; i-- {
+			if m.session.Messages[i].Role == "user" {
+				lastUserIdx = i
+				break
+			}
+		}
+		if lastUserIdx >= 0 {
+			m.session.Messages = m.session.Messages[:lastUserIdx+1]
+		}
+	}
+	m.sessionMutex().Unlock()
+
+	// Start a new agent run with the existing user message text.
+	// We do NOT call appendUserMessage because the user message is
+	// already in the context manager from the original submission.
+	m.streamBuffer = nil
+	m.shellBuffer = nil
+	m.streamPrefixWritten = false
+	m.setLoading(true)
+	m.loopStart = time.Now()
+	m.statusActivity = m.t("status.thinking")
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+
+	// Reset run tracking so persistFullSessionMessages only writes
+	// new messages from this run, not the existing context.
+	if m.agent != nil {
+		m.agent.StartRunTracking()
+	}
+
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(lastUserText))
+}

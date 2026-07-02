@@ -1249,6 +1249,14 @@ func zhCatalog(key string) string {
 		return "显示当前状态"
 	case "slash.update":
 		return "升级 ggcode"
+	case "regenerate.busy":
+		return "Agent 正在运行，无法重新生成。请先按 Ctrl+C 取消。"
+	case "regenerate.no_agent":
+		return "Agent 尚未初始化。"
+	case "regenerate.no_context":
+		return "上下文管理器不可用。"
+	case "regenerate.no_response":
+		return "没有可重新生成的 AI 回复。"
 	case "help.text":
 		return `可用命令：
 
@@ -1261,6 +1269,7 @@ func zhCatalog(key string) string {
   /compact           手动压缩对话历史
   /undo              撤销最近一次文件修改（回滚检查点）
   /checkpoints       列出所有文件修改检查点
+  /regenerate        丢弃最近回复并重新生成（别名: /regen）
 
 模型与供应商：
   /model [name]      打开模型面板或直接切换
