@@ -115,6 +115,21 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 		// The agent loop already fills cancelled tool_results via
 		// fillCancelledToolResults(), so the context is consistent.
 		m.persistFullSessionMessages()
+		m.setLoading(false)
+		m.spinner.Stop()
+		m.chatFinishAllRunningTools()
+		m.cancelFunc = nil
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		m.rolloverTunnelMainStream(false)
+		if m.pendingSubmissionCount() > 0 {
+			m.restorePendingInput()
+		}
+		m.pushTunnelStatus(tunnel.StatusIdle, "")
+		m.pushTunnelCurrentActivity()
+		m.chatListScrollToBottom()
 		return m, nil
 	}
 	m.runFailed = true
@@ -148,6 +163,21 @@ func (m Model) handleAgentErrMsg(msg agentErrMsg) (Model, tea.Cmd) {
 		// Even on cancellation, persist any messages that were added
 		// before the cancel (e.g. partial assistant response, tool results).
 		m.persistFullSessionMessages()
+		m.setLoading(false)
+		m.spinner.Stop()
+		m.chatFinishAllRunningTools()
+		m.cancelFunc = nil
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		m.rolloverTunnelMainStream(false)
+		if m.pendingSubmissionCount() > 0 {
+			m.restorePendingInput()
+		}
+		m.pushTunnelStatus(tunnel.StatusIdle, "")
+		m.pushTunnelCurrentActivity()
+		m.chatListScrollToBottom()
 		return m, nil
 	}
 	m.runFailed = true

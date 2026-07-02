@@ -633,15 +633,15 @@ func TestPendingQueueConsumeDetailedKeepsHiddenEntriesSeparate(t *testing.T) {
 	q.enqueueHidden("hidden cron", nil)
 	q.enqueue("visible two")
 
-	text, hidden, override := q.consumeDetailed()
+	text, hidden, override, _ := q.consumeDetailed()
 	if text != "visible one" || hidden || override != nil {
 		t.Fatalf("unexpected first consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
-	text, hidden, override = q.consumeDetailed()
+	text, hidden, override, _ = q.consumeDetailed()
 	if text != "hidden cron" || !hidden || override != nil {
 		t.Fatalf("unexpected second consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
-	text, hidden, override = q.consumeDetailed()
+	text, hidden, override, _ = q.consumeDetailed()
 	if text != "visible two" || hidden || override != nil {
 		t.Fatalf("unexpected third consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
@@ -835,5 +835,38 @@ func TestCancelActiveRun_CancelsSubAgents(t *testing.T) {
 	sa, _ := m.subAgentMgr.Get("sa-1")
 	if sa.Status != subagent.StatusCancelled {
 		t.Errorf("expected sub-agent cancelled after cancelActiveRun, got %s", sa.Status)
+	}
+}
+
+func TestPendingQueuePreservesImagesThroughConsume(t *testing.T) {
+	var q pendingQueue
+	imgs := []imageAttachedMsg{{placeholder: "[img1]", filename: "test.png"}}
+
+	q.enqueueWithImages("hello with image", imgs)
+	if q.count() != 1 {
+		t.Fatalf("expected 1 pending, got %d", q.count())
+	}
+
+	// Verify images are stored in q.items
+	if len(q.items) != 1 || len(q.items[0].Images) != 1 {
+		t.Fatalf("expected images stored in q.items[0], got items=%d imgs=%d",
+			len(q.items), func() int {
+				if len(q.items) > 0 {
+					return len(q.items[0].Images)
+				}
+				return -1
+			}())
+	}
+
+	// Consume should return images
+	text, hidden, override, consumedImgs := q.consumeDetailed()
+	if text != "hello with image" {
+		t.Fatalf("unexpected text: %q", text)
+	}
+	if hidden || override != nil {
+		t.Fatalf("unexpected hidden/override: hidden=%v override=%v", hidden, override)
+	}
+	if len(consumedImgs) != 1 || consumedImgs[0].filename != "test.png" {
+		t.Fatalf("expected 1 image 'test.png', got %d images", len(consumedImgs))
 	}
 }

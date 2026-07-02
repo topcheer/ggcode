@@ -195,7 +195,7 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/files", "/checkpoints", "/plugins",
-	"/inspector", "/image",
+	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 	"/diff", "/hooks", "/cost", "/review", "/copy", "/context",
@@ -276,6 +276,13 @@ var SlashCommandDescriptions = map[string]string{
 	"/regen":       "Regenerate last AI response (discard and re-run)",
 	"/branch":      "Fork current conversation into a new session",
 	"/fork":        "Fork current conversation into a new session",
+	"/mode":        "Set permission mode (supervised|plan|auto|bypass|autopilot)",
+	"/allow":       "Always allow a specific tool",
+	"/export":      "Export session to markdown file",
+	"/bug":         "Report a bug with diagnostics",
+	"/config":      "View/modify configuration",
+	"/reflect":     "Show recent run reflections",
+	"/rules":       "Manage ratchet rules",
 }
 
 // SlashCommandPlaceholders maps commands that accept optional arguments.

@@ -4,9 +4,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 )
@@ -17,7 +15,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	// This prevents terminal responses (OSC 11, CPR, Kitty mode report)
 	// from appearing as garbage in the text input field.
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
-		debug.Log("tui", "KEYPRESS dropped (input drain) key=%q text=%q", msg.String(), msg.Text)
+		// Don't log dropped keypresses during input drain
 		return m, nil
 	}
 	if m.startupBannerVisible {
@@ -32,7 +30,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	if (msg.String() == "ctrl+c" || msg.String() == "esc") && m.hasActivePanel() {
 		m.resetCancelConfirm()
 	}
-	debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, util.Truncate(m.input.Value(), 80))
+	// Don't log every keypress — extremely noisy
 	if m.tmuxMenuOpen {
 		return m.handleTmuxMenuKey(msg.String())
 	}
@@ -601,7 +599,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		text := strings.TrimSpace(m.input.Value())
 		m.input.Reset()
-		if text == "" {
+		if text == "" && len(m.pendingImages) == 0 {
 			m.chatListScrollToBottom()
 			return m, nil
 		}

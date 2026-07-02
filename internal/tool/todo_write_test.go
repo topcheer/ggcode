@@ -6,7 +6,7 @@ import (
 )
 
 func TestTodoWriteDescriptionEncouragesMeaningfulMilestones(t *testing.T) {
-	tool := NewTodoWrite(t.TempDir())
+	tool := NewTodoWrite("test-desc-session")
 	desc := tool.Description()
 	for _, want := range []string{"genuinely multi-step work", "not every micro-step", "meaningful milestone"} {
 		if !strings.Contains(desc, want) {

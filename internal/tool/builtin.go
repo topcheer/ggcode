@@ -46,6 +46,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Sleep
 		SleepTool{},
 
+		// Debug log access
+		DebugLogTool{},
+
 		// Worktree
 		&EnterWorktree{WorkingDir: workingDir},
 		&ExitWorktree{WorkingDir: workingDir},
@@ -80,7 +83,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Productivity
 		NewAskUserTool(),
-		NewWorkspaceTodoWrite(workingDir),
+		NewTodoWrite(""), // session ID set later via agent.SetSessionID()
 
 		// Permission
 		NewSwitchModeTool(policy),

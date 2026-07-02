@@ -1,7 +1,9 @@
 package wailskit
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -123,8 +125,57 @@ type SessionMessage struct {
 	Streaming   bool   `json:"streaming,omitempty"`
 }
 
+// shouldSkipHistoryTool mirrors the skip logic in the real-time streaming path.
+// These tools create no visible chat item during streaming, so they should
+// also be omitted when loading historical messages.
+func shouldSkipHistoryTool(toolName string) bool {
+	switch toolName {
+	case "read_command_output", "wait_command", "stop_command",
+		"write_command_input", "list_commands":
+		return true
+	case "enter_plan_mode":
+		return true
+	}
+	if strings.HasPrefix(toolName, "lsp_") {
+		return true
+	}
+	return false
+}
+
+// suppressHistoryToolResult applies the same result formatting as the real-time
+// streaming path (chat_bridge.go suppressToolResult + tool.DescribeToolResult).
+func suppressHistoryToolResult(toolName, rawArgs, result string, isError bool) string {
+	switch toolName {
+	case "web_fetch", "web_search", "stop_command", "todo_write", "list_agents":
+		return ""
+	case "start_command":
+		return tool.StartCommandResultText(result, isError)
+	case "team_create":
+		return tool.TeamCreateResultText(result)
+	case "swarm_task_create":
+		return tool.SwarmTaskCreateResultMarkdown(result)
+	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output",
+		"cron_create", "cron_delete", "cron_list", "lanchat", "teammate_spawn":
+		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
+			if present.Payload != "" {
+				return present.Payload
+			}
+			return present.Summary
+		}
+	}
+	return result
+}
+
+// resolvedToolCall caches tool_use info for later tool_result matching.
+type resolvedToolCall struct {
+	toolName string
+	rawArgs  string
+}
+
 func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 	result := make([]SessionMessage, 0, len(msgs))
+	toolCalls := make(map[string]resolvedToolCall)
+
 	for _, m := range msgs {
 		if m.Role == "system" {
 			continue
@@ -132,27 +183,81 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 		for _, block := range m.Content {
 			switch block.Type {
 			case "text":
+				if strings.TrimSpace(block.Text) == "" {
+					continue
+				}
 				result = append(result, SessionMessage{
 					Role:    m.Role,
 					Content: block.Text,
 				})
+
 			case "tool_use":
 				argsStr := string(block.Input)
-				pres := tool.DescribeTool(block.ToolName, argsStr)
+				toolName := block.ToolName
+
+				// Cache for tool_result lookup
+				if block.ToolID != "" {
+					toolCalls[block.ToolID] = resolvedToolCall{
+						toolName: toolName,
+						rawArgs:  argsStr,
+					}
+				}
+
+				// Skip tools that have no visible item in real-time
+				if shouldSkipHistoryTool(toolName) {
+					continue
+				}
+
+				// exit_plan_mode → render plan as assistant text
+				if toolName == "exit_plan_mode" {
+					var args struct {
+						Plan string `json:"plan"`
+					}
+					if json.Unmarshal([]byte(argsStr), &args) == nil && args.Plan != "" {
+						result = append(result, SessionMessage{
+							Role:    "assistant",
+							Content: args.Plan,
+						})
+					}
+					continue
+				}
+
+				pres := tool.DescribeTool(toolName, argsStr)
 				result = append(result, SessionMessage{
 					Role:        "tool",
-					ToolName:    block.ToolName,
+					ToolName:    toolName,
 					ToolID:      block.ToolID,
 					ToolArgs:    argsStr,
 					Content:     "",
 					ToolDisplay: pres.DisplayName,
 					ToolDetail:  pres.Detail,
 				})
+
 			case "tool_result":
-				content := block.Output
-				if content == "" {
-					content = block.Text
+				// Resolve tool name and rawArgs from the tool_use that produced this result
+				toolName := block.ToolName
+				rawArgs := ""
+				if tc, ok := toolCalls[block.ToolID]; ok {
+					if toolName == "" {
+						toolName = tc.toolName
+					}
+					rawArgs = tc.rawArgs
 				}
+
+				// Skip tool results for tools that have no visible item
+				if shouldSkipHistoryTool(toolName) || toolName == "exit_plan_mode" {
+					continue
+				}
+
+				// Format result the same way as real-time streaming
+				content := suppressHistoryToolResult(toolName, rawArgs, block.Output, block.IsError)
+				if content == "" && block.IsError {
+					content = block.Output
+					if content == "" {
+						content = block.Text
+					}
+				}
+
 				// Update matching tool message with result
 				for i := len(result) - 1; i >= 0; i-- {
 					if result[i].ToolID == block.ToolID && result[i].Role == "tool" && result[i].Content == "" {

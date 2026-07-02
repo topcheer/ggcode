@@ -90,8 +90,8 @@ func (m *Manager) Start(viewFunc ViewFunc) error {
 
 	m.running = true
 
-	debug.Log("stream", "started: %dx%d @ %dfps QP=%d targets=%d, viewFunc=%v",
-		m.config.Width, m.config.Height, m.config.FPS, m.config.Quality, len(m.targets), m.viewFunc != nil)
+	debug.Log("stream", "started: %dx%d @ %dfps targets=%d",
+		m.config.Width, m.config.Height, m.config.FPS, len(m.targets))
 
 	// Start frame capture goroutine (creates encoder + connects targets on first frame)
 	safego.Go("stream.frameLoop", func() { m.frameLoop() })
@@ -108,7 +108,6 @@ func (m *Manager) Stop() {
 		return
 	}
 
-	debug.Log("stream", "STOP called — shutting down pipeline")
 	m.running = false
 	close(m.stopCh)
 
@@ -125,7 +124,7 @@ func (m *Manager) Stop() {
 		enc.Stop()
 	}
 
-	debug.Log("stream", "stopped")
+	// stopped
 }
 
 // StopTarget stops a specific target by name.
@@ -140,7 +139,7 @@ func (m *Manager) StopTarget(name string) error {
 	t.Stop()
 	delete(m.targets, name)
 
-	debug.Log("stream", "target %s stopped", name)
+	// target stopped
 	return nil
 }
 
@@ -193,10 +192,7 @@ func (m *Manager) frameLoop() {
 		case <-ticker.C:
 			ansiText, termSize := m.viewFunc()
 			frameCount++
-			if frameCount <= 10 || frameCount%100 == 0 {
-				debug.Log("stream", "frameLoop tick #%d: ansiLen=%d cols=%d rows=%d",
-					frameCount, len(ansiText), termSize.Cols, termSize.Rows)
-			}
+			// Don't log frame ticks — extremely noisy at 30fps
 			if ansiText == "" {
 				continue
 			}
@@ -235,8 +231,7 @@ func (m *Manager) frameLoop() {
 
 				m.renderer = NewDirectRenderer(encW, encH, fontSize, m.config.FontPath, cols, rows)
 
-				debug.Log("stream", "terminal size: %dx%d chars, fontSize=%d → renderer+encoder %dx%d",
-					cols, rows, fontSize, encW, encH)
+				// Don't log terminal size on every resize
 
 				m.encoderMu.Lock()
 				if m.encoder != nil {
@@ -255,11 +250,8 @@ func (m *Manager) frameLoop() {
 				// On resize, old broadcaster exits when old encoder stdout closes.
 				if !frameLoopInit {
 					for _, target := range m.targets {
-						debug.Log("stream", "connecting target %s to %s", target.Name(), target.maskURLForLog())
 						if _, err := target.Connect(); err != nil {
 							debug.Log("stream", "target %s connect failed: %v", target.Name(), err)
-						} else {
-							debug.Log("stream", "target %s connected successfully", target.Name())
 						}
 					}
 				}
@@ -369,16 +361,13 @@ func (m *Manager) fanOutBroadcaster() {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
-			if broadcastCount <= 5 || broadcastCount%100 == 0 {
-				debug.Log("stream", "broadcaster: read %d bytes (total reads=%d)", n, broadcastCount)
-			}
+			// Don't log byte counts — extremely noisy
 
 			for _, ch := range targets {
 				select {
 				case ch <- data:
 				default:
-					// Channel full — drop frame for this target (prevents backpressure)
-					debug.Log("stream", "broadcast channel full, dropping frame")
+					// Channel full — drop frame silently
 				}
 			}
 		}
@@ -401,9 +390,7 @@ func (m *Manager) targetWriter(target *Target, ch chan []byte) {
 			return
 		}
 		total += n
-		if total < 5 || total%100000 < 32768 {
-			debug.Log("stream", "target %s: %d bytes forwarded", target.Name(), total)
-		}
+		// Don't log byte forwarding stats
 	}
 }
 

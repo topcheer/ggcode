@@ -118,7 +118,11 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		// Clear todos
-		todoPath := toolpkg.TodoFilePath(workingDirFromModel(m))
+		sessionID := ""
+		if m.session != nil {
+			sessionID = m.session.ID
+		}
+		todoPath := toolpkg.TodoFilePath(sessionID)
 		if err := os.Remove(todoPath); err != nil && !os.IsNotExist(err) {
 			return func() tea.Msg {
 				return streamMsg(m.t("todo.clear_failed", err))

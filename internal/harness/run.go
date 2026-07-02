@@ -578,6 +578,27 @@ func BuildRunPrompt(cfg *Config, task *Task) string {
 	if strings.TrimSpace(task.BranchName) != "" {
 		b.WriteString("- Branch: " + task.BranchName + "\n")
 	}
+
+	// On retries, include the failure context from the previous attempt so
+	// the agent does not repeat the same mistake. This is the ONLY channel
+	// through which the harness communicates prior failures — the subprocess
+	// starts fresh with no conversation history.
+	if task.Attempt > 1 && strings.TrimSpace(task.Error) != "" {
+		b.WriteString("\n⚠ PREVIOUS ATTEMPT FAILED — do NOT repeat the same mistake.\n")
+		b.WriteString(fmt.Sprintf("Previous error (attempt %d): %s\n", task.Attempt-1, task.Error))
+		if task.VerificationStatus == VerificationFailed {
+			b.WriteString("Previous verification: FAILED\n")
+			if strings.TrimSpace(task.VerificationReportPath) != "" {
+				b.WriteString("Verification report: " + task.VerificationReportPath + "\n")
+			}
+		}
+		if strings.TrimSpace(task.LogPath) != "" {
+			b.WriteString("Previous run log: " + task.LogPath + "\n")
+			b.WriteString("Read the log file to understand what went wrong before proceeding.\n")
+		}
+		b.WriteString("You MUST address the above failure. Do not simply retry the same approach.\n")
+	}
+
 	return strings.TrimSpace(b.String())
 }
 

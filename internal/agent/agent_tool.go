@@ -26,14 +26,14 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
-	debug.Log("agent", "permission check: tool=%s", tc.Name)
+	// Don't log permission check — permission decision below is sufficient
 	a.mu.RLock()
 	policy := a.policy
 	onApproval := a.onApproval
 	a.mu.RUnlock()
 	if policy != nil {
 		decision, err := policy.Check(tc.Name, tc.Arguments)
-		debug.Log("agent", "permission decision: tool=%s decision=%s err=%v", tc.Name, decision, err)
+		// Only log non-trivial permission decisions (deny/error), not every allow
 		if err != nil {
 			return tool.Result{Content: fmt.Sprintf("permission check error: %v", err), IsError: true}
 		}

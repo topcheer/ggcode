@@ -862,11 +862,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					deferredMemoryTarget = mt
 				}
 			}
-			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
+			// Don't log executeToolWithPermission start — the permission check log already covers this
 			result := a.executeToolWithPermission(ctx, tc)
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
-			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, util.Truncate(result.Content, 200), len(result.Images))
+			if result.IsError {
+				debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
+			}
 
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {

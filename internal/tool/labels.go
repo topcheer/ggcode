@@ -687,7 +687,7 @@ func extractLanchatDeliveryInfo(result string) string {
 }
 
 // describeLanchatHistoryResult formats the JSON message history into a
-// chat-log style display.
+// compact list — one line per message with a short content preview.
 func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool) {
 	if strings.Contains(trimmed, "No messages in history") {
 		return ToolResultPresentation{
@@ -719,15 +719,18 @@ func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool)
 	var lines []string
 	lines = append(lines, header)
 	for _, m := range msgs {
-		direction := "→"
+		// Compact content preview: single line, max ~50 chars.
+		preview := compactSingleLine(m.Body)
+		if len(preview) > 50 {
+			preview = preview[:50] + "..."
+		}
+
+		// Format: "  HH:MM:SS  nick → target   preview..."
 		target := m.To
 		if target == "" || target == "all" {
 			target = "all"
 		}
-
-		line1 := fmt.Sprintf("  %s  %s %s %s", m.Time, m.From, direction, target)
-		lines = append(lines, line1)
-		lines = append(lines, fmt.Sprintf("       %s", m.Body))
+		lines = append(lines, fmt.Sprintf("  %s  %s → %s   %s", m.Time, m.From, target, preview))
 	}
 
 	return ToolResultPresentation{

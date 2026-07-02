@@ -32,14 +32,23 @@ func (m *Model) promptExitConfirm() {
 }
 
 func (m *Model) queuePendingSubmission(text string) {
-	count := m.pending.enqueue(text)
-	debug.Log("tui", "queuePendingSubmission: count=%d text=%s", count, util.Truncate(text, 100))
+	// Capture images attached with this submission and clear them from the
+	// pending list so they don't leak into the next submission.
+	imgs := m.pendingImages
+	m.pendingImages = nil
+	count := m.pending.enqueueWithImages(text, imgs)
+	debug.Log("tui", "queuePendingSubmission: count=%d text=%s imgs=%d", count, util.Truncate(text, 100), len(imgs))
 	if count == 0 {
 		return
 	}
 	// Render the user's input in the conversation view so it looks like a
 	// normal submission, rather than showing a "[queued N pending]" hint.
-	m.chatWriteUser(nextChatID(), text)
+	// Include image placeholders so the user sees what was attached.
+	displayText := text
+	for _, img := range imgs {
+		displayText = strings.TrimSpace(img.placeholder + " " + displayText)
+	}
+	m.chatWriteUser(nextChatID(), displayText)
 	m.chatListScrollToBottom()
 }
 
@@ -109,18 +118,20 @@ func (m *Model) consumePendingSubmission() string {
 	return m.pending.consume()
 }
 
-func (m *Model) consumePendingSubmissionDetailed() (string, bool, *tunnel.MessageData) {
+func (m *Model) consumePendingSubmissionDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {
 	return m.pending.consumeDetailed()
 }
 
 func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
-	text, hidden, override := m.consumePendingSubmissionDetailed()
-	if text == "" {
+	text, hidden, override, imgs := m.consumePendingSubmissionDetailed()
+	if text == "" && len(imgs) == 0 {
 		return nil
 	}
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
+	// Restore images so startAgentWithExpand picks them up.
+	m.pendingImages = imgs
 	if hidden {
 		return m.submitHiddenText(text)
 	}
@@ -162,7 +173,7 @@ func (m *Model) restorePendingInput() {
 }
 
 func (m *Model) drainPendingInterrupt(runID int) string {
-	text, hidden, _ := m.consumePendingSubmissionDetailed()
+	text, hidden, _, _ := m.consumePendingSubmissionDetailed()
 	if text == "" {
 		return ""
 	}
@@ -233,6 +244,21 @@ func (q *pendingQueue) enqueue(text string) int {
 	return count
 }
 
+// enqueueWithImages stores images alongside the pending text in q.items.
+// The agentruntime.PendingQueue doesn't support images, so we store them
+// directly and recover them during consume.
+func (q *pendingQueue) enqueueWithImages(text string, imgs []imageAttachedMsg) int {
+	queue := q.ensureQueue()
+	count := queue.Enqueue(text, false, nil)
+	q.syncItemsFromQueue(queue)
+	// After sync, the last item in q.items corresponds to our submission.
+	// Store images there.
+	if len(q.items) > 0 {
+		q.items[len(q.items)-1].Images = imgs
+	}
+	return count
+}
+
 func (q *pendingQueue) enqueueHidden(text string, override *tunnel.MessageData) int {
 	queue := q.ensureQueue()
 	count := queue.Enqueue(text, true, cloneTunnelMessageData(override))
@@ -261,7 +287,7 @@ func (q *pendingQueue) snapshot() []string {
 }
 
 func (q *pendingQueue) consume() string {
-	text, _, _ := q.consumeDetailed()
+	text, _, _, _ := q.consumeDetailed()
 	return text
 }
 
@@ -281,26 +307,31 @@ func (q *pendingQueue) consumeVisiblePrefix() string {
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
-func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {
+func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {
 	queue := q.ensureQueue()
 	item, ok := queue.Consume()
 	if !ok {
 		q.syncItemsFromQueue(queue)
-		return "", false, nil
+		return "", false, nil, nil
 	}
 	if item.Hidden || item.Meta != nil {
 		q.syncItemsFromQueue(queue)
-		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta)
+		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta), nil
 	}
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
 	})
+	// Grab images from q.items before sync destroys them
+	var imgs []imageAttachedMsg
+	if len(q.items) > 0 {
+		imgs = q.items[0].Images
+	}
 	q.syncItemsFromQueue(queue)
 	parts := []string{item.Text}
 	for _, pending := range items {
 		parts = append(parts, pending.Text)
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, imgs
 }
 
 // stripImagePlaceholder removes a leading image placeholder from a value.

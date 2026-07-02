@@ -5,8 +5,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // HardwareEncoder represents a detected hardware encoder.
@@ -43,13 +41,13 @@ func DetectHardwareEncoders() []HardwareEncoder {
 			for _, enc := range encoders {
 				if enc == pref.Name {
 					hwEncoders = append(hwEncoders, pref)
-					debug.Log("stream", "hardware encoder detected: %s (%s)", pref.Name, pref.Description)
+					// Hardware encoder detected — no need to log
 					break
 				}
 			}
 		}
 		if len(hwEncoders) == 0 {
-			debug.Log("stream", "no hardware encoders found, will use libx264")
+			// No hardware encoders found
 		}
 	})
 	return hwEncoders
@@ -61,18 +59,18 @@ func DetectHardwareEncoders() []HardwareEncoder {
 func BestEncoder(forceEncoder string) string {
 	switch forceEncoder {
 	case "software", "libx264":
-		debug.Log("stream", "using software encoder: libx264")
+		// Using software encoder
 		return "libx264"
 	case "", "auto":
 		detected := DetectHardwareEncoders()
 		if len(detected) > 0 {
 			choice := detected[0].Name
-			debug.Log("stream", "auto-selected hardware encoder: %s", choice)
+			// Auto-selected hardware encoder
 			return choice
 		}
 		return "libx264"
 	default:
-		debug.Log("stream", "using forced encoder: %s", forceEncoder)
+		// Using forced encoder
 		return forceEncoder
 	}
 }

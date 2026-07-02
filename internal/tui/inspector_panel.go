@@ -316,7 +316,11 @@ func (m *Model) handleInspectorMemoryClear() (Model, tea.Cmd) {
 }
 
 func (m *Model) handleInspectorTodoClear() (Model, tea.Cmd) {
-	path := todoFilePath(workingDirFromModel(m))
+	sessionID := ""
+	if m.session != nil {
+		sessionID = m.session.ID
+	}
+	path := todoFilePath(sessionID)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		m.setInspectorMessage(inspectorText(m.currentLanguage(), "clear_failed", err))
 		return *m, nil
@@ -473,7 +477,11 @@ func (m Model) inspectorMemoryItems() []inspectorPanelItem {
 }
 
 func (m Model) inspectorTodoItems() []inspectorPanelItem {
-	todos, err := readInspectorTodos(workingDirFromModel(&m))
+	sessionID := ""
+	if m.session != nil {
+		sessionID = m.session.ID
+	}
+	todos, err := readInspectorTodos(sessionID)
 	if err != nil {
 		return []inspectorPanelItem{{Title: inspectorText(m.currentLanguage(), "todos_error"), Detail: err.Error(), Disabled: true}}
 	}
@@ -890,12 +898,12 @@ func formatInspectorTime(ts time.Time) string {
 	return ts.Local().Format(time.DateTime)
 }
 
-func todoFilePath(workspace string) string {
-	return toolpkg.TodoFilePath(workspace)
+func todoFilePath(sessionID string) string {
+	return toolpkg.TodoFilePath(sessionID)
 }
 
-func readInspectorTodos(workspace string) ([]toolpkg.Todo, error) {
-	data, err := os.ReadFile(todoFilePath(workspace))
+func readInspectorTodos(sessionID string) ([]toolpkg.Todo, error) {
+	data, err := os.ReadFile(todoFilePath(sessionID))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}

@@ -18,6 +18,11 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+func init() {
+	// Zero the precompact start delay so tests don't wait 6 seconds.
+	precompactDelay = 0
+}
+
 type mockTool struct {
 	name   string
 	result tool.Result

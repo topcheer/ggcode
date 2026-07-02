@@ -206,7 +206,7 @@ func (m *Model) submitHiddenText(text string) tea.Cmd {
 
 func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInChat bool) tea.Cmd {
 	// Notify Knight that user is active (resets idle timer)
-	if m.knight != nil && strings.TrimSpace(text) != "" {
+	if m.knight != nil && (strings.TrimSpace(text) != "" || len(m.pendingImages) > 0) {
 		m.knight.NotifyActivity()
 	}
 

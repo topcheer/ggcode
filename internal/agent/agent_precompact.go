@@ -33,7 +33,16 @@ type precompactState struct {
 	cancelled bool                   // set if CancelPreCompact was called externally
 }
 
-const precompactBackgroundTimeout = 60 * time.Second
+const (
+	precompactBackgroundTimeout = 60 * time.Second
+	// precompactStartDelay staggers the compression LLM call away from the
+	// agent's regular LLM turn to avoid API rate-limit collisions.
+	precompactStartDelay = 6 * time.Second
+)
+
+// precompactDelayCtx is the delay applied before the background compression
+// request fires. Tests override this to zero for fast execution.
+var precompactDelay = precompactStartDelay
 
 type snapshotCompactManager interface {
 	CompactSnapshot() ctxpkg.CompactSnapshot
@@ -108,6 +117,20 @@ func (a *Agent) StartPreCompact() {
 		defer close(pc.done)
 		defer cancel()
 
+		// Delay before sending the compression request.
+		// When precompact triggers, the agent's regular LLM turn fires
+		// simultaneously — the API rate-limits one of them if both hit at
+		// the same time. Staggering them avoids the collision.
+		if d := precompactDelay; d > 0 {
+			select {
+			case <-bgCtx.Done():
+				pc.err = bgCtx.Err()
+				debug.Log("precompact", "CANCELLED before delay completed")
+				return
+			case <-time.After(d):
+			}
+		}
+
 		result, err := snapshot.Compact(bgCtx, prov)
 		if err != nil {
 			pc.err = err
@@ -141,9 +164,15 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			a.precompact = nil
 		}
 		a.mu.Unlock()
-		ok := pc.err == nil && !pc.cancelled
-		if !ok {
+		if pc.err != nil || pc.cancelled {
 			debug.Log("precompact", "READY but unusable err=%v cancelled=%v", pc.err, pc.cancelled)
+			if onEvent != nil {
+				if pc.cancelled {
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... cancelled]"})
+				} else {
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... failed: %v]", pc.err)})
+				}
+			}
 			return false
 		}
 		snapshotMgr, ok := a.contextManager.(snapshotCompactManager)
@@ -152,14 +181,19 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			return false
 		}
 		applied, newTokens := snapshotMgr.ApplyCompactResult(pc.snapshot, pc.result)
-		debug.Log("precompact", "READY consumed applied=%t tokens=%d", applied, newTokens)
-		if applied {
-			a.maybeSaveCheckpoint()
+		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d", applied, newTokens, pc.startTok)
+		if !applied {
+			debug.Log("precompact", "RESULT DISCARDED: version mismatch (live messages modified during compaction)")
 			if onEvent != nil {
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... result discarded (messages changed)]"})
 			}
+			return false
 		}
-		return applied
+		a.maybeSaveCheckpoint()
+		if onEvent != nil {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
+		}
+		return true
 	default:
 		debug.Log("precompact", "still running; continuing without waiting")
 		return false

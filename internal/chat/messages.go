@@ -225,25 +225,29 @@ func (a *AssistantItem) Render(width int) string {
 		result = a.renderReasoning(width, prefixWidth, contentWidth)
 	}
 
-	// Render main assistant content.
-	rendered := a.renderMainContent(contentWidth)
-	lines := strings.Split(rendered, "\n")
-	var sb strings.Builder
-	for i, line := range lines {
-		if i == 0 {
-			sb.WriteString(a.styles.AssistantStyle.Render(a.prefix))
+	// Render main assistant content — but only if there is actual text content.
+	// When a turn has reasoning but no body text (e.g. only tool calls),
+	// rendering the empty prefix line is visually noise.
+	if a.text != "" || (a.reasoning == "" && !a.streaming) {
+		rendered := a.renderMainContent(contentWidth)
+		lines := strings.Split(rendered, "\n")
+		var sb strings.Builder
+		for i, line := range lines {
+			if i == 0 {
+				sb.WriteString(a.styles.AssistantStyle.Render(a.prefix))
+			} else {
+				sb.WriteString(strings.Repeat(" ", prefixWidth))
+			}
+			sb.WriteString(line)
+			if i < len(lines)-1 {
+				sb.WriteString("\n")
+			}
+		}
+		if result != "" {
+			result += "\n\n" + sb.String()
 		} else {
-			sb.WriteString(strings.Repeat(" ", prefixWidth))
+			result = sb.String()
 		}
-		sb.WriteString(line)
-		if i < len(lines)-1 {
-			sb.WriteString("\n")
-		}
-	}
-	if result != "" {
-		result += "\n" + sb.String()
-	} else {
-		result = sb.String()
 	}
 
 	a.SetCached(result, width, measureHeight(result))

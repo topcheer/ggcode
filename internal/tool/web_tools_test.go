@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -281,8 +280,9 @@ func TestWebSearchDomainFiltersMatchSubdomains(t *testing.T) {
 // --- todo_write tests ---
 
 func TestTodoWrite_Basic(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-basic"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{
 		"todos": [
@@ -300,9 +300,9 @@ func TestTodoWrite_Basic(t *testing.T) {
 	}
 
 	// Verify file
-	data, err := os.ReadFile(filepath.Join(dir, "todos.json"))
+	data, err := os.ReadFile(TodoFilePath(sessionID))
 	if err != nil {
-		t.Fatalf("failed to read todos.json: %v", err)
+		t.Fatalf("failed to read todo file: %v", err)
 	}
 	var todos []Todo
 	if err := json.Unmarshal(data, &todos); err != nil {
@@ -322,8 +322,9 @@ func TestTodoWrite_Basic(t *testing.T) {
 }
 
 func TestTodoWrite_ListTodos(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-list"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{"todos": [{"id": "1", "content": "Task 1", "status": "pending"}]}`)
 	_, err := tw.Execute(context.Background(), input)
@@ -341,8 +342,9 @@ func TestTodoWrite_ListTodos(t *testing.T) {
 }
 
 func TestTodoWrite_EmptyList(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-empty"
+	tw := NewTodoWrite(sessionID)
 
 	todos, err := tw.ListTodos()
 	if err != nil {
@@ -354,8 +356,9 @@ func TestTodoWrite_EmptyList(t *testing.T) {
 }
 
 func TestTodoWrite_ClearsFileOnEmptyUpdate(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-clear"
+	tw := NewTodoWrite(sessionID)
 
 	if _, err := tw.Execute(context.Background(), json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"pending"}]}`)); err != nil {
 		t.Fatalf("seed execute failed: %v", err)
@@ -363,14 +366,15 @@ func TestTodoWrite_ClearsFileOnEmptyUpdate(t *testing.T) {
 	if _, err := tw.Execute(context.Background(), json.RawMessage(`{"todos":[]}`)); err != nil {
 		t.Fatalf("clear execute failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "todos.json")); !os.IsNotExist(err) {
-		t.Fatalf("expected todos.json to be removed, err=%v", err)
+	if _, err := os.Stat(TodoFilePath(sessionID)); !os.IsNotExist(err) {
+		t.Fatalf("expected todo file to be removed, err=%v", err)
 	}
 }
 
 func TestTodoWrite_InvalidStatus(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-invalid"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{"todos": [{"id": "1", "content": "Bad", "status": "invalid"}]}`)
 	result, err := tw.Execute(context.Background(), input)
@@ -383,8 +387,9 @@ func TestTodoWrite_InvalidStatus(t *testing.T) {
 }
 
 func TestTodoWrite_MissingID(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-missing"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{"todos": [{"content": "No ID", "status": "pending"}]}`)
 	result, err := tw.Execute(context.Background(), input)
@@ -397,8 +402,9 @@ func TestTodoWrite_MissingID(t *testing.T) {
 }
 
 func TestTodoWrite_RejectsDuplicateIDs(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-dup"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"pending"},{"id":"1","content":"Task 2","status":"done"}]}`)
 	result, err := tw.Execute(context.Background(), input)
@@ -411,8 +417,9 @@ func TestTodoWrite_RejectsDuplicateIDs(t *testing.T) {
 }
 
 func TestTodoWrite_AllowsMultipleInProgress(t *testing.T) {
-	dir := t.TempDir()
-	tw := NewTodoWrite(dir)
+	withTestHome(t)
+	sessionID := "test-session-multi"
+	tw := NewTodoWrite(sessionID)
 
 	input := json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"in_progress"},{"id":"2","content":"Task 2","status":"in_progress"}]}`)
 	result, err := tw.Execute(context.Background(), input)

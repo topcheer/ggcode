@@ -58,14 +58,19 @@ type CompactResult struct {
 }
 
 const (
-	// Compaction trigger: 100% of usable budget. outputReserve and
-	// safetyMargin already account for headroom — no need to trigger early.
-	summarizeThreshold = 1.0
+	// Compaction trigger: 99% of usable budget. Leaves a small margin so the
+	// last LLM turn before compaction can still fit.
+	summarizeThreshold = 0.99
 
-	// Summary output cap: 5% of contextWindow. For 200K context the
-	// summary is at most ~10K tokens — enough to capture key decisions,
-	// file paths, code structure, and pending work.
-	maxSummaryOutputRatio = 0.05
+	// Summary output cap: 5% of contextWindow, but capped at a fixed
+	// absolute maximum. For 200K context → 10K; for 1M context → 12K (not 50K).
+	maxSummaryOutputRatio  = 0.05
+	maxSummaryOutputTokens = 12000
+
+	// Post-compaction target: fixed absolute size, not proportional.
+	// After compaction the context should be roughly system + summary ≈ 20K.
+	// For small context windows, cap at 25% of the window.
+	compactTargetFixed = 30000
 
 	// Recent conversation budget: fixed 15K tokens kept verbatim after
 	// summarization. Covers the last few conversation rounds.
@@ -73,17 +78,14 @@ const (
 	// to avoid dominating the available space.
 	recentBudgetFixed = 15000
 
-	// Post-compaction done check: the summarization loop continues until
-	// total tokens fall below this fraction of usable budget. Since
-	// post-compaction size ≈ systemTokens + summary + recent ≈ 65K,
-	// 0.60 (~102K for 200K context) provides ample safety margin.
-	compactDoneRatio = 0.60
+	// compactDoneRatio is no longer used — compactTargetTokens now returns
+	// a fixed absolute target. Kept for reference.
+	compactDoneRatio = 0.30
 
 	defaultOutputReserveRatio = 0.10
 	maxOutputReserveRatio     = 0.25
 	safetyMarginRatio         = 0.05
-	minRecentGroups           = 1
-	maxSummarizePasses        = 2
+	minRecentGroups           = 0 // summarize all groups, keep none verbatim
 	minSummaryReserve         = 64
 	microcompactMinGain       = 32
 	toolResultMinTokens       = 96
@@ -551,36 +553,41 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
+		// Live has fewer messages than snapshot — messages were removed
+		// (e.g. session cleared).  Stale, cannot apply.
 		return false, m.tokenCountLocked()
 	}
-	// If version unchanged, the first OrigLen messages are guaranteed identical.
-	// If version changed, messages may have been appended (allowed) or
-	// modified within the first OrigLen (stale snapshot - reject).
+
+	// Detect (but do NOT reject) messages that changed within the snapshot
+	// range.  The compaction summary is a lossy compression of the
+	// conversation — it does not require byte-level accuracy of the source.
+	// Using a slightly stale summary is always better than discarding the
+	// result and never compacting (which leads to hitting the context limit).
 	if m.version != snapshot.Version {
+		mismatches := 0
 		for i := range snapshot.Messages {
 			if i >= len(m.messages) {
-				return false, m.tokenCountLocked()
-			}
-			// Skip the system message — it is dynamically updated (lanchat
-			// peers, memory changes, autopilot state, etc.) via
-			// UpdateFirstSystemMessage which replaces messages[0] without
-			// incrementing version.  These content-only changes are safe to
-			// ignore because we restore the live system message below after
-			// applying the compacted result.
-			if snapshot.Messages[i].Role == "system" && m.messages[i].Role == "system" {
+				mismatches++
 				continue
+			}
+			if snapshot.Messages[i].Role == "system" && m.messages[i].Role == "system" {
+				continue // system message is dynamically updated, always skip
 			}
 			live := m.messages[i]
 			snap := snapshot.Messages[i]
 			if live.Role != snap.Role || contentFingerprint(live) != contentFingerprint(snap) {
-				return false, m.tokenCountLocked()
+				mismatches++
 			}
+		}
+		if mismatches > 0 {
+			debug.Log("ctx", "ApplyCompactResult: %d/%d messages changed since snapshot — applying anyway (lossy summary is acceptable)",
+				mismatches, len(snapshot.Messages))
 		}
 	}
 
 	// Preserve the current system message. The snapshot's version may be stale
-	// due to dynamic updates during the compaction window. Overwriting it with
-	// the snapshot version would lose recent lanchat/memory/injection changes.
+	// due to dynamic updates (lanchat peers, memory, autopilot state) during
+	// the compaction window.
 	var liveSystem provider.Message
 	hasLiveSystem := false
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
@@ -588,7 +595,12 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		hasLiveSystem = true
 	}
 
-	extra := append([]provider.Message(nil), m.messages[snapshot.OrigLen:]...)
+	// Messages appended after the snapshot are preserved as-is.
+	origEnd := snapshot.OrigLen
+	if origEnd > len(m.messages) {
+		origEnd = len(m.messages)
+	}
+	extra := append([]provider.Message(nil), m.messages[origEnd:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
 
@@ -700,75 +712,65 @@ func (m *Manager) PromptBudget() int {
 	return m.usablePromptBudgetLocked()
 }
 
-// Summarize compresses old messages into a summary while retaining an adaptive
-// recent suffix sized to fit within the target token budget.
+// Summarize compresses all messages (except system prompt) into a single
+// summary. This implements rolling compaction: each invocation produces
+// [system, summary, extra...] where extra = messages that arrived during
+// the async compaction window. On the next trigger, the summary itself is
+// included in the compression input, producing a fresh summary.
 func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
-	for pass := 0; pass < maxSummarizePasses; pass++ {
-		plan, ok := m.buildSummaryPlan()
-		if !ok {
-			debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
-			return nil
-		}
+	plan, ok := m.buildSummaryPlan()
+	if !ok {
+		debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
+		return nil
+	}
 
-		debug.Log("ctx", "Summarize: pass=%d old_msgs=%d recent_msgs=%d has_system=%t",
-			pass, len(plan.oldMsgs), len(plan.recentMsgs), plan.hasSystem)
+	debug.Log("ctx", "Summarize: old_msgs=%d has_system=%t", len(plan.oldMsgs), plan.hasSystem)
 
-		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens())
-		if err != nil {
-			debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
-			return err
-		}
-		debug.Log("ctx", "Summarize: summary generated, len=%d chars", len(summaryText))
+	summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens())
+	if err != nil {
+		debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
+		return err
+	}
+	debug.Log("ctx", "Summarize: summary generated, len=%d chars", len(summaryText))
 
-		stateText := m.buildPostCompactState(plan.allMsgs)
+	stateText := m.buildPostCompactState(plan.allMsgs)
 
-		m.mu.Lock()
+	m.mu.Lock()
+	// Collect any messages that arrived during summarization (TOCTOU fix)
+	var extraMsgs []provider.Message
+	if len(m.messages) > plan.origLen {
+		extraMsgs = make([]provider.Message, len(m.messages)-plan.origLen)
+		copy(extraMsgs, m.messages[plan.origLen:])
+	}
 
-		// Collect any messages that arrived during summarization (TOCTOU fix)
-		var extraMsgs []provider.Message
-		if len(m.messages) > plan.origLen {
-			extraMsgs = make([]provider.Message, len(m.messages)-plan.origLen)
-			copy(extraMsgs, m.messages[plan.origLen:])
-		}
-
-		newMsgs := make([]provider.Message, 0, len(plan.recentMsgs)+len(extraMsgs)+2)
-		if plan.hasSystem {
-			newMsgs = append(newMsgs, plan.systemMsg)
-		}
+	newMsgs := make([]provider.Message, 0, len(extraMsgs)+2)
+	if plan.hasSystem {
+		newMsgs = append(newMsgs, plan.systemMsg)
+	}
+	newMsgs = append(newMsgs, provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("[Previous conversation summary]\n%s", summaryText),
+		}},
+	})
+	if stateText != "" {
 		newMsgs = append(newMsgs, provider.Message{
 			Role: "system",
 			Content: []provider.ContentBlock{{
 				Type: "text",
-				Text: fmt.Sprintf("[Previous conversation summary]\n%s", summaryText),
+				Text: stateText,
 			}},
 		})
-		if stateText != "" {
-			newMsgs = append(newMsgs, provider.Message{
-				Role: "system",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: stateText,
-				}},
-			})
-		}
-		newMsgs = append(newMsgs, plan.recentMsgs...)
-		newMsgs = append(newMsgs, extraMsgs...)
-
-		oldLen := len(m.messages)
-		m.messages = newMsgs
-		m.version++
-		m.recalcTokens()
-		done := m.tokens <= m.compactTargetTokens()
-		debug.Log("ctx", "Summarize: pass=%d msgs=%d→%d tokens=%d target=%d done=%t",
-			pass, oldLen, len(newMsgs), m.tokens, m.compactTargetTokens(), done)
-		m.mu.Unlock()
-
-		if done {
-			return nil
-		}
 	}
+	newMsgs = append(newMsgs, extraMsgs...)
 
-	debug.Log("ctx", "Summarize: exhausted %d passes", maxSummarizePasses)
+	oldLen := len(m.messages)
+	m.messages = newMsgs
+	m.version++
+	m.recalcTokens()
+	debug.Log("ctx", "Summarize: msgs=%d→%d tokens=%d", oldLen, len(newMsgs), m.tokenCountLocked())
+	m.mu.Unlock()
 	return nil
 }
 
@@ -925,11 +927,12 @@ func (m *Manager) Microcompact() bool {
 	}
 
 	groups := buildMessageGroups(m.messages, start)
-	if len(groups) <= minRecentGroups {
-		debug.Log("ctx", "Microcompact: SKIP groups=%d <= min=%d", len(groups), minRecentGroups)
+	if len(groups) == 0 {
+		debug.Log("ctx", "Microcompact: SKIP no groups")
 		return false
 	}
-	protectedStart := groups[len(groups)-minRecentGroups].start
+	// Protect the most recent group from microcompact truncation.
+	protectedStart := groups[len(groups)-1].start
 
 	changed := false
 	currentTokens := m.tokenCountLocked()
@@ -1021,8 +1024,23 @@ func (m *Manager) Microcompact() bool {
 
 	if changed {
 		m.version++
-		m.recalcTokens()
-		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d", compactedCount, currentTokens, m.tokenCountLocked())
+		// Recalculate m.tokens from scratch, but DO NOT invalidate the
+		// usage baseline (unlike recalcTokens). The checkpoint baseline
+		// is still valid — microcompact only truncated tool_result outputs,
+		// it did not replace the message list. Instead, adjust the baseline
+		// downward by the savings tracked in currentTokens.
+		m.tokens = 0
+		for _, msg := range m.messages {
+			m.tokens += m.countTokens(msg)
+		}
+		if m.baselineAvailable {
+			// currentTokens started from tokenCountLocked() (baseline + delta)
+			// and was reduced by estimated savings. Use it as the new baseline.
+			m.baselineTokens = currentTokens
+			m.baselineDelta = 0
+		}
+		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d baseline=%t",
+			compactedCount, currentTokens, m.tokenCountLocked(), m.baselineAvailable)
 	} else {
 		debug.Log("ctx", "Microcompact: no eligible tool results found to compact")
 	}
@@ -1057,56 +1075,16 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 
 	plan.allMsgs = append([]provider.Message(nil), m.messages...)
 	groups := buildMessageGroups(m.messages, start)
-	if len(groups) <= minRecentGroups {
+	if len(groups) == 0 {
 		return summaryPlan{}, false
 	}
 
-	// Recent conversation budget: 15K fixed, but capped at 10% of
-	// contextWindow for small contexts to avoid dominating available space.
-	recentBudget := recentBudgetFixed
-	if cw := m.contextWindow; cw > 0 && recentBudget > cw/10 {
-		recentBudget = cw / 10
-	}
-
-	keepStart := len(m.messages)
-	recentTokens := 0
-	keptGroups := 0
-	for i := len(groups) - 1; i >= 0; i-- {
-		groupTokens := 0
-		for j := groups[i].start; j < groups[i].end; j++ {
-			groupTokens += m.countTokens(m.messages[j])
-		}
-		if keptGroups < minRecentGroups || recentTokens+groupTokens <= recentBudget {
-			recentTokens += groupTokens
-			keptGroups++
-			keepStart = groups[i].start
-			continue
-		}
-		break
-	}
-
-	// If recent side still far exceeds budget, force-compress oldest recent group.
-	// This handles the case where a single huge round causes infinite compression loops.
-	if recentTokens > recentBudget*2 && keptGroups > 1 {
-		// Move the oldest kept group to oldMsgs by advancing keepStart past it
-		firstKeptIdx := len(groups) - keptGroups
-		keepStart = groups[firstKeptIdx+1].start
-		keptGroups--
-		debug.Log("ctx", "buildSummaryPlan: forcing single-round compression, keptGroups=%d->%d recentTokens=%d budget=%d",
-			keptGroups+1, keptGroups, recentTokens, recentBudget)
-	}
-	if keptGroups >= len(groups) {
-		keepStart = groups[1].start
-	}
-	if keepStart <= start {
-		keepStart = groups[1].start
-	}
-	if keepStart >= len(m.messages) {
-		return summaryPlan{}, false
-	}
-
-	plan.oldMsgs = append([]provider.Message(nil), m.messages[start:keepStart]...)
-	plan.recentMsgs = append([]provider.Message(nil), m.messages[keepStart:]...)
+	// Rolling compaction: summarize ALL messages (except system prompt).
+	// No "recent groups" are kept verbatim. Messages produced during the
+	// compaction window are preserved later by ApplyCompactResult as "extra".
+	plan.oldMsgs = append([]provider.Message(nil), m.messages[start:]...)
+	plan.recentMsgs = nil
+	debug.Log("ctx", "buildSummaryPlan: summarizing all %d messages (groups=%d)", len(plan.oldMsgs), len(groups))
 	return plan, len(plan.oldMsgs) > 0
 }
 
@@ -1176,11 +1154,10 @@ Format: Use clear sections with bullet points. Be specific with names, paths, an
 }
 
 func (m *Manager) compactTargetTokens() int {
-	budget := m.usablePromptBudgetLocked()
-	if budget <= 0 {
-		return 0
+	target := compactTargetFixed
+	if cw := m.contextWindow; cw > 0 && target > cw/4 {
+		target = cw / 4 // cap at 25% for small context windows
 	}
-	target := int(float64(budget) * compactDoneRatio)
 	if target < minSummaryReserve {
 		return minSummaryReserve
 	}
@@ -1197,7 +1174,8 @@ func (m *Manager) microcompactTargetTokens() int {
 }
 
 // summaryReserveTokens returns the token budget reserved for the summary
-// LLM call's output. Capped at maxSummaryOutputRatio (5%) of contextWindow.
+// LLM call's output. Capped at maxSummaryOutputRatio (5%) of contextWindow
+// AND a fixed absolute maximum (maxSummaryOutputTokens).
 func (m *Manager) summaryReserveTokens() int {
 	if m.contextWindow <= 0 {
 		return minSummaryReserve
@@ -1205,6 +1183,9 @@ func (m *Manager) summaryReserveTokens() int {
 	reserve := int(float64(m.contextWindow) * maxSummaryOutputRatio)
 	if reserve < minSummaryReserve {
 		return minSummaryReserve
+	}
+	if reserve > maxSummaryOutputTokens {
+		return maxSummaryOutputTokens
 	}
 	return reserve
 }

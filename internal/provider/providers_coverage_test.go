@@ -129,8 +129,8 @@ func TestNewProviderHTTPTransportUsesLLMHeaderTimeout(t *testing.T) {
 	if tr.TLSHandshakeTimeout != 10*time.Second {
 		t.Fatalf("expected TLS handshake timeout 10s, got %v", tr.TLSHandshakeTimeout)
 	}
-	if tr.ResponseHeaderTimeout != 5*time.Minute {
-		t.Fatalf("expected response header timeout 5m, got %v", tr.ResponseHeaderTimeout)
+	if tr.ResponseHeaderTimeout != 120*time.Second {
+		t.Fatalf("expected response header timeout 120s, got %v", tr.ResponseHeaderTimeout)
 	}
 }
 

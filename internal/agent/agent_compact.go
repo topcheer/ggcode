@@ -91,6 +91,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		}
 		return true
 	}
+	// Cancel any still-running precompact before modifying live messages.
+	// Without this, local compaction (Microcompact/TruncateOldestGroup) would
+	// change fingerprints within the snapshot range, causing ApplyCompactResult
+	// to silently reject the precompact result when it eventually completes.
+	a.CancelPreCompact()
 	if a.compactLocallyForSendBudget("reactive compact") {
 		if retries != nil {
 			*retries = *retries + 1
@@ -208,6 +213,20 @@ func (a *Agent) ensurePromptSendable() {
 	if a.consumeReadyPreCompact(nil) && a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
+
+	// Do NOT modify live messages while a background precompact is running.
+	// compactLocallyForSendBudget calls Microcompact/TruncateOldestGroupForRetry
+	// which mutates tool_result blocks and drops message groups. This changes
+	// the fingerprints of messages within the precompact snapshot's range,
+	// causing ApplyCompactResult to silently reject the compaction result.
+	a.mu.RLock()
+	precompactRunning := a.precompact != nil
+	a.mu.RUnlock()
+	if precompactRunning {
+		debug.Log("agent", "ensurePromptSendable: SKIP local compaction (precompact running, would invalidate snapshot)")
+		return
+	}
+
 	a.compactLocallyForSendBudget("pre-send hard guard")
 }
 

@@ -131,7 +131,7 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	case OutboundEventStatus:
 		debug.Log("emitter", "emit im status=%q", truncateEmitter(event.Status, 80))
 	default:
-		debug.Log("emitter", "emit im kind=%s", event.Kind)
+		// Don't log every emit — extremely noisy for tool_result events
 	}
 	if e.state == nil {
 		e.state = newIMEmitterState()

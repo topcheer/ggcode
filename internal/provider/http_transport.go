@@ -11,7 +11,7 @@ import (
 const (
 	providerDialTimeout           = 30 * time.Second
 	providerTLSHandshakeTimeout   = 10 * time.Second
-	providerResponseHeaderTimeout = 5 * time.Minute
+	providerResponseHeaderTimeout = 120 * time.Second
 )
 
 func newProviderHTTPTransport() *http.Transport {

@@ -189,37 +189,37 @@ func TestContextManager_Summarize_TooFewMessages(t *testing.T) {
 	}
 }
 
-func TestContextManager_Summarize_AdaptiveRetentionByTokenBudget(t *testing.T) {
+func TestContextManager_Summarize_RollingCompactionSummarizesAll(t *testing.T) {
 	ctx := context.Background()
 	prov := &mockProvider{}
 
-	// Both managers have the same context window. small has short messages,
-	// large has long messages. With fixed recentBudget, large should retain
-	// fewer messages (each takes more budget).
-	small := NewManager(100000)
-	large := NewManager(100000)
-
-	small.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
-	large.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
+	cm := NewManager(100000)
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
 
 	for i := 0; i < 50; i++ {
-		small.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("small-user-%d %s", i, strings.Repeat("x", 40))}}})
-		small.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("small-assistant-%d %s", i, strings.Repeat("y", 40))}}})
-		large.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-user-%d %s", i, strings.Repeat("x", 800))}}})
-		large.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("large-assistant-%d %s", i, strings.Repeat("y", 800))}}})
+		cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("user-%d", i)}}})
+		cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("assistant-%d", i)}}})
 	}
 
-	if err := small.Summarize(ctx, prov); err != nil {
-		t.Fatalf("small summarize failed: %v", err)
-	}
-	if err := large.Summarize(ctx, prov); err != nil {
-		t.Fatalf("large summarize failed: %v", err)
+	if err := cm.Summarize(ctx, prov); err != nil {
+		t.Fatalf("summarize failed: %v", err)
 	}
 
-	smallRetained := retainedConversationMessages(small.Messages())
-	largeRetained := retainedConversationMessages(large.Messages())
-	if smallRetained <= largeRetained {
-		t.Fatalf("expected smaller messages to retain more recent history: small=%d large=%d", smallRetained, largeRetained)
+	msgs := cm.Messages()
+	// Rolling compaction: [system][summary_system] — no recent conversation messages retained
+	if len(msgs) != 2 {
+		t.Fatalf("expected system + summary = 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "system" {
+		t.Fatalf("expected first message to be system, got %s", msgs[0].Role)
+	}
+	if msgs[1].Role != "system" || !strings.Contains(msgs[1].Content[0].Text, "[Previous conversation summary]") {
+		t.Fatalf("expected second message to be summary, got role=%s", msgs[1].Role)
+	}
+	// No conversation messages should be retained verbatim
+	retained := retainedConversationMessages(msgs)
+	if retained != 0 {
+		t.Fatalf("expected 0 retained conversation messages, got %d", retained)
 	}
 }
 
@@ -337,9 +337,8 @@ func TestContextManager_ApplyCompactResultPreservesMessagesAppendedAfterSnapshot
 	if !messageContainsTextInList(msgs, "[Previous conversation summary]") {
 		t.Fatal("expected compacted summary to be inserted")
 	}
-	if !messageContainsTextInList(msgs, "recent snapshot question") || !messageContainsTextInList(msgs, "recent snapshot answer") {
-		t.Fatal("expected recent snapshot messages to be preserved")
-	}
+	// Rolling compaction: snapshot messages go into summary, not preserved verbatim.
+	// Only messages appended DURING the compaction window are preserved as extra.
 	if !messageContainsTextInList(msgs, "tool output created while compacting") {
 		t.Fatal("expected messages appended during async compaction to be preserved")
 	}
@@ -550,9 +549,10 @@ func TestContextManager_CompactSnapshot_CapturesVersion(t *testing.T) {
 	}
 }
 
-func TestContextManager_ApplyCompactResult_MicrocompactInvalidatesSnapshot(t *testing.T) {
+func TestContextManager_ApplyCompactResult_MicrocompactModificationsStillApplied(t *testing.T) {
 	// If Microcompact modifies a tool_result within the snapshot range after
-	// the snapshot was taken, the snapshot is stale and should be rejected.
+	// the snapshot was taken, the compaction result should STILL be applied.
+	// The summary is lossy compression — a slightly stale source is acceptable.
 	cm := NewManager(1000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
@@ -571,7 +571,6 @@ func TestContextManager_ApplyCompactResult_MicrocompactInvalidatesSnapshot(t *te
 	cm.recalcTokens()
 	cm.mu.Unlock()
 
-	// snapshot is now stale — the tool_result at index 1 was modified.
 	result := CompactResult{
 		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
 		TokenCount: 5,
@@ -579,8 +578,12 @@ func TestContextManager_ApplyCompactResult_MicrocompactInvalidatesSnapshot(t *te
 	}
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
-	if applied {
-		t.Fatal("expected snapshot to be rejected after Microcompact modified content within range")
+	if !applied {
+		t.Fatal("expected compact result to be applied even with stale snapshot (lossy summary is acceptable)")
+	}
+	msgs := cm.Messages()
+	if len(msgs) != 1 || msgs[0].Content[0].Text != "summary" {
+		t.Fatalf("expected only summary message, got %d messages", len(msgs))
 	}
 }
 
@@ -632,18 +635,19 @@ func TestContextManager_ApplyCompactResult_SystemMessageChangeAllowed(t *testing
 	}
 }
 
-func TestContextManager_ApplyCompactResult_SystemMessageRoleMismatchStillRejected(t *testing.T) {
-	// If the message at index 0 is no longer a system message (structural change),
-	// the snapshot should still be rejected even with the system message skip.
+func TestContextManager_ApplyCompactResult_LiveShorterThanSnapshot_Rejected(t *testing.T) {
+	// If messages were removed (live shorter than snapshot), the snapshot is
+	// structurally incompatible and must be rejected.
 	cm := NewManager(1000)
 	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "sys"}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
 
 	snapshot := cm.CompactSnapshot()
 
-	// Structural change: clear and re-add with different structure.
+	// Structural change: clear and re-add fewer messages.
 	cm.Clear()
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "not a system message"}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "only one message"}}})
 
 	result := CompactResult{
 		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
@@ -653,7 +657,7 @@ func TestContextManager_ApplyCompactResult_SystemMessageRoleMismatchStillRejecte
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
 	if applied {
-		t.Fatal("expected snapshot to be rejected when system message role changed to non-system")
+		t.Fatal("expected snapshot to be rejected when live has fewer messages than snapshot")
 	}
 }
 
@@ -706,7 +710,9 @@ func TestContextManager_Microcompact_ExtendsToRecentGroupWhenOverBudget(t *testi
 	}
 }
 
-func TestContextManager_Summarize_PreservesWholeRecentGroup(t *testing.T) {
+func TestContextManager_Summarize_PreservesExtraMessages(t *testing.T) {
+	// Rolling compaction: ALL snapshot messages are summarized.
+	// Messages produced during the async compaction window are preserved.
 	cm := NewManager(500)
 	ctx := context.Background()
 	prov := &mockProvider{}
@@ -726,26 +732,23 @@ func TestContextManager_Summarize_PreservesWholeRecentGroup(t *testing.T) {
 	}
 
 	msgs := cm.Messages()
-	if len(msgs) < 6 {
-		t.Fatalf("expected summary + preserved recent group, got %d messages", len(msgs))
+	// Rolling compaction: [system, summary_system] only.
+	// No conversation messages retained verbatim.
+	if len(msgs) != 2 {
+		t.Fatalf("expected system + summary = 2 messages, got %d", len(msgs))
 	}
 	if !containsSummaryMarker(msgs[1]) {
 		t.Fatal("expected summary marker after system prompt")
 	}
-	foundRecentQuestion := false
-	foundRecentTool := false
-	foundRecentAnswer := false
-	for _, msg := range msgs {
-		foundRecentQuestion = foundRecentQuestion || messageContainsText(msg, "recent question")
-		foundRecentTool = foundRecentTool || messageContainsText(msg, "recent tool output")
-		foundRecentAnswer = foundRecentAnswer || messageContainsText(msg, "recent answer")
-	}
-	if !foundRecentQuestion || !foundRecentTool || !foundRecentAnswer {
-		t.Fatal("expected whole recent group to remain after summarization")
+	retained := retainedConversationMessages(msgs)
+	if retained != 0 {
+		t.Fatalf("expected 0 retained conversation messages, got %d", retained)
 	}
 }
 
-func TestContextManager_CheckAndSummarizeReturnsFalseWhenNothingCanBeCompacted(t *testing.T) {
+func TestContextManager_Summarize_SingleGroupCanBeSummarized(t *testing.T) {
+	// With rolling compaction (minRecentGroups=0), even a single group
+	// can be summarized. This test verifies the behavior.
 	cm := NewManager(120)
 	ctx := context.Background()
 	prov := &mockProvider{}
@@ -758,11 +761,12 @@ func TestContextManager_CheckAndSummarizeReturnsFalseWhenNothingCanBeCompacted(t
 	if err != nil {
 		t.Fatalf("CheckAndSummarize failed: %v", err)
 	}
-	if summarized {
-		t.Fatal("expected CheckAndSummarize to report no change when only the current group remains")
+	// Single group can now be summarized with rolling compaction.
+	if !summarized {
+		t.Fatal("expected CheckAndSummarize to summarize even a single group")
 	}
-	if prov.chatCalls != 0 {
-		t.Fatalf("expected no summarization chat call, got %d", prov.chatCalls)
+	if prov.chatCalls == 0 {
+		t.Fatal("expected at least one summarization chat call")
 	}
 }
 
@@ -1064,6 +1068,71 @@ func TestRemoveLastAssistantGroup(t *testing.T) {
 	// Tokens should have decreased
 	if m.TokenCount() >= beforeTokens {
 		t.Error("expected token count to decrease after removal")
+	}
+}
+
+func TestMicrocompact_PreservesCheckpointBaseline(t *testing.T) {
+	cm := NewManager(55000)
+
+	// Simulate session restore: add checkpoint messages first.
+	cm.Add(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400000)}},
+	})
+
+	// Set checkpoint baseline to a realistic value (much lower than len/4 estimate).
+	cm.SetCheckpointBaseline(45000)
+
+	// Now add post-checkpoint messages — baselineDelta accumulates.
+	// Large tool result that will be microcompacted.
+	cm.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type:   "tool_result",
+			ToolID: "tool1",
+			Output: strings.Repeat("line of output\n", 2000),
+		}},
+	})
+	// Recent user message (protected from microcompact).
+	cm.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}},
+	})
+
+	beforeTokens := cm.TokenCount()
+	// baseline (50000) + delta for post-checkpoint messages must be > 50000.
+	if beforeTokens <= 50000 {
+		t.Fatalf("expected > 50000 (baseline + delta), got %d", beforeTokens)
+	}
+
+	// Run microcompact — it should truncate the large tool result.
+	changed := cm.Microcompact()
+	if !changed {
+		t.Fatal("expected microcompact to change something")
+	}
+
+	afterTokens := cm.TokenCount()
+	if afterTokens >= beforeTokens {
+		t.Fatalf("expected tokens to decrease after microcompact: %d -> %d", beforeTokens, afterTokens)
+	}
+
+	// KEY ASSERTION: the baseline should still be available.
+	// If recalcTokens() had invalidated it, tokenCount would fall back to
+	// the pure local estimate (len/4) which is wildly different.
+	cm.mu.Lock()
+	localEstimate := cm.tokens
+	baselineAvail := cm.baselineAvailable
+	cm.mu.Unlock()
+
+	if !baselineAvail {
+		t.Fatal("expected baseline to be available after microcompact, but it was invalidated")
+	}
+
+	// After microcompact with baseline, tokenCount should NOT equal the pure local estimate.
+	// If baseline was invalidated, tokenCount would == localEstimate.
+	if afterTokens == localEstimate {
+		t.Fatalf("token count (%d) equals pure local estimate (%d) — baseline was not used",
+			afterTokens, localEstimate)
 	}
 }
 

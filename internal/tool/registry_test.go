@@ -62,7 +62,7 @@ func TestDomainFromURL_Tool(t *testing.T) {
 }
 
 func TestTodoFilePath_Fn(t *testing.T) {
-	path := TodoFilePath(t.TempDir())
+	path := TodoFilePath("test-session-id")
 	if path == "" {
 		t.Error("expected non-empty path")
 	}

@@ -19,34 +19,65 @@ type Todo struct {
 	Status  string `json:"status"` // "pending", "in_progress", "done"
 }
 
-// TodoWrite implements the todo_write tool — manages a persistent todo list.
+// todosDir returns the global directory for session-scoped todo files:
+// ~/.ggcode/todos/
+func todosDir() string {
+	return filepath.Join(config.HomeDir(), ".ggcode", "todos")
+}
+
+// TodoFilePath returns the path to the todo file for a given session ID.
+// The path is ~/.ggcode/todos/<sessionID>.json — global, not per-workspace.
+// If sessionID is empty, returns a "_default" fallback path. This is purely
+// defensive — normal callers always pass a real session ID (or pipe pseudo-ID).
+// The _default file should never be created in normal operation because
+// TodoWrite.currentPath() returns "" when sessionID is empty, preventing
+// Execute/ClearTodos from reaching TodoFilePath("").
+func TodoFilePath(sessionID string) string {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		id = "_default"
+	}
+	return filepath.Join(todosDir(), id+".json")
+}
+
+// TodoWrite implements the todo_write tool — manages a session-scoped todo list.
 type TodoWrite struct {
-	mu  sync.Mutex
-	dir string // directory containing todos.json
+	mu        sync.Mutex
+	sessionID string // current session ID; determines the todo file path
 }
 
-func TodoDir(workspace string) string {
-	if trimmed := strings.TrimSpace(workspace); trimmed != "" {
-		return filepath.Join(filepath.Clean(trimmed), ".ggcode")
+// NewTodoWrite creates a TodoWrite tool bound to the given session ID.
+// If sessionID is empty, the tool is unbound until SetSessionID is called.
+func NewTodoWrite(sessionID string) *TodoWrite {
+	return &TodoWrite{sessionID: sessionID}
+}
+
+// SetSessionID updates the session ID, switching which todo file is used.
+func (t *TodoWrite) SetSessionID(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sessionID = id
+}
+
+// ClearTodos removes the todo file for the current session (if any).
+// This is called on agent stop to prevent permanent todo residue.
+func (t *TodoWrite) ClearTodos() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	path := t.currentPath()
+	if path == "" {
+		return
 	}
-	home := config.HomeDir()
-	return filepath.Join(home, ".ggcode")
+	_ = os.Remove(path)
 }
 
-func TodoFilePath(workspace string) string {
-	return filepath.Join(TodoDir(workspace), "todos.json")
-}
-
-// NewTodoWrite creates a TodoWrite tool. dir defaults to ~/.ggcode.
-func NewTodoWrite(dir string) *TodoWrite {
-	if dir == "" {
-		dir = TodoDir("")
+// currentPath returns the todo file path for the current session.
+// Returns empty string if sessionID is unset.
+func (t *TodoWrite) currentPath() string {
+	if strings.TrimSpace(t.sessionID) == "" {
+		return ""
 	}
-	return &TodoWrite{dir: dir}
-}
-
-func NewWorkspaceTodoWrite(workspace string) *TodoWrite {
-	return NewTodoWrite(TodoDir(workspace))
+	return TodoFilePath(t.sessionID)
 }
 
 func (t *TodoWrite) Name() string { return "todo_write" }
@@ -115,18 +146,23 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 		}
 	}
 
-	// Ensure directory exists
-	if err := os.MkdirAll(t.dir, 0755); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to create directory: %v", err)}, nil
+	path := t.currentPath()
+	if path == "" {
+		return Result{IsError: true, Content: "no active session — cannot persist todos"}, nil
 	}
 
-	path := filepath.Join(t.dir, "todos.json")
 	if len(args.Todos) == 0 {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return Result{IsError: true, Content: fmt.Sprintf("clear failed: %v", err)}, nil
 		}
 		return Result{Content: "Todos cleared\n"}, nil
 	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to create directory: %v", err)}, nil
+	}
+
 	data, err := json.MarshalIndent(args.Todos, "", "  ")
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("marshal failed: %v", err)}, nil
@@ -163,12 +199,15 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	return Result{Content: sb.String()}, nil
 }
 
-// ListTodos reads and returns all todos from disk.
+// ListTodos reads and returns all todos from the current session's file.
 func (t *TodoWrite) ListTodos() ([]Todo, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	path := filepath.Join(t.dir, "todos.json")
+	path := t.currentPath()
+	if path == "" {
+		return nil, nil
+	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil

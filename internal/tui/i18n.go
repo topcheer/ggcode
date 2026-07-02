@@ -251,6 +251,34 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.copy")
 	case "/context":
 		return tr(lang, "slash.context")
+	case "/inspector":
+		return tr(lang, "slash.inspector")
+	case "/chat":
+		return tr(lang, "slash.chat")
+	case "/nick":
+		return tr(lang, "slash.nick")
+	case "/stats":
+		return tr(lang, "slash.stats")
+	case "/tmux":
+		return tr(lang, "slash.tmux")
+	case "/share":
+		return tr(lang, "slash.share")
+	case "/unshare":
+		return tr(lang, "slash.unshare")
+	case "/tunnel":
+		return tr(lang, "slash.tunnel")
+	case "/retry":
+		return tr(lang, "slash.retry")
+	case "/edit":
+		return tr(lang, "slash.edit")
+	case "/regenerate", "/regen":
+		return tr(lang, "slash.regenerate")
+	case "/branch", "/fork":
+		return tr(lang, "slash.branch")
+	case "/reflect":
+		return tr(lang, "slash.reflect")
+	case "/rules":
+		return tr(lang, "slash.rules")
 	default:
 		return cmd
 	}

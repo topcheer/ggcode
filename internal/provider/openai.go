@@ -272,11 +272,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	}
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
-	if len(req.Tools) > 0 {
-		if toolJSON, err := json.Marshal(req.Tools); err == nil {
-			debug.Log("openai", "Tools: %s", string(toolJSON))
-		}
-	}
 
 	ch := make(chan StreamEvent, 64)
 
@@ -512,8 +507,7 @@ func estimateTokensForMessages(messages []Message) int {
 	}
 	totalChars = textChars + outputChars + inputChars
 	tokens := estimateTokensFromChars(totalChars)
-	debug.Log("provider", "estimateTokensForMessages: msgs=%d text_chars=%d output_chars=%d input_chars=%d total_chars=%d tokens=%d",
-		len(messages), textChars, outputChars, inputChars, totalChars, tokens)
+	debug.Log("provider", "estimateTokensForMessages: msgs=%d tokens=%d", len(messages), tokens)
 	return tokens
 }
 

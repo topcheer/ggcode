@@ -668,10 +668,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	if _, isSpinner := msg.(spinnerMsg); !isSpinner {
 		msgType := fmt.Sprintf("%T", msg)
 		if !strings.Contains(msgType, "Blink") {
-			debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+			// Don't log every bubbletea internal message — cursor blink alone generates ~160 lines/min
 		}
 	}
-	keyMsg, isKeyPress := msg.(tea.KeyPressMsg)
+	_, isKeyPress := msg.(tea.KeyPressMsg)
 	if !isKeyPress {
 		// Non-keyboard messages still need to reach the textinput so its
 		// virtual cursor can process blink scheduling messages
@@ -689,12 +689,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	var keyCmd tea.Cmd
 	// During startup input drain, suppress all keyboard input.
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
-		debug.Log("tui", "CATCHALL dropped (input drain) key=%q text=%q", keyMsg.String(), keyMsg.Text)
+		// Don't log dropped keypresses during input drain
 		return m, spinnerCmd
 	}
 	// Before inputReady, discard all keyboard input (same reason as KeyPressMsg handler).
 	if !m.inputReady {
-		debug.Log("tui", "CATCHALL dropped (not ready) key=%q text=%q", keyMsg.String(), keyMsg.Text)
+		// Don't log dropped keypresses when not ready
 		return m, spinnerCmd
 	}
 
@@ -702,7 +702,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	m.input, keyCmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
-		debug.Log("tui", "CATCHALL input changed old=%q new=%q", util.Truncate(oldValue, 80), util.Truncate(newValue, 80))
+		// Don't log input field changes
 	}
 
 	// Update autocomplete state based on current input

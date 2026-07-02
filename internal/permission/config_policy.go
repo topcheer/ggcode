@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -56,7 +55,7 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 
 // Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
-	debug.Log("permission", "Check: tool=%s input=%s", toolName, truncateStr(string(input), 200))
+	// Don't dump tool input JSON — can be huge and contains file content
 
 	// Interactive/communication tools are always auto-approved regardless of mode.
 	// ask_user: the tool itself IS the user interaction — requiring approval would be circular.

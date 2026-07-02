@@ -329,6 +329,7 @@ type pendingSubmission struct {
 	Text                  string
 	Hidden                bool
 	TunnelMessageOverride *tunnel.MessageData
+	Images                []imageAttachedMsg
 }
 
 type pendingQueue struct {
@@ -735,6 +736,10 @@ func (m *Model) startContextProbe() {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	// Propagate session ID to agent so todos are scoped to this session.
+	if m.agent != nil {
+		m.agent.SetSessionID(ses.ID)
+	}
 	// All messages in ses.Messages were loaded from the JSONL file — they
 	// are already on disk. Mark them as persisted so persistFullSessionMessages
 	// only appends truly new messages going forward.

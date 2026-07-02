@@ -469,6 +469,9 @@ func Log(pkg, format string, args ...interface{}) {
 		sink(cat, msg)
 	}
 
+	// Ring buffer always captures (for debug_log tool access)
+	ringAppend(cat, msg)
+
 	mu.RLock()
 	if !enabled {
 		mu.RUnlock()

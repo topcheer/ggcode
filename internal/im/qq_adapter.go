@@ -396,7 +396,7 @@ func (a *qqAdapter) heartbeatLoop(ctx context.Context) {
 			if ok {
 				payload["d"] = seq
 			}
-			debug.Log("qq", "adapter=%s send heartbeat seq=%v interval=%s", a.name, payload["d"], wait)
+			// Don't log routine heartbeats — extremely noisy
 			_ = a.writeJSON(payload)
 		}
 	}
@@ -416,7 +416,6 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 	}
 	op, _ := intValue(payload["op"])
 	eventType, _ := payload["t"].(string)
-	debug.Log("qq", "adapter=%s payload op=%d t=%q s=%v d_keys=%s", a.name, op, eventType, payload["s"], qqPayloadKeys(payload["d"]))
 	switch op {
 	case 10:
 		debug.Log("qq", "adapter=%s gateway hello", a.name)
@@ -429,7 +428,7 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 		}
 		return a.sendIdentify()
 	case 11:
-		debug.Log("qq", "adapter=%s heartbeat ack", a.name)
+		// Don't log routine heartbeat acks
 		return nil
 	case 0:
 		if eventType != "" {

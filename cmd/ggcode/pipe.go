@@ -119,6 +119,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
+	// Pipe mode has no session JSONL, but todo_write needs a session ID.
+	// Use a PID-based pseudo ID so todos work during pipe execution and are
+	// cleaned up automatically when the run ends (agent defer ClearTodos).
+	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
