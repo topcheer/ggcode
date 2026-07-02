@@ -42,7 +42,12 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 		m.emitIMText(finalIMText)
 	}
 	m.chatListScrollToBottom()
-	m.persistFullSessionMessages()
+	// Only persist here for normal completion. For cancel/error paths,
+	// persistFullSessionMessages was already called by handleErrMsg or
+	// handleAgentErrMsg. Calling it again would duplicate all records.
+	if !wasCanceled && !wasFailed {
+		m.persistFullSessionMessages()
+	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}
@@ -92,7 +97,9 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.appendTurnMetricsDigest(m.usageTurnIndex)
 	}
 	m.chatListScrollToBottom()
-	m.persistFullSessionMessages()
+	if !wasCanceled && !wasFailed {
+		m.persistFullSessionMessages()
+	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 		return m, m.submitPendingSubmissionCmd()
 	}

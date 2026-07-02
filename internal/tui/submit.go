@@ -187,12 +187,20 @@ func (m *Model) pushInitialTunnelRunState() {
 func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, imgs []imageAttachedMsg) error {
 	content := buildAgentSubmissionContent(text, imgs, false)
 	if len(imgs) == 0 {
-		_, err := m.runAgentWithContent(ctx, runID, content)
+		streamErrSent, err := m.runAgentWithContent(ctx, runID, content)
+		if streamErrSent && err != nil && !errors.Is(err, context.Canceled) {
+			// Error was already sent as agentErrMsg via stream callback.
+			// Return nil to prevent the goroutine from sending a duplicate.
+			return nil
+		}
 		return err
 	}
 
 	if !m.activeEndpointSupportsVision() {
-		_, err := m.runAgentWithContent(ctx, runID, content)
+		streamErrSent, err := m.runAgentWithContent(ctx, runID, content)
+		if streamErrSent && err != nil && !errors.Is(err, context.Canceled) {
+			return nil
+		}
 		return err
 	}
 
@@ -201,6 +209,9 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 		return err
 	}
 	if streamErrSent || !provider.IsImageBlockFallbackCandidate(err) {
+		if streamErrSent {
+			return nil // already sent via stream callback
+		}
 		return err
 	}
 
