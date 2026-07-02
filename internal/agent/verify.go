@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -98,6 +101,61 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 	return true
 }
 
+// makefileTags reads TAGS from the project Makefile (if present).
+// Many Go projects use build tags (e.g. `-tags goolm`) that are required
+// for compilation. Without them, `go test` and `go build` fail with missing
+// C headers. This function extracts the TAGS value so we can inject it into
+// the LLM-proposed verification command.
+func makefileTags(workingDir string) string {
+	makefile := filepath.Join(workingDir, "Makefile")
+	data, err := os.ReadFile(makefile)
+	if err != nil {
+		return ""
+	}
+	// Match: TAGS := goolm   or   TAGS = goolm
+	re := regexp.MustCompile(`(?m)^TAGS\s*[:?]?=\s*(.+)`)
+	m := re.FindSubmatch(data)
+	if m == nil {
+		return ""
+	}
+	tags := strings.TrimSpace(strings.Trim(string(m[1]), `"`))
+	if tags == "" {
+		return ""
+	}
+	return tags
+}
+
+// injectBuildTags ensures `go` commands include the project's build tags.
+// If the LLM proposed `go test ./...` and the Makefile declares TAGS := goolm,
+// this rewrites it to `go test -tags goolm ./...`.
+func injectBuildTags(cmd, tags string) string {
+	if tags == "" {
+		return cmd
+	}
+	trimmed := strings.TrimSpace(cmd)
+	// Only inject into bare `go test`, `go build`, `go vet` commands
+	// that don't already have -tags
+	if !strings.HasPrefix(trimmed, "go ") {
+		return cmd
+	}
+	if strings.Contains(trimmed, "-tags") {
+		return cmd // already has tags
+	}
+	parts := strings.SplitN(trimmed, " ", 3)
+	if len(parts) < 2 {
+		return cmd
+	}
+	subcmd := parts[1] // test, build, vet
+	if subcmd != "test" && subcmd != "build" && subcmd != "vet" {
+		return cmd
+	}
+	// Insert -tags after the subcommand
+	if len(parts) == 2 {
+		return fmt.Sprintf("go %s -tags %s", subcmd, tags)
+	}
+	return fmt.Sprintf("go %s -tags %s %s", subcmd, tags, parts[2])
+}
+
 // llmDecideVerifyCommand asks the LLM to output a single verification command
 // based on what it just did. Returns empty string if no verification is needed.
 func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
@@ -154,6 +212,15 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context) string {
 		strings.Contains(lower, "> /dev/") || strings.Contains(lower, "dd if=") {
 		debug.Log("verify", "LLM proposed dangerous command, rejecting: %s", cmd)
 		return ""
+	}
+
+	// Inject build tags from Makefile if the project requires them.
+	// Without this, `go test ./...` fails on projects that use build tags
+	// (e.g. goolm for mautrix crypto C headers).
+	wd := a.WorkingDir()
+	tags := makefileTags(wd)
+	if tags != "" {
+		cmd = injectBuildTags(cmd, tags)
 	}
 
 	return cmd
