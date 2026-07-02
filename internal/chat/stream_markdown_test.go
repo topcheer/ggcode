@@ -137,3 +137,34 @@ func TestAssistantItemFinishedRenderPreservesLists(t *testing.T) {
 		t.Fatalf("finished render missing list items: %q", rendered)
 	}
 }
+
+// TestStreamingMarkdownPreservesSpacesInMultiLineParagraph verifies that
+// text spanning multiple lines within a single paragraph block does not lose
+// whitespace when split into blocks and re-rendered.
+func TestStreamingMarkdownPreservesSpacesInMultiLineParagraph(t *testing.T) {
+	input := "I'll start by examining the current code\nthen check the configuration\nand finally run the tests."
+	rendered, _ := renderStreamingMarkdown(input, 120, nil)
+	// The rendered output must contain the words with spaces between them,
+	// not concatenated like "startby" or "thecurrent".
+	for _, word := range []string{"start by", "the current", "the tests"} {
+		if !strings.Contains(strings.ToLower(rendered), strings.ToLower(word)) {
+			t.Fatalf("streaming markdown lost whitespace: expected %q in output: %q", word, rendered)
+		}
+	}
+}
+
+// TestSplitMarkdownBlocksPreservesLineBreaks verifies that splitMarkdownBlocks
+// does not drop line breaks within paragraph blocks.
+func TestSplitMarkdownBlocksPreservesLineBreaks(t *testing.T) {
+	input := "First line of text.\nSecond line of text.\nThird line."
+	blocks := splitMarkdownBlocks(input)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d: %v", len(blocks), blocks)
+	}
+	// The block should contain all three lines with their text intact.
+	for _, expected := range []string{"First line", "Second line", "Third line"} {
+		if !strings.Contains(blocks[0], expected) {
+			t.Fatalf("block missing %q: %q", expected, blocks[0])
+		}
+	}
+}

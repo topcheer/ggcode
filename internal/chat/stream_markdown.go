@@ -99,8 +99,17 @@ func extractBlockMarkdown(node ast.Node, source []byte) string {
 		switch v := n.(type) {
 		case *ast.Text:
 			sb.Write(v.Segment.Value(source))
+			// Goldmark separates lines within a paragraph with SoftLineBreak
+			// nodes. Without this, consecutive Text segments concatenate
+			// without any separator, losing whitespace and line breaks.
+			if v.SoftLineBreak() {
+				sb.WriteByte('\n')
+			}
 		case *ast.String:
 			sb.Write(v.Value)
+		case *ast.Link:
+			// Links have a Text child with the link text and an attribute
+			// with the URL. We only need the text — the child walk handles it.
 		}
 		return ast.WalkContinue, nil
 	})
