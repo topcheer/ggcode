@@ -346,6 +346,8 @@ var SlashCommandPlaceholders = map[string]string{
 	"/context":     "",
 	"/regenerate":  "",
 	"/regen":       "",
+	"/branch":      "",
+	"/fork":        "",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

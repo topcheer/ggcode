@@ -11,7 +11,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tunnel"
@@ -368,4 +370,87 @@ func (m *Model) buildRestartArgs() []string {
 	}
 
 	return args
+}
+
+// handleBranchCommand forks the current conversation into a new session.
+// The new session gets a copy of all messages and metadata, allowing the user
+// to explore a different direction without losing the original conversation.
+func (m *Model) handleBranchCommand() tea.Cmd {
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.session == nil || m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if len(m.session.Messages) == 0 {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.empty"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Save the current session first to ensure all state is flushed.
+	oldSes := m.session
+	oldStore := m.sessionStore
+	safego.Go("tui.branch.sessionSave", func() { _ = oldStore.Save(oldSes) })
+
+	// Create the branched session with copied data (cannot copy Session by
+	// value because it contains a sync.RWMutex).
+	branched := session.NewSession(oldSes.Vendor, oldSes.Endpoint, oldSes.Model)
+	branched.Workspace = oldSes.Workspace
+	branched.TokenUsage = oldSes.TokenUsage
+	branched.CostJSON = append([]byte(nil), oldSes.CostJSON...)
+	branched.PermissionMode = oldSes.PermissionMode
+	if oldSes.SidebarVisible != nil {
+		val := *oldSes.SidebarVisible
+		branched.SidebarVisible = &val
+	}
+
+	// Deep-copy messages.
+	branched.Messages = make([]provider.Message, len(oldSes.Messages))
+	copy(branched.Messages, oldSes.Messages)
+
+	// Deep-copy usage history.
+	if len(oldSes.UsageHistory) > 0 {
+		branched.UsageHistory = make([]session.UsageEntry, len(oldSes.UsageHistory))
+		copy(branched.UsageHistory, oldSes.UsageHistory)
+	}
+	if len(oldSes.Metrics) > 0 {
+		branched.Metrics = make([]metrics.MetricEvent, len(oldSes.Metrics))
+		copy(branched.Metrics, oldSes.Metrics)
+	}
+	branched.EndpointUsage = make(map[string]provider.TokenUsage, len(oldSes.EndpointUsage))
+	for k, v := range oldSes.EndpointUsage {
+		branched.EndpointUsage[k] = v
+	}
+	branched.EndpointMetrics = make(map[string][]metrics.MetricEvent, len(oldSes.EndpointMetrics))
+	for k, v := range oldSes.EndpointMetrics {
+		cp := make([]metrics.MetricEvent, len(v))
+		copy(cp, v)
+		branched.EndpointMetrics[k] = cp
+	}
+
+	// Title: indicate this is a branch.
+	origTitle := oldSes.Title
+	if origTitle == "" {
+		origTitle = oldSes.ID
+	}
+	branched.Title = "Branch: " + origTitle
+
+	// Persist the new session.
+	if err := m.sessionStore.Save(branched); err != nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Switch to the branched session.
+	m.applyResumedSession(branched)
+
+	m.chatWriteSystem(nextSystemID(), m.t("branch.success", branched.ID, origTitle))
+	m.chatListScrollToBottom()
+	return nil
 }

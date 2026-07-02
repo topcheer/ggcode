@@ -1273,6 +1273,16 @@ func enCatalog(key string) string {
 		return "Context manager not available."
 	case "regenerate.no_response":
 		return "No assistant response to regenerate."
+	case "branch.busy":
+		return "Cannot branch while the agent is running. Press Ctrl+C to cancel first."
+	case "branch.no_session":
+		return "No active session to branch."
+	case "branch.empty":
+		return "Session has no messages to branch."
+	case "branch.save_failed":
+		return "Failed to create branched session: %v"
+	case "branch.success":
+		return "Branched to new session %s (from: %s). Original session is preserved."
 	case "help.text":
 		return `Available commands:
 
@@ -1286,6 +1296,7 @@ Session & History:
   /undo              Undo the last file edit (checkpoint rollback)
   /checkpoints       List all file edit checkpoints
   /regenerate        Discard last response and regenerate (alias: /regen)
+  /branch            Fork current conversation into a new session (alias: /fork)
 
 Model & Provider:
   /model [name]      Open model panel or switch directly

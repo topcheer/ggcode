@@ -1233,6 +1233,10 @@ func generateID() string {
 	return fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(b))
 }
 
+// GenerateID creates a new unique session ID. Exported for callers outside
+// the session package (e.g., /branch command creating a new session ID).
+func GenerateID() string { return generateID() }
+
 // Dir returns the store's directory path.
 func (s *JSONLStore) Dir() string {
 	return s.dir

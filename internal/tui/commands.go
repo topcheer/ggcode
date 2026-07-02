@@ -493,6 +493,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleContextCommand()
 		case "/regenerate", "/regen":
 			return m.handleRegenerateCommand()
+		case "/branch", "/fork":
+			return m.handleBranchCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {

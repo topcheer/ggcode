@@ -1257,6 +1257,16 @@ func zhCatalog(key string) string {
 		return "上下文管理器不可用。"
 	case "regenerate.no_response":
 		return "没有可重新生成的 AI 回复。"
+	case "branch.busy":
+		return "Agent 正在运行，无法分叉。请先按 Ctrl+C 取消。"
+	case "branch.no_session":
+		return "没有可分叉的活跃会话。"
+	case "branch.empty":
+		return "会话中没有消息可分叉。"
+	case "branch.save_failed":
+		return "创建分叉会话失败：%v"
+	case "branch.success":
+		return "已分叉到新会话 %s（来源: %s）。原会话保持不变。"
 	case "help.text":
 		return `可用命令：
 
@@ -1270,6 +1280,7 @@ func zhCatalog(key string) string {
   /undo              撤销最近一次文件修改（回滚检查点）
   /checkpoints       列出所有文件修改检查点
   /regenerate        丢弃最近回复并重新生成（别名: /regen）
+  /branch            将当前对话分叉到新会话（别名: /fork）
 
 模型与供应商：
   /model [name]      打开模型面板或直接切换
