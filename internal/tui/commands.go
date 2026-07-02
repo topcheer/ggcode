@@ -543,10 +543,14 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 	if displayInChat {
 		m.chatWriteUser(nextChatID(), displayText)
 		m.chatListScrollToBottom()
-
-		// Save original user message to session
-		m.appendUserMessage(text)
 	}
+
+	// Always persist the user message to session, even for hidden runs
+	// (cron prompts, autopilot synthetic messages). Without this,
+	// persistFullSessionMessages would skip runAdded[0] (it assumes the
+	// user submission was already persisted by appendUserMessage) and the
+	// message would be silently lost from the session JSONL.
+	m.appendUserMessage(text)
 
 	return m.continueDisplayedNormalTextRun(text)
 }
