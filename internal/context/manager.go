@@ -616,11 +616,7 @@ func (m *Manager) SetOutputReserve(n int) {
 // SetCheckpointBaseline sets the initial token baseline from a session
 // checkpoint. This avoids inflated token counts on session restore where
 // the local estimator (len/4) diverges significantly from real token counts.
-//
-// Call this AFTER loading checkpoint messages but BEFORE adding any new
-// messages. The checkpoint messages' tokens are accounted for by the
-// baseline value; messages added after this call will increment
-// baselineDelta normally.
+// The first real LLM call (RecordUsage) will override this with actual values.
 func (m *Manager) SetCheckpointBaseline(tokens int) {
 	if tokens <= 0 {
 		return

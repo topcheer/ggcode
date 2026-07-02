@@ -201,40 +201,19 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if agentInst == nil || ses == nil {
 		return
 	}
-	// ⚠️ Use ContextMessages (compacted checkpoint + post-checkpoint),
-	// NOT ses.Messages. ses.Messages is the full conversation history
-	// for TUI rendering — feeding it to the agent would bypass compaction
-	// and send the entire raw history to the LLM.
 	msgs := ses.ContextMessages
 	if len(msgs) == 0 {
-		msgs = ses.Messages // fallback when no checkpoint exists
+		msgs = ses.Messages
 	}
-
-	if ses.CheckpointTokens > 0 && ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
-		// Phase 1: Load checkpoint messages and set precise baseline.
-		cpMsgs := msgs[:ses.CheckpointMessageCount]
-		for _, msg := range cpMsgs {
-			agentInst.AddMessage(msg)
-		}
+	for _, msg := range msgs {
+		agentInst.AddMessage(msg)
+	}
+	// Use checkpoint's precise token count as baseline to avoid inflated
+	// display from local estimator. First real LLM call overrides this.
+	if ses.CheckpointTokens > 0 {
 		if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
 			cm.SetCheckpointBaseline(ses.CheckpointTokens)
 		}
-		// Phase 2: Load post-checkpoint messages — their tokens increment
-		// baselineDelta normally (tool results, assistant responses, etc.).
-		for _, msg := range msgs[ses.CheckpointMessageCount:] {
-			agentInst.AddMessage(msg)
-		}
-	} else {
-		// No checkpoint — load all messages with local estimation.
-		for _, msg := range msgs {
-			agentInst.AddMessage(msg)
-		}
 	}
-
-	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
-	// blocks (no matching tool_result blocks in subsequent messages), add a user
-	// message with cancelled tool_result entries. This handles session files saved
-	// while a tool execution was still pending (e.g. the process crashed or was
-	// interrupted).
 	agentInst.ReconcileToolCalls()
 }
