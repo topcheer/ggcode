@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -417,15 +418,15 @@ func TestHandleSlashCommand_RestartWithHook(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", t.TempDir())
 	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
 
-	restarted := false
-	bridge.SetRestartHook(func() { restarted = true })
+	var restarted atomic.Bool
+	bridge.SetRestartHook(func() { restarted.Store(true) })
 
 	err := bridge.handleSlashCommand(context.Background(), "/restart", testMsg("tg"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(1500 * time.Millisecond)
-	if !restarted {
+	if !restarted.Load() {
 		t.Error("expected restart hook to fire")
 	}
 }

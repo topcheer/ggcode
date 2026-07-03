@@ -1293,8 +1293,8 @@ func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 	emitter := NewIMEmitter(mgr, "en", "ws")
 	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
 
-	var restartCalled bool
-	bridge.SetRestartHook(func() { restartCalled = true })
+	var restartCalled atomic.Bool
+	bridge.SetRestartHook(func() { restartCalled.Store(true) })
 
 	// Set up a pending ask_user
 	bridge.mu.Lock()
@@ -1324,7 +1324,7 @@ func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
 	// Restart is async (1s delay), wait for it
 	time.Sleep(1500 * time.Millisecond)
 
-	if !restartCalled {
+	if !restartCalled.Load() {
 		t.Fatal("/restart should have triggered restart even with pendingAsk")
 	}
 

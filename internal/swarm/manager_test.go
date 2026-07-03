@@ -551,10 +551,13 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 	}
 
 	// Send a task to the teammate
+	var mu sync.Mutex
 	var resultEvent Event
 	m.SetOnUpdate(func(ev Event) {
 		if ev.Type == "teammate_idle" {
+			mu.Lock()
 			resultEvent = ev
+			mu.Unlock()
 		}
 	})
 
@@ -569,7 +572,13 @@ func TestManager_SpawnTeammate_WithFactory(t *testing.T) {
 
 	// Wait for result
 	deadline := time.After(3 * time.Second)
-	for resultEvent.Result == "" {
+	for {
+		mu.Lock()
+		done := resultEvent.Result != ""
+		mu.Unlock()
+		if done {
+			break
+		}
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for teammate to process task")

@@ -126,7 +126,7 @@ func NewOAuthHandler(serverName, serverURL string, store *auth.Store) *OAuthHand
 	return &OAuthHandler{
 		serverName: serverName,
 		serverURL:  serverURL,
-		httpClient: util.NewInsecureAwareClient(10 * time.Second),
+		httpClient: newMCPHTTPClient(10 * time.Second),
 		store:      store,
 	}
 }

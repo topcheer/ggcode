@@ -90,7 +90,7 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 func (c *Client) Start(ctx context.Context) error {
 	switch c.transport {
 	case "http":
-		c.httpClient = util.NewInsecureAwareClient(0) // no timeout; per-request context used
+		c.httpClient = newMCPHTTPClient(0) // no client-level timeout; per-request context used
 		return nil
 	case "ws", "websocket":
 		headers := http.Header{}

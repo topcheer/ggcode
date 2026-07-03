@@ -248,8 +248,13 @@ func TestIdleRunner_NilAgent(t *testing.T) {
 	ctx := context.Background()
 	tm.ctx = ctx
 
+	var evMu sync.Mutex
 	events := make([]Event, 0, 2)
-	onEvent := func(ev Event) { events = append(events, ev) }
+	onEvent := func(ev Event) {
+		evMu.Lock()
+		events = append(events, ev)
+		evMu.Unlock()
+	}
 
 	mgr := newTestManager()
 	done := make(chan struct{})
@@ -272,7 +277,14 @@ func TestIdleRunner_NilAgent(t *testing.T) {
 	}
 
 	// Should have emitted an error event
-	if len(events) == 0 || events[0].Type != "teammate_error" {
+	evMu.Lock()
+	evCount := len(events)
+	firstType := ""
+	if evCount > 0 {
+		firstType = events[0].Type
+	}
+	evMu.Unlock()
+	if evCount == 0 || firstType != "teammate_error" {
 		t.Fatalf("expected teammate_error event, got %v", events)
 	}
 

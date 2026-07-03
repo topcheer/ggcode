@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -235,17 +236,28 @@ func TestIMEmitterFormatAskUserPrompt(t *testing.T) {
 // namedCaptureSink captures all sent events for test assertions.
 type namedCaptureSink struct {
 	name       string
+	mu         sync.Mutex
 	eventsList []OutboundEvent
 }
 
 func (s *namedCaptureSink) Name() string { return s.name }
 
 func (s *namedCaptureSink) Send(_ context.Context, _ ChannelBinding, event OutboundEvent) error {
+	s.mu.Lock()
 	s.eventsList = append(s.eventsList, event)
+	s.mu.Unlock()
 	return nil
 }
 
-func (s *namedCaptureSink) events() []OutboundEvent { return s.eventsList }
-func (s *namedCaptureSink) reset()                  { s.eventsList = nil }
+func (s *namedCaptureSink) events() []OutboundEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]OutboundEvent(nil), s.eventsList...)
+}
+func (s *namedCaptureSink) reset() {
+	s.mu.Lock()
+	s.eventsList = nil
+	s.mu.Unlock()
+}
 
 var _ Sink = (*namedCaptureSink)(nil)
