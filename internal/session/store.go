@@ -199,6 +199,19 @@ func (s *JSONLStore) indexPath() string {
 }
 
 func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
+	return s.loadIndexImpl(true)
+}
+
+// loadIndexNoRepair is like loadIndex but skips the automatic repairIndex call
+// on corruption. Use this from contexts that already hold the index flock
+// (updateIndex, removeFromIndex) to avoid a deadlock: repairIndex itself
+// calls lockIndexFile, which would block forever waiting for the lock we
+// already hold.
+func (s *JSONLStore) loadIndexNoRepair() ([]indexEntry, error) {
+	return s.loadIndexImpl(false)
+}
+
+func (s *JSONLStore) loadIndexImpl(canRepair bool) ([]indexEntry, error) {
 	data, err := os.ReadFile(s.indexPath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -208,9 +221,14 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	}
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
-		// Corrupt index — rebuild from disk immediately to avoid losing entries.
+		// Corrupt index — rebuild from disk to avoid losing entries.
 		debug.Log("session", "loadIndex: corrupt session index, rebuilding from disk: %v", err)
 		s.indexDirty = true
+		if !canRepair {
+			// Caller holds the flock — cannot repair here (would deadlock).
+			// Return nil; the next unlocked loadIndex call will repair.
+			return nil, nil
+		}
 		repaired, repairErr := s.repairIndex(nil)
 		if repairErr != nil {
 			debug.Log("session", "loadIndex: repairIndex failed: %v", repairErr)
@@ -266,7 +284,7 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 		}
 	}()
 
-	idx, err := s.loadIndex()
+	idx, err := s.loadIndexNoRepair()
 	if err != nil {
 		s.indexDirty = true
 		return err
@@ -301,7 +319,7 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 		}
 	}()
 
-	idx, err := s.loadIndex()
+	idx, err := s.loadIndexNoRepair()
 	if err != nil {
 		return err
 	}
