@@ -1043,6 +1043,8 @@ func zhCatalog(key string) string {
 		return "剪贴板中没有找到图片。Windows 终端通常会拦截 Ctrl+V，请尝试 Ctrl+Shift+V 或输入 /image paste。"
 	case "cron.firing":
 		return "⏰ 定时任务触发"
+	case "agents.unavailable":
+		return "子 Agent 管理器未配置。\n\n"
 	case "agents.none":
 		return "还没有创建子 Agent。\n用法：LLM 可以使用 spawn_agent 工具创建子 Agent。\n\n"
 	case "agents.title":
@@ -1127,6 +1129,30 @@ func zhCatalog(key string) string {
 		return "管理 Slack 渠道绑定"
 	case "slash.dingtalk":
 		return "管理钉钉渠道绑定"
+	case "slash.wecom":
+		return "管理企业微信渠道绑定"
+	case "slash.wechat":
+		return "管理微信渠道绑定"
+	case "slash.mattermost":
+		return "管理 Mattermost 渠道绑定"
+	case "slash.matrix":
+		return "管理 Matrix 渠道绑定"
+	case "slash.signal":
+		return "管理 Signal 渠道绑定"
+	case "slash.irc":
+		return "管理 IRC 渠道绑定"
+	case "slash.nostr":
+		return "管理 Nostr 渠道绑定"
+	case "slash.twitch":
+		return "管理 Twitch 渠道绑定"
+	case "slash.whatsapp":
+		return "管理 WhatsApp 渠道绑定"
+	case "slash.impersonate":
+		return "伪装 CLI 工具以在 shell prompt 中显示"
+	case "slash.knight":
+		return "管理自主后台 Agent"
+	case "slash.stream":
+		return "配置流式输出模式"
 	case "slash.im":
 		return "打开统一 IM 渠道面板"
 	case "slash.diff":

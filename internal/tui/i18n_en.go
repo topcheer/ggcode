@@ -1411,6 +1411,10 @@ Mouse:
 		return "No active sharing session."
 	case "tunnel.mobile_connected":
 		return "Mobile client connected."
+	case "pairing.rejected":
+		return "The current pairing request has been rejected. Please re-initiate to continue."
+	case "pairing.blacklisted":
+		return "This channel has been blacklisted due to multiple rejections."
 	default:
 		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
 			return v
