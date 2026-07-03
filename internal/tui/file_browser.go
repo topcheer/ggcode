@@ -394,6 +394,34 @@ func (m *Model) handleFileBrowserKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	state := m.fileBrowser
 	resolveFileBrowserSelection(state)
+	// Guard against empty entries (empty dir or filter matches nothing).
+	// Without this, state.entries[state.selected] panics on Enter/Right/Left.
+	if len(state.entries) == 0 {
+		// Allow only escape/filter-clear keys; swallow everything else.
+		switch msg.String() {
+		case "ctrl+f", "esc":
+			if state.filtering || state.filter != "" {
+				if state.filter != "" {
+					state.filter = ""
+					m.syncFileBrowser(false)
+				}
+				state.filtering = false
+				return *m, nil
+			}
+			m.fileBrowser = nil
+			return *m, nil
+		case "/":
+			state.filtering = true
+			return *m, nil
+		case "backspace":
+			if state.filtering && state.filter != "" {
+				state.filter = state.filter[:len(state.filter)-1]
+				m.syncFileBrowser(false)
+			}
+			return *m, nil
+		}
+		return *m, nil
+	}
 	switch msg.String() {
 	case "ctrl+f", "esc":
 		if state.filtering || state.filter != "" {
