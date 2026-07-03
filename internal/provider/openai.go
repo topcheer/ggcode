@@ -507,7 +507,6 @@ func estimateTokensForMessages(messages []Message) int {
 	}
 	totalChars = textChars + outputChars + inputChars
 	tokens := estimateTokensFromChars(totalChars)
-	debug.Log("provider", "estimateTokensForMessages: msgs=%d tokens=%d", len(messages), tokens)
 	return tokens
 }
 

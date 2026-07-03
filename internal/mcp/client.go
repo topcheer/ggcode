@@ -97,7 +97,9 @@ func (c *Client) Start(ctx context.Context) error {
 		for key, value := range c.headers {
 			headers.Set(key, value)
 		}
-		conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.url, headers)
+		dialer := *websocket.DefaultDialer
+		dialer.Proxy = http.ProxyFromEnvironment
+		conn, _, err := dialer.DialContext(ctx, c.url, headers)
 		if err != nil {
 			return fmt.Errorf("mcp[%s]: websocket dial: %w", c.name, err)
 		}

@@ -11,6 +11,7 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"net/http"
 )
 
 // AnthropicProvider implements Provider using the Anthropic SDK.
@@ -44,6 +45,7 @@ func (p *AnthropicProvider) effectiveMaxTokens() int {
 // NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
 	opts := anthropicProviderOptions(apiKey, "")
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: newProviderHTTPTransport()}))
 	client := anthropic.NewClient(opts...)
 	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d", model, maxTokens)
 	return &AnthropicProvider{
@@ -56,6 +58,7 @@ func NewAnthropicProvider(apiKey string, model string, maxTokens int) *Anthropic
 // NewAnthropicProviderWithBaseURL creates a new Anthropic provider with a custom base URL.
 func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *AnthropicProvider {
 	opts := anthropicProviderOptions(apiKey, baseURL)
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: newProviderHTTPTransport()}))
 	client := anthropic.NewClient(opts...)
 	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
 	return &AnthropicProvider{
@@ -183,7 +186,6 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						delta := event.Delta
 						switch delta.Type {
 						case "text_delta":
-							debug.Log("anthropic", "chunk text=%q", delta.Text)
 							outputChars += len(delta.Text)
 							emitted = true
 							ch <- StreamEvent{Type: StreamEventText, Text: delta.Text}

@@ -36,7 +36,9 @@ func WrapTransport(base *http.Transport) *http.Transport {
 	if base != nil {
 		t = base.Clone()
 	} else {
-		t = &http.Transport{}
+		t = &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		}
 	}
 	if InsecureMode() {
 		if t.TLSClientConfig == nil {

@@ -22,6 +22,7 @@ func newProviderHTTPTransport() *http.Transport {
 		}).DialContext,
 		TLSHandshakeTimeout:   providerTLSHandshakeTimeout,
 		ResponseHeaderTimeout: providerResponseHeaderTimeout,
+		Proxy:                 http.ProxyFromEnvironment,
 	}
 	return util.WrapTransport(base)
 }

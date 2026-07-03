@@ -16,7 +16,7 @@ type RingEntry struct {
 }
 
 const (
-	defaultRingCap = 500
+	defaultRingCap = 2000
 	maxRingReturn  = 200
 )
 
