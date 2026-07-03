@@ -218,6 +218,10 @@ func (q *pendingQueue) ensureQueue() *agentruntime.PendingQueue[*tunnel.MessageD
 	return queue
 }
 
+// syncItemsFromQueue rebuilds q.items from the queue snapshot while
+// preserving Images on existing items by text-matching. Without this
+// preservation, every call would silently destroy images on previously
+// enqueued pending submissions.
 func (q *pendingQueue) syncItemsFromQueue(queue *agentruntime.PendingQueue[*tunnel.MessageData]) {
 	snapshot := queue.Snapshot()
 	if len(snapshot) == 0 {
@@ -225,13 +229,36 @@ func (q *pendingQueue) syncItemsFromQueue(queue *agentruntime.PendingQueue[*tunn
 		q.q = queue
 		return
 	}
+	// Collect images from existing items to preserve through the rebuild.
+	// Use text as a match key; each match is consumed (first-wins) to handle
+	// duplicate text submissions.
+	type imgSlot struct {
+		text   string
+		images []imageAttachedMsg
+		used   bool
+	}
+	var imgSlots []imgSlot
+	for _, item := range q.items {
+		if len(item.Images) > 0 {
+			imgSlots = append(imgSlots, imgSlot{text: item.Text, images: item.Images})
+		}
+	}
+
 	items := make([]pendingSubmission, 0, len(snapshot))
 	for _, item := range snapshot {
-		items = append(items, pendingSubmission{
+		ps := pendingSubmission{
 			Text:                  item.Text,
 			Hidden:                item.Hidden,
 			TunnelMessageOverride: cloneTunnelMessageData(item.Meta),
-		})
+		}
+		for i := range imgSlots {
+			if !imgSlots[i].used && imgSlots[i].text == item.Text {
+				ps.Images = imgSlots[i].images
+				imgSlots[i].used = true
+				break
+			}
+		}
+		items = append(items, ps)
 	}
 	q.items = items
 	q.q = queue
@@ -321,17 +348,20 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
 	})
-	// Grab images from q.items before sync destroys them
-	var imgs []imageAttachedMsg
-	if len(q.items) > 0 {
-		imgs = q.items[0].Images
+	// Collect images from ALL consumed items (not just the first).
+	// q.items still holds the pre-consume state; consumedCount tells us
+	// how many leading entries were consumed.
+	consumedCount := 1 + len(items)
+	var allImgs []imageAttachedMsg
+	for i := 0; i < consumedCount && i < len(q.items); i++ {
+		allImgs = append(allImgs, q.items[i].Images...)
 	}
 	q.syncItemsFromQueue(queue)
 	parts := []string{item.Text}
 	for _, pending := range items {
 		parts = append(parts, pending.Text)
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, imgs
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, allImgs
 }
 
 // stripImagePlaceholder removes a leading image placeholder from a value.
