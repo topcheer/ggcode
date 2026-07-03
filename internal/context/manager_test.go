@@ -993,3 +993,175 @@ func TestRemoveLastAssistantGroup_Empty(t *testing.T) {
 		t.Errorf("expected empty string for empty context, got %q", result)
 	}
 }
+
+func TestClearOldToolResults_BasicClearing(t *testing.T) {
+	m := NewManager(100000)
+	// Add 4 assistant→tool_result pairs with large outputs.
+	for i := 0; i < 4; i++ {
+		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
+		}})
+		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("x", 1000)},
+		}})
+	}
+	beforeTokens := m.TokenCount()
+	// keepN=2: should clear the first 2 results, keep last 2.
+	freed := m.ClearOldToolResults(2)
+	if freed <= 0 {
+		t.Fatal("expected positive tokens freed")
+	}
+	if m.TokenCount() >= beforeTokens {
+		t.Error("expected token count to decrease after clearing")
+	}
+	msgs := m.Messages()
+	// Verify first 2 results are cleared
+	for i := 0; i < 2; i++ {
+		result := findToolResult(t, msgs, fmt.Sprintf("call-%d", i))
+		if !strings.HasPrefix(result.Output, "[cleared:") {
+			t.Errorf("expected call-%d output to be cleared, got %q", i, result.Output[:min(50, len(result.Output))])
+		}
+	}
+	// Verify last 2 results are intact
+	for i := 2; i < 4; i++ {
+		result := findToolResult(t, msgs, fmt.Sprintf("call-%d", i))
+		if strings.HasPrefix(result.Output, "[cleared:") {
+			t.Errorf("expected call-%d output to be intact", i)
+		}
+		if len(result.Output) != 1000 {
+			t.Errorf("expected call-%d output to be 1000 chars, got %d", i, len(result.Output))
+		}
+	}
+}
+
+func TestClearOldToolResults_Idempotent(t *testing.T) {
+	m := NewManager(100000)
+	for i := 0; i < 4; i++ {
+		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
+		}})
+		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("y", 1000)},
+		}})
+	}
+	// First call clears some
+	first := m.ClearOldToolResults(2)
+	if first <= 0 {
+		t.Fatal("expected tokens freed on first call")
+	}
+	// Second call should be a no-op (all clearable results already cleared)
+	second := m.ClearOldToolResults(2)
+	if second != 0 {
+		t.Errorf("expected 0 tokens freed on second call, got %d", second)
+	}
+}
+
+func TestClearOldToolResults_ErrorResultsPreserved(t *testing.T) {
+	m := NewManager(100000)
+	// Error result should NOT be cleared
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("err-call", "grep", []byte(`{}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "err-call", Output: strings.Repeat("e", 1000), IsError: true},
+	}})
+	// Normal result that should be cleared
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("ok-call", "read_file", []byte(`{}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "ok-call", Output: strings.Repeat("f", 1000)},
+	}})
+
+	freed := m.ClearOldToolResults(0) // clear everything possible
+	// Error result should be preserved
+	errResult := findToolResult(t, m.Messages(), "err-call")
+	if strings.HasPrefix(errResult.Output, "[cleared:") {
+		t.Error("error result should not be cleared")
+	}
+	// Normal result should be cleared (keepN=0, so everything clearable gets cleared)
+	okResult := findToolResult(t, m.Messages(), "ok-call")
+	if !strings.HasPrefix(okResult.Output, "[cleared:") {
+		t.Error("normal result should be cleared")
+	}
+	if freed <= 0 {
+		t.Error("expected tokens freed")
+	}
+}
+
+func TestClearOldToolResults_SmallResultsPreserved(t *testing.T) {
+	m := NewManager(100000)
+	// Small result (< 500 chars) should NOT be cleared
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("small-call", "run_command", []byte(`{}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "small-call", Output: "ok"},
+	}})
+
+	freed := m.ClearOldToolResults(0)
+	if freed != 0 {
+		t.Errorf("expected 0 tokens freed (result too small), got %d", freed)
+	}
+}
+
+func TestClearOldToolResults_TooFewResults(t *testing.T) {
+	m := NewManager(100000)
+	// Only 2 results, keepN=5 → nothing to clear
+	for i := 0; i < 2; i++ {
+		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
+		}})
+		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("z", 1000)},
+		}})
+	}
+	freed := m.ClearOldToolResults(5)
+	if freed != 0 {
+		t.Errorf("expected 0 freed (too few results), got %d", freed)
+	}
+}
+
+func TestClearOldToolResults_ToolUsePreserved(t *testing.T) {
+	m := NewManager(100000)
+	// Verify tool_use blocks are never modified
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("call-1", "read_file", []byte(`{"path":"/foo.go"}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("a", 1000)},
+	}})
+
+	m.ClearOldToolResults(0)
+	msgs := m.Messages()
+	// Find the assistant message with tool_use
+	for _, msg := range msgs {
+		if msg.Role != "assistant" {
+			continue
+		}
+		for _, b := range msg.Content {
+			if b.Type == "tool_use" {
+				if b.ToolName != "read_file" {
+					t.Errorf("tool_use name should be preserved, got %q", b.ToolName)
+				}
+				if string(b.Input) != `{"path":"/foo.go"}` {
+					t.Errorf("tool_use input should be preserved, got %q", string(b.Input))
+				}
+			}
+		}
+	}
+}
+
+// findToolResult finds a tool_result block by tool_id in the message list.
+func findToolResult(t *testing.T, msgs []provider.Message, toolID string) provider.ContentBlock {
+	t.Helper()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && b.ToolID == toolID {
+				return b
+			}
+		}
+	}
+	t.Fatalf("tool_result with id %s not found", toolID)
+	return provider.ContentBlock{}
+}

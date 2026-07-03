@@ -868,6 +868,80 @@ func (m *Manager) recalcTokens() {
 	m.invalidateUsageBaselineLocked()
 }
 
+// toolResultClearMinLen is the minimum Output length to bother clearing.
+// Small results (e.g. "ok", "done") waste negligible tokens and may be
+// more useful to keep inline for context.
+const toolResultClearMinLen = 500
+
+// ClearOldToolResults replaces large tool_result outputs from older messages
+// with short placeholders, keeping the most recent `keepN` tool results intact.
+// This is a cheap, mechanical context-recovery technique that avoids the cost
+// of LLM-based compaction. It is safe to call repeatedly (idempotent).
+//
+// Only clears:
+//   - tool_result blocks with Output > toolResultClearMinLen
+//   - that are not error results (IsError == false)
+//   - that have not already been cleared (idempotency)
+//
+// Returns the estimated number of tokens freed.
+func (m *Manager) ClearOldToolResults(keepN int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Pass 1: count clearable tool_results (large, non-error, not yet cleared)
+	type clearTarget struct {
+		msgIdx  int
+		blkIdx  int
+		origLen int
+	}
+	var targets []clearTarget
+	for i, msg := range m.messages {
+		for j, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if b.IsError {
+				continue
+			}
+			if len(b.Output) < toolResultClearMinLen {
+				continue
+			}
+			if strings.HasPrefix(b.Output, "[cleared:") {
+				continue
+			}
+			targets = append(targets, clearTarget{msgIdx: i, blkIdx: j, origLen: len(b.Output)})
+		}
+	}
+
+	// Determine which targets to clear (all except the last keepN)
+	if len(targets) <= keepN {
+		return 0
+	}
+	toClear := targets[:len(targets)-keepN]
+
+	// Pass 2: replace outputs with placeholders
+	freedChars := 0
+	for _, t := range toClear {
+		block := &m.messages[t.msgIdx].Content[t.blkIdx]
+		origLen := t.origLen
+		freedChars += origLen
+		block.Output = fmt.Sprintf("[cleared: output was %d chars — re-run tool to see full result]", origLen)
+		block.Images = nil // clear images too — they're large and re-fetchable
+	}
+
+	if freedChars == 0 {
+		return 0
+	}
+
+	before := m.tokens
+	m.version++
+	m.recalcTokens()
+	freed := before - m.tokens
+	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d)",
+		len(toClear), freed, keepN, len(targets))
+	return freed
+}
+
 // countTokens uses the provider's token counting API when available,
 // falling back to heuristic estimation.
 func (m *Manager) countTokens(msg provider.Message) int {

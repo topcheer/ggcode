@@ -40,6 +40,18 @@ const (
 	// precompactStartDelay staggers the compression LLM call away from the
 	// agent's regular LLM turn to avoid API rate-limit collisions.
 	precompactStartDelay = 6 * time.Second
+
+	// toolResultClearTrigger starts proactive tool-result clearing at this
+	// fraction of the compaction threshold. Below this, clearing is unnecessary.
+	// This is the "tool-result clearing" technique from Anthropic's context
+	// engineering research (2025-2026): mechanically replace old re-fetchable
+	// tool outputs with placeholders to avoid expensive LLM compaction.
+	toolResultClearTrigger = 0.75
+
+	// toolResultClearKeepN is the number of most-recent tool results to keep
+	// intact when clearing. Older results get their Output replaced with a
+	// short placeholder.
+	toolResultClearKeepN = 6
 )
 
 // precompactDelayCtx is the delay applied before the background compression
@@ -116,6 +128,21 @@ func (a *Agent) StartPreCompact() {
 	}
 	threshold := cm.AutoCompactThreshold()
 	tokens := cm.TokenCount()
+
+	// Proactive tool-result clearing: try cheap mechanical clearing first.
+	// When tokens approach the threshold, replace old re-fetchable tool
+	// outputs with short placeholders. This may avoid compaction entirely.
+	if threshold > 0 && tokens >= int(float64(threshold)*toolResultClearTrigger) {
+		if mgr, ok := cm.(*ctxpkg.Manager); ok {
+			freed := mgr.ClearOldToolResults(toolResultClearKeepN)
+			if freed > 0 {
+				tokens = cm.TokenCount() // re-read after clearing
+				debug.Log("precompact", "CLEARED: freed %d tokens from old tool results, tokens now %d (threshold=%d)",
+					freed, tokens, threshold)
+			}
+		}
+	}
+
 	if threshold <= 0 || tokens < threshold {
 		a.mu.Unlock()
 		debug.Log("precompact", "SKIP: tokens=%d threshold=%d", tokens, threshold)
