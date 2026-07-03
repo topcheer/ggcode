@@ -2,7 +2,7 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build build-desktop-wails test lint verify-ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots
+.PHONY: build build-desktop-wails test lint verify-ci ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots
 
 TAGS := goolm
 
@@ -20,6 +20,9 @@ lint:
 
 verify-ci:
 	./scripts/dev/verify-ci.sh
+
+## ci is an alias for verify-ci, used by harness verification
+ci: verify-ci
 
 knight-eval:
 	./scripts/dev/knight-eval.sh
