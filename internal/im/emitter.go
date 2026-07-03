@@ -19,11 +19,16 @@ import (
 // IMEmitter handles asynchronous outbound IM event emission with typing keepalive.
 // It is framework-agnostic and can be used by both TUI and daemon modes.
 type IMEmitter struct {
-	state      *imEmitterState
-	typing     *imTypingKeeper
-	manager    *Manager
-	language   string // "zh-CN" or "en"
-	workDir    string // project working directory for path relativization
+	state    *imEmitterState
+	typing   *imTypingKeeper
+	manager  *Manager
+	language string // "zh-CN" or "en"
+	workDir  string // project working directory for path relativization
+
+	// mu protects lastStatus and outputMode from concurrent access.
+	// These fields are read from the agent stream callback goroutine and
+	// written from the TUI event loop or IM slash-command handler goroutine.
+	mu         sync.Mutex
 	lastStatus string // dedup status messages
 	outputMode string // verbose, quiet, summary (default: verbose)
 }
@@ -221,7 +226,9 @@ func (e *IMEmitter) EmitText(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+	e.mu.Lock()
 	e.lastStatus = ""
+	e.mu.Unlock()
 	e.EmitEvent(OutboundEvent{
 		Kind: OutboundEventText,
 		Text: text,
@@ -252,7 +259,9 @@ func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	if strings.TrimSpace(echoText) == "" {
 		return
 	}
+	e.mu.Lock()
 	e.lastStatus = ""
+	e.mu.Unlock()
 	if e.state == nil {
 		e.state = newIMEmitterState()
 	}
@@ -272,10 +281,13 @@ func (e *IMEmitter) EmitStatus(status string) {
 	if status == "" {
 		return
 	}
+	e.mu.Lock()
 	if status == e.lastStatus {
+		e.mu.Unlock()
 		return
 	}
 	e.lastStatus = status
+	e.mu.Unlock()
 	e.EmitEvent(OutboundEvent{
 		Kind:   OutboundEventStatus,
 		Status: status,
@@ -350,7 +362,9 @@ func (e *IMEmitter) SetOutputMode(mode string) {
 	if e == nil {
 		return
 	}
+	e.mu.Lock()
 	e.outputMode = mode
+	e.mu.Unlock()
 }
 
 // OutputMode returns the current output mode.
@@ -358,6 +372,8 @@ func (e *IMEmitter) OutputMode() string {
 	if e == nil {
 		return "verbose"
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.outputMode == "" {
 		return "verbose"
 	}
