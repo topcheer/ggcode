@@ -540,6 +540,13 @@ func (h *TaskHandler) CancelTask(id string) error {
 	}
 	t.Status = TaskStatus{State: TaskStateCanceled, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
+	// Close the done channel so any waiter on Done() unblocks.
+	// updateStatus would normally handle this, but CancelTask already
+	// holds the lock (updateStatus would self-deadlock on sync.Mutex).
+	if t.done != nil {
+		close(t.done)
+		t.done = nil
+	}
 	// Cancel the underlying context to stop tool/agent execution.
 	if cancel, ok := h.cancels[id]; ok {
 		cancel()
