@@ -1114,12 +1114,16 @@ func TestClaudeCallback_CodeExchange(t *testing.T) {
 		t.Errorf("expected 200 or 302, got %d", resp.StatusCode)
 	}
 
-	result := <-flow.callbackCh
-	if result.Code != "auth-code-123" {
-		t.Errorf("expected auth-code-123, got %s", result.Code)
-	}
-	if !result.IsAutomatic {
-		t.Error("expected IsAutomatic=true")
+	select {
+	case result := <-flow.callbackCh:
+		if result.Code != "auth-code-123" {
+			t.Errorf("expected auth-code-123, got %s", result.Code)
+		}
+		if !result.IsAutomatic {
+			t.Error("expected IsAutomatic=true")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for callback result")
 	}
 }
 
@@ -1172,9 +1176,13 @@ func TestClaudeCallback_OAuthError(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	result := <-flow.callbackCh
-	if result.Error == nil {
-		t.Error("expected error for OAuth error response")
+	select {
+	case result := <-flow.callbackCh:
+		if result.Error == nil {
+			t.Error("expected error for OAuth error response")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for callback result")
 	}
 }
 
