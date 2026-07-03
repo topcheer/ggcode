@@ -103,8 +103,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	s.server = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", host, cfg.Port),
 		Handler: mux,
-		BaseContext: func(l net.Listener) context.Context {
-			s.port = l.Addr().(*net.TCPAddr).Port
+		BaseContext: func(_ net.Listener) context.Context {
 			return context.Background()
 		},
 	}

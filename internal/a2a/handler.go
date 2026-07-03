@@ -200,7 +200,11 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Execute asynchronously.
 	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
 
+	// Snapshot must be taken under the lock to avoid racing with
+	// updateStatus in the execute goroutine.
+	h.mu.Lock()
 	snap := task.Snapshot()
+	h.mu.Unlock()
 	return &snap, nil
 }
 

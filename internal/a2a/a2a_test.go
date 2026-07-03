@@ -1,3 +1,5 @@
+//go:build integration_local
+
 package a2a
 
 import (
@@ -833,15 +835,6 @@ func TestDetectWorkspaceMetaScansProjectSignals(t *testing.T) {
 	}
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 // ---------------------------------------------------------------------------
 // Concurrent safety
 // ---------------------------------------------------------------------------
@@ -1043,15 +1036,6 @@ func TestClientResubscribe(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func newStringReader(s string) *stringReader { return &stringReader{s: s} }

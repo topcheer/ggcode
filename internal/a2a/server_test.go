@@ -1,3 +1,5 @@
+//go:build integration_local
+
 package a2a
 
 import (
