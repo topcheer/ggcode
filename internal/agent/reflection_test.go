@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -174,12 +175,19 @@ func TestStripCommandComment(t *testing.T) {
 
 func TestSetReflectionFunc(t *testing.T) {
 	a := &Agent{}
-	var called bool
-	var receivedStats RunStats
+	var (
+		mu            sync.Mutex
+		called        bool
+		receivedStats RunStats
+		done          = make(chan struct{})
+	)
 
 	a.SetReflectionFunc(func(stats RunStats) {
+		mu.Lock()
 		called = true
 		receivedStats = stats
+		mu.Unlock()
+		close(done)
 	})
 
 	stats := &RunStats{
@@ -191,8 +199,14 @@ func TestSetReflectionFunc(t *testing.T) {
 	stats.finalize(nil)
 	a.maybeReflect(stats)
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reflection function was not called within timeout")
+	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if !called {
 		t.Error("reflection function was not called")
 	}

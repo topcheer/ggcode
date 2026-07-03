@@ -3,6 +3,7 @@ package lanchat
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -242,9 +243,9 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	joinCount := 0
+	var joinCount atomic.Int32
 	hub.SetCallbacks(nil, nil, func(p Participant) {
-		joinCount++
+		joinCount.Add(1)
 	}, nil, nil, nil)
 
 	// Simulate a peer joining via presence
@@ -257,8 +258,8 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 
 	// Wait for async callback
 	time.Sleep(50 * time.Millisecond)
-	if joinCount != 1 {
-		t.Fatalf("expected 1 join notification, got %d", joinCount)
+	if joinCount.Load() != 1 {
+		t.Fatalf("expected 1 join notification, got %d", joinCount.Load())
 	}
 
 	// Mark the peer offline by aging out LastSeen
@@ -290,8 +291,8 @@ func TestPresenceNoDuplicateJoinAfterRecovery(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Should NOT have fired another join notification
-	if joinCount != 1 {
-		t.Errorf("expected 1 join notification (no duplicate on recovery), got %d", joinCount)
+	if joinCount.Load() != 1 {
+		t.Errorf("expected 1 join notification (no duplicate on recovery), got %d", joinCount.Load())
 	}
 
 	// Peer should be back online
@@ -324,9 +325,9 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	leaveCount := 0
+	var leaveCount atomic.Int32
 	hub.SetCallbacks(nil, nil, nil, func(nodeID, humanNick string) {
-		leaveCount++
+		leaveCount.Add(1)
 	}, nil, nil)
 
 	// Peer joins
@@ -345,8 +346,8 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
 
-	if leaveCount != 0 {
-		t.Errorf("leave should be delayed, but got %d notifications", leaveCount)
+	if leaveCount.Load() != 0 {
+		t.Errorf("leave should be delayed, but got %d notifications", leaveCount.Load())
 	}
 
 	// Peer is offline but within the delay window
@@ -365,8 +366,8 @@ func TestPresenceLeaveNotificationDelayed(t *testing.T) {
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
 
-	if leaveCount != 1 {
-		t.Errorf("expected 1 leave notification after delay, got %d", leaveCount)
+	if leaveCount.Load() != 1 {
+		t.Errorf("expected 1 leave notification after delay, got %d", leaveCount.Load())
 	}
 }
 
@@ -387,9 +388,9 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	leaveCount := 0
+	var leaveCount atomic.Int32
 	hub.SetCallbacks(nil, nil, nil, func(nodeID, humanNick string) {
-		leaveCount++
+		leaveCount.Add(1)
 	}, nil, nil)
 
 	// Peer joins
@@ -409,8 +410,8 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify leave was NOT fired yet (within offlineNotifyDelay)
-	if leaveCount != 0 {
-		t.Fatalf("leave should not fire within delay, got %d", leaveCount)
+	if leaveCount.Load() != 0 {
+		t.Fatalf("leave should not fire within delay, got %d", leaveCount.Load())
 	}
 
 	// Peer recovers before offlineNotifyDelay expires
@@ -423,8 +424,8 @@ func TestPresenceLeaveSuppressedOnQuickRecovery(t *testing.T) {
 	hub.UpdatePeers(nil)
 	time.Sleep(20 * time.Millisecond)
 
-	if leaveCount != 0 {
-		t.Errorf("expected 0 leave notifications (quick recovery), got %d", leaveCount)
+	if leaveCount.Load() != 0 {
+		t.Errorf("expected 0 leave notifications (quick recovery), got %d", leaveCount.Load())
 	}
 }
 
@@ -445,9 +446,9 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-self", "tui", "http://localhost:1234", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	joinCount := 0
+	var joinCount atomic.Int32
 	hub.SetCallbacks(nil, nil, func(p Participant) {
-		joinCount++
+		joinCount.Add(1)
 	}, nil, nil, nil)
 
 	peer := Participant{
@@ -457,8 +458,8 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 	}
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
-	if joinCount != 1 {
-		t.Fatalf("expected 1 join, got %d", joinCount)
+	if joinCount.Load() != 1 {
+		t.Fatalf("expected 1 join, got %d", joinCount.Load())
 	}
 
 	// Age the peer well beyond peerDeleteAfter
@@ -486,8 +487,8 @@ func TestPresencePeerDeletedAfterLongAbsence(t *testing.T) {
 	// Re-appearance should fire a new join notification
 	hub.HandlePresence(peer)
 	time.Sleep(20 * time.Millisecond)
-	if joinCount != 2 {
-		t.Errorf("expected 2 join notifications after delete+reappear, got %d", joinCount)
+	if joinCount.Load() != 2 {
+		t.Errorf("expected 2 join notifications after delete+reappear, got %d", joinCount.Load())
 	}
 }
 
