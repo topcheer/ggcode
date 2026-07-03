@@ -98,13 +98,17 @@ func (a *twitchAdapter) Start(ctx context.Context) {
 
 func (a *twitchAdapter) Close() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.closed = true
-	if a.conn != nil {
-		a.sendRaw("QUIT :ggcode shutting down")
-		a.conn.Close()
-	}
+	conn := a.conn
 	a.connected = false
+	a.mu.Unlock()
+
+	// Send QUIT and close OUTSIDE the lock to avoid self-deadlock:
+	// sendRaw acquires a.mu.RLock(), which deadlocks if we hold a.mu.Lock().
+	if conn != nil {
+		a.sendRaw("QUIT :ggcode shutting down")
+		conn.Close()
+	}
 	return nil
 }
 
