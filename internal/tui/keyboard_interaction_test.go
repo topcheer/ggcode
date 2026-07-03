@@ -1175,21 +1175,6 @@ func TestScenario_PermissionModeCycleCompletes(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: Startup banner clears on first real keypress
-// ---------------------------------------------------------------------------
-
-func TestScenario_StartupBannerClearsOnFirstKey(t *testing.T) {
-	m := newTestModel()
-	m.startupBannerVisible = true
-
-	updated, _ := m.Update(tea.KeyPressMsg{Text: "h"})
-	m = updated.(Model)
-	if m.startupBannerVisible {
-		t.Error("expected startupBannerVisible=false after first keypress")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Scenario: Paste is blocked when not ready
 // ---------------------------------------------------------------------------
 

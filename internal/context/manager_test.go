@@ -251,64 +251,6 @@ func TestContextManager_Summarize_BringsUsageBelowThreshold(t *testing.T) {
 	}
 }
 
-func TestContextManager_Microcompact_ReducesOldToolResults(t *testing.T) {
-	cm := NewManager(300)
-
-	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Need command output"}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("A", 1400)}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "I inspected the output."}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Recent question"}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Recent answer"}}})
-
-	before := cm.TokenCount()
-	if !cm.Microcompact() {
-		t.Fatal("expected microcompact to change old tool results")
-	}
-	if cm.TokenCount() >= before {
-		t.Fatalf("expected token count to decrease after microcompact: before=%d after=%d", before, cm.TokenCount())
-	}
-
-	msgs := cm.Messages()
-	foundPlaceholder := false
-	for _, block := range msgs[2].Content {
-		if block.Type == "tool_result" && strings.Contains(block.Output, "(truncated") {
-			foundPlaceholder = true
-		}
-	}
-	if !foundPlaceholder {
-		t.Fatal("expected old tool result to be compacted into placeholder text")
-	}
-}
-
-func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testing.T) {
-	cm := NewManager(4000)
-	ctx := context.Background()
-	prov := &mockProvider{}
-
-	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Show me the tool output"}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("B", 20000)}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Processed."}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Recent question"}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Recent answer"}}})
-
-	before := cm.TokenCount()
-	summarized, err := cm.CheckAndSummarize(ctx, prov)
-	if err != nil {
-		t.Fatalf("CheckAndSummarize failed: %v", err)
-	}
-	if !summarized {
-		t.Fatal("expected CheckAndSummarize to compact context")
-	}
-	if cm.TokenCount() >= before {
-		t.Fatalf("expected microcompact to reduce token count: before=%d after=%d", before, cm.TokenCount())
-	}
-	if prov.chatCalls != 0 {
-		t.Fatalf("expected microcompact to avoid LLM summarization when sufficient, got %d summary calls", prov.chatCalls)
-	}
-}
-
 func TestContextManager_ApplyCompactResultPreservesMessagesAppendedAfterSnapshot(t *testing.T) {
 	cm := NewManager(1000)
 	ctx := context.Background()
@@ -549,9 +491,9 @@ func TestContextManager_CompactSnapshot_CapturesVersion(t *testing.T) {
 	}
 }
 
-func TestContextManager_ApplyCompactResult_MicrocompactModificationsStillApplied(t *testing.T) {
-	// If Microcompact modifies a tool_result within the snapshot range after
-	// the snapshot was taken, the compaction result should STILL be applied.
+func TestContextManager_ApplyCompactResult_StaleSnapshotStillApplied(t *testing.T) {
+	// If messages within the snapshot range are modified after the snapshot
+	// was taken, the compaction result should STILL be applied.
 	// The summary is lossy compression — a slightly stale source is acceptable.
 	cm := NewManager(1000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
@@ -668,46 +610,6 @@ func messageContainsTextInList(messages []provider.Message, want string) bool {
 		}
 	}
 	return false
-}
-
-func TestContextManager_Microcompact_ExtendsToRecentGroupWhenOverBudget(t *testing.T) {
-	cm := NewManager(500)
-
-	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old question"}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.ToolUseBlock("call-old", "read_file", []byte(`{}`))}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "call-old", Output: strings.Repeat("O", 1200)}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old answer"}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.ToolUseBlock("call-recent", "read_file", []byte(`{}`))}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "call-recent", Output: strings.Repeat("R", 1200)}}})
-	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "recent answer"}}})
-
-	if !cm.Microcompact() {
-		t.Fatal("expected microcompact to change old group")
-	}
-
-	msgs := cm.Messages()
-	oldCompacted := false
-	recentCompacted := false
-	for _, block := range msgs[3].Content {
-		if block.Type == "tool_result" && strings.Contains(block.Output, "(truncated") {
-			oldCompacted = true
-		}
-	}
-	for _, block := range msgs[7].Content {
-		if block.Type == "tool_result" && strings.Contains(block.Output, "(truncated") {
-			recentCompacted = true
-		}
-	}
-	if !oldCompacted {
-		t.Fatal("expected old group tool result to be compacted")
-	}
-	// When old group compaction isn't enough to reach target, recent group's
-	// large tool results should also be compacted (proactive compression).
-	if !recentCompacted {
-		t.Fatal("expected recent group tool result to be compacted when over budget after old group compaction")
-	}
 }
 
 func TestContextManager_Summarize_PreservesExtraMessages(t *testing.T) {
@@ -1068,71 +970,6 @@ func TestRemoveLastAssistantGroup(t *testing.T) {
 	// Tokens should have decreased
 	if m.TokenCount() >= beforeTokens {
 		t.Error("expected token count to decrease after removal")
-	}
-}
-
-func TestMicrocompact_PreservesCheckpointBaseline(t *testing.T) {
-	cm := NewManager(55000)
-
-	// Simulate session restore: add checkpoint messages first.
-	cm.Add(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400000)}},
-	})
-
-	// Set checkpoint baseline to a realistic value (much lower than len/4 estimate).
-	cm.SetCheckpointBaseline(45000)
-
-	// Now add post-checkpoint messages — baselineDelta accumulates.
-	// Large tool result that will be microcompacted.
-	cm.Add(provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type:   "tool_result",
-			ToolID: "tool1",
-			Output: strings.Repeat("line of output\n", 2000),
-		}},
-	})
-	// Recent user message (protected from microcompact).
-	cm.Add(provider.Message{
-		Role:    "user",
-		Content: []provider.ContentBlock{{Type: "text", Text: "recent question"}},
-	})
-
-	beforeTokens := cm.TokenCount()
-	// baseline (50000) + delta for post-checkpoint messages must be > 50000.
-	if beforeTokens <= 50000 {
-		t.Fatalf("expected > 50000 (baseline + delta), got %d", beforeTokens)
-	}
-
-	// Run microcompact — it should truncate the large tool result.
-	changed := cm.Microcompact()
-	if !changed {
-		t.Fatal("expected microcompact to change something")
-	}
-
-	afterTokens := cm.TokenCount()
-	if afterTokens >= beforeTokens {
-		t.Fatalf("expected tokens to decrease after microcompact: %d -> %d", beforeTokens, afterTokens)
-	}
-
-	// KEY ASSERTION: the baseline should still be available.
-	// If recalcTokens() had invalidated it, tokenCount would fall back to
-	// the pure local estimate (len/4) which is wildly different.
-	cm.mu.Lock()
-	localEstimate := cm.tokens
-	baselineAvail := cm.baselineAvailable
-	cm.mu.Unlock()
-
-	if !baselineAvail {
-		t.Fatal("expected baseline to be available after microcompact, but it was invalidated")
-	}
-
-	// After microcompact with baseline, tokenCount should NOT equal the pure local estimate.
-	// If baseline was invalidated, tokenCount would == localEstimate.
-	if afterTokens == localEstimate {
-		t.Fatalf("token count (%d) equals pure local estimate (%d) — baseline was not used",
-			afterTokens, localEstimate)
 	}
 }
 

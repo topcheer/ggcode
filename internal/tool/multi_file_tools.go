@@ -82,7 +82,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		Offset int
 		Limit  int
 	}
-	reqs := make([]readReq, len(args.Files))
+	reqs := make([]readReq, 0, len(args.Files))
 	seen := map[string]struct{}{}
 	for i, f := range args.Files {
 		path, err := cleanAbsolutePath(f.Path)
@@ -90,7 +90,8 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: %v", i, err)}, nil
 		}
 		if _, ok := seen[path]; ok {
-			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: duplicate path %s", i, path)}, nil
+			// Duplicate path — skip silently (first occurrence wins).
+			continue
 		}
 		seen[path] = struct{}{}
 		if f.Offset < 0 {
@@ -102,7 +103,7 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if f.Limit > maxExplicitMultiFileReadLimit {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: limit %d exceeds max %d. Narrow the range or split the batch.", i, f.Limit, maxExplicitMultiFileReadLimit)}, nil
 		}
-		reqs[i] = readReq{Path: path, Offset: f.Offset, Limit: f.Limit}
+		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
 	}
 
 	var body strings.Builder
@@ -186,7 +187,7 @@ func (t MultiFileEdit) Parameters() json.RawMessage {
 		},
 		"files": {
 			"type": "array",
-			"description": "Files to edit in one coordinated change. Each path must be absolute and unique within the request. Group all edits for the same file into one entry.",
+			"description": "Files to edit in one coordinated change. Prefer grouping all edits for the same file into one entry. If the same path appears multiple times, the edits are automatically merged.",
 			"items": {
 				"type": "object",
 				"properties": {
@@ -379,33 +380,46 @@ func (t MultiFileEdit) parseInput(input json.RawMessage) (string, []multiFileEdi
 	}
 	totalEdits := 0
 	totalPayloadBytes := 0
-	entries := make([]multiFileEditEntry, len(args.Files))
-	seen := map[string]struct{}{}
+	// Use a slice + map for dedup: the slice preserves order, the map
+	// records which path is at which index so we can merge duplicates.
+	var entries []multiFileEditEntry
+	pathIndex := map[string]int{}
 	for i, f := range args.Files {
 		path, err := cleanAbsolutePath(f.Path)
 		if err != nil {
 			return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d]: %v", i, err)}
 		}
-		if _, ok := seen[path]; ok {
-			return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d]: duplicate path %s", i, path)}
-		}
-		seen[path] = struct{}{}
 		if len(f.Edits) == 0 {
 			return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d].edits must not be empty", i)}
 		}
 		if len(f.Edits) > maxMultiFileEditEditsPerFile {
 			return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d]: too many edits: got %d, max %d", i, len(f.Edits), maxMultiFileEditEditsPerFile)}
 		}
-		entry := multiFileEditEntry{Path: path, Edits: make([]textEdit, len(f.Edits))}
+		// Validate individual edits first.
+		validatedEdits := make([]textEdit, len(f.Edits))
 		for j, edit := range f.Edits {
-			totalEdits++
-			totalPayloadBytes += len(edit.OldText) + len(edit.NewText)
 			if edit.OldText == "" {
 				return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d].edits[%d]: old_text must not be empty", i, j)}
 			}
-			entry.Edits[j] = textEdit{OldText: edit.OldText, NewText: edit.NewText}
+			validatedEdits[j] = textEdit{OldText: edit.OldText, NewText: edit.NewText}
+			totalPayloadBytes += len(edit.OldText) + len(edit.NewText)
 		}
-		entries[i] = entry
+
+		// Merge into existing entry or create new one.
+		if idx, ok := pathIndex[path]; ok {
+			// Duplicate path — append edits to existing entry.
+			existingCount := len(entries[idx].Edits)
+			mergedCount := existingCount + len(validatedEdits)
+			if mergedCount > maxMultiFileEditEditsPerFile {
+				return "", nil, &Result{IsError: true, Content: fmt.Sprintf("files[%d]: merged duplicate path %s would have %d edits, max %d", i, path, mergedCount, maxMultiFileEditEditsPerFile)}
+			}
+			entries[idx].Edits = append(entries[idx].Edits, validatedEdits...)
+			totalEdits += len(validatedEdits)
+		} else {
+			pathIndex[path] = len(entries)
+			entries = append(entries, multiFileEditEntry{Path: path, Edits: validatedEdits})
+			totalEdits += len(validatedEdits)
+		}
 	}
 	if totalEdits > maxMultiFileEditTotalEdits {
 		return "", nil, &Result{IsError: true, Content: fmt.Sprintf("too many edits: got %d, max %d. Split the edit into smaller batches.", totalEdits, maxMultiFileEditTotalEdits)}

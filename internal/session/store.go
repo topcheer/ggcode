@@ -208,9 +208,33 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	}
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
-		// Corrupt index — keep List fast and let a later reconciliation pass rebuild it.
-		debug.Log("session", "loadIndex: corrupt session index, will rebuild: %v", err)
+		// Corrupt index — rebuild from disk immediately to avoid losing entries.
+		debug.Log("session", "loadIndex: corrupt session index, rebuilding from disk: %v", err)
 		s.indexDirty = true
+		repaired, repairErr := s.repairIndex(nil)
+		if repairErr != nil {
+			debug.Log("session", "loadIndex: repairIndex failed: %v", repairErr)
+			return nil, nil
+		}
+		if repaired {
+			return s.loadIndexFromDisk()
+		}
+		return nil, nil
+	}
+	return idx, nil
+}
+
+// loadIndexFromDisk reads and parses the index file without corruption recovery.
+func (s *JSONLStore) loadIndexFromDisk() ([]indexEntry, error) {
+	data, err := os.ReadFile(s.indexPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var idx []indexEntry
+	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, nil
 	}
 	return idx, nil
@@ -230,6 +254,18 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 }
 
 func (s *JSONLStore) updateIndex(ses *Session) error {
+	unlock, lockErr := lockIndexFile(s.indexPath())
+	if lockErr != nil {
+		debug.Log("session", "updateIndex: failed to acquire index lock: %v", lockErr)
+		s.indexDirty = true
+		// Proceed without lock — better to try than skip entirely.
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
 	idx, err := s.loadIndex()
 	if err != nil {
 		s.indexDirty = true
@@ -255,6 +291,16 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 }
 
 func (s *JSONLStore) removeFromIndex(id string) error {
+	unlock, lockErr := lockIndexFile(s.indexPath())
+	if lockErr != nil {
+		debug.Log("session", "removeFromIndex: failed to acquire index lock: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
@@ -768,7 +814,17 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 
 // repairIndex scans the sessions directory and reconciles with the index.
 // Returns true if the index was modified (written back).
+// The caller must NOT hold the index flock — this function acquires it.
 func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
+	unlock, lockErr := lockIndexFile(s.indexPath())
+	if lockErr != nil {
+		debug.Log("session", "repairIndex: failed to acquire index lock: %v", lockErr)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return false, err
@@ -854,6 +910,28 @@ func (s *JSONLStore) LatestForWorkspace(workspace string) (*Session, error) {
 	// inconsistencies don't prevent finding sessions.
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
 
+	// Check if the index has any entries for this workspace. If not,
+	// the index may be stale — rebuild from disk before giving up.
+	hasWorkspace := false
+	for _, e := range idx {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
+			hasWorkspace = true
+			break
+		}
+	}
+	if !hasWorkspace {
+		changed, repairErr := s.repairIndex(idx)
+		if repairErr != nil {
+			debug.Log("session", "LatestForWorkspace: repairIndex error: %v", repairErr)
+		}
+		if changed {
+			idx, err = s.loadIndex()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
@@ -888,8 +966,29 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 		return nil, err
 	}
 
-	// Normalize the workspace for comparison.
+	// If the index is empty or doesn't contain the requested workspace,
+	// repair it by scanning disk. This handles stale indexes where session
+	// files exist on disk but aren't in the index (e.g. after index corruption).
 	normalizedWorkspace := NormalizeWorkspacePath(workspace)
+	hasWorkspace := false
+	for _, e := range idx {
+		if NormalizeWorkspacePath(e.Workspace) == normalizedWorkspace {
+			hasWorkspace = true
+			break
+		}
+	}
+	if !hasWorkspace {
+		changed, repairErr := s.repairIndex(idx)
+		if repairErr != nil {
+			debug.Log("session", "ListForWorkspace: repairIndex error: %v", repairErr)
+		}
+		if changed {
+			idx, err = s.loadIndex()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	// Sort by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {

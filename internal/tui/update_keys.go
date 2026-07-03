@@ -18,9 +18,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// Don't log dropped keypresses during input drain
 		return m, nil
 	}
-	if m.startupBannerVisible {
-		m.startupBannerVisible = false
-	}
 	if msg.String() != "ctrl+c" {
 		m.resetExitConfirm()
 	}
@@ -178,6 +175,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	if m.inspectorPanel != nil {
 		return m.handleInspectorPanelKey(msg)
+	}
+
+	if m.initPromptActive {
+		return m.handleInitPromptKey(msg)
 	}
 
 	if m.harnessContextPrompt != nil {
@@ -750,4 +751,17 @@ func deleteWordBeforeCursor(ta *textarea.Model) {
 	}
 	lines[line] = currentLine[:pos] + currentLine[col:]
 	ta.SetValue(strings.Join(lines, "\n"))
+}
+
+// handleInitPromptKey handles keyboard input for the startup "Create GGCODE.md?" prompt.
+func (m Model) handleInitPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		m.initPromptActive = false
+		return m, m.handleInitCommand()
+	case "n", "N", "esc":
+		m.initPromptActive = false
+		return m, nil
+	}
+	return m, nil
 }

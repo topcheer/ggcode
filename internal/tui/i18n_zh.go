@@ -815,6 +815,16 @@ func zhCatalog(key string) string {
 		return "生成 GGCODE.md 内容失败：%v\n\n"
 	case "init.collecting":
 		return "正在收集项目知识..."
+	case "init.prompt.title":
+		return "初始化项目"
+	case "init.prompt.body":
+		return "此项目中未找到 GGCODE.md。是否创建一个，帮助 agent 了解你的代码规范？"
+	case "init.prompt.yes":
+		return "创建"
+	case "init.prompt.no":
+		return "跳过"
+	case "init.prompt.hint":
+		return " y = 创建 GGCODE.md • n/Esc = 跳过"
 	case "command.model_switched":
 		return "已切换模型为：%s（供应商：%s）\n\n"
 	case "command.model_failed":

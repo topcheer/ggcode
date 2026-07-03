@@ -88,8 +88,16 @@ func TestMultiFileWrite_DuplicatePath(t *testing.T) {
 
 	tool := MultiFileWrite{}
 	result, _ := tool.Execute(context.Background(), input)
-	if !result.IsError {
-		t.Error("expected error for duplicate path")
+	if result.IsError {
+		t.Fatalf("expected success with last-write-wins, got error: %s", result.Content)
+	}
+	// Last write should win.
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "B" {
+		t.Errorf("expected content 'B' (last write wins), got %q", string(got))
 	}
 }
 

@@ -216,9 +216,17 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			return false
 		}
 		applied, newTokens := snapshotMgr.ApplyCompactResult(pc.snapshot, pc.result)
-		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d", applied, newTokens, pc.startTok)
+		debug.Log("precompact", "READY consumed applied=%t tokens=%d startTok=%d result.changed=%t result.msgs=%d", applied, newTokens, pc.startTok, pc.result.Changed, len(pc.result.Messages))
 		if !applied {
-			debug.Log("precompact", "RESULT DISCARDED: version mismatch (live messages modified during compaction)")
+			reason := "unknown"
+			if !pc.result.Changed {
+				reason = "summarization produced no change"
+			} else if len(pc.result.Messages) == 0 {
+				reason = "summarization produced empty result"
+			} else {
+				reason = "live messages shrunk below snapshot size"
+			}
+			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
 			if onEvent != nil {
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... result discarded (messages changed)]"})
 			}

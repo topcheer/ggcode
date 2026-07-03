@@ -50,12 +50,6 @@ func (m Model) renderHeader() string {
 	return lipgloss.JoinVertical(lipgloss.Left, logoCard, metaCard)
 }
 
-func (m Model) renderStartupBanner() string {
-	if !m.startupBannerVisible {
-		return ""
-	}
-	return m.renderContextBox(m.t("panel.startup"), m.t("startup.banner"), lipgloss.Color("11"))
-}
 func (m Model) renderStatusBar() string {
 	if !m.loading {
 		return ""

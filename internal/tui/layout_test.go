@@ -2502,27 +2502,6 @@ func TestInitRequestsInitialWindowSize(t *testing.T) {
 	}
 }
 
-func TestStartupBannerHiddenByDefault(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 30)
-
-	view := m.View().Content
-	if strings.Contains(view, "Initializing") {
-		t.Fatalf("expected startup banner to stay hidden by default, got %q", view)
-	}
-}
-
-func TestStartupBannerReadyMsgRemainsDismissed(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 30)
-
-	model, _ := m.Update(startupReadyMsg{})
-	m = model.(Model)
-	if m.startupBannerVisible {
-		t.Fatal("expected startup banner to remain dismissed")
-	}
-}
-
 func TestUpdateKeyMsgCtrlCRequestsExitConfirmation(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("draft text")

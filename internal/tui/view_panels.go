@@ -134,9 +134,23 @@ func (m Model) renderContextPanel() string {
 		return m.renderContextBox(title, body, accent)
 	case m.autoCompleteActive && len(m.autoCompleteItems) > 0:
 		return m.renderAutoComplete()
+	case m.initPromptActive:
+		return m.renderInitPromptPanel()
 	default:
 		return ""
 	}
+}
+
+func (m Model) renderInitPromptPanel() string {
+	body := fmt.Sprintf("%s\n\n%s\n%s",
+		m.t("init.prompt.body"),
+		fmt.Sprintf("%s  %s",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true).Render("[y] "+m.t("init.prompt.yes")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("[n] "+m.t("init.prompt.no")),
+		),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("init.prompt.hint")),
+	)
+	return m.renderContextBox(m.t("init.prompt.title"), body, lipgloss.Color("11"))
 }
 func (m Model) renderIMPairingPanel() string {
 	challenge := m.pendingPairingChallenge()

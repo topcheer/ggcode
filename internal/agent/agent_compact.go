@@ -15,28 +15,11 @@ import (
 
 const maxReactiveCompactRetries = 3
 
-type microcompacter interface {
-	Microcompact() bool
-}
-
-// MicrocompactIfOverThreshold runs local microcompaction if the current
-// context exceeds the auto-compact threshold. Used after session restore
-// to avoid sending an oversized prompt to the LLM on the first run.
-// Returns (compacted, beforeTokens, afterTokens). When no compaction was
-// needed, beforeTokens == afterTokens == current token count.
+// MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
+// Microcompact was removed — precompact at 97.5% + reactive compact on PTL
+// now handle all compaction needs without corrupting tool_result data.
 func (a *Agent) MicrocompactIfOverThreshold() (compacted bool, beforeTokens int, afterTokens int) {
-	threshold := a.contextManager.AutoCompactThreshold()
 	tokens := a.contextManager.TokenCount()
-	if threshold > 0 && tokens > threshold {
-		debug.Log("agent", "restore microcompact: tokens=%d threshold=%d, compacting", tokens, threshold)
-		if cm, ok := a.contextManager.(microcompacter); ok {
-			if cm.Microcompact() {
-				afterTokens = a.contextManager.TokenCount()
-				debug.Log("agent", "restore microcompact: compacted %d → %d tokens", tokens, afterTokens)
-				return true, tokens, afterTokens
-			}
-		}
-	}
 	return false, tokens, tokens
 }
 
@@ -92,9 +75,6 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return true
 	}
 	// Cancel any still-running precompact before modifying live messages.
-	// Without this, local compaction (Microcompact/TruncateOldestGroup) would
-	// change fingerprints within the snapshot range, causing ApplyCompactResult
-	// to silently reject the precompact result when it eventually completes.
 	a.CancelPreCompact()
 	if a.compactLocallyForSendBudget("reactive compact") {
 		if retries != nil {
@@ -132,23 +112,24 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	return true
 }
 
-// maybeAutoCompact keeps the hot LLM path non-blocking. It may perform local
-// microcompaction, but full LLM summarization is scheduled through background
-// pre-compaction and only adopted later when ready. Prompt-too-long recovery
-// remains synchronous in tryReactiveCompact because the current request cannot
-// proceed without shrinking context.
+// maybeAutoCompact keeps the hot LLM path non-blocking. When token usage
+// exceeds 97.5% of the context window, it schedules a background precompact
+// (LLM summarization). If precompact succeeds, the next turn will consume
+// the result and shrink the context. If precompact fails or is too slow,
+// reactive compact (PTL recovery) handles it synchronously.
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
-	threshold := a.contextManager.AutoCompactThreshold()
-	tokens := a.contextManager.TokenCount()
 	ratio := a.contextManager.UsageRatio()
-	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d ratio=%.3f maxTokens=%d",
-		tokens, threshold, ratio, a.contextManager.ContextWindow())
-	if threshold <= 0 || tokens < threshold {
+	tokens := a.contextManager.TokenCount()
+
+	debug.Log("agent", "maybeAutoCompact: tokens=%d ratio=%.3f maxTokens=%d",
+		tokens, ratio, a.contextManager.ContextWindow())
+
+	// Trigger precompact at 97.5% of context window
+	if ratio < precompactTriggerRatio {
 		return nil
 	}
 
-	// If a precompact is already running, skip entirely — it will inject
-	// results when it completes and reduce the token count.
+	// If a precompact is already running, skip entirely
 	a.mu.Lock()
 	precompactRunning := a.precompact != nil
 	cooldownUntil := a.precompactCooldownUntil
@@ -159,49 +140,25 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	}
 
 	// Cooldown: after a precompact attempt (success or failure), wait before
-	// trying again. This prevents a tight loop where compaction completes but
-	// doesn't reduce enough, immediately triggering another expensive LLM
-	// summarization that produces the same result.
+	// trying again.
 	if time.Now().Before(cooldownUntil) {
 		debug.Log("agent", "maybeAutoCompact: SKIP (cooldown active, %s remaining, tokens=%d)", time.Until(cooldownUntil).Round(time.Second), tokens)
 		return nil
 	}
 
-	// Run microcompact silently — it's a cheap local operation (no LLM call)
-	// that truncates old tool_result blocks. It should happen as frequently
-	// as needed without showing the user a message.
-	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
-	changed := false
-	if cm, ok := a.contextManager.(microcompacter); ok {
-		changed = cm.Microcompact()
-	}
-	newTokens := a.contextManager.TokenCount()
-	if changed {
-		debug.Log("agent", "auto-microcompact: conversation compacted locally (%d → %d tokens)", tokens, newTokens)
-		if transientWarned != nil {
-			*transientWarned = false
-		}
-		if newTokens < tokens*7/10 {
-			a.maybeSaveCheckpoint()
-		}
-	}
-
-	if newTokens < threshold {
-		return nil // microcompact was enough — stay silent, no cooldown needed
-	}
-
-	// Microcompact wasn't enough — schedule background precompact (LLM summarization).
-	// Print the message and set a cooldown so we don't immediately retry.
-	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", newTokens)})
+	// Schedule background precompact
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", tokens)})
 	const precompactCooldown = 2 * time.Minute
 	a.mu.Lock()
 	a.precompactCooldownUntil = time.Now().Add(precompactCooldown)
 	a.mu.Unlock()
 
-	debug.Log("agent", "maybeAutoCompact: scheduling background precompact after microcompact tokens=%d threshold=%d cooldown=%s", newTokens, threshold, precompactCooldown)
+	debug.Log("agent", "maybeAutoCompact: scheduling background precompact tokens=%d ratio=%.3f cooldown=%s", tokens, ratio, precompactCooldown)
 	a.StartPreCompact()
 	return nil
 }
+
+const precompactTriggerRatio = 0.975
 
 func (a *Agent) ensurePromptSendable() {
 	if a.promptBudget() <= 0 {
@@ -210,23 +167,23 @@ func (a *Agent) ensurePromptSendable() {
 	if a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
+	// Consume completed precompact first
 	if a.consumeReadyPreCompact(nil) && a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
 
-	// Do NOT modify live messages while a background precompact is running.
-	// compactLocallyForSendBudget calls Microcompact/TruncateOldestGroupForRetry
-	// which mutates tool_result blocks and drops message groups. This changes
-	// the fingerprints of messages within the precompact snapshot's range,
-	// causing ApplyCompactResult to silently reject the compaction result.
+	// If precompact is still running, we can't safely modify live messages.
+	// The prompt will likely exceed budget and trigger reactive compact (PTL).
 	a.mu.RLock()
 	precompactRunning := a.precompact != nil
 	a.mu.RUnlock()
 	if precompactRunning {
-		debug.Log("agent", "ensurePromptSendable: SKIP local compaction (precompact running, would invalidate snapshot)")
+		debug.Log("agent", "ensurePromptSendable: SKIP (precompact running, will PTL if needed)")
 		return
 	}
 
+	// Last-resort: truncate oldest message groups to fit the budget.
+	// This is destructive but better than failing to send.
 	a.compactLocallyForSendBudget("pre-send hard guard")
 }
 
@@ -247,29 +204,25 @@ func (a *Agent) compactLocallyForSendBudget(reason string) bool {
 		return false
 	}
 
+	// Only truncation remains — no microcompact (removed to preserve
+	// tool_result integrity for precompact summarization).
 	changed := false
-	if cm, ok := a.contextManager.(microcompacter); ok && cm.Microcompact() {
-		changed = true
-	}
-
-	tokens := a.contextManager.TokenCount()
+	tokens := before
 	dropped := 0
-	if tokens >= budget {
-		if cm, ok := a.contextManager.(oldestGroupTruncater); ok {
-			for tokens >= budget && cm.TruncateOldestGroupForRetry() {
-				changed = true
-				dropped++
-				tokens = a.contextManager.TokenCount()
-			}
+	if cm, ok := a.contextManager.(oldestGroupTruncater); ok {
+		for tokens >= budget && cm.TruncateOldestGroupForRetry() {
+			changed = true
+			dropped++
+			tokens = a.contextManager.TokenCount()
 		}
 	}
 
 	if changed {
-		debug.Log("agent", "%s: local compaction reduced context %d→%d tokens budget=%d dropped_groups=%d",
+		debug.Log("agent", "%s: truncation reduced context %d→%d tokens budget=%d dropped_groups=%d",
 			reason, before, tokens, budget, dropped)
 		a.maybeSaveCheckpoint()
 	} else {
-		debug.Log("agent", "%s: local compaction unavailable/ineffective tokens=%d budget=%d", reason, before, budget)
+		debug.Log("agent", "%s: truncation unavailable/ineffective tokens=%d budget=%d", reason, before, budget)
 	}
 	return changed
 }

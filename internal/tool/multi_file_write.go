@@ -36,7 +36,7 @@ func (t MultiFileWrite) Parameters() json.RawMessage {
 		},
 		"files": {
 			"type": "array",
-			"description": "Files to write. Each path must be absolute and unique within the request.",
+			"description": "Files to write. Prefer unique paths; if a path appears multiple times, the last write wins.",
 			"items": {
 				"type": "object",
 				"properties": {
@@ -89,13 +89,24 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("invalid mode %q: must be atomic or partial_success", mode)}, nil
 	}
 
-	// Check for duplicate paths.
-	seen := make(map[string]bool, len(args.Files))
-	for _, f := range args.Files {
-		if seen[f.Path] {
-			return Result{IsError: true, Content: fmt.Sprintf("duplicate path: %s", f.Path)}, nil
+	// Deduplicate paths: last write wins (same semantics as calling write_file twice).
+	// This is more forgiving than rejecting duplicates — the LLM may logically
+	// group writes but accidentally repeat a path.
+	deduped := make(map[string]int) // path → index into dedupedFiles
+	for i, f := range args.Files {
+		path, err := cleanAbsolutePath(f.Path)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid path %q: %v", f.Path, err)}, nil
 		}
-		seen[f.Path] = true
+		args.Files[i].Path = path
+		if idx, ok := deduped[path]; ok {
+			// Overwrite existing entry (last wins).
+			args.Files[idx] = args.Files[i]
+			// Remove the duplicate by swapping with last and shortening.
+			args.Files = append(args.Files[:i], args.Files[i+1:]...)
+		} else {
+			deduped[path] = i
+		}
 	}
 
 	// Sandbox validation — check all paths first.

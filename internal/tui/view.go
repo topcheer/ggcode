@@ -36,13 +36,12 @@ func (m Model) View() tea.View {
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
-	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
 	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
 
-	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
+	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if actionPanel != "" {
 		availableHeight -= lipgloss.Height(actionPanel)
 	}
@@ -62,9 +61,9 @@ func (m Model) View() tea.View {
 	}
 
 	if debug.IsVerbose("layout") {
-		debug.Log("layout", "vh=%d h=%d s=%d c=%d a=%d sb=%d d=%d",
+		debug.Log("layout", "vh=%d h=%d c=%d a=%d sb=%d d=%d",
 			m.viewHeight(),
-			lipgloss.Height(header), lipgloss.Height(startupBanner), lipgloss.Height(composer),
+			lipgloss.Height(header), lipgloss.Height(composer),
 			lipgloss.Height(actionPanel), lipgloss.Height(statusBar), lipgloss.Height(deviceBanner))
 		debug.Log("layout", "avail=%d", availableHeight)
 	}
@@ -77,9 +76,6 @@ func (m Model) View() tea.View {
 	}
 	if header != "" {
 		sections = append(sections, header)
-	}
-	if startupBanner != "" {
-		sections = append(sections, startupBanner)
 	}
 	sections = append(sections, conversation)
 	if deviceBanner != "" {
@@ -139,13 +135,12 @@ func (m Model) conversationPanelHeight() int {
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
-	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
 	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
 
-	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
+	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if actionPanel != "" {
 		availableHeight -= lipgloss.Height(actionPanel)
 	}

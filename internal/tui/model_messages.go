@@ -56,7 +56,11 @@ type sessionMetricMsg struct {
 	Metric metrics.MetricEvent
 }
 
-type startupReadyMsg struct{}
+// initPromptCheckMsg carries the result of the startup GGCODE.md existence check.
+type initPromptCheckMsg struct {
+	needsInit bool
+	target    string // path to GGCODE.md that would be created
+}
 
 type autoRunCheckResultMsg struct {
 	Text        string

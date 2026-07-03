@@ -232,3 +232,75 @@ func TestMultiFileEdit_IgnoresMultiFileReadWrappers(t *testing.T) {
 		t.Fatalf("expected file to be updated, got: %q", got)
 	}
 }
+
+func TestMultiFileEdit_AutoMergesDuplicatePaths(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	os.WriteFile(fp, []byte("line1 old\nline2 old\nline3 old\n"), 0644)
+
+	// Two files[] entries with the same path — edits should be auto-merged.
+	input, _ := json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{
+				"path": fp,
+				"edits": []map[string]string{
+					{"old_text": "line1 old", "new_text": "line1 new"},
+				},
+			},
+			{
+				"path": fp,
+				"edits": []map[string]string{
+					{"old_text": "line3 old", "new_text": "line3 new"},
+				},
+			},
+		},
+	})
+
+	tool := MultiFileEdit{}
+	res, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected auto-merge success, got error: %s", res.Content)
+	}
+
+	got, _ := os.ReadFile(fp)
+	content := string(got)
+	if !strings.Contains(content, "line1 new") {
+		t.Errorf("expected 'line1 new' in file, got: %s", content)
+	}
+	if !strings.Contains(content, "line3 new") {
+		t.Errorf("expected 'line3 new' in file, got: %s", content)
+	}
+	if !strings.Contains(content, "line2 old") {
+		t.Errorf("expected 'line2 old' unchanged in file, got: %s", content)
+	}
+}
+
+func TestMultiFileRead_DuplicatePathSkipped(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	os.WriteFile(fp, []byte("hello world\n"), 0644)
+
+	// Two files[] entries with the same path — second should be silently skipped.
+	input, _ := json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{"path": fp},
+			{"path": fp, "offset": 5},
+		},
+	})
+
+	tool := MultiFileRead{}
+	res, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success with duplicate skipped, got error: %s", res.Content)
+	}
+	// Should contain content from the first read only.
+	if !strings.Contains(res.Content, "hello world") {
+		t.Errorf("expected file content in result, got: %s", res.Content)
+	}
+}

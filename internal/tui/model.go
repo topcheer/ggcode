@@ -250,18 +250,18 @@ type Model struct {
 	activeMCPTools  map[string]ToolStatusMsg
 
 	// Slash command autocomplete
-	autoCompleteItems    []string
-	autoCompleteIndex    int
-	autoCompleteActive   bool
-	autoCompleteKind     string // "slash" or "mention"
-	autoCompleteWorkDir  string // working directory for mention completion
-	inputHint            string // placeholder hint shown after cursor (e.g. "<subcommand>")
-	startedAt            time.Time
-	inputDrainUntil      time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
-	inputReady           bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
-	startupBannerVisible bool
-	lastResizeAt         time.Time
-	sidebarVisible       bool
+	autoCompleteItems   []string
+	autoCompleteIndex   int
+	autoCompleteActive  bool
+	autoCompleteKind    string // "slash" or "mention"
+	autoCompleteWorkDir string // working directory for mention completion
+	inputHint           string // placeholder hint shown after cursor (e.g. "<subcommand>")
+	startedAt           time.Time
+	inputDrainUntil     time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
+	inputReady          bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
+	initPromptActive    bool      // show "create GGCODE.md?" panel at startup
+	lastResizeAt        time.Time
+	sidebarVisible      bool
 
 	exitConfirmPending   bool
 	cancelConfirmPending bool
@@ -527,7 +527,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		viewport:               NewViewportModel(80, 20),
 		mode:                   policyMode(policy),
 		startedAt:              time.Time{}, // set on first WindowSizeMsg
-		startupBannerVisible:   false,
 		sidebarVisible:         false,
 		activeMCPTools:         make(map[string]ToolStatusMsg),
 		clipboardLoader:        loadClipboardImage,
@@ -662,6 +661,17 @@ func (m Model) Init() tea.Cmd {
 		func() tea.Msg { return tea.RequestWindowSize() },
 		func() tea.Msg { return gitBranchTickMsg{} },
 	}
+	// Check whether the project has a GGCODE.md (or AGENTS.md, CLAUDE.md,
+	// COPILOT.md). If none exist AND the directory has real project files
+	// (non-hidden), prompt the user to initialize.
+	cmds = append(cmds, func() tea.Msg {
+		workDir, _ := os.Getwd()
+		target, existing, _ := memory.ResolveProjectMemoryInitTarget(workDir)
+		if len(existing) == 0 && dirHasProjectFiles(workDir) {
+			return initPromptCheckMsg{needsInit: true, target: target}
+		}
+		return initPromptCheckMsg{needsInit: false}
+	})
 	if m.petEnabled {
 		cmds = append(cmds, startPetAnim())
 	}
@@ -674,6 +684,21 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg { return tmuxStartupSetupMsg{Layout: layout} })
 	}
 	return tea.Batch(cmds...)
+}
+
+// dirHasProjectFiles returns true if dir contains at least one non-hidden
+// file or directory (i.e. a real project, not just .git/.DS_Store/etc).
+func dirHasProjectFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) SetProgram(p *tea.Program) {

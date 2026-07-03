@@ -807,6 +807,16 @@ func enCatalog(key string) string {
 		return "Failed to generate GGCODE.md content: %v\n\n"
 	case "init.collecting":
 		return "Collecting project knowledge..."
+	case "init.prompt.title":
+		return "Initialize project"
+	case "init.prompt.body":
+		return "No GGCODE.md found in this project. Create one to help the agent understand your codebase conventions?"
+	case "init.prompt.yes":
+		return "Create"
+	case "init.prompt.no":
+		return "Skip"
+	case "init.prompt.hint":
+		return " y = create GGCODE.md • n/Esc = skip"
 	case "command.model_switched":
 		return "Switched model to: %s (vendor: %s)\n\n"
 	case "command.model_failed":

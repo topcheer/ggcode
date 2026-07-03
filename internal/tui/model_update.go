@@ -320,8 +320,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case harnessPanelAutoRefreshMsg:
 		return m.handleHarnessPanelAutoRefreshMsg(msg)
 
-	case startupReadyMsg:
-		m.startupBannerVisible = false
+	case initPromptCheckMsg:
+		m.initPromptActive = msg.needsInit
 		return m, nil
 
 	case projectMemoryLoadedMsg:

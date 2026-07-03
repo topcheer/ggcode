@@ -72,31 +72,13 @@ const (
 	// For small context windows, cap at 25% of the window.
 	compactTargetFixed = 30000
 
-	// Recent conversation budget: fixed 15K tokens kept verbatim after
-	// summarization. Covers the last few conversation rounds.
-	// For small context windows (<150K), capped at 10% of contextWindow
-	// to avoid dominating the available space.
-	recentBudgetFixed = 15000
-
-	// compactDoneRatio is no longer used — compactTargetTokens now returns
-	// a fixed absolute target. Kept for reference.
-	compactDoneRatio = 0.30
-
 	defaultOutputReserveRatio = 0.10
 	maxOutputReserveRatio     = 0.25
 	safetyMarginRatio         = 0.05
 	minRecentGroups           = 0 // summarize all groups, keep none verbatim
 	minSummaryReserve         = 64
-	microcompactMinGain       = 32
-	toolResultMinTokens       = 96
 	maxPTLRetries             = 3
 	tokenCountTimeout         = 100 * time.Millisecond
-
-	// Microcompact truncation thresholds
-	truncationHeadLines  = 10
-	truncationTailLines  = 5
-	truncationMinLines   = 20  // don't truncate if fewer than this many lines
-	truncationMaxLineLen = 200 // truncate individual lines longer than this
 )
 
 func AutoCompactThresholdRatio() float64 {
@@ -516,14 +498,18 @@ func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (C
 	scratch.recalcTokens()
 	scratch.mu.Unlock()
 
-	changed, err := scratch.CheckAndSummarize(ctx, prov)
-	if err != nil {
+	// Force summarization — the caller (precompact) already determined
+	// that compaction is needed based on the LIVE token count (calibrated
+	// from actual LLM API usage). The scratch manager's estimated token
+	// count (via recalcTokens) may be significantly lower than the live
+	// count, causing CheckAndSummarize to skip summarization and produce
+	// a Changed=false result that ApplyCompactResult rejects.
+	beforeVersion := scratch.version
+	if err := scratch.Summarize(ctx, prov); err != nil {
 		return CompactResult{}, err
 	}
 	after, tokens := scratch.MessagesAndTokenCount()
-	if !changed {
-		changed = scratch.version != 0
-	}
+	changed := scratch.version != beforeVersion
 	return CompactResult{
 		Messages:   after,
 		TokenCount: tokens,
@@ -797,23 +783,17 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 		return false, nil
 	}
 
-	changed := m.Microcompact()
-	if m.TokenCount() < m.AutoCompactThreshold() {
-		debug.Log("ctx", "CheckAndSummarize: Microcompact resolved, tokens now=%d", m.TokenCount())
-		return changed, nil
-	}
-
-	debug.Log("ctx", "CheckAndSummarize: Microcompact not enough, calling Summarize (tokens=%d)", m.TokenCount())
+	debug.Log("ctx", "CheckAndSummarize: calling Summarize (tokens=%d)", tokenCount)
 	beforeVersion := m.version
 	err := m.Summarize(ctx, prov)
 	if err != nil {
 		debug.Log("ctx", "CheckAndSummarize: Summarize FAILED: %v", err)
-		return changed, err
+		return false, err
 	}
 	summaryChanged := m.version != beforeVersion
 	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d→%d changed=%t",
 		m.TokenCount(), len(m.Messages()), summaryChanged)
-	return changed || summaryChanged, nil
+	return summaryChanged, nil
 }
 
 func (m *Manager) TruncateOldestGroupForRetry() bool {
@@ -908,143 +888,6 @@ func estimateTokens(msg provider.Message) int {
 		text += b.Text + b.ToolName + b.Output + string(b.Input)
 	}
 	return EstimateTokens(text)
-}
-
-// Microcompact reduces old bulky tool results in-place before falling back to
-// full summarization.
-func (m *Manager) Microcompact() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.tokenCountLocked() <= m.microcompactTargetTokens() {
-		debug.Log("ctx", "Microcompact: SKIP tokens=%d <= target=%d", m.tokenCountLocked(), m.microcompactTargetTokens())
-		return false
-	}
-
-	start := 0
-	if len(m.messages) > 0 && m.messages[0].Role == "system" {
-		start = 1
-	}
-
-	groups := buildMessageGroups(m.messages, start)
-	if len(groups) == 0 {
-		debug.Log("ctx", "Microcompact: SKIP no groups")
-		return false
-	}
-	// Protect the most recent group from microcompact truncation.
-	protectedStart := groups[len(groups)-1].start
-
-	changed := false
-	currentTokens := m.tokenCountLocked()
-	targetTokens := m.microcompactTargetTokens()
-	compactedCount := 0
-
-	debug.Log("ctx", "Microcompact: START tokens=%d target=%d msgs=%d groups=%d protected_from=%d",
-		currentTokens, targetTokens, len(m.messages), len(groups), protectedStart)
-
-	for i := start; i < protectedStart && currentTokens > targetTokens; i++ {
-		msg := m.messages[i]
-		blocks := append([]provider.ContentBlock(nil), msg.Content...)
-		msgChanged := false
-
-		for j, block := range blocks {
-			if block.Type != "tool_result" || block.Output == "" {
-				continue
-			}
-
-			originalTokens := EstimateTokens(block.Output)
-			if originalTokens < toolResultMinTokens {
-				continue
-			}
-
-			placeholder := compactedToolResultPlaceholder(block, originalTokens)
-			newTokens := EstimateTokens(placeholder)
-			if originalTokens-newTokens < microcompactMinGain {
-				continue
-			}
-
-			blocks[j].Output = placeholder
-			currentTokens -= originalTokens - newTokens
-			msgChanged = true
-			changed = true
-			compactedCount++
-
-			if currentTokens <= targetTokens {
-				break
-			}
-		}
-
-		if msgChanged {
-			msg.Content = blocks
-			m.messages[i] = msg
-		}
-	}
-
-	// Extension: also compact large tool_results in recent groups if still over budget.
-	// This prevents infinite compression loops when recent rounds contain huge tool output.
-	if currentTokens > targetTokens {
-		for i := protectedStart; i < len(m.messages) && currentTokens > targetTokens; i++ {
-			msg := m.messages[i]
-			blocks := append([]provider.ContentBlock(nil), msg.Content...)
-			msgChanged := false
-
-			for j, block := range blocks {
-				if block.Type != "tool_result" || block.Output == "" {
-					continue
-				}
-				// Use a higher threshold for recent groups to avoid over-truncation.
-				originalTokens := EstimateTokens(block.Output)
-				if originalTokens < toolResultMinTokens*3 {
-					continue
-				}
-
-				placeholder := compactedToolResultPlaceholder(block, originalTokens)
-				newTokens := EstimateTokens(placeholder)
-				if originalTokens-newTokens < microcompactMinGain {
-					continue
-				}
-
-				blocks[j].Output = placeholder
-				currentTokens -= originalTokens - newTokens
-				msgChanged = true
-				changed = true
-				compactedCount++
-
-				if currentTokens <= targetTokens {
-					break
-				}
-			}
-
-			if msgChanged {
-				msg.Content = blocks
-				m.messages[i] = msg
-			}
-		}
-	}
-
-	if changed {
-		m.version++
-		// Recalculate m.tokens from scratch, but DO NOT invalidate the
-		// usage baseline (unlike recalcTokens). The checkpoint baseline
-		// is still valid — microcompact only truncated tool_result outputs,
-		// it did not replace the message list. Instead, adjust the baseline
-		// downward by the savings tracked in currentTokens.
-		m.tokens = 0
-		for _, msg := range m.messages {
-			m.tokens += m.countTokens(msg)
-		}
-		if m.baselineAvailable {
-			// currentTokens started from tokenCountLocked() (baseline + delta)
-			// and was reduced by estimated savings. Use it as the new baseline.
-			m.baselineTokens = currentTokens
-			m.baselineDelta = 0
-		}
-		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d baseline=%t",
-			compactedCount, currentTokens, m.tokenCountLocked(), m.baselineAvailable)
-	} else {
-		debug.Log("ctx", "Microcompact: no eligible tool results found to compact")
-	}
-	return changed
 }
 
 type summaryPlan struct {
@@ -1164,15 +1007,6 @@ func (m *Manager) compactTargetTokens() int {
 	return target
 }
 
-// microcompactTargetTokens returns the target for Microcompact tool-result
-// truncation. Microcompact only truncates overly large tool_result blocks —
-// it must NOT aggressively compress conversation content. Target is set to
-// the auto-compact threshold: truncate just enough to get below threshold.
-// If that's not enough, Summarize takes over for full LLM summarization.
-func (m *Manager) microcompactTargetTokens() int {
-	return m.autoCompactThresholdLocked()
-}
-
 // summaryReserveTokens returns the token budget reserved for the summary
 // LLM call's output. Capped at maxSummaryOutputRatio (5%) of contextWindow
 // AND a fixed absolute maximum (maxSummaryOutputTokens).
@@ -1271,49 +1105,6 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// compactedToolResultPlaceholder truncates large tool results while preserving
-// head and tail content so the LLM retains enough context to avoid redundant
-// operations (e.g. re-reading a file it already inspected).
-func compactedToolResultPlaceholder(block provider.ContentBlock, originalTokens int) string {
-	output := block.Output
-
-	// For multi-line content with enough lines: preserve head + tail
-	lines := strings.Split(output, "\n")
-	if len(lines) >= truncationMinLines {
-		// Truncate individual long lines first
-		for i, line := range lines {
-			if len(line) > truncationMaxLineLen {
-				lines[i] = line[:truncationMaxLineLen-3] + "..."
-			}
-		}
-
-		headEnd := truncationHeadLines
-		tailStart := len(lines) - truncationTailLines
-		if tailStart > headEnd {
-			head := lines[:headEnd]
-			tail := lines[tailStart:]
-			skipped := tailStart - headEnd
-
-			var sb strings.Builder
-			sb.WriteString(strings.Join(head, "\n"))
-			sb.WriteString(fmt.Sprintf("\n... (truncated %d lines, original %d tokens)\n", skipped, originalTokens))
-			sb.WriteString(strings.Join(tail, "\n"))
-			return sb.String()
-		}
-	}
-
-	// For few-line but very long content (e.g. single-line minified output):
-	// truncate by character position.
-	if len(output) > truncationMaxLineLen*2 {
-		headLen := minInt(len(output), truncationMaxLineLen)
-		tailLen := minInt(len(output)-headLen, truncationMaxLineLen/2)
-		return fmt.Sprintf("%s\n... (truncated, original %d tokens)\n%s",
-			output[:headLen], originalTokens, output[len(output)-tailLen:])
-	}
-
-	return output
 }
 
 func buildSummaryPayload(msgs []provider.Message) string {
