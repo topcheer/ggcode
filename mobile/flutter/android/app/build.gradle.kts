@@ -41,8 +41,8 @@ android {
         applicationId = "gg.ai.ggcode.mobile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2026070301
-        versionName = "1.3.102"
+        versionCode = 2026070302
+        versionName = "1.3.103"
     }
 
     buildTypes {

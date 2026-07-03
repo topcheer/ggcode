@@ -5,7 +5,6 @@ package session
 import (
 	"os"
 	"syscall"
-	"unsafe"
 )
 
 // lockIndexFile acquires a blocking exclusive lock on the index lock file.
