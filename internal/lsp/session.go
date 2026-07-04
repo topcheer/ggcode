@@ -115,7 +115,9 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	if !session.shouldRetryEmptyResults() {
 		session.markProjectReady()
 	}
+	client.mu.Lock()
 	client.notificationHandler = session.handleNotification
+	client.mu.Unlock()
 	m.sessions[key] = session
 	return session, nil
 }

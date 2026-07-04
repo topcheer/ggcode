@@ -671,8 +671,11 @@ func (c *stdioClient) readLoop() {
 			continue
 		}
 		if !hasRPCID(msg.ID) {
-			if c.notificationHandler != nil && strings.TrimSpace(msg.Method) != "" {
-				c.notificationHandler(msg.Method, msg.Params)
+			c.mu.Lock()
+			handler := c.notificationHandler
+			c.mu.Unlock()
+			if handler != nil && strings.TrimSpace(msg.Method) != "" {
+				handler(msg.Method, msg.Params)
 			}
 			continue
 		}
