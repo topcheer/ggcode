@@ -12,6 +12,7 @@ package safego
 
 import (
 	"runtime/debug"
+	"sync"
 )
 
 // logFn is set by the debug package at init time to avoid a circular import.
@@ -29,7 +30,27 @@ func SetLogger(fn func(category, format string, args ...any)) {
 // the recovering goroutine. The TUI can install a hook to surface a
 // non-fatal error message to the user; servers can install a hook to ship
 // the stack to a sink. It must not panic.
-var PanicHook func(name string, recovered any, stack []byte)
+//
+// Access is protected by panicHookMu to prevent data races between goroutines
+// calling Recover() and callers mutating the hook (e.g. tests).
+var (
+	panicHookMu sync.RWMutex
+	panicHook   func(name string, recovered any, stack []byte)
+)
+
+// SetPanicHook sets the global panic hook. Pass nil to clear it.
+func SetPanicHook(fn func(name string, recovered any, stack []byte)) {
+	panicHookMu.Lock()
+	panicHook = fn
+	panicHookMu.Unlock()
+}
+
+// GetPanicHook returns the current panic hook (may be nil).
+func GetPanicHook() func(name string, recovered any, stack []byte) {
+	panicHookMu.RLock()
+	defer panicHookMu.RUnlock()
+	return panicHook
+}
 
 // Go launches fn in a new goroutine with panic recovery. The name is used
 // only in log output to identify the goroutine in case of a panic.
@@ -62,7 +83,7 @@ func Recover(name string) {
 	if logFn != nil {
 		logFn("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
 	}
-	if hook := PanicHook; hook != nil {
+	if hook := GetPanicHook(); hook != nil {
 		// Guard the hook itself against panics so a buggy hook can't
 		// re-trigger the very crash safego is meant to prevent.
 		func() {

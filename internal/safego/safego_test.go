@@ -43,16 +43,16 @@ func TestPanicHookFires(t *testing.T) {
 		gotValue any
 	)
 	done := make(chan struct{})
-	old := PanicHook
-	PanicHook = func(name string, recovered any, stack []byte) {
+	old := GetPanicHook()
+	SetPanicHook(func(name string, recovered any, stack []byte) {
 		calls.Add(1)
 		mu.Lock()
 		gotName = name
 		gotValue = recovered
 		mu.Unlock()
 		close(done)
-	}
-	defer func() { PanicHook = old }()
+	})
+	defer SetPanicHook(old)
 	Run("hook-test", func() { panic("hooked") })
 	// Wait for the hook to fire (should be immediate since Run is sync,
 	// but guards against scheduler edge cases on CI).
@@ -75,9 +75,9 @@ func TestPanicHookFires(t *testing.T) {
 }
 
 func TestPanicHookPanicSwallowed(t *testing.T) {
-	old := PanicHook
-	PanicHook = func(name string, recovered any, stack []byte) { panic("hook boom") }
-	defer func() { PanicHook = old }()
+	old := GetPanicHook()
+	SetPanicHook(func(name string, recovered any, stack []byte) { panic("hook boom") })
+	defer SetPanicHook(old)
 	Run("hook-panic-test", func() { panic("inner") })
 }
 
