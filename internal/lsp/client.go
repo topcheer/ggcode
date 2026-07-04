@@ -102,8 +102,28 @@ type stdioClient struct {
 	pending map[string]chan rpcEnvelope
 	mu      sync.Mutex
 
-	stderr              bytes.Buffer
+	stderr              lockedBuffer
 	notificationHandler func(method string, params json.RawMessage)
+}
+
+// lockedBuffer wraps bytes.Buffer with a mutex so it is safe for concurrent
+// reads and writes (exec.Cmd writes stderr from a goroutine while
+// failPending reads it from another).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *lockedBuffer) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.Write(p)
+}
+
+func (lb *lockedBuffer) String() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.String()
 }
 
 func Hover(ctx context.Context, workspace, path string, pos Position) (string, error) {
