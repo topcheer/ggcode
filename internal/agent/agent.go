@@ -882,6 +882,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				runStats.recordToolError(tc.Name, result.Content)
 			}
 
+			// Error-streak detection: if consecutive tool calls are failing,
+			// inject strategic guidance to break the cycle.
+			if errorGuidance := a.errorStreakCheck(result.IsError, tc.Name); errorGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + errorGuidance
+				} else {
+					result.Content = errorGuidance
+				}
+			}
+
 			// Collect follow-up messages from tools (e.g., inline skills).
 			if len(result.FollowUpMessages) > 0 {
 				followUpMessages = append(followUpMessages, result.FollowUpMessages...)
