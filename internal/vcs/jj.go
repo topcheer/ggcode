@@ -24,7 +24,7 @@ func (Jujutsu) Status(ctx context.Context, dir string) (string, error) {
 func (Jujutsu) Diff(ctx context.Context, dir string, cached bool, file string) (string, error) {
 	args := []string{"diff"}
 	if file != "" {
-		args = append(args, file)
+		args = append(args, "--", file)
 	}
 	return runVCSCmd(ctx, dir, "jj", args...)
 }

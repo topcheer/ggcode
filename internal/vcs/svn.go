@@ -20,7 +20,7 @@ func (Subversion) Diff(ctx context.Context, dir string, cached bool, file string
 	// svn has no staging area; cached is ignored.
 	args := []string{"diff"}
 	if file != "" {
-		args = append(args, file)
+		args = append(args, "--", file)
 	}
 	return runVCSCmd(ctx, dir, "svn", args...)
 }

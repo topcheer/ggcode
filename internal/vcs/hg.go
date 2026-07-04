@@ -20,7 +20,7 @@ func (Mercurial) Diff(ctx context.Context, dir string, cached bool, file string)
 	// hg doesn't have a staging area like git's index; cached is ignored.
 	args := []string{"diff"}
 	if file != "" {
-		args = append(args, file)
+		args = append(args, "--", file)
 	}
 	return runVCSCmd(ctx, dir, "hg", args...)
 }
