@@ -7,6 +7,10 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// maxEndpointMetricsPerKey caps the number of metric events stored per endpoint
+// to prevent unbounded memory growth in long-running sessions.
+const maxEndpointMetricsPerKey = 200
+
 func EndpointStatsKey(vendor, endpoint string) string {
 	vendor = strings.TrimSpace(vendor)
 	endpoint = strings.TrimSpace(endpoint)
@@ -81,6 +85,12 @@ func (s *Session) AppendMetricForEndpoint(vendor, endpoint string, ev metrics.Me
 	defer s.endpointStatsMu.Unlock()
 	s.ensureEndpointStatsLocked()
 	s.EndpointMetrics[key] = append(s.EndpointMetrics[key], ev)
+	// Cap to prevent unbounded growth in long-running sessions.
+	// Keep the most recent entries by dropping from the front.
+	if len(s.EndpointMetrics[key]) > maxEndpointMetricsPerKey {
+		excess := len(s.EndpointMetrics[key]) - maxEndpointMetricsPerKey
+		s.EndpointMetrics[key] = s.EndpointMetrics[key][excess:]
+	}
 }
 
 func (s *Session) UsageForEndpoint(vendor, endpoint string) provider.TokenUsage {
