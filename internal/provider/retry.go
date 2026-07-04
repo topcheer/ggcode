@@ -188,13 +188,8 @@ func isRetryableHTTPStatus(status int) bool {
 	}
 }
 
-// retryWithBackoff retries fn up to maxAttempts times with exponential backoff.
+// retryWithBackoffCtx retries fn up to maxAttempts times with exponential backoff.
 // Only retries retryable errors (429 or 5xx), and honors Retry-After where available.
-func retryWithBackoff(fn func() error, maxAttempts int) error {
-	return retryWithBackoffCtx(context.Background(), fn, maxAttempts)
-}
-
-// retryWithBackoffCtx is like retryWithBackoff but respects context cancellation.
 func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) error {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
