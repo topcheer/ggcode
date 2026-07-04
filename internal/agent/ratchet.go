@@ -127,7 +127,9 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 	}
 
 	if changed {
-		_ = rs.save()
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save rules after match: %v", err)
+		}
 	}
 	return matched, unmatched
 }
@@ -149,7 +151,9 @@ func (rs *RuleStore) AddRule(r Rule) {
 
 	rs.rules = append(rs.rules, r)
 	rs.evict()
-	_ = rs.save()
+	if err := rs.save(); err != nil {
+		debug.Log("ratchet", "failed to save rules after adding rule %s: %v", r.ID, err)
+	}
 	debug.Log("ratchet", "added rule %s: %s (match=%s, tool=%s)", r.ID, r.Rule, r.MatchPattern, r.ToolPattern)
 }
 
