@@ -1,5 +1,7 @@
 package cost
 
+import "sync"
+
 // SessionCost tracks cumulative token usage and estimated cost for a session.
 type SessionCost struct {
 	Provider         string  `json:"provider"`
@@ -13,6 +15,7 @@ type SessionCost struct {
 
 // Tracker accumulates token usage and computes cost.
 type Tracker struct {
+	mu      sync.Mutex
 	cost    SessionCost
 	pricing PricingTable
 }
@@ -27,6 +30,8 @@ func NewTracker(provider, model string, pricing PricingTable) *Tracker {
 
 // Record adds a usage update from an API call.
 func (t *Tracker) Record(usage TokenUsage) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.cost.InputTokens += int64(usage.InputTokens)
 	t.cost.OutputTokens += int64(usage.OutputTokens)
 	t.cost.CacheReadTokens += int64(usage.CacheRead)
@@ -36,6 +41,8 @@ func (t *Tracker) Record(usage TokenUsage) {
 
 // SessionCost returns a snapshot of the current cost.
 func (t *Tracker) SessionCost() SessionCost {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.cost
 }
 
