@@ -2,7 +2,10 @@ package im
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 func TestMuteUnmuteBinding(t *testing.T) {
@@ -1104,5 +1107,54 @@ func TestMuteAllExceptNonexistent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 muted, got %d", count)
+	}
+}
+
+// TestStartNamedAdapterRejectsMuted verifies that StartNamedAdapter refuses
+// to start a connection for a muted adapter. This is the core guard that
+// prevents muted adapters from establishing connections.
+func TestStartNamedAdapterRejectsMuted(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, err := mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-muted",
+		ChannelID: "ch-1",
+	})
+	if err != nil {
+		t.Fatalf("BindChannel failed: %v", err)
+	}
+
+	// Mute the binding
+	if err := mgr.MuteBinding("qq-muted"); err != nil {
+		t.Fatalf("MuteBinding failed: %v", err)
+	}
+
+	// StartNamedAdapter must refuse to start a muted adapter
+	cfg := config.IMConfig{
+		Adapters: map[string]config.IMAdapterConfig{
+			"qq-muted": {Enabled: true, Platform: string(PlatformQQ)},
+		},
+	}
+	err = StartNamedAdapter(context.Background(), cfg, "qq-muted", mgr)
+	if err == nil {
+		t.Fatal("expected error when starting muted adapter, got nil")
+	}
+	if !strings.Contains(err.Error(), "muted") {
+		t.Fatalf("expected error to mention 'muted', got: %v", err)
+	}
+}
+
+// TestStartNamedAdapterNilManager verifies the nil manager guard.
+func TestStartNamedAdapterNilManager(t *testing.T) {
+	cfg := config.IMConfig{}
+	err := StartNamedAdapter(context.Background(), cfg, "test", nil)
+	if err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected nil manager error, got: %v", err)
 	}
 }
