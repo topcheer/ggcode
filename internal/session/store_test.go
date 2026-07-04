@@ -1095,3 +1095,91 @@ func TestLastTurnIndex(t *testing.T) {
 		t.Fatalf("expected nil session turn index 0, got %d", got)
 	}
 }
+
+func TestAppendMessagesBatchToDisk(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	store.Save(ses)
+
+	// Append 5 messages in a batch.
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg1"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "reply1"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg2"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "reply2"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg3"}}},
+	}
+	if err := store.AppendMessagesBatchToDisk(ses, msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reload and verify all 5 messages persisted in order.
+	reloaded, _ := store.Load(ses.ID)
+	if len(reloaded.Messages) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(reloaded.Messages))
+	}
+	for i, want := range []string{"msg1", "reply1", "msg2", "reply2", "msg3"} {
+		got := reloaded.Messages[i].Content[0].Text
+		if got != want {
+			t.Errorf("message %d: expected %q, got %q", i, want, got)
+		}
+	}
+}
+
+func TestAppendMessagesBatchToDiskEmpty(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	store.Save(ses)
+
+	// Empty batch should be a no-op.
+	if err := store.AppendMessagesBatchToDisk(ses, nil); err != nil {
+		t.Fatalf("expected nil error for empty batch, got %v", err)
+	}
+
+	reloaded, _ := store.Load(ses.ID)
+	if reloaded != nil && len(reloaded.Messages) != 0 {
+		t.Fatalf("expected 0 messages after empty batch, got %d", len(reloaded.Messages))
+	}
+}
+
+func TestAppendMessagesBatchToDiskMixedWithSingle(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	store.Save(ses)
+
+	// Single append first.
+	store.AppendMessageToDisk(ses, provider.Message{
+		Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "single"}},
+	})
+
+	// Then batch append.
+	store.AppendMessagesBatchToDisk(ses, []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "batch1"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "batch2"}}},
+	})
+
+	// Then single again.
+	store.AppendMessageToDisk(ses, provider.Message{
+		Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "single2"}},
+	})
+
+	reloaded, _ := store.Load(ses.ID)
+	if len(reloaded.Messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(reloaded.Messages))
+	}
+	want := []string{"single", "batch1", "batch2", "single2"}
+	for i, w := range want {
+		if reloaded.Messages[i].Content[0].Text != w {
+			t.Errorf("message %d: expected %q, got %q", i, w, reloaded.Messages[i].Content[0].Text)
+		}
+	}
+}

@@ -1164,6 +1164,31 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	return s.updateIndex(ses)
 }
 
+// AppendMessagesBatchToDisk persists multiple messages to the session's JSONL
+// file in a single file write, then updates the index once. This is much more
+// efficient than calling AppendMessageToDisk in a loop, which does N separate
+// file opens and N index read-writes.
+//
+// Like AppendMessageToDisk, this does NOT modify the Session object.
+func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.sessionPath(ses.ID)
+
+	recs := make([]jsonlRecord, len(msgs))
+	for i, msg := range msgs {
+		recs[i] = jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+	}
+	if err := appendRecordLines(path, recs); err != nil {
+		return err
+	}
+
+	return s.updateIndex(ses)
+}
+
 // AppendTunnelEventToDisk persists a canonical tunnel event to the session's
 // JSONL file. Does NOT call updateIndex — tunnel events don't change session
 // metadata (title, model, workspace) that appears in the session index.
@@ -1418,11 +1443,20 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, compactedMessages []pr
 // os.File.Write call. Combined with the store mutex, this guarantees no JSONL
 // line interleaving even for records larger than PIPE_BUF.
 func appendRecordLine(path string, rec jsonlRecord) error {
+	return appendRecordLines(path, []jsonlRecord{rec})
+}
+
+// appendRecordLines encodes multiple records and writes them all in a single
+// file open+write. This is significantly faster than calling appendRecordLine
+// in a loop because it avoids repeated open/close syscalls.
+func appendRecordLines(path string, recs []jsonlRecord) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(rec); err != nil {
-		return err
+	for _, rec := range recs {
+		if err := enc.Encode(rec); err != nil {
+			return err
+		}
 	}
 	// O_APPEND guarantees atomic appends at the OS level on POSIX systems.
 	// We intentionally skip f.Sync() (fsync) here for performance:
@@ -1430,8 +1464,6 @@ func appendRecordLine(path string, rec jsonlRecord) error {
 	//   - The data reaches disk via the OS buffer cache within seconds.
 	//   - The only risk is power loss losing the last few buffered appends,
 	//     which is acceptable for session event logs.
-	// Previously every tunnel_event (222K+ per session) did an fsync, causing
-	// significant latency on the agent streaming path.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err

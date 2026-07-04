@@ -68,12 +68,12 @@ func (m *Model) persistFullSessionMessages() {
 		return
 	}
 
-	// Append only the new messages to disk (incremental, no full rewrite).
+	// Append only the new messages to disk (batch write for performance).
+	// Using AppendMessagesBatchToDisk instead of a loop of AppendMessageToDisk
+	// reduces N file opens to 1 and N index read-writes to 1.
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		for _, msg := range newMsgs {
-			if err := jsonlStore.AppendMessageToDisk(ses, msg); err != nil {
-				debug.Log("tui", "persistFullSessionMessages: AppendMessageToDisk failed: %v", err)
-			}
+		if err := jsonlStore.AppendMessagesBatchToDisk(ses, newMsgs); err != nil {
+			debug.Log("tui", "persistFullSessionMessages: AppendMessagesBatchToDisk failed: %v", err)
 		}
 	} else {
 		// Fallback for non-JSONL stores: full save.
