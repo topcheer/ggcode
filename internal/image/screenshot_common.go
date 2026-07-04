@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 // ScreenshotAction specifies what the screenshot tool should do.
@@ -101,7 +103,7 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 
 		target := decoded
 		if img.Width > maxW {
-			target = resizeNearestNeighbor(decoded, maxW)
+			target = resizeImage(decoded, maxW)
 			img.Width = target.Bounds().Dx()
 			img.Height = target.Bounds().Dy()
 		}
@@ -140,9 +142,10 @@ func decodeImageData(data []byte) (image.Image, error) {
 	return img, err
 }
 
-// resizeNearestNeighbor resizes src so its width does not exceed maxW,
-// maintaining aspect ratio using nearest-neighbor sampling.
-func resizeNearestNeighbor(src image.Image, maxW int) image.Image {
+// resizeImage resizes src so its width does not exceed maxW,
+// maintaining aspect ratio using CatmullRom interpolation for high quality.
+// This produces significantly sharper text and UI elements than nearest-neighbor.
+func resizeImage(src image.Image, maxW int) image.Image {
 	bounds := src.Bounds()
 	oldW := bounds.Dx()
 	oldH := bounds.Dy()
@@ -152,13 +155,7 @@ func resizeNearestNeighbor(src image.Image, maxW int) image.Image {
 	newW := maxW
 	newH := oldH * newW / oldW
 	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
-	for y := 0; y < newH; y++ {
-		sy := y * oldH / newH
-		for x := 0; x < newW; x++ {
-			sx := x * oldW / newW
-			dst.Set(x, y, src.At(bounds.Min.X+sx, bounds.Min.Y+sy))
-		}
-	}
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, bounds, xdraw.Over, nil)
 	return dst
 }
 
