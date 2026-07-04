@@ -12,6 +12,9 @@ const (
 	providerDialTimeout           = 30 * time.Second
 	providerTLSHandshakeTimeout   = 10 * time.Second
 	providerResponseHeaderTimeout = 120 * time.Second
+	providerIdleConnTimeout       = 90 * time.Second
+	providerMaxIdleConns          = 20
+	providerMaxIdleConnsPerHost   = 5
 )
 
 func newProviderHTTPTransport() *http.Transport {
@@ -22,6 +25,9 @@ func newProviderHTTPTransport() *http.Transport {
 		}).DialContext,
 		TLSHandshakeTimeout:   providerTLSHandshakeTimeout,
 		ResponseHeaderTimeout: providerResponseHeaderTimeout,
+		IdleConnTimeout:       providerIdleConnTimeout,
+		MaxIdleConns:          providerMaxIdleConns,
+		MaxIdleConnsPerHost:   providerMaxIdleConnsPerHost,
 		Proxy:                 http.ProxyFromEnvironment,
 	}
 	return util.WrapTransport(base)
