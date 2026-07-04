@@ -62,16 +62,17 @@ type Agent struct {
 	precompact                   *precompactState
 	precompactCooldownUntil      time.Time // earliest next precompact; guarded by mu
 	shutdownCtx                  context.Context
-	shutdownCancel               context.CancelFunc // cancels on Close()
-	probeKey                     string             // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal                string             // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked           bool               // true after the goal-collection instruction has been injected
-	autopilotGoalSet             bool               // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotGoalCheckedThisTurn bool               // prevents infinite goal-check loops within a single idle turn
-	reflectionFunc               ReflectionFunc     // called after each run with accumulated stats
-	loopDetector                 loopDetector       // tracks consecutive identical tool calls to detect stuck loops
-	systemPromptInjector         func() string      // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt             string             // the fully built static system prompt; used as reset base for dynamic injection
+	shutdownCancel               context.CancelFunc  // cancels on Close()
+	probeKey                     string              // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal                string              // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked           bool                // true after the goal-collection instruction has been injected
+	autopilotGoalSet             bool                // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotGoalCheckedThisTurn bool                // prevents infinite goal-check loops within a single idle turn
+	reflectionFunc               ReflectionFunc      // called after each run with accumulated stats
+	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
+	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
+	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
 	mu                           sync.RWMutex
 }
 
@@ -557,6 +558,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	// Reset loop detector for each new user turn.
 	a.resetLoopDetector()
+	a.resetPostEditVerify()
 
 	defer func() {
 		runStats.finalize(err)
@@ -889,6 +891,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + errorGuidance
 				} else {
 					result.Content = errorGuidance
+				}
+			}
+
+			// Post-edit verification hint: after successful source-code edits,
+			// periodically suggest running the build command to verify changes.
+			if !result.IsError {
+				if verifyHint := a.postEditVerifyHint(tc.Name, tc.Arguments); verifyHint != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + verifyHint
+					} else {
+						result.Content = verifyHint
+					}
 				}
 			}
 
