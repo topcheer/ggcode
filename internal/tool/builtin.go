@@ -90,6 +90,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// IM (manager injected post-registration via SetManager)
 		IMTool{},
+
+		// Screenshot
+		ScreenshotTool{},
 	)
 	for _, tool := range tools {
 		if err := registry.Register(tool); err != nil {

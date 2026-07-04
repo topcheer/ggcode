@@ -260,6 +260,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
 **LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants (with role, team, workspace, languages), send messages (DM, `to='*'` broadcast, `send_team` team-targeted), read history, manage @agent approvals
 **IM** (1, in `builtin.go`): `im` — status (list adapters), mute/unmute (drop/reconnect adapter), disable/enable, send (with `auto_start` for muted/disabled adapters). Always allowed in all permission modes. Manager injected post-registration via `im.NewToolManagerAdapter()`.
+**Screenshot** (1, in `builtin.go`): `screenshot` — capture full screen, specific display, window (by title/app name), or screen region. Supports cursor inclusion, delay, PNG/JPEG format, auto-resize. Actions: `capture` (default), `list_displays`, `list_windows`. Platform implementations in `internal/image/screenshot_{platform}.go`.
 **Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
 
 ### Slash Commands
