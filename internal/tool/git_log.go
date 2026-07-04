@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitLog implements the git_log tool.
@@ -53,8 +55,23 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		args.Count = 10
 	}
 
+	dir := resolveDir(args.Path, t.WorkingDir)
+
+	// Non-git VCS path.
+	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
+		out, err := v.Log(ctx, dir, args.Count)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("%s log failed: %v", v.Name(), err)}, nil
+		}
+		trimmed := strings.TrimSpace(out)
+		if trimmed == "" {
+			return Result{Content: "No commits found."}, nil
+		}
+		return Result{Content: trimmed}, nil
+	}
+
 	cmd := gitCommand(ctx, "log", "--oneline", "-"+strconv.Itoa(args.Count))
-	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

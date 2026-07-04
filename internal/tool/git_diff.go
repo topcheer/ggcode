@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitDiff implements the git_diff tool.
@@ -53,6 +55,21 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	dir := resolveDir(args.Path, t.WorkingDir)
+
+	// Non-git VCS path.
+	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
+		out, err := v.Diff(ctx, dir, args.Cached, args.File)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("%s diff failed: %v", v.Name(), err)}, nil
+		}
+		trimmed := strings.TrimSpace(out)
+		if trimmed == "" {
+			return Result{Content: "No differences found."}, nil
+		}
+		return Result{Content: trimmed}, nil
+	}
+
 	gitArgs := []string{"diff"}
 	if args.Cached {
 		gitArgs = append(gitArgs, "--cached")
@@ -62,7 +79,7 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

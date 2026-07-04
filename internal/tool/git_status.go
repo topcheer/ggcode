@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitStatus implements the git_status tool.
@@ -43,8 +45,23 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	dir := resolveDir(args.Path, t.WorkingDir)
+
+	// Fast path: if git repo, use the existing optimized command.
+	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
+		out, err := v.Status(ctx, dir)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("%s status failed: %v", v.Name(), err)}, nil
+		}
+		trimmed := strings.TrimSpace(out)
+		if trimmed == "" {
+			return Result{Content: "Working tree clean. No changes."}, nil
+		}
+		return Result{Content: trimmed}, nil
+	}
+
 	cmd := gitCommand(ctx, "status", "--porcelain")
-	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitCommit implements the git_commit tool.
@@ -61,13 +63,28 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// Append Co-Authored-By trailer
 	fullMessage := args.Message + "\n\n" + coAuthorTrailer
 
+	dir := resolveDir(args.Path, t.WorkingDir)
+
+	// Non-git VCS path.
+	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
+		out, err := v.Commit(ctx, dir, fullMessage)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("%s commit failed: %v", v.Name(), err)}, nil
+		}
+		trimmed := strings.TrimSpace(out)
+		if trimmed == "" {
+			return Result{Content: "Committed successfully."}, nil
+		}
+		return Result{Content: trimmed}, nil
+	}
+
 	gitArgs := []string{"commit", "-m", fullMessage}
 	if args.All {
 		gitArgs = []string{"commit", "-a", "-m", fullMessage}
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

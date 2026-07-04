@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/vcs"
 )
 
 // GitAdd implements the git_add tool.
@@ -58,11 +60,26 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		return Result{IsError: true, Content: "files is required"}, nil
 	}
 
+	dir := resolveDir(args.Path, t.WorkingDir)
+
+	// Non-git VCS path.
+	if v := vcs.Detect(dir); v != nil && v.Name() != "git" {
+		out, err := v.Add(ctx, dir, args.Files)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("%s add failed: %v", v.Name(), err)}, nil
+		}
+		trimmed := strings.TrimSpace(out)
+		if trimmed == "" {
+			return Result{Content: fmt.Sprintf("Staged %d file(s).", len(args.Files))}, nil
+		}
+		return Result{Content: trimmed}, nil
+	}
+
 	gitArgs := []string{"add", "--"}
 	gitArgs = append(gitArgs, args.Files...)
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
+	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

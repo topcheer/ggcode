@@ -40,6 +40,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
 	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/vcs"
 	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
 )
@@ -1329,10 +1330,11 @@ func init() {
 
 // detectGitStatus returns a short git status string or "".
 func detectGitStatus(workingDir string) string {
-	if _, err := os.Stat(workingDir + "/.git"); err != nil {
-		return "not a git repository"
+	v := vcs.Detect(workingDir)
+	if v == nil {
+		return "not a version-controlled repository"
 	}
-	return "in a git repository"
+	return "in a " + v.DisplayName() + " repository"
 }
 
 func loadStartupAssets(
