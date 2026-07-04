@@ -94,6 +94,14 @@ func localizedToolLabel(lang Language, action string) string {
 			return "等待"
 		case "cron_create":
 			return "创建定时"
+		case "cron_update":
+			return "更新定时"
+		case "cron_pause":
+			return "暂停定时"
+		case "cron_resume":
+			return "恢复定时"
+		case "cron_get":
+			return "查看定时"
 		case "config":
 			return "配置"
 		case "enter_worktree":
@@ -217,6 +225,14 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Sleep"
 		case "cron_create":
 			return "Create Cron"
+		case "cron_update":
+			return "Update Cron"
+		case "cron_pause":
+			return "Pause Cron"
+		case "cron_resume":
+			return "Resume Cron"
+		case "cron_get":
+			return "Inspect Cron"
 		case "config":
 			return "Config"
 		case "enter_worktree":
@@ -347,6 +363,14 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "等待中..."
 			case "cron_create":
 				return "创建定时任务..."
+			case "cron_update":
+				return "更新定时任务..."
+			case "cron_pause":
+				return "暂停定时任务..."
+			case "cron_resume":
+				return "恢复定时任务..."
+			case "cron_get":
+				return "查看定时任务..."
 			case "config":
 				return "更新配置..."
 			case "enter_worktree":
@@ -446,6 +470,14 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Sleeping..."
 			case "cron_create":
 				return "Scheduling..."
+			case "cron_update":
+				return "Updating cron job..."
+			case "cron_pause":
+				return "Pausing cron job..."
+			case "cron_resume":
+				return "Resuming cron job..."
+			case "cron_get":
+				return "Inspecting cron job..."
 			case "config":
 				return "Updating config..."
 			case "enter_worktree":

@@ -155,7 +155,7 @@ func suppressHistoryToolResult(toolName, rawArgs, result string, isError bool) s
 	case "swarm_task_create":
 		return tool.SwarmTaskCreateResultMarkdown(result)
 	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output",
-		"cron_create", "cron_delete", "cron_list", "lanchat", "teammate_spawn":
+		"cron_create", "cron_delete", "cron_list", "cron_update", "cron_pause", "cron_resume", "cron_get", "lanchat", "teammate_spawn":
 		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
 			if present.Payload != "" {
 				return present.Payload

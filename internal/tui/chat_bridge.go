@@ -335,7 +335,7 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 	case "swarm_task_create":
 		return tool.SwarmTaskCreateResultMarkdown(result)
 	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output",
-		"cron_create", "cron_delete", "cron_list":
+		"cron_create", "cron_delete", "cron_list", "cron_update", "cron_pause", "cron_resume", "cron_get":
 		if present, ok := tool.DescribeToolResult(toolName, rawArgs, result, isError); ok {
 			return present.Summary
 		}

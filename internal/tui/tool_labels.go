@@ -241,6 +241,34 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		return toolPresentationFor(lang, "delete", "cron job")
 	case "cron_list":
 		return toolPresentationFor(lang, "inspect", "cron jobs")
+	case "cron_update":
+		jobID := argString(args, "jobId")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "cron_update"),
+			Detail:      jobID,
+			Activity:    localizedToolActivity(lang, "cron_update", jobID),
+		}
+	case "cron_pause":
+		jobID := argString(args, "jobId")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "cron_pause"),
+			Detail:      jobID,
+			Activity:    localizedToolActivity(lang, "cron_pause", jobID),
+		}
+	case "cron_resume":
+		jobID := argString(args, "jobId")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "cron_resume"),
+			Detail:      jobID,
+			Activity:    localizedToolActivity(lang, "cron_resume", jobID),
+		}
+	case "cron_get":
+		jobID := argString(args, "jobId")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "cron_get"),
+			Detail:      jobID,
+			Activity:    localizedToolActivity(lang, "cron_get", jobID),
+		}
 	case "enter_worktree":
 		name := argString(args, "name")
 		return toolPresentation{
