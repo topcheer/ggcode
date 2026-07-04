@@ -96,39 +96,35 @@ func ListDisplays() ([]DisplayInfo, error) {
 }
 
 // ListWindows returns capturable windows on macOS.
+// Uses CGWindowListCopyWindowInfo via Swift to get CGWindowIDs, which are
+// the IDs that screencapture -l expects. AppleScript's "id of window" returns
+// Accessibility API IDs which are in a completely different number space.
 func ListWindows() ([]WindowInfo, error) {
-	script := `
-tell application "System Events"
-  set output to ""
-  repeat with p in (every process whose background only is false)
-    set pname to name of p
-    try
-      repeat with w in windows of p
-        set wname to name of w
-        try
-          set wid to id of w
-        on error
-          set wid to 0
-        end try
-        try
-          set wpos to position of w
-          set wsize to size of w
-          set wx to item 1 of wpos
-          set wy to item 2 of wpos
-          set ww to item 1 of wsize
-          set wh to item 2 of wsize
-          set output to output & pname & "\t" & wname & "\t" & wid & "\t" & wx & "\t" & wy & "\t" & ww & "\t" & wh & "\n"
-        end try
-      end repeat
-    end try
-  end repeat
-  return output
-end tell
+	// Swift snippet that uses Core Graphics to list on-screen windows.
+	// Each line: CGWindowID\tOwnerName\tWindowName\tX\tY\tW\tH
+	swiftCode := `
+import Cocoa
+let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
+for w in windows {
+    let wid = (w["kCGWindowNumber"] as? Int) ?? 0
+    let owner = (w["kCGWindowOwnerName"] as? String) ?? ""
+    let title = (w["kCGWindowName"] as? String) ?? ""
+    let layer = (w["kCGWindowLayer"] as? Int) ?? 0
+    if layer != 0 { continue }
+    if owner.isEmpty { continue }
+    guard let bounds = w["kCGWindowBounds"] as? [String: CGFloat] else { continue }
+    let x = Int(bounds["X"] ?? 0)
+    let y = Int(bounds["Y"] ?? 0)
+    let width = Int(bounds["Width"] ?? 0)
+    let height = Int(bounds["Height"] ?? 0)
+    if width < 10 || height < 10 { continue }
+    print("\(wid)\t\(owner)\t\(title)\t\(x)\t\(y)\t\(width)\t\(height)")
+}
 `
-	cmd := exec.Command("osascript", "-e", script)
+	cmd := exec.Command("swift", "-e", swiftCode)
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("listing windows (accessibility permission may be required): %w", err)
+		return nil, fmt.Errorf("listing windows via Core Graphics: %w", err)
 	}
 
 	var windows []WindowInfo
@@ -141,15 +137,15 @@ end tell
 		if len(fields) < 7 {
 			continue
 		}
-		id, _ := strconv.Atoi(fields[2])
+		id, _ := strconv.Atoi(fields[0])
 		x, _ := strconv.Atoi(fields[3])
 		y, _ := strconv.Atoi(fields[4])
 		w, _ := strconv.Atoi(fields[5])
 		h, _ := strconv.Atoi(fields[6])
 		windows = append(windows, WindowInfo{
 			ID:     id,
-			App:    fields[0],
-			Title:  fields[1],
+			App:    fields[1],
+			Title:  fields[2],
 			X:      x,
 			Y:      y,
 			Width:  w,
