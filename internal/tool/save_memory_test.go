@@ -21,6 +21,7 @@ func createTestProjectDir(t *testing.T) string {
 }
 
 func TestSaveMemoryTool_DefaultProjectScope(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -56,6 +57,7 @@ func TestSaveMemoryTool_DefaultProjectScope(t *testing.T) {
 }
 
 func TestSaveMemoryTool_GlobalScope(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -88,6 +90,7 @@ func TestSaveMemoryTool_GlobalScope(t *testing.T) {
 }
 
 func TestSaveMemoryTool_ExplicitProjectScope(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -120,6 +123,7 @@ func TestSaveMemoryTool_ExplicitProjectScope(t *testing.T) {
 }
 
 func TestSaveMemoryTool_InvalidScope(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -144,6 +148,7 @@ func TestSaveMemoryTool_InvalidScope(t *testing.T) {
 }
 
 func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -186,6 +191,7 @@ func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
 }
 
 func TestSaveMemoryTool_NoGitStillWorks(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
@@ -221,6 +227,7 @@ func TestSaveMemoryTool_NoGitStillWorks(t *testing.T) {
 }
 
 func TestSaveMemoryTool_CallsAfterSaveHook(t *testing.T) {
+	withTestHome(t)
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
