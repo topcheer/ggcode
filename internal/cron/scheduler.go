@@ -464,7 +464,13 @@ func (s *Scheduler) scheduleJob(job *Job) {
 	}
 
 	timer := time.AfterFunc(delay, func() {
-		s.enqueue(job.Prompt, job.QueueIfBusy)
+		// Read mutable fields under lock to avoid data race with Update().
+		s.mu.Lock()
+		prompt := job.Prompt
+		queueIfBusy := job.QueueIfBusy
+		s.mu.Unlock()
+
+		s.enqueue(prompt, queueIfBusy)
 
 		s.mu.Lock()
 		if job.Recurring {
@@ -504,7 +510,13 @@ func (s *Scheduler) scheduleJobLocked(job *Job) {
 		delay = 0
 	}
 	s.timers[job.ID] = time.AfterFunc(delay, func() {
-		s.enqueue(job.Prompt, job.QueueIfBusy)
+		// Read mutable fields under lock to avoid data race with Update().
+		s.mu.Lock()
+		prompt := job.Prompt
+		queueIfBusy := job.QueueIfBusy
+		s.mu.Unlock()
+
+		s.enqueue(prompt, queueIfBusy)
 
 		s.mu.Lock()
 		if job.Recurring {
