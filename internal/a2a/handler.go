@@ -245,7 +245,11 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	// Resume execution.
 	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
 
+	// Snapshot must be taken under the lock to avoid racing with
+	// updateStatus in the execute goroutine.
+	h.mu.Lock()
 	snap := task.Snapshot()
+	h.mu.Unlock()
 	return &snap, nil
 }
 
