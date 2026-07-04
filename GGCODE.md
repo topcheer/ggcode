@@ -81,6 +81,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   session/             JSONL-backed session persistence with tunnel event recording
   cron/                Scheduled job management (cron expressions, one-shot reminders)
   checkpoint/          In-memory file checkpointing for undo/revert support
+  vcs/                 Multi-VCS abstraction: auto-detect (git/hg/svn/jj), dispatch SCM operations
   permission/          Permission modes + per-tool policy enforcement + sandbox + dangerous tool classification
   plugin/              External tool plugins (command-based, MCP-based)
   hooks/               Pre/post hooks runner (5 events: agent start/stop, stream start/stop, tool use; command + HTTP types; HMAC-signed JSON payload)
@@ -247,7 +248,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 
 **File operations**: `read_file`, `multi_file_read`, `write_file`, `edit_file`, `multi_edit_file`, `multi_file_edit`, `list_directory`, `search_files`, `glob`
 **Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
-**Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`
+**VCS/Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`. Tools auto-detect the repository type via `internal/vcs/` and dispatch to the correct backend. Supported VCS: **Git** (primary), **Mercurial** (hg), **Subversion** (svn), **Jujutsu** (jj). Detection walks up the directory tree for `.git`/`.hg`/`.svn`/`.jj` metadata dirs. Tool names remain `git_*` for backward compatibility — they work for all VCS types internally.
 **Web** (2): `web_fetch`, `web_search`
 **Search**: `grep` (ripgrep-based, supports regex, glob, file type, context lines)
 **LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
@@ -255,7 +256,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
 **Swarm** (10, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
-**Cron** (3, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`
+**Cron** (7, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`, `cron_update`, `cron_pause`, `cron_resume`, `cron_get`
 **Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
 **LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants (with role, team, workspace, languages), send messages (DM, `to='*'` broadcast, `send_team` team-targeted), read history, manage @agent approvals
 **IM** (1, in `builtin.go`): `im` — status (list adapters), mute/unmute (drop/reconnect adapter), disable/enable, send (with `auto_start` for muted/disabled adapters). Always allowed in all permission modes. Manager injected post-registration via `im.NewToolManagerAdapter()`.
