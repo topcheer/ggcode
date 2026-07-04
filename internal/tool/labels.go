@@ -240,6 +240,14 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Schedules", "list")
 	case "cron_delete":
 		return toolPres("Delete Schedule", displayTarget(argStr(args, "jobId")))
+	case "cron_update":
+		return toolPres("Update Schedule", displayTarget(argStr(args, "jobId")))
+	case "cron_pause":
+		return toolPres("Pause Schedule", displayTarget(argStr(args, "jobId")))
+	case "cron_resume":
+		return toolPres("Resume Schedule", displayTarget(argStr(args, "jobId")))
+	case "cron_get":
+		return toolPres("Schedule Details", displayTarget(argStr(args, "jobId")))
 	case "enter_plan_mode":
 		return toolPres("Planning...", "")
 	case "exit_plan_mode":
@@ -459,7 +467,7 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return pres, true
 	}
 
-	if !isTaskTool(toolName) && toolName != "cron_create" && toolName != "cron_delete" && toolName != "cron_list" {
+	if !isTaskTool(toolName) && toolName != "cron_create" && toolName != "cron_delete" && toolName != "cron_list" && toolName != "cron_update" && toolName != "cron_pause" && toolName != "cron_resume" && toolName != "cron_get" {
 		return ToolResultPresentation{}, false
 	}
 

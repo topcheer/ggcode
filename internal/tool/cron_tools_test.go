@@ -276,3 +276,270 @@ func TestCronCreateToolDescriptionClarifiesPersistence(t *testing.T) {
 		}
 	}
 }
+
+// --- cron_update ---
+
+func TestCronUpdateTool_ChangesPrompt(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"old prompt"}`))
+	var job struct{ ID string }
+	json.Unmarshal([]byte(strings.TrimSpace(createResult.Content)), &job)
+
+	updateTool := CronUpdateTool{Scheduler: s}
+	result, err := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+job.ID+`","prompt":"new prompt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	got, ok := s.Get(job.ID)
+	if !ok {
+		t.Fatal("job should exist after update")
+	}
+	if got.Prompt != "new prompt" {
+		t.Errorf("expected prompt 'new prompt', got %q", got.Prompt)
+	}
+	// Cron should be unchanged
+	if got.CronExpr != "* * * * *" {
+		t.Errorf("cron expression should be unchanged, got %q", got.CronExpr)
+	}
+}
+
+func TestCronUpdateTool_ChangesCronExpr(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+	var job struct{ ID string }
+	json.Unmarshal([]byte(strings.TrimSpace(createResult.Content)), &job)
+
+	updateTool := CronUpdateTool{Scheduler: s}
+	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+job.ID+`","cron":"0 9 * * *"}`))
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	got, _ := s.Get(job.ID)
+	if got.CronExpr != "0 9 * * *" {
+		t.Errorf("expected cron '0 9 * * *', got %q", got.CronExpr)
+	}
+}
+
+func TestCronUpdateTool_NotFound(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	updateTool := CronUpdateTool{Scheduler: s}
+	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"nonexistent","prompt":"test"}`))
+	if !result.IsError {
+		t.Error("expected error for nonexistent job")
+	}
+}
+
+func TestCronUpdateTool_NoFieldsProvided(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+
+	updateTool := CronUpdateTool{Scheduler: s}
+	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if !result.IsError {
+		t.Error("expected error when no update fields provided")
+	}
+}
+
+func TestCronUpdateTool_InvalidCronExpr(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test"}`))
+
+	updateTool := CronUpdateTool{Scheduler: s}
+	result, _ := updateTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1","cron":"invalid expr"}`))
+	if !result.IsError {
+		t.Error("expected error for invalid cron expression")
+	}
+
+	// Original should be unchanged
+	got, _ := s.Get("cron-1")
+	if got.CronExpr != "* * * * *" {
+		t.Errorf("cron expression should be unchanged after failed update, got %q", got.CronExpr)
+	}
+}
+
+func TestCronUpdateTool_NilScheduler(t *testing.T) {
+	tool := CronUpdateTool{}
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1","prompt":"test"}`))
+	if !result.IsError {
+		t.Error("expected error for nil scheduler")
+	}
+}
+
+// --- cron_pause / cron_resume ---
+
+func TestCronPauseResumeTool(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+
+	// Pause
+	pauseTool := CronPauseTool{Scheduler: s}
+	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if result.IsError {
+		t.Fatalf("pause failed: %s", result.Content)
+	}
+
+	got, _ := s.Get("cron-1")
+	if !got.Paused {
+		t.Error("expected Paused=true after pause")
+	}
+
+	// Resume
+	resumeTool := CronResumeTool{Scheduler: s}
+	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if result.IsError {
+		t.Fatalf("resume failed: %s", result.Content)
+	}
+
+	got, _ = s.Get("cron-1")
+	if got.Paused {
+		t.Error("expected Paused=false after resume")
+	}
+}
+
+func TestCronPauseTool_NotFound(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	pauseTool := CronPauseTool{Scheduler: s}
+	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"nonexistent"}`))
+	if !result.IsError {
+		t.Error("expected error for pausing nonexistent job")
+	}
+}
+
+func TestCronResumeTool_NotFound(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	resumeTool := CronResumeTool{Scheduler: s}
+	result, _ := resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"nonexistent"}`))
+	if !result.IsError {
+		t.Error("expected error for resuming nonexistent job")
+	}
+}
+
+func TestCronPauseTool_NilScheduler(t *testing.T) {
+	tool := CronPauseTool{}
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if !result.IsError {
+		t.Error("expected error for nil scheduler")
+	}
+}
+
+func TestCronResumeTool_NilScheduler(t *testing.T) {
+	tool := CronResumeTool{}
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if !result.IsError {
+		t.Error("expected error for nil scheduler")
+	}
+}
+
+func TestCronPauseResume_Idempotent(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+
+	// Double pause should be fine
+	pauseTool := CronPauseTool{Scheduler: s}
+	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	result, _ := pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if result.IsError {
+		t.Error("double pause should not error")
+	}
+
+	// Double resume should be fine
+	resumeTool := CronResumeTool{Scheduler: s}
+	resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	result, _ = resumeTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if result.IsError {
+		t.Error("double resume should not error")
+	}
+}
+
+// --- cron_get ---
+
+func TestCronGetTool_ShowsFullPrompt(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createResult, _ := createTool.Execute(context.Background(), json.RawMessage(`{"cron":"*/5 * * * *","prompt":"short prompt here","recurring":true}`))
+	var job struct{ ID string }
+	json.Unmarshal([]byte(strings.TrimSpace(createResult.Content)), &job)
+
+	getTool := CronGetTool{Scheduler: s}
+	result, _ := getTool.Execute(context.Background(), json.RawMessage(`{"jobId":"`+job.ID+`"}`))
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	// Full prompt must be shown
+	if !strings.Contains(result.Content, "short prompt here") {
+		t.Errorf("result should contain full prompt, got: %s", result.Content)
+	}
+	// Should show state, type, cron expr
+	for _, want := range []string{"State:", "Type:", "Cron expr:", "*/5 * * * *", "Next fire:"} {
+		if !strings.Contains(result.Content, want) {
+			t.Errorf("result should contain %q, got: %s", want, result.Content)
+		}
+	}
+}
+
+func TestCronGetTool_ShowsPausedState(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	createTool := CronCreateTool{Scheduler: s}
+	createTool.Execute(context.Background(), json.RawMessage(`{"cron":"* * * * *","prompt":"test","recurring":true}`))
+
+	pauseTool := CronPauseTool{Scheduler: s}
+	pauseTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+
+	getTool := CronGetTool{Scheduler: s}
+	result, _ := getTool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if !strings.Contains(result.Content, "paused") {
+		t.Errorf("result should show 'paused' state, got: %s", result.Content)
+	}
+}
+
+func TestCronGetTool_NotFound(t *testing.T) {
+	s := cron.NewScheduler(nil, "")
+	defer s.Shutdown()
+
+	getTool := CronGetTool{Scheduler: s}
+	result, _ := getTool.Execute(context.Background(), json.RawMessage(`{"jobId":"nonexistent"}`))
+	if !result.IsError {
+		t.Error("expected error for nonexistent job")
+	}
+}
+
+func TestCronGetTool_NilScheduler(t *testing.T) {
+	tool := CronGetTool{}
+	result, _ := tool.Execute(context.Background(), json.RawMessage(`{"jobId":"cron-1"}`))
+	if !result.IsError {
+		t.Error("expected error for nil scheduler")
+	}
+}

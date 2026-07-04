@@ -21,6 +21,7 @@ type Job struct {
 	QueueIfBusy bool // if true, queue the prompt when agent is busy; if false (default), skip
 	CreatedAt   time.Time
 	NextFire    time.Time
+	Paused      bool // if true, the job is suspended (no timers, no firing)
 }
 
 // Snapshot returns a copy of the job safe for external use.
@@ -35,6 +36,7 @@ type jobJSON struct {
 	Prompt      string `json:"prompt"`
 	Recurring   bool   `json:"recurring"`
 	QueueIfBusy bool   `json:"queue_if_busy"`
+	Paused      bool   `json:"paused,omitempty"`
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -117,6 +119,7 @@ func (s *Scheduler) Load() {
 			QueueIfBusy: jj.QueueIfBusy,
 			CreatedAt:   createdAt,
 			NextFire:    next,
+			Paused:      jj.Paused,
 		}
 		s.jobs[job.ID] = job
 		// Track max ID to avoid collisions with new jobs.
@@ -127,7 +130,9 @@ func (s *Scheduler) Load() {
 		}
 		s.mu.Unlock()
 
-		s.scheduleJob(job)
+		if !job.Paused {
+			s.scheduleJob(job)
+		}
 	}
 
 	loadedCount := 0
@@ -157,6 +162,7 @@ func (s *Scheduler) save() error {
 			Prompt:      j.Prompt,
 			Recurring:   j.Recurring,
 			QueueIfBusy: j.QueueIfBusy,
+			Paused:      j.Paused,
 			CreatedAt:   j.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -286,6 +292,159 @@ func (s *Scheduler) Get(id string) (Job, bool) {
 		return Job{}, false
 	}
 	return j.Snapshot(), true
+}
+
+// Update modifies an existing job's cron expression, prompt, and/or queue_if_busy.
+// Only the provided (non-nil) fields are changed. The job's timer is rescheduled.
+// If the new cron expression is invalid, the original job is left unchanged.
+func (s *Scheduler) Update(id string, cronExpr *string, prompt *string, queueIfBusy *bool) (Job, error) {
+	s.mu.Lock()
+	job, ok := s.jobs[id]
+	if !ok {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("job %q not found", id)
+	}
+
+	// Validate new cron expression before mutating.
+	if cronExpr != nil {
+		if _, err := NextTime(*cronExpr, time.Now()); err != nil {
+			s.mu.Unlock()
+			return Job{}, fmt.Errorf("invalid cron expression %q: %w", *cronExpr, err)
+		}
+	}
+
+	// Snapshot original values for rollback on save failure.
+	origCron := job.CronExpr
+	origPrompt := job.Prompt
+	origQueue := job.QueueIfBusy
+
+	if cronExpr != nil {
+		job.CronExpr = *cronExpr
+	}
+	if prompt != nil {
+		job.Prompt = *prompt
+	}
+	if queueIfBusy != nil {
+		job.QueueIfBusy = *queueIfBusy
+	}
+
+	// Recompute NextFire if cron changed.
+	if cronExpr != nil {
+		next, err := NextTime(job.CronExpr, time.Now())
+		if err != nil {
+			job.CronExpr = origCron
+			s.mu.Unlock()
+			return Job{}, err
+		}
+		job.NextFire = next
+	}
+	newSnapshot := job.Snapshot()
+
+	// Stop and reschedule the timer (unless paused).
+	if timer, ok := s.timers[id]; ok {
+		timer.Stop()
+		delete(s.timers, id)
+	}
+	if !job.Paused {
+		s.scheduleJobLocked(job)
+	}
+	s.mu.Unlock()
+
+	if err := s.save(); err != nil {
+		// Rollback on persistence failure.
+		s.mu.Lock()
+		job.CronExpr = origCron
+		job.Prompt = origPrompt
+		job.QueueIfBusy = origQueue
+		if cronExpr != nil {
+			next, _ := NextTime(origCron, time.Now())
+			job.NextFire = next
+		}
+		if t, ok := s.timers[id]; ok {
+			t.Stop()
+			delete(s.timers, id)
+		}
+		if !job.Paused {
+			s.scheduleJobLocked(job)
+		}
+		s.mu.Unlock()
+		debug.Log("cron", "Update: failed to persist job %s: %v", id, err)
+		return Job{}, err
+	}
+
+	debug.Log("cron", "Update: updated job %s", id)
+	return newSnapshot, nil
+}
+
+// Pause suspends a job's timer without deleting it. The job remains in the
+// scheduler and is persisted (for recurring jobs). Resume with Resume().
+func (s *Scheduler) Pause(id string) error {
+	s.mu.Lock()
+	job, ok := s.jobs[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("job %q not found", id)
+	}
+	if job.Paused {
+		s.mu.Unlock()
+		return nil // already paused, no-op
+	}
+	job.Paused = true
+	if timer, ok := s.timers[id]; ok {
+		timer.Stop()
+		delete(s.timers, id)
+	}
+	s.mu.Unlock()
+
+	if err := s.save(); err != nil {
+		// Rollback
+		s.mu.Lock()
+		job.Paused = false
+		s.scheduleJobLocked(job)
+		s.mu.Unlock()
+		return err
+	}
+	debug.Log("cron", "Pause: paused job %s", id)
+	return nil
+}
+
+// Resume reactivates a paused job by recomputing its NextFire and scheduling a new timer.
+func (s *Scheduler) Resume(id string) error {
+	s.mu.Lock()
+	job, ok := s.jobs[id]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("job %q not found", id)
+	}
+	if !job.Paused {
+		s.mu.Unlock()
+		return nil // already active, no-op
+	}
+	job.Paused = false
+
+	next, err := NextTime(job.CronExpr, time.Now())
+	if err != nil {
+		job.Paused = true // rollback
+		s.mu.Unlock()
+		return fmt.Errorf("invalid cron expression in job %s: %w", id, err)
+	}
+	job.NextFire = next
+	s.scheduleJobLocked(job)
+	s.mu.Unlock()
+
+	if err := s.save(); err != nil {
+		// Rollback
+		s.mu.Lock()
+		job.Paused = true
+		if t, ok := s.timers[id]; ok {
+			t.Stop()
+			delete(s.timers, id)
+		}
+		s.mu.Unlock()
+		return err
+	}
+	debug.Log("cron", "Resume: resumed job %s", id)
+	return nil
 }
 
 // SetEnqueue sets or replaces the enqueue callback. Use this when the

@@ -101,7 +101,7 @@ func IsReadOnlyTool(name string) bool {
 		"git_blame", "git_branch_list", "git_remote", "git_stash_list",
 		"web_fetch", "web_search",
 		"task_list", "task_get", "plan_status",
-		"cron_list", "list_commands", "read_command_output",
+		"cron_list", "cron_get", "list_commands", "read_command_output",
 		"wait_command", "get_config":
 		return true
 	}

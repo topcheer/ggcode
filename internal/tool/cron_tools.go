@@ -190,9 +190,253 @@ func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		if job.QueueIfBusy {
 			queueMode = "queue-if-busy"
 		}
-		fmt.Fprintf(&sb, "- %s [%s, %s] %s next=%s\n",
-			job.ID, kind, queueMode, job.CronExpr,
+		state := ""
+		if job.Paused {
+			state = "paused, "
+		}
+		fmt.Fprintf(&sb, "- %s [%s%s, %s] %s next=%s\n",
+			job.ID, state, kind, queueMode, job.CronExpr,
 			job.NextFire.Format(time.RFC3339))
 	}
+	return Result{Content: sb.String()}, nil
+}
+
+// CronUpdateTool updates an existing scheduled job's cron expression, prompt,
+// and/or queue_if_busy without changing its ID.
+type CronUpdateTool struct {
+	Scheduler *cron.Scheduler
+}
+
+func (t CronUpdateTool) Name() string { return "cron_update" }
+func (t CronUpdateTool) Description() string {
+	return "Update an existing scheduled cron job by ID. Only the fields you provide will be changed; " +
+		"omitted fields keep their current value. The job's timer is automatically rescheduled if the cron expression changes. " +
+		"The job ID remains the same — no need to delete and recreate."
+}
+func (t CronUpdateTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"jobId": {
+				"type": "string",
+				"description": "Job ID to update (e.g. 'cron-3')"
+			},
+			"cron": {
+				"type": "string",
+				"description": "New cron expression (optional, omit to keep current)"
+			},
+			"prompt": {
+				"type": "string",
+				"description": "New prompt text (optional, omit to keep current)"
+			},
+			"queue_if_busy": {
+				"type": "boolean",
+				"description": "New queue-if-busy setting (optional, omit to keep current)"
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			}
+		},
+		"required": [
+			"jobId",
+			"description"
+		]
+	}`)
+}
+func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
+	if t.Scheduler == nil {
+		return Result{IsError: true, Content: "cron_update: scheduler not available"}, nil
+	}
+	var args struct {
+		JobID       string  `json:"jobId"`
+		Cron        *string `json:"cron"`
+		Prompt      *string `json:"prompt"`
+		QueueIfBusy *bool   `json:"queue_if_busy"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if args.JobID == "" {
+		return Result{IsError: true, Content: "jobId is required"}, nil
+	}
+	if args.Cron == nil && args.Prompt == nil && args.QueueIfBusy == nil {
+		return Result{IsError: true, Content: "at least one of cron, prompt, or queue_if_busy must be provided to update"}, nil
+	}
+
+	job, err := t.Scheduler.Update(args.JobID, args.Cron, args.Prompt, args.QueueIfBusy)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	out, _ := json.Marshal(job)
+	return Result{Content: string(out) + "\n"}, nil
+}
+
+// CronPauseTool pauses a scheduled job without deleting it.
+type CronPauseTool struct {
+	Scheduler *cron.Scheduler
+}
+
+func (t CronPauseTool) Name() string { return "cron_pause" }
+func (t CronPauseTool) Description() string {
+	return "Pause a scheduled cron job temporarily. The job's timer is stopped but the job configuration is preserved. " +
+		"Use cron_resume to reactivate it. Pausing is useful when you want to temporarily disable a periodic task without losing the cron expression or prompt."
+}
+func (t CronPauseTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"jobId": {
+				"type": "string",
+				"description": "Job ID to pause"
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			}
+		},
+		"required": [
+			"jobId",
+			"description"
+		]
+	}`)
+}
+func (t CronPauseTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
+	if t.Scheduler == nil {
+		return Result{IsError: true, Content: "cron_pause: scheduler not available"}, nil
+	}
+	var args struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if args.JobID == "" {
+		return Result{IsError: true, Content: "jobId is required"}, nil
+	}
+	if err := t.Scheduler.Pause(args.JobID); err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	return Result{Content: fmt.Sprintf("Job %s paused. Use cron_resume to reactivate.\n", args.JobID)}, nil
+}
+
+// CronResumeTool reactivates a paused scheduled job.
+type CronResumeTool struct {
+	Scheduler *cron.Scheduler
+}
+
+func (t CronResumeTool) Name() string { return "cron_resume" }
+func (t CronResumeTool) Description() string {
+	return "Resume a paused cron job. The job's NextFire time is recomputed from the current time and a new timer is scheduled. " +
+		"If the job is already active, this is a no-op."
+}
+func (t CronResumeTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"jobId": {
+				"type": "string",
+				"description": "Job ID to resume"
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			}
+		},
+		"required": [
+			"jobId",
+			"description"
+		]
+	}`)
+}
+func (t CronResumeTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
+	if t.Scheduler == nil {
+		return Result{IsError: true, Content: "cron_resume: scheduler not available"}, nil
+	}
+	var args struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if args.JobID == "" {
+		return Result{IsError: true, Content: "jobId is required"}, nil
+	}
+	if err := t.Scheduler.Resume(args.JobID); err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	return Result{Content: fmt.Sprintf("Job %s resumed.\n", args.JobID)}, nil
+}
+
+// CronGetTool retrieves full details of a single scheduled job.
+type CronGetTool struct {
+	Scheduler *cron.Scheduler
+}
+
+func (t CronGetTool) Name() string { return "cron_get" }
+func (t CronGetTool) Description() string {
+	return "Get full details of a single scheduled cron job by ID, including the complete prompt text. " +
+		"Use this when cron_list's summary format doesn't show enough detail."
+}
+func (t CronGetTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"jobId": {
+				"type": "string",
+				"description": "Job ID to inspect"
+			},
+			"description": {
+				"type": "string",
+				"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			}
+		},
+		"required": [
+			"jobId",
+			"description"
+		]
+	}`)
+}
+func (t CronGetTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
+	if t.Scheduler == nil {
+		return Result{IsError: true, Content: "cron_get: scheduler not available"}, nil
+	}
+	var args struct {
+		JobID string `json:"jobId"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if args.JobID == "" {
+		return Result{IsError: true, Content: "jobId is required"}, nil
+	}
+
+	job, ok := t.Scheduler.Get(args.JobID)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("job %q not found", args.JobID)}, nil
+	}
+
+	kind := "recurring"
+	if !job.Recurring {
+		kind = "one-shot"
+	}
+	queueMode := "skip-if-busy"
+	if job.QueueIfBusy {
+		queueMode = "queue-if-busy"
+	}
+	state := "active"
+	if job.Paused {
+		state = "paused"
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "ID:          %s\n", job.ID)
+	fmt.Fprintf(&sb, "State:       %s\n", state)
+	fmt.Fprintf(&sb, "Type:        %s\n", kind)
+	fmt.Fprintf(&sb, "Queue mode:  %s\n", queueMode)
+	fmt.Fprintf(&sb, "Cron expr:   %s\n", job.CronExpr)
+	fmt.Fprintf(&sb, "Next fire:   %s\n", job.NextFire.Format(time.RFC3339))
+	fmt.Fprintf(&sb, "Created at:  %s\n", job.CreatedAt.Format(time.RFC3339))
+	fmt.Fprintf(&sb, "Prompt:\n%s\n", job.Prompt)
 	return Result{Content: sb.String()}, nil
 }

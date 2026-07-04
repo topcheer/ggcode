@@ -440,6 +440,10 @@ func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	tools.Register(tool.CronCreateTool{Scheduler: s})
 	tools.Register(tool.CronDeleteTool{Scheduler: s})
 	tools.Register(tool.CronListTool{Scheduler: s})
+	tools.Register(tool.CronUpdateTool{Scheduler: s})
+	tools.Register(tool.CronPauseTool{Scheduler: s})
+	tools.Register(tool.CronResumeTool{Scheduler: s})
+	tools.Register(tool.CronGetTool{Scheduler: s})
 }
 
 // RuntimeStatus returns current runtime state for external monitoring
