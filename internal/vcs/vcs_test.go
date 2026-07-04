@@ -130,6 +130,9 @@ func setupGitRepo(t *testing.T) string {
 		}
 	}
 	run("init")
+	// Set repo-local identity so commits work even without global git config (CI).
+	run("config", "user.name", "Test")
+	run("config", "user.email", "test@test.com")
 	writeFile(t, dir, "README.md", "# test repo\n")
 	run("add", "README.md")
 	run("commit", "-m", "initial commit")
@@ -322,9 +325,13 @@ func setupHgRepo(t *testing.T) string {
 		}
 	}
 	run("init")
+	// Set repo-local identity so commits work without global hg config (CI).
+	// Write hgrc with username.
+	os.MkdirAll(filepath.Join(dir, ".hg"), 0755)
+	os.WriteFile(filepath.Join(dir, ".hg", "hgrc"), []byte("[ui]\nusername = Test <test@test.com>\n"), 0644)
 	writeFile(t, dir, "README.md", "# hg repo\n")
 	run("add", "README.md")
-	run("commit", "-m", "initial commit", "-u", "test")
+	run("commit", "-m", "initial commit")
 	return dir
 }
 
