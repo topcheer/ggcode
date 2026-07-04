@@ -664,7 +664,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
-		a.consumeReadyPreCompact(onEvent)
+		if a.consumeReadyPreCompact(onEvent) {
+			runStats.recordCompaction()
+		}
 		if a.injectPendingInterruptions() {
 			continue
 		}
@@ -674,6 +676,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.ensurePromptSendable()
 		msgs := a.contextManager.Messages()
+		runStats.recordContextUsage(a.contextManager.TokenCount())
+		if runStats.ContextWindow == 0 {
+			runStats.ContextWindow = a.contextManager.ContextWindow()
+		}
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
 			i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
 
@@ -685,6 +691,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
+				runStats.recordCompaction()
 				idleAutopilotContinuations = 0
 				continue
 			}

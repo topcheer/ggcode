@@ -233,6 +233,38 @@ func TestMaybeReflectNilStats(t *testing.T) {
 	a.maybeReflect(nil)
 }
 
+func TestRecordContextUsage(t *testing.T) {
+	s := &RunStats{}
+	s.recordContextUsage(100)
+	s.recordContextUsage(200)
+	s.recordContextUsage(150)
+	if s.ContextPeakTokens != 200 {
+		t.Errorf("expected peak 200, got %d", s.ContextPeakTokens)
+	}
+}
+
+func TestGenerateInsightsContextMetrics(t *testing.T) {
+	stats := RunStats{
+		ToolCalls:         map[string]int{"read_file": 2},
+		ContextPeakTokens: 150000,
+		ContextWindow:     200000,
+		CompactionCount:   2,
+	}
+	out := GenerateInsights(stats)
+	if !contains(out, "Peak tokens:") {
+		t.Errorf("expected peak tokens in output: %s", out)
+	}
+	if !contains(out, "150000") {
+		t.Errorf("expected 150000 in output: %s", out)
+	}
+	if !contains(out, "75%") {
+		t.Errorf("expected 75%% utilization: %s", out)
+	}
+	if !contains(out, "Compaction events: 2") {
+		t.Errorf("expected compaction count: %s", out)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
 }

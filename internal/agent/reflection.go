@@ -40,6 +40,17 @@ type RunStats struct {
 	// UserPrompt is the first 200 chars of the user's input, for context.
 	UserPrompt string
 
+	// ContextPeakTokens is the highest token count observed during the run.
+	// Tracked per-iteration from contextManager.TokenCount().
+	ContextPeakTokens int
+
+	// ContextWindow is the model's context window size for this run.
+	ContextWindow int
+
+	// CompactionCount is the number of compaction events triggered during the run.
+	// Includes both auto-compact and reactive compact.
+	CompactionCount int
+
 	// startTime is used internally to compute Duration.
 	startTime time.Time
 }
@@ -93,6 +104,18 @@ func (s *RunStats) recordToolError(toolName, errMsg string) {
 	}
 	msg := fmt.Sprintf("%s: %s", toolName, errMsg)
 	s.Errors = append(s.Errors, truncatePrompt(msg, 500))
+}
+
+// recordContextUsage tracks peak token usage across iterations.
+func (s *RunStats) recordContextUsage(tokens int) {
+	if tokens > s.ContextPeakTokens {
+		s.ContextPeakTokens = tokens
+	}
+}
+
+// recordCompaction increments the compaction event counter.
+func (s *RunStats) recordCompaction() {
+	s.CompactionCount++
 }
 
 // finalize sets Duration and Success. Iterations is tracked live during the run.
@@ -212,6 +235,24 @@ func GenerateInsights(stats RunStats) string {
 		b.WriteString("Errors encountered:\n")
 		for _, e := range stats.Errors {
 			fmt.Fprintf(&b, "- %s\n", e)
+		}
+		b.WriteString("\n")
+	}
+
+	// Context window usage
+	if stats.ContextPeakTokens > 0 {
+		peakPct := 0.0
+		if stats.ContextWindow > 0 {
+			peakPct = float64(stats.ContextPeakTokens) / float64(stats.ContextWindow) * 100
+		}
+		b.WriteString("Context usage:\n")
+		fmt.Fprintf(&b, "- Peak tokens: %d", stats.ContextPeakTokens)
+		if stats.ContextWindow > 0 {
+			fmt.Fprintf(&b, " / %d (%.0f%%)", stats.ContextWindow, peakPct)
+		}
+		b.WriteString("\n")
+		if stats.CompactionCount > 0 {
+			fmt.Fprintf(&b, "- Compaction events: %d\n", stats.CompactionCount)
 		}
 		b.WriteString("\n")
 	}
