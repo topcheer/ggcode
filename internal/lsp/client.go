@@ -829,10 +829,16 @@ func (c *stdioClient) call(ctx context.Context, method string, params any, out a
 	c.pending[rpcIDKey(idRaw)] = ch
 	c.mu.Unlock()
 	if err := c.write(rpcEnvelope{JSONRPC: "2.0", ID: idRaw, Method: method, Params: rawParams}); err != nil {
+		c.mu.Lock()
+		delete(c.pending, rpcIDKey(idRaw))
+		c.mu.Unlock()
 		return err
 	}
 	select {
 	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, rpcIDKey(idRaw))
+		c.mu.Unlock()
 		return ctx.Err()
 	case msg := <-ch:
 		if msg.Error != nil {
