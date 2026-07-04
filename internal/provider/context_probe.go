@@ -289,6 +289,14 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 		return
 	}
 
+	// Phase 1b: check known model table (instant, no API call)
+	if known := LookupKnownModelContextWindow(model); known > 0 {
+		debug.Log("probe", "known model: %s → context_window=%d — applying synchronously (caching)", model, known)
+		SetProbeCache(key, known)
+		onResult(ProbeResult{Key: key, ContextWindow: known, FromCache: false})
+		return
+	}
+
 	debug.Log("probe", "cache MISS: key=%s — launching background goroutine", key)
 
 	// Phase 2: fire background probe
