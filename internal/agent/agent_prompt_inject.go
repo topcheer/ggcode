@@ -8,25 +8,49 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// maybeInjectDynamicSystemPrompt calls the systemPromptInjector callback
-// (if set) and appends the returned text to the base system prompt.
-// The base prompt is always restored first, so dynamic content never
-// accumulates across runs.
+// maybeInjectDynamicSystemPrompt builds the system prompt from scratch on
+// every run, ensuring dynamic content and ratchet rules never accumulate
+// across runs. The build order is:
+//
+//  1. Base system prompt (always present)
+//  2. Dynamic system prompt from injector callback (if set)
+//  3. Top learned ratchet rules (if any exist for this workspace)
+//
+// This function is called once at the start of each agent Run().
 func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	a.mu.Lock()
-	fn := a.systemPromptInjector
 	base := a.baseSystemPrompt
+	fn := a.systemPromptInjector
 	a.mu.Unlock()
 
-	if fn == nil {
-		return
-	}
-
-	extra := strings.TrimSpace(fn())
-
+	// Always start from base to prevent accumulation across runs.
 	newText := base
-	if extra != "" {
-		newText = base + "\n\n" + extra
+	changed := false
+
+	// Layer 2: dynamic system prompt from external injector.
+	if fn != nil {
+		extra := strings.TrimSpace(fn())
+		if extra != "" {
+			newText = base + "\n\n" + extra
+			changed = true
+		}
+	}
+
+	// Layer 3: proactive ratchet rules.
+	rulesText := ""
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if rs := NewRuleStore(workingDir); rs != nil {
+			rulesText = rs.TopRulesForPrompt(5)
+		}
+	}
+	if rulesText != "" {
+		newText = newText + "\n\n" + rulesText
+		changed = true
+		debug.Log("agent", "Injected learned ratchet rules into system prompt")
+	}
+
+	if !changed {
+		return
 	}
 
 	cm, ok := a.contextManager.(*context.Manager)
@@ -39,47 +63,6 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	})
 }
 
-// maybeInjectRatchetRules appends the top learned ratchet rules (by hit count)
-// to the system prompt. This proactively surfaces lessons from previous runs
-// so the agent knows about known pitfalls from the start, not just when a
-// tool pattern reactively matches.
-//
-// Rules are appended after any dynamic system prompt content. The base
-// prompt is always restored first, so rules never accumulate across runs.
-func (a *Agent) maybeInjectRatchetRules() {
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return
-	}
-	rs := NewRuleStore(workingDir)
-	if rs == nil {
-		return
-	}
-	// Only inject the top 5 rules to keep system prompt concise.
-	rulesText := rs.TopRulesForPrompt(5)
-	if rulesText == "" {
-		return
-	}
-
-	debug.Log("agent", "Injecting %d learned ratchet rules into system prompt")
-
-	// Read the current system message (which may have been modified by
-	// maybeInjectDynamicSystemPrompt) and append ratchet rules.
-	cm, ok := a.contextManager.(*context.Manager)
-	if !ok {
-		return
-	}
-	msgs := cm.Messages()
-	if len(msgs) == 0 || msgs[0].Role != "system" {
-		return
-	}
-	currentText := ""
-	if len(msgs[0].Content) > 0 && msgs[0].Content[0].Type == "text" {
-		currentText = msgs[0].Content[0].Text
-	}
-	newText := currentText + "\n\n" + rulesText
-	cm.UpdateFirstSystemMessage(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: newText}},
-	})
-}
+// maybeInjectRatchetRules is a no-op retained for backward compatibility.
+// Ratchet rule injection is now handled by maybeInjectDynamicSystemPrompt.
+func (a *Agent) maybeInjectRatchetRules() {}
