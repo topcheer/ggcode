@@ -330,8 +330,8 @@ func TestRetryWithBackoffCtxRetriesDeadlineExceededWhenContextActive(t *testing.
 	if attempts != 2 {
 		t.Fatalf("expected 2 attempts, got %d", attempts)
 	}
-	if len(slept) != 1 || slept[0] != time.Second {
-		t.Fatalf("expected one 1s backoff, got %+v", slept)
+	if len(slept) != 1 || slept[0] < 750*time.Millisecond || slept[0] > 1250*time.Millisecond {
+		t.Fatalf("expected one ~1s backoff (with jitter), got %+v", slept)
 	}
 }
 
@@ -574,5 +574,49 @@ func TestAnthropicUsageIncludesCacheTokens(t *testing.T) {
 	}
 	if usage.CacheRead != 8832 || usage.CacheWrite != 128 {
 		t.Fatalf("expected cache usage read/write 8832/128, got %d/%d", usage.CacheRead, usage.CacheWrite)
+	}
+}
+
+func TestRetryDelayJitterRange(t *testing.T) {
+	// Test that jitter keeps delays within ±25% of the base delay.
+	// attempt=2 → base delay = 4s, jitter range = ±0.5s → [3.5s, 4.5s]
+	base := time.Second * 4
+	minExpected := base - base/4 // 3s
+	maxExpected := base + base/4 // 5s
+
+	for i := 0; i < 100; i++ {
+		delay := retryDelay(nil, 2) // nil err → uses exponential backoff path
+		if delay < minExpected || delay > maxExpected {
+			t.Errorf("attempt %d: delay %v outside expected range [%v, %v]", i, delay, minExpected, maxExpected)
+		}
+	}
+
+	// Verify attempt=5+ hits the cap (30s) with jitter → [22.5s, 37.5s]
+	cap := providerRetryBackoffCap
+	minCap := cap - cap/4
+	maxCap := cap + cap/4
+	for i := 0; i < 100; i++ {
+		delay := retryDelay(nil, 10)
+		if delay < minCap || delay > maxCap {
+			t.Errorf("capped attempt %d: delay %v outside expected range [%v, %v]", i, delay, minCap, maxCap)
+		}
+	}
+}
+
+func TestRetryDelayRetryAfterNoJitter(t *testing.T) {
+	// Retry-After header values must not get jitter — respect server instruction exactly.
+	err := &anthropic.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Response: &http.Response{
+			Header: http.Header{
+				"Retry-After": []string{"5"},
+			},
+		},
+	}
+	for i := 0; i < 50; i++ {
+		delay := retryDelay(err, 3)
+		if delay != 5*time.Second {
+			t.Errorf("Retry-After delay should be exactly 5s (no jitter), got %v on iteration %d", delay, i)
+		}
 	}
 }

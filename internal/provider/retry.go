@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -224,7 +225,13 @@ func retryDelay(err error, attempt int) time.Duration {
 	}
 	delay := time.Second * time.Duration(1<<minInt(attempt, 5))
 	if delay > providerRetryBackoffCap {
-		return providerRetryBackoffCap
+		delay = providerRetryBackoffCap
+	}
+	// Add ±25% jitter to prevent thundering herd when multiple clients
+	// retry simultaneously (e.g., shared rate limit across instances).
+	jitterRange := delay / 4
+	if jitterRange > 0 {
+		delay = delay - jitterRange/2 + time.Duration(rand.Int64N(int64(jitterRange)))
 	}
 	return delay
 }
