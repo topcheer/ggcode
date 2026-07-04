@@ -272,12 +272,31 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	// Truncate very large diffs
+	// Truncate very large diffs. When truncating, prepend a --stat summary
+	// so the user can see which files changed even if the full diff is cut off.
 	maxLines := 200
 	lines := strings.Split(result, "\n")
 	if len(lines) > maxLines {
-		result = strings.Join(lines[:maxLines], "\n") +
-			fmt.Sprintf("\n\n... (%d more lines, run /diff <file> to narrow)", len(lines)-maxLines)
+		// Get the stat summary for context
+		statArgs := []string{"diff", "--stat"}
+		// Preserve user-specified flags like --cached
+		for _, p := range parts[1:] {
+			if strings.HasPrefix(p, "--") {
+				statArgs = append(statArgs, p)
+			}
+		}
+		statCmd := exec.Command("git", statArgs...)
+		statCmd.Dir = workingDirFromModel(m)
+		statOutput, statErr := statCmd.CombinedOutput()
+
+		var sb strings.Builder
+		if statErr == nil && strings.TrimSpace(string(statOutput)) != "" {
+			sb.WriteString(strings.TrimSpace(string(statOutput)))
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString(strings.Join(lines[:maxLines], "\n"))
+		sb.WriteString(fmt.Sprintf("\n\n... (%d more lines, run /diff <file> to narrow)", len(lines)-maxLines))
+		result = sb.String()
 	}
 
 	m.chatWriteSystem(nextSystemID(), "```\n"+result+"\n```")
