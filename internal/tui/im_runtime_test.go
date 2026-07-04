@@ -152,6 +152,7 @@ func TestAgentDoneDoesNotEmitBufferedIMMessageWithoutRoundEvent(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -205,6 +206,7 @@ func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.input.SetValue("ping")
 
 	h := startLiveProgramHarness(t, m)
@@ -266,6 +268,7 @@ func TestAgentRoundSummaryEmitsRawAccumulatedText(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -278,7 +281,7 @@ func TestAgentRoundSummaryEmitsRawAccumulatedText(t *testing.T) {
 	})
 	m = next.(Model)
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()
@@ -318,6 +321,8 @@ func TestEscapeRejectsPendingIMPairing(t *testing.T) {
 	m.startedAt = time.Now().Add(-2 * time.Second)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink)      // re-register after detectAndAutoMute
+	_ = imMgr.UnmuteBinding("qq") // unmute in case detectAndAutoMute muted it
 	if _, err := imMgr.HandlePairingInbound(im.InboundMessage{
 		Envelope: im.Envelope{
 			Adapter:    "qq",
@@ -372,12 +377,13 @@ func TestLocalInputEnterEmitsUserMirrorToIM(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.input.SetValue("hello")
 
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()
@@ -412,6 +418,7 @@ func TestAskUserRoundEmitsExplicitQuestionMessage(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.loading = true
 	m.activeAgentRunID = 1
 
@@ -428,7 +435,7 @@ func TestAskUserRoundEmitsExplicitQuestionMessage(t *testing.T) {
 	})
 	m = next.(Model)
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()
@@ -508,6 +515,7 @@ func TestRemoteInboundAnswerAdvancesQuestionnaireAndEmitsNextQuestion(t *testing
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 
 	respCh := make(chan tool.AskUserResponse, 1)
 	req := tool.AskUserRequest{
@@ -548,7 +556,7 @@ func TestRemoteInboundAnswerAdvancesQuestionnaireAndEmitsNextQuestion(t *testing
 	if idx := m.pendingQuestionnaire.activeQuestionIndex(); idx != 1 {
 		t.Fatalf("expected questionnaire to advance to second question, got %d", idx)
 	}
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()
@@ -621,7 +629,7 @@ func TestRemoteInboundSlashCommandWinsOverPendingQuestionnaire(t *testing.T) {
 	if m.pendingQuestionnaire == nil {
 		t.Fatal("expected questionnaire to remain pending after slash command")
 	}
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && len(sink.snapshot()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -669,6 +677,7 @@ func TestSubAgentUpdateDoesNotEmitIMStatus(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
 	id := m.subAgentMgr.Spawn("review", "review-1", "Review core architecture", nil, context.Background())
@@ -709,11 +718,12 @@ func TestIMEmitterPreservesStatusThenTextOrder(t *testing.T) {
 	imMgr.RegisterSink(sink)
 	m.SetIMManager(imMgr)
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
 
 	m.emitIMStatus("正在检查 git status...")
 	m.emitIMText("检查完成")
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()

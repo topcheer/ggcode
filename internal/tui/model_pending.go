@@ -207,6 +207,12 @@ func cloneTunnelMessageData(data *tunnel.MessageData) *tunnel.MessageData {
 }
 
 func (q *pendingQueue) ensureQueue() *agentruntime.PendingQueue[*tunnel.MessageData] {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.ensureQueueLocked()
+}
+
+func (q *pendingQueue) ensureQueueLocked() *agentruntime.PendingQueue[*tunnel.MessageData] {
 	if q.q != nil {
 		return q.q
 	}
@@ -222,7 +228,7 @@ func (q *pendingQueue) ensureQueue() *agentruntime.PendingQueue[*tunnel.MessageD
 // preserving Images on existing items by text-matching. Without this
 // preservation, every call would silently destroy images on previously
 // enqueued pending submissions.
-func (q *pendingQueue) syncItemsFromQueue(queue *agentruntime.PendingQueue[*tunnel.MessageData]) {
+func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue[*tunnel.MessageData]) {
 	snapshot := queue.Snapshot()
 	if len(snapshot) == 0 {
 		q.items = nil
@@ -265,9 +271,11 @@ func (q *pendingQueue) syncItemsFromQueue(queue *agentruntime.PendingQueue[*tunn
 }
 
 func (q *pendingQueue) enqueue(text string) int {
-	queue := q.ensureQueue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
 	count := queue.Enqueue(text, false, nil)
-	q.syncItemsFromQueue(queue)
+	q.syncItemsFromQueueLocked(queue)
 	return count
 }
 
@@ -275,9 +283,11 @@ func (q *pendingQueue) enqueue(text string) int {
 // The agentruntime.PendingQueue doesn't support images, so we store them
 // directly and recover them during consume.
 func (q *pendingQueue) enqueueWithImages(text string, imgs []imageAttachedMsg) int {
-	queue := q.ensureQueue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
 	count := queue.Enqueue(text, false, nil)
-	q.syncItemsFromQueue(queue)
+	q.syncItemsFromQueueLocked(queue)
 	// After sync, the last item in q.items corresponds to our submission.
 	// Store images there.
 	if len(q.items) > 0 {
@@ -287,22 +297,30 @@ func (q *pendingQueue) enqueueWithImages(text string, imgs []imageAttachedMsg) i
 }
 
 func (q *pendingQueue) enqueueHidden(text string, override *tunnel.MessageData) int {
-	queue := q.ensureQueue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
 	count := queue.Enqueue(text, true, cloneTunnelMessageData(override))
-	q.syncItemsFromQueue(queue)
+	q.syncItemsFromQueueLocked(queue)
 	return count
 }
 
 func (q *pendingQueue) count() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	return len(q.items)
 }
 
 func (q *pendingQueue) clear() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	q.items = nil
 	q.q = agentruntime.NewPendingQueue[*tunnel.MessageData]()
 }
 
 func (q *pendingQueue) snapshot() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	if len(q.items) == 0 {
 		return nil
 	}
@@ -319,11 +337,13 @@ func (q *pendingQueue) consume() string {
 }
 
 func (q *pendingQueue) consumeVisiblePrefix() string {
-	queue := q.ensureQueue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
 	})
-	q.syncItemsFromQueue(queue)
+	q.syncItemsFromQueueLocked(queue)
 	if len(items) == 0 {
 		return ""
 	}
@@ -335,14 +355,16 @@ func (q *pendingQueue) consumeVisiblePrefix() string {
 }
 
 func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {
-	queue := q.ensureQueue()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.ensureQueueLocked()
 	item, ok := queue.Consume()
 	if !ok {
-		q.syncItemsFromQueue(queue)
+		q.syncItemsFromQueueLocked(queue)
 		return "", false, nil, nil
 	}
 	if item.Hidden || item.Meta != nil {
-		q.syncItemsFromQueue(queue)
+		q.syncItemsFromQueueLocked(queue)
 		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta), nil
 	}
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
@@ -356,7 +378,7 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	for i := 0; i < consumedCount && i < len(q.items); i++ {
 		allImgs = append(allImgs, q.items[i].Images...)
 	}
-	q.syncItemsFromQueue(queue)
+	q.syncItemsFromQueueLocked(queue)
 	parts := []string{item.Text}
 	for _, pending := range items {
 		parts = append(parts, pending.Text)

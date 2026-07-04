@@ -53,7 +53,9 @@ echo "[verify-ci] running go vet (main module)"
 go vet -tags goolm ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit + Tier 1 integration)"
-go test -tags "goolm,integration" ./cmd/... ./internal/...
+# Limit parallelism to prevent OOM kills on machines with many packages.
+# -p 4 limits the number of test binaries compiled and run in parallel.
+go test -tags "goolm,integration" -p 4 ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop"

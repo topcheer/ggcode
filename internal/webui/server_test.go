@@ -477,6 +477,7 @@ func (m *mockAgent) Messages() []provider.Message {
 
 // mockChatBridge is a test double for ChatBridge.
 type mockChatBridge struct {
+	mu          sync.Mutex
 	messages    []provider.Message
 	lastContent []provider.ContentBlock
 	subs        []func(provider.StreamEvent)
@@ -484,10 +485,14 @@ type mockChatBridge struct {
 }
 
 func (m *mockChatBridge) Messages() []provider.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.messages
 }
 
 func (m *mockChatBridge) SendUserMessage(content []provider.ContentBlock) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.lastContent = content
 	m.messages = append(m.messages, provider.Message{Role: "user", Content: content})
 }

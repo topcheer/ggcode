@@ -333,6 +333,7 @@ type pendingSubmission struct {
 }
 
 type pendingQueue struct {
+	mu    sync.Mutex
 	items []pendingSubmission
 	q     *agentruntime.PendingQueue[*tunnel.MessageData]
 }
