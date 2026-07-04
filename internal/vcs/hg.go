@@ -33,7 +33,7 @@ func (Mercurial) Log(ctx context.Context, dir string, count int) (string, error)
 }
 
 func (Mercurial) Add(ctx context.Context, dir string, files []string) (string, error) {
-	args := []string{"add"}
+	args := []string{"add", "--"}
 	args = append(args, files...)
 	return runVCSCmd(ctx, dir, "hg", args...)
 }
