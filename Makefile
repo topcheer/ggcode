@@ -13,7 +13,9 @@ build-desktop-wails:
 	cd desktop/ggcode-desktop-wails && wails build -tags "$(TAGS)" -clean
 
 test:
-	go test -tags "$(TAGS)" ./...
+	# GOMEMLIMIT + GOGC prevent OOM kills on shared/CI machines with limited RAM.
+	# -p 1 compiles one test binary at a time; -parallel 1 runs one test func at a time.
+	GOMEMLIMIT=1GiB GOGC=50 go test -tags "$(TAGS)" -p 1 -parallel 1 -timeout 600s ./...
 
 lint:
 	go vet -tags "$(TAGS)" ./...
