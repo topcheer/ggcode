@@ -300,9 +300,6 @@ func TestReloadBindingSkipsDisabled(t *testing.T) {
 	if len(mgr.CurrentBindings()) != 1 {
 		t.Fatalf("expected 1 active binding after disable, got %d", len(mgr.CurrentBindings()))
 	}
-	if _, ok := mgr.CurrentBindings()[0], mgr.IsBindingDisabled("qq-bot-1"); !ok {
-		// just check IsBindingDisabled
-	}
 	if !mgr.IsBindingDisabled("qq-bot-1") {
 		t.Fatal("expected qq-bot-1 to be disabled")
 	}

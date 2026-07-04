@@ -911,49 +911,40 @@ func (m *Model) detectAndAutoMute() {
 	if m.imManager == nil {
 		return
 	}
+	// Already registered via Manager? Skip.
+	// reloadBindingLocked preserves muted state across BindSession calls,
+	// so there's no need to re-apply MuteAll here. Re-muting unconditionally
+	// would override user-initiated unmute on non-primary instances.
+	if d := m.imManager.InstanceDetect(); d != nil && d.IsRegistered() {
+		return
+	}
 	session := m.session
 	if session == nil {
 		return
 	}
-
-	// If not yet registered, register now (InitRuntime may have already done this).
-	d := m.imManager.InstanceDetect()
-	if d == nil || !d.IsRegistered() {
-		autoMuteCount := 0
-		for _, binding := range m.imManager.CurrentBindings() {
-			if binding.Muted || strings.TrimSpace(binding.ChannelID) == "" {
-				continue
-			}
-			autoMuteCount++
+	autoMuteCount := 0
+	for _, binding := range m.imManager.CurrentBindings() {
+		if binding.Muted || strings.TrimSpace(binding.ChannelID) == "" {
+			continue
 		}
+		autoMuteCount++
+	}
 
-		detect, others, err := m.imManager.RegisterInstance(session.Workspace)
-		if err != nil {
-			return
-		}
-		m.storeIMInstanceDetect(detect)
+	detect, others, err := m.imManager.RegisterInstance(session.Workspace)
+	if err != nil {
+		return
+	}
+	m.storeIMInstanceDetect(detect)
 
-		if len(others) == 0 {
-			return
-		}
-
-		// RegisterInstance already auto-muted active channels; just surface the result.
-		if autoMuteCount > 0 {
-			primary := others[0] // oldest
-			msg := m.t("panel.im.message.auto_mute", autoMuteCount, primary.PID, primary.StartedAt.Format("15:04"))
-			m.chatWriteSystem(nextSystemID(), msg)
-		}
+	if len(others) == 0 {
 		return
 	}
 
-	// Already registered — but bindIMSession may have wiped muted state via
-	// reloadBindingLocked. Re-apply auto-mute if this is a non-primary instance
-	// with unmuted channels.
-	if !m.imManager.IsPrimary() {
-		count, _ := m.imManager.MuteAll()
-		if count > 0 {
-			debug.Log("tui", "detectAndAutoMute: re-applied auto-mute for %d channel(s) after bindIMSession", count)
-		}
+	// RegisterInstance already auto-muted active channels; just surface the result.
+	if autoMuteCount > 0 {
+		primary := others[0] // oldest
+		msg := m.t("panel.im.message.auto_mute", autoMuteCount, primary.PID, primary.StartedAt.Format("15:04"))
+		m.chatWriteSystem(nextSystemID(), msg)
 	}
 }
 
