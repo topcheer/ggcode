@@ -118,6 +118,48 @@ func (s *RunStats) recordCompaction() {
 	s.CompactionCount++
 }
 
+// totalToolCalls returns the sum of all tool call counts.
+func (s *RunStats) totalToolCalls() int {
+	total := 0
+	for _, n := range s.ToolCalls {
+		total += n
+	}
+	return total
+}
+
+// Summary returns a human-readable one-line summary of the run's activity.
+// Used when the agent hits max iterations or as a run-completion summary.
+func (s *RunStats) Summary() string {
+	parts := []string{}
+	parts = append(parts, fmt.Sprintf("%d iterations", s.Iterations))
+	if tc := s.totalToolCalls(); tc > 0 {
+		part := fmt.Sprintf("%d tool calls", tc)
+		if len(s.Errors) > 0 {
+			part += fmt.Sprintf(" (%d errors)", len(s.Errors))
+		}
+		parts = append(parts, part)
+	}
+	if len(s.FilesEdited) > 0 {
+		parts = append(parts, fmt.Sprintf("%d files edited", len(s.FilesEdited)))
+	}
+	if len(s.CommandsRun) > 0 {
+		parts = append(parts, fmt.Sprintf("%d commands run", len(s.CommandsRun)))
+	}
+	if s.Duration > 0 {
+		parts = append(parts, formatRunDuration(s.Duration))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatRunDuration(d time.Duration) string {
+	if d >= time.Minute {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", m, s)
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
 // finalize sets Duration and Success. Iterations is tracked live during the run.
 func (s *RunStats) finalize(err error) {
 	s.Duration = time.Since(s.startTime)

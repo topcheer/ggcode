@@ -1000,8 +1000,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 
 	if a.maxIter > 0 {
+		// Emit a summary of what was accomplished before the error, so the
+		// user has actionable context instead of a bare "max iterations" message.
+		runStats.finalize(nil) // compute Duration for the summary
+		summary := runStats.Summary()
+		debug.Log("agent", "RunStreamWithContent END: max iterations reached (%s)", summary)
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: fmt.Sprintf("\nReached maximum iterations (%d). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.maxIter, summary),
+		})
 		err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
-		debug.Log("agent", "RunStreamWithContent END: %v", err)
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 		return err
 	}

@@ -277,3 +277,76 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestRunStatsSummary(t *testing.T) {
+	// Empty stats — only iterations shown.
+	s := newRunStats("test")
+	s.Iterations = 5
+	summary := s.Summary()
+	if !contains(summary, "5 iterations") {
+		t.Errorf("expected '5 iterations' in summary: %s", summary)
+	}
+
+	// With tool calls.
+	s.recordToolCall("read_file")
+	s.recordToolCall("edit_file")
+	s.recordToolCall("edit_file")
+	summary = s.Summary()
+	if !contains(summary, "3 tool calls") {
+		t.Errorf("expected '3 tool calls' in summary: %s", summary)
+	}
+
+	// With errors.
+	s.recordToolError("run_command", "exit status 1")
+	summary = s.Summary()
+	if !contains(summary, "1 errors") {
+		t.Errorf("expected '1 errors' in summary: %s", summary)
+	}
+
+	// With files edited.
+	s.recordFileEdit("/foo.go")
+	s.recordFileEdit("/bar.go")
+	summary = s.Summary()
+	if !contains(summary, "2 files edited") {
+		t.Errorf("expected '2 files edited' in summary: %s", summary)
+	}
+
+	// With commands run.
+	s.recordCommand("go build ./...")
+	summary = s.Summary()
+	if !contains(summary, "1 commands run") {
+		t.Errorf("expected '1 commands run' in summary: %s", summary)
+	}
+}
+
+func TestRunStatsSummaryDuration(t *testing.T) {
+	s := newRunStats("test")
+	s.Iterations = 3
+	s.Duration = 2 * time.Minute
+	summary := s.Summary()
+	if !contains(summary, "2m0s") {
+		t.Errorf("expected '2m0s' in summary: %s", summary)
+	}
+
+	s.Duration = 30 * time.Second
+	summary = s.Summary()
+	if !contains(summary, "30.0s") {
+		t.Errorf("expected '30.0s' in summary: %s", summary)
+	}
+}
+
+func TestTotalToolCalls(t *testing.T) {
+	s := &RunStats{ToolCalls: map[string]int{
+		"read_file":   5,
+		"edit_file":   3,
+		"run_command": 2,
+	}}
+	if total := s.totalToolCalls(); total != 10 {
+		t.Errorf("expected 10, got %d", total)
+	}
+
+	s2 := &RunStats{}
+	if total := s2.totalToolCalls(); total != 0 {
+		t.Errorf("expected 0 for empty, got %d", total)
+	}
+}
