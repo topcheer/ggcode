@@ -657,6 +657,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	idleAutopilotContinuations := 0
 	consecutiveEmptyResponses := 0
 	verifyRetries := 0
+	progressCheckInjected := false
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -684,6 +685,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
 			i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
+
+		// Mid-point progress checkpoint: at 60% of max iterations, inject a
+		// one-time progress assessment. This is the lightweight "overseer"
+		// pattern from SICA — giving the agent a chance to course-correct
+		// before running out of iteration budget.
+		// Only fires when maxIter >= 20 to avoid interfering with short runs.
+		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
+			progressCheckInjected = true
+			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf(
+						"Progress checkpoint: you are at iteration %d of %d. "+
+							"Briefly assess: Are you on track to complete the task? "+
+							"If your current approach isn't working efficiently, consider switching to a different strategy. "+
+							"Prioritize completing the core task over perfectionism.",
+						i+1, a.maxIter,
+					),
+				}},
+			})
+			msgs = a.contextManager.Messages() // refresh after adding checkpoint
+		}
 
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
