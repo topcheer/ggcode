@@ -167,6 +167,63 @@ func (rs *RuleStore) Rules() []Rule {
 	return result
 }
 
+// TopRulesForPrompt returns a concise summary of the most frequently-hit
+// rules for proactive injection into the system prompt. Only includes rules
+// that have been hit at least once (HitCount > 0), sorted by hit count
+// descending, limited to maxRules entries.
+//
+// This implements the "rules as first-class citizens" pattern from the
+// self-improving agent literature: learned rules should be visible to the
+// agent from the start of each run, not just reactively when a tool pattern
+// matches.
+func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+
+	if len(rs.rules) == 0 {
+		return ""
+	}
+
+	// Filter to rules with HitCount > 0, then sort by HitCount descending
+	type ruleHit struct {
+		rule string
+		hint string
+		hits int
+	}
+	var active []ruleHit
+	for _, r := range rs.rules {
+		if r.HitCount > 0 {
+			active = append(active, ruleHit{rule: r.Rule, hint: r.FixHint, hits: r.HitCount})
+		}
+	}
+	if len(active) == 0 {
+		return ""
+	}
+
+	// Simple insertion sort by hits descending (small N, no need for sort.Slice)
+	for i := 1; i < len(active); i++ {
+		for j := i; j > 0 && active[j].hits > active[j-1].hits; j-- {
+			active[j], active[j-1] = active[j-1], active[j]
+		}
+	}
+
+	if maxRules > 0 && len(active) > maxRules {
+		active = active[:maxRules]
+	}
+
+	var b strings.Builder
+	b.WriteString("Lessons from previous runs in this workspace:\n")
+	for _, a := range active {
+		b.WriteString(fmt.Sprintf("- %s", a.rule))
+		if a.hint != "" {
+			b.WriteString(fmt.Sprintf(" → %s", a.hint))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // MatchingRulesForTool returns rules whose category matches the tool name
 // and whose ToolPattern (or MatchPattern as fallback) matches the tool
 // arguments. Used for rule injection into tool results.

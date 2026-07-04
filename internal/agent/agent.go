@@ -650,6 +650,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.clearGoalIfNotAutopilot()
 	a.maybeInjectAutopilotGoalCollection()
 	a.maybeInjectDynamicSystemPrompt()
+	a.maybeInjectRatchetRules()
 
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
