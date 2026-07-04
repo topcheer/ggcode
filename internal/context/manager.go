@@ -1185,6 +1185,7 @@ func buildSummaryPayload(msgs []provider.Message) string {
 	const (
 		payloadToolResultMaxLen = 500 // max chars for tool result in summary payload
 		payloadToolResultHead   = 200 // keep first N chars
+		payloadToolInputMaxLen  = 300 // max chars for tool input in summary payload
 	)
 
 	var sb strings.Builder
@@ -1196,7 +1197,12 @@ func buildSummaryPayload(msgs []provider.Message) string {
 				sb.WriteString(block.Text)
 				sb.WriteByte('\n')
 			case "tool_use":
-				sb.WriteString(fmt.Sprintf("Tool call: %s\n", block.ToolName))
+				input := formatToolInputForSummary(block.Input, payloadToolInputMaxLen)
+				if input != "" {
+					sb.WriteString(fmt.Sprintf("Tool call: %s(%s)\n", block.ToolName, input))
+				} else {
+					sb.WriteString(fmt.Sprintf("Tool call: %s\n", block.ToolName))
+				}
 			case "tool_result":
 				output := block.Output
 				if len(output) > payloadToolResultMaxLen {
@@ -1208,6 +1214,62 @@ func buildSummaryPayload(msgs []provider.Message) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// formatToolInputForSummary extracts the most informative fields from a tool
+// call's JSON input and returns a concise human-readable string. This lets the
+// summarization LLM know WHICH file was read, WHAT command was run, etc.
+// Without this, the summarizer only sees "Tool call: read_file" with no path.
+func formatToolInputForSummary(input []byte, maxLen int) string {
+	if len(input) == 0 || maxLen <= 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(input, &m); err != nil {
+		return ""
+	}
+	// Priority fields by importance for summarization
+	priorityKeys := []string{
+		"path", "file_path", "command", "pattern", "query", "url",
+		"directory", "task", "prompt", "message", "revision",
+	}
+	var parts []string
+	for _, key := range priorityKeys {
+		val, ok := m[key]
+		if !ok {
+			continue
+		}
+		s := fmt.Sprintf("%v", val)
+		s = strings.ReplaceAll(s, "\n", " ")
+		if len(s) > 80 {
+			s = s[:77] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", key, s))
+		delete(m, key) // remove so we don't double-report
+	}
+	// Include remaining short scalar fields (e.g., old_text/new_text snippets)
+	for k, v := range m {
+		if len(parts) >= 4 {
+			break // limit total fields
+		}
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		s = strings.ReplaceAll(s, "\n", " ")
+		if len(s) > 60 {
+			s = s[:57] + "..."
+		}
+		if s == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", k, s))
+	}
+	result := strings.Join(parts, ", ")
+	if len(result) > maxLen {
+		result = result[:maxLen-3] + "..."
+	}
+	return result
 }
 
 func truncateGroupsForPTLRetry(msgs []provider.Message) ([]provider.Message, bool) {

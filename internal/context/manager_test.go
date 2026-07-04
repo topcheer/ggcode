@@ -1165,3 +1165,97 @@ func findToolResult(t *testing.T, msgs []provider.Message, toolID string) provid
 	t.Fatalf("tool_result with id %s not found", toolID)
 	return provider.ContentBlock{}
 }
+
+func TestFormatToolInputForSummary(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		maxLen  int
+		wantHas []string // substrings that must be present
+		wantNot []string // substrings that must NOT be present
+	}{
+		{
+			name:    "read_file with path",
+			input:   `{"path":"/internal/context/manager.go"}`,
+			maxLen:  300,
+			wantHas: []string{"path=", "manager.go"},
+		},
+		{
+			name:    "run_command with command",
+			input:   `{"command":"go test -race ./..."}`,
+			maxLen:  300,
+			wantHas: []string{"command=", "go test"},
+		},
+		{
+			name:    "edit_file with old_text and new_text",
+			input:   `{"file_path":"main.go","old_text":"old","new_text":"new"}`,
+			maxLen:  300,
+			wantHas: []string{"file_path=", "main.go"},
+		},
+		{
+			name:    "empty input",
+			input:   `{}`,
+			maxLen:  300,
+			wantHas: nil,
+		},
+		{
+			name:    "long input truncated",
+			input:   `{"path":"` + strings.Repeat("x", 200) + `"}`,
+			maxLen:  50,
+			wantHas: []string{"..."},
+		},
+		{
+			name:    "nil input",
+			input:   ``,
+			maxLen:  300,
+			wantHas: nil,
+		},
+		{
+			name:    "search with pattern and query",
+			input:   `{"pattern":"func.*Summarize","query":"context engineering"}`,
+			maxLen:  300,
+			wantHas: []string{"pattern=", "query="},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatToolInputForSummary([]byte(tt.input), tt.maxLen)
+			for _, s := range tt.wantHas {
+				if !strings.Contains(result, s) {
+					t.Errorf("expected result to contain %q, got: %s", s, result)
+				}
+			}
+			for _, s := range tt.wantNot {
+				if strings.Contains(result, s) {
+					t.Errorf("expected result to NOT contain %q, got: %s", s, result)
+				}
+			}
+			if len(result) > tt.maxLen+10 { // allow small overhead
+				t.Errorf("result length %d exceeds maxLen %d: %s", len(result), tt.maxLen, result)
+			}
+		})
+	}
+}
+
+func TestBuildSummaryPayloadIncludesToolInputs(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Read the file"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock("call-1", "read_file", []byte(`{"path":"internal/agent/agent.go"}`)),
+		}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "call-1", Output: "file contents here"}}},
+	}
+
+	payload := buildSummaryPayload(msgs)
+
+	// The payload must include the tool name AND the input path
+	if !strings.Contains(payload, "read_file") {
+		t.Error("payload missing tool name 'read_file'")
+	}
+	if !strings.Contains(payload, "agent.go") {
+		t.Error("payload missing tool input path 'agent.go'")
+	}
+	if !strings.Contains(payload, "path=") {
+		t.Error("payload missing 'path=' key from tool input")
+	}
+}
