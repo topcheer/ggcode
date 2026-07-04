@@ -210,6 +210,115 @@ func TestManagerIsPrimary_NoDetector(t *testing.T) {
 	}
 }
 
+// TestReloadBindingPreservesMutedState is a regression test for the bug where
+// calling BindSession after RegisterInstance+MuteAll would wipe the auto-mute
+// state. This simulates the real flow: InitRuntime → RegisterInstance (auto-mute)
+// → SetIMManager → bindIMSession → BindSession → reloadBindingLocked.
+func TestReloadBindingPreservesMutedState(t *testing.T) {
+	dir := t.TempDir()
+	instancesDir := filepath.Join(dir, ".ggcode", "instances")
+	os.MkdirAll(instancesDir, 0o755)
+
+	// Simulate a primary instance already running
+	sleepCmd := exec.Command("sleep", "30")
+	if err := sleepCmd.Start(); err != nil {
+		t.Skip("cannot fork sleep process")
+	}
+	defer sleepCmd.Process.Kill()
+	fakePID := sleepCmd.Process.Pid
+
+	olderInfo := InstanceInfo{
+		PID:               fakePID,
+		UUID:              "primary-uuid-abcd",
+		StartedAt:         time.Now().Add(-5 * time.Minute),
+		HasActiveChannels: true,
+	}
+	olderData, _ := json.Marshal(olderInfo)
+	os.WriteFile(filepath.Join(instancesDir, fmt.Sprintf("%d-primary-u.json", fakePID)), olderData, 0o644)
+
+	store := &memBindingStore{
+		bindings: []ChannelBinding{
+			{Workspace: dir, Platform: PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1"},
+			{Workspace: dir, Platform: PlatformTelegram, Adapter: "tg-bot-1", ChannelID: "ch-2"},
+		},
+	}
+	mgr := NewManager()
+	mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{Workspace: dir})
+
+	// RegisterInstance should auto-mute all bindings (non-primary instance)
+	_, others, err := mgr.RegisterInstance(dir)
+	if err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+	if len(others) != 1 {
+		t.Fatalf("expected 1 other, got %d", len(others))
+	}
+
+	// Verify all bindings are muted after RegisterInstance
+	for _, b := range mgr.CurrentBindings() {
+		if !b.Muted {
+			t.Fatalf("expected binding %s to be muted after RegisterInstance", b.Adapter)
+		}
+	}
+
+	// Simulate bindIMSession: call BindSession again (same workspace).
+	// Before the fix, reloadBindingLocked would reset Muted=false for all bindings.
+	mgr.BindSession(SessionBinding{Workspace: dir})
+
+	// After the fix: muted state should be preserved
+	for _, b := range mgr.CurrentBindings() {
+		if !b.Muted {
+			t.Fatalf("REGRESSION: binding %s lost muted state after BindSession reload", b.Adapter)
+		}
+	}
+
+	mgr.UnregisterInstance()
+}
+
+// TestReloadBindingSkipsDisabled tests that reloadBindingLocked does not
+// re-add adapters that were explicitly disabled via ApplyAdapterConfig.
+func TestReloadBindingSkipsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	store := &memBindingStore{
+		bindings: []ChannelBinding{
+			{Workspace: dir, Platform: PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1"},
+			{Workspace: dir, Platform: PlatformTelegram, Adapter: "tg-bot-1", ChannelID: "ch-2"},
+		},
+	}
+	mgr := NewManager()
+	mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{Workspace: dir})
+
+	// Verify both adapters loaded
+	if len(mgr.CurrentBindings()) != 2 {
+		t.Fatalf("expected 2 bindings, got %d", len(mgr.CurrentBindings()))
+	}
+
+	// Disable one adapter
+	mgr.ApplyAdapterConfig(map[string]bool{"qq-bot-1": false})
+	if len(mgr.CurrentBindings()) != 1 {
+		t.Fatalf("expected 1 active binding after disable, got %d", len(mgr.CurrentBindings()))
+	}
+	if _, ok := mgr.CurrentBindings()[0], mgr.IsBindingDisabled("qq-bot-1"); !ok {
+		// just check IsBindingDisabled
+	}
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("expected qq-bot-1 to be disabled")
+	}
+
+	// Reload via BindSession — disabled adapter should NOT come back
+	mgr.BindSession(SessionBinding{Workspace: dir})
+	if len(mgr.CurrentBindings()) != 1 {
+		t.Fatalf("expected 1 active binding after reload (disabled should stay disabled), got %d", len(mgr.CurrentBindings()))
+	}
+	for _, b := range mgr.CurrentBindings() {
+		if b.Adapter == "qq-bot-1" {
+			t.Fatal("REGRESSION: disabled adapter qq-bot-1 came back after reload")
+		}
+	}
+}
+
 // memBindingStore is a minimal in-memory BindingStore for testing.
 type memBindingStore struct {
 	bindings []ChannelBinding

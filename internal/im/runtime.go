@@ -951,6 +951,16 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 }
 
 func (m *Manager) reloadBindingLocked() error {
+	// Preserve runtime-only state (muted) from existing bindings before reload.
+	// Without this, calling BindSession after RegisterInstance+MuteAll would
+	// wipe the auto-mute state, causing all instances to show active IM channels.
+	prevMuted := make(map[string]bool)
+	for name, b := range m.currentBindings {
+		if b.Muted {
+			prevMuted[name] = true
+		}
+	}
+
 	m.currentBindings = make(map[string]*ChannelBinding)
 	if m.bindingStore == nil || m.session == nil {
 		return nil
@@ -962,6 +972,14 @@ func (m *Manager) reloadBindingLocked() error {
 	for i := range bindings {
 		copy := bindings[i]
 		copy.Muted = false // Muted is in-memory only, never restored from store
+		// Preserve muted state from before reload (e.g. auto-mute from RegisterInstance)
+		if prevMuted[copy.Adapter] {
+			copy.Muted = true
+		}
+		// Skip adapters that were explicitly disabled via ApplyAdapterConfig
+		if _, disabled := m.disabledBindings[copy.Adapter]; disabled {
+			continue
+		}
 		m.currentBindings[copy.Adapter] = &copy
 	}
 	return nil
