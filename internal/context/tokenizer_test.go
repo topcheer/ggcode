@@ -1,6 +1,7 @@
 package context
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -105,5 +106,32 @@ func TestEstimateTokensMultipleToolCalls(t *testing.T) {
 	// 3 tool calls × 6 overhead = 18 structural tokens.
 	if got < 18 {
 		t.Errorf("expected at least 18 tokens for 3 tool calls, got %d", got)
+	}
+}
+
+func BenchmarkEstimateTokens_ASCII(b *testing.B) {
+	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 500) // ~22KB
+	b.SetBytes(int64(len(text)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = EstimateTokens(text)
+	}
+}
+
+func BenchmarkEstimateTokens_CJK(b *testing.B) {
+	text := strings.Repeat("敏捷的棕色狐狸跳过了懒狗。", 500) // ~6KB
+	b.SetBytes(int64(len(text)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = EstimateTokens(text)
+	}
+}
+
+func BenchmarkEstimateTokens_Mixed(b *testing.B) {
+	text := strings.Repeat("function 测试() { return 'hello 世界'; }", 200) // ~8KB
+	b.SetBytes(int64(len(text)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = EstimateTokens(text)
 	}
 }
