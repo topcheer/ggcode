@@ -29,7 +29,9 @@ func (Subversion) Log(ctx context.Context, dir string, count int) (string, error
 	if count <= 0 {
 		count = 10
 	}
-	return runVCSCmd(ctx, dir, "svn", "log", "-l", strconv.Itoa(count))
+	// Use -r 1:HEAD with -l to get most recent commits. Plain `svn log`
+	// in a working copy may not show recently committed revisions reliably.
+	return runVCSCmd(ctx, dir, "svn", "log", "-r", "1:HEAD", "-l", strconv.Itoa(count))
 }
 
 func (Subversion) Add(ctx context.Context, dir string, files []string) (string, error) {
@@ -39,7 +41,7 @@ func (Subversion) Add(ctx context.Context, dir string, files []string) (string, 
 }
 
 func (Subversion) Commit(ctx context.Context, dir string, message string) (string, error) {
-	return runVCSCmd(ctx, dir, "svn", "commit", "-m", message)
+	return runVCSCmd(ctx, dir, "svn", "commit", "-m", message, "--non-interactive")
 }
 
 func (Subversion) CurrentBranch(ctx context.Context, dir string) (string, error) {

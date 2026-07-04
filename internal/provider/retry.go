@@ -233,6 +233,10 @@ func retryDelay(err error, attempt int) time.Duration {
 	if jitterRange > 0 {
 		delay = delay - jitterRange/2 + time.Duration(rand.Int64N(int64(jitterRange)))
 	}
+	// Re-clamp after jitter so the effective delay never exceeds the cap.
+	if delay > providerRetryBackoffCap {
+		delay = providerRetryBackoffCap
+	}
 	return delay
 }
 
