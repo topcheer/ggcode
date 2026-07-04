@@ -958,10 +958,29 @@ func (m *Manager) countTokens(msg provider.Message) int {
 
 func estimateTokens(msg provider.Message) int {
 	var text string
+	var hasImage bool
+	var toolCallCount int
 	for _, b := range msg.Content {
 		text += b.Text + b.ToolName + b.Output + string(b.Input)
+		if b.Type == "image" || b.ImageData != "" || len(b.Images) > 0 {
+			hasImage = true
+		}
+		if b.Type == "tool_use" {
+			toolCallCount++
+		}
 	}
-	return EstimateTokens(text)
+	n := EstimateTokens(text)
+	// Each message has ~4 tokens of structural overhead (role, separators).
+	n += 4
+	// Tool calls carry JSON structure overhead beyond their input text:
+	// tool name, id, type field, opening/closing braces, etc.
+	n += toolCallCount * 6
+	// Images are roughly 85-170 tokens for standard thumbnails,
+	// and up to 1100 tokens for large images. Use a conservative average.
+	if hasImage {
+		n += 170
+	}
+	return n
 }
 
 type summaryPlan struct {
