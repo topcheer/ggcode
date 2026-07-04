@@ -35,8 +35,9 @@ func (m *Model) ensureCurrentWorkspaceIMManager(unavailableErr, disabledErr stri
 		adapters[name] = acfg.Enabled
 	}
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
-		Workspace:       m.currentWorkspacePath(),
-		EnabledAdapters: adapters,
+		Workspace:        m.currentWorkspacePath(),
+		EnabledAdapters:  adapters,
+		RegisterInstance: m.currentWorkspacePath() != "",
 	})
 	if err != nil {
 		return fmt.Errorf("initializing IM runtime: %w", err)

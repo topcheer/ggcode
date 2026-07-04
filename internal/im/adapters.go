@@ -60,6 +60,11 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 		if strings.TrimSpace(binding.Adapter) == "" {
 			continue
 		}
+		// Skip muted bindings — muted adapters must never start connections
+		if binding.Muted {
+			debug.Log("im", "StartCurrentBindingAdapter: skipping muted adapter %q", binding.Adapter)
+			continue
+		}
 		// Built-in PC adapter — only start when binding explicitly targets it
 		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
 			startPCAdapter(ctx, cfg, mgr)
@@ -81,6 +86,12 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 func StartNamedAdapter(parent context.Context, cfg config.IMConfig, name string, mgr *Manager) error {
 	if mgr == nil {
 		return fmt.Errorf("IM manager is nil")
+	}
+	// Never start a muted adapter — this is a hard guard to prevent
+	// muted adapters from opening connections regardless of caller.
+	if mgr.IsMuted(name) {
+		debug.Log("im", "StartNamedAdapter: refusing to start muted adapter %q", name)
+		return fmt.Errorf("adapter %q is muted — unmute it first", name)
 	}
 	adapterCfg, ok := cfg.Adapters[name]
 	if !ok {

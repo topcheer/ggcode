@@ -328,8 +328,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
-		Workspace:       workingDir,
-		EnabledAdapters: adapters,
+		Workspace:        workingDir,
+		EnabledAdapters:  adapters,
+		RegisterInstance: workingDir != "",
 	})
 	if err != nil {
 		return fmt.Errorf("initializing IM runtime: %w", err)

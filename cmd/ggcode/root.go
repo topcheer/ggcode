@@ -793,13 +793,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			adapters[name] = acfg.Enabled
 		}
 		runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
-			Workspace:       workingDir,
-			EnabledAdapters: adapters,
+			Workspace:        workingDir,
+			EnabledAdapters:  adapters,
+			RegisterInstance: workingDir != "",
 		})
 		if err != nil {
 			return fmt.Errorf("initializing IM runtime: %w", err)
 		}
 		imMgr = runtimeInit.Manager
+		if imMgr != nil {
+			defer imMgr.UnregisterInstance()
+		}
 		if knightAgent != nil {
 			knightAgent.SetEmitter(im.NewIMEmitter(imMgr, cfg.Language, workingDir))
 		}
