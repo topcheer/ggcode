@@ -971,8 +971,12 @@ func (m *Model) bindIMSession() {
 	if m.imManager == nil {
 		return
 	}
+	// When session is nil (e.g. SetIMManager called before SetSession),
+	// do NOT call UnbindSession — that would destroy currentBindings
+	// including auto-mute state from RegisterInstance. The manager retains
+	// whatever binding InitRuntime set up (CWD-based). When SetSession is
+	// later called, it will BindSession with the correct session workspace.
 	if m.session == nil {
-		m.imManager.UnbindSession()
 		return
 	}
 	m.imManager.BindSession(im.SessionBinding{
