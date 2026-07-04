@@ -591,14 +591,14 @@ func TestRetryDelayJitterRange(t *testing.T) {
 		}
 	}
 
-	// Verify attempt=5+ hits the cap (30s) with jitter → [22.5s, 37.5s]
+	// Verify attempt=5+ hits the cap (30s) with jitter → [22.5s, 30s]
+	// The cap is re-applied after jitter so the delay never exceeds it.
 	cap := providerRetryBackoffCap
 	minCap := cap - cap/4
-	maxCap := cap + cap/4
 	for i := 0; i < 100; i++ {
 		delay := retryDelay(nil, 10)
-		if delay < minCap || delay > maxCap {
-			t.Errorf("capped attempt %d: delay %v outside expected range [%v, %v]", i, delay, minCap, maxCap)
+		if delay < minCap || delay > cap {
+			t.Errorf("capped attempt %d: delay %v outside expected range [%v, %v]", i, delay, minCap, cap)
 		}
 	}
 }
