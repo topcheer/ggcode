@@ -69,9 +69,16 @@ func TestScreenshotToolInvalidParams(t *testing.T) {
 	}
 }
 
-func TestScreenshotToolNilSafeExecute(t *testing.T) {
+func TestScreenshotToolListDisplaysAction(t *testing.T) {
+	// Use list_displays action which is lightweight — no image decode.
+	// On headless CI it returns an error result, on a real machine it
+	// returns display info. Either way, no panic and no OOM from
+	// decoding a large screenshot.
 	tool := ScreenshotTool{}
-	// Empty input should default to action=capture and either succeed (real screen)
-	// or return an error result (headless CI). Either way, no panic.
-	_, _ = tool.Execute(context.Background(), json.RawMessage(`{}`))
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"list_displays"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should either succeed or return a graceful error, never panic.
+	_ = result
 }
