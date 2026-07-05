@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -71,9 +72,12 @@ type Agent struct {
 	reflectionFunc               ReflectionFunc      // called after each run with accumulated stats
 	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
 	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
+	onVerifyProgress             func(text string)   // called during async verification (status updates)
+	onVerifyResult               func(VerifyResult)  // called when async verification completes
 	mu                           sync.RWMutex
 }
 
@@ -110,6 +114,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shutdownCtx:      ctx,
 		shutdownCancel:   cancel,
 		overseer:         newOverseerState(),
+		repetition:       newRepetitionTracker(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -212,6 +217,17 @@ func (a *Agent) SetSystemPromptInjector(fn func() string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.systemPromptInjector = fn
+}
+
+// SetVerifyCallbacks sets callbacks for async post-run verification.
+// progress is called with status text during verification.
+// result is called when verification completes (passed or failed).
+// Either callback may be nil.
+func (a *Agent) SetVerifyCallbacks(progress func(string), result func(VerifyResult)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onVerifyProgress = progress
+	a.onVerifyResult = result
 }
 
 // SetApprovalHandler sets a callback for interactive approval (Ask → Deny by default).
@@ -557,10 +573,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 	}
 	runStats := newRunStats(userPromptForStats)
+	// asyncVerifyStats captures run stats for the background verification goroutine.
+	asyncVerifyStats := (*RunStats)(nil)
 
 	// Reset loop detector for each new user turn.
 	a.resetLoopDetector()
 	a.resetPostEditVerify()
+	a.resetRepetitionTracker()
 
 	defer func() {
 		runStats.finalize(err)
@@ -578,6 +597,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if tw, ok := t.(*tool.TodoWrite); ok {
 				tw.ClearTodos()
 			}
+		}
+		// Launch async verification — does not block the return.
+		// Runs build/test in background, reports result via callbacks.
+		if asyncVerifyStats != nil && err == nil {
+			statsCopy := *asyncVerifyStats
+			safego.Go("asyncVerify", func() {
+				a.asyncVerify(a.shutdownCtx, &statsCopy)
+			})
 		}
 	}()
 
@@ -659,7 +686,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	reactiveCompactRetries := 0
 	idleAutopilotContinuations := 0
 	consecutiveEmptyResponses := 0
-	verifyRetries := 0
 	progressCheckInjected := false
 	contextWarningInjected := false
 	todoCheckCount := 0
@@ -886,16 +912,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					continue
 				}
 			}
-			// Auto-verify: before returning, run build/test verification.
-			// If it fails, inject errors back and continue the loop.
-			// Only in non-plan modes, max 3 retries, only if code was changed.
-			if verifyRetries < autoVerifyMaxRetries && runStats.Iterations > 1 {
-				if a.maybeAutoVerify(ctx, onEvent, textBuf, runStats) {
-					verifyRetries++
-					debug.Log("agent", "Iteration %d: auto-verify failed, continuing (retry %d/%d)", i+1, verifyRetries, autoVerifyMaxRetries)
-					continue
-				}
-			}
+			// Capture stats for async verification before returning.
+			asyncVerifyStats = runStats
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}

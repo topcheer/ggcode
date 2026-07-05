@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -14,6 +15,16 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/update"
 )
+
+// verifyProgressMsg is sent during async verification (status updates).
+type verifyProgressMsg struct {
+	text string
+}
+
+// verifyResultMsg is sent when async verification completes.
+type verifyResultMsg struct {
+	result agent.VerifyResult
+}
 
 // streamMsg wraps a string from the agent goroutine.
 type streamMsg string

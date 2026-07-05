@@ -669,6 +669,25 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// after creating the questionnaire state.
 		return m, nil
 
+	// ---- Async verification messages ----
+	case verifyProgressMsg:
+		m.chatWriteSystem(nextSystemID(), msg.text)
+		m.chatListScrollToBottom()
+		return m, nil
+
+	case verifyResultMsg:
+		if msg.result.Passed {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("✅ [Verification passed: `%s`]", msg.result.Command))
+		} else {
+			output := msg.result.Output
+			if len(output) > 500 {
+				output = output[:500] + "…"
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("❌ [Verification failed: `%s`]\n```\n%s\n```", msg.result.Command, output))
+		}
+		m.chatListScrollToBottom()
+		return m, nil
+
 	// ---- LAN chat messages ----
 	case lanchatMsg, lanchatReceiptMsg, lanchatPeerJoinMsg, lanchatPeerLeaveMsg, lanchatApprovalReqMsg, lanchatNickChangeMsg, lanchatAutoApproveMsg:
 		return m.handleLanChatPanelUpdate(msg)

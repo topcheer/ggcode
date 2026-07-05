@@ -135,6 +135,21 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 			return lanchat.FormatPeersInfo(hubCopy, wd)
 		})
 	}
+	// Register async verification callbacks — progress updates and final
+	// results are delivered as TUI messages so the user sees them live.
+	prog := r.program
+	r.agent.SetVerifyCallbacks(
+		func(text string) {
+			if prog != nil {
+				prog.Send(verifyProgressMsg{text: text})
+			}
+		},
+		func(result agent.VerifyResult) {
+			if prog != nil {
+				prog.Send(verifyResultMsg{result: result})
+			}
+		},
+	)
 	// Register auto-approve callback: inject the message into the TUI event
 	// loop as a lanchatApprovalReqMsg so the existing approval→submit flow
 	// handles it. This ensures "always approve" policy actually triggers the

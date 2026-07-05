@@ -25,57 +25,58 @@ type VerifyResult struct {
 
 // --- Auto-verify loop integration ---
 
-const autoVerifyMaxRetries = 3
-
 const verifyPromptTimeout = 30 * time.Second
 const verifyExecuteTimeout = 120 * time.Second
 
-// maybeAutoVerify asks the LLM to determine a verification command
-// after completing its work, runs it, and on failure feeds errors back.
-// Returns true if verification failed (meaning we should continue the loop).
-// Only runs if code was actually changed in this run.
-func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.StreamEvent), lastText string, runStats *RunStats) bool {
+// asyncVerify runs build/test verification in the background after the agent
+// loop completes. It does NOT block the agent's response — the user sees the
+// agent's output immediately, and verification results arrive asynchronously
+// via the onVerifyProgress/onVerifyResult callbacks.
+//
+// If verification fails, errors are injected into the context manager so they're
+// available for the next user turn. No automatic retry — the user decides what
+// to do with the failure.
+func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	mode := a.currentMode()
 	if mode == permission.PlanMode {
-		return false
+		return
 	}
 
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
-		return false
+		return
 	}
 
-	// Skip verification if no code was changed — avoids wasting time
-	// on Q&A conversations or read-only exploration.
 	if !codeChangedInRun(runStats) {
 		debug.Log("verify", "skipping: no file-editing tools used in this run")
-		return false
+		return
 	}
 
-	// First try deterministic detection — no LLM call needed, instant.
+	a.verifyProgress("Running verification…")
+
+	// First try deterministic detection — no LLM call needed.
 	cmd := detectBuildSystem(workingDir)
 	if cmd == "" {
-		// No build system detected — fall back to LLM.
+		a.verifyProgress("Determining verification command…")
 		cmd = a.llmDecideVerifyCommand(ctx)
 	} else {
 		debug.Log("verify", "using deterministic command: %s", cmd)
 	}
 	if cmd == "" {
 		debug.Log("verify", "LLM decided no verification needed")
-		return false
+		return
 	}
 
+	a.verifyProgress(fmt.Sprintf("Running `%s`…", cmd))
 	result := a.executeVerifyCommand(ctx, cmd)
 
 	if result.Passed {
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\n✅ [Verification passed: `%s`]\n", cmd),
-		})
-		return false
+		debug.Log("verify", "PASSED: %s", cmd)
+		a.verifyResult(*result)
+		return
 	}
 
-	// Verification failed — ratchet: record errors for future rule generation
+	// Verification failed — ratchet: record errors for future rule generation.
 	rs := NewRuleStore(workingDir)
 	if rs != nil {
 		matched, unmatched := rs.MatchErrors(result.Errors)
@@ -89,20 +90,14 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 		}
 	}
 
-	// Inject the errors back into the agent loop
-	// Wrap output in a code block — markdown rendering collapses bare newlines.
-	output := truncStr(result.Output, 500)
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: fmt.Sprintf("\n❌ [Verification failed: `%s`]\n```\n%s\n```\n", cmd, output),
-	})
+	debug.Log("verify", "FAILED: %s — %d errors", cmd, len(result.Errors))
 
+	// Inject errors into context for the next turn. No auto-retry.
 	errorSummary := fmt.Sprintf("Verification failed with the following command:\n```\n%s\n```\n\nErrors:\n", cmd)
 	for _, e := range result.Errors {
 		errorSummary += fmt.Sprintf("- %s\n", e)
 	}
 	errorSummary += "\nFix these issues and ensure the build passes."
-
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{
@@ -111,7 +106,27 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 		}},
 	})
 
-	return true
+	a.verifyResult(*result)
+}
+
+// verifyProgress safely calls the progress callback if set.
+func (a *Agent) verifyProgress(text string) {
+	a.mu.RLock()
+	fn := a.onVerifyProgress
+	a.mu.RUnlock()
+	if fn != nil {
+		fn(text)
+	}
+}
+
+// verifyResult safely calls the result callback if set.
+func (a *Agent) verifyResult(result VerifyResult) {
+	a.mu.RLock()
+	fn := a.onVerifyResult
+	a.mu.RUnlock()
+	if fn != nil {
+		fn(result)
+	}
 }
 
 // buildVerifyContext gathers project-specific hints to help the verification
