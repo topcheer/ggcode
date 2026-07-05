@@ -164,6 +164,12 @@ func (t *MobileDeviceTool) Execute(ctx context.Context, input json.RawMessage) (
 		p.Lines = 100
 	}
 
+	// When listing devices with platform=auto, show ALL available platforms
+	// (both iOS and Android) instead of just the first one that resolves.
+	if p.Action == "devices" && (p.Platform == "" || p.Platform == "auto") {
+		return t.listAllDevices(ctx)
+	}
+
 	backend, err := t.resolveBackend(p.Platform)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -249,6 +255,36 @@ func (t *MobileDeviceTool) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return nil
+}
+
+// listAllDevices lists devices from all available backends (iOS + Android).
+// Called when action=devices and platform=auto.
+func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
+	var sb strings.Builder
+	hasAny := false
+
+	if t.ios != nil {
+		r, err := t.ios.devices(ctx)
+		if err == nil && !r.IsError {
+			sb.WriteString(r.Content)
+			sb.WriteString("\n")
+			hasAny = true
+		}
+	}
+
+	if t.android != nil {
+		r, err := t.android.devices(ctx)
+		if err == nil && !r.IsError {
+			sb.WriteString(r.Content)
+			sb.WriteString("\n")
+			hasAny = true
+		}
+	}
+
+	if !hasAny {
+		return Result{Content: "No mobile devices or simulators available."}, nil
+	}
+	return Result{Content: strings.TrimSpace(sb.String())}, nil
 }
 
 func (t *MobileDeviceTool) resolveBackend(platform string) (mobileBackend, error) {
