@@ -9,7 +9,6 @@ import (
 func TestBrowserToolInterface(t *testing.T) {
 	b := NewBrowser()
 
-	// Verify tool interface
 	if b.Name() != "browser" {
 		t.Errorf("Name() = %q, want %q", b.Name(), "browser")
 	}
@@ -19,7 +18,6 @@ func TestBrowserToolInterface(t *testing.T) {
 		t.Errorf("Description should mention DevTools Protocol and SPA support, got: %s", desc)
 	}
 
-	// Verify parameters schema is valid JSON
 	params := b.Parameters()
 	var schema map[string]interface{}
 	if err := json.Unmarshal(params, &schema); err != nil {
@@ -30,7 +28,9 @@ func TestBrowserToolInterface(t *testing.T) {
 	if !ok {
 		t.Fatal("schema missing properties")
 	}
-	requiredProps := []string{"action", "url", "session", "selector", "text", "expression", "wait_for", "description"}
+
+	// Verify all expected properties exist
+	requiredProps := []string{"action", "url", "profile", "session", "selector", "text", "expression", "wait_for", "headless", "description"}
 	for _, prop := range requiredProps {
 		if _, ok := props[prop]; !ok {
 			t.Errorf("schema missing property %q", prop)
@@ -99,16 +99,47 @@ func TestBrowserFormatJSResult(t *testing.T) {
 	}
 }
 
-func TestBrowserSessionManagement(t *testing.T) {
+func TestBrowserProfileManagement(t *testing.T) {
 	b := NewBrowser()
-
-	// Verify multiple sessions can be created
 	if b == nil {
 		t.Fatal("NewBrowser returned nil")
 	}
+	if b.profiles == nil {
+		t.Fatal("profiles map not initialized")
+	}
+}
 
-	// Sessions map should be initialized
-	if b.sessions == nil {
-		t.Fatal("sessions map not initialized")
+func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
+	b := NewBrowser()
+	var schema map[string]interface{}
+	if err := json.Unmarshal(b.Parameters(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	props := schema["properties"].(map[string]interface{})
+
+	// Profile param must exist and mention cookies/sessions
+	profileDesc, _ := props["profile"].(map[string]interface{})
+	if profileDesc == nil {
+		t.Fatal("missing 'profile' property")
+	}
+	descStr, _ := profileDesc["description"].(string)
+	if !strings.Contains(strings.ToLower(descStr), "profile") {
+		t.Errorf("profile description should mention profiles, got: %s", descStr)
+	}
+
+	// Session param must exist
+	if _, ok := props["session"]; !ok {
+		t.Error("missing 'session' property")
+	}
+}
+
+func TestBrowserMissingAction(t *testing.T) {
+	b := NewBrowser()
+	input, _ := json.Marshal(map[string]string{
+		"description": "test without action",
+	})
+	result, _ := b.Execute(nil, input)
+	if !result.IsError {
+		t.Error("expected error for missing action")
 	}
 }

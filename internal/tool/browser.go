@@ -5,12 +5,28 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
+
+// browserProfile holds a Chrome instance with its own allocator.
+// Each profile = one Chrome process with its own user-data-dir.
+type browserProfile struct {
+	allocCtx    context.Context
+	allocCancel context.CancelFunc
+	tabs        map[string]*browserTab
+}
+
+// browserTab holds state for a single browser tab within a profile.
+type browserTab struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
 
 // Browser provides Go-native browser automation via Chrome DevTools Protocol (CDP).
 //
@@ -20,33 +36,22 @@ import (
 //
 // Features:
 //   - Full JavaScript execution (SPA support: React, Vue, Angular, etc.)
-//   - Cookie/session persistence across actions
-//   - Navigation, clicking, form filling
-//   - Content extraction (text, HTML, structured)
-//   - Screenshots (actual PNG images)
-//   - Console log capture
-//   - Network request observation
-//   - Multiple parallel sessions
+//   - Cookie/session persistence across actions within a profile
+//   - Multiple Chrome profiles (each with its own cookies, extensions, settings)
+//   - Multiple parallel sessions (tabs) within each profile
+//   - Navigation, clicking, typing, screenshots, JS evaluation
 //
 // Requires: Chrome or Chromium installed on the system.
 // For lightweight non-JS scraping, use web_fetch instead.
 type Browser struct {
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	sessions    map[string]*browserTab
-	mu          sync.Mutex
-	started     bool
-}
-
-type browserTab struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	profiles map[string]*browserProfile
+	mu       sync.Mutex
 }
 
 // NewBrowser creates a new CDP-based browser tool.
 func NewBrowser() *Browser {
 	return &Browser{
-		sessions: make(map[string]*browserTab),
+		profiles: make(map[string]*browserProfile),
 	}
 }
 
@@ -54,8 +59,8 @@ func (b *Browser) Name() string { return "browser" }
 
 func (b *Browser) Description() string {
 	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JavaScript support without Node.js or Playwright. " +
-		"Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content. " +
-		"Maintains cookies and session state across actions. " +
+		"Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. " +
+		"Supports multiple Chrome profiles (each with separate cookies/sessions) and multiple tabs per profile. " +
 		"Requires Chrome/Chromium installed. For simple non-JS page fetching, use web_fetch instead."
 }
 
@@ -72,9 +77,13 @@ func (b *Browser) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "URL to navigate to (for 'navigate' action)."
 		},
+		"profile": {
+			"type": "string",
+			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). To use your real Chrome profile, set profile to 'system'."
+		},
 		"session": {
 			"type": "string",
-			"description": "Session/tab ID to maintain state. Defaults to 'default'. Use different IDs for parallel browsing. Each session is a separate browser tab."
+			"description": "Tab/session ID within a profile. Each session is a separate browser tab. Defaults to 'default'. Use different IDs for parallel browsing within the same profile."
 		},
 		"selector": {
 			"type": "string",
@@ -113,6 +122,7 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	var args struct {
 		Action      string `json:"action"`
 		URL         string `json:"url"`
+		Profile     string `json:"profile"`
 		Session     string `json:"session"`
 		Selector    string `json:"selector"`
 		Text        string `json:"text"`
@@ -125,6 +135,9 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
+	if args.Profile == "" {
+		args.Profile = "default"
+	}
 	if args.Session == "" {
 		args.Session = "default"
 	}
@@ -132,81 +145,82 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		args.WaitTimeout = 10
 	}
 
-	// Ensure allocator is started
-	if err := b.ensureStarted(args.Headless); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to start browser: %v\n\nEnsure Chrome or Chromium is installed.", err)}, nil
-	}
-
 	switch args.Action {
 	case "navigate":
 		if args.URL == "" {
 			return Result{IsError: true, Content: "url is required for navigate action"}, nil
 		}
-		return b.doNavigate(ctx, args.Session, args.URL, args.WaitFor, args.WaitTimeout)
+		return b.doNavigate(ctx, args.Profile, args.Session, args.URL, args.WaitFor, args.WaitTimeout, args.Headless)
 
 	case "click":
 		if args.Selector == "" {
 			return Result{IsError: true, Content: "selector is required for click action"}, nil
 		}
-		return b.doClick(ctx, args.Session, args.Selector, args.WaitFor, args.WaitTimeout)
+		return b.doClick(ctx, args.Profile, args.Session, args.Selector, args.WaitFor, args.WaitTimeout, args.Headless)
 
 	case "type":
 		if args.Selector == "" {
 			return Result{IsError: true, Content: "selector is required for type action"}, nil
 		}
-		return b.doType(ctx, args.Session, args.Selector, args.Text, args.WaitFor, args.WaitTimeout)
+		return b.doType(ctx, args.Profile, args.Session, args.Selector, args.Text, args.WaitFor, args.WaitTimeout, args.Headless)
 
 	case "extract":
-		return b.doExtract(ctx, args.Session, args.Selector)
+		return b.doExtract(ctx, args.Profile, args.Session, args.Selector, args.Headless)
 
 	case "screenshot":
-		return b.doScreenshot(ctx, args.Session, args.Selector)
+		return b.doScreenshot(ctx, args.Profile, args.Session, args.Selector, args.Headless)
 
 	case "evaluate":
 		if args.Expression == "" {
 			return Result{IsError: true, Content: "expression is required for evaluate action"}, nil
 		}
-		return b.doEvaluate(ctx, args.Session, args.Expression)
+		return b.doEvaluate(ctx, args.Profile, args.Session, args.Expression, args.Headless)
 
 	case "wait":
 		if args.WaitFor == "" {
 			return Result{IsError: true, Content: "wait_for selector is required for wait action"}, nil
 		}
-		return b.doWait(ctx, args.Session, args.WaitFor, args.WaitTimeout)
+		return b.doWait(ctx, args.Profile, args.Session, args.WaitFor, args.WaitTimeout, args.Headless)
 
 	case "links":
-		return b.doLinks(ctx, args.Session)
+		return b.doLinks(ctx, args.Profile, args.Session, args.Headless)
 
 	case "scroll":
-		return b.doScroll(ctx, args.Session, args.Selector)
+		return b.doScroll(ctx, args.Profile, args.Session, args.Selector, args.Headless)
 
 	case "back":
-		return b.doBack(ctx, args.Session)
+		return b.doBack(ctx, args.Profile, args.Session, args.Headless)
 
 	case "content":
-		return b.doContent(ctx, args.Session)
+		return b.doContent(ctx, args.Profile, args.Session, args.Headless)
 
 	case "close":
-		return b.doCloseSession(args.Session)
+		return b.doCloseSession(args.Profile, args.Session)
 
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
 	}
 }
 
-// ensureStarted lazily initializes the Chrome allocator.
-func (b *Browser) ensureStarted(headless *bool) error {
+// getProfile returns an existing Chrome profile or lazily creates one.
+// Each profile has its own Chrome allocator (separate process, cookies, data dir).
+func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.started {
-		return nil
+	if p, ok := b.profiles[name]; ok {
+		return p, nil
+	}
+
+	// Build allocator options
+	headlessMode := true
+	if headless != nil {
+		headlessMode = *headless
 	}
 
 	opts := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
-		chromedp.Headless,
 		chromedp.DisableGPU,
 		chromedp.Flag("disable-background-networking", true),
 		chromedp.Flag("enable-features", "NetworkService,NetworkServiceInProcess"),
@@ -218,60 +232,75 @@ func (b *Browser) ensureStarted(headless *bool) error {
 		chromedp.Flag("no-sandbox", true),
 		chromedp.WindowSize(1280, 800),
 	}
-	if headless != nil && !*headless {
-		// Remove headless flag for visible mode
-		opts = append(opts[:0], opts[:2]...) // Keep NoFirstRun, NoDefaultBrowserCheck
-		opts = append(opts,
-			chromedp.DisableGPU,
-			chromedp.WindowSize(1280, 800),
-		)
+
+	if headlessMode {
+		opts = append(opts, chromedp.Headless)
 	}
 
-	b.allocCtx, b.allocCancel = chromedp.NewExecAllocator(context.Background(), opts...)
-	b.started = true
-	return nil
+	// Profile-specific data directory
+	if name == "system" {
+		// Use the real Chrome profile directory — inherits existing cookies/login state
+		userDataDir := findChromeUserDataDir()
+		if userDataDir != "" {
+			opts = append(opts, chromedp.UserDataDir(userDataDir))
+		}
+	} else if name != "default" {
+		// Named profile: persist data in ~/.ggcode/browser-profiles/<name>
+		dataDir := filepath.Join(homeDir(), ".ggcode", "browser-profiles", name)
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create profile directory: %w", err)
+		}
+		opts = append(opts, chromedp.UserDataDir(dataDir))
+	}
+	// "default" profile uses chromedp's temp dir (ephemeral, cleaned on exit)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+
+	p := &browserProfile{
+		allocCtx:    allocCtx,
+		allocCancel: allocCancel,
+		tabs:        make(map[string]*browserTab),
+	}
+	b.profiles[name] = p
+	return p, nil
 }
 
-// getSession returns an existing tab or creates a new one.
-func (b *Browser) getSession(id string) (*browserTab, error) {
+// getSession returns an existing tab or creates a new one within the profile.
+func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*browserTab, error) {
+	p, err := b.getProfile(profileName, headless)
+	if err != nil {
+		return nil, err
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if tab, ok := b.sessions[id]; ok {
-		// Check if context is still alive
+	if tab, ok := p.tabs[sessionID]; ok {
 		if tab.ctx.Err() == nil {
 			return tab, nil
 		}
-		// Dead tab, clean up
-		delete(b.sessions, id)
+		delete(p.tabs, sessionID)
 	}
 
-	// Create new tab from the shared allocator
-	taskCtx, cancel := chromedp.NewContext(b.allocCtx)
-	// Run the initial navigation to start the browser
+	taskCtx, cancel := chromedp.NewContext(p.allocCtx)
 	if err := chromedp.Run(taskCtx); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create browser tab: %w", err)
 	}
 
-	tab := &browserTab{
-		ctx:    taskCtx,
-		cancel: cancel,
-	}
-	b.sessions[id] = tab
+	tab := &browserTab{ctx: taskCtx, cancel: cancel}
+	p.tabs[sessionID] = tab
 	return tab, nil
 }
 
 // doNavigate opens a URL and optionally waits for an element.
-func (b *Browser) doNavigate(ctx context.Context, session, rawURL, waitFor string, waitTimeout int) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doNavigate(ctx context.Context, profile, session, rawURL, waitFor string, waitTimeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	actions := []chromedp.Action{
-		chromedp.Navigate(rawURL),
-	}
+	actions := []chromedp.Action{chromedp.Navigate(rawURL)}
 	if waitFor != "" {
 		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
 	}
@@ -279,13 +308,12 @@ func (b *Browser) doNavigate(ctx context.Context, session, rawURL, waitFor strin
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+15)*time.Second)
 	defer cancel()
 
-	// Merge with caller context
-	mergedCtx, mergedCancel := context.WithTimeout(ctx, time.Duration(waitTimeout+15)*time.Second)
-	defer mergedCancel()
+	// Propagate caller cancellation
 	go func() {
 		select {
-		case <-mergedCtx.Done():
+		case <-ctx.Done():
 			cancel()
+		case <-timeoutCtx.Done():
 		}
 	}()
 
@@ -293,19 +321,18 @@ func (b *Browser) doNavigate(ctx context.Context, session, rawURL, waitFor strin
 		return Result{IsError: true, Content: fmt.Sprintf("navigation failed: %v", err)}, nil
 	}
 
-	// Get page title and URL
 	var title, finalURL string
 	_ = chromedp.Run(timeoutCtx,
 		chromedp.Title(&title),
 		chromedp.Location(&finalURL),
 	)
 
-	return Result{Content: fmt.Sprintf("Navigated to: %s\nTitle: %s\nURL: %s\n\nUse action 'content' for page text, 'extract' with selector, or 'screenshot' for visual capture.", rawURL, title, finalURL)}, nil
+	return Result{Content: fmt.Sprintf("Navigated to: %s\nTitle: %s\nURL: %s\nProfile: %s\nSession: %s\n\nUse action 'content' for page text, 'extract' with selector, or 'screenshot' for visual capture.", rawURL, title, finalURL, profile, session)}, nil
 }
 
 // doClick clicks an element.
-func (b *Browser) doClick(ctx context.Context, session, selector, waitFor string, waitTimeout int) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitFor string, waitTimeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -331,8 +358,8 @@ func (b *Browser) doClick(ctx context.Context, session, selector, waitFor string
 }
 
 // doType clears an input field and types text into it.
-func (b *Browser) doType(ctx context.Context, session, selector, text, waitFor string, waitTimeout int) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doType(ctx context.Context, profile, session, selector, text, waitFor string, waitTimeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -359,37 +386,32 @@ func (b *Browser) doType(ctx context.Context, session, selector, text, waitFor s
 }
 
 // doExtract gets text content from the page or specific elements.
-func (b *Browser) doExtract(ctx context.Context, session, selector string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doExtract(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
 	if selector != "" {
-		// Extract specific element(s)
 		var results []map[string]string
-		js := fmt.Sprintf(`() => {
-			const els = document.querySelectorAll(%q);
-			return Array.from(els).map(el => ({
-				tag: el.tagName.toLowerCase(),
-				text: el.innerText.trim().substring(0, 5000),
-				href: el.href || '',
-				value: el.value || '',
-				id: el.id || '',
-				className: el.className || '',
-			}));
-		}`, selector)
+		js := fmt.Sprintf(`(() => {
+				const els = document.querySelectorAll(%q);
+				return Array.from(els).map(el => ({
+					tag: el.tagName.toLowerCase(),
+					text: el.innerText.trim().substring(0, 5000),
+					href: el.href || '',
+					value: el.value || '',
+					id: el.id || '',
+					className: el.className || '',
+				}));
+			})()`, selector)
 
-		if err := chromedp.Run(tab.ctx,
-			chromedp.WaitReady("body", chromedp.ByQuery),
-		); err != nil {
+		if err := chromedp.Run(tab.ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("wait failed: %v", err)}, nil
 		}
-
 		if err := chromedp.Run(tab.ctx, chromedp.Evaluate(js, &results)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
 		}
-
 		if len(results) == 0 {
 			return Result{Content: fmt.Sprintf("No elements matched: %s", selector)}, nil
 		}
@@ -406,7 +428,10 @@ func (b *Browser) doExtract(ctx context.Context, session, selector string) (Resu
 				sb.WriteString(fmt.Sprintf(" #%s", r["id"]))
 			}
 			if r["className"] != "" {
-				sb.WriteString(fmt.Sprintf(" .%s", strings.Fields(r["className"])[0]))
+				parts := strings.Fields(r["className"])
+				if len(parts) > 0 {
+					sb.WriteString(fmt.Sprintf(" .%s", parts[0]))
+				}
 			}
 			sb.WriteString("]")
 			if r["text"] != "" {
@@ -424,11 +449,11 @@ func (b *Browser) doExtract(ctx context.Context, session, selector string) (Resu
 		return Result{Content: sb.String()}, nil
 	}
 
-	// Extract full page text
+	// Full page text
 	var pageText string
 	if err := chromedp.Run(tab.ctx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Evaluate(`() => document.body.innerText.substring(0, 50000)`, &pageText),
+		chromedp.Evaluate(`document.body.innerText.substring(0, 50000)`, &pageText),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("extract failed: %v", err)}, nil
 	}
@@ -436,15 +461,14 @@ func (b *Browser) doExtract(ctx context.Context, session, selector string) (Resu
 }
 
 // doScreenshot captures a PNG screenshot.
-func (b *Browser) doScreenshot(ctx context.Context, session, selector string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
 	var buf []byte
 	if selector != "" {
-		// Screenshot specific element
 		if err := chromedp.Run(tab.ctx,
 			chromedp.WaitVisible(selector, chromedp.ByQuery),
 			chromedp.Screenshot(selector, &buf, chromedp.ByQuery),
@@ -452,10 +476,7 @@ func (b *Browser) doScreenshot(ctx context.Context, session, selector string) (R
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	} else {
-		// Full page screenshot
-		if err := chromedp.Run(tab.ctx,
-			chromedp.FullScreenshot(&buf, 90),
-		); err != nil {
+		if err := chromedp.Run(tab.ctx, chromedp.FullScreenshot(&buf, 90)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
 		}
 	}
@@ -467,23 +488,20 @@ func (b *Browser) doScreenshot(ctx context.Context, session, selector string) (R
 }
 
 // doEvaluate runs arbitrary JavaScript in the page context.
-func (b *Browser) doEvaluate(ctx context.Context, session, expression string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
 	var result interface{}
-	// Wrap in async function for await support
-	wrappedExpr := fmt.Sprintf(`async () => { return (%s); }`, expression)
-
-	if err := chromedp.Run(tab.ctx,
-		chromedp.Evaluate(wrappedExpr, &result),
-	); err != nil {
+	// chromedp.Evaluate already wraps in an async function and awaits.
+	// Do NOT add our own async wrapper — it causes results to come back
+	// as empty objects instead of the actual values.
+	if err := chromedp.Run(tab.ctx, chromedp.Evaluate(expression, &result)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("JavaScript evaluation failed: %v", err)}, nil
 	}
 
-	// Format result
 	resultStr := formatJSResult(result)
 	if len(resultStr) > 50000 {
 		resultStr = resultStr[:50000] + "\n... [truncated]"
@@ -492,8 +510,8 @@ func (b *Browser) doEvaluate(ctx context.Context, session, expression string) (R
 }
 
 // doWait waits for an element to appear.
-func (b *Browser) doWait(ctx context.Context, session, selector string, timeout int) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doWait(ctx context.Context, profile, session, selector string, timeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -501,18 +519,15 @@ func (b *Browser) doWait(ctx context.Context, session, selector string, timeout 
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	if err := chromedp.Run(timeoutCtx,
-		chromedp.WaitVisible(selector, chromedp.ByQuery),
-	); err != nil {
+	if err := chromedp.Run(timeoutCtx, chromedp.WaitVisible(selector, chromedp.ByQuery)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("wait timed out after %ds: %v", timeout, err)}, nil
 	}
-
 	return Result{Content: fmt.Sprintf("Element appeared: %s", selector)}, nil
 }
 
 // doLinks extracts all links from the page.
-func (b *Browser) doLinks(ctx context.Context, session string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doLinks(ctx context.Context, profile, session string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -523,12 +538,12 @@ func (b *Browser) doLinks(ctx context.Context, session string) (Result, error) {
 	}
 	var links []linkData
 
-	js := `() => {
+	js := `(() => {
 		return Array.from(document.querySelectorAll("a[href]")).map(a => ({
 			text: (a.innerText || a.textContent || "").trim().substring(0, 100),
 			href: a.href,
 		}));
-	}`
+	})()`
 
 	if err := chromedp.Run(tab.ctx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -559,25 +574,21 @@ func (b *Browser) doLinks(ctx context.Context, session string) (Result, error) {
 }
 
 // doScroll scrolls the page or scrolls an element into view.
-func (b *Browser) doScroll(ctx context.Context, session, selector string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doScroll(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
 	if selector != "" {
-		// Scroll element into view
-		if err := chromedp.Run(tab.ctx,
-			chromedp.ScrollIntoView(selector, chromedp.ByQuery),
-		); err != nil {
+		if err := chromedp.Run(tab.ctx, chromedp.ScrollIntoView(selector, chromedp.ByQuery)); err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
 		}
 		return Result{Content: fmt.Sprintf("Scrolled %s into view.", selector)}, nil
 	}
 
-	// Scroll to bottom of page
 	if err := chromedp.Run(tab.ctx,
-		chromedp.Evaluate(`() => window.scrollTo(0, document.body.scrollHeight)`, nil),
+		chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil),
 	); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("scroll failed: %v", err)}, nil
 	}
@@ -585,15 +596,13 @@ func (b *Browser) doScroll(ctx context.Context, session, selector string) (Resul
 }
 
 // doBack navigates back in history.
-func (b *Browser) doBack(ctx context.Context, session string) (Result, error) {
-	tab, err := b.getSession(session)
+func (b *Browser) doBack(ctx context.Context, profile, session string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	if err := chromedp.Run(tab.ctx,
-		chromedp.NavigateBack(),
-	); err != nil {
+	if err := chromedp.Run(tab.ctx, chromedp.NavigateBack()); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("back navigation failed: %v", err)}, nil
 	}
 
@@ -602,9 +611,9 @@ func (b *Browser) doBack(ctx context.Context, session string) (Result, error) {
 	return Result{Content: fmt.Sprintf("Navigated back. Current URL: %s", urlAfter)}, nil
 }
 
-// doContent gets structured page content (title, headings, text, forms).
-func (b *Browser) doContent(ctx context.Context, session string) (Result, error) {
-	tab, err := b.getSession(session)
+// doContent gets structured page content.
+func (b *Browser) doContent(ctx context.Context, profile, session string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -617,7 +626,7 @@ func (b *Browser) doContent(ctx context.Context, session string) (Result, error)
 	}
 
 	var content pageContent
-	js := `() => {
+	js := `(() => {
 		const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4"))
 			.map(h => "#".repeat(parseInt(h.tagName[1])) + " " + h.innerText.trim())
 			.join("\n");
@@ -627,7 +636,7 @@ func (b *Browser) doContent(ctx context.Context, session string) (Result, error)
 			text: document.body.innerText.substring(0, 40000),
 			headings: headings,
 		};
-	}`
+	})()`
 
 	if err := chromedp.Run(tab.ctx,
 		chromedp.WaitReady("body", chromedp.ByQuery),
@@ -649,17 +658,22 @@ func (b *Browser) doContent(ctx context.Context, session string) (Result, error)
 }
 
 // doCloseSession closes a browser tab and removes the session.
-func (b *Browser) doCloseSession(session string) (Result, error) {
+func (b *Browser) doCloseSession(profile, session string) (Result, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	tab, ok := b.sessions[session]
+	p, ok := b.profiles[profile]
+	if !ok {
+		return Result{Content: fmt.Sprintf("Profile '%s' does not exist.", profile)}, nil
+	}
+
+	tab, ok := p.tabs[session]
 	if !ok {
 		return Result{Content: fmt.Sprintf("Session '%s' does not exist.", session)}, nil
 	}
 	tab.cancel()
-	delete(b.sessions, session)
-	return Result{Content: fmt.Sprintf("Closed session '%s'.", session)}, nil
+	delete(p.tabs, session)
+	return Result{Content: fmt.Sprintf("Closed session '%s' in profile '%s'.", session, profile)}, nil
 }
 
 // formatJSResult converts a JavaScript evaluation result to a readable string.
@@ -690,4 +704,36 @@ func formatJSResult(result interface{}) string {
 		data, _ := json.MarshalIndent(result, "", "  ")
 		return string(data)
 	}
+}
+
+// findChromeUserDataDir locates the system Chrome user data directory.
+func findChromeUserDataDir() string {
+	home := homeDir()
+	if home == "" {
+		return ""
+	}
+
+	// Platform-specific Chrome user data directories
+	candidates := []string{
+		// macOS
+		filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
+		// Linux
+		filepath.Join(home, ".config", "google-chrome"),
+		filepath.Join(home, ".config", "chromium"),
+		// Windows (Git Bash style paths)
+		filepath.Join(home, "AppData", "Local", "Google", "Chrome", "User Data"),
+	}
+
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// homeDir returns the user's home directory.
+func homeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
 }
