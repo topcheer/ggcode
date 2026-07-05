@@ -17,9 +17,10 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 			m.statusToolCount++
 		}
 		m.chatStartTool(ts)
-		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			m.renderStreamBuffer(true)
-		}
+		// Do NOT reset streamBuffer on tool start — text must continue
+		// accumulating across the same LLM turn even when tool calls
+		// are interspersed. Resetting causes text loss because
+		// chatUpdateAssistantText() replaces (not appends).
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {
@@ -27,9 +28,12 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 		ts.Elapsed = m.spinner.Elapsed()
 		m.spinner.Stop()
 		spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
-		// Reset stream prefix so next text block gets ●
-		m.streamPrefixWritten = false
-		// Reset stream buffer position for next text chunk
+		// Do NOT reset streamPrefixWritten here. Resetting causes the
+		// next text/reasoning flush to create a NEW assistant item,
+		// which duplicates reasoning (fullReasoningBuf accumulates)
+		// and fragments text (streamBuffer was emptied by tool start).
+		// streamPrefixWritten is properly reset by chatFinishReasoning()
+		// at the end of each LLM turn (agentReasoningDoneMsg).
 	}
 	m.chatListScrollToBottom()
 	return m, spinnerCmd
@@ -60,9 +64,7 @@ func (m Model) handleAgentToolBatchMsg(msg agentToolBatchMsg, spinnerCmd tea.Cmd
 				m.statusToolCount++
 			}
 			m.chatStartTool(ts.ToolStatusMsg)
-			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-				m.renderStreamBuffer(true)
-			}
+			// Do NOT reset streamBuffer on tool start (see handleToolStatusMsg).
 			startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
@@ -70,7 +72,9 @@ func (m Model) handleAgentToolBatchMsg(msg agentToolBatchMsg, spinnerCmd tea.Cmd
 			ts.ToolStatusMsg.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
-			m.streamPrefixWritten = false
+			// Do NOT reset streamPrefixWritten here — that would fragment the
+			// assistant text across multiple bubbles. The assistant item should
+			// stay streaming so text from later turns continues on the same item.
 		}
 	}
 	m.chatListScrollToBottom()
@@ -90,9 +94,7 @@ func (m Model) handleAgentToolStatusMsg(msg agentToolStatusMsg, spinnerCmd tea.C
 			m.statusToolCount++
 		}
 		m.chatStartTool(ts)
-		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			m.renderStreamBuffer(true)
-		}
+		// Do NOT reset streamBuffer on tool start (see handleToolStatusMsg).
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {
@@ -100,7 +102,7 @@ func (m Model) handleAgentToolStatusMsg(msg agentToolStatusMsg, spinnerCmd tea.C
 		ts.Elapsed = m.spinner.Elapsed()
 		m.spinner.Stop()
 		spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
-		m.streamPrefixWritten = false
+		// Do NOT reset streamPrefixWritten (see handleToolStatusMsg).
 	}
 	m.chatListScrollToBottom()
 	return m, spinnerCmd

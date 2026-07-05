@@ -86,9 +86,13 @@ func (m *Model) appendReasoningChunk(chunk string) {
 }
 
 // chatFinishReasoning collapses the reasoning block in the current assistant item.
-// It also resets streamPrefixWritten so that the next LLM turn (in a multi-round
-// agent loop) creates a fresh assistant item with its own reasoning block,
-// instead of appending to the previous turn's item.
+// It does NOT finalize the item or reset streamPrefixWritten — the assistant item
+// stays streaming so that subsequent text from later agent-loop turns continues
+// on the same bubble. The item is finalized only when agentDoneMsg fires.
+//
+// If a later turn has new reasoning, appendReasoningChunk replaces the reasoning
+// text via SetReasoning (which also un-collapses the block). This is correct:
+// the old reasoning was already visible (collapsed) and the new one replaces it.
 func (m *Model) chatFinishReasoning() {
 	aid := m.currentAssistantID()
 	if m.chatList != nil {
@@ -97,16 +101,6 @@ func (m *Model) chatFinishReasoning() {
 				a.SetReasoningFinished()
 			}
 		}
-	}
-	// Finalize the current assistant item and reset state so the next turn
-	// creates a fresh one. This is critical for multi-round agent loops where
-	// turn 1 has reasoning + tool calls (no body) and turn 2 starts fresh.
-	// Without this reset, turn 2's reasoning would be set on the same
-	// assistant item as turn 1's (which already has reasoningFinished=true).
-	m.chatFinishAssistant(aid)
-	m.streamPrefixWritten = false
-	if m.streamBuffer != nil {
-		m.streamBuffer.Reset()
 	}
 }
 
