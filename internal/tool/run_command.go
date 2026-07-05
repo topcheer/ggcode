@@ -307,13 +307,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	output := stdout.String()
 	errOutput := stderr.String()
 
-	// Truncate output if too large
-	if len(output) > maxOutputSize {
-		output = output[:maxOutputSize] + "\n... [output truncated]"
-	}
-	if len(errOutput) > maxOutputSize {
-		errOutput = errOutput[:maxOutputSize] + "\n... [stderr truncated]"
-	}
+	// Truncate output if too large — keep both head and tail.
+	// For most commands (tests, builds, lints), the important info is at the
+	// end (error messages, test results). Keeping only the head would lose it.
+	output = truncateMiddle(output, maxOutputSize, "output")
+	errOutput = truncateMiddle(errOutput, maxOutputSize, "stderr")
 
 	var sb strings.Builder
 	if output != "" {
@@ -347,6 +345,22 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	return Result{Content: sb.String()}, nil
+}
+
+// truncateMiddle keeps the first 40% and last 50% of output, inserting a
+// "[... N bytes omitted ...]" marker in between. This ensures the agent sees
+// both the beginning (context/setup) and the end (errors, results, exit status)
+// of long outputs like test runs, build logs, and linter output.
+func truncateMiddle(s string, maxLen int, label string) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	headSize := maxLen * 2 / 5 // 40% of budget for the head
+	tailSize := maxLen / 2     // 50% of budget for the tail
+	omitted := len(s) - headSize - tailSize
+	head := s[:headSize]
+	tail := s[len(s)-tailSize:]
+	return head + fmt.Sprintf("\n... [%d bytes omitted — %s truncated, showing tail] ...\n", omitted, label) + tail
 }
 
 // executeWithAutoBackground starts a command as a managed job and waits up to

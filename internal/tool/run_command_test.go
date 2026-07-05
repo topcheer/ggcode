@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,4 +147,45 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestTruncateMiddle_ShortStringUnchanged(t *testing.T) {
+	s := "hello world"
+	got := truncateMiddle(s, 100, "output")
+	if got != s {
+		t.Fatalf("short string should be unchanged, got: %s", got)
+	}
+}
+
+func TestTruncateMiddle_PreservesHeadAndTail(t *testing.T) {
+	// Create a 10000-byte string: "HEAD_START" + padding + "TAIL_END"
+	var sb strings.Builder
+	sb.WriteString("HEAD_START")
+	for i := 0; i < 9980; i++ {
+		sb.WriteString("x")
+	}
+	sb.WriteString("TAIL_END")
+	s := sb.String()
+	if len(s) < 1001 {
+		t.Fatalf("setup error: expected >1000 bytes, got %d", len(s))
+	}
+
+	got := truncateMiddle(s, 1000, "output")
+	if !containsStr(got, "HEAD_START") {
+		t.Error("truncated output should contain head")
+	}
+	if !containsStr(got, "TAIL_END") {
+		t.Error("truncated output should contain tail — this is the key fix")
+	}
+	if !containsStr(got, "bytes omitted") {
+		t.Error("truncated output should contain omission marker")
+	}
+}
+
+func TestTruncateMiddle_ExactSize(t *testing.T) {
+	s := strings.Repeat("a", 100)
+	got := truncateMiddle(s, 100, "output")
+	if got != s {
+		t.Fatal("string at exactly maxLen should not be truncated")
+	}
 }
