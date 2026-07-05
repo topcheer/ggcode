@@ -15,19 +15,16 @@ import (
 // androidBackend implements mobileBackend using ADB (Android Debug Bridge).
 // Works on all platforms where adb is installed.
 type androidBackend struct {
-	adbPath   string
-	cachedDev string
+	adbPath string
 }
 
 func (a *androidBackend) cleanup() {}
 
 func (a *androidBackend) defaultDevice() string {
-	if a.cachedDev != "" {
-		return a.cachedDev
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, _, _ := runCommand(ctx, 5*time.Second, a.adbPath, "devices")
+	var firstDevice string
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "List of devices") {
@@ -35,11 +32,38 @@ func (a *androidBackend) defaultDevice() string {
 		}
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && (fields[1] == "device" || fields[1] == "emulator") {
-			a.cachedDev = fields[0]
-			return fields[0]
+			// Prefer transport_id for reliable targeting of wireless devices
+			if tid := extractTransportID(fields); tid != "" {
+				return tid
+			}
+			if firstDevice == "" {
+				firstDevice = fields[0]
+			}
+		}
+	}
+	return firstDevice
+}
+
+// extractTransportID finds the transport_id:NNNN field and returns the numeric ID.
+func extractTransportID(fields []string) string {
+	for _, f := range fields {
+		if strings.HasPrefix(f, "transport_id:") {
+			return strings.TrimPrefix(f, "transport_id:")
 		}
 	}
 	return ""
+}
+
+// adbDeviceArgs returns the appropriate adb flags for targeting a specific device.
+// Numeric values are treated as transport IDs (-t), everything else as serial (-s).
+func adbDeviceArgs(device string) []string {
+	if device == "" {
+		return nil
+	}
+	if _, err := strconv.Atoi(device); err == nil {
+		return []string{"-t", device}
+	}
+	return []string{"-s", device}
 }
 
 func (a *androidBackend) devices(ctx context.Context) (Result, error) {
@@ -65,6 +89,10 @@ func (a *androidBackend) devices(ctx context.Context) (Result, error) {
 				info += " " + f
 			}
 			sb.WriteString(fmt.Sprintf("  %s [%s]%s\n", serial, state, info))
+			// Hint: show transport_id separately for reliable targeting
+			if tid := extractTransportID(fields); tid != "" {
+				sb.WriteString(fmt.Sprintf("    (use device=\"%s\" with transport_id for reliable targeting)\n", tid))
+			}
 		}
 	}
 	if !hasDevice {
@@ -77,7 +105,9 @@ func (a *androidBackend) devices(ctx context.Context) (Result, error) {
 func (a *androidBackend) boot(ctx context.Context, device string) (Result, error) {
 	// Android emulators are booted via emulator command, not adb.
 	// adb can wait for device to be ready.
-	out, _, err := runCommand(ctx, 30*time.Second, a.adbPath, "-s", device, "wait-for-device")
+	args := adbDeviceArgs(device)
+	args = append(args, "wait-for-device")
+	out, _, err := runCommand(ctx, 30*time.Second, a.adbPath, args...)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("boot/wait failed: %v", err)}, nil
 	}
@@ -85,10 +115,7 @@ func (a *androidBackend) boot(ctx context.Context, device string) (Result, error
 }
 
 func (a *androidBackend) install(ctx context.Context, device, appPath string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "install", "-r", appPath)
 	_, stderr, err := runCommand(ctx, 120*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -98,10 +125,7 @@ func (a *androidBackend) install(ctx context.Context, device, appPath string) (R
 }
 
 func (a *androidBackend) uninstall(ctx context.Context, device, pkg string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "uninstall", pkg)
 	_, stderr, err := runCommand(ctx, 30*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -111,10 +135,7 @@ func (a *androidBackend) uninstall(ctx context.Context, device, pkg string) (Res
 }
 
 func (a *androidBackend) launch(ctx context.Context, device, pkg string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
 	out, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -124,10 +145,7 @@ func (a *androidBackend) launch(ctx context.Context, device, pkg string) (Result
 }
 
 func (a *androidBackend) close(ctx context.Context, device, pkg string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "am", "force-stop", pkg)
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -137,10 +155,7 @@ func (a *androidBackend) close(ctx context.Context, device, pkg string) (Result,
 }
 
 func (a *androidBackend) snapshot(ctx context.Context, device string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	// Dump UI hierarchy to device, then pull it
 	dumpArgs := append(args, "shell", "uiautomator", "dump", "/sdcard/window_dump.xml")
 	_, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, dumpArgs...)
@@ -170,10 +185,7 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("ggcode_screenshot_%d.png", time.Now().UnixNano()))
 	defer os.Remove(tmpFile)
 
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "exec-out", "screencap", "-p")
 	cmd := exec.CommandContext(ctx, a.adbPath, args...)
 	f, err := os.Create(tmpFile)
@@ -208,10 +220,7 @@ func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) 
 	if ref != "" {
 		return Result{IsError: true, Content: "element reference requires a prior snapshot — use coordinates instead, or call snapshot first"}, nil
 	}
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -233,10 +242,7 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 	}
 	// adb input text doesn't handle spaces well, use %s
 	escapedText := strings.ReplaceAll(text, " ", "%s")
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "text", escapedText)
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -246,10 +252,7 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 }
 
 func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "swipe",
 		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(endX), strconv.Itoa(endY), "300")
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
@@ -261,10 +264,7 @@ func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, en
 
 func (a *androidBackend) press(ctx context.Context, device, key string) (Result, error) {
 	keyCode := androidKeyCode(key)
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "keyevent", keyCode)
 	_, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {
@@ -274,10 +274,7 @@ func (a *androidBackend) press(ctx context.Context, device, key string) (Result,
 }
 
 func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	if pkg != "" {
 		args = append(args, "shell", "logcat", "-d", "--pid=$(pidof", "-s", pkg+" 2>/dev/null)")
 	} else {
@@ -286,10 +283,7 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 	out, stderr, err := runCommand(ctx, 15*time.Second, a.adbPath, args...)
 	if err != nil {
 		// Fallback to simple logcat
-		args = []string{}
-		if device != "" {
-			args = append(args, "-s", device)
-		}
+		args = adbDeviceArgs(device)
 		args = append(args, "shell", "logcat", "-d", "-t", strconv.Itoa(lines))
 		out, stderr, err = runCommand(ctx, 15*time.Second, a.adbPath, args...)
 		if err != nil {
@@ -305,10 +299,7 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 }
 
 func (a *androidBackend) listApps(ctx context.Context, device string) (Result, error) {
-	args := []string{}
-	if device != "" {
-		args = append(args, "-s", device)
-	}
+	args := adbDeviceArgs(device)
 	args = append(args, "shell", "pm", "list", "packages", "-3")
 	out, stderr, err := runCommand(ctx, 10*time.Second, a.adbPath, args...)
 	if err != nil {

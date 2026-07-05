@@ -64,6 +64,8 @@ func (t *MobileDeviceTool) Description() string {
 		"Supports: devices (list), boot, install, launch, snapshot (UI tree), " +
 		"screenshot, tap, type, swipe, press (hardware keys), logs, close, list_apps. " +
 		"Use action=\"devices\" first to see available devices. " +
+		"For Android wireless devices, use the transport_id (numeric) as the device parameter " +
+		"for reliable targeting instead of the long mDNS serial name. " +
 		"snapshot returns a token-efficient accessibility tree with @eN element references " +
 		"that can be used in tap/type/swipe actions."
 }
