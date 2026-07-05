@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -23,6 +24,10 @@ type modelPanelState struct {
 	endpoint   string
 	protocol   string
 	filter     textinput.Model
+
+	// Inline editing for context_window (w) and max_tokens (o)
+	editingField string // "context_window" or "max_tokens"
+	editInput    textinput.Model
 }
 
 type modelPanelRefreshResultMsg struct {
@@ -78,6 +83,18 @@ func (m Model) renderModelPanel() string {
 	} else {
 		source = m.t("panel.model.source.builtin")
 	}
+
+	// Resolve current context_window and max_tokens for display
+	cw, mt := "auto", "auto"
+	if ep := m.config.ActiveEndpointConfig(); ep != nil {
+		if ep.ContextWindow > 0 {
+			cw = fmt.Sprintf("%d", ep.ContextWindow)
+		}
+		if ep.MaxTokens > 0 {
+			mt = fmt.Sprintf("%d", ep.MaxTokens)
+		}
+	}
+
 	window := buildModelListWindow(panel.models, panel.selected, panel.filter)
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.model.models")),
@@ -92,11 +109,24 @@ func (m Model) renderModelPanel() string {
 		fmt.Sprintf(" %s: %s", m.t("panel.model.endpoint"), panel.endpoint),
 		fmt.Sprintf(" %s: %s", m.t("panel.model.protocol"), panel.protocol),
 		fmt.Sprintf(" %s: %s", m.t("panel.model.source"), source),
+		fmt.Sprintf(" %s: %s  |  %s: %s", m.t("panel.model.context_window"), cw, m.t("panel.model.max_tokens"), mt),
 	)
 	if panel.refreshing {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" "+m.t("panel.model.refreshing")))
 	}
-	body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.model.hint.main")))
+	if panel.editingField != "" {
+		label := m.t("panel.model.context_window")
+		if panel.editingField == "max_tokens" {
+			label = m.t("panel.model.max_tokens")
+		}
+		body = append(body,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.model.edit")+" "+label),
+			panel.editInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.model.hint.edit")),
+		)
+	} else {
+		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.model.hint.main")))
+	}
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
 	}
@@ -107,6 +137,10 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.modelPanel
 	if panel == nil {
 		return *m, nil
+	}
+	// Handle inline editing mode
+	if panel.editingField != "" {
+		return m.handleModelPanelEditKey(msg)
 	}
 	if panel.filter.Focused() && modelFilterConsumesKey(msg.String()) {
 		var cmd tea.Cmd
@@ -140,6 +174,22 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if len(panel.models) > 0 {
 			moveFilteredModelSelection(&panel.selected, panel.models, panel.filter, -1)
 		}
+		return *m, nil
+	case "w":
+		ep := m.config.ActiveEndpointConfig()
+		val := ""
+		if ep != nil && ep.ContextWindow > 0 {
+			val = fmt.Sprintf("%d", ep.ContextWindow)
+		}
+		panel.startEditing("context_window", val)
+		return *m, nil
+	case "o":
+		ep := m.config.ActiveEndpointConfig()
+		val := ""
+		if ep != nil && ep.MaxTokens > 0 {
+			val = fmt.Sprintf("%d", ep.MaxTokens)
+		}
+		panel.startEditing("max_tokens", val)
 		return *m, nil
 	case "r", "R":
 		panel.filter.Blur()
@@ -216,4 +266,101 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 		}
 		return result
 	}
+}
+
+// startEditing begins inline editing of a numeric field.
+func (p *modelPanelState) startEditing(field, initialValue string) {
+	ti := textinput.New()
+	ti.Prompt = "❯ "
+	ti.SetValue(initialValue)
+	ti.CursorEnd()
+	ti.Focus()
+	p.editingField = field
+	p.editInput = ti
+}
+
+// handleModelPanelEditKey processes keys while in inline edit mode.
+func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	panel := m.modelPanel
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		panel.editingField = ""
+		panel.editInput = textinput.Model{}
+		return *m, nil
+	case "enter":
+		val := strings.TrimSpace(panel.editInput.Value())
+		panel.editingField = ""
+		panel.editInput = textinput.Model{}
+
+		vendor := m.config.Vendor
+		endpoint := m.config.Endpoint
+		vc, ok := m.config.Vendors[vendor]
+		if !ok {
+			panel.message = "vendor not found"
+			return *m, nil
+		}
+		ep, ok := vc.Endpoints[endpoint]
+		if !ok {
+			panel.message = "endpoint not found"
+			return *m, nil
+		}
+
+		var n int
+		if val != "" {
+			var parseErr error
+			n, parseErr = parseIntPositive(val)
+			if parseErr != nil {
+				panel.message = parseErr.Error()
+				return *m, nil
+			}
+		}
+
+		switch panel.editingField {
+		case "context_window":
+			ep.ContextWindow = n
+		case "max_tokens":
+			ep.MaxTokens = n
+		}
+		vc.Endpoints[endpoint] = ep
+		m.config.Vendors[vendor] = vc
+
+		if err := m.saveConfig(); err != nil {
+			panel.message = fmt.Sprintf("save failed: %v", err)
+			return *m, nil
+		}
+
+		// Apply to running agent immediately
+		if m.agent != nil {
+			if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
+				agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+			}
+		}
+
+		if val == "" || n == 0 {
+			panel.message = m.t("panel.model.context_cleared")
+		} else if panel.editingField == "context_window" {
+			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), n, ep.MaxTokens)
+		} else {
+			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), ep.ContextWindow, n)
+		}
+		return *m, nil
+	default:
+		var cmd tea.Cmd
+		panel.editInput, cmd = panel.editInput.Update(msg)
+		return *m, cmd
+	}
+}
+
+// parseIntPositive parses a non-negative integer string.
+func parseIntPositive(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	var val int
+	_, err := fmt.Sscanf(s, "%d", &val)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number: %q", s)
+	}
+	if val < 0 {
+		return 0, fmt.Errorf("must be >= 0")
+	}
+	return val, nil
 }

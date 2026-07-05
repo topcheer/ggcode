@@ -717,10 +717,12 @@ func zhCatalog(key string) string {
 		return "端点 Base URL"
 	case "panel.provider.edit.custom_model":
 		return "自定义模型"
+	case "panel.provider.edit.new_endpoint_name":
+		return "新端点名称"
 	case "panel.provider.hint.edit":
 		return "Enter 保存 • Esc 取消"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • Esc 关闭"
+		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • e 新增端点 • Esc 关闭"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot：l 登录 • x 登出 • b 编辑企业域名"
 	case "panel.provider.saved":
@@ -774,9 +776,21 @@ func zhCatalog(key string) string {
 	case "panel.model.refreshing":
 		return "正在刷新最新模型..."
 	case "panel.model.hint.main":
-		return "j/k 移动 • Enter 或 s 应用 • r 刷新 • / 聚焦筛选 • Esc 关闭 • /model <name> 直接切换"
+		return "j/k 移动 • Enter 或 s 应用 • w 上下文长度 • o 最大输出 • r 刷新 • / 筛选 • Esc 关闭"
+	case "panel.model.hint.edit":
+		return "Enter 保存 • Esc 取消 (0 或空 = 自动检测)"
+	case "panel.model.context_window":
+		return "上下文长度"
+	case "panel.model.max_tokens":
+		return "最大输出 Tokens"
+	case "panel.model.edit":
+		return "编辑"
 	case "panel.model.saved_runtime_inactive":
 		return "配置已保存，但当前运行时仍未激活：%s"
+	case "panel.model.context_applied":
+		return "已设置 context_window=%d, max_tokens=%d (已保存)"
+	case "panel.model.context_cleared":
+		return "已重置为自动检测 (已保存)"
 	case "panel.model.switched":
 		return "已切换模型为 %s。"
 	case "panel.model.refresh.save_failed":

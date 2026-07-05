@@ -709,10 +709,12 @@ func enCatalog(key string) string {
 		return "endpoint base url"
 	case "panel.provider.edit.custom_model":
 		return "custom model"
+	case "panel.provider.edit.new_endpoint_name":
+		return "new endpoint name"
 	case "panel.provider.hint.edit":
 		return "Enter save • Esc cancel"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • Esc close"
+		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • e add endpoint • Esc close"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l login • x logout • b edit enterprise domain"
 	case "panel.provider.saved":
@@ -766,9 +768,21 @@ func enCatalog(key string) string {
 	case "panel.model.refreshing":
 		return "Refreshing latest models..."
 	case "panel.model.hint.main":
-		return "j/k move • Enter or s apply • r refresh • / focus filter • Esc close • /model <name> direct switch"
+		return "j/k move • Enter or s apply • w context window • o max tokens • r refresh • / filter • Esc close"
+	case "panel.model.hint.edit":
+		return "Enter save • Esc cancel (0 or empty = auto-detect)"
+	case "panel.model.context_window":
+		return "Context Window"
+	case "panel.model.max_tokens":
+		return "Max Output Tokens"
+	case "panel.model.edit":
+		return "Edit"
 	case "panel.model.saved_runtime_inactive":
 		return "Saved config, but current runtime is still inactive: %s"
+	case "panel.model.context_applied":
+		return "Applied context_window=%d, max_tokens=%d (saved)"
+	case "panel.model.context_cleared":
+		return "Reset to auto-detect (saved)"
 	case "panel.model.switched":
 		return "Switched model to %s."
 	case "panel.model.refresh.save_failed":
