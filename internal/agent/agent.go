@@ -1016,6 +1016,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
+			// Smart verify hint reset: if the agent ran a build/test/verify command,
+			// reset the edit counter and track the result.
+			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
+
 			// Post-edit verification hint: after successful source-code edits,
 			// periodically suggest running the build command to verify changes.
 			if !result.IsError {

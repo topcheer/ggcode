@@ -11,17 +11,20 @@ import (
 )
 
 // postEditVerifyState tracks file edits to inject periodic verification hints.
-// This implements the "generate-verify-fix loop" pattern from the Iterative
-// Refinement Loop research: after editing source code, prompt the agent to
-// verify (build/test) before making more changes.
+// This implements the "generate-verify-fix loop" pattern: after editing source
+// code, prompt the agent to verify (build/test) before making more changes.
 //
 // The hint fires once every postEditVerifyInterval source-code edits, not
 // after every single edit, to avoid noise. Non-source files (docs, JSON,
 // markdown) don't count toward the threshold.
+//
+// Smart detection: if the agent runs a build/test/verify command between edits,
+// the counter resets — the agent already verified, no need to nag.
 type postEditVerifyState struct {
-	sourceEditsSinceHint int    // consecutive source-code edits since last hint
+	sourceEditsSinceHint int    // consecutive source-code edits since last hint or build
 	buildCmd             string // cached build command (detected lazily, empty = not yet checked)
 	buildCmdChecked      bool   // whether we've attempted detection
+	lastBuildFailed      bool   // true if the agent's last build command failed
 }
 
 // postEditVerifyInterval is how many source-code edits between hints.
@@ -248,6 +251,10 @@ func isSourceCodeFile(path string) bool {
 // postEditVerifyHint checks if we should inject a verification hint after
 // a successful file edit. Returns the hint text, or "" if no hint needed.
 //
+// Context-aware: if the agent has already run a build since the last hint
+// fire, the counter was reset (via maybeResetVerifyOnCommand). If the last
+// build FAILED, the hint message includes urgency.
+//
 // Thread-safety: caller must NOT hold a.mu (this method acquires it).
 func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string {
 	if !fileEditingTools[toolName] {
@@ -284,11 +291,108 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	a.postEditVerify.sourceEditsSinceHint = 0
 	debug.Log("agent", "post-edit verify hint: suggesting %q after %d source-code edits", cmd, postEditVerifyInterval)
 
+	// Context-aware: if last build failed, make it urgent.
+	if a.postEditVerify.lastBuildFailed {
+		return fmt.Sprintf(
+			"[Verification reminder: you've edited %d source files since the last build check (which FAILED). "+
+				"Run `%s` to verify your fixes compile before making further edits.]",
+			postEditVerifyInterval, cmd,
+		)
+	}
+
 	return fmt.Sprintf(
 		"[Verification reminder: you've edited %d source files since the last build check. "+
 			"Run `%s` to verify your changes compile before making further edits.]",
 		postEditVerifyInterval, cmd,
 	)
+}
+
+// verifyCommands is a set of command substrings that indicate a build/test/verify
+// command. Used by maybeResetVerifyOnCommand to detect when the agent has
+// proactively run verification (so the hint counter can be reset).
+var verifyCommands = map[string]bool{
+	"go build":      true,
+	"go test":       true,
+	"go vet":        true,
+	"make":          true,
+	"cargo build":   true,
+	"cargo test":    true,
+	"npm run build": true,
+	"npm test":      true,
+	"npm run test":  true,
+	"just":          true,
+	"task":          true,
+	"pytest":        true,
+	"flutter test":  true,
+	"cmake":         true,
+	"ctest":         true,
+	"rake test":     true,
+}
+
+// isVerifyCommand checks whether a command string looks like a build/test/verify
+// command by matching against known verify command substrings.
+func isVerifyCommand(cmd string) bool {
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
+	if cmdLower == "" {
+		return false
+	}
+	// Direct substring match against known verify commands.
+	for prefix := range verifyCommands {
+		if strings.HasPrefix(cmdLower, prefix+" ") || cmdLower == prefix {
+			return true
+		}
+	}
+	// Also match "make <target>" / "just <recipe>" / "task <task>" patterns.
+	words := strings.Fields(cmdLower)
+	if len(words) > 0 {
+		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
+			return true
+		}
+	}
+	return false
+}
+
+// maybeResetVerifyOnCommand checks whether a run_command tool call was a
+// build/test/verify command and, if so, resets the edit counter and records
+// the result. This prevents redundant verify hints when the agent has already
+// proactively verified.
+//
+// Thread-safety: caller must NOT hold a.mu (this method acquires it).
+func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage, resultErr bool) {
+	if toolName != "run_command" {
+		return
+	}
+
+	cmd := extractCommandFromArgs(args)
+	if cmd == "" || !isVerifyCommand(cmd) {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.postEditVerify.sourceEditsSinceHint = 0
+	a.postEditVerify.lastBuildFailed = resultErr
+
+	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", cmd, resultErr)
+}
+
+// extractCommandFromArgs extracts the "command" field from run_command args.
+func extractCommandFromArgs(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return ""
+	}
+	if v, ok := raw["command"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			return s
+		}
+	}
+	return ""
 }
 
 // resetPostEditVerify clears edit tracking state. Called at the start of

@@ -226,3 +226,121 @@ func TestResetPostEditVerify(t *testing.T) {
 		t.Error("expected buildCmdChecked=false after reset")
 	}
 }
+
+func TestIsVerifyCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"go build ./...", true},
+		{"go test ./internal/agent/", true},
+		{"go vet ./...", true},
+		{"make verify-ci", true},
+		{"make", true},
+		{"cargo build", true},
+		{"cargo test", true},
+		{"npm run build", true},
+		{"npm test", true},
+		{"just verify", true},
+		{"pytest", true},
+		{"flutter test", true},
+		// Non-verify commands
+		{"ls -la", false},
+		{"echo hello", false},
+		{"git status", false},
+		{"cat README.md", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			if got := isVerifyCommand(tt.cmd); got != tt.want {
+				t.Errorf("isVerifyCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaybeResetVerifyOnCommand(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
+
+	a := &Agent{workingDir: tmp}
+
+	// Build up edit counter.
+	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
+	a.postEditVerifyHint("edit_file", editArgs)
+	a.postEditVerifyHint("edit_file", editArgs)
+
+	if a.postEditVerify.sourceEditsSinceHint != 2 {
+		t.Fatalf("expected counter=2 before build, got %d", a.postEditVerify.sourceEditsSinceHint)
+	}
+
+	// Agent runs "go build ./..." — successful build resets counter.
+	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
+	a.maybeResetVerifyOnCommand("run_command", buildArgs, false)
+
+	if a.postEditVerify.sourceEditsSinceHint != 0 {
+		t.Errorf("expected counter=0 after successful build, got %d", a.postEditVerify.sourceEditsSinceHint)
+	}
+	if a.postEditVerify.lastBuildFailed {
+		t.Error("expected lastBuildFailed=false after successful build")
+	}
+
+	// Non-verify command does NOT reset counter.
+	a.postEditVerifyHint("edit_file", editArgs)
+	a.postEditVerifyHint("edit_file", editArgs)
+	lsArgs, _ := json.Marshal(map[string]string{"command": "ls -la"})
+	a.maybeResetVerifyOnCommand("run_command", lsArgs, false)
+
+	if a.postEditVerify.sourceEditsSinceHint != 2 {
+		t.Errorf("expected counter unchanged after ls, got %d", a.postEditVerify.sourceEditsSinceHint)
+	}
+}
+
+func TestMaybeResetVerifyOnCommand_FailedBuild(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module test\n"), 0644)
+
+	a := &Agent{workingDir: tmp}
+
+	// Agent runs "go build ./..." — FAILED.
+	buildArgs, _ := json.Marshal(map[string]string{"command": "go build ./..."})
+	a.maybeResetVerifyOnCommand("run_command", buildArgs, true)
+
+	if a.postEditVerify.sourceEditsSinceHint != 0 {
+		t.Errorf("expected counter=0 after failed build, got %d", a.postEditVerify.sourceEditsSinceHint)
+	}
+	if !a.postEditVerify.lastBuildFailed {
+		t.Error("expected lastBuildFailed=true after failed build")
+	}
+
+	// Now edit 3 files → hint should include "(which FAILED)" urgency.
+	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go"})
+	hint1 := a.postEditVerifyHint("edit_file", editArgs)
+	hint2 := a.postEditVerifyHint("edit_file", editArgs)
+	hint3 := a.postEditVerifyHint("edit_file", editArgs)
+
+	if hint1 != "" || hint2 != "" {
+		t.Fatal("expected no hint before threshold")
+	}
+	if hint3 == "" {
+		t.Fatal("expected hint after 3 edits")
+	}
+	if !strings.Contains(hint3, "FAILED") {
+		t.Errorf("expected hint to mention FAILED, got: %s", hint3)
+	}
+}
+
+func TestMaybeResetVerifyOnCommand_NonRunCommand(t *testing.T) {
+	tmp := t.TempDir()
+	a := &Agent{workingDir: tmp}
+
+	// edit_file tool calls should NOT trigger reset.
+	editArgs, _ := json.Marshal(map[string]string{"file_path": "/foo.go", "command": "go build"})
+	a.maybeResetVerifyOnCommand("edit_file", editArgs, false)
+
+	// Counter unchanged (default 0, but verify it didn't set anything weird)
+	if a.postEditVerify.lastBuildFailed {
+		t.Error("expected lastBuildFailed=false for non-run_command tool")
+	}
+}
