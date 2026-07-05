@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // RunStats accumulates observability data during a single RunStreamWithContent
@@ -367,7 +368,7 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		return
 	}
 	s := *stats // copy to avoid race
-	go func() {
+	safego.Go("agent.reflection", func() {
 		defer func() {
 			if r := recover(); r != nil {
 				debug.Log("agent", "reflection handler panicked: %v", r)
@@ -378,7 +379,7 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		// unmatched ones via LLM. This is the harness ratchet — every
 		// error becomes a rule that prevents future mistakes.
 		a.runRatchet(&s)
-	}()
+	})
 }
 
 func truncatePrompt(s string, maxLen int) string {
