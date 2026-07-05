@@ -67,45 +67,85 @@ var sourceCodeExtensions = map[string]bool{
 
 // detectBuildSystem checks the working directory for build system markers
 // and returns the appropriate verify command, or "" if none found.
+// Priority: Makefile targets > verification scripts > language-specific defaults.
+// Makefile is preferred over go.mod because it includes build tags, env vars,
+// and other project-specific configuration that language defaults miss.
 func detectBuildSystem(workingDir string) string {
 	if workingDir == "" {
 		return ""
 	}
 
-	// Check for Go module first (most relevant for this project).
+	// 1. Makefile — the project's authoritative build configuration.
+	// Check for specific high-value targets in priority order.
+	makefiles := []string{
+		filepath.Join(workingDir, "Makefile"),
+		filepath.Join(workingDir, "makefile"),
+		filepath.Join(workingDir, "GNUmakefile"),
+	}
+	for _, mf := range makefiles {
+		if data, err := os.ReadFile(mf); err == nil {
+			content := string(data)
+			// Look for the most useful verification target.
+			for _, target := range []string{"verify-ci", "ci", "verify", "test", "build"} {
+				// Match "target:" or "target :" at start of a line (not in a comment or variable)
+				if hasMakeTarget(content, target) {
+					return "make " + target
+				}
+			}
+			// Makefile exists but no recognized target. Fall through to
+			// language detection — bare "make" might run the wrong thing.
+			break
+		}
+	}
+
+	// 2. Project-specific verification scripts.
+	scriptChecks := []string{
+		filepath.Join(workingDir, "scripts", "dev", "verify-ci.sh"),
+		filepath.Join(workingDir, "scripts", "verify.sh"),
+		filepath.Join(workingDir, "scripts", "ci.sh"),
+	}
+	for _, script := range scriptChecks {
+		if fileExists(script) {
+			return "bash " + script
+		}
+	}
+
+	// 3. Language-specific defaults (lower confidence — may miss build tags).
 	if fileExists(filepath.Join(workingDir, "go.mod")) {
 		return "go build ./..."
 	}
-
-	// Makefile covers many projects (C/C++, Go, etc.).
-	if fileExists(filepath.Join(workingDir, "Makefile")) ||
-		fileExists(filepath.Join(workingDir, "makefile")) ||
-		fileExists(filepath.Join(workingDir, "GNUmakefile")) {
-		return "make"
-	}
-
-	// Rust.
 	if fileExists(filepath.Join(workingDir, "Cargo.toml")) {
 		return "cargo build"
 	}
-
-	// Node.js.
 	if fileExists(filepath.Join(workingDir, "package.json")) {
 		return "npm run build"
 	}
-
-	// CMake.
 	if fileExists(filepath.Join(workingDir, "CMakeLists.txt")) {
 		return "cmake --build build"
 	}
-
-	// Python (test rather than build — Python isn't compiled).
 	if fileExists(filepath.Join(workingDir, "pyproject.toml")) ||
 		fileExists(filepath.Join(workingDir, "setup.py")) {
 		return "python -m pytest"
 	}
 
 	return ""
+}
+
+// hasMakeTarget checks if a Makefile defines a target with the given name.
+// Matches "target:" at the beginning of a line (after optional whitespace),
+// but not in comments (lines starting with #) or variable assignments (=).
+func hasMakeTarget(makefileContent, target string) bool {
+	targetPrefix := target + ":"
+	for _, line := range strings.Split(makefileContent, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, targetPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func fileExists(path string) bool {

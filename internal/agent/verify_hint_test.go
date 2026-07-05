@@ -27,9 +27,9 @@ func TestDetectBuildSystem(t *testing.T) {
 	// Makefile.
 	mkDir := filepath.Join(tmp, "mkproject")
 	os.MkdirAll(mkDir, 0755)
-	os.WriteFile(filepath.Join(mkDir, "Makefile"), []byte("all:\n\techo hi\n"), 0644)
-	if cmd := detectBuildSystem(mkDir); cmd != "make" {
-		t.Errorf("expected 'make', got %q", cmd)
+	os.WriteFile(filepath.Join(mkDir, "Makefile"), []byte("build:\n\techo hi\n"), 0644)
+	if cmd := detectBuildSystem(mkDir); cmd != "make build" {
+		t.Errorf("expected 'make build', got %q", cmd)
 	}
 
 	// Rust.
