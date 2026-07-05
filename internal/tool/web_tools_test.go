@@ -69,6 +69,35 @@ func TestWebFetch_HTTPError(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error for 404")
 	}
+	// Should include status code and final URL
+	if !strings.Contains(result.Content, "HTTP 404") {
+		t.Errorf("expected 'HTTP 404' in output, got: %s", result.Content)
+	}
+}
+
+func TestWebFetch_HTTPErrorWithBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, "<html><body>Access denied. Rate limit exceeded.</body></html>")
+	}))
+	defer ts.Close()
+
+	wf := WebFetch{AllowPrivate: true}
+	input := json.RawMessage(fmt.Sprintf(`{"url": "%s"}`, ts.URL))
+	result, err := wf.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error for 403")
+	}
+	// Non-200 responses should now include body content for diagnostics
+	if !strings.Contains(result.Content, "Rate limit exceeded") {
+		t.Errorf("expected body content in error response, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "HTTP 403") {
+		t.Errorf("expected status code in error response, got: %s", result.Content)
+	}
 }
 
 func TestWebFetch_MissingURL(t *testing.T) {

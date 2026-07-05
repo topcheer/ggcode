@@ -129,8 +129,25 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	defer resp.Body.Close()
 
+	// For non-200 responses, still read a truncated body — many APIs and
+	// websites return useful error details (JSON messages, HTML hints) that
+	// help the agent diagnose the problem and choose a fallback strategy.
 	if resp.StatusCode != http.StatusOK {
-		return Result{IsError: true, Content: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, resp.Status)}, nil
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 10000))
+		if readErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, resp.Status)}, nil
+		}
+		errText := stripHTML(string(errBody))
+		// Truncate non-200 response bodies to keep context usage minimal
+		if len(errText) > 2000 {
+			errText = errText[:2000] + "\n... [error body truncated]"
+		}
+		finalURL := resp.Request.URL.String()
+		msg := fmt.Sprintf("HTTP %d: %s\nFinal URL: %s", resp.StatusCode, resp.Status, finalURL)
+		if strings.TrimSpace(errText) != "" {
+			msg += "\n" + errText
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
@@ -141,6 +158,12 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	text := stripHTML(string(body))
 	if len(text) > 50000 {
 		text = text[:50000] + "\n... [truncated]"
+	}
+
+	// Include final URL if redirected (helpful for shortened URLs, etc.)
+	finalURL := resp.Request.URL.String()
+	if finalURL != args.URL {
+		text = fmt.Sprintf("[Redirected to: %s]\n\n%s", finalURL, text)
 	}
 
 	// When a prompt is provided, prepend it so the LLM can process accordingly
