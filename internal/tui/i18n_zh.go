@@ -46,8 +46,6 @@ func zhCatalog(key string) string {
 		return "正在重新连接 %s..."
 	case "panel.mcp.reconnect_failed":
 		return "无法重新连接 %s。"
-	case "panel.mcp.installing_browser_preset":
-		return "正在安装浏览器自动化 MCP 预设..."
 	case "panel.mcp.uninstalling":
 		return "正在卸载 %s..."
 	case "panel.startup":

@@ -1156,40 +1156,6 @@ func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
 	}
 }
 
-func TestMCPPanelBrowserPresetInstallsPlaywright(t *testing.T) {
-	m := newTestModel()
-	cfg := config.DefaultConfig()
-	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
-	m.SetConfig(cfg)
-	manager := &fakeMCPManager{}
-	m.SetMCPManager(manager)
-	m.openMCPPanel()
-
-	next, cmd := m.Update(tea.KeyPressMsg{Text: "b"})
-	if cmd == nil {
-		t.Fatal("expected browser preset install to return a command")
-	}
-	msg := cmd()
-	next, cmd = next.(Model).Update(msg)
-	if cmd != nil {
-		t.Fatal("expected install result to update synchronously")
-	}
-	m2 := next.(Model)
-	if len(manager.installed) != 1 {
-		t.Fatalf("expected preset install call, got %+v", manager.installed)
-	}
-	got := manager.installed[0]
-	if got.Name != "playwright" || got.Command != "npx" || got.Type != "stdio" {
-		t.Fatalf("unexpected preset config: %+v", got)
-	}
-	if len(m2.config.MCPServers) != 1 || m2.config.MCPServers[0].Name != "playwright" {
-		t.Fatalf("expected playwright MCP server persisted, got %+v", m2.config.MCPServers)
-	}
-	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Installed MCP server playwright") {
-		t.Fatalf("expected preset success message, got %+v", m2.mcpPanel)
-	}
-}
-
 func TestMCPPanelUninstallRemovesConfigAndCallsManager(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()

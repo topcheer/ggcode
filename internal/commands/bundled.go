@@ -49,9 +49,9 @@ func bundledSkills() []*Command {
 		{
 			Name:          "browser-automation",
 			DisplayName:   "Use browser automation",
-			Description:   "Browser automation through the built-in 'browser' tool (Go-native CDP, no Node.js/Playwright needed) or MCP browser servers as fallback.",
+			Description:   "Browser automation through the built-in 'browser' tool (Go-native CDP, no Node.js/Playwright needed).",
 			WhenToUse:     "Use when the user wants to open websites, click elements, fill forms, capture screenshots, inspect console output, or automate browser flows.",
-			Template:      "Handle browser tasks through the built-in `browser` tool first. It provides full SPA/JavaScript support via Chrome DevTools Protocol (CDP) without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Requires Chrome/Chromium installed. For simple non-JS page fetching, use `web_fetch` instead. If the built-in browser tool is insufficient (e.g., needs file downloads, multi-tab orchestration), fall back to MCP browser tools via `list_mcp_capabilities`.",
+			Template:      "Handle browser tasks through the built-in `browser` tool. It provides full SPA/JavaScript support via Chrome DevTools Protocol (CDP) without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Requires Chrome/Chromium installed. For simple non-JS page fetching, use `web_fetch` instead.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,

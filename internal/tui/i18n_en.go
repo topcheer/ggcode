@@ -50,8 +50,6 @@ func enCatalog(key string) string {
 		return "Reconnecting %s..."
 	case "panel.mcp.reconnect_failed":
 		return "Unable to reconnect %s."
-	case "panel.mcp.installing_browser_preset":
-		return "Installing browser automation MCP preset..."
 	case "panel.mcp.uninstalling":
 		return "Uninstalling %s..."
 	case "panel.startup":

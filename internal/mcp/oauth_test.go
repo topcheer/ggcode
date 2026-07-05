@@ -310,13 +310,6 @@ func TestAdapter_NewAdapter(t *testing.T) {
 	}
 }
 
-func TestBrowserAutomationPreset(t *testing.T) {
-	cfg := BrowserAutomationPreset()
-	if cfg.Command != "npx" {
-		t.Errorf("command = %q", cfg.Command)
-	}
-}
-
 func TestExchangeCode_NilStateGuard(t *testing.T) {
 	h := NewOAuthHandler("test-server", "https://example.com", nil)
 	// h.state is nil — should return error, not panic.
