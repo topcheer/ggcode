@@ -89,7 +89,12 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			}
 			return Result{Content: text}, nil
 		}
-		return Result{IsError: true, Content: fmt.Sprintf("file too large (%d MB). Use read_file with offset/limit for range reading.", info.Size()/(1024*1024))}, nil
+		// Count lines so the agent knows the range to use
+		lineCount := countFileLines(args.Path)
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"file too large (%d MB, ~%d lines). Use read_file with offset and limit for range reading (e.g. offset=1 limit=500 to read the first 500 lines).",
+			info.Size()/(1024*1024), lineCount,
+		)}, nil
 	}
 
 	data, err := os.ReadFile(args.Path)

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +182,29 @@ func TestReadFileStreamingRangeBeyondEnd(t *testing.T) {
 	}
 	if !strings.Contains(text, "beyond end") {
 		t.Errorf("expected beyond-end message: %s", text)
+	}
+}
+
+func TestReadFileStreamingTruncationReportsTotal(t *testing.T) {
+	// Create a 100-line file and read with limit=10 — should report total
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "medium.txt")
+	var sb strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&sb, "line %d\n", i+1)
+	}
+	os.WriteFile(fp, []byte(sb.String()), 0o644)
+
+	text, err := readFileRangeStreaming(fp, 1, 10, readFileRangeOptions{
+		defaultLimit: maxOutputLines,
+		moreHint:     "test hint",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Must include "of ~100" so the agent knows the file size
+	if !strings.Contains(text, "of ~100") {
+		t.Errorf("expected 'of ~100' in truncation message: %s", text[strings.LastIndex(text, "["):])
 	}
 }
 

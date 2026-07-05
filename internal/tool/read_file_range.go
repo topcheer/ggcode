@@ -114,13 +114,17 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	var buf strings.Builder
 	lineNum := 0 // 0-based
 	readCount := 0
+	hitLimit := false
 	for scanner.Scan() {
 		if lineNum < startIdx {
 			lineNum++
 			continue
 		}
 		if readCount >= effectiveLimit {
-			break
+			hitLimit = true
+			// Don't break — keep scanning to count total lines
+			lineNum++
+			continue
 		}
 		fmt.Fprintf(&buf, "%6d\t%s\n", lineNum+1, scanner.Text())
 		readCount++
@@ -130,11 +134,7 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 		return "", fmt.Errorf("error reading file: %w", err)
 	}
 
-	totalLines := lineNum // approximate; we stopped scanning
-	if readCount < effectiveLimit && readCount > 0 {
-		// We read to end of file without hitting the limit
-		totalLines = lineNum
-	}
+	totalLines := lineNum
 
 	if buf.Len() == 0 {
 		if startIdx > 0 && totalLines > 0 {
@@ -143,10 +143,28 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 		return "[Empty file or no lines in range.]", nil
 	}
 
-	if readCount >= effectiveLimit {
-		fmt.Fprintf(&buf, "[Showing lines %d-%d. %s]\n",
-			startIdx+1, startIdx+readCount, opts.moreHint)
+	if hitLimit {
+		fmt.Fprintf(&buf, "[Showing lines %d-%d of ~%d. %s]\n",
+			startIdx+1, startIdx+readCount, totalLines, opts.moreHint)
 	}
 
 	return buf.String(), nil
+}
+
+// countFileLines does a fast line count of a file using a streaming scanner.
+// Used to provide line count hints for large files without loading them into memory.
+func countFileLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	count := 0
+	for scanner.Scan() {
+		count++
+	}
+	return count
 }
