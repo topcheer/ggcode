@@ -94,7 +94,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		"action": {
 			"type": "string",
 			"description": "Browser action to perform.",
-			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close"]
+			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status"]
 		},
 		"url": {
 			"type": "string",
@@ -219,6 +219,9 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	case "close":
 		return b.doCloseSession(args.Profile, args.Session)
+
+	case "status":
+		return b.doStatus()
 
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
@@ -779,6 +782,53 @@ func (b *Browser) doContent(ctx context.Context, profile, session string, headle
 	if len(content.Text) >= 40000 {
 		sb.WriteString("\n... [truncated]")
 	}
+	return Result{Content: sb.String()}, nil
+}
+
+// doStatus lists all active browser profiles and sessions.
+func (b *Browser) doStatus() (Result, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if len(b.profiles) == 0 {
+		return Result{Content: "No active browser profiles. Use 'navigate' to start a browser session."}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Browser Status (%d profile(s) active):\n\n", len(b.profiles)))
+
+	for name, p := range b.profiles {
+		sb.WriteString(fmt.Sprintf("  Profile: %s (%d tab(s))\n", name, len(p.tabs)))
+		for sessID, tab := range p.tabs {
+			var url, title string
+			if tab.ctx.Err() == nil {
+				_ = chromedp.Run(tab.ctx,
+					chromedp.Location(&url),
+					chromedp.Title(&title),
+				)
+			}
+			status := "active"
+			if tab.ctx.Err() != nil {
+				status = "closed"
+			}
+			if url != "" {
+				sb.WriteString(fmt.Sprintf("    └─ Session: %s [%s] %s — %s\n", sessID, status, title, url))
+			} else {
+				sb.WriteString(fmt.Sprintf("    └─ Session: %s [%s]\n", sessID, status))
+			}
+		}
+	}
+
+	chromePath := findChromeExecutable()
+	if chromePath != "" {
+		sb.WriteString(fmt.Sprintf("\nChrome: %s", chromePath))
+		ver := getChromeVersion(chromePath)
+		if ver > 0 {
+			sb.WriteString(fmt.Sprintf(" (v%d)", ver))
+		}
+		sb.WriteString("\n")
+	}
+
 	return Result{Content: sb.String()}, nil
 }
 
