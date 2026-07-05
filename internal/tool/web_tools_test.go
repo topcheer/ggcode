@@ -38,7 +38,7 @@ func TestWebFetch_Success(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %s", result.Content)
 	}
-	if result.Content != "Hello World" {
+	if result.Content != "Hello\nWorld" {
 		t.Errorf("expected 'Hello World', got %q", result.Content)
 	}
 }
@@ -185,18 +185,56 @@ func TestParsePrivateNetworks_InvalidCIDR(t *testing.T) {
 
 func TestStripHTML(t *testing.T) {
 	tests := []struct {
-		input, want string
+		name, input, want string
 	}{
-		{"<p>Hello</p>", "Hello"},
-		{"<h1>Title</h1><p>Body</p>", "Title Body"},
-		{"A &amp; B &lt; C", "A & B < C"},
-		{"<script>alert('x')</script>Text", "Text"},
+		{"simple paragraph", "<p>Hello</p>", "Hello"},
+		{"heading and paragraph become separate lines", "<h1>Title</h1><p>Body</p>", "Title\nBody"},
+		{"entity decoding", "A &amp; B &lt; C", "A & B < C"},
+		{"script removed", "<script>alert('x')</script>Text", "Text"},
+		{"nav removed", "<nav>Home About</nav><main><p>Content</p></main>", "Content"},
+		{"article extraction", "<header>Brand</header><article><p>Article text here that is long enough to pass threshold</p></article>", "Article text here that is long enough to pass threshold"},
+		{"numeric entity", "&#8217;", "\u2019"},
+		{"named entity", "&mdash;", "\u2014"},
 	}
 	for _, tc := range tests {
-		got := stripHTML(tc.input)
-		if got != tc.want {
-			t.Errorf("stripHTML(%q) = %q, want %q", tc.input, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripHTML(tc.input)
+			if got != tc.want {
+				t.Errorf("stripHTML(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStripHTMLContentExtraction(t *testing.T) {
+	// Simulate a typical web page with nav, article, sidebar, footer
+	html := `<html><head><title>Test Page</title></head><body>
+	<nav><a href="/">Home</a> <a href="/about">About</a></nav>
+	<header><h1>Site Brand</h1></header>
+	<article>
+		<h2>How to Use This Feature</h2>
+		<p>This is the main content paragraph that contains useful information about the feature.</p>
+		<p>Second paragraph with more details and context for the reader.</p>
+	</article>
+	<aside><h3>Related Links</h3><ul><li>Link 1</li><li>Link 2</li></ul></aside>
+	<footer>Copyright 2024. All rights reserved.</footer>
+	</body></html>`
+
+	result := stripHTML(html)
+	// Nav should NOT be in result
+	if strings.Contains(result, "Home") && strings.Contains(result, "About") {
+		t.Errorf("navigation text should be removed, got: %s", result)
+	}
+	// Footer should NOT be in result
+	if strings.Contains(result, "Copyright") {
+		t.Errorf("footer text should be removed, got: %s", result)
+	}
+	// Article content SHOULD be in result
+	if !strings.Contains(result, "How to Use This Feature") {
+		t.Errorf("article heading should be in result, got: %s", result)
+	}
+	if !strings.Contains(result, "main content paragraph") {
+		t.Errorf("article body should be in result, got: %s", result)
 	}
 }
 
@@ -215,7 +253,7 @@ func TestWebFetch_PromptIsPrependedNotExecuted(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected tool error: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "Prompt: Return only title") || !strings.Contains(result.Content, "Hello World") {
+	if !strings.Contains(result.Content, "Prompt: Return only title") || !strings.Contains(result.Content, "Hello") || !strings.Contains(result.Content, "World") {
 		t.Fatalf("expected prompt to be prepended to raw fetched text, got %q", result.Content)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -255,17 +256,126 @@ func StripHTML(s string) string {
 	return stripHTML(s)
 }
 
-// stripHTML removes HTML tags and decodes common entities.
+// stripHTML removes HTML tags, extracts main content, and decodes entities.
+// It prioritizes semantic content containers (<article>, <main>, role="main")
+// and removes boilerplate elements (<nav>, <header>, <footer>, <aside>) to
+// produce cleaner text that uses fewer tokens and is easier for the LLM to
+// parse. Falls back to full-page extraction when no semantic container is found.
 func stripHTML(s string) string {
-	s = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`).ReplaceAllString(s, "")
-	s = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`).ReplaceAllString(s, "")
+	// Phase 1: Remove non-content elements entirely
+	// Go's RE2 does not support backreferences (\1), so we enumerate each tag.
+	for _, tag := range []string{"script", "style", "noscript", "template", "svg", "nav", "header", "footer", "aside", "form", "iframe"} {
+		re := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>.*?</` + tag + `\s*>`)
+		s = re.ReplaceAllString(s, "")
+	}
+	// Also remove self-closing non-content tags
+	s = regexp.MustCompile(`(?is)<(meta|link|input|button)\b[^>]*/?>`).ReplaceAllString(s, "")
+
+	// Phase 2: Try to extract main content from semantic containers
+	// Priority: <article> > <main> > [role="main"] > #content > .content > .post > .entry-content
+	if extracted := extractMainContent(s); extracted != "" {
+		s = extracted
+	}
+
+	// Phase 3: Convert block-level elements to newlines for readability
+	// This preserves paragraph/heading structure that the LLM uses for comprehension
+	blockRe := regexp.MustCompile(`(?i)</?(p|div|section|article|header|footer|h[1-6]|li|tr|blockquote|pre|ul|ol|table|figure|figcaption|dt|dd)\b[^>]*>`)
+	s = blockRe.ReplaceAllString(s, "\n")
+	// Convert <br> to newline
+	s = regexp.MustCompile(`(?i)<br\s*/?>`).ReplaceAllString(s, "\n")
+
+	// Phase 4: Strip remaining tags
 	s = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
-	s = strings.ReplaceAll(s, "&amp;", "&")
-	s = strings.ReplaceAll(s, "&lt;", "<")
-	s = strings.ReplaceAll(s, "&gt;", ">")
-	s = strings.ReplaceAll(s, "&quot;", `"`)
-	s = strings.ReplaceAll(s, "&#39;", "'")
-	s = strings.ReplaceAll(s, "&nbsp;", " ")
-	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
-	return strings.TrimSpace(s)
+
+	// Phase 5: Decode HTML entities
+	s = html.UnescapeString(s)
+
+	// Phase 6: Collapse whitespace but preserve line structure
+	// Collapse spaces within lines, collapse 3+ newlines to 2
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			cleaned = append(cleaned, line)
+		}
+	}
+	return strings.Join(cleaned, "\n")
+}
+
+// extractMainContent tries to find the primary content container in an HTML page.
+// Returns the inner HTML of the container, or empty string if none found.
+func extractMainContent(htmlStr string) string {
+	// Try <article> first — most reliable for blog posts and documentation
+	if content := extractFirstTag(htmlStr, "article"); content != "" {
+		return content
+	}
+	// Try <main>
+	if content := extractFirstTag(htmlStr, "main"); content != "" {
+		return content
+	}
+	// Try [role="main"]
+	if content := extractAttrMatch(htmlStr, "role", "main"); content != "" {
+		return content
+	}
+	// Try common content div patterns
+	for _, idPattern := range []string{"content", "main-content", "post-content", "page-content", "body-content", "wiki-content"} {
+		if content := extractByID(htmlStr, idPattern); content != "" {
+			return content
+		}
+	}
+	return ""
+}
+
+// extractFirstTag extracts the inner content of the first occurrence of a tag.
+func extractFirstTag(s, tag string) string {
+	openRe := regexp.MustCompile(`(?is)<` + tag + `\b[^>]*>`)
+	closeRe := regexp.MustCompile(`(?is)</` + tag + `\s*>`)
+
+	openMatch := openRe.FindStringIndex(s)
+	if openMatch == nil {
+		return ""
+	}
+	rest := s[openMatch[1]:]
+	closeMatch := closeRe.FindStringIndex(rest)
+	if closeMatch == nil {
+		return ""
+	}
+	inner := rest[:closeMatch[0]]
+	// Only use if it contains meaningful text (>100 chars)
+	if len(strings.TrimSpace(stripTagsOnly(inner))) < 100 {
+		return ""
+	}
+	return inner
+}
+
+// extractAttrMatch extracts content from a tag with a specific attribute value.
+func extractAttrMatch(s, attr, val string) string {
+	re := regexp.MustCompile(`(?is)<\w+\s+[^>]*` + attr + `\s*=\s*["']` + val + `["'][^>]*>(.*?)</\w+>`)
+	m := re.FindStringSubmatch(s)
+	if m == nil || len(m) < 2 {
+		return ""
+	}
+	if len(strings.TrimSpace(stripTagsOnly(m[1]))) < 100 {
+		return ""
+	}
+	return m[1]
+}
+
+// extractByID extracts content from a tag with a specific id attribute.
+func extractByID(s, id string) string {
+	re := regexp.MustCompile(`(?is)<\w+\s+[^>]*id\s*=\s*["']` + regexp.QuoteMeta(id) + `["'][^>]*>(.*?)</\w+>`)
+	m := re.FindStringSubmatch(s)
+	if m == nil || len(m) < 2 {
+		return ""
+	}
+	if len(strings.TrimSpace(stripTagsOnly(m[1]))) < 100 {
+		return ""
+	}
+	return m[1]
+}
+
+// stripTagsOnly removes HTML tags without any entity decoding or whitespace handling.
+func stripTagsOnly(s string) string {
+	return regexp.MustCompile(`<[^>]+>`).ReplaceAllString(s, " ")
 }
