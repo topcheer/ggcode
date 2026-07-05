@@ -953,7 +953,11 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 		url := fmt.Sprintf("%s/interactions/%s/%s/callback", a.apiBase, interactionID, interactionToken)
 		body := map[string]any{"type": 6} // UPDATE_MESSAGE (deferred)
 		bodyBytes, _ := json.Marshal(body)
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(bodyBytes))
+		// Use a timeout context instead of context.Background() to prevent
+		// the HTTP request from hanging indefinitely if the connection stalls.
+		ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ackCtx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 		req.Header.Set("Authorization", "Bot "+a.token)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := a.httpClient.Do(req)

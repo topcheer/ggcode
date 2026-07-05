@@ -69,7 +69,13 @@ func MCPDisabled(name string) bool {
 
 // SetMCPDisabled persists the enabled/disabled state for an MCP server.
 func SetMCPDisabled(name string, disabled bool) {
-	disabledSet := loadMCPDisabledSet()
+	cached := loadMCPDisabledSet()
+	// Copy the cached map before mutating to avoid concurrent map access
+	// with readers that hold the same map pointer from the cache.
+	disabledSet := make(map[string]bool, len(cached)+1)
+	for k, v := range cached {
+		disabledSet[k] = v
+	}
 	if disabled {
 		disabledSet[name] = true
 	} else {

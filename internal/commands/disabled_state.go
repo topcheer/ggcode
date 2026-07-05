@@ -106,7 +106,13 @@ func ApplyDisabledState(cmds map[string]*Command) {
 
 // PersistEnabledState saves the enabled/disabled state for a single skill.
 func PersistEnabledState(name string, enabled bool) {
-	disabled := loadDisabledSet()
+	cached := loadDisabledSet()
+	// Copy the cached map before mutating to avoid concurrent map access
+	// with readers that hold the same map pointer from the cache.
+	disabled := make(map[string]bool, len(cached)+1)
+	for k, v := range cached {
+		disabled[k] = v
+	}
 	if enabled {
 		delete(disabled, normalizeSkillName(name))
 	} else {
