@@ -98,7 +98,51 @@ func detectBuildSystem(workingDir string) string {
 		}
 	}
 
-	// 2. Project-specific verification scripts.
+	// 2. Justfile — modern command runner (just).
+	justfiles := []string{
+		filepath.Join(workingDir, "Justfile"),
+		filepath.Join(workingDir, "justfile"),
+		filepath.Join(workingDir, ".justfile"),
+	}
+	for _, jf := range justfiles {
+		if fileExists(jf) {
+			// Check for a verify/ci/test recipe
+			if data, err := os.ReadFile(jf); err == nil {
+				content := string(data)
+				for _, recipe := range []string{"verify-ci", "ci", "verify", "test", "build"} {
+					// Just recipes can be defined as "recipe:" or "recipe:"
+					if strings.Contains(content, "\n"+recipe+":") || strings.HasPrefix(content, recipe+":") {
+						return "just " + recipe
+					}
+				}
+			}
+			return "just"
+		}
+	}
+
+	// 3. Taskfile — modern task runner (task).
+	taskfiles := []string{
+		filepath.Join(workingDir, "Taskfile.yml"),
+		filepath.Join(workingDir, "Taskfile.yaml"),
+		filepath.Join(workingDir, ".taskfile.yml"),
+	}
+	for _, tf := range taskfiles {
+		if fileExists(tf) {
+			// Check for a verify/ci/test task
+			if data, err := os.ReadFile(tf); err == nil {
+				content := string(data)
+				for _, task := range []string{"verify-ci", "ci", "verify", "test", "build"} {
+					// YAML task names appear as keys under "tasks:" section
+					if strings.Contains(content, task+":") {
+						return "task " + task
+					}
+				}
+			}
+			return "task"
+		}
+	}
+
+	// 4. Project-specific verification scripts.
 	scriptChecks := []string{
 		filepath.Join(workingDir, "scripts", "dev", "verify-ci.sh"),
 		filepath.Join(workingDir, "scripts", "verify.sh"),
@@ -110,7 +154,7 @@ func detectBuildSystem(workingDir string) string {
 		}
 	}
 
-	// 3. Language-specific defaults (lower confidence — may miss build tags).
+	// 5. Language-specific defaults (lower confidence — may miss build tags).
 	if fileExists(filepath.Join(workingDir, "go.mod")) {
 		return "go build ./..."
 	}
