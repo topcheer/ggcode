@@ -770,7 +770,7 @@ func enCatalog(key string) string {
 	case "panel.model.hint.main":
 		return "j/k move • Enter or s apply • w context window • o max tokens • r refresh • / filter • Esc close"
 	case "panel.model.hint.edit":
-		return "Enter save • Esc cancel (0 or empty = auto-detect)"
+		return "Enter save • Esc cancel (0 or empty = auto, K/M/G suffix OK e.g. 256k)"
 	case "panel.model.context_window":
 		return "Context Window"
 	case "panel.model.max_tokens":

@@ -778,7 +778,7 @@ func zhCatalog(key string) string {
 	case "panel.model.hint.main":
 		return "j/k 移动 • Enter 或 s 应用 • w 上下文长度 • o 最大输出 • r 刷新 • / 筛选 • Esc 关闭"
 	case "panel.model.hint.edit":
-		return "Enter 保存 • Esc 取消 (0 或空 = 自动检测)"
+		return "Enter 保存 • Esc 取消 (0 或空 = 自动，支持 K/M/G 后缀如 256k)"
 	case "panel.model.context_window":
 		return "上下文长度"
 	case "panel.model.max_tokens":

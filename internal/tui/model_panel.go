@@ -292,6 +292,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	case "enter":
 		val := strings.TrimSpace(panel.editInput.Value())
+		field := panel.editingField // capture before clearing
 		panel.editingField = ""
 		panel.editInput = textinput.Model{}
 		m.input.Focus() // restore main input
@@ -319,7 +320,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
-		switch panel.editingField {
+		switch field {
 		case "context_window":
 			ep.ContextWindow = n
 		case "max_tokens":
@@ -342,7 +343,7 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 		if val == "" || n == 0 {
 			panel.message = m.t("panel.model.context_cleared")
-		} else if panel.editingField == "context_window" {
+		} else if field == "context_window" {
 			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), n, ep.MaxTokens)
 		} else {
 			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), ep.ContextWindow, n)
@@ -355,9 +356,26 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 }
 
-// parseIntPositive parses a non-negative integer string.
+// parseIntPositive parses a non-negative integer string with optional K/M/G suffix.
+// Examples: "256k" → 262144, "1M" → 1048576, "2G" → 2147483648, "128000" → 128000.
 func parseIntPositive(s string) (int, error) {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	upper := strings.ToUpper(s)
+	mult := 1
+	switch {
+	case strings.HasSuffix(upper, "G"):
+		mult = 1024 * 1024 * 1024
+		s = s[:len(s)-1]
+	case strings.HasSuffix(upper, "M"):
+		mult = 1024 * 1024
+		s = s[:len(s)-1]
+	case strings.HasSuffix(upper, "K"):
+		mult = 1024
+		s = s[:len(s)-1]
+	}
 	var val int
 	_, err := fmt.Sscanf(s, "%d", &val)
 	if err != nil {
@@ -366,5 +384,5 @@ func parseIntPositive(s string) (int, error) {
 	if val < 0 {
 		return 0, fmt.Errorf("must be >= 0")
 	}
-	return val, nil
+	return val * mult, nil
 }
