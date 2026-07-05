@@ -36,9 +36,11 @@ type loopDetector struct {
 	// Reset to 0 when any tool call succeeds.
 	consecutiveErrors int
 
-	// errorGuidanceGiven tracks whether we already injected error-streak
-	// guidance at the current threshold, to avoid spamming.
-	errorGuidanceGiven bool
+	// errorGuidanceLevel tracks the highest guidance level injected so far
+	// (0 = none, 1 = reconsider strategy, 2 = technical debugging, 3 = escalate).
+	// Progressive guidance ensures an agent in a deep error spiral gets
+	// increasingly specific and actionable interventions, not just one message.
+	errorGuidanceLevel int
 }
 
 // fingerprintToolCall creates a hash of tool name + arguments.
@@ -98,7 +100,7 @@ func (ld *loopDetector) reset() {
 	ld.fingerprints = nil
 	ld.lastToolName = ""
 	ld.consecutiveErrors = 0
-	ld.errorGuidanceGiven = false
+	ld.errorGuidanceLevel = 0
 }
 
 // recordResult updates the error streak counter. Call after each tool result
@@ -109,21 +111,57 @@ func (ld *loopDetector) recordResult(isError bool, toolName string) string {
 	} else {
 		if ld.consecutiveErrors > 0 {
 			ld.consecutiveErrors = 0
-			ld.errorGuidanceGiven = false
+			ld.errorGuidanceLevel = 0
 		}
 		return ""
 	}
 
-	if ld.errorGuidanceGiven {
-		return ""
+	// Progressive error-streak guidance (inspired by SICA's async overseer
+	// pattern). Each level fires at most once per streak, with increasingly
+	// specific and actionable guidance.
+	//
+	// Level 1 (4 errors): Reconsider strategy — the agent has tried multiple
+	//   different approaches and none worked. Step back and think.
+	// Level 2 (7 errors): Technical debugging — by now the agent has had time
+	//   to reconsider but is still failing. Point to concrete technical causes
+	//   that are easy to miss: renamed symbols, import cycles, build tags,
+	//   stale types from other agents' edits.
+	// Level 3 (10 errors): Escalate — the agent is in a deep spiral. Recommend
+	//   asking the user, skipping the subtask, or using a fundamentally
+	//   different tool (e.g. rewrite_file instead of edit_file).
+
+	if ld.consecutiveErrors >= 10 && ld.errorGuidanceLevel < 3 {
+		ld.errorGuidanceLevel = 3
+		debug.Log("agent", "error-streak: %d consecutive errors, injecting escalation guidance", ld.consecutiveErrors)
+		return fmt.Sprintf(
+			"CRITICAL: You have had %d consecutive tool errors. This is a deep error spiral that is unlikely to resolve by continuing the same approach.\n"+
+				"You must change course now:\n"+
+				"1. Stop attempting edits to this file or area\n"+
+				"2. Use ask_user to ask the user for guidance, or skip this subtask\n"+
+				"3. If you must continue, try a completely different tool (e.g. write_file to replace the entire file instead of edit_file)\n"+
+				"4. Re-read ALL relevant files from scratch — your mental model of the code is likely wrong",
+			ld.consecutiveErrors,
+		)
 	}
 
-	// At 4 consecutive errors from different tool calls, inject strategic
-	// guidance. This is the key threshold: the agent has tried multiple
-	// different approaches and none worked. Time to step back and think.
-	if ld.consecutiveErrors >= 4 {
-		ld.errorGuidanceGiven = true
-		debug.Log("agent", "error-streak detection: %d consecutive tool errors, injecting strategic guidance", ld.consecutiveErrors)
+	if ld.consecutiveErrors >= 7 && ld.errorGuidanceLevel < 2 {
+		ld.errorGuidanceLevel = 2
+		debug.Log("agent", "error-streak: %d consecutive errors, injecting technical debugging guidance", ld.consecutiveErrors)
+		return fmt.Sprintf(
+			"You have had %d consecutive tool errors. The first reconsideration did not help, so the problem is likely something specific:\n"+
+				"1. Check for renamed symbols or moved functions — search by behavior, not by name\n"+
+				"2. Check for import cycles or missing dependencies\n"+
+				"3. If this is a shared workspace, other agents may have changed files — git diff to see recent changes\n"+
+				"4. Check for build tags (e.g. -tags goolm) or environment-specific code paths\n"+
+				"5. Try reading the exact current file content with read_file before your next edit\n"+
+				"6. Verify the types match — a struct field rename can cascade silently",
+			ld.consecutiveErrors,
+		)
+	}
+
+	if ld.consecutiveErrors >= 4 && ld.errorGuidanceLevel < 1 {
+		ld.errorGuidanceLevel = 1
+		debug.Log("agent", "error-streak: %d consecutive tool errors, injecting strategic guidance", ld.consecutiveErrors)
 		return fmt.Sprintf(
 			"You have had %d consecutive tool calls return errors in a row. "+
 				"This strongly suggests your current approach is not working. "+

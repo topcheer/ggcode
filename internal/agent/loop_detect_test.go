@@ -87,14 +87,80 @@ func TestLoopDetector_MixedErrorsAndDuplicates(t *testing.T) {
 	}
 
 	// Record some errors
-	ld.recordResult(true, "edit_file")
-	ld.recordResult(true, "edit_file")
-	ld.recordResult(true, "run_command")
-	ld.recordResult(true, "write_file")
+	g := ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not trigger at 1 error")
+	}
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not trigger at 2 errors")
+	}
+	g = ld.recordResult(true, "run_command")
+	if g != "" {
+		t.Error("should not trigger at 3 errors")
+	}
+	g = ld.recordResult(true, "write_file")
+	if g == "" {
+		t.Error("should trigger level 1 guidance at 4 errors")
+	}
+	if ld.errorGuidanceLevel != 1 {
+		t.Errorf("expected errorGuidanceLevel=1 after 4 errors, got %d", ld.errorGuidanceLevel)
+	}
 
-	// Should have triggered error-streak guidance already
-	if !ld.errorGuidanceGiven {
-		t.Error("expected errorGuidanceGiven to be true after 4 errors")
+	// Continue errors — should NOT re-trigger level 1
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not re-trigger level 1 at 5 errors")
+	}
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not re-trigger level 1 at 6 errors")
+	}
+
+	// 7th error — should trigger level 2
+	g = ld.recordResult(true, "run_command")
+	if g == "" {
+		t.Error("should trigger level 2 guidance at 7 errors")
+	}
+	if ld.errorGuidanceLevel != 2 {
+		t.Errorf("expected errorGuidanceLevel=2 after 7 errors, got %d", ld.errorGuidanceLevel)
+	}
+
+	// Continue errors — should NOT re-trigger level 2
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not re-trigger level 2 at 8 errors")
+	}
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not re-trigger level 2 at 9 errors")
+	}
+
+	// 10th error — should trigger level 3
+	g = ld.recordResult(true, "write_file")
+	if g == "" {
+		t.Error("should trigger level 3 guidance at 10 errors")
+	}
+	if ld.errorGuidanceLevel != 3 {
+		t.Errorf("expected errorGuidanceLevel=3 after 10 errors, got %d", ld.errorGuidanceLevel)
+	}
+
+	// More errors after level 3 — should not trigger anything new
+	g = ld.recordResult(true, "edit_file")
+	if g != "" {
+		t.Error("should not trigger anything after level 3")
+	}
+
+	// Success resets everything
+	g = ld.recordResult(false, "edit_file")
+	if g != "" {
+		t.Error("success should not trigger guidance")
+	}
+	if ld.errorGuidanceLevel != 0 {
+		t.Errorf("expected errorGuidanceLevel=0 after success, got %d", ld.errorGuidanceLevel)
+	}
+	if ld.consecutiveErrors != 0 {
+		t.Errorf("expected consecutiveErrors=0 after success, got %d", ld.consecutiveErrors)
 	}
 }
 
