@@ -41,10 +41,10 @@ func (m *Model) updateAutoComplete() {
 						if strings.EqualFold(first, "All") || strings.EqualFold(first, "所有人") {
 							filtered = append(filtered, first)
 						}
-					}
-					for _, item := range m.autoCompleteItems[1:] {
-						if strings.HasPrefix(strings.ToLower(item), strings.ToLower(query)) {
-							filtered = append(filtered, item)
+						for _, item := range m.autoCompleteItems[1:] {
+							if strings.HasPrefix(strings.ToLower(item), strings.ToLower(query)) {
+								filtered = append(filtered, item)
+							}
 						}
 					}
 					m.autoCompleteItems = filtered
