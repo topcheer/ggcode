@@ -1,3 +1,5 @@
+//go:build integration_local
+
 package lsp
 
 import (
@@ -620,13 +622,4 @@ func TestLSP_Lua_CodeActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("Lua CodeActions: %d results", len(actions))
-}
-
-// ── util ─────────────────────────────────────────────────────────────────
-
-func truncateForLog(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
