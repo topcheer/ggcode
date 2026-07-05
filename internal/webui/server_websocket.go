@@ -191,21 +191,10 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			content = append(content, provider.TextBlock(fileText))
 		}
 
-		// Send user acknowledgment with attachment info
-		ackExtras := map[string]interface{}{"type": "user_ack", "text": msg.Text}
-		if len(msg.Images) > 0 {
-			ackExtras["image_count"] = len(msg.Images)
-		}
-		if len(msg.Files) > 0 {
-			fileNames := make([]string, len(msg.Files))
-			for i, f := range msg.Files {
-				fileNames[i] = f.Name
-			}
-			ackExtras["file_names"] = fileNames
-		}
-		send(ackExtras)
-
-		// Route through bridge or direct agent
+		// Route through bridge or direct agent BEFORE sending ack, so that
+		// bridge state (e.g. lastContent) is populated before the client
+		// reads the ack and checks it. This eliminates a test race where
+		// the ack arrives faster than SendUserMessage completes.
 		if s.chatBridge != nil {
 			s.chatBridge.SendUserMessage(content)
 		} else {
@@ -241,6 +230,20 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			s.agentMu.Unlock()
 			s.agentBusy.Store(false)
 		}
+
+		// Send user acknowledgment with attachment info
+		ackExtras := map[string]interface{}{"type": "user_ack", "text": msg.Text}
+		if len(msg.Images) > 0 {
+			ackExtras["image_count"] = len(msg.Images)
+		}
+		if len(msg.Files) > 0 {
+			fileNames := make([]string, len(msg.Files))
+			for i, f := range msg.Files {
+				fileNames[i] = f.Name
+			}
+			ackExtras["file_names"] = fileNames
+		}
+		send(ackExtras)
 	}
 }
 
