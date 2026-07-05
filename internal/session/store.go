@@ -263,10 +263,25 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 	if err != nil {
 		return err
 	}
-	// atomic write
+	// atomic write with fsync for crash durability (matches Save() pattern)
 	tmp := s.indexPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("creating index temp file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("writing index temp file: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("syncing index temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("closing index temp file: %w", err)
 	}
 	return os.Rename(tmp, s.indexPath())
 }
@@ -631,7 +646,13 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// Apply metadata from meta records (always the latest meta wins)
 	for _, rec := range metaRecords {
 		ses.Title = rec.Title
-		ses.Workspace = rec.Workspace
+		// Only overwrite workspace if the meta record has one. Older sessions
+		// (or sessions created before the workspace field existed) may have
+		// empty workspace in their meta records. Overwriting with "" would
+		// make the session unfindable by ListForWorkspace/LatestForWorkspace.
+		if rec.Workspace != "" {
+			ses.Workspace = rec.Workspace
+		}
 		ses.Vendor = rec.Vendor
 		ses.Endpoint = rec.Endpoint
 		ses.Model = rec.Model
@@ -645,6 +666,15 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		if rec.SidebarVisible != nil {
 			ses.SidebarVisible = rec.SidebarVisible
 		}
+	}
+
+	// Fallback: if no meta record contained a workspace (sessions created
+	// before the workspace field was tracked), assign the current workspace.
+	// Without this, the session is invisible to ListForWorkspace and can
+	// never be auto-loaded on restart.
+	if ses.Workspace == "" {
+		ses.Workspace = CurrentWorkspacePath()
+		debug.Log("session", "loadSession %s: workspace was empty, falling back to %s", id, ses.Workspace)
 	}
 
 	// Deduplicate message records in corrupted JSONL files.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/image"
 )
@@ -49,4 +50,28 @@ func persistAttachedImage(filename string, img image.Image) (string, error) {
 		return "", fmt.Errorf("writing attached image: %w", err)
 	}
 	return path, nil
+}
+
+// cleanupOldTempImages removes image files older than 24 hours from the
+// ggcode-images temp directory. Called once at startup to prevent
+// unbounded disk usage from accumulated clipboard/tunnel images.
+func cleanupOldTempImages() {
+	cacheDir := filepath.Join(os.TempDir(), "ggcode-images")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			os.Remove(filepath.Join(cacheDir, e.Name()))
+		}
+	}
 }
