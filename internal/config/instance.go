@@ -99,18 +99,9 @@ func MergeInstance(global, instance *Config) {
 	}
 
 	// Simple scalar fields — only override if global is zero.
-	if global.Vendor == "" && instance.Vendor != "" {
-		global.Vendor = instance.Vendor
-		global.instanceFields["vendor"] = true
-	}
-	if global.Endpoint == "" && instance.Endpoint != "" {
-		global.Endpoint = instance.Endpoint
-		global.instanceFields["endpoint"] = true
-	}
-	if global.Model == "" && instance.Model != "" {
-		global.Model = instance.Model
-		global.instanceFields["model"] = true
-	}
+	// NOTE: Vendor, Endpoint, and Model are now SESSION-scoped (persisted in
+	// session JSONL). Instance config no longer overrides them — each session
+	// remembers its own model selection independently.
 	if global.Language == "" && instance.Language != "" {
 		global.Language = instance.Language
 		global.instanceFields["language"] = true

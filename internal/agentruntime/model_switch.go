@@ -37,9 +37,10 @@ func ActivateCurrentSelection(cfg *config.Config, vendor, endpoint, model string
 		if err := cfg.SetActiveSelection(vendor, endpoint, model); err != nil {
 			return nil, nil, err
 		}
-		if err := cfg.Save(); err != nil {
-			return nil, nil, err
-		}
+		// NOTE: cfg.Save() was intentionally removed.
+		// Model selection is now session-scoped — the session JSONL is the
+		// source of truth, not the config file. Callers are responsible for
+		// persisting the session after updating its Vendor/Endpoint/Model.
 	}
 	return ResolveCurrentSelection(cfg)
 }
@@ -51,4 +52,32 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
+}
+
+// SyncVendorEndpointToGlobal ensures a vendor/endpoint definition exists in
+// the global config file so new sessions can discover it without re-configuring
+// API keys. This is called after model switches to propagate vendor/endpoint
+// definitions that were added during the current session.
+func SyncVendorEndpointToGlobal(cfg *config.Config, vendor, endpoint string) {
+	if cfg == nil || vendor == "" || endpoint == "" {
+		return
+	}
+	changed := false
+	if cfg.Vendors == nil {
+		cfg.Vendors = make(map[string]config.VendorConfig)
+	}
+	vc, ok := cfg.Vendors[vendor]
+	if !ok {
+		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
+		cfg.Vendors[vendor] = vc
+		changed = true
+	}
+	if _, ok := vc.Endpoints[endpoint]; !ok {
+		vc.Endpoints[endpoint] = config.EndpointConfig{}
+		cfg.Vendors[vendor] = vc
+		changed = true
+	}
+	if changed {
+		_ = cfg.SaveScoped("global")
+	}
 }

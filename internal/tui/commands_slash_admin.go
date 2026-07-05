@@ -232,9 +232,6 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 }
 
 func (m *Model) reloadActiveProvider() error {
-	if err := m.saveConfig(); err != nil {
-		return err
-	}
 	if err := m.tryActivateCurrentSelection(); err != nil {
 		return err
 	}

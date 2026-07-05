@@ -164,10 +164,6 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = err.Error()
 			return *m, nil
 		}
-		if err := m.saveConfig(); err != nil {
-			panel.message = err.Error()
-			return *m, nil
-		}
 		if err := m.tryActivateCurrentSelection(); err != nil {
 			panel.message = m.t("panel.model.saved_runtime_inactive", err.Error())
 			return *m, nil

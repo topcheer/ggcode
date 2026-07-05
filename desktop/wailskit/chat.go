@@ -2875,6 +2875,23 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	b.resolved = resolved
 	b.mu.Unlock()
 	agentruntime.ApplyProviderToAgent(a, prov, resolved)
+
+	// Persist model selection to session JSONL (session-scoped).
+	if b.currentSes != nil {
+		b.currentSes.Vendor = b.cfg.Vendor
+		b.currentSes.Endpoint = b.cfg.Endpoint
+		b.currentSes.Model = resolved.Model
+		if b.sessionStore != nil {
+			_ = b.sessionStore.AppendMetaToDisk(b.currentSes)
+		}
+	}
+
+	// Sync vendor/endpoint definitions to global config so new sessions
+	// can discover this model without re-configuring API keys.
+	if b.cfg.Vendor != "" && b.cfg.Endpoint != "" {
+		agentruntime.SyncVendorEndpointToGlobal(b.cfg, b.cfg.Vendor, b.cfg.Endpoint)
+	}
+
 	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, a, func(resp relaycatalog.ResolveResponse) {
 		b.mu.Lock()
 		if b.resolved != nil {
@@ -2908,6 +2925,10 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 		b.currentSes.Vendor = b.cfg.Vendor
 		b.currentSes.Endpoint = b.cfg.Endpoint
 		b.currentSes.Model = resolved.Model
+		// Persist to session JSONL (session-scoped).
+		if b.sessionStore != nil {
+			_ = b.sessionStore.AppendMetaToDisk(b.currentSes)
+		}
 	}
 	b.mu.Unlock()
 

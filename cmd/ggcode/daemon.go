@@ -736,7 +736,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			ses.Vendor = cfg.Vendor
 			ses.Endpoint = cfg.Endpoint
 			ses.Model = resolved.Model
+			// Persist model selection to session JSONL (session-scoped).
+			_ = store.AppendMetaToDisk(ses)
 		}
+		// Sync vendor/endpoint definitions to global config.
+		agentruntime.SyncVendorEndpointToGlobal(cfg, cfg.Vendor, cfg.Endpoint)
 		if vendor == "" && endpoint == "" && model == "" {
 			vendors := make([]string, 0)
 			for v := range cfg.Vendors {

@@ -773,12 +773,40 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.persistedMsgCount = len(ses.Messages)
 	m.usageTurnIndex = session.LastTurnIndex(ses)
 	m.lastMetricDigestTurn = m.usageTurnIndex
-	// Sync the session's model/vendor/endpoint to the current config.
-	// When resuming an old session, the session's stored model may differ
-	// from the config's current model. The agent always uses the config
-	// model, so the session must be updated to match — otherwise usage
-	// records and /cost display the wrong model.
-	m.syncSessionSelection()
+	// Restore session's model/vendor/endpoint to in-memory config.
+	// The session is the source of truth for model selection — the config
+	// file is only used for initial onboarding when creating new sessions.
+	// Usage records and /cost now use the session's model directly.
+	if ses.Vendor != "" && m.config != nil {
+		m.config.Vendor = ses.Vendor
+	}
+	if ses.Endpoint != "" && m.config != nil {
+		m.config.Endpoint = ses.Endpoint
+	}
+	if ses.Model != "" && m.config != nil {
+		m.config.Model = ses.Model
+	}
+	// Mark the runtime selection so usage/cost tracking uses the correct model.
+	if m.config != nil {
+		m.setActiveRuntimeSelection(m.config.Vendor, m.config.Endpoint, m.config.Model)
+	}
+	// Activate the provider using the restored model selection.
+	if m.config != nil {
+		if err := m.tryActivateCurrentSelection(); err != nil {
+			debug.Log("repl", "SetSession: activate provider failed: %v", err)
+		}
+	}
+	// Rebuild endpoint-level stats from UsageHistory to populate
+	// EndpointUsage (not directly stored in JSONL). This ensures
+	// sidebarSessionUsage returns correct values after session load.
+	if ses.EndpointUsage == nil || len(ses.EndpointUsage) == 0 {
+		ses.RebuildEndpointStats()
+	}
+	// Persist session meta to JSONL so TokenUsage, vendor, model etc.
+	// match the current in-memory state.
+	if m.sessionStore != nil {
+		_ = m.sessionStore.AppendMetaToDisk(m.session)
+	}
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
@@ -812,20 +840,19 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	// not the session-stored model which may be stale after a model
 	// switch. activeModel is set by setActiveRuntimeSelection() every
 	// time the provider is activated, so it always reflects reality.
+	// For vendor/endpoint, use the session's config keys (not display
+	// names from ResolvedEndpoint) so that RebuildEndpointStats produces
+	// keys that match AddUsageForEndpoint and UsageForEndpoint.
 	model := m.activeModel
-	vendor := m.activeVendor
-	endpoint := m.activeEndpoint
 	if model == "" {
 		model = ses.Model
-		vendor = ses.Vendor
-		endpoint = ses.Endpoint
 	}
 	entry := session.UsageEntry{
 		Timestamp: time.Now(),
 		TurnIndex: m.usageTurnIndex,
 		Model:     model,
-		Vendor:    vendor,
-		Endpoint:  endpoint,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
 		Usage:     usage,
 	}
 	// Keep in-memory UsageHistory in sync with disk. AppendUsageEntry

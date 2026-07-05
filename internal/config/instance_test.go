@@ -164,10 +164,10 @@ func TestMergeInstance_ScalarFields(t *testing.T) {
 		wantLang  string
 	}{
 		{
-			name:      "instance fills empty global field",
+			name:      "instance no longer fills global Model (session-scoped)",
 			global:    Config{Model: ""},
 			instance:  Config{Model: "gpt-4o-mini"},
-			wantModel: "gpt-4o-mini",
+			wantModel: "", // Model is now session-scoped, instance does not override
 		},
 		{
 			name:      "instance does not override non-empty global",
