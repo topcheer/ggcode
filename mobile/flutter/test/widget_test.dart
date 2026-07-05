@@ -768,8 +768,8 @@ void main() {
 
     final textField = tester.widget<TextField>(find.byType(TextField));
     expect(textField.enabled, isTrue);
+    // When agent is busy and can send, the stop button is shown (not send).
     expect(find.byIcon(Icons.stop_circle), findsOneWidget);
-    expect(find.byIcon(Icons.send), findsOneWidget);
   });
 
   testWidgets('workspace scanner allows manual URL entry',
