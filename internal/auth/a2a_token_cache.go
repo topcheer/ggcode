@@ -62,7 +62,14 @@ func (tc *TokenCache) Save(provider string, token *PKCEToken, clientID string) e
 		return err
 	}
 
-	return os.WriteFile(tc.path(provider), data, 0600)
+	// Atomic write: temp file + rename to prevent corruption on crash.
+	// os.WriteFile is non-atomic — a crash mid-write leaves a truncated file.
+	path := tc.path(provider)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Load reads a cached token for the given provider.
