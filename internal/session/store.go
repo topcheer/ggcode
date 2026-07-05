@@ -512,6 +512,16 @@ func (s *JSONLStore) Save(ses *Session) error {
 		}
 	}
 
+	// Sync before Close to ensure data reaches disk before the atomic rename.
+	// Without this, a crash after Close but before the OS flushes dirty pages
+	// could leave the renamed file empty or partially written.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		debug.Log("session", "Save: failed to sync temp file for session %s: %v", ses.ID, err)
+		return fmt.Errorf("syncing temp file: %w", err)
+	}
+
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
 		debug.Log("session", "Save: failed to close temp file for session %s: %v", ses.ID, err)
@@ -1460,7 +1470,8 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	}
 	// O_APPEND guarantees atomic appends at the OS level on POSIX systems.
 	// We intentionally skip f.Sync() (fsync) here for performance:
-	//   - Save() (full session rewrite via atomic rename) doesn't fsync either.
+	//   - Save() (full session rewrite via atomic rename) does fsync for durability.
+	//   - This append path trades fsync for speed since it's called frequently.
 	//   - The data reaches disk via the OS buffer cache within seconds.
 	//   - The only risk is power loss losing the last few buffered appends,
 	//     which is acceptable for session event logs.
