@@ -125,6 +125,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return err
 		}
 	}
+
 	return nil
 }
 
