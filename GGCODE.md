@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.125`](docs/releases/v1.3.125.md) |
+| Latest documented release | [`v1.3.127`](docs/releases/v1.3.127.md) |
 
 ## Build & Validation
 
@@ -250,6 +250,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
 **VCS/Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`. Tools auto-detect the repository type via `internal/vcs/` and dispatch to the correct backend. Supported VCS: **Git** (primary), **Mercurial** (hg), **Subversion** (svn), **Jujutsu** (jj). Detection walks up the directory tree for `.git`/`.hg`/`.svn`/`.jj` metadata dirs. Tool names remain `git_*` for backward compatibility — they work for all VCS types internally.
 **Web** (2): `web_fetch`, `web_search`
+**Browser** (1, in `builtin.go`): `browser` — Go-native browser automation via Chrome DevTools Protocol (chromedp). Full SPA/JavaScript support without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Multi-session support with cookie persistence. Lazy allocator (Chrome starts on first navigate). Headless by default, configurable via `headless: false`. Allowed in plan mode (read-only browsing). Requires Chrome/Chromium installed.
 **Search**: `grep` (ripgrep-based, supports regex, glob, file type, context lines)
 **LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
 **Productivity** (3, in `builtin.go`): `ask_user`, `todo_write`, `switch_mode` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)

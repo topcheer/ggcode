@@ -6,38 +6,51 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// skipIfNoChrome skips the test if Chrome/Chromium is not available.
+var (
+	chromeSkipOnce sync.Once
+	chromeSkipMsg  string
+)
+
+// skipIfNoChrome skips the test if Chrome/Chromium is not available or the
+// test site is unreachable. Uses sync.Once so the check runs only once per
+// test binary execution, avoiding 12 separate Chrome launches.
 func skipIfNoChrome(t *testing.T) {
 	t.Helper()
-	b := NewBrowser()
-	defer b.doCloseSession("default", "itest")
-	// 1. Check Chrome is available via about:blank
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	input, _ := json.Marshal(map[string]interface{}{
-		"action":      "navigate",
-		"url":         "about:blank",
-		"description": "chrome availability check",
+	chromeSkipOnce.Do(func() {
+		b := NewBrowser()
+		defer b.doCloseSession("default", "itest")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		input, _ := json.Marshal(map[string]interface{}{
+			"action":      "navigate",
+			"url":         "about:blank",
+			"description": "chrome availability check",
+		})
+		_, err := b.Execute(ctx, input)
+		if err != nil {
+			chromeSkipMsg = "Chrome/Chromium not available: " + err.Error()
+			return
+		}
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel2()
+		input2, _ := json.Marshal(map[string]interface{}{
+			"action":      "navigate",
+			"url":         testSite,
+			"description": "test site reachability check",
+		})
+		result, err := b.Execute(ctx2, input2)
+		if err != nil || result.IsError {
+			chromeSkipMsg = "test site " + testSite + " not reachable"
+			return
+		}
 	})
-	_, err := b.Execute(ctx, input)
-	if err != nil {
-		t.Skipf("Chrome/Chromium not available: %v", err)
-	}
-	// 2. Check test site is reachable (network may be restricted)
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel2()
-	input2, _ := json.Marshal(map[string]interface{}{
-		"action":      "navigate",
-		"url":         testSite,
-		"description": "test site reachability check",
-	})
-	result, err := b.Execute(ctx2, input2)
-	if err != nil || result.IsError {
-		t.Skipf("test site %s not reachable: err=%v isError=%v", testSite, err, result.IsError)
+	if chromeSkipMsg != "" {
+		t.Skip(chromeSkipMsg)
 	}
 }
 

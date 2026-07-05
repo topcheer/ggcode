@@ -61,7 +61,7 @@ echo "[verify-ci] running tests (main module, unit only)"
 GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 4 -timeout 300s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
-desktop_dir="${repo_root}/desktop/ggcode-desktop"
+desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
 if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   echo ""
   echo "[verify-ci:desktop] checking gofmt cleanliness"
