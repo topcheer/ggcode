@@ -125,6 +125,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return err
 		}
 	}
+	if shouldRegisterMobileDevice() {
+		if err := registry.Register(NewMobileDeviceTool()); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
