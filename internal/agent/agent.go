@@ -996,6 +996,26 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 
+			// Repetition tracker: semantic-level detection of failed edit clusters.
+			// Catches near-miss loops that exact-match loop detection misses.
+			if repetitionGuidance := a.repetitionCheckEdit(tc.Name, tc.Arguments, result.IsError); repetitionGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + repetitionGuidance
+				} else {
+					result.Content = repetitionGuidance
+				}
+			}
+			// Also check read-edit-fail cycles for read_file calls.
+			if tc.Name == "read_file" || tc.Name == "multi_file_read" {
+				if readGuidance := a.repetitionCheckRead(extractFileHint(tc.Name, tc.Arguments)); readGuidance != "" {
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + readGuidance
+					} else {
+						result.Content = readGuidance
+					}
+				}
+			}
+
 			// Post-edit verification hint: after successful source-code edits,
 			// periodically suggest running the build command to verify changes.
 			if !result.IsError {
