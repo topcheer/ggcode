@@ -349,7 +349,6 @@ jobs:
 
       - name: Submit for App Store Review
         if: steps.check-build.outputs.skip != 'true'
-        continue-on-error: true
         run: |
           cd ios
           bundle exec fastlane submit_for_review

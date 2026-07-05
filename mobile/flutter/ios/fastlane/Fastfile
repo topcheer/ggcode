@@ -497,29 +497,37 @@ platform :ios do
       UI.message("No pending versions to reject")
     end
 
-    # Always clean up stale review submission items from non-COMPLETE submissions.
+    # Always clean up stale review submissions (items AND containers).
     # This prevents the "ReviewSubmission creation concurrency limit is reached" error
-    # that occurs when stale READY_FOR_REVIEW submissions accumulate across CI runs.
+    # that occurs when stale READY_FOR_REVIEW submissions accumulate across CI runs
+    # (which happened because the actual submit action was missing — submissions
+    # were created but never submitted, so they piled up as drafts).
     stale_cleanup = 0
     submissions = client.get_review_submissions(app_id: app.id).to_models
-    submissions.each do |sub|
-      next if sub.state == "COMPLETE"
+    # Keep only the most recent non-COMPLETE submission (for reuse);
+    # delete all other non-COMPLETE ones to free up the concurrency limit.
+    non_complete = submissions.reject { |s| s.state == "COMPLETE" }
+    to_delete = non_complete.size > 1 ? non_complete[0..-2] : []
+    to_delete.each do |sub|
       begin
+        # Remove items first, then delete the submission container
         sub_items = client.get_review_submission_items(review_submission_id: sub.id).to_models
         sub_items.each do |item|
           begin
             client.tunes_request_client.delete("v1/reviewSubmissionItems/#{item.id}")
-            stale_cleanup += 1
           rescue => e
             UI.message("  Stale cleanup item #{item.id}: #{e.message}")
           end
         end
+        client.tunes_request_client.delete("v1/reviewSubmissions/#{sub.id}")
+        stale_cleanup += 1
+        UI.message("  Deleted stale submission #{sub.id} (state: #{sub.state || 'nil'})")
       rescue => e
-        UI.message("  Stale cleanup for #{sub.id}: #{e.message}")
+        UI.message("  Stale cleanup submission #{sub.id}: #{e.message}")
       end
     end
     if stale_cleanup > 0
-      UI.success("Cleaned up #{stale_cleanup} stale review submission item(s)")
+      UI.success("Deleted #{stale_cleanup} stale review submission(s)")
       sleep 5
     end
   end
@@ -658,13 +666,25 @@ platform :ios do
       # Add the current version as an item
       client.post_review_submission_item(review_submission_id: usable.id, app_store_version_id: ios_version.id)
       UI.success("Added version #{v} to submission #{usable.id}!")
+      submission_id = usable.id
     else
       UI.message("Creating new submission...")
       resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
       sub = resp.to_models.first
       UI.user_error!("Failed to create review submission") if sub.nil?
       client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{sub.id} with version #{v}!")
+      UI.success("Added version #{v} to submission #{sub.id}!")
+      submission_id = sub.id
+    end
+
+    # 5. ACTUALLY submit for review — this transitions the submission
+    #    from READY_FOR_REVIEW to WAITING_FOR_REVIEW.
+    #    Without this call, the submission sits at READY_FOR_REVIEW forever.
+    begin
+      client.tunes_request_client.post("v1/reviewSubmissions/#{submission_id}/actions/submit", nil)
+      UI.success("Review submission #{submission_id} submitted! Version #{v} is now WAITING_FOR_REVIEW.")
+    rescue => e
+      UI.user_error!("Failed to submit for review (submission #{submission_id}): #{e.message}")
     end
   end
 
