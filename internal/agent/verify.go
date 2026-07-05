@@ -337,6 +337,12 @@ func extractText(msg provider.Message) string {
 // --- Rule injection into tool results ---
 
 // injectRulesIntoResult prepends matching harness rules to a tool result.
+// Rules are matched via two paths:
+//  1. Preventive: MatchingRulesForTool matches rule patterns against tool ARGS
+//     (warns before the error occurs, e.g. "go build" without -tags goolm).
+//  2. Reactive: MatchingRulesForResult matches rule patterns against the tool
+//     RESULT content (warns when a known error pattern appears in the output,
+//     e.g. "cannot find package olm" → injects the fix hint immediately).
 func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, resultContent string) string {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
@@ -347,7 +353,9 @@ func (a *Agent) injectRulesIntoResult(toolName string, args json.RawMessage, res
 		return resultContent
 	}
 
-	matching := rs.MatchingRulesForTool(toolName, string(args))
+	preventive := rs.MatchingRulesForTool(toolName, string(args))
+	reactive := rs.MatchingRulesForResult(resultContent)
+	matching := mergeRuleSets(preventive, reactive)
 	if len(matching) == 0 {
 		return resultContent
 	}
