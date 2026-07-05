@@ -130,6 +130,12 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Fetch", displayTarget(argStr(args, "url")))
 	case "web_search":
 		return toolPres("Search", displayTarget(argStr(args, "query")))
+	case "browser":
+		return browserLabel(args)
+	case "screenshot":
+		return screenshotLabel(args)
+	case "mobile_device":
+		return mobileDeviceLabel(args)
 	case "todo_write":
 		return toolPres("Update Todos", "")
 	case "ask_user":
@@ -461,6 +467,12 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		if pres, ok := describeLanchatResult(rawArgs, trimmed, isError); ok {
 			return pres, true
 		}
+	case "screenshot":
+		return describeScreenshotResult(trimmed, isError), true
+	case "mobile_device":
+		return describeMobileDeviceResult(rawArgs, trimmed, isError), true
+	case "browser":
+		return describeBrowserResult(rawArgs, trimmed, isError), true
 	}
 
 	if pres, ok := describeExternalWrappedResult(trimmed); ok {
@@ -1542,6 +1554,187 @@ func iterm2Label(args map[string]any) ToolPresentation {
 	default:
 		return toolPres("iTerm2", action)
 	}
+}
+
+// browserLabel renders a human-readable label for the browser tool.
+func browserLabel(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	url := argStr(args, "url")
+	selector := argStr(args, "selector")
+	text := argStr(args, "text")
+
+	switch action {
+	case "", "navigate":
+		return toolPres("Browser", displayTarget(url))
+	case "click":
+		return toolPres("Browser Click", displayTarget(selector))
+	case "type":
+		return toolPres("Browser Type", compactPreview(text))
+	case "extract":
+		return toolPres("Browser Extract", displayTarget(selector))
+	case "screenshot":
+		return toolPres("Browser Screenshot", "")
+	case "evaluate":
+		return toolPres("Browser JS", compactPreview(argStr(args, "expression")))
+	case "wait", "wait_for":
+		return toolPres("Browser Wait", displayTarget(selector))
+	case "links":
+		return toolPres("Browser Links", "")
+	case "scroll":
+		return toolPres("Browser Scroll", displayTarget(selector))
+	case "back":
+		return toolPres("Browser Back", "")
+	case "content":
+		return toolPres("Browser Content", "")
+	case "close":
+		return toolPres("Browser Close", "")
+	default:
+		return toolPres("Browser", action)
+	}
+}
+
+// screenshotLabel renders a human-readable label for the screenshot tool.
+func screenshotLabel(args map[string]any) ToolPresentation {
+	window := argStr(args, "window")
+	if window != "" {
+		return toolPres("Screenshot", window)
+	}
+	action := argStr(args, "action")
+	if action == "list_windows" {
+		return toolPres("Screenshot", "list windows")
+	}
+	if action == "list_displays" {
+		return toolPres("Screenshot", "list displays")
+	}
+	return toolPres("Screenshot", "")
+}
+
+// mobileDeviceLabel renders a human-readable label for the mobile_device tool.
+func mobileDeviceLabel(args map[string]any) ToolPresentation {
+	action := argStr(args, "action")
+	device := argStr(args, "device")
+
+	switch action {
+	case "", "devices":
+		return toolPres("Mobile", "list devices")
+	case "screenshot":
+		return toolPres("Mobile Screenshot", displayTarget(device))
+	case "tap":
+		return toolPres("Mobile Tap", displayTarget(device))
+	case "type":
+		return toolPres("Mobile Type", compactPreview(argStr(args, "text")))
+	case "press":
+		return toolPres("Mobile Press", argStr(args, "text"))
+	case "swipe":
+		return toolPres("Mobile Swipe", displayTarget(device))
+	case "install":
+		return toolPres("Mobile Install", displayTarget(device))
+	case "uninstall":
+		return toolPres("Mobile Uninstall", displayTarget(device))
+	case "launch":
+		return toolPres("Mobile Launch", displayTarget(device))
+	case "close":
+		return toolPres("Mobile Close", displayTarget(device))
+	case "dump":
+		return toolPres("Mobile UI Tree", displayTarget(device))
+	case "log":
+		return toolPres("Mobile Logs", displayTarget(device))
+	default:
+		return toolPres("Mobile", action)
+	}
+}
+
+// describeScreenshotResult summarizes screenshot tool results for multi-end display.
+func describeScreenshotResult(result string, isError bool) ToolResultPresentation {
+	if isError {
+		return ToolResultPresentation{Summary: compactSingleLine(result)}
+	}
+	// Success: result is either an image path or a JSON with image data
+	if strings.Contains(result, "saved") || strings.Contains(result, ".png") || strings.Contains(result, ".jpg") {
+		return ToolResultPresentation{Summary: "Screenshot captured"}
+	}
+	return ToolResultPresentation{Summary: "Screenshot OK"}
+}
+
+// describeMobileDeviceResult summarizes mobile_device tool results for multi-end display.
+func describeMobileDeviceResult(rawArgs, result string, isError bool) ToolResultPresentation {
+	if isError {
+		return ToolResultPresentation{Summary: compactSingleLine(result)}
+	}
+	args := parseToolArgs(rawArgs)
+	action := argStr(args, "action")
+	switch action {
+	case "", "devices":
+		lines := nonEmptyTrimmedLines(result)
+		return ToolResultPresentation{Summary: pluralizeEn(len(lines), "device")}
+	case "screenshot":
+		return ToolResultPresentation{Summary: "Mobile screenshot captured"}
+	case "dump":
+		if count := strings.Count(result, "<node"); count > 0 {
+			return ToolResultPresentation{Summary: pluralizeEn(count, "UI element"), Payload: result, PayloadMode: "text"}
+		}
+		return ToolResultPresentation{Summary: "UI tree dumped", Payload: result, PayloadMode: "text"}
+	case "log":
+		lines := nonEmptyTrimmedLines(result)
+		return ToolResultPresentation{Summary: pluralizeEn(len(lines), "log line"), Payload: result, PayloadMode: "text"}
+	default:
+		return ToolResultPresentation{Summary: compactSingleLine(result)}
+	}
+}
+
+// describeBrowserResult summarizes browser tool results for multi-end display.
+func describeBrowserResult(rawArgs, result string, isError bool) ToolResultPresentation {
+	if isError {
+		return ToolResultPresentation{Summary: compactSingleLine(result)}
+	}
+	args := parseToolArgs(rawArgs)
+	action := argStr(args, "action")
+	switch action {
+	case "", "navigate":
+		title := extractHTMLTitle(result)
+		if title != "" {
+			return ToolResultPresentation{Summary: title, Payload: result, PayloadMode: "text"}
+		}
+		return ToolResultPresentation{Summary: "Page loaded", Payload: result, PayloadMode: "text"}
+	case "screenshot":
+		return ToolResultPresentation{Summary: "Browser screenshot captured"}
+	case "click":
+		return ToolResultPresentation{Summary: "Clicked"}
+	case "type":
+		return ToolResultPresentation{Summary: "Typed"}
+	case "links":
+		lines := nonEmptyTrimmedLines(result)
+		return ToolResultPresentation{Summary: pluralizeEn(len(lines), "link"), Payload: result, PayloadMode: "text"}
+	case "evaluate":
+		return ToolResultPresentation{Summary: compactSingleLine(result), Payload: result, PayloadMode: "text"}
+	default:
+		return ToolResultPresentation{Summary: compactSingleLine(result)}
+	}
+}
+
+// extractHTMLTitle extracts the <title> from an HTML string.
+func extractHTMLTitle(s string) string {
+	start := strings.Index(strings.ToLower(s), "<title>")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(strings.ToLower(s[start:]), "</title>")
+	if end < 0 {
+		return ""
+	}
+	title := strings.TrimSpace(s[start+7 : start+end])
+	if len(title) > 60 {
+		return title[:57] + "..."
+	}
+	return title
+}
+
+// pluralizeEn returns "1 word" or "N words" in English.
+func pluralizeEn(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
 }
 
 func compactPreview(s string) string {
