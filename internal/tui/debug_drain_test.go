@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,25 +8,17 @@ import (
 
 func TestDebugDrainTiming(t *testing.T) {
 	m := newTestModel()
-
-	// Direct test: call Update with KeyPressMsg
-	result, _ := m.Update(tea.KeyPressMsg{Text: "h"})
-	if updated, ok := result.(Model); ok {
-		t.Logf("direct Update: input=%q", updated.input.Value())
-	} else {
-		t.Fatalf("wrong type %T", result)
-	}
-
-	// Via harness
-	m2 := newTestModel()
-	h := startLiveProgramHarness(t, m2)
+	h := startLiveProgramHarness(t, m)
 	defer h.close()
+
+	s := h.snapshot()
+	t.Logf("before: focused=%v drainZero=%v ready=%v",
+		s.input.Focused(), s.inputDrainUntil.IsZero(), s.inputReady)
+	t.Logf("before: mode=%v", s.mode)
+	t.Logf("before: cancelFunc nil=%v", s.cancelFunc == nil)
 
 	h.send(tea.KeyPressMsg{Text: "h"})
 	h.sync()
-	s := h.snapshot()
-	t.Logf("via harness: input=%q", s.input.Value())
-
-	// Check if the issue is the harness program startup
-	fmt.Printf("DEBUG: harness input focused=%v\n", s.input.Focused())
+	s = h.snapshot()
+	t.Logf("after h: value=%q", s.input.Value())
 }
