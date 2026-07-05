@@ -152,6 +152,9 @@ func TestEachLLMTurnGetsSeparateAssistantItem(t *testing.T) {
 	if m.streamPrefixWritten {
 		t.Fatal("streamPrefixWritten should be false after agentTurnDoneMsg")
 	}
+	if m.streamBuffer != nil && m.streamBuffer.Len() != 0 {
+		t.Fatalf("streamBuffer should be empty after agentTurnDoneMsg, got %d bytes", m.streamBuffer.Len())
+	}
 
 	// Turn 2: new reasoning → must create new item
 	next, _ = m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 7, Text: "turn 2"}, nil)

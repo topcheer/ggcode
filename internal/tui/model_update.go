@@ -201,12 +201,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	case agentTurnDoneMsg:
 		// LLM turn boundary: collapse reasoning, finalize the assistant item,
-		// and reset streamPrefixWritten so the next LLM turn creates a fresh
+		// and reset stream state so the next LLM turn creates a fresh
 		// assistant item with its own reasoning/text.
 		m.chatFinishReasoning()
 		m.chatFinishAssistant(m.currentAssistantID())
 		m.streamPrefixWritten = false
 		m.reasoningActive = false
+		// CRITICAL: reset streamBuffer so next turn's text doesn't accumulate
+		// on top of the previous turn's content.
+		if m.streamBuffer != nil {
+			m.streamBuffer.Reset()
+		}
 		return m, spinnerCmd
 
 	case agentInterruptMsg:
