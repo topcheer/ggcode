@@ -78,5 +78,5 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
 
   echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 go test -tags goolm -count=1 ./...)
+  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=1GiB GOGC=50 go test -tags goolm -p 1 -count=1 -timeout 120s ./...)
 fi
