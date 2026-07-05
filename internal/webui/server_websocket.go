@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -206,7 +207,9 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			s.agentMu.Lock()
 			ctx, cancel := context.WithCancel(r.Context())
 			done := make(chan struct{})
+			readPumpDone := make(chan struct{})
 			safego.Go("webui.ws.readPump", func() {
+				defer close(readPumpDone)
 				for {
 					_, _, err := conn.ReadMessage()
 					if err != nil {
@@ -227,6 +230,13 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			})
 			<-done
 			cancel()
+			// Force readPump's blocked ReadMessage to return immediately,
+			// then wait for it to exit. Without this, the outer loop would
+			// call ReadMessage concurrently with readPump — violating
+			// gorilla/websocket's "no concurrent readers" contract.
+			conn.SetReadDeadline(time.Now())
+			<-readPumpDone
+			conn.SetReadDeadline(time.Time{}) // reset for outer loop
 			s.agentMu.Unlock()
 			s.agentBusy.Store(false)
 		}
