@@ -64,8 +64,9 @@ The default config includes these servers:
 |--------|---------|
 | `cloudflare` | Cloudflare API and docs |
 | `web-reader` | Fetch and read web pages |
-| `playwright` | Browser automation |
 | `zai-mcp-server` | Image analysis and OCR |
+
+> **Note:** The `playwright` MCP preset has been removed. Use the built-in `browser` tool instead — it provides Go-native Chrome DevTools Protocol (CDP) automation with no Node.js or Playwright dependency. See the Tools section in `GGCODE.md` for details.
 
 ## Auto-Start
 

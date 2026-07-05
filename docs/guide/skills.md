@@ -28,7 +28,7 @@ skill(skill="debug", args="investigate the failing test in auth_test.go")
 
 | Skill | Description |
 |-------|-------------|
-| `browser-automation` | Drive a browser via Playwright MCP |
+| `browser-automation` | Drive a browser via built-in CDP browser tool |
 | `debug` | Systematic debugging workflow |
 | `documentation-update` | Keep docs in sync with code changes |
 | `verify` | Run tests and validate changes |
