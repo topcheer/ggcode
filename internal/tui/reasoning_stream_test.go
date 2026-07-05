@@ -67,40 +67,38 @@ func TestHandleAgentReasoningMsgUsesAccumulatedReasoningText(t *testing.T) {
 	}
 }
 
-// TestReasoningDoneMsgKeepsStreamPrefixWritten ensures that after
-// agentReasoningDoneMsg fires (end of an LLM turn), streamPrefixWritten stays
-// true so the next turn's text continues on the same assistant bubble.
-// Resetting it caused text fragmentation: each tool call result would split
-// the assistant text into a separate bubble.
-func TestReasoningDoneMsgKeepsStreamPrefixWritten(t *testing.T) {
+// TestAgentTurnDoneMsgResetsStreamPrefix ensures that agentTurnDoneMsg
+// (fired at StreamEventDone = LLM turn boundary) resets streamPrefixWritten
+// so the next LLM turn creates a fresh assistant item. Each LLM turn gets
+// its own assistant bubble, while text within a single turn stays unified
+// even across tool calls.
+func TestAgentTurnDoneMsgResetsStreamPrefix(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 5
 
-	// Simulate reasoning arriving for turn 1
+	// Turn 1: reasoning arrives
 	next, _ := m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 5, Text: "turn 1 thinking"}, nil)
 	m = next
-
 	if !m.streamPrefixWritten {
-		t.Fatal("streamPrefixWritten should be true after reasoning arrives")
+		t.Fatal("streamPrefixWritten should be true after reasoning")
 	}
-
 	turn1ID := m.currentAssistantID()
 
-	// Simulate end of turn 1
-	updatedModel, _ := m.Update(agentReasoningDoneMsg{})
+	// End of turn 1 (StreamEventDone)
+	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
-	if !m.streamPrefixWritten {
-		t.Fatal("streamPrefixWritten should remain true after agentReasoningDoneMsg (prevents text fragmentation)")
+	if m.streamPrefixWritten {
+		t.Fatal("streamPrefixWritten should be false after agentTurnDoneMsg (turn boundary)")
 	}
 
-	// Simulate text arriving for turn 2 — should use the SAME assistant item
-	next, _ = m.handleAgentStreamMsg(agentStreamMsg{RunID: 5, Text: "turn 2 text"}, nil)
+	// Turn 2: new reasoning arrives — should create a NEW assistant item
+	next, _ = m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 5, Text: "turn 2 thinking"}, nil)
 	m = next
-
 	turn2ID := m.currentAssistantID()
-	if turn1ID != turn2ID {
-		t.Fatal("turn 2 should use the same assistant ID as turn 1 (not fragment text)")
+
+	if turn1ID == turn2ID {
+		t.Fatal("turn 2 should get a different assistant ID than turn 1")
 	}
 }

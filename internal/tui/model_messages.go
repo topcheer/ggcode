@@ -195,7 +195,10 @@ type agentReasoningMsg struct {
 	Text  string
 }
 
-type agentReasoningDoneMsg struct{}
+// agentTurnDoneMsg is sent at provider.StreamEventDone — the end of one
+// LLM turn (reasoning + text + tool calls all complete). NOT the end of
+// reasoning; reasoning ends when the first text/tool event arrives.
+type agentTurnDoneMsg struct{}
 
 type agentDoneMsg struct {
 	RunID int

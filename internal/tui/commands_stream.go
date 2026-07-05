@@ -96,7 +96,7 @@ func (m *Model) appendReasoningChunk(chunk string) {
 // chatFinishReasoning collapses the reasoning block in the current assistant item
 // and marks reasoning as inactive. It is called when the first text chunk or tool
 // event arrives (the natural end of reasoning in an LLM turn), or at turn end via
-// agentReasoningDoneMsg (which is a no-op if reasoning was already collapsed).
+// agentTurnDoneMsg (which is a no-op if reasoning was already collapsed).
 func (m *Model) chatFinishReasoning() {
 	if !m.reasoningActive {
 		return

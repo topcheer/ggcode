@@ -33,7 +33,7 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 		// which duplicates reasoning (fullReasoningBuf accumulates)
 		// and fragments text (streamBuffer was emptied by tool start).
 		// streamPrefixWritten is properly reset by chatFinishReasoning()
-		// at the end of each LLM turn (agentReasoningDoneMsg).
+		// at the end of each LLM turn (agentTurnDoneMsg).
 	}
 	m.chatListScrollToBottom()
 	return m, spinnerCmd

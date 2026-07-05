@@ -463,7 +463,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			// flush, the text would remain stuck in batchBuf because the
 			// ticker goroutine exits after the first closeBatchDone().
 			flushBatch()
-			m.program.Send(agentReasoningDoneMsg{})
+			m.program.Send(agentTurnDoneMsg{})
 			writingStatusSent = false
 			// Reset reasoning buffer so the next LLM turn starts fresh.
 			// Without this, fullReasoningBuf accumulates across turns and
