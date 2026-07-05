@@ -44,6 +44,7 @@ func (m *Model) openModelPanel() tea.Cmd {
 	m.providerPanel = nil
 	m.mcpPanel = nil
 	m.skillsPanel = nil
+	m.input.Blur() // release main input focus while panel is open
 
 	resolved, err := m.config.ResolveActiveEndpoint()
 	if err != nil {
@@ -70,6 +71,7 @@ func (m *Model) openModelPanel() tea.Cmd {
 
 func (m *Model) closeModelPanel() {
 	m.modelPanel = nil
+	m.input.Focus() // restore main input focus
 }
 
 func (m Model) renderModelPanel() string {
@@ -286,11 +288,13 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		panel.editingField = ""
 		panel.editInput = textinput.Model{}
+		m.input.Focus() // restore main input
 		return *m, nil
 	case "enter":
 		val := strings.TrimSpace(panel.editInput.Value())
 		panel.editingField = ""
 		panel.editInput = textinput.Model{}
+		m.input.Focus() // restore main input
 
 		vendor := m.config.Vendor
 		endpoint := m.config.Endpoint
