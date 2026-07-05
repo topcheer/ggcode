@@ -660,6 +660,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	verifyRetries := 0
 	progressCheckInjected := false
 	contextWarningInjected := false
+	todoCheckCount := 0
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -865,11 +866,28 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				continue
 			}
 			idleAutopilotContinuations = 0
+			// Check for incomplete todos before finishing. If the agent
+			// created todos but didn't complete them, inject a reminder
+			// instead of silently finishing. Max 2 reminders to avoid loops.
+			if todoCheckCount < 2 {
+				if reminder := a.checkIncompleteTodos(); reminder != "" {
+					todoCheckCount++
+					debug.Log("agent", "Iteration %d: incomplete todos detected, injecting reminder (%d/2)", i+1, todoCheckCount)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: reminder,
+						}},
+					})
+					continue
+				}
+			}
 			// Auto-verify: before returning, run build/test verification.
 			// If it fails, inject errors back and continue the loop.
-			// Only in non-plan modes, max 3 retries.
+			// Only in non-plan modes, max 3 retries, only if code was changed.
 			if verifyRetries < autoVerifyMaxRetries && runStats.Iterations > 1 {
-				if a.maybeAutoVerify(ctx, onEvent, textBuf) {
+				if a.maybeAutoVerify(ctx, onEvent, textBuf, runStats) {
 					verifyRetries++
 					debug.Log("agent", "Iteration %d: auto-verify failed, continuing (retry %d/%d)", i+1, verifyRetries, autoVerifyMaxRetries)
 					continue

@@ -33,7 +33,8 @@ const verifyExecuteTimeout = 120 * time.Second
 // maybeAutoVerify asks the LLM to determine a verification command
 // after completing its work, runs it, and on failure feeds errors back.
 // Returns true if verification failed (meaning we should continue the loop).
-func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.StreamEvent), lastText string) bool {
+// Only runs if code was actually changed in this run.
+func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.StreamEvent), lastText string, runStats *RunStats) bool {
 	mode := a.currentMode()
 	if mode == permission.PlanMode {
 		return false
@@ -44,8 +45,21 @@ func (a *Agent) maybeAutoVerify(ctx context.Context, onEvent func(provider.Strea
 		return false
 	}
 
-	// Ask the LLM to decide what verification command to run.
-	cmd := a.llmDecideVerifyCommand(ctx)
+	// Skip verification if no code was changed — avoids wasting time
+	// on Q&A conversations or read-only exploration.
+	if !codeChangedInRun(runStats) {
+		debug.Log("verify", "skipping: no file-editing tools used in this run")
+		return false
+	}
+
+	// First try deterministic detection — no LLM call needed, instant.
+	cmd := detectBuildSystem(workingDir)
+	if cmd == "" {
+		// No build system detected — fall back to LLM.
+		cmd = a.llmDecideVerifyCommand(ctx)
+	} else {
+		debug.Log("verify", "using deterministic command: %s", cmd)
+	}
 	if cmd == "" {
 		debug.Log("verify", "LLM decided no verification needed")
 		return false
