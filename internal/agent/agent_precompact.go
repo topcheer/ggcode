@@ -41,18 +41,34 @@ const (
 	// agent's regular LLM turn to avoid API rate-limit collisions.
 	precompactStartDelay = 6 * time.Second
 
-	// toolResultClearTrigger starts proactive tool-result clearing at this
-	// fraction of the compaction threshold. Below this, clearing is unnecessary.
+	// Progressive tool-result clearing tiers. Instead of a single aggressive
+	// pass, we clear in graduated steps as context fills up. This spreads
+	// the loss of detail across multiple thresholds rather than losing many
+	// results all at once, keeping more recent context intact longer.
+	//
 	// This is the "tool-result clearing" technique from Anthropic's context
-	// engineering research (2025-2026): mechanically replace old re-fetchable
-	// tool outputs with placeholders to avoid expensive LLM compaction.
-	toolResultClearTrigger = 0.75
-
-	// toolResultClearKeepN is the number of most-recent tool results to keep
-	// intact when clearing. Older results get their Output replaced with a
-	// short placeholder.
-	toolResultClearKeepN = 6
+	// engineering research (2025-2026), extended with progressive tiers
+	// inspired by the ACE (Agentic Context Engineering) framework.
+	//
+	// Each tier: [trigger fraction, keepN, clearInputs]
+	// - trigger: fraction of compaction threshold to activate
+	// - keepN: number of most-recent tool results to preserve
+	// - clearInputs: also truncate tool_use Input arguments
 )
+
+// clearTier defines one level of progressive tool-result clearing.
+type clearTier struct {
+	trigger     float64 // fraction of compaction threshold to activate
+	keepN       int     // number of most-recent tool results to preserve
+	clearInputs bool    // also truncate tool_use Input arguments
+}
+
+// toolClearTiers defines the progressive clearing schedule.
+var toolClearTiers = []clearTier{
+	{trigger: 0.50, keepN: 12, clearInputs: false}, // gentle: early bloat detection
+	{trigger: 0.65, keepN: 8, clearInputs: false},  // moderate: trim older results
+	{trigger: 0.75, keepN: 4, clearInputs: true},   // aggressive: also clear tool_use inputs
+}
 
 // precompactDelayCtx is the delay applied before the background compression
 // request fires. Tests override this to zero for fast execution.
@@ -129,24 +145,30 @@ func (a *Agent) StartPreCompact() {
 	threshold := cm.AutoCompactThreshold()
 	tokens := cm.TokenCount()
 
-	// Proactive tool-result clearing: try cheap mechanical clearing first.
-	// When tokens approach the threshold, replace old re-fetchable tool
-	// outputs with short placeholders. This may avoid compaction entirely.
-	if threshold > 0 && tokens >= int(float64(threshold)*toolResultClearTrigger) {
+	// Progressive tool-result clearing: try cheap mechanical clearing first.
+	// Walk through tiers from gentle to aggressive. Each tier clears more
+	// aggressively (fewer kept results). Idempotent — already-cleared
+	// results are skipped, so re-running a tier is a no-op.
+	if threshold > 0 {
 		if mgr, ok := cm.(*ctxpkg.Manager); ok {
-			freed := mgr.ClearOldToolResults(toolResultClearKeepN)
-			if freed > 0 {
-				tokens = cm.TokenCount() // re-read after clearing
-				debug.Log("precompact", "CLEARED: freed %d tokens from old tool results, tokens now %d (threshold=%d)",
-					freed, tokens, threshold)
-			}
-			// Also clear old tool_use Input (arguments) whose results were cleared.
-			// Tools like edit_file/write_file have large Input (full file content).
-			freedInput := mgr.ClearOldToolUseInputs()
-			if freedInput > 0 {
-				tokens = cm.TokenCount()
-				debug.Log("precompact", "CLEARED: freed %d tokens from old tool_use inputs, tokens now %d (threshold=%d)",
-					freedInput, tokens, threshold)
+			for _, tier := range toolClearTiers {
+				if tokens < int(float64(threshold)*tier.trigger) {
+					break // not yet at this tier's trigger point
+				}
+				freed := mgr.ClearOldToolResults(tier.keepN)
+				if freed > 0 {
+					tokens = cm.TokenCount()
+					debug.Log("precompact", "CLEARED(tier %.0f%%): freed %d tokens from tool results (keepN=%d), tokens now %d (threshold=%d)",
+						tier.trigger*100, freed, tier.keepN, tokens, threshold)
+				}
+				if tier.clearInputs {
+					freedInput := mgr.ClearOldToolUseInputs()
+					if freedInput > 0 {
+						tokens = cm.TokenCount()
+						debug.Log("precompact", "CLEARED(tier %.0f%%): freed %d tokens from tool_use inputs, tokens now %d (threshold=%d)",
+							tier.trigger*100, freedInput, tokens, threshold)
+					}
+				}
 			}
 		}
 	}
