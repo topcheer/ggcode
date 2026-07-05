@@ -677,11 +677,16 @@ platform :ios do
       submission_id = sub.id
     end
 
-    # 5. ACTUALLY submit for review — this transitions the submission
-    #    from READY_FOR_REVIEW to WAITING_FOR_REVIEW.
-    #    Without this call, the submission sits at READY_FOR_REVIEW forever.
+    # 5. ACTUALLY submit for review — PATCH reviewSubmissions/{id} with
+    #    {submitted: true} transitions the submission from READY_FOR_REVIEW
+    #    to WAITING_FOR_REVIEW. This uses the spaceship built-in method
+    #    (ReviewSubmission#submit_for_review), NOT a non-existent
+    #    POST actions/submit endpoint.
     begin
-      client.tunes_request_client.post("v1/reviewSubmissions/#{submission_id}/actions/submit", nil)
+      Spaceship::ConnectAPI.patch_review_submission(
+        review_submission_id: submission_id,
+        attributes: { submitted: true }
+      )
       UI.success("Review submission #{submission_id} submitted! Version #{v} is now WAITING_FOR_REVIEW.")
     rescue => e
       UI.user_error!("Failed to submit for review (submission #{submission_id}): #{e.message}")
