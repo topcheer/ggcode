@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -622,7 +623,7 @@ func (m *Model) handleContextCommand() tea.Cmd {
 
 	// System prompt token estimate
 	sysPrompt := m.agent.SystemPrompt()
-	sysTokens := estimateTokens(sysPrompt)
+	sysTokens := context.EstimateTokens(sysPrompt)
 
 	// Count messages by role
 	var userMsgs, asstMsgs, toolMsgs int
@@ -693,26 +694,21 @@ func (m *Model) handleContextCommand() tea.Cmd {
 	return nil
 }
 
-// estimateTokens provides a rough token estimate (4 chars ≈ 1 token).
-func estimateTokens(text string) int {
-	if len(text) == 0 {
-		return 0
-	}
-	return (len(text) + 3) / 4
-}
-
 // estimateMessageTokens sums token estimates across all content blocks.
+// Uses context.EstimateTokens for text (ASCII fast path + CJK aware),
+// and adds overhead for images and tool calls.
 func estimateMessageTokens(msg provider.Message) int {
 	var total int
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
-			total += estimateTokens(block.Text)
+			total += context.EstimateTokens(block.Text)
 		case "image":
 			// Vision tokens are larger; approximate as 1000 per image
 			total += 1000
 		default:
-			total += 100
+			// Tool calls/results have JSON structure overhead
+			total += context.EstimateTokens(block.Output+block.ToolName+string(block.Input)) + 6
 		}
 	}
 	return total
