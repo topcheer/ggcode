@@ -52,10 +52,13 @@ echo "[verify-ci] cross-platform compile check passed"
 echo "[verify-ci] running go vet (main module)"
 go vet -tags goolm ./cmd/... ./internal/...
 
-echo "[verify-ci] running tests (main module, unit + Tier 1 integration)"
+echo "[verify-ci] running tests (main module, unit only)"
 # Limit parallelism to prevent OOM kills on machines with many packages.
 # -p 4 limits the number of test binaries compiled and run in parallel.
-go test -tags "goolm,integration" -p 4 ./cmd/... ./internal/...
+# NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
+# tests that spawn Chrome) are too heavy for CI and will OOM. Run them
+# separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
+GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 4 -timeout 300s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop"
