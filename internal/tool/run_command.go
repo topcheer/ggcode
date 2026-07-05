@@ -348,19 +348,48 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a
-// "[... N bytes omitted ...]" marker in between. This ensures the agent sees
+// "[... N lines omitted ...]" marker in between. This ensures the agent sees
 // both the beginning (context/setup) and the end (errors, results, exit status)
 // of long outputs like test runs, build logs, and linter output.
+//
+// Truncation is line-aware: head and tail boundaries are snapped to the
+// nearest newline so the output doesn't contain partial lines. This makes
+// the truncated output much easier for the agent to parse.
 func truncateMiddle(s string, maxLen int, label string) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	headSize := maxLen * 2 / 5 // 40% of budget for the head
 	tailSize := maxLen / 2     // 50% of budget for the tail
-	omitted := len(s) - headSize - tailSize
-	head := s[:headSize]
-	tail := s[len(s)-tailSize:]
-	return head + fmt.Sprintf("\n... [%d bytes omitted — %s truncated, showing tail] ...\n", omitted, label) + tail
+
+	// Snap head to the end of the current line (don't cut mid-line).
+	// But only snap forward by at most maxLen/10 to avoid swallowing
+	// huge single-line content.
+	headEnd := headSize
+	if idx := strings.Index(s[headSize:], "\n"); idx >= 0 && idx <= headSize/2 {
+		headEnd = headSize + idx
+	}
+
+	// Snap tail to the start of the next line (don't start mid-line).
+	tailStart := len(s) - tailSize
+	if idx := strings.Index(s[tailStart:], "\n"); idx >= 0 && idx <= tailSize/2 {
+		tailStart = tailStart + idx + 1
+	}
+
+	// If snapping causes overlap, fall back to raw byte truncation
+	if headEnd >= tailStart {
+		headEnd = headSize
+		tailStart = len(s) - tailSize
+	}
+
+	head := s[:headEnd]
+	tail := s[tailStart:]
+
+	// Count omitted lines for a more useful message
+	omittedText := s[headEnd:tailStart]
+	omittedLines := strings.Count(omittedText, "\n")
+
+	return head + fmt.Sprintf("\n... [%d lines omitted — %s truncated, showing tail] ...\n", omittedLines, label) + tail
 }
 
 // executeWithAutoBackground starts a command as a managed job and waits up to

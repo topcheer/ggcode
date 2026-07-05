@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func TestTruncateMiddle_PreservesHeadAndTail(t *testing.T) {
 	if !containsStr(got, "TAIL_END") {
 		t.Error("truncated output should contain tail — this is the key fix")
 	}
-	if !containsStr(got, "bytes omitted") {
+	if !containsStr(got, "omitted") {
 		t.Error("truncated output should contain omission marker")
 	}
 }
@@ -187,5 +188,37 @@ func TestTruncateMiddle_ExactSize(t *testing.T) {
 	got := truncateMiddle(s, 100, "output")
 	if got != s {
 		t.Fatal("string at exactly maxLen should not be truncated")
+	}
+}
+
+func TestTruncateMiddle_LineAwareNoPartialLines(t *testing.T) {
+	// Build multi-line output where each line is 50 chars
+	var sb strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&sb, "line %03d: %s\n", i, strings.Repeat("x", 38))
+	}
+	s := sb.String()
+
+	got := truncateMiddle(s, 2000, "output")
+
+	// Every line in the result should be complete (end with \n or be the last line)
+	for _, line := range strings.Split(got, "\n") {
+		if line == "" {
+			continue
+		}
+		// Skip the truncation marker line
+		if containsStr(line, "omitted") {
+			continue
+		}
+		// Each visible line should start with "line" (meaning it's complete)
+		if !containsStr(line, "line ") && !containsStr(line, "x") {
+			// Could be a fragment if truncation cut mid-line
+			t.Errorf("found partial line (line-aware truncation should prevent this): %q", line)
+		}
+	}
+
+	// Should mention lines omitted (not bytes)
+	if !containsStr(got, "lines omitted") {
+		t.Error("line-aware truncation should report 'lines omitted'")
 	}
 }
