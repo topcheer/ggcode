@@ -269,6 +269,8 @@ func convertTabsToSpaces(text string, tabWidth int) string {
 
 // diagnoseMatchFailure provides actionable hints when old_text is not found.
 // It checks for common causes: tab vs space, trailing whitespace, line ending differences.
+// When possible, it also finds the nearest matching lines in the file so the
+// agent can see exactly what changed without a separate read_file call.
 func diagnoseMatchFailure(content, oldText string) string {
 	oldHasTabs := strings.Contains(oldText, "\t")
 	oldHasLeadingSpaces := false
@@ -279,14 +281,16 @@ func diagnoseMatchFailure(content, oldText string) string {
 		}
 	}
 
+	allLines := strings.Split(content, "\n")
+
+	// Detect indentation style from a sample of lines
 	fileHasTabs := false
 	fileIndentSpaces := 0
-	lines := strings.Split(content, "\n")
-	limit := len(lines)
-	if limit > 100 {
-		limit = 100
+	sampleLimit := len(allLines)
+	if sampleLimit > 100 {
+		sampleLimit = 100
 	}
-	for _, line := range lines[:limit] {
+	for _, line := range allLines[:sampleLimit] {
 		if len(line) > 0 && line[0] == '\t' {
 			fileHasTabs = true
 		}
@@ -297,46 +301,28 @@ func diagnoseMatchFailure(content, oldText string) string {
 
 	var hints []string
 
-	if fileHasTabs && !oldHasTabs && oldHasLeadingSpaces {
-		hints = append(hints, "file uses tab indentation — use \\t in old_text")
-		firstOldLine := strings.Split(oldText, "\n")[0]
-		trimmedOld := strings.TrimLeft(firstOldLine, " \t")
-		if trimmedOld != "" {
-			for _, line := range lines {
-				trimmed := strings.TrimLeft(line, " \t")
-				if trimmed == trimmedOld {
-					visual := visualizeWhitespace(line)
-					hints = append(hints, fmt.Sprintf("expected line: %s", visual))
-					break
-				}
-			}
-		}
-	} else if !fileHasTabs && oldHasTabs && fileIndentSpaces > 0 {
-		hints = append(hints, "file uses space indentation — remove \\t from old_text")
-	}
-
 	// Check for CRLF vs LF
 	if strings.Contains(content, "\r\n") && !strings.Contains(oldText, "\r\n") {
 		hints = append(hints, "file uses CRLF line endings — re-read the file to get exact content")
 	}
 
-	// Check if old_text is close to something in the file (first line matches partially)
-	if len(hints) == 0 {
-		firstOldLine := strings.Split(oldText, "\n")[0]
-		firstOldLine = strings.TrimSpace(firstOldLine)
-		if firstOldLine != "" {
-			for _, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				if trimmed == firstOldLine {
-					visual := visualizeWhitespace(line)
-					hints = append(hints, fmt.Sprintf(
-						"first line matches but whitespace differs. Expected line: %s — re-read the file with read_file and copy exact content",
-						visual,
-					))
-					break
-				}
-			}
+	// Check for tab/space mismatch
+	if fileHasTabs && !oldHasTabs && oldHasLeadingSpaces {
+		hints = append(hints, "file uses tab indentation — use \\t in old_text")
+	} else if !fileHasTabs && oldHasTabs && fileIndentSpaces > 0 {
+		hints = append(hints, "file uses space indentation — remove \\t from old_text")
+	}
+
+	// Try to find the nearest matching lines in the full file.
+	// This is the most useful diagnostic: it shows the agent exactly what the
+	// file looks like near the intended edit location, with line numbers that
+	// can be used as anchors for a corrected edit_file retry.
+	if nearest := findNearestLines(allLines, oldText, 3); len(nearest) > 0 {
+		var parts []string
+		for _, nl := range nearest {
+			parts = append(parts, fmt.Sprintf("  %d\t%s", nl.lineNum, visualizeWhitespace(nl.text)))
 		}
+		hints = append(hints, fmt.Sprintf("nearest matching lines in file:\n%s", strings.Join(parts, "\n")))
 	}
 
 	if len(hints) == 0 {
@@ -344,6 +330,109 @@ func diagnoseMatchFailure(content, oldText string) string {
 	}
 
 	return strings.Join(hints, "; ")
+}
+
+// nearestLine holds a line's content and its 1-based line number.
+type nearestLine struct {
+	lineNum int
+	text    string
+}
+
+// findNearestLines searches the entire file for lines most similar to the
+// first line of oldText. It returns up to `maxResults` lines sorted by
+// similarity (descending). Uses token-level Jaccard similarity which is
+// fast and works well for code.
+func findNearestLines(fileLines []string, oldText string, maxResults int) []nearestLine {
+	oldFirst := strings.TrimSpace(strings.Split(oldText, "\n")[0])
+	if oldFirst == "" || len(oldFirst) < 3 {
+		return nil
+	}
+
+	oldTokens := tokenize(oldFirst)
+	if len(oldTokens) == 0 {
+		return nil
+	}
+
+	type scored struct {
+		nearestLine
+		score float64
+	}
+	var candidates []scored
+
+	for i, line := range fileLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lineTokens := tokenize(trimmed)
+		if len(lineTokens) == 0 {
+			continue
+		}
+		score := jaccardSimilarity(oldTokens, lineTokens)
+		if score > 0.3 { // minimum threshold for "similar enough"
+			candidates = append(candidates, scored{
+				nearestLine: nearestLine{lineNum: i + 1, text: line},
+				score:       score,
+			})
+		}
+	}
+
+	// Sort by score descending, keep top N
+	for i := 0; i < len(candidates); i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[j].score > candidates[i].score {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+		}
+	}
+	if len(candidates) > maxResults {
+		candidates = candidates[:maxResults]
+	}
+
+	result := make([]nearestLine, len(candidates))
+	for i, c := range candidates {
+		result[i] = c.nearestLine
+	}
+	return result
+}
+
+// tokenize splits a string into lowercase tokens for fuzzy comparison.
+func tokenize(s string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	var current strings.Builder
+	for _, c := range strings.ToLower(s) {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+			current.WriteRune(c)
+		} else {
+			if current.Len() > 0 {
+				tokens[current.String()] = struct{}{}
+				current.Reset()
+			}
+		}
+	}
+	if current.Len() > 0 {
+		tokens[current.String()] = struct{}{}
+	}
+	return tokens
+}
+
+// jaccardSimilarity computes the Jaccard similarity between two token sets.
+// J(A,B) = |A ∩ B| / |A ∪ B|
+func jaccardSimilarity(a, b map[string]struct{}) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	intersection := 0
+	for token := range a {
+		if _, ok := b[token]; ok {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
 }
 
 // visualizeWhitespace replaces tab characters with the literal string "<TAB>"
