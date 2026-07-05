@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.127`](docs/releases/v1.3.127.md) |
+| Latest documented release | [`v1.3.128`](docs/releases/v1.3.128.md) |
 
 ## Build & Validation
 
@@ -262,6 +262,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **LAN Chat** (5, in `cmd/ggcode/root.go`): `lanchat` — list participants (with role, team, workspace, languages), send messages (DM, `to='*'` broadcast, `send_team` team-targeted), read history, manage @agent approvals
 **IM** (1, in `builtin.go`): `im` — status (list adapters), mute/unmute (drop/reconnect adapter), disable/enable, send (with `auto_start` for muted/disabled adapters). Always allowed in all permission modes. Manager injected post-registration via `im.NewToolManagerAdapter()`.
 **Screenshot** (1, in `builtin.go`): `screenshot` — capture full screen, specific display, window (by title/app name), or screen region. Supports cursor inclusion, delay, PNG/JPEG format, auto-resize. Actions: `capture` (default), `list_displays`, `list_windows`. Platform implementations in `internal/image/screenshot_{platform}.go`.
+**Mobile Device** (1, in `builtin.go`): `mobile_device` — Control native mobile apps on iOS Simulator or Android Emulator/Device. Actions: devices (list), boot, install, launch, snapshot (UI tree), screenshot, tap, type, swipe, press (hardware keys), logs, close, list_apps.
 **Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
 
 ### Slash Commands
