@@ -6,7 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -221,6 +225,94 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 }
 
+// minChromeMajorVersion is the minimum Chrome version required for reliable
+// CDP support. Chrome < 90 may have missing or incompatible CDP domains.
+const minChromeMajorVersion = 90
+
+// chromeNotFoundHelp returns a human-friendly error message when Chrome
+// cannot be found, with platform-specific install instructions.
+func chromeNotFoundHelp() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "Chrome or Chromium not found. Install from https://www.google.com/chrome/ or run: brew install --cask google-chrome"
+	case "windows":
+		return "Chrome or Chromium not found. Install from https://www.google.com/chrome/ or: winget install Google.Chrome"
+	default:
+		return "Chrome or Chromium not found. Install via your package manager, e.g.: sudo apt install google-chrome-stable OR sudo snap install chromium"
+	}
+}
+
+// findChromeExecutable locates a Chrome/Chromium binary across platforms.
+// Returns the path if found, empty string otherwise.
+func findChromeExecutable() string {
+	var locations []string
+	switch runtime.GOOS {
+	case "darwin":
+		locations = []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+			filepath.Join(homeDir(), "Applications", "Chromium.app", "Contents", "MacOS", "Chromium"),
+		}
+	case "windows":
+		locations = []string{
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Google\Chrome\Application\chrome.exe`),
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Chromium\Application\chrome.exe`),
+		}
+	default:
+		// Linux and other Unix-like systems
+		locations = []string{
+			"google-chrome-stable",
+			"google-chrome",
+			"chromium-browser",
+			"chromium",
+			"/usr/bin/google-chrome",
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/chromium-browser",
+			"/usr/bin/chromium",
+			"/snap/bin/chromium",
+			"/opt/google/chrome/chrome",
+		}
+	}
+
+	for _, p := range locations {
+		if path, err := exec.LookPath(p); err == nil {
+			return path
+		}
+		// For absolute paths, check directly
+		if filepath.IsAbs(p) {
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// getChromeVersion returns the major version number of the installed Chrome.
+// Returns 0 if the version cannot be determined (non-fatal — we warn but don't block).
+func getChromeVersion(chromePath string) int {
+	cmd := exec.Command(chromePath, "--version")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	// Output format: "Google Chrome 149.0.7827.201" or "Chromium 132.0.6834.110"
+	re := regexp.MustCompile(`(\d+)\.`)
+	match := re.FindStringSubmatch(string(output))
+	if len(match) < 2 {
+		return 0
+	}
+	ver, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0
+	}
+	return ver
+}
+
 // getProfile returns an existing Chrome profile or lazily creates one.
 // Each profile has its own Chrome allocator (separate process, cookies, data dir).
 func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, error) {
@@ -231,6 +323,19 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		return p, nil
 	}
 
+	// Pre-flight check: verify Chrome/Chromium is installed
+	chromePath := findChromeExecutable()
+	if chromePath == "" {
+		return nil, fmt.Errorf("%s\n\nThe browser tool requires Chrome or Chromium to be installed on this system.", chromeNotFoundHelp())
+	}
+
+	// Check version — warn (but don't block) if too old
+	chromeVersion := getChromeVersion(chromePath)
+	if chromeVersion > 0 && chromeVersion < minChromeMajorVersion {
+		// Non-fatal: older Chrome may work for basic operations
+		fmt.Fprintf(os.Stderr, "[browser] WARNING: Chrome %d detected, recommended version is %d+\n", chromeVersion, minChromeMajorVersion)
+	}
+
 	// Build allocator options
 	headlessMode := true
 	if headless != nil {
@@ -238,6 +343,7 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 	}
 
 	opts := []chromedp.ExecAllocatorOption{
+		chromedp.ExecPath(chromePath),
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.DisableGPU,

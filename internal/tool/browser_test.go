@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -185,5 +186,41 @@ func TestBrowserMissingAction(t *testing.T) {
 	result, _ := b.Execute(nil, input)
 	if !result.IsError {
 		t.Error("expected error for missing action")
+	}
+}
+
+func TestFindChromeExecutable(t *testing.T) {
+	// Should find Chrome or Chromium on the dev machine
+	path := findChromeExecutable()
+	if path == "" {
+		t.Skip("no Chrome/Chromium installed on this machine")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("findChromeExecutable returned invalid path: %s: %v", path, err)
+	}
+}
+
+func TestGetChromeVersion(t *testing.T) {
+	path := findChromeExecutable()
+	if path == "" {
+		t.Skip("no Chrome/Chromium installed")
+	}
+	ver := getChromeVersion(path)
+	if ver == 0 {
+		t.Skip("could not determine Chrome version")
+	}
+	if ver < 50 {
+		t.Errorf("Chrome version %d seems too low", ver)
+	}
+	t.Logf("Detected Chrome version: %d", ver)
+}
+
+func TestChromeNotFoundHelp(t *testing.T) {
+	msg := chromeNotFoundHelp()
+	if !strings.Contains(msg, "Chrome") {
+		t.Errorf("error message should mention Chrome: %s", msg)
+	}
+	if !strings.Contains(strings.ToLower(msg), "install") {
+		t.Errorf("error message should include install instructions: %s", msg)
 	}
 }
