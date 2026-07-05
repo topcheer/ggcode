@@ -129,6 +129,11 @@ func (c *InteractiveRuntimeCore) Close() {
 	if c.Tunnel != nil {
 		c.Tunnel.Close()
 	}
+	// Shut down tools that hold resources (e.g. browser Chrome processes).
+	// This prevents resource leaks — without it, Chrome processes accumulate.
+	if c.Registry != nil {
+		c.Registry.CloseAll()
+	}
 }
 
 // MCPManagerCancel returns the MCP cancel function for callers that need

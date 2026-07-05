@@ -57,6 +57,25 @@ func NewBrowser() *Browser {
 
 func (b *Browser) Name() string { return "browser" }
 
+// Close shuts down all browser profiles and their Chrome processes.
+// Implements the Closer interface for graceful cleanup on agent exit.
+func (b *Browser) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for name, p := range b.profiles {
+		// Cancel all tab contexts within the profile
+		for _, tab := range p.tabs {
+			tab.cancel()
+		}
+		p.tabs = nil
+		// Cancel the allocator (kills the Chrome process)
+		p.allocCancel()
+		delete(b.profiles, name)
+	}
+	return nil
+}
+
 func (b *Browser) Description() string {
 	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JavaScript support without Node.js or Playwright. " +
 		"Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. " +

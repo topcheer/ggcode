@@ -52,6 +52,14 @@ type Tool interface {
 	Execute(ctx context.Context, input json.RawMessage) (Result, error)
 }
 
+// Closer is an optional interface for tools that hold resources (browser
+// processes, network connections, file handles) that must be released when
+// the agent shuts down. Tools that implement Close() will have it called
+// during registry teardown via Registry.CloseAll().
+type Closer interface {
+	Close() error
+}
+
 // Registry manages the set of available tools.
 type Registry struct {
 	tools map[string]Tool
@@ -102,6 +110,28 @@ func (r *Registry) List() []Tool {
 		out = append(out, t)
 	}
 	return out
+}
+
+// CloseAll calls Close() on every registered tool that implements Closer.
+// This releases resources like browser processes, network connections, etc.
+// Errors are collected but do not stop cleanup — all tools are attempted.
+func (r *Registry) CloseAll() []error {
+	r.mu.RLock()
+	tools := make([]Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		tools = append(tools, t)
+	}
+	r.mu.RUnlock()
+
+	var errs []error
+	for _, t := range tools {
+		if c, ok := t.(Closer); ok {
+			if err := c.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close %s: %w", t.Name(), err))
+			}
+		}
+	}
+	return errs
 }
 
 // ToDefinitions converts all tools to provider.ToolDefinition for the LLM.

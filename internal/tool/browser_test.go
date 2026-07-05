@@ -109,6 +109,50 @@ func TestBrowserProfileManagement(t *testing.T) {
 	}
 }
 
+func TestBrowserCloserInterface(t *testing.T) {
+	b := NewBrowser()
+
+	// Browser must implement Closer
+	var _ Closer = b
+
+	// Close on a fresh browser (no profiles created) should be safe
+	if err := b.Close(); err != nil {
+		t.Errorf("Close() on fresh browser should not error: %v", err)
+	}
+
+	// Close again (idempotent) should be safe
+	if err := b.Close(); err != nil {
+		t.Errorf("Close() twice should be safe: %v", err)
+	}
+}
+
+func TestRegistryCloseAll(t *testing.T) {
+	r := NewRegistry()
+	browser := NewBrowser()
+	if err := r.Register(browser); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register a non-Closer tool too — CloseAll should skip it
+	if err := r.Register(WebFetch{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// CloseAll should call Close on Browser but skip WebFetch
+	errs := r.CloseAll()
+	if len(errs) != 0 {
+		t.Errorf("CloseAll should not return errors, got: %v", errs)
+	}
+
+	// Verify browser profiles were cleared
+	browser.mu.Lock()
+	cleared := len(browser.profiles) == 0
+	browser.mu.Unlock()
+	if !cleared {
+		t.Error("CloseAll should have cleared browser profiles")
+	}
+}
+
 func TestBrowserSchemaHasProfileAndSession(t *testing.T) {
 	b := NewBrowser()
 	var schema map[string]interface{}
