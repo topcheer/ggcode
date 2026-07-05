@@ -125,7 +125,11 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		fileHint: fileHint,
 	})
 
-	if productiveTools[toolName] {
+	// A tool call is productive if it's a productive tool AND it succeeded.
+	// Failed run_command calls (e.g. failed builds) are NOT productive —
+	// they don't represent forward progress. This prevents the drift detector
+	// from being suppressed when the agent is stuck running failing commands.
+	if productiveTools[toolName] && !(isError && toolName == "run_command") {
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)

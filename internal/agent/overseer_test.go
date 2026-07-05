@@ -260,3 +260,52 @@ func TestExtractFileHintJSON(t *testing.T) {
 		t.Errorf("extractFileHint with nested JSON = %q, want /some/file.go", got)
 	}
 }
+
+// TestOverseer_FailedCommandNotProductive verifies that a failed run_command
+// does NOT reset itersSinceProductive. Previously, ALL run_command calls were
+// treated as productive, which suppressed drift detection when the agent was
+// stuck running failing builds in a loop.
+func TestOverseer_FailedCommandNotProductive(t *testing.T) {
+	o := newOverseerState()
+
+	// Run driftThreshold failed commands — these should NOT reset the drift counter.
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall("run_command", true, "") // failed build
+	}
+
+	if o.itersSinceProductive < driftThreshold {
+		t.Fatalf("expected itersSinceProductive >= %d after %d failed commands, got %d",
+			driftThreshold, driftThreshold, o.itersSinceProductive)
+	}
+
+	// Drift should fire because failed commands are not productive.
+	msg := o.analyze(driftThreshold)
+	if msg == "" {
+		t.Fatal("expected drift intervention after repeated failed commands")
+	}
+}
+
+// TestOverseer_SuccessfulCommandResetsProductive verifies that a successful
+// run_command DOES reset itersSinceProductive (the normal case).
+func TestOverseer_SuccessfulCommandResetsProductive(t *testing.T) {
+	o := newOverseerState()
+
+	// Some read-only calls.
+	for i := 0; i < 10; i++ {
+		o.recordToolCall("read_file", false, "/path.go")
+	}
+	if o.itersSinceProductive != 10 {
+		t.Fatalf("expected itersSinceProductive=10, got %d", o.itersSinceProductive)
+	}
+
+	// A successful command resets the counter.
+	o.recordToolCall("run_command", false, "")
+	if o.itersSinceProductive != 0 {
+		t.Fatalf("expected itersSinceProductive=0 after successful command, got %d", o.itersSinceProductive)
+	}
+
+	// File-read tracking should also be reset.
+	if len(o.fileReadsSinceEdit) != 0 {
+		t.Fatalf("expected fileReadsSinceEdit cleared after successful command, got %d entries", len(o.fileReadsSinceEdit))
+	}
+}
