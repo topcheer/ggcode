@@ -70,6 +70,7 @@ type Agent struct {
 	autopilotGoalCheckedThisTurn bool                // prevents infinite goal-check loops within a single idle turn
 	reflectionFunc               ReflectionFunc      // called after each run with accumulated stats
 	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
+	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
@@ -108,6 +109,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		baseSystemPrompt: systemPrompt,
 		shutdownCtx:      ctx,
 		shutdownCancel:   cancel,
+		overseer:         newOverseerState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -667,6 +669,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		a.resetOverseer() // clear trajectory state for new run
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
@@ -962,6 +965,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = result.Content + "\n\n" + errorGuidance
 				} else {
 					result.Content = errorGuidance
+				}
+			}
+
+			// Overseer: deterministic trajectory analysis (SICA-inspired).
+			// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
+			if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), runStats.Iterations); overseerGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + overseerGuidance
+				} else {
+					result.Content = overseerGuidance
 				}
 			}
 
