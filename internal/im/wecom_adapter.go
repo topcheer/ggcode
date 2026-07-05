@@ -119,12 +119,15 @@ func (a *wecomAdapter) Start(ctx context.Context) {
 
 func (a *wecomAdapter) Close() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.closed = true
 	a.connected = false
-	if a.ws != nil {
-		a.ws.Close()
-		a.ws = nil
+	ws := a.ws
+	a.ws = nil
+	a.mu.Unlock()
+	// Close outside the lock to avoid potential deadlock if ws.Close()
+	// triggers internal callbacks that try to acquire a.mu.RLock().
+	if ws != nil {
+		ws.Close()
 	}
 	return nil
 }

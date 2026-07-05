@@ -106,13 +106,15 @@ func (a *nostrAdapter) Start(ctx context.Context) {
 
 func (a *nostrAdapter) Close() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.closed = true
-	for _, r := range a.relayConns {
-		r.Close()
-	}
+	relays := a.relayConns
 	a.relayConns = nil
 	a.connected = 0
+	a.mu.Unlock()
+	// Close outside the lock to avoid potential deadlock.
+	for _, r := range relays {
+		r.Close()
+	}
 	return nil
 }
 
