@@ -74,6 +74,13 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	}
 
 	if route.Kind == im.InboundRouteAskUser {
+		if m.pendingQuestionnaire == nil {
+			// Questionnaire was already completed/cancelled; ignore stale IM reply.
+			if msg.Response != nil {
+				msg.Response <- nil
+			}
+			return m, nil
+		}
 		completed, err := m.pendingQuestionnaire.applyRemoteAnswer(route.Text, m.currentLanguage())
 		if msg.Response != nil {
 			msg.Response <- nil
