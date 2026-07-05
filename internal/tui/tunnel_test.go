@@ -2191,3 +2191,138 @@ func TestHandleTunnelAskUserResponseDeliversPendingAnswer(t *testing.T) {
 		t.Fatal("timed out waiting for ask user response delivery")
 	}
 }
+
+// tinyValidPNG is a 1x1 pixel PNG encoded as base64.
+const tinyValidPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+func TestBase64DecodeTunnelImage(t *testing.T) {
+	// Valid base64 should decode successfully.
+	raw := base64DecodeTunnelImage(tinyValidPNG)
+	if len(raw) == 0 {
+		t.Fatal("expected non-empty decoded bytes for valid base64")
+	}
+
+	// Invalid base64 should return nil.
+	raw = base64DecodeTunnelImage("!!!not-base64!!!")
+	if raw != nil {
+		t.Fatalf("expected nil for invalid base64, got %d bytes", len(raw))
+	}
+
+	// Empty string should return empty bytes (valid base64).
+	raw = base64DecodeTunnelImage("")
+	if len(raw) != 0 {
+		t.Fatalf("expected empty for empty input, got %d bytes", len(raw))
+	}
+}
+
+func TestHandleTunnelInboundMsg_WithImages(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 1
+
+	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 1,
+		text:       "What is this?",
+		images: []tunnel.ImageData{
+			{MIME: "image/png", Data: tinyValidPNG, Name: "screenshot.png"},
+		},
+	})
+	updated := got.(*Model)
+
+	// Agent should have been started (loading = true).
+	if !updated.loading {
+		t.Fatal("expected loading=true after image+text message")
+	}
+
+	// Images should have been consumed from pendingImages by startAgent.
+	// (startAgent calls runAgentSubmission which reads pendingImages).
+	// After agent start, pendingImages should be empty.
+	if len(updated.pendingImages) != 0 {
+		t.Fatalf("expected pendingImages to be consumed, got %d", len(updated.pendingImages))
+	}
+}
+
+func TestHandleTunnelInboundMsg_WithImagesOnly(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 1
+
+	// Message with images but no text should still trigger agent.
+	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 1,
+		text:       "",
+		images: []tunnel.ImageData{
+			{MIME: "image/png", Data: tinyValidPNG, Name: "photo.png"},
+		},
+	})
+	updated := got.(*Model)
+
+	if !updated.loading {
+		t.Fatal("expected loading=true for image-only message")
+	}
+}
+
+func TestHandleTunnelInboundMsg_WithInvalidImage(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 1
+
+	// Invalid image data should be silently skipped, but text still processed.
+	got, _ := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 1,
+		text:       "describe this",
+		images: []tunnel.ImageData{
+			{MIME: "image/png", Data: "!!!invalid-base64!!!", Name: "bad.png"},
+		},
+	})
+	updated := got.(*Model)
+
+	if !updated.loading {
+		t.Fatal("expected loading=true even when image decode fails")
+	}
+}
+
+func TestHandleTunnelInboundMsg_EmptyTextAndNoImages(t *testing.T) {
+	m := newTestModel()
+	m.tunnelGeneration = 1
+
+	got, cmd := m.handleTunnelInboundMsg(tunnelInboundMsg{
+		generation: 1,
+		text:       "",
+	})
+	updated := got.(*Model)
+
+	if cmd != nil {
+		t.Fatal("expected nil cmd for empty message with no images")
+	}
+	if updated.loading {
+		t.Fatal("expected loading=false for empty message with no images")
+	}
+}
+
+// Ensure Go-side MessageData with images survives JSON round-trip through
+// the encrypted tunnel layer.
+func TestMessageDataImagesRoundTrip(t *testing.T) {
+	original := tunnel.MessageData{
+		Text: "check this screenshot",
+		Images: []tunnel.ImageData{
+			{MIME: "image/jpeg", Data: tinyValidPNG, Name: "capture.jpg"},
+		},
+		MessageID: "rt-001",
+	}
+
+	// Simulate tunnel serialization (JSON → encrypt → decrypt → JSON).
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded tunnel.MessageData
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if len(decoded.Images) != 1 {
+		t.Fatalf("expected 1 image after round-trip, got %d", len(decoded.Images))
+	}
+	if decoded.Images[0].Data != tinyValidPNG {
+		t.Error("image data mismatch after JSON round-trip")
+	}
+}

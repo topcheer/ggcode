@@ -20,52 +20,28 @@ var ProjectMemoryFilenames = []string{
 
 const DefaultProjectMemoryFilename = "GGCODE.md"
 
-// LoadProjectMemory reads supported project bootstrap documents from the global
-// config dir and the current working directory's ancestor chain.
-// Merge order: global -> walked parents/current directory.
+// LoadProjectMemory reads supported project bootstrap documents from the
+// global config dir (~/.ggcode/) and the current working directory only.
+// No parent directory traversal is performed — this prevents loading memory
+// from unrelated ancestor workspaces (e.g. modelmeta loading ggcode's memory
+// just because they share a parent directory).
 func LoadProjectMemory(workingDir string) (content string, files []string, err error) {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
 		absDir = workingDir
 	}
-	paths := append(globalProjectMemoryFiles(), walkUpProjectMemory(absDir)...)
+	paths := append(globalProjectMemoryFiles(), currentDirProjectMemoryFiles(absDir)...)
 	return ReadProjectMemoryFiles(paths)
 }
 
-// walkUpProjectMemory walks from dir upward looking for supported project docs.
-// Stops at the user's HOME directory to avoid expensive traversal when launched
-// from HOME or /.
-func walkUpProjectMemory(dir string) []string {
-	var found []string
-	visited := make(map[string]bool)
-	home := config.HomeDir()
-	for {
-		if dir == "" || dir == "/" || strings.EqualFold(dir, home) {
-			break
-		}
-		if visited[dir] {
-			break
-		}
-		visited[dir] = true
-		var currentDir []string
-		for _, name := range ProjectMemoryFilenames {
-			p := filepath.Join(dir, name)
-			if _, err := os.Stat(p); err == nil {
-				currentDir = append(currentDir, p)
-			}
-		}
-		found = append(currentDir, found...)
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return found
+// currentDirProjectMemoryFiles returns project memory files that exist in the
+// given directory itself (no parent walk).
+func currentDirProjectMemoryFiles(dir string) []string {
+	return listProjectMemoryFiles(dir)
 }
 
 // ProjectMemoryFilesForPath returns the supported project memory files that
-// apply to a specific path by walking that path's ancestor chain.
+// exist in the directory containing the given path (no parent walk).
 func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
@@ -79,7 +55,7 @@ func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	} else {
 		dir = filepath.Dir(absPath)
 	}
-	return walkUpProjectMemory(dir), nil
+	return listProjectMemoryFiles(dir), nil
 }
 
 // ReadProjectMemoryFiles reads project memory files in order and returns their
@@ -120,34 +96,14 @@ func readFileSafe(p string) (string, error) {
 	return string(data), nil
 }
 
-// ResolveProjectMemoryInitTarget returns the preferred directory and file path
-// for creating a new project memory file from the current working directory.
+// ResolveProjectMemoryInitTarget returns the preferred file path for creating
+// a new project memory file in the current working directory.
 func ResolveProjectMemoryInitTarget(workingDir string) (targetPath string, existingFiles []string, err error) {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
 		absDir = workingDir
 	}
-	root := findProjectMemoryRoot(absDir)
-	return filepath.Join(root, DefaultProjectMemoryFilename), listProjectMemoryFiles(root), nil
-}
-
-func findProjectMemoryRoot(dir string) string {
-	home := config.HomeDir()
-	current := dir
-	for {
-		if current == "" || current == string(filepath.Separator) || strings.EqualFold(current, home) {
-			break
-		}
-		if hasProjectMemoryFiles(current) || hasGitRootMarker(current) {
-			return current
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
-	}
-	return dir
+	return filepath.Join(absDir, DefaultProjectMemoryFilename), listProjectMemoryFiles(absDir), nil
 }
 
 func globalProjectMemoryFiles() []string {
@@ -159,10 +115,6 @@ func globalProjectMemoryFiles() []string {
 	return files
 }
 
-func hasProjectMemoryFiles(dir string) bool {
-	return len(listProjectMemoryFiles(dir)) > 0
-}
-
 func listProjectMemoryFiles(dir string) []string {
 	var files []string
 	for _, name := range ProjectMemoryFilenames {
@@ -172,9 +124,4 @@ func listProjectMemoryFiles(dir string) []string {
 		}
 	}
 	return files
-}
-
-func hasGitRootMarker(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
 }

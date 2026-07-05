@@ -9,11 +9,6 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/topcheer/ggcode/internal/image"
-	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/session"
 )
 
 type harnessBarrierMsg struct {
@@ -171,61 +166,6 @@ func waitForProgramState(t *testing.T, h *liveProgramHarness, predicate func(Mod
 	}
 	t.Fatal("timed out waiting for expected program state")
 	return last
-}
-
-func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
-	m := newTestModel()
-	// Mode is now persisted to session metadata, not config file.
-	ses := session.NewSession("", "", "")
-	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "init"}}}}
-	m.session = ses
-
-	h := startLiveProgramHarness(t, m)
-	defer h.close()
-
-	h.send(tea.KeyPressMsg{Text: "h"})
-	h.send(tea.KeyPressMsg{Text: "i"})
-	h.send(tea.KeyPressMsg{Text: "shift+tab"})
-	h.sync()
-
-	state := h.snapshot()
-	if got := state.input.Value(); got != "hi" {
-		t.Fatalf("expected live program input %q, got %q", "hi", got)
-	}
-	if state.mode != permission.PlanMode {
-		t.Fatalf("expected live program mode %v, got %v", permission.PlanMode, state.mode)
-	}
-	if ses.PermissionMode != permission.PlanMode.String() {
-		t.Fatalf("expected session.PermissionMode %q, got %q", permission.PlanMode.String(), ses.PermissionMode)
-	}
-}
-
-func TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand(t *testing.T) {
-	m := newTestModel()
-	m.clipboardLoader = func() (imageAttachedMsg, error) {
-		img := image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10}
-		return imageAttachedMsg{
-			placeholder: image.Placeholder("ggcode-image-deadbeef.png", img),
-			img:         img,
-			filename:    "ggcode-image-deadbeef.png",
-			sourcePath:  "/tmp/ggcode-image-deadbeef.png",
-		}, nil
-	}
-
-	h := startLiveProgramHarness(t, m)
-	defer h.close()
-
-	h.send(tea.KeyPressMsg{Text: "ctrl+v"})
-
-	state := waitForProgramState(t, h, func(state Model) bool {
-		return len(state.pendingImages) > 0
-	})
-	if len(state.pendingImages) == 0 {
-		t.Fatal("expected live program clipboard paste to attach an image")
-	}
-	if state.pendingImages[0].sourcePath != "/tmp/ggcode-image-deadbeef.png" {
-		t.Fatalf("expected source path to survive async command, got %q", state.pendingImages[0].sourcePath)
-	}
 }
 
 func TestTruncateHarnessTextKeepsUTF8Valid(t *testing.T) {

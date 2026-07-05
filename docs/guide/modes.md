@@ -22,15 +22,45 @@ Best for code review, exploration, and planning before implementation.
 
 ### `auto`
 
-Allows safe operations automatically, denies dangerous ones. Reduces interruptions while maintaining safety guardrails.
+Allows safe operations automatically, **denies** dangerous ones. Never prompts the user — every operation is either allowed or denied. Reduces interruptions while maintaining hard safety guardrails.
+
+- **Dangerous commands** (`rm -rf`, `git push --force`, etc.): **Denied** (hard block, agent cannot proceed)
+- **File writes outside sandbox**: **Denied**
+- **File reads outside sandbox**: **Denied**
+- **Normal/safe operations**: Allowed silently
 
 ### `bypass`
 
-Auto-approves safe operations and warns on potentially dangerous ones. Faster for trusted workflows.
+Auto-approves safe operations, **asks** on potentially dangerous ones. Faster for trusted workflows — the agent can proceed with most operations, and you only get prompted for genuinely risky actions.
 
 ```bash
 ggcode --bypass
 ```
+
+- **Extremely dangerous commands** (catastrophic, irreversible): **Ask** (you can approve or reject)
+- **Dangerous commands** (not extremely dangerous): **Allowed** silently
+- **File writes outside sandbox**: **Ask** (you can approve or reject per-call)
+- **File reads outside sandbox**: **Allowed** silently, unless the path is sensitive (`~/.aws/credentials`, `/etc/**`, etc.) — then **Ask**
+- **Normal/safe operations**: Allowed silently
+
+### `auto` vs `bypass` — Detailed Comparison
+
+| Scenario | `auto` | `bypass` |
+|----------|--------|---------|
+| Safe command (`go build`, `ls`) | Allow | Allow |
+| Dangerous command (`rm -rf`, `git push --force`) | **Deny** (hard block) | **Allow** (only extremely dangerous commands trigger Ask) |
+| Extremely dangerous command | **Deny** | **Ask** (can approve) |
+| Write file inside workspace | Allow | Allow |
+| Write file outside workspace | **Deny** | **Ask** (can approve) |
+| Read file inside workspace | Allow | Allow |
+| Read file outside workspace | **Deny** | Allow (unless sensitive path → **Ask**) |
+| User prompts / interruptions | Never | Only for edge cases |
+
+**Key difference**: `auto` **never prompts** — it hard-denies anything risky. `bypass` **may prompt** for edge cases (out-of-sandbox writes, extremely dangerous commands), giving you the choice to approve or reject case-by-case.
+
+**Danger levels**: There are two tiers of command danger classification:
+- `IsDangerous` — broader set (e.g. `rm -rf`, `git push --force`, `dd`). `auto` uses this to deny.
+- `IsExtremelyDangerous` — narrower subset (catastrophic, irreversible). `bypass` uses this to ask; everything else is allowed.
 
 ### `autopilot`
 

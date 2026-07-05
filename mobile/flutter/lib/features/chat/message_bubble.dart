@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
@@ -55,10 +57,37 @@ class MessageBubble extends StatelessWidget {
           borderRadius: BorderRadius.circular(22),
           boxShadow: AppShadows.panel,
         ),
-        child: SelectableText(
-          message.text,
-          style:
-              const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Image thumbnails
+            if (message.imageThumbnails.isNotEmpty) ...[
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                alignment: WrapAlignment.end,
+                children: message.imageThumbnails.map((dataUrl) {
+                  final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.memory(
+                      base64Decode(b64),
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    ),
+                  );
+                }).toList(),
+              ),
+              if (message.text.isNotEmpty) const SizedBox(height: 8),
+            ],
+            if (message.text.isNotEmpty)
+              SelectableText(
+                message.text,
+                style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
+              ),
+          ],
         ),
       ),
     );

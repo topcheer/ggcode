@@ -27,6 +27,7 @@ class ChatMessage {
   final String kind;
   final bool isUser;
   final String text;
+  final List<String> imageThumbnails; // base64 data URLs for display
   final bool streaming;
   final String? toolId;
   final String? toolName;
@@ -49,6 +50,7 @@ class ChatMessage {
     this.kind = '',
     this.isUser = false,
     this.text = '',
+    this.imageThumbnails = const [],
     this.streaming = false,
     this.toolId,
     this.toolName,
@@ -67,6 +69,7 @@ class ChatMessage {
   ChatMessage copyWith({
     String? id,
     String? text,
+    List<String>? imageThumbnails,
     String? kind,
     bool? streaming,
     String? toolResult,
@@ -85,6 +88,7 @@ class ChatMessage {
         kind: kind ?? this.kind,
         isUser: isUser,
         text: text ?? this.text,
+        imageThumbnails: imageThumbnails ?? this.imageThumbnails,
         streaming: streaming ?? this.streaming,
         toolId: toolId,
         toolName: toolName,
@@ -165,13 +169,20 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// Send a user message with ack tracking.
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
-  void addUserMessage(String text) {
+  void addUserMessage(String text, {List<proto.MessageImage> images = const []}) {
     final messageId =
         'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
+
+    // Build thumbnail data URLs for display in the bubble.
+    final thumbnails = images
+        .map((img) => 'data:${img.mime};base64,${img.data}')
+        .toList();
+
     final msg = ChatMessage(
       id: messageId,
       isUser: true,
       text: text,
+      imageThumbnails: thumbnails,
       time: DateTime.now(),
       status: MessageStatus.sending,
     );
@@ -181,7 +192,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ref.read(connectionProvider.notifier).send({
       'type': 'message',
       'message_id': messageId,
-      'data': {'text': text, 'message_id': messageId},
+      'data': {
+        'text': text,
+        'message_id': messageId,
+        if (images.isNotEmpty)
+          'images': images.map((e) => e.toJson()).toList(),
+      },
     });
 
     // 5s timeout: if no relay_ack by then, assume delivered via TCP.

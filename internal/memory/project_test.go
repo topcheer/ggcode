@@ -12,41 +12,35 @@ func TestLoadProjectMemory(t *testing.T) {
 	tmpDir := t.TempDir()
 	globalDir := filepath.Join(tmpDir, "home", ".ggcode")
 	projectDir := filepath.Join(tmpDir, "project")
-	subDir := filepath.Join(projectDir, "sub")
 
-	for _, d := range []string{globalDir, projectDir, subDir} {
+	for _, d := range []string{globalDir, projectDir} {
 		os.MkdirAll(d, 0755)
 	}
 
 	// Write supported project memory files
 	os.WriteFile(filepath.Join(globalDir, "GGCODE.md"), []byte("global instructions"), 0644)
 	os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte("project instructions"), 0644)
-	os.WriteFile(filepath.Join(subDir, "CLAUDE.md"), []byte("sub instructions"), 0644)
 
 	// Monkey-patch UserHomeDir
 	origHome := os.Getenv("HOME")
 	t.Setenv("HOME", filepath.Join(tmpDir, "home"))
 
-	content, files, err := LoadProjectMemory(subDir)
+	content, files, err := LoadProjectMemory(projectDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should contain all three
+	// Should contain global + current dir only (no parent walk)
 	if !contains(content, "global instructions") {
 		t.Error("missing global instructions")
 	}
 	if !contains(content, "project instructions") {
 		t.Error("missing project instructions")
 	}
-	if !contains(content, "sub instructions") {
-		t.Error("missing sub instructions")
-	}
-	if len(files) != 3 {
-		t.Errorf("expected 3 files, got %d", len(files))
+	if len(files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(files))
 	}
 
-	// Restore
 	_ = os.Setenv("HOME", origHome)
 }
 
@@ -78,43 +72,42 @@ func TestLoadProjectMemory_MultipleNamesInOneDir(t *testing.T) {
 	}
 }
 
-func TestLoadProjectMemory_DoesNotPreloadNestedSubdirectories(t *testing.T) {
+func TestLoadProjectMemory_DoesNotWalkParentDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")
-	nestedDir := filepath.Join(projectDir, "internal", "feature")
-	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+	subDir := filepath.Join(projectDir, "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "GGCODE.md"), []byte("root"), 0644); err != nil {
-		t.Fatalf("write root memory: %v", err)
+	if err := os.WriteFile(filepath.Join(projectDir, "GGCODE.md"), []byte("parent"), 0644); err != nil {
+		t.Fatalf("write parent memory: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(nestedDir, "AGENTS.md"), []byte("nested"), 0644); err != nil {
-		t.Fatalf("write nested memory: %v", err)
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("child"), 0644); err != nil {
+		t.Fatalf("write child memory: %v", err)
 	}
 	t.Setenv("HOME", tmpDir)
 
-	content, files, err := LoadProjectMemory(projectDir)
+	content, files, err := LoadProjectMemory(subDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !contains(content, "root") {
-		t.Fatalf("expected root memory to load, got %q", content)
+	// Should only load from subDir itself, NOT from parent projectDir
+	if contains(content, "parent") {
+		t.Fatalf("should NOT load parent dir memory, got %q", content)
 	}
-	if contains(content, "nested") {
-		t.Fatalf("did not expect nested subdirectory memory at startup, got %q", content)
+	if !contains(content, "child") {
+		t.Fatalf("expected child memory, got %q", content)
 	}
-	if len(files) != 1 || files[0] != filepath.Join(projectDir, "GGCODE.md") {
-		t.Fatalf("unexpected files: %v", files)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d: %v", len(files), files)
 	}
 }
 
-func TestProjectMemoryFilesForPath_LoadsAncestorChainOnly(t *testing.T) {
+func TestProjectMemoryFilesForPath_CurrentDirOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoDir := filepath.Join(tmpDir, "repo")
-	targetDir := filepath.Join(repoDir, "internal", "feature")
-	siblingDir := filepath.Join(repoDir, "docs")
-	targetFile := filepath.Join(targetDir, "main.go")
-	for _, dir := range []string{targetDir, siblingDir} {
+	featureDir := filepath.Join(repoDir, "internal", "feature")
+	for _, dir := range []string{repoDir, featureDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
@@ -122,94 +115,40 @@ func TestProjectMemoryFilesForPath_LoadsAncestorChainOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoDir, "GGCODE.md"), []byte("root"), 0644); err != nil {
 		t.Fatalf("write root memory: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(filepath.Join(repoDir, "internal"), "AGENTS.md"), []byte("internal"), 0644); err != nil {
-		t.Fatalf("write internal memory: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(targetDir, "CLAUDE.md"), []byte("feature"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(featureDir, "CLAUDE.md"), []byte("feature"), 0644); err != nil {
 		t.Fatalf("write feature memory: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(siblingDir, "COPILOT.md"), []byte("docs"), 0644); err != nil {
-		t.Fatalf("write sibling memory: %v", err)
-	}
 
-	files, err := ProjectMemoryFilesForPath(targetFile)
+	files, err := ProjectMemoryFilesForPath(filepath.Join(featureDir, "main.go"))
 	if err != nil {
 		t.Fatalf("ProjectMemoryFilesForPath() error = %v", err)
 	}
-	want := []string{
-		filepath.Join(repoDir, "GGCODE.md"),
-		filepath.Join(repoDir, "internal", "AGENTS.md"),
-		filepath.Join(targetDir, "CLAUDE.md"),
+	// Should only find files in the current dir, not parents
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file (current dir only), got %d: %v", len(files), files)
 	}
-	if len(files) != len(want) {
-		t.Fatalf("expected %d files, got %d: %v", len(want), len(files), files)
-	}
-	for i := range want {
-		if files[i] != want[i] {
-			t.Fatalf("unexpected file order: got %v want %v", files, want)
-		}
-	}
-
-	content, loaded, err := ReadProjectMemoryFiles(files)
-	if err != nil {
-		t.Fatalf("ReadProjectMemoryFiles() error = %v", err)
-	}
-	if len(loaded) != 3 {
-		t.Fatalf("expected 3 loaded files, got %d", len(loaded))
-	}
-	for _, expected := range []string{"root", "internal", "feature"} {
-		if !contains(content, expected) {
-			t.Fatalf("expected %q in content, got %q", expected, content)
-		}
-	}
-	if contains(content, "docs") {
-		t.Fatalf("did not expect sibling directory memory, got %q", content)
+	if files[0] != filepath.Join(featureDir, "CLAUDE.md") {
+		t.Fatalf("unexpected file: %v", files)
 	}
 }
 
-func TestResolveProjectMemoryInitTarget_UsesGitRoot(t *testing.T) {
+func TestResolveProjectMemoryInitTarget_CurrentDirOnly(t *testing.T) {
 	tmpDir := t.TempDir()
-	repoDir := filepath.Join(tmpDir, "repo")
-	subDir := filepath.Join(repoDir, "internal", "tui")
+	subDir := filepath.Join(tmpDir, "repo", "internal", "tui")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
 	}
 
 	target, existing, err := ResolveProjectMemoryInitTarget(subDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if target != filepath.Join(repoDir, "GGCODE.md") {
-		t.Fatalf("expected repo-root target, got %q", target)
+	// Should target the current working dir, not walk up to git root
+	if target != filepath.Join(subDir, "GGCODE.md") {
+		t.Fatalf("expected current-dir target, got %q", target)
 	}
 	if len(existing) != 0 {
 		t.Fatalf("expected no existing files, got %v", existing)
-	}
-}
-
-func TestResolveProjectMemoryInitTarget_PrefersExistingProjectMemoryDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	repoDir := filepath.Join(tmpDir, "repo")
-	subDir := filepath.Join(repoDir, "docs", "plans")
-	if err := os.MkdirAll(subDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "AGENTS.md"), []byte("agents"), 0644); err != nil {
-		t.Fatalf("write AGENTS.md: %v", err)
-	}
-
-	target, existing, err := ResolveProjectMemoryInitTarget(subDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if target != filepath.Join(repoDir, "GGCODE.md") {
-		t.Fatalf("expected GGCODE.md target in existing project memory dir, got %q", target)
-	}
-	if len(existing) != 1 || existing[0] != filepath.Join(repoDir, "AGENTS.md") {
-		t.Fatalf("unexpected existing files: %v", existing)
 	}
 }
 

@@ -146,17 +146,38 @@ class ActivityData {
       );
 }
 
+/// A single image attached to a message (base64-encoded).
+class MessageImage {
+  final String mime; // "image/jpeg", "image/png"
+  final String data; // base64-encoded bytes (no data: prefix)
+  final String name;
+
+  const MessageImage({
+    required this.mime,
+    required this.data,
+    this.name = '',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'mime': mime,
+        'data': data,
+        if (name.isNotEmpty) 'name': name,
+      };
+}
+
 class MessageData {
   final String text;
   final String displayText;
   final String kind;
   final String messageId;
+  final List<MessageImage> images;
 
   MessageData({
     required this.text,
     this.displayText = '',
     this.kind = '',
     this.messageId = '',
+    this.images = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -164,6 +185,7 @@ class MessageData {
         'display_text': displayText,
         'kind': kind,
         'message_id': messageId,
+        if (images.isNotEmpty) 'images': images.map((e) => e.toJson()).toList(),
       };
 
   factory MessageData.fromJson(Map<String, dynamic> d) => MessageData(
@@ -171,6 +193,14 @@ class MessageData {
         displayText: d['display_text'] as String? ?? '',
         kind: d['kind'] as String? ?? '',
         messageId: d['message_id'] as String? ?? '',
+        images: (d['images'] as List<dynamic>?)
+                ?.map((e) => MessageImage(
+                      mime: (e as Map<String, dynamic>)['mime'] as String? ?? 'image/jpeg',
+                      data: e['data'] as String? ?? '',
+                      name: e['name'] as String? ?? '',
+                    ))
+                .toList() ??
+            const [],
       );
 }
 

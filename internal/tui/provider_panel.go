@@ -234,10 +234,12 @@ func (m *Model) openProviderPanel() {
 	m.modelPanel = nil
 	m.providerPanel = newProviderPanelFromConfig(m.configView())
 	m.providerPanel.modelFilter = newModelFilterInput(m.currentLanguage())
+	m.input.Blur()
 }
 
 func (m *Model) closeProviderPanel() {
 	m.providerPanel = nil
+	m.input.Focus()
 }
 
 func (m *Model) renderProviderPanel() string {
@@ -537,6 +539,20 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				} else {
 					panel.enterpriseURL = normalized
 				}
+			case "new endpoint name":
+				if value == "" {
+					err = fmt.Errorf("endpoint name cannot be empty")
+				} else {
+					vc := m.config.Vendors[panel.selectedVendor()]
+					if _, exists := vc.Endpoints[value]; exists {
+						err = fmt.Errorf("endpoint %q already exists", value)
+					} else {
+						vc.Endpoints[value] = config.EndpointConfig{
+							Protocol: "openai",
+						}
+						m.config.Vendors[panel.selectedVendor()] = vc
+					}
+				}
 			}
 			if err != nil {
 				panel.message = err.Error()
@@ -560,6 +576,16 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.provider.saved")
 			panel.refreshing = false
 			panel.refreshVendor = ""
+			if editedField == "new endpoint name" {
+				panel.endpointIDs = m.config.EndpointNames(panel.selectedVendor())
+				epName := strings.TrimSpace(panel.editInput.Value())
+				panel.endpointIndex = indexOf(panel.endpointIDs, epName)
+				if panel.endpointIndex < 0 {
+					panel.endpointIndex = 0
+				}
+				panel.modelIndex = 0
+				panel.models = nil
+			}
 			if providerEditShouldRefreshModels(editedField) {
 				if cmd := m.refreshProviderModelsForVendor(panel.selectedVendor()); cmd != nil {
 					return *m, cmd
@@ -669,6 +695,9 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		vc := m.config.Vendors[panel.selectedVendor()]
 		ep := vc.Endpoints[panel.selectedEndpoint()]
 		panel.startEditing("endpoint base url", ep.BaseURL)
+		return *m, nil
+	case "e":
+		panel.startEditing("new endpoint name", "")
 		return *m, nil
 	case "m":
 		panel.startEditing("custom model", panel.selectedModel())
@@ -981,6 +1010,8 @@ func providerEditFieldLabel(lang Language, field string) string {
 		return tr(lang, "panel.provider.edit.endpoint_base_url")
 	case "custom model":
 		return tr(lang, "panel.provider.edit.custom_model")
+	case "new endpoint name":
+		return tr(lang, "panel.provider.edit.new_endpoint_name")
 	case "enterprise url":
 		return tr(lang, "panel.provider.enterprise_url")
 	default:

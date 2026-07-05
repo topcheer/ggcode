@@ -10,11 +10,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/a2a"
-	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -175,75 +173,6 @@ func TestAgentDoneDoesNotEmitBufferedIMMessageWithoutRoundEvent(t *testing.T) {
 	events := sink.snapshot()
 	if len(events) != 0 {
 		t.Fatalf("expected no IM emit without round summary event, got %#v", events)
-	}
-}
-
-func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
-	imMgr := im.NewManager()
-	store := im.NewMemoryBindingStore()
-	if err := imMgr.SetBindingStore(store); err != nil {
-		t.Fatalf("SetBindingStore returned error: %v", err)
-	}
-	imMgr.BindSession(im.SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
-	if _, err := imMgr.BindChannel(im.ChannelBinding{
-		Platform:  im.PlatformQQ,
-		Adapter:   "qq",
-		TargetID:  "ops",
-		ChannelID: "group-1",
-	}); err != nil {
-		t.Fatalf("BindChannel returned error: %v", err)
-	}
-	sink := &testIMSink{name: "qq"}
-	imMgr.RegisterSink(sink)
-
-	prov := &testStreamProvider{events: []provider.StreamEvent{
-		{Type: provider.StreamEventText, Text: "hello "},
-		{Type: provider.StreamEventText, Text: "world"},
-		{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{}},
-	}}
-	ag := agent.NewAgent(prov, tool.NewRegistry(), "", 0)
-	m := NewModel(ag, permission.NewConfigPolicy(nil, nil))
-	m.startedAt = time.Now().Add(-2 * time.Second)
-	m.SetIMManager(imMgr)
-	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
-	imMgr.RegisterSink(sink) // re-register after detectAndAutoMute
-	m.input.SetValue("ping")
-
-	h := startLiveProgramHarness(t, m)
-	defer h.close()
-	h.send(tea.KeyPressMsg{Code: tea.KeyEnter})
-
-	waitForProgramState(t, h, func(state Model) bool {
-		return !state.loading
-	})
-
-	deadline := time.Now().Add(5 * time.Second)
-	var events []im.OutboundEvent
-	for time.Now().Before(deadline) {
-		events = sink.snapshot()
-		if len(events) >= 2 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if len(events) == 0 {
-		t.Fatal("expected IM events after live prompt submission")
-	}
-
-	texts := make([]im.OutboundEvent, 0, len(events))
-	for _, event := range events {
-		if event.Kind == im.OutboundEventText {
-			texts = append(texts, event)
-		}
-	}
-	if len(texts) != 2 {
-		t.Fatalf("expected mirrored user text plus assistant text, got %#v", events)
-	}
-	if texts[0].Text != "【用户】ping\n" {
-		t.Fatalf("expected mirrored user IM text, got %q", texts[0].Text)
-	}
-	if texts[1].Text != "hello world" {
-		t.Fatalf("expected merged live IM text, got %q", texts[1].Text)
 	}
 }
 

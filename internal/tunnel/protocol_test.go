@@ -494,3 +494,60 @@ func TestHistoryEntryOmitEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestImageDataJSON(t *testing.T) {
+	img := ImageData{MIME: "image/jpeg", Data: "dGhpcyBpcyBhIHRlc3Q=", Name: "photo.jpg"}
+	b, err := json.Marshal(img)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got ImageData
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.MIME != "image/jpeg" || got.Data != "dGhpcyBpcyBhIHRlc3Q=" || got.Name != "photo.jpg" {
+		t.Errorf("mismatch: %+v", got)
+	}
+}
+
+func TestMessageDataWithImagesJSON(t *testing.T) {
+	d := MessageData{
+		Text: "What is in this image?",
+		Images: []ImageData{
+			{MIME: "image/png", Data: "iVBORw0KGgo=", Name: "screenshot.png"},
+			{MIME: "image/jpeg", Data: "/9j/4AAQ=", Name: "photo.jpg"},
+		},
+		MessageID: "msg-123",
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got MessageData
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Text != "What is in this image?" {
+		t.Errorf("Text mismatch: %q", got.Text)
+	}
+	if len(got.Images) != 2 {
+		t.Fatalf("expected 2 images, got %d", len(got.Images))
+	}
+	if got.Images[0].MIME != "image/png" || got.Images[1].MIME != "image/jpeg" {
+		t.Errorf("image MIME mismatch: %+v", got.Images)
+	}
+	if got.MessageID != "msg-123" {
+		t.Errorf("MessageID mismatch: %q", got.MessageID)
+	}
+}
+
+func TestMessageDataImagesOmitEmpty(t *testing.T) {
+	// When no images, the "images" key should be absent from JSON.
+	d := MessageData{Text: "hello"}
+	b, _ := json.Marshal(d)
+	var m map[string]interface{}
+	json.Unmarshal(b, &m)
+	if _, ok := m["images"]; ok {
+		t.Error("\"images\" should be omitted when empty")
+	}
+}

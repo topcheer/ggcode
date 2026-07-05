@@ -228,12 +228,20 @@ type ApprovalResponseData struct {
 	Decision string `json:"decision"` // allow/deny/always_allow
 }
 
+// ImageData carries a single image as base64-encoded data.
+type ImageData struct {
+	MIME string `json:"mime"`           // "image/jpeg", "image/png", etc.
+	Data string `json:"data"`           // base64-encoded image data (without data: prefix)
+	Name string `json:"name,omitempty"` // optional filename hint
+}
+
 // MessageData carries a user message.
 type MessageData struct {
-	Text        string `json:"text"`
-	DisplayText string `json:"display_text,omitempty"`
-	Kind        string `json:"kind,omitempty"`
-	MessageID   string `json:"message_id,omitempty"` // client-generated ID for ack tracking
+	Text        string      `json:"text"`
+	DisplayText string      `json:"display_text,omitempty"`
+	Kind        string      `json:"kind,omitempty"`
+	Images      []ImageData `json:"images,omitempty"`     // attached images (base64)
+	MessageID   string      `json:"message_id,omitempty"` // client-generated ID for ack tracking
 }
 
 func NormalizeClientMessageID(messageID string) string {

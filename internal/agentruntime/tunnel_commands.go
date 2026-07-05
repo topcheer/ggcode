@@ -25,7 +25,7 @@ func RouteTunnelCommand(cmd tunnel.GatewayMessage, hooks TunnelCommandHooks) {
 		if err := json.Unmarshal(cmd.Data, &data); err != nil {
 			return
 		}
-		if strings.TrimSpace(data.Text) == "" {
+		if strings.TrimSpace(data.Text) == "" && len(data.Images) == 0 {
 			return
 		}
 		data.MessageID = tunnel.NormalizeClientMessageID(data.MessageID)
