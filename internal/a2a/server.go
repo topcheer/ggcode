@@ -775,7 +775,9 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 		url := cfg.URL
 		token := cfg.Token
 		safego.Go("a2a.pushNotify", func() {
-			req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 			if err != nil {
 				debug.Log("a2a", "push request error: %v", err)
 				return
