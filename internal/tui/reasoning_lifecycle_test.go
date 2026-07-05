@@ -2,6 +2,8 @@ package tui
 
 import (
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/chat"
 )
 
 // TestReasoningStartsOnFirstChunk verifies that reasoningActive is set true
@@ -114,6 +116,52 @@ func TestToolResultDoesNotResetStreamPrefix(t *testing.T) {
 
 	if !m.streamPrefixWritten {
 		t.Fatal("streamPrefixWritten must stay true after tool result (prevents text fragmentation)")
+	}
+}
+
+// TestTextDoesNotAccumulateAcrossTurns is the PRIMARY regression test for the
+// streamBuffer-not-reset bug. Turn 1 writes "hello", agentTurnDoneMsg fires,
+// turn 2 writes "world". Turn 2's assistant item must contain ONLY "world",
+// not "helloworld".
+func TestTextDoesNotAccumulateAcrossTurns(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 7
+
+	// Turn 1: text
+	next, _ := m.handleAgentStreamMsg(agentStreamMsg{RunID: 7, Text: "hello"}, nil)
+	m = next
+	id1 := m.currentAssistantID()
+
+	// Verify turn 1 text
+	if item := m.chatList.FindByID(id1); item != nil {
+		if a, ok := item.(*chat.AssistantItem); ok {
+			if a.Text() != "hello" {
+				t.Fatalf("turn 1 text = %q, want %q", a.Text(), "hello")
+			}
+		}
+	}
+
+	// Turn boundary
+	updatedModel, _ := m.Update(agentTurnDoneMsg{})
+	m = updatedModel.(Model)
+
+	// Turn 2: text
+	next, _ = m.handleAgentStreamMsg(agentStreamMsg{RunID: 7, Text: "world"}, nil)
+	m = next
+	id2 := m.currentAssistantID()
+
+	if id1 == id2 {
+		t.Fatal("turn 2 should create a new assistant item")
+	}
+
+	// THE KEY ASSERTION: turn 2 text must be "world", NOT "helloworld"
+	if item := m.chatList.FindByID(id2); item != nil {
+		if a, ok := item.(*chat.AssistantItem); ok {
+			if a.Text() != "world" {
+				t.Fatalf("TEXT ACCUMULATION BUG: turn 2 text = %q, want %q (streamBuffer was not reset at turn boundary)", a.Text(), "world")
+			}
+		}
 	}
 }
 
