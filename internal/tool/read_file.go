@@ -72,12 +72,23 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// Pre-check file size
+	// Pre-check file size — but allow range reads of large files via offset/limit
 	info, err := os.Stat(args.Path)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error accessing file: %v", err)}, nil
 	}
 	if info.Size() > maxFileSize {
+		if args.Offset > 0 || args.Limit > 0 {
+			// Streaming range read: only read the requested lines
+			text, err := readFileRangeStreaming(args.Path, args.Offset, args.Limit, readFileRangeOptions{
+				defaultLimit: maxOutputLines,
+				moreHint:     "Use read_file with offset/limit for more.",
+			})
+			if err != nil {
+				return Result{IsError: true, Content: err.Error()}, nil
+			}
+			return Result{Content: text}, nil
+		}
 		return Result{IsError: true, Content: fmt.Sprintf("file too large (%d MB). Use read_file with offset/limit for range reading.", info.Size()/(1024*1024))}, nil
 	}
 

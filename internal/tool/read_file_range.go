@@ -1,7 +1,9 @@
 package tool
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -73,4 +75,78 @@ func readFileRangeWithOptions(content string, offset, limit int, opts readFileRa
 	}
 
 	return buf.String()
+}
+
+// readFileRangeStreaming reads a specific line range from a file using a
+// streaming scanner, without loading the entire file into memory. This is
+// used for large files (>10MB) where the agent specifies offset/limit.
+// The output format matches readFileRangeWithOptions (cat -n style).
+func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOptions) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("error opening file: %w", err)
+	}
+	defer f.Close()
+
+	if opts.defaultLimit <= 0 {
+		opts.defaultLimit = maxOutputLines
+	}
+	if opts.moreHint == "" {
+		opts.moreHint = "Use read_file with offset/limit for more."
+	}
+
+	// Convert 1-based offset to 0-based
+	startIdx := offset - 1
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	// Determine how many lines to read
+	effectiveLimit := limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = opts.defaultLimit
+	}
+
+	scanner := bufio.NewScanner(f)
+	// Allow lines up to 1MB (for minified files with very long lines)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var buf strings.Builder
+	lineNum := 0 // 0-based
+	readCount := 0
+	for scanner.Scan() {
+		if lineNum < startIdx {
+			lineNum++
+			continue
+		}
+		if readCount >= effectiveLimit {
+			break
+		}
+		fmt.Fprintf(&buf, "%6d\t%s\n", lineNum+1, scanner.Text())
+		readCount++
+		lineNum++
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading file: %w", err)
+	}
+
+	totalLines := lineNum // approximate; we stopped scanning
+	if readCount < effectiveLimit && readCount > 0 {
+		// We read to end of file without hitting the limit
+		totalLines = lineNum
+	}
+
+	if buf.Len() == 0 {
+		if startIdx > 0 && totalLines > 0 {
+			return fmt.Sprintf("[File has ~%d lines. Offset %d is beyond end.]", totalLines, offset), nil
+		}
+		return "[Empty file or no lines in range.]", nil
+	}
+
+	if readCount >= effectiveLimit {
+		fmt.Fprintf(&buf, "[Showing lines %d-%d. %s]\n",
+			startIdx+1, startIdx+readCount, opts.moreHint)
+	}
+
+	return buf.String(), nil
 }

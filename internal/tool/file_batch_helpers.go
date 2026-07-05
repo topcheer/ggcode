@@ -115,6 +115,9 @@ func readTextContentAtPath(path string, offset, limit int, opts readFileRangeOpt
 		return "", fmt.Errorf("error accessing file: %v", err)
 	}
 	if info.Size() > maxFileSize {
+		if offset > 0 || limit > 0 {
+			return readFileRangeStreaming(path, offset, limit, opts)
+		}
 		return "", fmt.Errorf("file too large (%d MB). Use read_file with offset/limit for range reading.", info.Size()/(1024*1024))
 	}
 	data, err := os.ReadFile(path)
