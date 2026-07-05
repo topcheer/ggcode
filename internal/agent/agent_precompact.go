@@ -140,6 +140,14 @@ func (a *Agent) StartPreCompact() {
 				debug.Log("precompact", "CLEARED: freed %d tokens from old tool results, tokens now %d (threshold=%d)",
 					freed, tokens, threshold)
 			}
+			// Also clear old tool_use Input (arguments) whose results were cleared.
+			// Tools like edit_file/write_file have large Input (full file content).
+			freedInput := mgr.ClearOldToolUseInputs()
+			if freedInput > 0 {
+				tokens = cm.TokenCount()
+				debug.Log("precompact", "CLEARED: freed %d tokens from old tool_use inputs, tokens now %d (threshold=%d)",
+					freedInput, tokens, threshold)
+			}
 		}
 	}
 

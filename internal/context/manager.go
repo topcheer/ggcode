@@ -873,6 +873,11 @@ func (m *Manager) recalcTokens() {
 // more useful to keep inline for context.
 const toolResultClearMinLen = 500
 
+// toolUseInputClearMinLen is the minimum Input (arguments) length to bother
+// clearing. Many tool calls have tiny arguments (e.g. {"path": "main.go"})
+// that aren't worth truncating.
+const toolUseInputClearMinLen = 200
+
 // ClearOldToolResults replaces large tool_result outputs from older messages
 // with short placeholders, keeping the most recent `keepN` tool results intact.
 // This is a cheap, mechanical context-recovery technique that avoids the cost
@@ -939,6 +944,84 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 	freed := before - m.tokens
 	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d)",
 		len(toClear), freed, keepN, len(targets))
+	return freed
+}
+
+// ClearOldToolUseInputs truncates the Input (arguments) of tool_use blocks
+// whose corresponding tool_result has already been cleared by ClearOldToolResults.
+// This recovers context from large tool arguments (e.g., full file content in
+// edit_file/write_file Input) that are no longer needed once the result is gone.
+//
+// Only clears tool_use blocks where:
+//   - Input length exceeds toolUseInputClearMinLen
+//   - The matching tool_result Output starts with "[cleared:" (already cleared)
+//   - Input has not already been truncated (idempotency)
+//
+// Returns the estimated number of tokens freed.
+func (m *Manager) ClearOldToolUseInputs() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Pass 1: collect ToolIDs of cleared tool_results
+	clearedIDs := make(map[string]bool)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && strings.HasPrefix(b.Output, "[cleared:") {
+				clearedIDs[b.ToolID] = true
+			}
+		}
+	}
+	if len(clearedIDs) == 0 {
+		return 0
+	}
+
+	// Pass 2: truncate matching tool_use Input blocks
+	type inputTarget struct {
+		msgIdx  int
+		blkIdx  int
+		origLen int
+	}
+	var targets []inputTarget
+	for i, msg := range m.messages {
+		for j, b := range msg.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			if !clearedIDs[b.ToolID] {
+				continue
+			}
+			if len(b.Input) < toolUseInputClearMinLen {
+				continue
+			}
+			// Idempotency: check if already truncated
+			var check map[string]any
+			if json.Unmarshal(b.Input, &check) == nil {
+				if v, ok := check["_cleared"].(bool); ok && v {
+					continue
+				}
+			}
+			targets = append(targets, inputTarget{msgIdx: i, blkIdx: j, origLen: len(b.Input)})
+		}
+	}
+
+	if len(targets) == 0 {
+		return 0
+	}
+
+	freedChars := 0
+	for _, t := range targets {
+		block := &m.messages[t.msgIdx].Content[t.blkIdx]
+		origTool := block.ToolName
+		freedChars += t.origLen
+		// Replace with minimal placeholder that preserves tool name for context
+		block.Input = json.RawMessage(fmt.Sprintf(`{"_cleared":true,"_tool":%q,"_note":"input was %d chars — already executed"}`, origTool, t.origLen))
+	}
+
+	before := m.tokens
+	m.version++
+	m.recalcTokens()
+	freed := before - m.tokens
+	debug.Log("ctx", "ClearOldToolUseInputs: cleared %d tool_use inputs, freed ~%d tokens", len(targets), freed)
 	return freed
 }
 

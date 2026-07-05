@@ -1259,3 +1259,108 @@ func TestBuildSummaryPayloadIncludesToolInputs(t *testing.T) {
 		t.Error("payload missing 'path=' key from tool input")
 	}
 }
+
+// ── ClearOldToolUseInputs tests ──
+
+func TestClearOldToolUseInputs_ClearsLargeInputAfterResultCleared(t *testing.T) {
+	m := NewManager(100000)
+	largeInput := fmt.Sprintf(`{"path":"/large/file.go","old_text":%q}`, strings.Repeat("line\n", 100))
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("call-1", "edit_file", []byte(largeInput)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("x", 1000)},
+	}})
+
+	// Step 1: clear the tool_result first
+	m.ClearOldToolResults(0)
+
+	// Step 2: now clear the tool_use input
+	freed := m.ClearOldToolUseInputs()
+	if freed <= 0 {
+		t.Fatal("ClearOldToolUseInputs should free tokens when result is already cleared and input is large")
+	}
+
+	msgs := m.Messages()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_use" && b.ToolID == "call-1" {
+				if string(b.Input) == largeInput {
+					t.Fatal("tool_use input should have been truncated")
+				}
+				if !strings.Contains(string(b.Input), "_cleared") {
+					t.Fatalf("tool_use input should contain _cleared marker, got %q", string(b.Input))
+				}
+				if b.ToolName != "edit_file" {
+					t.Errorf("tool name should be preserved, got %q", b.ToolName)
+				}
+			}
+		}
+	}
+}
+
+func TestClearOldToolUseInputs_SkipsWhenResultNotCleared(t *testing.T) {
+	m := NewManager(100000)
+	largeInput := fmt.Sprintf(`{"path":"/large/file.go","content":%q}`, strings.Repeat("x", 500))
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("call-1", "write_file", []byte(largeInput)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("result ", 200)},
+	}})
+
+	// Don't call ClearOldToolResults — result is still intact
+	freed := m.ClearOldToolUseInputs()
+	if freed != 0 {
+		t.Fatalf("ClearOldToolUseInputs should not free tokens when result is not cleared, got %d", freed)
+	}
+
+	// Verify input is unchanged
+	msgs := m.Messages()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_use" && b.ToolID == "call-1" {
+				if string(b.Input) != largeInput {
+					t.Fatal("tool_use input should be unchanged when result is not cleared")
+				}
+			}
+		}
+	}
+}
+
+func TestClearOldToolUseInputs_Idempotent(t *testing.T) {
+	m := NewManager(100000)
+	largeInput := fmt.Sprintf(`{"path":"/f.go","content":%q}`, strings.Repeat("a", 500))
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("call-1", "write_file", []byte(largeInput)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("b", 1000)},
+	}})
+
+	m.ClearOldToolResults(0)
+	first := m.ClearOldToolUseInputs()
+	if first <= 0 {
+		t.Fatal("first call should free tokens")
+	}
+	second := m.ClearOldToolUseInputs()
+	if second != 0 {
+		t.Fatalf("second call should be no-op (idempotent), freed %d", second)
+	}
+}
+
+func TestClearOldToolUseInputs_SkipsSmallInput(t *testing.T) {
+	m := NewManager(100000)
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("call-1", "read_file", []byte(`{"path":"/small.go"}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("c", 1000)},
+	}})
+
+	m.ClearOldToolResults(0)
+	freed := m.ClearOldToolUseInputs()
+	if freed != 0 {
+		t.Fatalf("small input (< %d chars) should not be cleared, freed %d", toolUseInputClearMinLen, freed)
+	}
+}
