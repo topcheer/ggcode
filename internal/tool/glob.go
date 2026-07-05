@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -93,7 +94,22 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 		}
 	}
 
-	return Result{Content: strings.Join(matches, "\n")}, nil
+	// Sort matches alphabetically for predictable output
+	sort.Strings(matches)
+
+	// Cap results to avoid flooding context with large file lists
+	const maxGlobResults = 500
+	totalCount := len(matches)
+	if totalCount > maxGlobResults {
+		matches = matches[:maxGlobResults]
+	}
+
+	result := strings.Join(matches, "\n")
+	if totalCount > maxGlobResults {
+		result += fmt.Sprintf("\n... [%d more files matched — refine your pattern to see them]", totalCount-maxGlobResults)
+	}
+
+	return Result{Content: result}, nil
 }
 
 // filterByTracked removes files not in the git-tracked set.
