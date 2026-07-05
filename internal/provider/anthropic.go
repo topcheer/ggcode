@@ -382,7 +382,15 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			}
 			systemTexts = nil
 			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+1)
-			newBlocks = append(newBlocks, anthropic.NewTextBlock("[System]\n"+sb.String()+"\n[End System]"))
+			sysBlock := anthropic.NewTextBlock("[System]\n" + sb.String() + "\n[End System]")
+			// Add cache control breakpoint on the system text block so Anthropic
+			// caches the large static system prompt across turns (~90% input
+			// token savings for this portion). Non-Anthropic providers ignore
+			// this field. See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+			if sysBlock.OfText != nil {
+				sysBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			}
+			newBlocks = append(newBlocks, sysBlock)
 			newBlocks = append(newBlocks, blocks...)
 			param.Content = newBlocks
 		}
@@ -407,6 +415,14 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			toolParams[i] = anthropic.ToolUnionParamOfTool(inputSchema, t.Name)
 			if toolParams[i].OfTool != nil {
 				toolParams[i].OfTool.Description = desc
+				// Add cache control breakpoint on the last tool definition so
+				// Anthropic caches all tool schemas (which are large and static
+				// across turns). Only the last item needs the breakpoint —
+				// Anthropic caches everything from the start up to each
+				// breakpoint.
+				if i == len(tools)-1 {
+					toolParams[i].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				}
 			}
 		}
 		params.Tools = toolParams
