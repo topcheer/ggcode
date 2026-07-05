@@ -659,6 +659,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	consecutiveEmptyResponses := 0
 	verifyRetries := 0
 	progressCheckInjected := false
+	contextWarningInjected := false
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -709,6 +710,32 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}},
 			})
 			msgs = a.contextManager.Messages() // refresh after adding checkpoint
+		}
+
+		// Context budget warning: at 80% context window utilization, inject a
+		// one-time hint to use context-efficient strategies. This implements
+		// the "context density awareness" pattern — the agent adjusts tool
+		// usage when context space is scarce.
+		if !contextWarningInjected && a.contextManager.ContextWindow() > 0 {
+			usage := a.contextManager.UsageRatio()
+			if usage >= 0.80 {
+				contextWarningInjected = true
+				debug.Log("agent", "Injecting context budget warning at %.0f%% utilization", usage*100)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fmt.Sprintf(
+							"Context note: %.0f%% of the context window is now in use. "+
+								"To conserve context space: prefer targeted searches (grep) over full file reads, "+
+								"avoid re-reading files you've already seen, and keep responses concise. "+
+								"If possible, complete the task with fewer, more focused tool calls.",
+							usage*100,
+						),
+					}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 		}
 
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
