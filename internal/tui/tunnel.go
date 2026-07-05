@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -24,6 +27,16 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/version"
 )
+
+// base64DecodeTunnelImage decodes a base64 string to raw bytes.
+func base64DecodeTunnelImage(b64 string) []byte {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		debug.Log("tunnel", "base64 decode failed: %v", err)
+		return nil
+	}
+	return data
+}
 
 // tunnelStartMsg is sent when the tunnel is ready.
 type tunnelStartMsg struct {
@@ -55,6 +68,7 @@ type tunnelInboundMsg struct {
 	generation uint64
 	text       string
 	messageID  string
+	images     []tunnel.ImageData
 }
 
 // tunnelModeChangeMsg carries a mode change request from mobile.
@@ -900,6 +914,7 @@ func (m *Model) handleTunnelClientCommand(generation uint64, broker *tunnel.Brok
 					generation: generation,
 					text:       data.Text,
 					messageID:  data.MessageID,
+					images:     data.Images,
 				})
 			}
 		},
@@ -949,7 +964,7 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 	text := msg.text
-	if text == "" {
+	if text == "" && len(msg.images) == 0 {
 		return m, nil
 	}
 
@@ -968,6 +983,38 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 	// Notify Knight idle timer.
 	if m.knight != nil {
 		m.knight.NotifyActivity()
+	}
+
+	// Convert tunnel images to imageAttachedMsg for the agent pipeline.
+	if len(msg.images) > 0 {
+		for _, img := range msg.images {
+			decoded, err := imagepkg.Decode(base64DecodeTunnelImage(img.Data))
+			if err != nil {
+				debug.Log("tunnel", "failed to decode tunnel image %s: %v", img.Name, err)
+				continue
+			}
+			// Persist to temp dir so the agent can read_file it when needed.
+			// This mirrors the clipboard paste path (persistAttachedImage).
+			filename := img.Name
+			if filename == "" {
+				filename = "tunnel-image.png"
+			}
+			// Sanitize filename to avoid directory traversal.
+			filename = filepath.Base(filename)
+			// Prepend tunnel- prefix to avoid collisions with clipboard images.
+			filename = "tunnel-" + filename
+			sourcePath, persistErr := persistAttachedImage(filename, decoded)
+			if persistErr != nil {
+				debug.Log("tunnel", "failed to persist tunnel image %s: %v", img.Name, persistErr)
+				sourcePath = "" // fall back to bare filename
+			}
+			m.pendingImages = append(m.pendingImages, imageAttachedMsg{
+				img:         decoded,
+				filename:    img.Name,
+				sourcePath:  sourcePath,
+				placeholder: imagepkg.Placeholder(img.Name, decoded),
+			})
+		}
 	}
 
 	if m.cancelFunc == nil {
