@@ -17,6 +17,12 @@ func (m *Model) appendStreamChunk(chunk string) {
 		return
 	}
 	m.chatFinishAllRunningTools()
+	// Collapse reasoning block when the first body text arrives.
+	// This implements the design: reasoning starts on first reasoning chunk,
+	// ends on first text or tool event.
+	if m.reasoningActive {
+		m.chatFinishReasoning()
+	}
 	if m.streamBuffer == nil {
 		m.streamBuffer = &bytes.Buffer{}
 	}
@@ -57,6 +63,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 	}
 	m.harnessRunLiveTail = ""
 	m.streamPrefixWritten = false
+	m.reasoningActive = false
 	m.chatFinishAssistant(m.currentAssistantID())
 	m.chatWriteSystem(nextChatID(), strings.TrimSuffix(text, "\n"))
 	m.chatListScrollToBottom()
@@ -72,6 +79,7 @@ func (m *Model) appendReasoningChunk(chunk string) {
 		m.nextAssistantID()
 		m.chatEnsureAssistant()
 	}
+	m.reasoningActive = true
 	// Append reasoning to the current assistant item
 	aid := m.currentAssistantID()
 	if m.chatList != nil {
@@ -85,15 +93,15 @@ func (m *Model) appendReasoningChunk(chunk string) {
 	m.chatListScrollToBottom()
 }
 
-// chatFinishReasoning collapses the reasoning block in the current assistant item.
-// It does NOT finalize the item or reset streamPrefixWritten — the assistant item
-// stays streaming so that subsequent text from later agent-loop turns continues
-// on the same bubble. The item is finalized only when agentDoneMsg fires.
-//
-// If a later turn has new reasoning, appendReasoningChunk replaces the reasoning
-// text via SetReasoning (which also un-collapses the block). This is correct:
-// the old reasoning was already visible (collapsed) and the new one replaces it.
+// chatFinishReasoning collapses the reasoning block in the current assistant item
+// and marks reasoning as inactive. It is called when the first text chunk or tool
+// event arrives (the natural end of reasoning in an LLM turn), or at turn end via
+// agentReasoningDoneMsg (which is a no-op if reasoning was already collapsed).
 func (m *Model) chatFinishReasoning() {
+	if !m.reasoningActive {
+		return
+	}
+	m.reasoningActive = false
 	aid := m.currentAssistantID()
 	if m.chatList != nil {
 		if item := m.chatList.FindByID(aid); item != nil {

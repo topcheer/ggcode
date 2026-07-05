@@ -17,10 +17,10 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 			m.statusToolCount++
 		}
 		m.chatStartTool(ts)
-		// Do NOT reset streamBuffer on tool start — text must continue
-		// accumulating across the same LLM turn even when tool calls
-		// are interspersed. Resetting causes text loss because
-		// chatUpdateAssistantText() replaces (not appends).
+		// Collapse reasoning when the first tool event arrives.
+		if m.reasoningActive {
+			m.chatFinishReasoning()
+		}
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {
@@ -64,7 +64,10 @@ func (m Model) handleAgentToolBatchMsg(msg agentToolBatchMsg, spinnerCmd tea.Cmd
 				m.statusToolCount++
 			}
 			m.chatStartTool(ts.ToolStatusMsg)
-			// Do NOT reset streamBuffer on tool start (see handleToolStatusMsg).
+			// Collapse reasoning when the first tool event arrives.
+			if m.reasoningActive {
+				m.chatFinishReasoning()
+			}
 			startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
@@ -94,7 +97,10 @@ func (m Model) handleAgentToolStatusMsg(msg agentToolStatusMsg, spinnerCmd tea.C
 			m.statusToolCount++
 		}
 		m.chatStartTool(ts)
-		// Do NOT reset streamBuffer on tool start (see handleToolStatusMsg).
+		// Collapse reasoning when the first tool event arrives.
+		if m.reasoningActive {
+			m.chatFinishReasoning()
+		}
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {

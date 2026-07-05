@@ -216,6 +216,7 @@ type Model struct {
 	shellOutputID       string // ID of the system message for shell command output
 	shellOutputIDs      map[string]struct{}
 	streamPrefixWritten bool
+	reasoningActive     bool // true while reasoning block is expanded in current LLM turn
 	harnessRunRemainder string
 	harnessRunLiveTail  string
 

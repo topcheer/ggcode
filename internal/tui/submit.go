@@ -503,11 +503,15 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 
 func buildBatchedStreamMessages(runID int, text, reasoning string, status []agentStatusMsg, tools []agentToolStatusMsg) []tea.Msg {
 	msgs := make([]tea.Msg, 0, 3)
-	if text != "" {
-		msgs = append(msgs, agentStreamMsg{RunID: runID, Text: text})
-	}
+	// Reasoning must be delivered BEFORE text so the TUI can expand the
+	// reasoning block first, then collapse it when the text chunk arrives.
+	// If text came first, appendStreamChunk would run before reasoning is
+	// active, missing the collapse trigger.
 	if reasoning != "" {
 		msgs = append(msgs, agentReasoningMsg{RunID: runID, Text: reasoning})
+	}
+	if text != "" {
+		msgs = append(msgs, agentStreamMsg{RunID: runID, Text: text})
 	}
 	if len(status) > 0 || len(tools) > 0 {
 		msgs = append(msgs, agentToolBatchMsg{

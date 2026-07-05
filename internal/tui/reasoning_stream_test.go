@@ -23,7 +23,7 @@ func TestBuildBatchedStreamMessagesIncludesReasoningWithoutText(t *testing.T) {
 	}
 }
 
-func TestBuildBatchedStreamMessagesOrdersTextThenReasoningThenTools(t *testing.T) {
+func TestBuildBatchedStreamMessagesOrdersReasoningThenTextThenTools(t *testing.T) {
 	status := []agentStatusMsg{{RunID: 9, statusMsg: statusMsg{Activity: "Thinking..."}}}
 	toolMsgs := []agentToolStatusMsg{{RunID: 9, ToolStatusMsg: ToolStatusMsg{ToolName: "bash"}}}
 
@@ -31,11 +31,13 @@ func TestBuildBatchedStreamMessagesOrdersTextThenReasoningThenTools(t *testing.T
 	if len(msgs) != 3 {
 		t.Fatalf("message count = %d, want 3", len(msgs))
 	}
-	if _, ok := msgs[0].(agentStreamMsg); !ok {
-		t.Fatalf("first message type = %T, want agentStreamMsg", msgs[0])
+	// Reasoning must come first so the TUI expands the thinking block before
+	// the text chunk arrives and collapses it.
+	if _, ok := msgs[0].(agentReasoningMsg); !ok {
+		t.Fatalf("first message type = %T, want agentReasoningMsg", msgs[0])
 	}
-	if _, ok := msgs[1].(agentReasoningMsg); !ok {
-		t.Fatalf("second message type = %T, want agentReasoningMsg", msgs[1])
+	if _, ok := msgs[1].(agentStreamMsg); !ok {
+		t.Fatalf("second message type = %T, want agentStreamMsg", msgs[1])
 	}
 	if _, ok := msgs[2].(agentToolBatchMsg); !ok {
 		t.Fatalf("third message type = %T, want agentToolBatchMsg", msgs[2])
