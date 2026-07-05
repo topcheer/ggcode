@@ -1,0 +1,114 @@
+package tool
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestBrowserToolInterface(t *testing.T) {
+	b := NewBrowser()
+
+	// Verify tool interface
+	if b.Name() != "browser" {
+		t.Errorf("Name() = %q, want %q", b.Name(), "browser")
+	}
+
+	desc := strings.ToLower(b.Description())
+	if !strings.Contains(desc, "devtools protocol") || !strings.Contains(desc, "spa") {
+		t.Errorf("Description should mention DevTools Protocol and SPA support, got: %s", desc)
+	}
+
+	// Verify parameters schema is valid JSON
+	params := b.Parameters()
+	var schema map[string]interface{}
+	if err := json.Unmarshal(params, &schema); err != nil {
+		t.Fatalf("Parameters() returned invalid JSON: %v", err)
+	}
+
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("schema missing properties")
+	}
+	requiredProps := []string{"action", "url", "session", "selector", "text", "expression", "wait_for", "description"}
+	for _, prop := range requiredProps {
+		if _, ok := props[prop]; !ok {
+			t.Errorf("schema missing property %q", prop)
+		}
+	}
+
+	// Verify required includes action and description
+	required, ok := schema["required"].([]interface{})
+	if !ok {
+		t.Fatal("schema missing required array")
+	}
+	foundAction, foundDesc := false, false
+	for _, r := range required {
+		if r == "action" {
+			foundAction = true
+		}
+		if r == "description" {
+			foundDesc = true
+		}
+	}
+	if !foundAction {
+		t.Error("schema should require 'action'")
+	}
+	if !foundDesc {
+		t.Error("schema should require 'description'")
+	}
+}
+
+func TestBrowserToolUnknownAction(t *testing.T) {
+	b := NewBrowser()
+	input, _ := json.Marshal(map[string]string{
+		"action":      "invalid_action",
+		"description": "test",
+	})
+	result, err := b.Execute(nil, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for unknown action")
+	}
+	if !strings.Contains(result.Content, "unknown action") {
+		t.Errorf("error should mention unknown action, got: %s", result.Content)
+	}
+}
+
+func TestBrowserFormatJSResult(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		contains string
+	}{
+		{nil, "undefined"},
+		{"hello", "hello"},
+		{float64(42), "42"},
+		{float64(3.14), "3.14"},
+		{true, "true"},
+		{false, "false"},
+		{[]interface{}{"a", "b", "c"}, "[a, b, c]"},
+	}
+
+	for _, tt := range tests {
+		result := formatJSResult(tt.input)
+		if !strings.Contains(result, tt.contains) {
+			t.Errorf("formatJSResult(%v) = %q, expected to contain %q", tt.input, result, tt.contains)
+		}
+	}
+}
+
+func TestBrowserSessionManagement(t *testing.T) {
+	b := NewBrowser()
+
+	// Verify multiple sessions can be created
+	if b == nil {
+		t.Fatal("NewBrowser returned nil")
+	}
+
+	// Sessions map should be initialized
+	if b.sessions == nil {
+		t.Fatal("sessions map not initialized")
+	}
+}

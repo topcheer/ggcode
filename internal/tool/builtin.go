@@ -80,6 +80,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Web
 		WebFetch{},
 		WebSearch{},
+		NewBrowser(),
 
 		// Productivity
 		NewAskUserTool(),

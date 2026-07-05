@@ -49,9 +49,9 @@ func bundledSkills() []*Command {
 		{
 			Name:          "browser-automation",
 			DisplayName:   "Use browser automation",
-			Description:   "Route browser and website tasks through MCP-backed browser tools instead of pretending browser access exists by default.",
+			Description:   "Browser automation through the built-in 'browser' tool (Go-native CDP, no Node.js/Playwright needed) or MCP browser servers as fallback.",
 			WhenToUse:     "Use when the user wants to open websites, click elements, fill forms, capture screenshots, inspect console output, or automate browser flows.",
-			Template:      "Handle browser tasks through MCP. Start by checking `list_mcp_capabilities` for a browser-oriented MCP server and its tools or prompts. If browser MCP tools are already available, use them directly. If they are not available, state that ggcode does not have built-in browser control and needs a browser automation MCP server first. In interactive sessions, guide the user toward `/mcp` install or the built-in Playwright preset (`b` in the `/mcp` panel), or add an equivalent `mcp_servers` config entry such as `playwright` via `npx -y @playwright/mcp`. Once connected, re-check capabilities and use the discovered MCP tools or MCP prompt-backed skills rather than freehanding web interactions.",
+			Template:      "Handle browser tasks through the built-in `browser` tool first. It provides full SPA/JavaScript support via Chrome DevTools Protocol (CDP) without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Requires Chrome/Chromium installed. For simple non-JS page fetching, use `web_fetch` instead. If the built-in browser tool is insufficient (e.g., needs file downloads, multi-tab orchestration), fall back to MCP browser tools via `list_mcp_capabilities`.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,

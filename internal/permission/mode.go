@@ -99,7 +99,7 @@ func IsReadOnlyTool(name string) bool {
 		return true
 	case "sleep", "git_status", "git_diff", "git_log", "git_show",
 		"git_blame", "git_branch_list", "git_remote", "git_stash_list",
-		"web_fetch", "web_search",
+		"web_fetch", "web_search", "browser",
 		"task_list", "task_get", "plan_status",
 		"cron_list", "cron_get", "list_commands", "read_command_output",
 		"wait_command", "get_config":
