@@ -209,6 +209,9 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 		m.closeInspectorPanel()
 		return *m, m.resumeSession(item.ID)
 	case inspectorPanelCheckpoints:
+		if m.agent == nil {
+			return *m, nil
+		}
 		cpMgr := m.agent.CheckpointManager()
 		if cpMgr == nil || item.ID == "" {
 			return *m, nil
@@ -431,6 +434,9 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 }
 
 func (m Model) inspectorCheckpointItems() []inspectorPanelItem {
+	if m.agent == nil {
+		return nil
+	}
 	cpMgr := m.agent.CheckpointManager()
 	if cpMgr == nil {
 		return nil

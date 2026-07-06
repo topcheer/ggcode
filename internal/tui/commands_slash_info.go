@@ -99,6 +99,11 @@ func (m *Model) exportSession(id string) tea.Cmd {
 }
 
 func (m *Model) handleFilesCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return streamMsg(m.t("files.disabled"))
+		}
+	}
 	cpMgr := m.agent.CheckpointManager()
 	if cpMgr == nil {
 		return func() tea.Msg {
