@@ -1085,6 +1085,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Context cancelled after completing some tools. Fill "cancelled"
 				// results for remaining tool_calls that have not run yet.
 				a.fillCancelledToolResults(toolCalls[idx+1:], &toolResults)
+				// fillCancelledToolResults adds to contextManager only when
+				// pending > 0. If this was the last tool call, we still need to
+				// add the completed results to keep tool_use/tool_result pairs
+				// balanced for the next LLM call.
+				if len(toolCalls[idx+1:]) == 0 && len(toolResults) > 0 {
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: toolResults,
+					})
+				}
 				return err
 			}
 		}
