@@ -695,7 +695,7 @@ func deleteFromCursorToEnd(ta *textarea.Model) {
 		return
 	}
 	lines[line] = lines[line][:col]
-	ta.SetValue(strings.Join(lines, "\n"))
+	setValueAtCursor(ta, strings.Join(lines, "\n"), line, col)
 }
 
 // deleteFromLineStartToCursor deletes from the start of the current line to
@@ -715,7 +715,7 @@ func deleteFromLineStartToCursor(ta *textarea.Model) {
 		col = len(lines[line])
 	}
 	lines[line] = lines[line][col:]
-	ta.SetValue(strings.Join(lines, "\n"))
+	setValueAtCursor(ta, strings.Join(lines, "\n"), line, 0)
 }
 
 // deleteWordBeforeCursor deletes the word before the cursor (Ctrl+W behavior).
@@ -750,7 +750,21 @@ func deleteWordBeforeCursor(ta *textarea.Model) {
 		pos--
 	}
 	lines[line] = currentLine[:pos] + currentLine[col:]
-	ta.SetValue(strings.Join(lines, "\n"))
+	setValueAtCursor(ta, strings.Join(lines, "\n"), line, pos)
+}
+
+// setValueAtCursor sets the textarea value and restores the cursor to the
+// given (row, col). textarea.SetValue resets the cursor to the end of the
+// text, so we navigate back to the desired position after setting the value.
+func setValueAtCursor(ta *textarea.Model, value string, row, col int) {
+	ta.SetValue(value)
+	// After SetValue, cursor is at the end of the last line.
+	// Navigate up to the target row, then set the column.
+	numLines := strings.Count(value, "\n")
+	for i := numLines; i > row; i-- {
+		ta.CursorUp()
+	}
+	ta.SetCursorColumn(col)
 }
 
 // handleInitPromptKey handles keyboard input for the startup "Create GGCODE.md?" prompt.

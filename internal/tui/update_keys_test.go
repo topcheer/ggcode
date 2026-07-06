@@ -18,6 +18,10 @@ func TestDeleteFromCursorToEnd_StartOfLine(t *testing.T) {
 	if ta.Value() != expected {
 		t.Errorf("expected %q, got %q", expected, ta.Value())
 	}
+	// Cursor should stay at row 1, col 0 (where it was before deletion)
+	if ta.Line() != 1 || ta.Column() != 0 {
+		t.Errorf("cursor should be at (1,0), got (%d,%d)", ta.Line(), ta.Column())
+	}
 }
 
 func TestDeleteFromLineStartToCursor_EndOfLine(t *testing.T) {
@@ -32,6 +36,10 @@ func TestDeleteFromLineStartToCursor_EndOfLine(t *testing.T) {
 	if ta.Value() != expected {
 		t.Errorf("expected %q, got %q", expected, ta.Value())
 	}
+	// Cursor should be at row 1, col 0 (start of the trimmed line)
+	if ta.Line() != 1 || ta.Column() != 0 {
+		t.Errorf("cursor should be at (1,0), got (%d,%d)", ta.Line(), ta.Column())
+	}
 }
 
 func TestDeleteWordBeforeCursor(t *testing.T) {
@@ -44,6 +52,10 @@ func TestDeleteWordBeforeCursor(t *testing.T) {
 	expected := "hello world"
 	if ta.Value() != expected {
 		t.Errorf("expected %q, got %q", expected, ta.Value())
+	}
+	// Cursor should be at end of "hello world" (col 11, row 0)
+	if ta.Line() != 0 || ta.Column() != 11 {
+		t.Errorf("cursor should be at (0,11), got (%d,%d)", ta.Line(), ta.Column())
 	}
 }
 
@@ -80,6 +92,10 @@ func TestDeleteFromCursorToEnd_EmptyLine(t *testing.T) {
 	deleteFromCursorToEnd(&ta)
 	if ta.Value() != "hello\n\nworld" {
 		t.Errorf("empty line should be unchanged, got %q", ta.Value())
+	}
+	// Cursor should stay at row 1, col 0
+	if ta.Line() != 1 || ta.Column() != 0 {
+		t.Errorf("cursor should be at (1,0), got (%d,%d)", ta.Line(), ta.Column())
 	}
 }
 
