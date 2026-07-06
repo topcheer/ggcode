@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { ClipboardGetText, EventsOn } from '../../wailsjs/runtime/runtime'
+import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
@@ -115,6 +115,20 @@ function enhanceCodeBlocks(container: HTMLElement) {
 
     // Adjust <pre> padding top since header is now inside
     pre.style.paddingTop = '4px'
+    // Intercept external links: open in system browser instead of navigating webview
+    const anchors = container.querySelectorAll<HTMLAnchorElement>('a[href]')
+    anchors.forEach((a) => {
+      if (a.getAttribute('data-external')) return // already intercepted
+      const href = a.getAttribute('href') || ''
+      if (href.startsWith('http://') || href.startsWith('https://')) {
+        a.setAttribute('data-external', 'true')
+        a.addEventListener('click', (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          BrowserOpenURL(href)
+        })
+      }
+    })
   })
 }
 
