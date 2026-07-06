@@ -501,6 +501,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const autoScrollByTabRef = useRef<Record<string, boolean>>({ main: true })
   const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
   const suppressNextScrollEventRef = useRef(false)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
   const currentTabStreaming = activeTab === 'main'
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
@@ -1211,7 +1212,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1, position: 'relative' }}>
       {/* Top bar */}
       <div style={{
         height: 'var(--topbar-height)',
@@ -1507,6 +1508,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const nearBottom = isNearBottom(scrollContainerRef.current)
           autoScrollByTabRef.current[activeTab] = nearBottom
           lastManualScrollAtByTabRef.current[activeTab] = Date.now()
+          setShowScrollBtn(!nearBottom && messages.length > 3)
         }}
         style={{
         flex: 1, overflowY: 'auto',
@@ -1544,6 +1546,43 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               ))}
             </>
           })()
+        )}
+
+        {/* Scroll-to-bottom floating button */}
+        {showScrollBtn && (
+          <button
+            onClick={() => {
+              autoScrollByTabRef.current[activeTab] = true
+              const container = scrollContainerRef.current
+              if (container) {
+                suppressNextScrollEventRef.current = true
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+              }
+              setShowScrollBtn(false)
+            }}
+            style={{
+              position: 'absolute',
+              bottom: 80,
+              right: 20,
+              width: 36, height: 36,
+              borderRadius: '50%',
+              background: 'var(--color-card)',
+              border: '1px solid var(--color-border)',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 50,
+              transition: 'opacity 0.2s, transform 0.2s',
+            }}
+            title="Scroll to bottom"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
         )}
 
         {/* Typing indicator — appears while agent is thinking/working before first token */}
