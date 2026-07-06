@@ -3186,6 +3186,30 @@ func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
 	}
 }
 
+func TestEscDismissesExitConfirmation(t *testing.T) {
+	m := newTestModel()
+	m.exitConfirmPending = true
+
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m2 := model.(Model)
+
+	if m2.exitConfirmPending {
+		t.Error("expected Esc to dismiss exit confirmation")
+	}
+}
+
+func TestEscDismissesCancelConfirmation(t *testing.T) {
+	m := newTestModel()
+	m.cancelConfirmPending = true
+
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m2 := model.(Model)
+
+	if m2.cancelConfirmPending {
+		t.Error("expected Esc to dismiss cancel confirmation")
+	}
+}
+
 func TestExitConfirmStartsOnFreshLine(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)

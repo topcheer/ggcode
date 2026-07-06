@@ -521,6 +521,16 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "esc":
+		// Dismiss exit confirmation prompt first (highest priority).
+		if m.exitConfirmPending {
+			m.resetExitConfirm()
+			return m, nil
+		}
+		// Dismiss cancel confirmation prompt.
+		if m.cancelConfirmPending {
+			m.resetCancelConfirm()
+			return m, nil
+		}
 		// Handle pending auto-run suggestion: Esc dismisses (before autocomplete)
 		// Handle pending harness review: Esc skips review
 		if m.pendingHarnessReview != nil {
