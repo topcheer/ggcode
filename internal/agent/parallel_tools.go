@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -91,6 +92,7 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		wg.Add(1)
 		go func(p pending) {
 			defer wg.Done()
+			defer safego.Recover("agent.parallel.preExec")
 
 			if ctx.Err() != nil {
 				return
