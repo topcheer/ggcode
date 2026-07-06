@@ -80,14 +80,42 @@ type speculator struct {
 	// Cache of speculative results keyed by cacheKey(toolName, argsHash).
 	cache map[string]*speculativeResult
 
+	// Cache ordering for LRU eviction (front = oldest, back = newest).
+	cacheOrder []string
+
 	// Statistics for observability.
 	hits         int
 	misses       int
 	speculations int
 	savedMicros  int64 // approximate latency saved in microseconds
 
+	// Adaptive threshold: minimum observation count before predicting.
+	// Self-tunes based on hit rate (inspired by speculative-tools adaptive strategy).
+	adaptiveMinCount int
+
+	// Number of active speculative goroutines (bounded by maxConcurrent).
+	activeSpeculations int
+
 	ttl time.Duration
 }
+
+const (
+	// specMaxCacheSize bounds the speculative result cache to prevent
+	// unbounded memory growth during long agent runs.
+	specMaxCacheSize = 50
+
+	// specMaxConcurrent limits the number of concurrent speculative
+	// goroutines to prevent resource exhaustion.
+	specMaxConcurrent = 3
+
+	// specAdaptiveFloor/Ceiling bound the adaptive threshold.
+	specAdaptiveFloor   = 1
+	specAdaptiveCeiling = 5
+
+	// specAdaptiveWindow is the number of cache lookups (hits+misses)
+	// between threshold re-evaluations.
+	specAdaptiveWindow = 20
+)
 
 type speculativeResult struct {
 	result   tool.Result
@@ -96,9 +124,11 @@ type speculativeResult struct {
 
 func newSpeculator() *speculator {
 	return &speculator{
-		patterns: make(map[string]map[string]int),
-		cache:    make(map[string]*speculativeResult),
-		ttl:      30 * time.Second,
+		patterns:         make(map[string]map[string]int),
+		cache:            make(map[string]*speculativeResult),
+		cacheOrder:       make([]string, 0, specMaxCacheSize),
+		ttl:              30 * time.Second,
+		adaptiveMinCount: 2, // start conservative, adapt based on hit rate
 	}
 }
 
@@ -128,7 +158,7 @@ func (s *speculator) resetSequence() {
 }
 
 // predictNext returns likely next read-only tool names based on the last tool.
-// Only returns predictions with at least minCount observations.
+// Uses adaptiveMinCount which self-tunes based on cache hit rate.
 func (s *speculator) predictNext(lastTool string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,13 +168,15 @@ func (s *speculator) predictNext(lastTool string) []string {
 		return nil
 	}
 
+	minCount := s.adaptiveMinCount
+
 	type prediction struct {
 		tool  string
 		count int
 	}
 	var preds []prediction
 	for nextTool, count := range nexts {
-		if speculativeSafeTools[nextTool] && count >= 2 {
+		if speculativeSafeTools[nextTool] && count >= minCount {
 			preds = append(preds, prediction{nextTool, count})
 		}
 	}
@@ -180,11 +212,14 @@ func (s *speculator) getCached(toolName string, args json.RawMessage) (tool.Resu
 	cached, ok := s.cache[key]
 	if !ok {
 		s.misses++
+		s.maybeAdaptThreshold()
 		return tool.Result{}, false
 	}
 	if time.Since(cached.cachedAt) > s.ttl {
+		s.removeFromCacheOrder(key)
 		delete(s.cache, key)
 		s.misses++
+		s.maybeAdaptThreshold()
 		return tool.Result{}, false
 	}
 	s.hits++
@@ -192,15 +227,66 @@ func (s *speculator) getCached(toolName string, args json.RawMessage) (tool.Resu
 	return cached.result, true
 }
 
-// store caches a speculative result.
+// maybeAdaptThreshold adjusts the prediction threshold based on recent
+// cache hit rate. Called after every cache lookup. Uses a fixed evaluation
+// window to avoid premature adaptation.
+//
+// High hit rate (>40%): predictions are valuable → lower threshold → speculate more.
+// Low hit rate (<15%): predictions are wasteful → raise threshold → speculate less.
+func (s *speculator) maybeAdaptThreshold() {
+	total := s.hits + s.misses
+	if total == 0 || total%specAdaptiveWindow != 0 {
+		return
+	}
+
+	hitRate := float64(s.hits) / float64(total)
+
+	if hitRate >= 0.40 && s.adaptiveMinCount > specAdaptiveFloor {
+		s.adaptiveMinCount--
+		debug.Log("speculate", "adaptive threshold lowered to %d (hitRate=%.0f%%, hits=%d, misses=%d)",
+			s.adaptiveMinCount, hitRate*100, s.hits, s.misses)
+	} else if hitRate < 0.15 && s.adaptiveMinCount < specAdaptiveCeiling {
+		s.adaptiveMinCount++
+		debug.Log("speculate", "adaptive threshold raised to %d (hitRate=%.0f%%, hits=%d, misses=%d)",
+			s.adaptiveMinCount, hitRate*100, s.hits, s.misses)
+	}
+}
+
+// store caches a speculative result, evicting the oldest entry if the
+// cache is at capacity (simple LRU using cacheOrder slice).
 func (s *speculator) store(toolName string, args json.RawMessage, result tool.Result) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	key := cacheKey(toolName, args)
+
+	// If key already exists, remove from order (will be re-added at end).
+	if _, exists := s.cache[key]; exists {
+		s.removeFromCacheOrder(key)
+	} else if len(s.cache) >= specMaxCacheSize {
+		// Evict oldest entry.
+		if len(s.cacheOrder) > 0 {
+			oldest := s.cacheOrder[0]
+			delete(s.cache, oldest)
+			s.cacheOrder = s.cacheOrder[1:]
+			debug.Log("speculate", "cache full, evicted oldest entry (key=%s)", oldest)
+		}
+	}
+
 	s.cache[key] = &speculativeResult{
 		result:   result,
 		cachedAt: time.Now(),
+	}
+	s.cacheOrder = append(s.cacheOrder, key)
+}
+
+// removeFromCacheOrder removes a key from the LRU ordering slice.
+func (s *speculator) removeFromCacheOrder(key string) {
+	for i, k := range s.cacheOrder {
+		if k == key {
+			s.cacheOrder = append(s.cacheOrder[:i], s.cacheOrder[i+1:]...)
+			return
+		}
 	}
 }
 
@@ -266,6 +352,7 @@ func predictArgs(nextTool, prevTool string, prevArgs json.RawMessage) json.RawMe
 
 // speculate starts background goroutines to pre-execute predicted tool calls.
 // It runs while the LLM is generating its next response (2-5 seconds).
+// At most specMaxConcurrent goroutines run concurrently.
 func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTool string, lastArgs json.RawMessage) {
 	if tools == nil {
 		return
@@ -276,7 +363,16 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	}
 
 	for _, predicted := range predictions {
+		// Check concurrency limit.
+		s.mu.Lock()
+		if s.activeSpeculations >= specMaxConcurrent {
+			s.mu.Unlock()
+			debug.Log("speculate", "max concurrent speculations (%d) reached, skipping %s", specMaxConcurrent, predicted)
+			continue
+		}
 		// Predict arguments for this tool.
+		s.mu.Unlock()
+
 		predArgs := predictArgs(predicted, lastTool, lastArgs)
 		if predArgs == nil {
 			debug.Log("speculate", "no arg prediction for %s after %s, skipping", predicted, lastTool)
@@ -290,10 +386,17 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 
 		s.mu.Lock()
 		s.speculations++
+		s.activeSpeculations++
 		s.mu.Unlock()
 
 		// Launch background goroutine for speculative execution.
 		go func(toolName string, toolArgs json.RawMessage) {
+			defer func() {
+				s.mu.Lock()
+				s.activeSpeculations--
+				s.mu.Unlock()
+			}()
+
 			specCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 
@@ -327,20 +430,26 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 
 // specStats returns current speculation statistics for observability.
 type specStats struct {
-	Hits         int   `json:"hits"`
-	Misses       int   `json:"misses"`
-	Speculations int   `json:"speculations"`
-	SavedMicros  int64 `json:"saved_micros"`
+	Hits             int   `json:"hits"`
+	Misses           int   `json:"misses"`
+	Speculations     int   `json:"speculations"`
+	SavedMicros      int64 `json:"saved_micros"`
+	AdaptiveMinCount int   `json:"adaptive_min_count"`
+	CacheSize        int   `json:"cache_size"`
+	ActiveSpecs      int   `json:"active_specs"`
 }
 
 func (s *speculator) stats() specStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return specStats{
-		Hits:         s.hits,
-		Misses:       s.misses,
-		Speculations: s.speculations,
-		SavedMicros:  s.savedMicros,
+		Hits:             s.hits,
+		Misses:           s.misses,
+		Speculations:     s.speculations,
+		SavedMicros:      s.savedMicros,
+		AdaptiveMinCount: s.adaptiveMinCount,
+		CacheSize:        len(s.cache),
+		ActiveSpecs:      s.activeSpeculations,
 	}
 }
 
@@ -348,5 +457,6 @@ func (s *speculator) stats() specStats {
 func (s *speculator) Close() {
 	s.mu.Lock()
 	s.cache = make(map[string]*speculativeResult)
+	s.cacheOrder = make([]string, 0, specMaxCacheSize)
 	s.mu.Unlock()
 }

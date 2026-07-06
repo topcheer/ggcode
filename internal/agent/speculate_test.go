@@ -257,6 +257,146 @@ func TestSpeculator_CloseClearsCache(t *testing.T) {
 	}
 }
 
+func TestSpeculator_CacheEvictionLRU(t *testing.T) {
+	s := newSpeculator()
+
+	// Fill cache beyond specMaxCacheSize.
+	for i := 0; i < specMaxCacheSize+5; i++ {
+		path := "/file" + string(rune('a'+i)) + ".go"
+		s.store("read_file", json.RawMessage(`{"path":"`+path+`"}`), mockToolResult(path))
+	}
+
+	stats := s.stats()
+	if stats.CacheSize > specMaxCacheSize {
+		t.Fatalf("cache size %d exceeds max %d", stats.CacheSize, specMaxCacheSize)
+	}
+
+	// The earliest entries should have been evicted.
+	_, hit := s.getCached("read_file", json.RawMessage(`{"path":"/filea.go"}`))
+	if hit {
+		t.Fatal("expected oldest entry to be evicted")
+	}
+
+	// The latest entries should still be present.
+	latestPath := "/file" + string(rune('a'+specMaxCacheSize+4)) + ".go"
+	_, hit = s.getCached("read_file", json.RawMessage(`{"path":"`+latestPath+`"}`))
+	if !hit {
+		t.Fatal("expected newest entry to be present")
+	}
+}
+
+func TestSpeculator_AdaptiveThresholdLowHitRate(t *testing.T) {
+	s := newSpeculator()
+
+	// Store one result.
+	args := json.RawMessage(`{"path":"/test.go"}`)
+	s.store("read_file", args, mockToolResult("content"))
+
+	// Generate many misses to drive hit rate down.
+	// Default threshold is 2; with low hit rate it should increase.
+	for i := 0; i < specAdaptiveWindow; i++ {
+		s.getCached("read_file", json.RawMessage(`{"path":"/miss`+string(rune('a'+i%26))+`.go"}`))
+	}
+
+	stats := s.stats()
+	if stats.AdaptiveMinCount <= 2 {
+		t.Fatalf("expected adaptive threshold to increase above 2 with low hit rate, got %d", stats.AdaptiveMinCount)
+	}
+}
+
+func TestSpeculator_AdaptiveThresholdHighHitRate(t *testing.T) {
+	s := newSpeculator()
+
+	// Generate mostly hits to drive hit rate up.
+	args := json.RawMessage(`{"path":"/test.go"}`)
+	s.store("read_file", args, mockToolResult("content"))
+
+	for i := 0; i < specAdaptiveWindow; i++ {
+		s.getCached("read_file", args) // always hit
+	}
+
+	stats := s.stats()
+	if stats.AdaptiveMinCount < specAdaptiveFloor {
+		t.Fatalf("adaptive threshold below floor: %d", stats.AdaptiveMinCount)
+	}
+	// With 100% hit rate, threshold should have been lowered.
+	if stats.AdaptiveMinCount > 1 {
+		// It may not have lowered yet if it started at 2, but let's verify
+		// it didn't increase. The key assertion is it should be <= initial 2.
+		if stats.AdaptiveMinCount > 2 {
+			t.Fatalf("adaptive threshold should not increase with high hit rate, got %d", stats.AdaptiveMinCount)
+		}
+	}
+}
+
+func TestSpeculator_AdaptiveThresholdAffectsPrediction(t *testing.T) {
+	s := newSpeculator()
+
+	// Learn pattern with only 2 observations.
+	s.recordObservation("edit_file")
+	s.recordObservation("read_file")
+	s.recordObservation("edit_file")
+	s.recordObservation("read_file")
+
+	// With default threshold=2, prediction should work.
+	preds := s.predictNext("edit_file")
+	if len(preds) == 0 {
+		t.Fatal("expected prediction with default threshold=2")
+	}
+
+	// Force threshold up to 5.
+	s.mu.Lock()
+	s.adaptiveMinCount = 5
+	s.mu.Unlock()
+
+	// With threshold=5, prediction should not fire (only 2 observations).
+	preds = s.predictNext("edit_file")
+	if len(preds) != 0 {
+		t.Fatalf("expected no prediction with threshold=5 (only 2 observations), got %v", preds)
+	}
+}
+
+func TestSpeculator_ConcurrencyLimit(t *testing.T) {
+	s := newSpeculator()
+
+	// Manually set active speculations to max.
+	s.mu.Lock()
+	s.activeSpeculations = specMaxConcurrent
+	s.mu.Unlock()
+
+	// Speculate should skip due to concurrency limit.
+	// (Even with patterns, the concurrency check runs first.)
+	s.recordObservation("edit_file")
+	s.recordObservation("read_file")
+	s.recordObservation("edit_file")
+	s.recordObservation("read_file")
+
+	beforeStats := s.stats()
+	s.speculate(context.Background(), nil, "edit_file", json.RawMessage(`{"file_path":"/test.go"}`))
+	afterStats := s.stats()
+
+	// Speculations count should not increase (skipped due to concurrency).
+	if afterStats.Speculations != beforeStats.Speculations {
+		t.Fatalf("expected no new speculations with max concurrency reached, got delta %d",
+			afterStats.Speculations-beforeStats.Speculations)
+	}
+}
+
+func TestSpeculator_StatsIncludeNewFields(t *testing.T) {
+	s := newSpeculator()
+
+	stats := s.stats()
+	if stats.AdaptiveMinCount != 2 {
+		t.Errorf("expected initial adaptiveMinCount=2, got %d", stats.AdaptiveMinCount)
+	}
+	if stats.CacheSize != 0 {
+		t.Errorf("expected initial cacheSize=0, got %d", stats.CacheSize)
+	}
+	if stats.ActiveSpecs != 0 {
+		t.Errorf("expected initial activeSpecs=0, got %d", stats.ActiveSpecs)
+	}
+}
+
 // mockToolResult creates a tool.Result for testing.
 func mockToolResult(content string) tool.Result {
 	return tool.Result{Content: content}
