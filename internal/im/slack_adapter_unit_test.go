@@ -35,9 +35,10 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"**bold**", "_bold_"},
+		{"**bold**", "*bold*"},
 		{"*italic*", "_italic_"},
 		{"~~strike~~", "~strike~"},
+		{"**bold** and *italic*", "*bold* and _italic_"},
 		{"<script>", "&lt;script&gt;"},
 		{"a & b", "a &amp; b"},
 		{"plain text", "plain text"},

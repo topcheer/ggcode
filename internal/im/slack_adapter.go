@@ -766,15 +766,23 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, filename strin
 }
 
 // markdownToMrkdwn converts basic Markdown to Slack mrkdwn format.
+// Slack mrkdwn reference: https://docs.slack.dev/messaging/formatting-message-text/
+// Bold: *text* (single asterisk), Italic: _text_ (underscore), Strike: ~text~ (single tilde)
 func markdownToMrkdwn(text string) string {
 	// Escape HTML entities
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
-	// Convert **bold** to *bold*
-	text = replaceDelimiters(text, "**", "*")
-	// Convert *italic* to _italic_ (only single *)
+	// Convert **bold** to *bold* using a placeholder to avoid collision
+	// with the *italic* → _italic_ conversion below.
+	// Without the placeholder, step 1 would produce *bold* and step 2 would
+	// then convert that *bold* to _bold_ (wrong — bold would render as italic).
+	const boldPlaceholder = "\x00B\x00"
+	text = replaceDelimiters(text, "**", boldPlaceholder)
+	// Convert remaining *italic* to _italic_
 	text = replaceDelimiters(text, "*", "_")
+	// Restore bold placeholders as Slack mrkdwn *bold*
+	text = strings.ReplaceAll(text, boldPlaceholder, "*")
 	// Convert ~~strikethrough~~ to ~strikethrough~
 	text = replaceDelimiters(text, "~~", "~")
 	return text
