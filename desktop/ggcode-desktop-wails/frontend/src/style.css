@@ -181,3 +181,58 @@ body {
   animation: searchFlash 1.5s ease-out;
   border-radius: var(--radius-md);
 }
+
+/* ── Custom scrollbar styling (thin, themed) ──────────────────────────────── */
+/* Matches VS Code / Discord / Slack pattern: thin track, subtle thumb */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
+}
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+    background: rgba(128, 128, 128, 0.25);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(128, 128, 128, 0.45);
+    background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* ── Text selection color (theme-matched) ─────────────────────────────────── */
+::selection {
+    background: rgba(59, 130, 246, 0.3);
+    color: var(--text-primary, #fff);
+}
+.markdown-body ::selection {
+    background: rgba(59, 130, 246, 0.35);
+}
+
+/* ── Keyboard focus-visible outline (accessibility) ───────────────────────── */
+*:focus-visible {
+    outline: 2px solid var(--color-primary, #3b82f6);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+/* Remove focus-visible from elements that have their own focus styling */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+    outline-offset: 1px;
+}
+
+/* ── Smooth scroll behavior for message container ─────────────────────────── */
+/* Only apply to scrollable containers, not the whole page */
+div[style*="overflow"] {
+    scroll-behavior: smooth;
+}
