@@ -49,6 +49,20 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		debug.Log("agent", "Injected learned ratchet rules into system prompt")
 	}
 
+	// Layer 4: playbook strategy hints (ACE-inspired).
+	// Learn from past successful runs to guide future ones.
+	playbookText := ""
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if pb := NewPlaybook(workingDir); pb != nil {
+			playbookText = pb.HintsForPrompt(3)
+		}
+	}
+	if playbookText != "" {
+		newText = newText + "\n\n" + playbookText
+		changed = true
+		debug.Log("agent", "Injected playbook strategy hints into system prompt")
+	}
+
 	if !changed {
 		return
 	}

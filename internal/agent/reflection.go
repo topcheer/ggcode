@@ -375,6 +375,9 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 			}
 		}()
 		fn(s)
+		// Record successful strategies in the playbook (ACE-inspired).
+		// Learns from SUCCESSES to complement ratchet's learning from failures.
+		a.recordPlaybook(&s)
 		// Run ratchet: match errors against existing rules, generalize
 		// unmatched ones via LLM. This is the harness ratchet — every
 		// error becomes a rule that prevents future mistakes.
