@@ -293,10 +293,15 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 	if strings.TrimSpace(replyTo) != "" {
 		replySeq = 1
 	}
-	body := a.buildTextBodyWithMode(content, chatType, replyTo, replySeq, useMarkdown)
+	sentContent := content
+	if !useMarkdown {
+		sentContent = stripMarkdown(content)
+	}
+	body := a.buildTextBodyWithMode(sentContent, chatType, replyTo, replySeq, useMarkdown)
 	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, nil); err != nil {
 		if useMarkdown && isQQMarkdownRejected(err) {
-			body = a.buildTextBodyWithMode(content, chatType, replyTo, replySeq, false)
+			plainContent := stripMarkdown(content)
+			body = a.buildTextBodyWithMode(plainContent, chatType, replyTo, replySeq, false)
 			_, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil)
 			return retryErr
 		}
@@ -1089,11 +1094,18 @@ func (a *qqAdapter) recordPassiveReply(binding ChannelBinding, replyTo string) {
 
 func (a *qqAdapter) sendTextMessage(ctx context.Context, path, chatType, content, replyTo string, replySeq int) (string, error) {
 	useMarkdown := a.markdownSupport
-	body := a.buildTextBodyWithMode(content, chatType, replyTo, replySeq, useMarkdown)
+	// Strip markdown syntax when sending as plain text to avoid showing
+	// literal **bold**, _italic_ etc. to users on non-markdown contexts.
+	sentContent := content
+	if !useMarkdown {
+		sentContent = stripMarkdown(content)
+	}
+	body := a.buildTextBodyWithMode(sentContent, chatType, replyTo, replySeq, useMarkdown)
 	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, nil); err != nil {
 		if useMarkdown && isQQMarkdownRejected(err) {
 			debug.Log("qq", "adapter=%s outbound markdown rejected, retrying as text", a.name)
-			body = a.buildTextBodyWithMode(content, chatType, replyTo, replySeq, false)
+			plainContent := stripMarkdown(content)
+			body = a.buildTextBodyWithMode(plainContent, chatType, replyTo, replySeq, false)
 			if _, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil); retryErr != nil {
 				return "", retryErr
 			}
