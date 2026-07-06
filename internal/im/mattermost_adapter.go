@@ -27,6 +27,7 @@ const (
 	mattermostHeartbeatPeriod   = 30 * time.Second
 	mattermostDedupMaxSize      = 1000
 	mattermostRequestTimeout    = 30 * time.Second
+	mattermostInterMsgDelay     = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
 )
 
 type mattermostAdapter struct {
@@ -463,6 +464,14 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 		if rootID == "" && len(chunks) > 1 && i == 0 {
 			if newID, ok := result["id"].(string); ok && newID != "" {
 				rootID = newID
+			}
+		}
+		// Small inter-message delay for multi-chunk sends to avoid rate limiting.
+		if i < len(chunks)-1 {
+			select {
+			case <-time.After(mattermostInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	}

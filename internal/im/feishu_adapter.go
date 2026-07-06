@@ -59,7 +59,8 @@ import (
 const (
 	feishuDefaultDomain    = "feishu"
 	feishuMaxTextLen       = 4000
-	feishuTokenExpireDelta = 300 // refresh 5 minutes early
+	feishuTokenExpireDelta = 300                    // refresh 5 minutes early
+	feishuInterMsgDelay    = 300 * time.Millisecond // Feishu allows 5 QPS per user; 300ms ≈ 3.3 QPS is safe
 )
 
 type feishuAdapter struct {
@@ -1093,7 +1094,7 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 	chunks := splitFeishuMessage(remainingText, feishuMaxTextLen)
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
 		msgID, err := a.sendPostMessage(ctx, chatID, chunk)
 		if err != nil {
 			// Fallback to plain text if post format fails
@@ -1104,6 +1105,15 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			}
 		}
 		a.recordOutboundMessage(binding, msgID)
+		// Inter-message delay to respect Feishu's 5 QPS rate limit.
+		// Source: https://open.feishu.cn/document/server-docs/im-v1/message/create
+		if i < len(chunks)-1 {
+			select {
+			case <-time.After(feishuInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	return nil
 }
