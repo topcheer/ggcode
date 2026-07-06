@@ -54,11 +54,13 @@ go vet -tags goolm ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # Limit parallelism to prevent OOM kills on machines with many packages.
-# -p 4 limits the number of test binaries compiled and run in parallel.
+# -p 1 limits the number of test binaries compiled and run in parallel.
+# -parallel 1 limits concurrent test functions within a single package.
+# GOMEMLIMIT=1GiB caps Go runtime heap; GOGC=30 triggers GC aggressively.
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 1 -timeout 300s ./cmd/... ./internal/...
+GOMEMLIMIT=1GiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
@@ -78,5 +80,5 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
 
   echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=1GiB GOGC=50 go test -tags goolm -p 1 -count=1 -timeout 120s ./...)
+  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=512MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
 fi

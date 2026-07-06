@@ -257,10 +257,7 @@ func (m Model) renderSidebarA2ASection() string {
 		case "cancel":
 			icon = "⊘"
 		}
-		msg := evt.Message
-		if len(msg) > width-6 {
-			msg = msg[:width-9] + "..."
-		}
+		msg := util.Truncate(evt.Message, width-6)
 		rows = append(rows, fmt.Sprintf("  %s %s", icon, msg))
 	}
 
