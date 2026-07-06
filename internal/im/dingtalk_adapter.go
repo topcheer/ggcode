@@ -607,6 +607,10 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return nil
 	}
 
+	// Split long messages to stay within DingTalk's ~4000 char markdown limit.
+	// Without splitting, long agent responses are silently truncated or rejected.
+	chunks := SplitMessageForPlatform(content, PlatformDingTalk)
+
 	// Try sessionWebhook first (from the most recent callback).
 	// This is the recommended way to reply in DingTalk.
 	a.mu.RLock()
@@ -614,25 +618,26 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	robotCode := a.lastRobotCode
 	a.mu.RUnlock()
 
-	if webhook != "" {
-		debug.Log("dingtalk", "adapter=%s Send via webhook text_len=%d", a.name, len(content))
-		err := a.sendMarkdownViaWebhook(ctx, webhook, content, robotCode)
-		if err == nil {
-			debug.Log("dingtalk", "adapter=%s Send webhook OK", a.name)
-			return nil
+	for i, chunk := range chunks {
+		if webhook != "" {
+			debug.Log("dingtalk", "adapter=%s Send via webhook chunk=%d/%d text_len=%d", a.name, i+1, len(chunks), len(chunk))
+			err := a.sendMarkdownViaWebhook(ctx, webhook, chunk, robotCode)
+			if err == nil {
+				continue
+			}
+			debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
 		}
-		debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
-	}
 
-	// Fallback: use REST API with userId (staffId from ChannelID).
-	debug.Log("dingtalk", "adapter=%s Send via API userId=%s text_len=%d", a.name, binding.ChannelID, len(content))
-	err := a.sendMarkdownViaAPI(ctx, binding, content)
-	if err != nil {
-		debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
-	} else {
-		debug.Log("dingtalk", "adapter=%s Send API OK", a.name)
+		// Fallback: use REST API with userId (staffId from ChannelID).
+		debug.Log("dingtalk", "adapter=%s Send via API userId=%s chunk=%d/%d text_len=%d", a.name, binding.ChannelID, i+1, len(chunks), len(chunk))
+		err := a.sendMarkdownViaAPI(ctx, binding, chunk)
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
+			return err
+		}
 	}
-	return err
+	debug.Log("dingtalk", "adapter=%s Send OK chunks=%d", a.name, len(chunks))
+	return nil
 }
 
 // sendMarkdownViaWebhook sends a reply using the sessionWebhook URL from the callback.
