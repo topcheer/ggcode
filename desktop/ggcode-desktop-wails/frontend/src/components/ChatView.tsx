@@ -1866,11 +1866,6 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           ? <div className="markdown-body" style={{ fontSize: 'var(--font-size-base)' }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
           : msg.content}
       </div>
-      {msg.timestamp && (
-        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginRight: 4 }}>
-          {formatTimestamp(msg.timestamp)}
-        </span>
-      )}
       {(pending || failed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginRight: 4, fontSize: 11, color: failed ? 'var(--color-error)' : 'var(--text-tertiary)' }}>
           <span>{pending ? 'Sending...' : 'Failed to send'}</span>
