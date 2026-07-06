@@ -204,6 +204,47 @@ func TestWechatAdapter_Send_Success(t *testing.T) {
 	}
 }
 
+func TestWechatAdapter_Send_StripsMarkdown(t *testing.T) {
+	var receivedBody ilinkSendMessageRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ret":0}`)
+	}))
+	defer srv.Close()
+
+	a, _ := newWechatAdapter("wc", config.IMConfig{}, config.IMAdapterConfig{
+		Extra: map[string]any{
+			"base_url":  srv.URL,
+			"bot_token": "test-token",
+		},
+	}, nil)
+
+	err := a.Send(context.Background(), ChannelBinding{
+		ChannelID: "user-md",
+	}, OutboundEvent{Kind: OutboundEventText, Text: "**bold** and `code`\n# heading\n[link](https://x.com)"})
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+
+	if len(receivedBody.Msg.ItemList) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(receivedBody.Msg.ItemList))
+	}
+	got := receivedBody.Msg.ItemList[0].TextItem.Text
+	if strings.Contains(got, "**") {
+		t.Errorf("markdown ** not stripped: %q", got)
+	}
+	if strings.Contains(got, "`") {
+		t.Errorf("markdown backticks not stripped: %q", got)
+	}
+	if strings.Contains(got, "# ") {
+		t.Errorf("markdown heading marker not stripped: %q", got)
+	}
+	if strings.Contains(got, "[link]") || strings.Contains(got, "](https") {
+		t.Errorf("markdown link not stripped: %q", got)
+	}
+}
+
 func TestWechatAdapter_Send_EmptyText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not make HTTP request for empty text")

@@ -537,7 +537,9 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return fmt.Errorf("wechat adapter %q: no bot_token", a.name)
 	}
 
-	text := strings.TrimSpace(a.outboundText(event))
+	// WeChat iLink API renders plain text only — strip markdown syntax so
+	// users don't see raw **bold**, # headings, or `code` backticks.
+	text := stripMarkdown(strings.TrimSpace(a.outboundText(event)))
 	if text == "" {
 		debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
 		return nil
