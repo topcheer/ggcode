@@ -76,6 +76,7 @@ type Agent struct {
 	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
 	toolMemo                     *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
 	confidence                   *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
+	budgetGuard                  *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
@@ -121,6 +122,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:       newSpeculator(),
 		toolMemo:         newToolMemo(),
 		confidence:       newConfidenceState(),
+		budgetGuard:      newBudgetGuardState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -702,6 +704,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.speculator.resetSequence()
 	a.toolMemo.reset()
 	a.confidence.reset()
+	a.budgetGuard.reset()
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
@@ -807,6 +810,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+
+		// Budget guard: track per-step output token cost trend (BAGEN-inspired).
+		// Detects cost-escalation patterns that indicate a doomed trajectory.
+		a.budgetGuard.recordStep(resp.Usage.OutputTokens)
+		if budgetWarning := a.budgetGuard.maybeWarn(a.contextManager.ContextWindow(), a.contextManager.TokenCount()); budgetWarning != "" {
+			debug.Log("budget-guard", "cost escalation detected: steps=%d consumed=%d", len(a.budgetGuard.stepCosts), a.budgetGuard.totalConsumed)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: budgetWarning,
+				}},
+			})
+			msgs = a.contextManager.Messages()
+		}
 
 		// Detect empty LLM response: API accepted input but produced no output.
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives

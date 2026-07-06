@@ -32,6 +32,11 @@ const (
 	signalInitialBackoff    = 2 * time.Second
 	signalBackoffMax        = 60 * time.Second
 	signalMaxSentTimestamps = 100
+
+	// signalInterMessageDelay is the delay between consecutive messages.
+	// signal-cli-rest-api can return HTTP 429 (rate limit) on rapid sends.
+	// Source: https://github.com/AsamK/signal-cli/discussions/1513
+	signalInterMessageDelay = 500 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -534,7 +539,11 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 
 	chunks := splitSignalMessage(text, signalMaxMessageLen)
 	var lastErr error
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		// Rate limit: signal-cli-rest-api returns 429 on rapid sends.
+		if i > 0 {
+			time.Sleep(signalInterMessageDelay)
+		}
 		endpoint := "/v2/send"
 		payload := map[string]any{
 			"number":  a.account,
@@ -574,7 +583,26 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 
-		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// Retry on rate limit with exponential backoff.
+			backoff := signalInterMessageDelay * 2
+			debug.Log("signal", "adapter=%s rate-limited (429) to %s, retrying after %v", a.name, chatID, backoff)
+			time.Sleep(backoff)
+			// Retry the same chunk
+			resp2, err2 := a.conn.Do(req)
+			if err2 != nil {
+				lastErr = fmt.Errorf("Signal send retry: %w", err2)
+				continue
+			}
+			respBody2, _ := io.ReadAll(io.LimitReader(resp2.Body, 4096))
+			resp2.Body.Close()
+			if resp2.StatusCode != http.StatusCreated && resp2.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("Signal send status %d: %s", resp2.StatusCode, string(respBody2))
+				debug.Log("signal", "adapter=%s send retry error to %s: %s", a.name, chatID, string(respBody2))
+				continue
+			}
+			respBody = respBody2
+		} else if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
 			debug.Log("signal", "adapter=%s send error to %s: %s", a.name, chatID, string(respBody))
 			continue
