@@ -34,6 +34,7 @@ const zh: Record<TranslationKey, string> = {
   'chat.agentWorking': 'Agent 工作中...',
 
   // CommandPalette
+  'cmd.recent': '最近使用',
   'cmd.placeholder': '输入命令...',
   'cmd.noResults': '没有匹配的命令',
   'cmd.newSession': '新建会话',
@@ -53,6 +54,13 @@ const zh: Record<TranslationKey, string> = {
   'cmd.cat.chat': '聊天',
   'cmd.cat.settings': '设置',
   'cmd.cat.navigation': '导航',
+  'cmd.cat.view': '视图',
+  'cmd.goChat': '聊天',
+  'cmd.goFiles': '文件浏览',
+  'cmd.goIM': 'IM 管理',
+  'cmd.goMCP': 'MCP 服务器',
+  'cmd.goLanChat': '局域网聊天',
+  'cmd.goDebug': '调试控制台',
 
   // ContextPanel
   'context.title': '上下文',

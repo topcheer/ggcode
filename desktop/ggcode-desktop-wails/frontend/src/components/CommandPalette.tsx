@@ -1,12 +1,33 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search } from 'lucide-react'
+import { Search, type LucideIcon } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
 
 export interface CommandAction {
   nameKey: TranslationKey
   shortcut?: string
   categoryKey: TranslationKey
+  icon?: LucideIcon
   action: () => void
+}
+
+const RECENT_KEY = 'ggcode-cmd-recent'
+const MAX_RECENT = 5
+
+/** Load recently used command nameKeys from localStorage */
+function loadRecent(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+/** Save a command as recently used (moves to front, dedupes, caps at MAX_RECENT) */
+function saveRecent(nameKey: string) {
+  try {
+    const recent = loadRecent().filter(k => k !== nameKey)
+    recent.unshift(nameKey)
+    localStorage.setItem(RECENT_KEY, JSON.stringify(recent.slice(0, MAX_RECENT)))
+  } catch { /* ignore */ }
 }
 
 interface Props {
@@ -45,6 +66,7 @@ export function CommandPalette({ onClose, actions }: Props) {
   const executeSelected = useCallback(() => {
     const cmd = filtered[selectedIndex]
     if (cmd) {
+      saveRecent(cmd.nameKey as string)
       cmd.action()
       onClose()
     }
@@ -83,9 +105,17 @@ export function CommandPalette({ onClose, actions }: Props) {
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex])
 
+  // Split into recent and rest
+  const recentKeys = useMemo(() => loadRecent(), [])
+  const recentKeySet = useMemo(() => new Set(recentKeys), [recentKeys])
+  const recentCmds = useMemo(() =>
+    filtered.filter(c => recentKeySet.has(c.nameKey as string))
+      .sort((a, b) => recentKeys.indexOf(a.nameKey as string) - recentKeys.indexOf(b.nameKey as string)),
+    [filtered, recentKeySet, recentKeys])
+
   const categories = useMemo(() =>
     [...new Set(filtered.map(c => c.categoryKey))],
-  [filtered])
+    [filtered])
 
   let runningIndex = -1
 
@@ -141,6 +171,54 @@ export function CommandPalette({ onClose, actions }: Props) {
               {t('cmd.noResults')}
             </div>
           )}
+          {/* Recently used section */}
+          {recentCmds.length > 0 && (
+            <div>
+              <div style={{
+                padding: '8px var(--spacing-lg) 4px',
+                fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)',
+                textTransform: 'uppercase', letterSpacing: '0.05em',
+              }}>
+                {t('cmd.recent')}
+              </div>
+              {recentCmds.map((cmd) => {
+                runningIndex++
+                const idx = runningIndex
+                const isSelected = idx === selectedIndex
+                const Icon = cmd.icon
+                return (
+                  <div
+                    key={'recent-' + (cmd.nameKey as string)}
+                    ref={el => { itemRefs.current[idx] = el }}
+                    onClick={() => { saveRecent(cmd.nameKey as string); cmd.action(); onClose() }}
+                    onMouseEnter={() => setSelectedIndex(idx)}
+                    style={{
+                      display: 'flex', alignItems: 'center',
+                      padding: '7px var(--spacing-lg)',
+                      background: isSelected ? 'rgba(128,128,128,0.12)' : 'transparent',
+                      cursor: 'pointer',
+                      transition: 'background 0.08s',
+                    }}
+                  >
+                    {Icon && <Icon size={14} style={{ marginRight: 8, color: 'var(--text-tertiary)', flexShrink: 0 }} />}
+                    <span style={{
+                      fontSize: 13,
+                      color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: isSelected ? 500 : 400,
+                    }}>{t(cmd.nameKey)}</span>
+                    <div style={{ flex: 1 }} />
+                    {cmd.shortcut && (
+                      <span style={{
+                        fontSize: 11, color: 'var(--text-tertiary)',
+                        padding: '2px 6px', borderRadius: 'var(--radius-sm)',
+                        background: 'var(--color-surface)',
+                      }}>{cmd.shortcut}</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
           {categories.map(catKey => (
             <div key={catKey}>
               <div style={{
@@ -154,11 +232,12 @@ export function CommandPalette({ onClose, actions }: Props) {
                 runningIndex++
                 const idx = runningIndex
                 const isSelected = idx === selectedIndex
+                const Icon = cmd.icon
                 return (
                   <div
                     key={cmd.nameKey as string}
                     ref={el => { itemRefs.current[idx] = el }}
-                    onClick={() => { cmd.action(); onClose() }}
+                    onClick={() => { saveRecent(cmd.nameKey as string); cmd.action(); onClose() }}
                     onMouseEnter={() => setSelectedIndex(idx)}
                     style={{
                       display: 'flex', alignItems: 'center',
@@ -168,6 +247,7 @@ export function CommandPalette({ onClose, actions }: Props) {
                       transition: 'background 0.08s',
                     }}
                   >
+                    {Icon && <Icon size={14} style={{ marginRight: 8, color: 'var(--text-tertiary)', flexShrink: 0 }} />}
                     <span style={{
                       fontSize: 13,
                       color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',

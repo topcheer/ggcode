@@ -32,6 +32,7 @@ const en = {
   'chat.agentWorking': 'Agent is working...',
 
   // CommandPalette
+  'cmd.recent': 'Recent',
   'cmd.placeholder': 'Type a command...',
   'cmd.noResults': 'No matching commands',
   'cmd.newSession': 'New Session',
@@ -51,6 +52,13 @@ const en = {
   'cmd.cat.chat': 'Chat',
   'cmd.cat.settings': 'Settings',
   'cmd.cat.navigation': 'Navigation',
+  'cmd.cat.view': 'Views',
+  'cmd.goChat': 'Go to Chat',
+  'cmd.goFiles': 'Go to Files',
+  'cmd.goIM': 'Go to IM Management',
+  'cmd.goMCP': 'Go to MCP Servers',
+  'cmd.goLanChat': 'Go to LAN Chat',
+  'cmd.goDebug': 'Go to Debug Console',
 
   // ContextPanel
   'context.title': 'Context',
