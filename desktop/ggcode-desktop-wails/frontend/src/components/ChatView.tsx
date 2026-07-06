@@ -55,11 +55,82 @@ function safeMarkdown(text: string): string {
   }
 }
 
+// Post-process rendered HTML: add copy button + language label to <pre> blocks
+function enhanceCodeBlocks(container: HTMLElement) {
+  const preBlocks = container.querySelectorAll('pre')
+  preBlocks.forEach((pre) => {
+    if (pre.querySelector('.code-block-header')) return // already enhanced
+
+    const code = pre.querySelector('code')
+    if (!code) return
+
+    // Extract language from class name (e.g., "language-go" → "go")
+    const langClass = Array.from(code.classList).find((c: string) => c.startsWith('language-'))
+    const lang = langClass ? langClass.replace('language-', '') : ''
+
+    // Create wrapper: make <pre> position relative, add header bar
+    pre.style.position = 'relative'
+
+    const header = document.createElement('div')
+    header.className = 'code-block-header'
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px;font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono,SF Mono,monospace);'
+
+    // Language label
+    const langSpan = document.createElement('span')
+    langSpan.textContent = lang || 'text'
+    langSpan.style.cssText = 'opacity:0.7;text-transform:lowercase;'
+    header.appendChild(langSpan)
+
+    // Copy button
+    const copyBtn = document.createElement('button')
+    copyBtn.textContent = 'Copy'
+    copyBtn.style.cssText = 'padding:1px 8px;border-radius:3px;border:1px solid var(--color-border);background:var(--color-surface);color:var(--text-tertiary);cursor:pointer;font-size:11px;opacity:0;transition:opacity 0.15s;'
+    copyBtn.addEventListener('mouseenter', () => { copyBtn.style.opacity = '1' })
+    copyBtn.addEventListener('mouseleave', () => { copyBtn.style.opacity = '0' })
+
+    pre.addEventListener('mouseenter', () => { copyBtn.style.opacity = '1' })
+    pre.addEventListener('mouseleave', () => { copyBtn.style.opacity = '0' })
+
+    copyBtn.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const text = code.textContent || ''
+      navigator.clipboard.writeText(text).then(() => {
+        copyBtn.textContent = '✓ Copied'
+        copyBtn.style.color = 'var(--color-success)'
+        copyBtn.style.borderColor = 'var(--color-success)'
+        copyBtn.style.opacity = '1'
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy'
+          copyBtn.style.color = ''
+          copyBtn.style.borderColor = ''
+          copyBtn.style.opacity = '0'
+        }, 1500)
+      }).catch(() => {})
+    })
+    header.appendChild(copyBtn)
+
+    // Insert header at top of <pre>, before <code>
+    pre.insertBefore(header, code)
+
+    // Adjust <pre> padding top since header is now inside
+    pre.style.paddingTop = '4px'
+  })
+}
+
 // Render message content: split into markdown + mermaid segments
 function MessageContent({ content }: { content: string }) {
   const segments = splitContent(content)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (containerRef.current) {
+      enhanceCodeBlocks(containerRef.current)
+    }
+  }, [segments])
+
   return (
-    <>
+    <div ref={containerRef}>
       {segments.map((seg, i) => {
         if (seg.type === 'markdown') {
           return <div key={i} className="markdown-body" dangerouslySetInnerHTML={{ __html: safeMarkdown(seg.text) }} />
@@ -74,7 +145,7 @@ function MessageContent({ content }: { content: string }) {
           </pre>
         )
       })}
-    </>
+    </div>
   )
 }
 
