@@ -33,6 +33,7 @@ const en = {
 
   // CommandPalette
   'cmd.placeholder': 'Type a command...',
+  'cmd.noResults': 'No matching commands',
   'cmd.newSession': 'New Session',
   'cmd.searchSessions': 'Search Sessions',
   'cmd.clearHistory': 'Clear History',

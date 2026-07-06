@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { ViewMode, StatusBarData } from '../types'
 import { I18nProvider, useTranslation, type Locale } from '../i18n'
 import { NavRail } from './NavRail'
@@ -11,7 +11,7 @@ import { FileBrowser } from './FileBrowser'
 import { MCPServers } from './MCPServers'
 import { LanChatView } from './LanChatView'
 import { ContextPanel } from './ContextPanel'
-import { CommandPalette } from './CommandPalette'
+import { CommandPalette, type CommandAction } from './CommandPalette'
 import RealShareDialog from './ShareDialog'
 import { AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
@@ -331,7 +331,21 @@ function LayoutInner() {
       )}
 
       {/* Overlay dialogs */}
-      {cmdPaletteOpen && <CommandPalette onClose={() => setCmdPaletteOpen(false)} />}
+      {cmdPaletteOpen && (
+        <CommandPalette
+          onClose={() => setCmdPaletteOpen(false)}
+          actions={useMemo<CommandAction[]>(() => [
+            { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session', action: () => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) } },
+            { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', action: () => { setView('chat'); setSidebarOpen(true) } },
+            { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', action: () => setShareDialogOpen(true) },
+            { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', action: () => setContextPanelOpen(prev => !prev) },
+            { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', action: () => { document.documentElement.classList.toggle('dark') } },
+            { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
+            { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
+            { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', action: () => setSidebarOpen(prev => !prev) },
+          ], [setView, setSidebarOpen, setContextPanelOpen, setShareDialogOpen])}
+        />
+      )}
       {shareDialogOpen && <RealShareDialog onClose={() => setShareDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
       {updateNotifOpen && <UpdateNotification onClose={() => setUpdateNotifOpen(false)} />}

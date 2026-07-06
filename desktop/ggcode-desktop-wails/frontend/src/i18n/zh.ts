@@ -35,6 +35,7 @@ const zh: Record<TranslationKey, string> = {
 
   // CommandPalette
   'cmd.placeholder': '输入命令...',
+  'cmd.noResults': '没有匹配的命令',
   'cmd.newSession': '新建会话',
   'cmd.searchSessions': '搜索会话',
   'cmd.clearHistory': '清除历史',
