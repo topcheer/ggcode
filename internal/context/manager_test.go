@@ -1485,3 +1485,156 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// --- ACON-inspired observation compression tests ---
+
+func TestSummarizeClearedResult_ReadFile(t *testing.T) {
+	args := map[string]any{"path": "/Volumes/new/ggai/ggcode/internal/agent/agent.go"}
+	result := summarizeClearedResult("read_file", 2048, "some output", args)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "read_file") {
+		t.Errorf("expected tool name in summary, got: %s", result)
+	}
+	if !strings.Contains(result, "agent.go") {
+		t.Errorf("expected file name in summary, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_Grep(t *testing.T) {
+	args := map[string]any{"pattern": "func.*Agent"}
+	output := "line1\nline2\nline3\n"
+	result := summarizeClearedResult("grep", 1024, output, args)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "grep") {
+		t.Errorf("expected tool name in summary, got: %s", result)
+	}
+	if !strings.Contains(result, "func.*Agent") {
+		t.Errorf("expected pattern in summary, got: %s", result)
+	}
+	if !strings.Contains(result, "3 lines") {
+		t.Errorf("expected line count in summary, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_RunCommand(t *testing.T) {
+	args := map[string]any{"command": "go build -tags goolm ./...\necho done"}
+	result := summarizeClearedResult("run_command", 512, "output", args)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "go build") {
+		t.Errorf("expected command in summary, got: %s", result)
+	}
+	// Should only show first line, not the echo
+	if strings.Contains(result, "echo done") {
+		t.Errorf("expected only first line, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_ListDirectory(t *testing.T) {
+	args := map[string]any{"path": "/Volumes/new/ggai/ggcode/internal/context"}
+	result := summarizeClearedResult("list_directory", 1024, "output", args)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "context") {
+		t.Errorf("expected dir name in summary, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_MultiFileRead(t *testing.T) {
+	args := map[string]any{"files": []any{"a.go", "b.go", "c.go"}}
+	result := summarizeClearedResult("multi_file_read", 3072, "output", args)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "3 files") {
+		t.Errorf("expected file count in summary, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_UnknownTool(t *testing.T) {
+	result := summarizeClearedResult("custom_tool", 1024, "output", map[string]any{})
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "custom_tool") {
+		t.Errorf("expected tool name in summary, got: %s", result)
+	}
+}
+
+func TestSummarizeClearedResult_EmptyTool(t *testing.T) {
+	result := summarizeClearedResult("", 1024, "output", nil)
+	if !strings.HasPrefix(result, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", result)
+	}
+	if !strings.Contains(result, "1024 chars") {
+		t.Errorf("expected char count fallback, got: %s", result)
+	}
+}
+
+func TestShortPath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"main.go", "main.go"},
+		{"a/b.go", "a/b.go"},
+		{"a/b/c.go", "a/b/c.go"},
+		{"/x/y/z/w.go", ".../y/z/w.go"},
+	}
+	for _, tt := range tests {
+		got := shortPath(tt.input)
+		if got != tt.expected {
+			t.Errorf("shortPath(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestClearOldToolResults_ProducesToolAwareSummary(t *testing.T) {
+	m := NewManager(100000)
+
+	// Add a tool_use + tool_result pair for read_file
+	useInput := json.RawMessage(`{"path":"/Volumes/new/ggai/ggcode/main.go"}`)
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{
+			provider.ToolUseBlock("tool-1", "read_file", useInput),
+		},
+	})
+	largeOutput := strings.Repeat("x", 600) // above toolResultClearMinLen
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("tool-1", largeOutput, false),
+		},
+	})
+
+	freed := m.ClearOldToolResults(0)
+	if freed <= 0 {
+		t.Fatal("expected some tokens freed")
+	}
+
+	msgs := m.Messages()
+	var clearedOutput string
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" {
+				clearedOutput = b.Output
+			}
+		}
+	}
+	if !strings.HasPrefix(clearedOutput, "[cleared:") {
+		t.Fatalf("expected [cleared: prefix, got: %s", clearedOutput)
+	}
+	if !strings.Contains(clearedOutput, "read_file") {
+		t.Errorf("expected tool name in summary, got: %s", clearedOutput)
+	}
+	if !strings.Contains(clearedOutput, "main.go") {
+		t.Errorf("expected file name in summary, got: %s", clearedOutput)
+	}
+}

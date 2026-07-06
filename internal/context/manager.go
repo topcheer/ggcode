@@ -893,6 +893,31 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Pass 0: build tool info map from tool_use blocks for ACON-inspired
+	// observation compression (ICML 2026). Instead of generic "[cleared: N chars]",
+	// produce tool-specific summaries that preserve key context — file paths,
+	// search patterns, command names — so the agent knows whether re-running
+	// the tool is worthwhile.
+	type toolInfo struct {
+		name string
+		args map[string]any
+	}
+	toolMap := make(map[string]toolInfo)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type == "tool_use" && b.ToolID != "" {
+				info := toolInfo{name: b.ToolName}
+				if len(b.Input) > 0 {
+					var args map[string]any
+					if json.Unmarshal(b.Input, &args) == nil {
+						info.args = args
+					}
+				}
+				toolMap[b.ToolID] = info
+			}
+		}
+	}
+
 	// Pass 1: count clearable tool_results (large, non-error, not yet cleared).
 	// Also skip results with semantic importance (error/debugging context) to
 	// avoid "context collapse" — the phenomenon where iterative clearing erodes
@@ -935,13 +960,22 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 	}
 	toClear := targets[:len(targets)-keepN]
 
-	// Pass 2: replace outputs with placeholders
+	// Pass 2: replace outputs with tool-aware summaries
 	freedChars := 0
 	for _, t := range toClear {
 		block := &m.messages[t.msgIdx].Content[t.blkIdx]
 		origLen := t.origLen
 		freedChars += origLen
-		block.Output = fmt.Sprintf("[cleared: output was %d chars — re-run tool to see full result]", origLen)
+		// Use tool name from the result block, or look up from tool_use.
+		toolName := block.ToolName
+		var args map[string]any
+		if info, ok := toolMap[block.ToolID]; ok {
+			if toolName == "" {
+				toolName = info.name
+			}
+			args = info.args
+		}
+		block.Output = summarizeClearedResult(toolName, origLen, block.Output, args)
 		block.Images = nil // clear images too — they're large and re-fetchable
 	}
 
@@ -998,6 +1032,139 @@ func hasSemanticImportance(output string) bool {
 	}
 
 	return false
+}
+
+// summarizeClearedResult produces a concise, tool-aware summary for a cleared
+// tool result placeholder. Instead of the generic "[cleared: N chars]", it
+// preserves key context — file paths, search patterns, command names — so the
+// agent can decide whether re-running the tool is worthwhile.
+//
+// This implements ACON's "observation compression" concept (ICML 2026):
+// "optimally compress both observations and history into concise, informative
+// representations." Our approach uses deterministic heuristics per tool type
+// rather than LLM-based compression, keeping it fast and cost-free.
+//
+// The output always starts with "[cleared:" for backward compatibility with
+// idempotency checks and ClearOldToolUseInputs matching.
+func summarizeClearedResult(toolName string, origLen int, output string, args map[string]any) string {
+	summary := buildToolSummary(toolName, origLen, output, args)
+	if summary == "" {
+		summary = fmt.Sprintf("output was %d chars", origLen)
+	}
+	return fmt.Sprintf("[cleared: %s — re-run to see full result]", summary)
+}
+
+// buildToolSummary extracts the key contextual information from a tool result
+// based on the tool type. Returns a short string (e.g., "read_file of
+// main.go (~2KB)") or empty string if no specific info could be extracted.
+func buildToolSummary(toolName string, origLen int, output string, args map[string]any) string {
+	if args == nil {
+		args = map[string]any{}
+	}
+	kbSize := origLen / 1024
+	if kbSize == 0 {
+		kbSize = 1 // show at least 1KB for readability
+	}
+
+	switch toolName {
+	case "read_file":
+		if path, ok := extractPath(args); ok {
+			return fmt.Sprintf("read_file of %s (~%dKB)", shortPath(path), kbSize)
+		}
+		return fmt.Sprintf("read_file output (~%dKB)", kbSize)
+
+	case "multi_file_read":
+		if n := extractFileCount(args); n > 0 {
+			return fmt.Sprintf("multi_file_read of %d files (~%dKB)", n, kbSize)
+		}
+		return fmt.Sprintf("multi_file_read output (~%dKB)", kbSize)
+
+	case "grep":
+		pattern, _ := args["pattern"].(string)
+		resultLines := strings.Count(output, "\n")
+		return fmt.Sprintf("grep for %q (%d lines, ~%dKB)", truncStr(pattern, 40), resultLines, kbSize)
+
+	case "search_files":
+		pattern, _ := args["pattern"].(string)
+		return fmt.Sprintf("search_files for %q (~%dKB)", truncStr(pattern, 40), kbSize)
+
+	case "list_directory":
+		if path, ok := extractPath(args); ok {
+			return fmt.Sprintf("list_directory of %s (~%dKB)", shortPath(path), kbSize)
+		}
+		return fmt.Sprintf("list_directory output (~%dKB)", kbSize)
+
+	case "run_command":
+		cmd, _ := args["command"].(string)
+		firstLine := cmd
+		if idx := strings.IndexByte(cmd, '\n'); idx > 0 {
+			firstLine = cmd[:idx]
+		}
+		return fmt.Sprintf("run_command: %s (~%dKB)", truncStr(firstLine, 50), kbSize)
+
+	case "glob":
+		pattern, _ := args["pattern"].(string)
+		return fmt.Sprintf("glob %q (~%dKB)", truncStr(pattern, 40), kbSize)
+
+	case "git_diff", "git_status", "git_log", "git_show", "git_blame":
+		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
+
+	case "lsp_symbols", "lsp_definition", "lsp_references", "lsp_hover",
+		"lsp_diagnostics", "lsp_implementation", "lsp_code_actions",
+		"lsp_rename", "lsp_workspace_symbols":
+		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
+
+	case "web_fetch", "web_search":
+		if url, _ := args["url"].(string); url != "" {
+			return fmt.Sprintf("%s of %s (~%dKB)", toolName, truncStr(url, 50), kbSize)
+		}
+		if q, _ := args["query"].(string); q != "" {
+			return fmt.Sprintf("%s for %q (~%dKB)", toolName, truncStr(q, 40), kbSize)
+		}
+		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
+
+	default:
+		if toolName != "" {
+			return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
+		}
+		return fmt.Sprintf("output was %d chars", origLen)
+	}
+}
+
+// extractPath gets the "path" field from args, handling both string and
+// nested "files" array structures.
+func extractPath(args map[string]any) (string, bool) {
+	if path, ok := args["path"].(string); ok && path != "" {
+		return path, true
+	}
+	return "", false
+}
+
+// extractFileCount counts entries in a "files" array argument.
+func extractFileCount(args map[string]any) int {
+	if files, ok := args["files"].([]any); ok {
+		return len(files)
+	}
+	return 0
+}
+
+// shortPath abbreviates long paths to keep summaries compact.
+// Example: "/Volumes/new/ggai/ggcode/internal/agent/agent.go" → ".../agent/agent.go"
+func shortPath(path string) string {
+	// Keep last 3 path components for readability.
+	parts := strings.Split(path, "/")
+	if len(parts) <= 3 {
+		return path
+	}
+	return ".../" + strings.Join(parts[len(parts)-3:], "/")
+}
+
+// truncStr truncates a string to maxLen, appending "..." if truncated.
+func truncStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // ClearOldToolUseInputs truncates the Input (arguments) of tool_use blocks
