@@ -1866,6 +1866,11 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           ? <div className="markdown-body" style={{ fontSize: 'var(--font-size-base)' }} dangerouslySetInnerHTML={{ __html: safeMarkdown(msg.content) }} />
           : msg.content}
       </div>
+      {msg.timestamp && (
+        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginRight: 4 }}>
+          {formatTimestamp(msg.timestamp)}
+        </span>
+      )}
       {(pending || failed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginRight: 4, fontSize: 11, color: failed ? 'var(--color-error)' : 'var(--text-tertiary)' }}>
           <span>{pending ? 'Sending...' : 'Failed to send'}</span>
@@ -1888,8 +1893,19 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           )}
         </div>
       )}
+      {msg.timestamp && !pending && !failed && (
+        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginRight: 4 }}>
+          {formatTimestamp(msg.timestamp)}
+        </span>
+      )}
     </div>
   )
+}
+
+function formatTimestamp(ts: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
@@ -1957,6 +1973,11 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
             animation: 'pulse 1s ease-in-out infinite',
             verticalAlign: 'text-bottom',
           }} />
+        )}
+        {msg.timestamp && !msg.streaming && (
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginLeft: 2 }}>
+            {formatTimestamp(msg.timestamp)}
+          </span>
         )}
       </div>
     </div>
