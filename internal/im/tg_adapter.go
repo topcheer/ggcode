@@ -29,16 +29,20 @@ import (
 )
 
 const (
-	tgDefaultAPIBase  = "https://api.telegram.org"
-	tgPollTimeout     = 30
-	tgMaxTextLen      = 4096
-	tgGetUpdatesPath  = "/bot%s/getUpdates"
-	tgSendMessagePath = "/bot%s/sendMessage"
-	tgSetReactionPath = "/bot%s/setMessageReaction"
-	tgSendPhotoPath   = "/bot%s/sendPhoto"
-	tgGetMePath       = "/bot%s/getMe"
-	tgGetFileBase     = "https://api.telegram.org/file/bot%s/%s"
-	tgGetFilePath     = "/bot%s/getFile"
+	tgDefaultAPIBase = "https://api.telegram.org"
+	tgPollTimeout    = 30
+	tgMaxTextLen     = 4096
+	// tgInterMessageDelay is the delay between consecutive messages to the same
+	// chat. Telegram limits bots to ~1 message/second per chat.
+	// Source: https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this
+	tgInterMessageDelay = 500 * time.Millisecond
+	tgGetUpdatesPath    = "/bot%s/getUpdates"
+	tgSendMessagePath   = "/bot%s/sendMessage"
+	tgSetReactionPath   = "/bot%s/setMessageReaction"
+	tgSendPhotoPath     = "/bot%s/sendPhoto"
+	tgGetMePath         = "/bot%s/getMe"
+	tgGetFileBase       = "https://api.telegram.org/file/bot%s/%s"
+	tgGetFilePath       = "/bot%s/getFile"
 )
 
 type tgAdapter struct {
@@ -552,7 +556,16 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		if err != nil {
 			return err
 		}
-		for _, msg := range messages {
+		for i, msg := range messages {
+			// Rate limit: avoid >1 msg/sec per chat (official Telegram limit).
+			// Source: https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this
+			if i > 0 {
+				select {
+				case <-time.After(tgInterMessageDelay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 			if err := a.sendTextMessage(ctx, channelID, msg, ""); err != nil {
 				return err
 			}
@@ -576,7 +589,14 @@ func (a *tgAdapter) sendReplyText(ctx context.Context, chatID, replyTo, content 
 	if err != nil {
 		return err
 	}
-	for _, msg := range msgs {
+	for i, msg := range msgs {
+		if i > 0 {
+			select {
+			case <-time.After(tgInterMessageDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		if err := a.sendTextMessage(ctx, chatID, msg, replyTo); err != nil {
 			return err
 		}
