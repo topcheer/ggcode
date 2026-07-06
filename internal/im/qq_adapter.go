@@ -248,21 +248,24 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
 	}
 
-	// Send remaining text (images stripped)
+	// Send remaining text (images stripped), split into chunks for QQ's message length limit
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText != "" {
-		useReplyTo := replyTo
-		useReplySeq := replySeq
-		if lastMsgID != "" {
-			useReplyTo = lastMsgID
-			useReplySeq = 0
-		}
-		deliveredReplyTo, err := a.sendTextMessage(ctx, path, chatType, remainingText, useReplyTo, useReplySeq)
-		if err != nil {
-			return err
-		}
-		if deliveredReplyTo != "" {
-			lastMsgID = deliveredReplyTo
+		chunks := SplitMessageForPlatform(remainingText, PlatformQQ)
+		for i, chunk := range chunks {
+			useReplyTo := replyTo
+			useReplySeq := replySeq + i // increment seq per chunk to avoid QQ dedup
+			if lastMsgID != "" {
+				useReplyTo = lastMsgID
+				useReplySeq = i
+			}
+			deliveredReplyTo, err := a.sendTextMessage(ctx, path, chatType, chunk, useReplyTo, useReplySeq)
+			if err != nil {
+				return err
+			}
+			if deliveredReplyTo != "" && lastMsgID == "" {
+				lastMsgID = deliveredReplyTo
+			}
 		}
 	}
 
