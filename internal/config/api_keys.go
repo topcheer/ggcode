@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type APIKeyFinding struct {
@@ -442,11 +444,9 @@ func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFindin
 	if err != nil {
 		return nil, fmt.Errorf("marshaling migrated config: %w", err)
 	}
-	if err := os.WriteFile(path, updated, 0600); err != nil {
+	if err := writeSecureConfigFile(path, updated); err != nil {
 		return nil, fmt.Errorf("writing migrated config %s: %w", path, err)
 	}
-	// Force exact permissions (os.WriteFile respects umask).
-	_ = os.Chmod(path, 0600)
 
 	return findings, nil
 }
@@ -541,11 +541,9 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 	// 0600: only owner can read/write — these are secrets.
-	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
+	if err := util.AtomicWriteFile(path, []byte(b.String()), 0600); err != nil {
 		return fmt.Errorf("writing keys.env: %w", err)
 	}
-	// Force exact permissions (os.WriteFile respects umask).
-	_ = os.Chmod(path, 0600)
 	return nil
 }
 
