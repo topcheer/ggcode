@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Search, Smartphone, Trash2, Lock } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 import { SkeletonList } from './Skeleton'
+import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 
 interface Props {
   onClose: () => void
@@ -59,6 +60,10 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; session: SessionItem } | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -157,6 +162,50 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     } catch (e) {
       showToast?.('error', `Failed to open session: ${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+
+  const handleContextMenu = (e: React.MouseEvent, s: SessionItem) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu({ x: e.clientX, y: e.clientY, session: s })
+  }
+
+  const handleCopyId = async (s: SessionItem) => {
+    try {
+      await navigator.clipboard.writeText(s.id)
+      showToast?.('success', 'Session ID copied')
+    } catch {
+      showToast?.('error', 'Failed to copy')
+    }
+  }
+
+  const handleRename = (s: SessionItem) => {
+    setRenamingId(s.id)
+    setRenameValue(s.title || '')
+    // Focus input after render
+    setTimeout(() => renameInputRef.current?.focus(), 50)
+  }
+
+  const handleRenameSubmit = async () => {
+    if (!renamingId) return
+    const newTitle = renameValue.trim()
+    if (!newTitle) {
+      setRenamingId(null)
+      return
+    }
+    try {
+      await App.RenameSession(renamingId, newTitle)
+      setSessions(prev => prev.map(s => s.id === renamingId ? { ...s, title: newTitle } : s))
+      showToast?.('success', 'Session renamed')
+    } catch (e) {
+      showToast?.('error', `Rename failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setRenamingId(null)
+  }
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleRenameSubmit() }
+    else if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null) }
   }
 
   // Reset selection when filter changes
@@ -280,6 +329,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
               <div
                 ref={el => { itemRefs.current[idx] = el }}
                 onClick={() => { setSelectedIndex(idx); handleSelect(s) }}
+                onContextMenu={e => handleContextMenu(e, s)}
                 onMouseEnter={() => { setHoveredSessionId(s.id); setSelectedIndex(idx) }}
                 onMouseLeave={() => setHoveredSessionId(prev => prev === s.id ? null : prev)}
                 style={{
@@ -303,14 +353,35 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
-                  <span style={{
-                    fontSize: 13, fontWeight: s.id === activeSessionId ? 500 : 400,
-                    color: s.id === activeSessionId ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                    flex: 1,
-                  }}>
-                    {s.title || t('sidebar.untitled')}
-                  </span>
+                  {renamingId === s.id ? (
+                    <input
+                      ref={renameInputRef}
+                      value={renameValue}
+                      onChange={e => setRenameValue(e.target.value)}
+                      onKeyDown={handleRenameKeyDown}
+                      onBlur={handleRenameSubmit}
+                      onClick={e => e.stopPropagation()}
+                      style={{
+                        fontSize: 13, fontWeight: 400,
+                        color: 'var(--text-primary)',
+                        flex: 1, minWidth: 0,
+                        border: '1px solid var(--color-primary)',
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--color-card)',
+                        outline: 'none',
+                        padding: '2px 6px',
+                      }}
+                    />
+                  ) : (
+                    <span style={{
+                      fontSize: 13, fontWeight: s.id === activeSessionId ? 500 : 400,
+                      color: s.id === activeSessionId ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      flex: 1,
+                    }}>
+                      {s.title || t('sidebar.untitled')}
+                    </span>
+                  )}
                   {s.locked && (
                     <Lock size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginRight: 2 }} />
                   )}
@@ -377,6 +448,40 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           }}><Smartphone size={16} /></button>
         )}
       </div>
+
+      {/* Right-click context menu */}
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+          items={[
+            {
+              label: 'Open',
+              icon: <FolderOpen size={14} />,
+              onClick: () => handleSelect(ctxMenu.session),
+              disabled: ctxMenu.session.locked,
+            },
+            {
+              label: 'Rename',
+              icon: <Pencil size={14} />,
+              onClick: () => handleRename(ctxMenu.session),
+              disabled: ctxMenu.session.locked,
+            },
+            {
+              label: 'Copy ID',
+              icon: <Copy size={14} />,
+              onClick: () => handleCopyId(ctxMenu.session),
+            },
+            {
+              label: 'Delete',
+              icon: <Trash2 size={14} />,
+              onClick: () => handleDelete({ stopPropagation: () => {} } as React.MouseEvent, ctxMenu.session.id),
+              danger: true,
+            },
+          ]}
+        />
+      )}
     </div>
   )
 }

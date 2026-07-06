@@ -82,6 +82,20 @@ func DeleteSession(id string) error {
 	return store.Delete(id)
 }
 
+// RenameSession updates the title of a session by ID.
+func RenameSession(id string, title string) error {
+	store, err := session.NewDefaultStore()
+	if err != nil {
+		return fmt.Errorf("open session store: %w", err)
+	}
+	ses, err := store.Load(id)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
+	}
+	ses.Title = title
+	return store.AppendMetaToDisk(ses)
+}
+
 // NewSession clears the current session so next chat creates a fresh one.
 // The chat bridge must be set via SetChatBridge before calling.
 var activeChatBridge *ChatBridge

@@ -25,6 +25,8 @@ export function CycleReasoningEffort():Promise<Record<string, any>>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
+export function RenameSession(arg1:string,arg2:string):Promise<void>;
+
 export function DrainLogStream():Promise<string>;
 
 export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;

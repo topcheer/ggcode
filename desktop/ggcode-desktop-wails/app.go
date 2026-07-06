@@ -796,6 +796,11 @@ func (a *App) DeleteSession(id string) error {
 	return wailskit.DeleteSession(id)
 }
 
+// RenameSession updates the title of a session by ID.
+func (a *App) RenameSession(id string, title string) error {
+	return wailskit.RenameSession(id, title)
+}
+
 // NewSession creates a fresh initialized session, cancelling any current work.
 func (a *App) NewSession() (string, error) {
 	if a.chat == nil {

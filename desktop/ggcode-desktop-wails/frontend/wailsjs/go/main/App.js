@@ -42,6 +42,10 @@ export function DeleteSession(arg1) {
   return window['go']['main']['App']['DeleteSession'](arg1);
 }
 
+export function RenameSession(arg1,arg2) {
+  return window['go']['main']['App']['RenameSession'](arg1,arg2);
+}
+
 export function DrainLogStream() {
   return window['go']['main']['App']['DrainLogStream']();
 }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import { ShieldAlert, XCircle, CheckCircle2, ShieldCheck, FileEdit, FilePlus, Terminal, FileJson } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
@@ -15,6 +15,17 @@ interface ApprovalDialogProps {
 }
 
 // ─── Diff helpers ──────────────────────────────────────────────
+
+const kbdStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 5px',
+  fontSize: 10,
+  fontFamily: 'var(--font-mono)',
+  background: 'var(--color-card)',
+  border: '1px solid var(--color-border)',
+  borderRadius: 'var(--radius-sm)',
+  marginRight: 3,
+}
 
 interface DiffLine {
   type: 'context' | 'add' | 'remove'
@@ -349,7 +360,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
   const { t } = useTranslation()
   const [responding, setResponding] = useState(false)
 
-  const handleRespond = async (decision: 'deny' | 'allow' | 'always_allow') => {
+  const handleRespond = useCallback(async (decision: 'deny' | 'allow' | 'always_allow') => {
     if (responding) return
     setResponding(true)
     try {
@@ -358,7 +369,22 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
       console.error('Approval response error:', e)
     }
     onClose()
-  }
+  }, [responding, request.requestId, onClose])
+
+  // Keyboard shortcuts: Esc=Deny, Enter=Allow, Shift+Enter=Always Allow
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleRespond('deny')
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        handleRespond(e.shiftKey ? 'always_allow' : 'allow')
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [handleRespond])
 
   const isWide = ['edit_file', 'multi_edit_file', 'multi_file_edit', 'write_file', 'multi_file_write', 'run_command'].includes(request.toolName)
 
@@ -417,54 +443,66 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
 
         {/* Buttons */}
         <div style={{
-          display: 'flex', gap: 10, justifyContent: 'flex-end',
+          display: 'flex', alignItems: 'center', gap: 10,
+          justifyContent: 'space-between',
           padding: '0 20px 16px',
         }}>
-          <button
-            onClick={() => handleRespond('deny')}
-            disabled={responding}
-            style={{
-              padding: '8px 20px', borderRadius: 'var(--radius-md)',
-              background: 'rgba(220,38,38,0.15)', color: '#f87171',
-              border: '1px solid rgba(220,38,38,0.3)',
-              cursor: responding ? 'not-allowed' : 'pointer',
-              fontWeight: 600, fontSize: 13,
-              display: 'flex', alignItems: 'center', gap: 6,
-              opacity: responding ? 0.5 : 1,
-            }}
-          >
-            <XCircle size={15} /> {t('approval.deny')}
-          </button>
-          <button
-            onClick={() => handleRespond('allow')}
-            disabled={responding}
-            style={{
-              padding: '8px 20px', borderRadius: 'var(--radius-md)',
-              background: 'var(--color-primary)', color: '#fff',
-              border: 'none',
-              cursor: responding ? 'not-allowed' : 'pointer',
-              fontWeight: 600, fontSize: 13,
-              display: 'flex', alignItems: 'center', gap: 6,
-              opacity: responding ? 0.5 : 1,
-            }}
-          >
-            <CheckCircle2 size={15} /> {t('approval.allow')}
-          </button>
-          <button
-            onClick={() => handleRespond('always_allow')}
-            disabled={responding}
-            style={{
-              padding: '8px 20px', borderRadius: 'var(--radius-md)',
-              background: 'rgba(34,197,94,0.15)', color: '#4ade80',
-              border: '1px solid rgba(34,197,94,0.3)',
-              cursor: responding ? 'not-allowed' : 'pointer',
-              fontWeight: 600, fontSize: 13,
-              display: 'flex', alignItems: 'center', gap: 6,
-              opacity: responding ? 0.5 : 1,
-            }}
-          >
-            <ShieldCheck size={15} /> {t('approval.alwaysAllow')}
-          </button>
+          {/* Keyboard hint */}
+          <div style={{
+            fontSize: 11, color: 'var(--text-tertiary)',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span><kbd style={kbdStyle}>Esc</kbd> Deny</span>
+            <span><kbd style={kbdStyle}>Enter</kbd> Allow</span>
+            <span><kbd style={kbdStyle}>Shift+Enter</kbd> Always</span>
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={() => handleRespond('deny')}
+              disabled={responding}
+              style={{
+                padding: '8px 20px', borderRadius: 'var(--radius-md)',
+                background: 'rgba(220,38,38,0.15)', color: '#f87171',
+                border: '1px solid rgba(220,38,38,0.3)',
+                cursor: responding ? 'not-allowed' : 'pointer',
+                fontWeight: 600, fontSize: 13,
+                display: 'flex', alignItems: 'center', gap: 6,
+                opacity: responding ? 0.5 : 1,
+              }}
+            >
+              <XCircle size={15} /> {t('approval.deny')}
+            </button>
+            <button
+              onClick={() => handleRespond('allow')}
+              disabled={responding}
+              style={{
+                padding: '8px 20px', borderRadius: 'var(--radius-md)',
+                background: 'var(--color-primary)', color: '#fff',
+                border: 'none',
+                cursor: responding ? 'not-allowed' : 'pointer',
+                fontWeight: 600, fontSize: 13,
+                display: 'flex', alignItems: 'center', gap: 6,
+                opacity: responding ? 0.5 : 1,
+              }}
+            >
+              <CheckCircle2 size={15} /> {t('approval.allow')}
+            </button>
+            <button
+              onClick={() => handleRespond('always_allow')}
+              disabled={responding}
+              style={{
+                padding: '8px 20px', borderRadius: 'var(--radius-md)',
+                background: 'rgba(34,197,94,0.15)', color: '#4ade80',
+                border: '1px solid rgba(34,197,94,0.3)',
+                cursor: responding ? 'not-allowed' : 'pointer',
+                fontWeight: 600, fontSize: 13,
+                display: 'flex', alignItems: 'center', gap: 6,
+                opacity: responding ? 0.5 : 1,
+              }}
+            >
+              <ShieldCheck size={15} /> {t('approval.alwaysAllow')}
+            </button>
+          </div>
         </div>
       </div>
     </div>
