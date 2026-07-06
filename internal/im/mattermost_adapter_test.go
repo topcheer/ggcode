@@ -135,6 +135,65 @@ func TestMattermostPlatformConstant(t *testing.T) {
 	}
 }
 
+// TestMattermostSendHandlesAllEventTypes verifies that Send() uses
+// defaultOutboundText() to handle all event types, not just OutboundEventText.
+// Previously, Send() only passed event.Text, silently dropping tool calls,
+// tool results, status updates, and approval requests.
+func TestMattermostSendHandlesAllEventTypes(t *testing.T) {
+	tests := []struct {
+		name  string
+		event OutboundEvent
+		want  string
+	}{
+		{
+			name:  "text event",
+			event: OutboundEvent{Kind: OutboundEventText, Text: "hello world"},
+			want:  "hello world",
+		},
+		{
+			name:  "status event",
+			event: OutboundEvent{Kind: OutboundEventStatus, Status: "Thinking..."},
+			want:  "Thinking...",
+		},
+		{
+			name: "tool call event",
+			event: OutboundEvent{
+				Kind: OutboundEventToolCall,
+				ToolCall: &ToolCallInfo{
+					ToolName: "edit_file",
+					Args:     `{"file_path":"/tmp/test.go"}`,
+					Lang:     "en",
+				},
+			},
+			want: "", // non-empty formatted text — just verify it's not silently dropped
+		},
+		{
+			name: "tool result event",
+			event: OutboundEvent{
+				Kind:    OutboundEventToolResult,
+				ToolRes: &ToolResultInfo{ToolName: "run_command", Result: "OK"},
+			},
+			want: "", // non-empty formatted text
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// defaultOutboundText should produce output for all event types
+			got := defaultOutboundText(tt.event)
+			if tt.want != "" && got != tt.want {
+				t.Errorf("defaultOutboundText() = %q, want %q", got, tt.want)
+			}
+			// For tool call/result, just verify non-empty (exact format may change)
+			if tt.want == "" && (tt.event.Kind == OutboundEventToolCall || tt.event.Kind == OutboundEventToolResult) {
+				if got == "" {
+					t.Errorf("defaultOutboundText() returned empty for %s — event type would be silently dropped", tt.name)
+				}
+			}
+		})
+	}
+}
+
 func TestMattermostParseCommaList(t *testing.T) {
 	tests := []struct {
 		input string

@@ -431,7 +431,11 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(ctx, chatID, binding.ThreadID, event.Text)
+	text := strings.TrimSpace(defaultOutboundText(event))
+	if text == "" {
+		return nil
+	}
+	return a.sendText(ctx, chatID, binding.ThreadID, text)
 }
 
 func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, text string) error {
