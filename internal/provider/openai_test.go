@@ -621,3 +621,20 @@ func TestRetryDelayRetryAfterNoJitter(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryDelayRetryAfterCapped(t *testing.T) {
+	// Retry-After values exceeding providerRetryBackoffCap must be capped
+	// so the interactive agent doesn't freeze for minutes.
+	err := &anthropic.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Response: &http.Response{
+			Header: http.Header{
+				"Retry-After": []string{"300"},
+			},
+		},
+	}
+	delay := retryDelay(err, 0)
+	if delay != providerRetryBackoffCap {
+		t.Fatalf("Retry-After 300s should be capped to %v, got %v", providerRetryBackoffCap, delay)
+	}
+}

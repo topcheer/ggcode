@@ -215,6 +215,14 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 
 func retryDelay(err error, attempt int) time.Duration {
 	if delay, ok := retryAfterDelay(err); ok && delay > 0 {
+		// Cap Retry-After at providerRetryBackoffCap. Some providers return
+		// very large Retry-After values (60-300s); an interactive agent must
+		// not freeze for minutes. If the cap expires and the server is still
+		// rate-limiting, it will return 429 again and we retry — acceptable
+		// for an interactive tool.
+		if delay > providerRetryBackoffCap {
+			delay = providerRetryBackoffCap
+		}
 		return delay
 	}
 	if attempt < 0 {
