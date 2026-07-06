@@ -25,6 +25,11 @@ const (
 	twitchReconnectBackoff = 5 * time.Second
 	twitchMaxBackoff       = 120 * time.Second
 	twitchMaxMessageLen    = 500
+	// twitchInterMessageDelay is the delay between consecutive PRIVMSG lines.
+	// Twitch limits non-VIP/mod accounts to 20 messages per 30 seconds
+	// and 1 message per second per channel.
+	// Source: https://dev.twitch.tv/docs/irc/#rate-limits
+	twitchInterMessageDelay = 1100 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -402,7 +407,10 @@ func (a *twitchAdapter) sendTwitchMessage(target, text string) error {
 			continue
 		}
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
-		for _, chunk := range chunks {
+		for i, chunk := range chunks {
+			if i > 0 {
+				time.Sleep(twitchInterMessageDelay)
+			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
 		}
 	}

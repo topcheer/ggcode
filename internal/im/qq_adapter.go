@@ -39,6 +39,10 @@ const (
 	qqMsgTypeMedia    = 7
 	qqFileTypeImage   = 1
 
+	// qqInterMessageDelay is the delay between consecutive messages to the same
+	// channel. QQ Bot API limits 5 messages/second per sub-channel.
+	// Source: https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/send-receive/send.html
+	qqInterMessageDelay     = 250 * time.Millisecond
 	qqUploadCacheMaxEntries = 500
 	qqUploadCacheTTL        = 30 * time.Minute
 )
@@ -253,6 +257,14 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	if remainingText != "" {
 		chunks := SplitMessageForPlatform(remainingText, PlatformQQ)
 		for i, chunk := range chunks {
+			// Rate limit: max 5 messages/second per channel.
+			if i > 0 {
+				select {
+				case <-time.After(qqInterMessageDelay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 			useReplyTo := replyTo
 			useReplySeq := replySeq + i // increment seq per chunk to avoid QQ dedup
 			if lastMsgID != "" {

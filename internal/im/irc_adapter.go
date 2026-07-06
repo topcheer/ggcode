@@ -26,6 +26,10 @@ const (
 	ircReconnectBackoff    = 5 * time.Second
 	ircMaxReconnectBackoff = 120 * time.Second
 	ircMaxMessageLen       = 400
+	// ircInterMessageDelay is the delay between consecutive PRIVMSG lines.
+	// IRC servers enforce flood protection; 300ms is conservative.
+	// Source: RFC 2812 §2.3.1, common IRC server flood protection policies.
+	ircInterMessageDelay = 300 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -497,7 +501,10 @@ func (a *ircAdapter) sendIRCMessage(target, text string) error {
 			continue
 		}
 		chunks := splitIRCMessage(line, ircMaxMessageLen)
-		for _, chunk := range chunks {
+		for i, chunk := range chunks {
+			if i > 0 {
+				time.Sleep(ircInterMessageDelay)
+			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
 		}
 	}
