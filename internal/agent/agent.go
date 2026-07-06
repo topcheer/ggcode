@@ -73,6 +73,7 @@ type Agent struct {
 	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
 	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
+	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
@@ -115,6 +116,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shutdownCancel:   cancel,
 		overseer:         newOverseerState(),
 		repetition:       newRepetitionTracker(),
+		speculator:       newSpeculator(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -695,7 +697,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		a.resetOverseer() // clear trajectory state for new run
+		a.resetOverseer()            // clear trajectory state for new run
+		a.speculator.resetSequence() // clear speculative pattern sequence for new run
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
@@ -964,7 +967,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Don't log executeToolWithPermission start — the permission check log already covers this
-			result := a.executeToolWithPermission(ctx, tc)
+			// Check speculative cache: if a read-only tool was pre-executed speculatively
+			// while the LLM was generating, return the cached result instantly.
+			var result tool.Result
+			if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
+				result = cachedResult
+				debug.Log("speculate", "speculative cache hit for %s (saved tool execution)", tc.Name)
+			} else {
+				result = a.executeToolWithPermission(ctx, tc)
+			}
+			// Record the tool call for speculative pattern learning.
+			a.speculator.recordObservation(tc.Name)
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			if result.IsError {
@@ -1096,6 +1109,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			Role:    "user", // Anthropic uses user role for tool results
 			Content: toolResults,
 		})
+
+		// Speculative tool execution (PASTE-inspired): now that tool results
+		// are sent to the LLM, the LLM will spend 2-5 seconds generating its
+		// next response. Use that idle window to speculatively pre-execute
+		// likely next read-only tool calls based on learned patterns.
+		if len(toolCalls) > 0 {
+			lastTC := toolCalls[len(toolCalls)-1]
+			a.speculator.speculate(ctx, a.tools, lastTC.Name, lastTC.Arguments)
+		}
 
 		// Inject follow-up messages from tools (e.g., inline skill instructions).
 		for _, msg := range followUpMessages {
