@@ -47,6 +47,7 @@ body {
     border-radius: 4px;
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 13px;
+    color: var(--color-info);
 }
 .markdown-body pre {
     background: rgba(0,0,0,0.3);
@@ -59,6 +60,7 @@ body {
     background: none;
     padding: 0;
     font-size: 13px;
+    color: var(--text-primary);
 }
 .markdown-body ul, .markdown-body ol {
     margin: 0.4em 0;
@@ -101,6 +103,9 @@ body {
 .markdown-body h1 { font-size: 1.3em; }
 .markdown-body h2 { font-size: 1.15em; }
 .markdown-body h3 { font-size: 1.05em; }
+.markdown-body h4 { font-size: 1em; font-weight: 600; }
+.markdown-body h5 { font-size: 0.95em; font-weight: 600; }
+.markdown-body h6 { font-size: 0.9em; font-weight: 600; color: var(--text-secondary); }
 .markdown-body a {
     color: var(--color-primary);
     text-decoration: none;

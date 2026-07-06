@@ -123,7 +123,7 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
             flex: 1, height: 6, borderRadius: 3, background: 'var(--color-surface)',
             overflow: 'hidden',
           }}>
-            <div style={{ width: `${usagePercent}%`, height: '100%', borderRadius: 3, background: 'var(--color-success)' }} />
+            <div style={{ width: `${usagePercent}%`, height: '100%', borderRadius: 3, background: usagePercent > 80 ? 'var(--color-error)' : usagePercent > 50 ? 'var(--color-warning)' : 'var(--color-success)' }} />
           </div>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)' }}>
             {ctxUsed} / {ctxTotal}
