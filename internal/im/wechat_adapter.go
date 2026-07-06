@@ -558,6 +558,14 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			debug.Log("wechat", "adapter=%s chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
 			return err
 		}
+		// Small delay between chunks to avoid WeChat iLink API rate limiting.
+		if i < len(chunks)-1 {
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 
 	debug.Log("wechat", "adapter=%s sendmessage OK to=%s chunks=%d", a.name, toUserID, len(chunks))
