@@ -83,6 +83,7 @@ const en = {
   'kb.newSession': 'New Session',
   'kb.shareSession': 'Share Session',
   'kb.toggleIdentity': 'Toggle Agent Identity',
+  'kb.searchInChat': 'Search in Conversation',
   'kb.sendMessage': 'Send Message',
   'kb.newline': 'New Line (in Input)',
   'kb.navigateList': 'Navigate List',

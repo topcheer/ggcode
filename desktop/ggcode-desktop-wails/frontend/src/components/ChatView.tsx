@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy } from 'lucide-react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -364,6 +364,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [teamBoard, setTeamBoard] = useState<TeamBoardSnapshot[]>([])
   const [teamBoardOpen, setTeamBoardOpen] = useState(false)
   const teamBoardDismissedRef = useRef(false)
+
+  // --- In-conversation search ---
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   // --- Identity (nick/role/team) ---
   const [selfNick, setSelfNick] = useState('')
@@ -1270,6 +1276,73 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [cycleReasoningEffort, handleSend])
 
+  // ── In-conversation search ────────────────────────────────────────────────
+
+  // Compute matches from current messages
+  const searchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [] as number[] // indices into messages array
+    const q = searchQuery.toLowerCase()
+    return messages
+      .map((msg, i) => ({ idx: i, content: msg.content }))
+      .filter(m => m.content.toLowerCase().includes(q))
+      .map(m => m.idx)
+  }, [messages, searchQuery])
+
+  // Reset match index when query changes
+  useEffect(() => { setSearchMatchIdx(0) }, [searchQuery])
+
+  // Focus search input when opened
+  useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+  }, [searchOpen])
+
+  // Global Cmd+F / Ctrl+F to open search, Esc to close
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        e.stopPropagation()
+        setSearchOpen(prev => !prev)
+        return
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        e.preventDefault()
+        setSearchOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handler, true)
+    return () => document.removeEventListener('keydown', handler, true)
+  }, [searchOpen])
+
+  // Scroll current match into view
+  useEffect(() => {
+    if (!searchOpen || searchMatches.length === 0) return
+    const idx = searchMatches[Math.min(searchMatchIdx, searchMatches.length - 1)]
+    if (idx === undefined) return
+    const msgId = messages[idx]?.id
+    if (!msgId) return
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Brief highlight flash
+      el.classList.add('search-match-highlight')
+      setTimeout(() => el.classList.remove('search-match-highlight'), 1500)
+    }
+  }, [searchMatchIdx, searchMatches, searchOpen, messages])
+
+  const searchNext = useCallback(() => {
+    if (searchMatches.length === 0) return
+    setSearchMatchIdx(prev => (prev + 1) % searchMatches.length)
+  }, [searchMatches.length])
+
+  const searchPrev = useCallback(() => {
+    if (searchMatches.length === 0) return
+    setSearchMatchIdx(prev => (prev - 1 + searchMatches.length) % searchMatches.length)
+  }, [searchMatches.length])
+
   // ── Status bar label ──────────────────────────────────────────────────────
 
   const statusLabel = statusBar.status === 'working' ? (thinking ? 'Thinking...' : 'Working...')
@@ -1682,6 +1755,70 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
       )}
 
+      {/* In-conversation search bar */}
+      {searchOpen && (
+        <div style={{
+          position: 'absolute', top: 8, right: 12, zIndex: 200,
+          display: 'flex', alignItems: 'center', gap: 0,
+          background: 'var(--color-card)', border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-md)', boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+          padding: '2px 4px 2px 8px', maxWidth: 340,
+        }}>
+          <Search size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? searchPrev() : searchNext() }
+              if (e.key === 'Escape') { setSearchOpen(false) }
+            }}
+            placeholder="Find in conversation..."
+            style={{
+              background: 'none', border: 'none', outline: 'none',
+              color: 'var(--text-primary)', fontSize: 13,
+              fontFamily: 'var(--font-mono)',
+              padding: '4px 6px', width: 140, minWidth: 0,
+            }}
+          />
+          {searchQuery.trim() && (
+            <span style={{
+              fontSize: 11, color: 'var(--text-tertiary)',
+              fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
+              padding: '0 4px',
+            }}>
+              {searchMatches.length > 0
+                ? `${Math.min(searchMatchIdx + 1, searchMatches.length)}/${searchMatches.length}`
+                : '0/0'}
+            </span>
+          )}
+          <button onClick={searchPrev} disabled={searchMatches.length === 0} title="Previous (Shift+Enter)" style={{
+            background: 'none', border: 'none', cursor: searchMatches.length ? 'pointer' : 'default',
+            color: searchMatches.length ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            opacity: searchMatches.length ? 1 : 0.4,
+          }}>
+            <ChevronUp size={15} />
+          </button>
+          <button onClick={searchNext} disabled={searchMatches.length === 0} title="Next (Enter)" style={{
+            background: 'none', border: 'none', cursor: searchMatches.length ? 'pointer' : 'default',
+            color: searchMatches.length ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+            padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            opacity: searchMatches.length ? 1 : 0.4,
+          }}>
+            <ChevronDown size={15} />
+          </button>
+          <button onClick={() => setSearchOpen(false)} title="Close (Esc)" style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--text-secondary)', padding: '3px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Messages — render active tab's content */}
       <div
         ref={scrollContainerRef}
@@ -1721,10 +1858,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 return prevDay.getTime() !== currDay.getTime()
               })()
               return (
-                <React.Fragment key={msg.id}>
+                <div key={msg.id} data-msg-id={msg.id}>
                   {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
                   <MessageCard msg={msg} onRetry={handleRetrySend} />
-                </React.Fragment>
+                </div>
               )
             })}
           </>

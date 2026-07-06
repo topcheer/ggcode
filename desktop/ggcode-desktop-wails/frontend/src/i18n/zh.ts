@@ -85,6 +85,7 @@ const zh: Record<TranslationKey, string> = {
   'kb.newSession': '新建会话',
   'kb.shareSession': '分享会话',
   'kb.toggleIdentity': '切换 Agent 身份',
+  'kb.searchInChat': '在对话中搜索',
   'kb.sendMessage': '发送消息',
   'kb.newline': '换行（输入框内）',
   'kb.navigateList': '导航列表',

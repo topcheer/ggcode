@@ -25,6 +25,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', 'N'], labelKey: 'kb.newSession', icon: Plus },
       { keys: ['⌘', '⇧', 'S'], labelKey: 'kb.shareSession', icon: Share2 },
       { keys: ['⌘', 'G'], labelKey: 'kb.toggleIdentity', icon: UserCog },
+      { keys: ['⌘', 'F'], labelKey: 'kb.searchInChat', icon: Search },
       { keys: ['↵'], labelKey: 'kb.sendMessage', icon: CornerDownLeft },
       { keys: ['⇧', '↵'], labelKey: 'kb.newline' },
     ],

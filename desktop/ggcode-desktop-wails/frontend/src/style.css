@@ -171,3 +171,13 @@ body {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* In-conversation search match highlight */
+@keyframes searchFlash {
+  0% { box-shadow: 0 0 0 2px var(--color-primary), 0 0 16px rgba(59, 130, 246, 0.35); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.search-match-highlight {
+  animation: searchFlash 1.5s ease-out;
+  border-radius: var(--radius-md);
+}
