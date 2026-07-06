@@ -356,6 +356,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
   const [statusBar, setStatusBar] = useState<StatusBarState>({
     vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
   })
@@ -364,6 +365,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [teamBoard, setTeamBoard] = useState<TeamBoardSnapshot[]>([])
   const [teamBoardOpen, setTeamBoardOpen] = useState(false)
   const teamBoardDismissedRef = useRef(false)
+
+  // --- Agent working timer ---
+  useEffect(() => {
+    if (!thinking && !isStreaming) {
+      setAgentElapsed(0)
+      return
+    }
+    const start = Date.now()
+    const interval = setInterval(() => {
+      setAgentElapsed(Math.floor((Date.now() - start) / 1000))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [thinking, isStreaming])
 
   // --- In-conversation search ---
   const [searchOpen, setSearchOpen] = useState(false)
@@ -1688,6 +1702,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         )}
 
         {messages.length > 0 && (
+          <span style={{
+            fontSize: 10, color: 'var(--text-tertiary)',
+            fontFamily: 'var(--font-mono)', opacity: 0.7,
+          }}>
+            {messages.length} {messages.length === 1 ? 'msg' : 'msgs'}
+          </span>
+        )}
+        {messages.length > 0 && (
           <button onClick={handleExportConversation} title="Copy conversation" style={{
             width: 28, height: 28, borderRadius: 'var(--radius-sm)',
             background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
@@ -1973,6 +1995,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: 13 }}>
               {thinking ? 'Thinking...' : 'Working...'}
             </span>
+            {agentElapsed > 0 && (
+              <span style={{
+                color: 'var(--text-tertiary)', fontSize: 11,
+                fontFamily: 'var(--font-mono)',
+                background: 'var(--color-surface)',
+                padding: '1px 6px', borderRadius: 4,
+                border: '1px solid var(--color-border)',
+              }}>
+                {agentElapsed < 60 ? `${agentElapsed}s` : `${Math.floor(agentElapsed / 60)}m${agentElapsed % 60}s`}
+              </span>
+            )}
           </div>
         )}
 
@@ -2069,6 +2102,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         pointerEvents: 'none', userSelect: 'none',
       }}>
         {t('chat.inputHint')}
+        {input.length > 100 && (
+          <span style={{ marginLeft: 8, color: input.length > 4000 ? 'var(--color-error)' : input.length > 2000 ? 'var(--color-warning)' : 'inherit' }}>
+            {input.length > 1000 ? `~${Math.ceil(input.length / 4)} tokens · ` : ''}{input.length} chars
+          </span>
+        )}
       </div>
 
       {/* Pulse animation keyframe */}
