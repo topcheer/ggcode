@@ -1083,6 +1083,8 @@ func (m *Model) hasActivePanel() bool {
 		m.lanChatPanel != nil ||
 		m.skillsPanel != nil ||
 		m.streamPanel != nil ||
+		m.knightPanel != nil ||
+		m.statsPanel != nil ||
 		len(m.langOptions) > 0
 }
 
