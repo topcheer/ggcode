@@ -230,7 +230,11 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 		req, err := http.NewRequestWithContext(ctx, "GET", receiveURL, nil)
 		if err != nil {
 			debug.Log("signal", "adapter=%s receive request error: %v", a.name, err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
 			continue
 		}
 
@@ -240,7 +244,11 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 				return nil
 			}
 			debug.Log("signal", "adapter=%s receive error: %v", a.name, err)
-			time.Sleep(5 * time.Second)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
 			continue
 		}
 
@@ -253,7 +261,11 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 			debug.Log("signal", "adapter=%s receive status %d: %s", a.name, resp.StatusCode, string(body))
-			time.Sleep(5 * time.Second)
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
 			continue
 		}
 
