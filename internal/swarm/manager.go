@@ -72,6 +72,7 @@ type Manager struct {
 	streamTextBuf   map[string]*strings.Builder // teammateID → accumulated text
 	streamRsnBuf    map[string]*strings.Builder // teammateID → accumulated reasoning
 	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
+	shutdownOnce    sync.Once
 }
 
 // NewManager creates a swarm Manager.
@@ -117,9 +118,11 @@ func (m *Manager) RootContext() context.Context {
 }
 
 // Shutdown cancels all running teammates and stops the manager.
+// Safe to call multiple times (idempotent).
 func (m *Manager) Shutdown() {
-	// Stop the stream batch ticker and flush remaining text.
-	close(m.streamBatchDone)
+	m.shutdownOnce.Do(func() {
+		close(m.streamBatchDone)
+	})
 	m.flushStreamBatch()
 
 	m.mu.Lock()

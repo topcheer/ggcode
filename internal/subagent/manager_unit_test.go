@@ -558,6 +558,13 @@ func TestManagerRootContextAndShutdown(t *testing.T) {
 	}
 }
 
+func TestManagerShutdown_DoubleCall(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	mgr.Shutdown()
+	// Second call must not panic (close of closed channel)
+	mgr.Shutdown()
+}
+
 // ---------------------------------------------------------------------------
 // Manager: SetOnComplete callback
 // ---------------------------------------------------------------------------

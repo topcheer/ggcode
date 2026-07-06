@@ -329,6 +329,14 @@ func TestManager_Shutdown(t *testing.T) {
 	}
 }
 
+func TestManager_Shutdown_DoubleCall(t *testing.T) {
+	m, _ := testManager(t)
+
+	m.Shutdown()
+	// Second call must not panic (close of closed channel)
+	m.Shutdown()
+}
+
 func TestManager_OnUpdate(t *testing.T) {
 	var events []Event
 	var mu sync.Mutex

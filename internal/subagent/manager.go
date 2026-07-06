@@ -274,6 +274,7 @@ type Manager struct {
 	streamTextBuf   map[string]*strings.Builder // agentID → accumulated text
 	streamRsnBuf    map[string]*strings.Builder // agentID → accumulated reasoning
 	streamBatchDone chan struct{}               // closed to stop the ticker goroutine
+	shutdownOnce    sync.Once
 }
 
 // NewManager creates a Manager with the given config.
@@ -311,9 +312,11 @@ func (m *Manager) RootContext() context.Context {
 }
 
 // Shutdown cancels every running sub-agent. Call once during app shutdown.
+// Safe to call multiple times (idempotent).
 func (m *Manager) Shutdown() {
-	// Stop the stream batch ticker goroutine.
-	close(m.streamBatchDone)
+	m.shutdownOnce.Do(func() {
+		close(m.streamBatchDone)
+	})
 	// Flush any remaining buffered text before shutdown.
 	m.flushStreamBatch()
 	if m.rootCancel != nil {
