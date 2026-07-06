@@ -155,10 +155,14 @@ func TestOverseer_EachPatternFiresOnce(t *testing.T) {
 
 func TestOverseer_Reset(t *testing.T) {
 	o := newOverseerState()
-	for i := 0; i < stallThreshold; i++ {
+	// Push trajectory past drift threshold so driftLevel advances.
+	for i := 0; i < driftThreshold*3; i++ {
 		o.recordToolCall("read_file", false, "/path.go")
 	}
-	o.analyze(stallThreshold)
+	o.checkDrift(o.trajectory)
+	if o.driftLevel == 0 {
+		t.Fatal("expected driftLevel > 0 before reset")
+	}
 	o.reset()
 
 	if len(o.trajectory) != 0 {
@@ -169,6 +173,18 @@ func TestOverseer_Reset(t *testing.T) {
 	}
 	if o.itersSinceProductive != 0 {
 		t.Fatal("itersSinceProductive should be 0 after reset")
+	}
+	if o.driftLevel != 0 {
+		t.Fatalf("driftLevel should be 0 after reset, got %d", o.driftLevel)
+	}
+
+	// Verify drift detection works again after reset.
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall("read_file", false, "/path.go")
+	}
+	msg := o.checkDrift(o.trajectory)
+	if msg == "" {
+		t.Fatal("drift detection should fire after reset — driftLevel was not reset")
 	}
 }
 

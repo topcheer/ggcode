@@ -160,6 +160,7 @@ func (o *overseerState) reset() {
 	o.trajectory = nil
 	o.fileReadsSinceEdit = make(map[string]int)
 	o.itersSinceProductive = 0
+	o.driftLevel = 0
 	o.fired = make(map[string]bool)
 	o.lastAnalysisIter = 0
 }
