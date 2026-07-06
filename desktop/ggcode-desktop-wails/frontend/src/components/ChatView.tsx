@@ -2341,8 +2341,21 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 
 function ToolMessage({ msg }: { msg: ChatMessage }) {
   const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const isCommandTool = ['run_command', 'start_command', 'bash', 'powershell'].includes(msg.toolName || '')
+  const MAX_RESULT_LINES = 200
+  const resultLines = msg.content ? msg.content.split('\n') : []
+  const truncatedResult = resultLines.length > MAX_RESULT_LINES
+    ? resultLines.slice(0, MAX_RESULT_LINES).join('\n') + `\n\n... (${resultLines.length - MAX_RESULT_LINES} more lines, click Copy for full output)`
+    : msg.content
+
+  const handleCopyResult = useCallback(() => {
+    navigator.clipboard.writeText(msg.content || '').then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [msg.content])
 
   // Title: displayName from Go's DescribeTool (now uses description/first-line comment for commands)
   // Append prettified tool name in parens
@@ -2435,6 +2448,13 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           </span>
         )}
 
+        {/* Line count indicator for non-streaming results */}
+        {msg.content && !msg.streaming && !expanded && (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+            {resultLines.length > 1 ? `${resultLines.length} lines` : `${msg.content.length} chars`}
+          </span>
+        )}
+
         {(msg.content || commandContent) && !msg.streaming && (
           <span style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
             {expanded ? '▲' : '▼'}
@@ -2475,18 +2495,35 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
 
           {/* Result (terminal style) */}
           {msg.content && (
-            <div style={{
-              marginTop: 4, padding: '8px 10px',
-              borderRadius: 'var(--radius-md)',
-              background: msg.isError ? '#2d1b1b' : '#0d1117',
-              border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(255,255,255,0.1)'}`,
-              maxHeight: 300, overflowY: 'auto',
-              fontFamily: 'var(--font-mono)', fontSize: 12,
-              color: msg.isError ? '#f87171' : '#8b949e',
-              whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
-              textAlign: 'left',
-            }}>
-              {msg.content}
+            <div style={{ marginTop: 4, position: 'relative' }}>
+              <div style={{
+                padding: '8px 10px',
+                borderRadius: 'var(--radius-md)',
+                background: msg.isError ? '#2d1b1b' : '#0d1117',
+                border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(255,255,255,0.1)'}`,
+                maxHeight: 300, overflowY: 'auto',
+                fontFamily: 'var(--font-mono)', fontSize: 12,
+                color: msg.isError ? '#f87171' : '#8b949e',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
+                textAlign: 'left',
+              }}>
+                {truncatedResult || msg.content}
+              </div>
+              {/* Copy button for result */}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleCopyResult() }}
+                title="Copy result"
+                style={{
+                  position: 'absolute', top: 4, right: 4,
+                  padding: '2px 8px', borderRadius: 3,
+                  background: copied ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  color: copied ? 'var(--color-success)' : 'rgba(255,255,255,0.6)',
+                  cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+                }}
+              >
+                {copied ? '✓ Copied' : 'Copy'}
+              </button>
             </div>
           )}
         </>
