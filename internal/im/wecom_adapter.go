@@ -646,21 +646,35 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if text == "" {
 		return nil
 	}
-	if len(text) > wecomMaxTextLen {
-		text = truncateRunes(text, wecomMaxTextLen, "")
-	}
 
-	// Try respond_msg if we have a tracked req_id for the last inbound message
+	// Split long messages instead of truncating — losing content is worse UX
+	// than sending multiple messages. WeCom limit is 2048 bytes per message.
+	chunks := SplitMessageForPlatform(text, PlatformWeCom)
+
+	// First chunk: try respond_msg if we have a tracked req_id.
+	// Subsequent chunks: must use proactive API (respond_msg has reply limits).
+	hasReply := false
 	if msgID := strings.TrimSpace(binding.LastInboundMessageID); msgID != "" {
 		a.mu.RLock()
 		reqID, ok := a.replyReqIDs[msgID]
 		a.mu.RUnlock()
 		if ok && reqID != "" {
-			return a.sendRespond(chatID, reqID, text)
+			if err := a.sendRespond(chatID, reqID, chunks[0]); err != nil {
+				return err
+			}
+			hasReply = true
 		}
 	}
 
-	return a.sendProactive(chatID, text)
+	for i := 0; i < len(chunks); i++ {
+		if hasReply && i == 0 {
+			continue // already sent via respond_msg
+		}
+		if err := a.sendProactive(chatID, chunks[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TriggerTyping implements the TypingIndicator interface.
