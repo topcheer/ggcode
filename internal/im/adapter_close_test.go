@@ -194,4 +194,13 @@ func TestCloserInterface(t *testing.T) {
 	var _ Closer = (*tgAdapter)(nil)
 	var _ Closer = (*pcAdapter)(nil)
 	var _ Closer = (*dummyAdapter)(nil)
+	var _ Closer = (*whatsappAdapter)(nil)
+	var _ Closer = (*signalAdapter)(nil)
+	var _ Closer = (*nostrAdapter)(nil)
+	var _ Closer = (*ircAdapter)(nil)
+	var _ Closer = (*twitchAdapter)(nil)
+	var _ Closer = (*matrixAdapter)(nil)
+	var _ Closer = (*mattermostAdapter)(nil)
+	var _ Closer = (*WechatAdapter)(nil)
+	var _ Closer = (*wecomAdapter)(nil)
 }

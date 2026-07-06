@@ -174,6 +174,14 @@ func (a *whatsappAdapter) Stop() {
 	}
 }
 
+// Close implements the Closer interface so the runtime can properly
+// shut down the adapter. Without this, the runtime logs a warning and
+// leaks the WhatsApp websocket connection.
+func (a *whatsappAdapter) Close() error {
+	a.Stop()
+	return nil
+}
+
 func (a *whatsappAdapter) ChatID() string { return "" }
 
 // ---------------------------------------------------------------------------
