@@ -100,8 +100,16 @@ func (pb *Playbook) save() {
 		debug.Log("playbook", "failed to marshal playbook: %v", err)
 		return
 	}
-	if err := os.WriteFile(pb.path, data, 0644); err != nil {
-		debug.Log("playbook", "failed to write playbook: %v", err)
+	// Atomic write: write to temp file, then rename. Prevents corruption
+	// if the process is interrupted mid-write.
+	tmp := pb.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		debug.Log("playbook", "failed to write playbook tmp: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, pb.path); err != nil {
+		debug.Log("playbook", "failed to rename playbook: %v", err)
+		os.Remove(tmp) // cleanup
 	}
 }
 
@@ -285,19 +293,25 @@ func (pb *Playbook) evict() {
 	if len(pb.entries) <= pb.maxEntries {
 		return
 	}
-	// Sort by LastSeen descending, keep top maxEntries
-	for i := 0; i < len(pb.entries)-1; i++ {
-		for j := i + 1; j < len(pb.entries); j++ {
-			if pb.entries[j].LastSeen.After(pb.entries[i].LastSeen) {
-				pb.entries[i], pb.entries[j] = pb.entries[j], pb.entries[i]
-			}
-		}
-	}
+	// Sort by LastSeen descending (most recent first), keep top maxEntries
+	sort.Slice(pb.entries, func(i, j int) bool {
+		return pb.entries[i].LastSeen.After(pb.entries[j].LastSeen)
+	})
 	pb.entries = pb.entries[:pb.maxEntries]
 }
 
 // HintsForPrompt generates brief strategy hints for the system prompt.
-// Returns at most maxHints entries, prioritized by frequency and recency.
+// Returns at most maxHints entries, prioritized by a composite score that
+// considers both frequency and efficiency.
+//
+// Inspired by SICA's utility function (Robeyns et al., arXiv:2504.15228):
+// patterns that lead to faster completion are more valuable than patterns
+// used frequently but slowly. The score combines:
+//   - Frequency weight: more observations = higher confidence
+//   - Efficiency weight: fewer iterations = better strategy
+//
+// This ensures that a pattern observed 3 times at ~5 iterations ranks higher
+// than one observed 5 times at ~50 iterations.
 func (pb *Playbook) HintsForPrompt(maxHints int) string {
 	if pb == nil {
 		return ""
@@ -310,16 +324,16 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 		return ""
 	}
 
-	// Sort entries by uses (descending) for relevance
+	// Sort entries by composite score (descending).
+	// Score = frequency × efficiency, where:
+	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
+	//   efficiency = 10 / avgIter — fewer iterations = higher score
+	// This rewards patterns that are both well-observed AND efficient.
 	sorted := make([]PlaybookEntry, len(pb.entries))
 	copy(sorted, pb.entries)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Uses > sorted[i].Uses {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return playbookScore(sorted[i]) > playbookScore(sorted[j])
+	})
 
 	if maxHints > len(sorted) {
 		maxHints = len(sorted)
@@ -345,6 +359,26 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 			e.TaskType, fileHint, e.ToolSequence, e.Uses, e.AvgIter, durHint))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// playbookScore computes a composite score for ranking playbook entries.
+// Higher is better. Combines frequency (more observations = higher confidence)
+// with efficiency (fewer iterations = better strategy).
+//
+// Formula: score = min(uses, 10) * (10 / max(avgIter, 1))
+//   - A pattern used 5 times at ~10 iterations scores 5.0
+//   - A pattern used 10 times at ~50 iterations scores 2.0
+//   - A pattern used 3 times at ~5 iterations scores 6.0
+func playbookScore(e PlaybookEntry) float64 {
+	freq := float64(e.Uses)
+	if freq > 10 {
+		freq = 10
+	}
+	iter := e.AvgIter
+	if iter < 1 {
+		iter = 1
+	}
+	return freq * (10.0 / iter)
 }
 
 // recordPlaybook is called from maybeReflect to record successful strategies.

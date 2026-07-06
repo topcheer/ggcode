@@ -338,3 +338,128 @@ func TestPlaybookNilSafe(t *testing.T) {
 }
 
 // contains, indexOf, splitLines are defined in agent_tool.go / reflection_test.go
+
+func TestPlaybookScore(t *testing.T) {
+	tests := []struct {
+		name    string
+		uses    int
+		avgIter float64
+		want    float64
+	}{
+		{"frequent efficient", 5, 10, 5.0},  // 5 * (10/10)
+		{"frequent slow", 10, 50, 2.0},      // 10 * (10/50)
+		{"rare efficient", 3, 5, 6.0},       // 3 * (10/5) — ranks higher!
+		{"capped frequency", 20, 10, 10.0},  // min(20,10) * (10/10)
+		{"zero iter protected", 1, 0, 10.0}, // 1 * (10/1)
+	}
+	for _, tt := range tests {
+		e := PlaybookEntry{Uses: tt.uses, AvgIter: tt.avgIter}
+		got := playbookScore(e)
+		if got != tt.want {
+			t.Errorf("%s: playbookScore(uses=%d, iter=%.0f) = %.2f, want %.2f",
+				tt.name, tt.uses, tt.avgIter, got, tt.want)
+		}
+	}
+}
+
+func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	// Entry A: frequent but slow (5 runs, 40 iterations each)
+	pb.entries = append(pb.entries, PlaybookEntry{
+		TaskType:     "bugfix",
+		ToolSequence: "read→edit→exec",
+		FileTypes:    ".go",
+		Uses:         5,
+		AvgIter:      40,
+		AvgDurationS: 300,
+		LastSeen:     time.Now(),
+		CreatedAt:    time.Now(),
+	})
+
+	// Entry B: rare but efficient (3 runs, 5 iterations each)
+	pb.entries = append(pb.entries, PlaybookEntry{
+		TaskType:     "feature",
+		ToolSequence: "read→edit",
+		FileTypes:    ".go",
+		Uses:         3,
+		AvgIter:      5,
+		AvgDurationS: 60,
+		LastSeen:     time.Now(),
+		CreatedAt:    time.Now(),
+	})
+
+	// Entry C: very frequent, moderate efficiency (10 runs, 15 iterations)
+	pb.entries = append(pb.entries, PlaybookEntry{
+		TaskType:     "refactor",
+		ToolSequence: "read→edit→exec→vcs",
+		FileTypes:    ".go",
+		Uses:         10,
+		AvgIter:      15,
+		AvgDurationS: 120,
+		LastSeen:     time.Now(),
+		CreatedAt:    time.Now(),
+	})
+
+	// Score B should be highest: 3 * (10/5) = 6.0
+	// Score C: 10 * (10/15) = 6.67
+	// Score A: 5 * (10/40) = 1.25
+	// So ranking should be: C (6.67) > B (6.0) > A (1.25)
+	hints := pb.HintsForPrompt(3)
+	if hints == "" {
+		t.Fatal("expected non-empty hints")
+	}
+	lines := strings.Split(hints, "\n")
+	// Find positions of each task type
+	var refactorPos, featurePos, bugfixPos int
+	for i, line := range lines {
+		if strings.Contains(line, "refactor") {
+			refactorPos = i
+		}
+		if strings.Contains(line, "feature") {
+			featurePos = i
+		}
+		if strings.Contains(line, "bugfix") {
+			bugfixPos = i
+		}
+	}
+	// C (refactor) should rank before B (feature) should rank before A (bugfix)
+	if refactorPos >= featurePos {
+		t.Errorf("expected refactor (score=%.2f) before feature (score=%.2f)",
+			playbookScore(pb.entries[2]), playbookScore(pb.entries[1]))
+	}
+	if featurePos >= bugfixPos {
+		t.Errorf("expected feature (score=%.2f) before bugfix (score=%.2f)",
+			playbookScore(pb.entries[1]), playbookScore(pb.entries[0]))
+	}
+}
+
+func TestPlaybookAtomicSave(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	pb.Record(&RunStats{
+		ToolCalls:   map[string]int{"read_file": 3, "edit_file": 2},
+		FilesEdited: []string{"main.go"},
+		Success:     true,
+		Iterations:  5,
+		Duration:    time.Minute,
+		UserPrompt:  "fix a bug",
+	})
+
+	// Verify no .tmp file left behind
+	tmpPath := filepath.Join(dir, ".ggcode", "playbook.json.tmp")
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Errorf("expected no .tmp file after save, but it exists")
+	}
+
+	// Verify main file is valid JSON
+	data, err := os.ReadFile(filepath.Join(dir, ".ggcode", "playbook.json"))
+	if err != nil {
+		t.Fatalf("failed to read playbook: %v", err)
+	}
+	if !strings.Contains(string(data), "bugfix") {
+		t.Errorf("expected playbook to contain 'bugfix' task type")
+	}
+}
