@@ -444,7 +444,7 @@ func (a *Agent) UpdateSystemPrompt(text string) {
 	}
 	cm.UpdateFirstSystemMessage(provider.Message{
 		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+		Content: []provider.ContentBlock{{Type: "text", Text: text, Cache: true}},
 	})
 }
 

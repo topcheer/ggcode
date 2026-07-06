@@ -27,6 +27,7 @@ type ContentBlock struct {
 	ReasoningContent  string          `json:"reasoning_content,omitempty"`  // DeepSeek reasoning content (must be echoed back)
 	ThinkingSignature string          `json:"thinking_signature,omitempty"` // Anthropic extended thinking signature (must be echoed back)
 	ThinkingData      string          `json:"thinking_data,omitempty"`      // Anthropic redacted thinking data (must be echoed back)
+	Cache             bool            `json:"cache,omitempty"`              // hint for providers to apply cache_control on this block
 }
 
 // ImageBlock creates an image content block with base64-encoded data.

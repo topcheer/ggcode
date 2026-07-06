@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -309,13 +308,22 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 
 func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
 	var msgParams []anthropic.MessageParam
-	// Collect system messages to embed into first user message (zai Anthropic rejects 'system' role)
-	var systemTexts []string
+	// Collect system content blocks preserving cache hints so we can emit
+	// separate Anthropic text blocks with selective cache_control breakpoints.
+	// This follows "Don't Break the Cache" (arXiv:2601.06007): static system
+	// prompt content gets its own cache breakpoint, so dynamic layers (ratchet
+	// rules, playbook) changing between runs doesn't invalidate the cache for
+	// the much larger static prefix.
+	type sysBlock struct {
+		text  string
+		cache bool
+	}
+	var systemBlocks []sysBlock
 	for _, m := range messages {
 		if m.Role == "system" {
 			for _, b := range m.Content {
-				if b.Type == "text" {
-					systemTexts = append(systemTexts, b.Text)
+				if b.Type == "text" && b.Text != "" {
+					systemBlocks = append(systemBlocks, sysBlock{text: b.Text, cache: b.Cache})
 				}
 			}
 			continue
@@ -371,26 +379,27 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			}
 		}
 		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
-		// Prepend system text into first user message
-		if m.Role == "user" && len(systemTexts) > 0 {
-			var sb strings.Builder
-			for i, st := range systemTexts {
-				if i > 0 {
-					sb.WriteByte('\n')
+		// Prepend system blocks into first user message, emitting each as a
+		// separate Anthropic text block with selective cache_control.
+		if m.Role == "user" && len(systemBlocks) > 0 {
+			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(systemBlocks))
+			for i, sb := range systemBlocks {
+				var text string
+				if i == 0 {
+					text = "[System]\n" + sb.text
+				} else {
+					text = sb.text
 				}
-				sb.WriteString(st)
+				if i == len(systemBlocks)-1 {
+					text += "\n[End System]"
+				}
+				block := anthropic.NewTextBlock(text)
+				if block.OfText != nil && sb.cache {
+					block.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				}
+				newBlocks = append(newBlocks, block)
 			}
-			systemTexts = nil
-			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+1)
-			sysBlock := anthropic.NewTextBlock("[System]\n" + sb.String() + "\n[End System]")
-			// Add cache control breakpoint on the system text block so Anthropic
-			// caches the large static system prompt across turns (~90% input
-			// token savings for this portion). Non-Anthropic providers ignore
-			// this field. See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-			if sysBlock.OfText != nil {
-				sysBlock.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
-			}
-			newBlocks = append(newBlocks, sysBlock)
+			systemBlocks = nil
 			newBlocks = append(newBlocks, blocks...)
 			param.Content = newBlocks
 		}

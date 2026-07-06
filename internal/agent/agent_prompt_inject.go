@@ -12,9 +12,17 @@ import (
 // every run, ensuring dynamic content and ratchet rules never accumulate
 // across runs. The build order is:
 //
-//  1. Base system prompt (always present)
+//  1. Base system prompt (always present, marked cacheable)
 //  2. Dynamic system prompt from injector callback (if set)
 //  3. Top learned ratchet rules (if any exist for this workspace)
+//  4. Playbook strategy hints (if any exist for this workspace)
+//
+// The static base (layer 1) is emitted as a separate content block with
+// Cache=true so providers like Anthropic can cache it across turns even
+// when the dynamic layers (2-4) change between runs. This follows the
+// "Don't Break the Cache" finding (arXiv:2601.06007): placing stable
+// content at the start with its own cache breakpoint maximises KV cache
+// reuse, saving 40-80% of system prompt token costs.
 //
 // This function is called once at the start of each agent Run().
 func (a *Agent) maybeInjectDynamicSystemPrompt() {
@@ -23,47 +31,44 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	fn := a.systemPromptInjector
 	a.mu.Unlock()
 
-	// Always start from base to prevent accumulation across runs.
-	newText := base
-	changed := false
+	// Collect dynamic layers.
+	var dynamicParts []string
 
 	// Layer 2: dynamic system prompt from external injector.
 	if fn != nil {
 		extra := strings.TrimSpace(fn())
 		if extra != "" {
-			newText = base + "\n\n" + extra
-			changed = true
+			dynamicParts = append(dynamicParts, extra)
 		}
 	}
 
 	// Layer 3: proactive ratchet rules.
-	rulesText := ""
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if rs := NewRuleStore(workingDir); rs != nil {
-			rulesText = rs.TopRulesForPrompt(5)
+			rulesText := rs.TopRulesForPrompt(5)
+			if rulesText != "" {
+				dynamicParts = append(dynamicParts, rulesText)
+				debug.Log("agent", "Injected learned ratchet rules into system prompt")
+			}
 		}
-	}
-	if rulesText != "" {
-		newText = newText + "\n\n" + rulesText
-		changed = true
-		debug.Log("agent", "Injected learned ratchet rules into system prompt")
 	}
 
 	// Layer 4: playbook strategy hints (ACE-inspired).
-	// Learn from past successful runs to guide future ones.
-	playbookText := ""
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText = pb.HintsForPrompt(3)
+			playbookText := pb.HintsForPrompt(3)
+			if playbookText != "" {
+				dynamicParts = append(dynamicParts, playbookText)
+				debug.Log("agent", "Injected playbook strategy hints into system prompt")
+			}
 		}
 	}
-	if playbookText != "" {
-		newText = newText + "\n\n" + playbookText
-		changed = true
-		debug.Log("agent", "Injected playbook strategy hints into system prompt")
-	}
 
-	if !changed {
+	// Skip entirely when there is no system prompt and no dynamic content.
+	// This preserves backward compatibility: tests and setups that rely on
+	// the absence of a system message are not disturbed.
+	base = strings.TrimSpace(base)
+	if base == "" && len(dynamicParts) == 0 {
 		return
 	}
 
@@ -71,9 +76,24 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	if !ok {
 		return
 	}
+
+	// Build content blocks: static base (cacheable) + dynamic (not cached).
+	// When there is no dynamic content, emit a single cached block.
+	if len(dynamicParts) == 0 {
+		cm.UpdateFirstSystemMessage(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: base, Cache: true}},
+		})
+		return
+	}
+
+	dynamicText := strings.Join(dynamicParts, "\n\n")
 	cm.UpdateFirstSystemMessage(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: newText}},
+		Role: "system",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: base, Cache: true},
+			{Type: "text", Text: dynamicText},
+		},
 	})
 }
 
