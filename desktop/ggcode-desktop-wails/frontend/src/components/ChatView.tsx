@@ -1644,6 +1644,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       {/* Messages — render active tab's content */}
       <div
         ref={scrollContainerRef}
+        role="log"
+        aria-live="polite"
+        aria-atomic="false"
         onScroll={() => {
           if (suppressNextScrollEventRef.current) {
             suppressNextScrollEventRef.current = false
