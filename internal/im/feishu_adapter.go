@@ -1325,8 +1325,12 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 			data = d
 			filename = filepath.Base(img.Data)
 		} else {
-			// Download the image
-			resp, err := a.httpClient.Get(img.Data)
+			// Download the image with context for cancellation
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+			if err != nil {
+				return fmt.Errorf("create image download request: %w", err)
+			}
+			resp, err := a.httpClient.Do(req)
 			if err != nil {
 				return fmt.Errorf("download image: %w", err)
 			}

@@ -718,8 +718,13 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string,
 			}
 			return a.uploadFile(ctx, channelID, filepath.Base(img.Data), data, "")
 		}
-		// For remote URLs, download first then upload
-		resp, err := a.httpClient.Get(img.Data)
+		// For remote URLs, download first then upload (with context for cancellation)
+		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+		if err != nil {
+			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			return err
+		}
+		resp, err := a.httpClient.Do(dlReq)
 		if err != nil {
 			// Fallback: send URL as text
 			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
