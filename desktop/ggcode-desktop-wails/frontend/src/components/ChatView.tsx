@@ -1189,7 +1189,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         >
           {statusBar.mode}
         </button>
-        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {(statusLabel === 'Working...' || statusLabel === 'Thinking...') && (
+            <span style={{
+              display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+              background: 'var(--color-warning)',
+              animation: 'pulse 1.2s ease-in-out infinite',
+            }} />
+          )}
           {statusLabel}
         </span>
         <button
@@ -1468,11 +1475,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           })()
         )}
 
-        {/* Thinking indicator (mirrors Fyne showThinking) */}
-        {thinking && (
-          <div>
+        {/* Typing indicator — appears while agent is thinking/working before first token */}
+        {(thinking || (isStreaming && !streamingMsgID.current)) && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 0',
+          }}>
             <div style={{
-              fontSize: 11, fontWeight: 600, marginBottom: 4,
+              fontSize: 11, fontWeight: 600,
               color: 'var(--color-warning)',
               display: 'flex', alignItems: 'center', gap: 6,
             }}>
@@ -1483,9 +1493,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               }} />
               Agent
             </div>
-            <div style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: 13 }}>
-              Thinking...
+            {/* Animated typing dots */}
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              {[0, 1, 2].map(i => (
+                <span key={i} style={{
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: 'var(--text-tertiary)',
+                  animation: `typBounce 1.2s ease-in-out ${i * 0.15}s infinite`,
+                }} />
+              ))}
             </div>
+            <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: 13 }}>
+              {thinking ? 'Thinking...' : 'Working...'}
+            </span>
           </div>
         )}
 
@@ -1576,6 +1596,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        @keyframes typBounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-6px); opacity: 1; }
         }
       `}</style>
       </div>
