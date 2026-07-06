@@ -100,19 +100,25 @@ func (s *Store) readLocked(path string) ([]Message, error) {
 }
 
 func (s *Store) writeLocked(path string, msgs []Message) error {
-	f, err := os.Create(path)
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	enc := json.NewEncoder(f)
 	for _, m := range msgs {
 		if err := enc.Encode(m); err != nil {
+			f.Close()
+			os.Remove(tmpPath)
 			return err
 		}
 	}
-	return nil
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // splitLines splits byte data into newline-delimited chunks.
