@@ -88,9 +88,14 @@ func (s *RunStats) recordFileEdit(path string) {
 }
 
 // recordCommand adds a shell command to the list (truncated).
+// Max 30 entries, each truncated to 200 chars. Prevents unbounded
+// growth in long autopilot/cron sessions.
 func (s *RunStats) recordCommand(cmd string) {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
+		return
+	}
+	if len(s.CommandsRun) >= 30 {
 		return
 	}
 	s.CommandsRun = append(s.CommandsRun, truncatePrompt(cmd, 200))

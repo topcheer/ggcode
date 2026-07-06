@@ -43,6 +43,16 @@ func TestRunStatsRecordCommand(t *testing.T) {
 	}
 }
 
+func TestRunStatsRecordCommandMaxEntries(t *testing.T) {
+	s := newRunStats("test")
+	for i := 0; i < 50; i++ {
+		s.recordCommand("echo test")
+	}
+	if len(s.CommandsRun) != 30 {
+		t.Errorf("expected max 30 commands, got %d", len(s.CommandsRun))
+	}
+}
+
 func TestRunStatsRecordToolErrorMaxEntries(t *testing.T) {
 	s := newRunStats("test")
 	for i := 0; i < 15; i++ {
