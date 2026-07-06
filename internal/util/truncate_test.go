@@ -17,6 +17,8 @@ func TestTruncate(t *testing.T) {
 		{"maxRunes_1", "hello", 1, "h"},
 		{"empty", "", 10, ""},
 		{"multi_byte", "日本語テスト", 4, "日..."},
+		{"negative", "hello", -1, "hello"},
+		{"zero", "hello", 0, ""},
 	}
 
 	for _, tt := range tests {
