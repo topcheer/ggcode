@@ -1,0 +1,92 @@
+package im
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Rate limit constants.
+// Sources:
+//   - Slack: HTTP 429 with Retry-After header (seconds)
+//     https://api.slack.com/apis/rate-limits
+//   - Discord: HTTP 429 with Retry-After header (float seconds) or JSON body {"retry_after": N}
+//     https://discord.com/developers/docs/topics/rate-limits
+//   - Mattermost: HTTP 429 with X-RateLimit-Reset header (Unix ms timestamp) or Retry-After
+//     https://docs.mattermost.com/administration-guide/manage/rate-limit-settings.html
+const (
+	// maxRateLimitRetries is the maximum number of retry attempts after a 429.
+	maxRateLimitRetries = 2
+	// defaultRetryDelay is used when no Retry-After header is present.
+	defaultRetryDelay = 2 * time.Second
+	// maxRetryDelay caps any single retry wait to prevent excessive blocking.
+	maxRetryDelay = 30 * time.Second
+)
+
+// parseRetryAfter extracts the retry delay from a 429 response.
+// It checks the standard Retry-After header first, then falls back to
+// platform-specific headers (X-RateLimit-Reset for Mattermost).
+// Returns defaultRetryDelay if no header is present or parseable.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return defaultRetryDelay
+	}
+
+	// Standard Retry-After header (seconds or HTTP-date).
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		// Try integer seconds first.
+		if secs, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && secs >= 0 {
+			return capDuration(time.Duration(secs) * time.Second)
+		}
+		// Try HTTP-date format.
+		if t, err := http.ParseTime(ra); err == nil {
+			d := time.Until(t)
+			if d > 0 {
+				return capDuration(d)
+			}
+		}
+	}
+
+	// Mattermost uses X-RateLimit-Reset (Unix timestamp in milliseconds).
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if ms, err := strconv.ParseInt(strings.TrimSpace(reset), 10, 64); err == nil && ms > 0 {
+			resetTime := time.Unix(0, ms*int64(time.Millisecond))
+			d := time.Until(resetTime)
+			if d > 0 {
+				return capDuration(d)
+			}
+		}
+	}
+
+	return defaultRetryDelay
+}
+
+// capDuration clamps a retry delay to maxRetryDelay.
+func capDuration(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultRetryDelay
+	}
+	if d > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return d
+}
+
+// sleepRetry sleeps for the given duration, respecting context cancellation.
+// Returns ctx.Err() if the context is cancelled during the sleep.
+func sleepRetry(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// rateLimitExhausted formats a standard error for when all retries are used up.
+func rateLimitExhausted(platform string) error {
+	return fmt.Errorf("%s API rate limited: max retries (%d) exceeded", platform, maxRateLimitRetries)
+}

@@ -454,7 +454,7 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 		if rootID != "" && a.replyMode == "thread" {
 			payload["root_id"] = rootID
 		}
-		result, err := a.apiPost("posts", payload)
+		result, err := a.apiPostCtx(ctx, "posts", payload)
 		if err != nil {
 			return fmt.Errorf("Mattermost send chunk %d/%d: %w", i+1, len(chunks), err)
 		}
@@ -553,33 +553,57 @@ func (a *mattermostAdapter) apiGet(path string) (map[string]any, error) {
 }
 
 func (a *mattermostAdapter) apiPost(path string, payload map[string]any) (map[string]any, error) {
+	return a.apiPostCtx(context.Background(), path, payload)
+}
+
+// apiPostCtx sends a POST request with context and 429 rate-limit retry.
+func (a *mattermostAdapter) apiPostCtx(ctx context.Context, path string, payload map[string]any) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("POST", a.apiURL(path), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := a.conn.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", path, err)
-	}
-	defer resp.Body.Close()
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiURL(path), bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+a.token)
+		req.Header.Set("Content-Type", "application/json")
 
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("POST %s → %d: %s", path, resp.StatusCode, string(respBody))
-	}
+		resp, err := a.conn.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("POST %s: %w", path, err)
+		}
 
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("POST %s decode: %w", path, err)
+		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("mattermost", "adapter=%s POST %s 429 rate limited, retry %d/%d in %v",
+					a.name, path, attempt+1, maxRateLimitRetries, delay)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, rateLimitExhausted("Mattermost")
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			return nil, fmt.Errorf("POST %s → %d: %s", path, resp.StatusCode, string(respBody))
+		}
+
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("POST %s decode: %w", path, err)
+		}
+		return result, nil
 	}
-	return result, nil
+	return nil, rateLimitExhausted("Mattermost")
 }
 
 func (a *mattermostAdapter) publishState(healthy bool, status, lastErr string) {

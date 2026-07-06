@@ -554,22 +554,42 @@ func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, cont
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 	body := map[string]any{"content": content}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bot "+a.token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+
+		// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("discord", "adapter=%s createMessage 429 rate limited, retry %d/%d in %v",
+					a.name, attempt+1, maxRateLimitRetries, delay)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return err
+				}
+				continue
+			}
+			return rateLimitExhausted("Discord")
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+			return fmt.Errorf("Discord API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+		return nil
 	}
-	req.Header.Set("Authorization", "Bot "+a.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return fmt.Errorf("Discord API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return nil
+	return rateLimitExhausted("Discord")
 }
 
 // TriggerTyping adds a reaction acknowledgement to the latest real user message

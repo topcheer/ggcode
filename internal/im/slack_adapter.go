@@ -601,31 +601,64 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, conten
 		"text":    content,
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		if attempt > 0 {
+			debug.Log("slack", "adapter=%s send retry %d/%d", a.name, attempt, maxRateLimitRetries)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+a.botToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+
+		// Handle HTTP 429 rate limit with Retry-After backoff.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("slack", "adapter=%s rate limited (429), retrying in %v (attempt %d/%d)",
+					a.name, delay, attempt+1, maxRateLimitRetries)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", rateLimitExhausted("Slack")
+		}
+
+		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+		if err != nil {
+			return "", err
+		}
+
+		var result map[string]any
+		if err := json.Unmarshal(data, &result); err != nil {
+			return "", fmt.Errorf("Slack API parse error: %w", err)
+		}
+		if ok, _ := result["ok"].(bool); !ok {
+			errMsg, _ := result["error"].(string)
+			// Slack may return ok=false with error="ratelimited" inside a 200 body.
+			if errMsg == "ratelimited" && attempt < maxRateLimitRetries {
+				debug.Log("slack", "adapter=%s Slack ratelimited error, retrying (attempt %d/%d)",
+					a.name, attempt+1, maxRateLimitRetries)
+				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", fmt.Errorf("Slack API error: %s", errMsg)
+		}
+		ts, _ := result["ts"].(string)
+		return strings.TrimSpace(ts), nil
 	}
-	req.Header.Set("Authorization", "Bearer "+a.botToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-	if err != nil {
-		return "", err
-	}
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("Slack API parse error: %w", err)
-	}
-	if ok, _ := result["ok"].(bool); !ok {
-		errMsg, _ := result["error"].(string)
-		return "", fmt.Errorf("Slack API error: %s", errMsg)
-	}
-	ts, _ := result["ts"].(string)
-	return strings.TrimSpace(ts), nil
+	return "", rateLimitExhausted("Slack")
 }
 
 func (a *slackAdapter) recordOutboundMessage(binding ChannelBinding, messageID string) {
