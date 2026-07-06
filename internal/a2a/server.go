@@ -791,8 +791,13 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 				debug.Log("a2a", "push delivery error: %v", err)
 				return
 			}
+			io.Copy(io.Discard, resp.Body) // drain for connection reuse
 			resp.Body.Close()
-			debug.Log("a2a", "push delivered to %s: %d", url, resp.StatusCode)
+			if resp.StatusCode >= 400 {
+				debug.Log("a2a", "push to %s failed: HTTP %d", url, resp.StatusCode)
+			} else {
+				debug.Log("a2a", "push delivered to %s: %d", url, resp.StatusCode)
+			}
 		})
 	}
 }
