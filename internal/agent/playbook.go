@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -193,11 +194,12 @@ func extractFileTypes(filesEdited []string) string {
 			return ext
 		}
 	}
-	// Multiple extensions
+	// Multiple extensions — sort for deterministic fingerprint
 	var sorted []string
 	for ext := range exts {
 		sorted = append(sorted, ext)
 	}
+	sort.Strings(sorted)
 	return strings.Join(sorted, "+")
 }
 

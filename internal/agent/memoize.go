@@ -70,7 +70,9 @@ func extractPathForInvalidation(toolName string, args []byte) string {
 	case "list_directory":
 		return extractJSONStringField(args, "path")
 	case "glob":
-		return extractJSONStringField(args, "directory")
+		// Glob supports recursive patterns (**), so the top-level directory's
+		// mtime does not reflect changes in subdirectories. Use TTL instead.
+		return ""
 	case "multi_file_read":
 		return "" // multi-file: skip per-file mtime, use TTL
 	default:
@@ -82,9 +84,9 @@ func extractPathForInvalidation(toolName string, args []byte) string {
 // use mtime invalidation instead.
 func (m *toolMemo) getTTL(toolName string) time.Duration {
 	switch toolName {
-	case "read_file", "list_directory", "glob":
+	case "read_file", "list_directory":
 		return 0 // use mtime invalidation, no TTL
-	case "grep", "search_files":
+	case "grep", "search_files", "glob":
 		return memoizeSearchTTL
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_workspace_symbols", "lsp_diagnostics", "lsp_implementation",
