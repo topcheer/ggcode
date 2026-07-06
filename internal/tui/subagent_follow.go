@@ -582,9 +582,9 @@ func (m *Model) renderSubAgentFollowStrip() string {
 		activity := slot.Phase
 		if activity == "" {
 			if slot.Terminal {
-				activity = "done"
+				activity = m.t("follow.status_done")
 			} else {
-				activity = "running"
+				activity = m.t("follow.status_running")
 			}
 		}
 
@@ -610,10 +610,10 @@ func (m *Model) renderSubAgentFollowStrip() string {
 	}
 
 	if len(m.subAgentFollow.slots) > maxShow {
-		b.WriteString(fmt.Sprintf("  +%d more", len(m.subAgentFollow.slots)-maxShow))
+		b.WriteString(fmt.Sprintf(m.t("follow.more"), len(m.subAgentFollow.slots)-maxShow))
 	}
 
-	b.WriteString("   ↑↓←→ switch  Esc close")
+	b.WriteString(m.t("follow.hint"))
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(b.String())
 }
 

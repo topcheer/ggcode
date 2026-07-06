@@ -225,12 +225,13 @@ func (m Model) renderComposerPanel() string {
 	if m.tmuxMenuOpen {
 		inputPart = m.renderTmuxMenu()
 	} else if m.subAgentFollow.isActive() {
-		kind := "agent"
-		if m.subAgentFollow.activeID != "" && len(m.subAgentFollow.activeID) >= 3 && m.subAgentFollow.activeID[:3] == "tm-" {
-			kind = "teammate"
+		if strings.HasPrefix(m.subAgentFollow.activeID, "tm-") {
+			inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+				fmt.Sprintf(m.t("follow.active_teammate"), shortID(m.subAgentFollow.activeID)))
+		} else {
+			inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+				fmt.Sprintf(m.t("follow.active_agent"), shortID(m.subAgentFollow.activeID)))
 		}
-		inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-			fmt.Sprintf("Following %s %s — input paused. Press Esc to return.", kind, shortID(m.subAgentFollow.activeID)))
 	} else {
 		inputPart = m.renderComposerInput()
 	}

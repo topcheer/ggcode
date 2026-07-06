@@ -598,6 +598,18 @@ func enCatalog(key string) string {
 		return "Reasoning effort is not supported by the current provider"
 	case "follow.loading":
 		return "  Loading follow view..."
+	case "follow.active_agent":
+		return "Following agent %s — input paused. Press Esc to return."
+	case "follow.active_teammate":
+		return "Following teammate %s — input paused. Press Esc to return."
+	case "follow.status_running":
+		return "running"
+	case "follow.status_done":
+		return "done"
+	case "follow.more":
+		return "  +%d more"
+	case "follow.hint":
+		return "  ↑↓←→ switch  Esc close"
 	case "status.tools_used":
 		return "%d tools used"
 	case "tool.done":

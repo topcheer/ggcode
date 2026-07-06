@@ -606,6 +606,18 @@ func zhCatalog(key string) string {
 		return "当前提供商不支持推理强度"
 	case "follow.loading":
 		return "  正在加载跟随视图..."
+	case "follow.active_agent":
+		return "正在跟随 agent %s — 输入已暂停。按 Esc 返回。"
+	case "follow.active_teammate":
+		return "正在跟随 teammate %s — 输入已暂停。按 Esc 返回。"
+	case "follow.status_running":
+		return "运行中"
+	case "follow.status_done":
+		return "完成"
+	case "follow.more":
+		return "  +%d 个更多"
+	case "follow.hint":
+		return "  ↑↓←→ 切换  Esc 关闭"
 	case "status.tools_used":
 		return "已调用 %d 个工具"
 	case "tool.done":
