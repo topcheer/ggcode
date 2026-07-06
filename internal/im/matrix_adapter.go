@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -27,6 +28,14 @@ const (
 	matrixMaxMessageLen = 4000
 	matrixSyncTimeout   = 30000
 	matrixCryptoDBName  = "matrix-crypto.db"
+
+	// matrixInterMessageDelay is the delay between consecutive messages to the
+	// same room. Most Matrix homeservers rate-limit at ~1 message/second/user.
+	// Source: https://spec.matrix.org/latest/client-server-api/#rate-limiting
+	matrixInterMessageDelay = 500 * time.Millisecond
+
+	// matrixMaxRetries is the maximum number of retries on M_LIMIT_EXCEEDED.
+	matrixMaxRetries = 3
 )
 
 type matrixAdapter struct {
@@ -616,7 +625,16 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 	}
 
 	chunks := chunkText(text, matrixMaxMessageLen)
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		// Rate limit: most homeservers limit ~1 msg/sec/user.
+		if i > 0 {
+			select {
+			case <-time.After(matrixInterMessageDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
 		content := &event.MessageEventContent{
 			MsgType: event.MsgText,
 			Body:    chunk,
@@ -637,7 +655,32 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 		}
 
 		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
-		_, err := a.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+		var err error
+		for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
+			_, err = a.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+			if err == nil {
+				break
+			}
+			// Retry on M_LIMIT_EXCEEDED with server-provided delay.
+			var respErr *mautrix.RespError
+			if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
+				retryAfter := matrixInterMessageDelay * 2
+				if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
+					if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
+						retryAfter = time.Duration(msFloat) * time.Millisecond
+					}
+				}
+				debug.Log("matrix", "adapter=%s rate-limited (M_LIMIT_EXCEEDED), retry %d/%d after %v",
+					a.name, attempt+1, matrixMaxRetries, retryAfter)
+				select {
+				case <-time.After(retryAfter):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				continue
+			}
+			break
+		}
 		if err != nil {
 			return fmt.Errorf("matrix send to %s: %w", roomID, err)
 		}
