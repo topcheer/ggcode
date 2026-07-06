@@ -162,45 +162,45 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if name == "" {
 			name = tc.Detail
 		}
-		return fmt.Sprintf("👥 创建团队: %s", name)
+		return fmt.Sprintf("👥 %s: %s", imLabel(lang, "team_create"), name)
 	case "team_delete":
-		return "👥 删除团队"
+		return "👥 " + imLabel(lang, "team_delete")
 	case "teammate_spawn":
 		name := extractArgValue(args, "name")
 		if name == "" {
 			name = tc.Detail
 		}
-		return fmt.Sprintf("🤖 创建队友: %s", name)
+		return fmt.Sprintf("🤖 %s: %s", imLabel(lang, "teammate_spawn"), name)
 	case "teammate_shutdown":
-		return "🤖 关闭队友"
+		return "🤖 " + imLabel(lang, "teammate_shutdown")
 	case "send_message":
 		to := extractArgValue(args, "to")
 		if to == "" {
 			to = tc.Detail
 		}
-		return fmt.Sprintf("📨 发送消息 → %s", to)
+		return fmt.Sprintf("📨 %s → %s", imLabel(lang, "send_message"), to)
 	case "teammate_results":
-		return "📋 收集团队结果"
+		return "📋 " + imLabel(lang, "teammate_results")
 	case "swarm_task_create":
 		subject := extractArgValue(args, "subject")
 		if subject == "" {
 			subject = tc.Detail
 		}
-		return fmt.Sprintf("📋 创建任务: %s", subject)
+		return fmt.Sprintf("📋 %s: %s", imLabel(lang, "swarm_task_create"), subject)
 	case "swarm_task_complete":
-		return "✅ 完成任务"
+		return "✅ " + imLabel(lang, "swarm_task_complete")
 	case "a2a_remote":
 		target := extractArgValue(args, "target")
 		if target == "" {
 			target = tc.Detail
 		}
-		return fmt.Sprintf("🔗 远程调用 → %s", target)
+		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_remote"), target)
 	case "a2a_send_task":
 		target := extractArgValue(args, "target")
 		if target == "" {
 			target = tc.Detail
 		}
-		return fmt.Sprintf("🔗 发送任务 → %s", target)
+		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_send_task"), target)
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -319,43 +319,43 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		if name == "" {
 			name = tr.Detail
 		}
-		return true, fmt.Sprintf("👥 团队已创建 %s", name)
+		return true, fmt.Sprintf("👥 %s %s", imLabel(toolLang(tr.Lang), "team_created"), name)
 	case "team_delete":
-		return true, "👥 团队已删除"
+		return true, "👥 " + imLabel(toolLang(tr.Lang), "team_deleted")
 	case "teammate_spawn":
 		name := extractArgValue(tr.Args, "name")
 		if name == "" {
 			name = tr.Detail
 		}
-		return true, fmt.Sprintf("🤖 队友 %s 已创建", name)
+		return true, fmt.Sprintf("🤖 %s %s", imLabel(toolLang(tr.Lang), "teammate_created"), name)
 	case "teammate_shutdown":
-		return true, "🤖 队友已关闭"
+		return true, "🤖 " + imLabel(toolLang(tr.Lang), "teammate_shutdown_done")
 	case "send_message":
 		to := extractArgValue(tr.Args, "to")
 		if to == "" {
 			to = tr.Detail
 		}
-		return true, fmt.Sprintf("📨 消息已发送 → %s", to)
+		return true, fmt.Sprintf("📨 %s → %s", imLabel(toolLang(tr.Lang), "message_sent"), to)
 	case "swarm_task_create":
 		subject := extractArgValue(tr.Args, "subject")
 		if subject == "" {
 			subject = tr.Detail
 		}
-		return true, fmt.Sprintf("📋 任务已创建: %s", subject)
+		return true, fmt.Sprintf("📋 %s: %s", imLabel(toolLang(tr.Lang), "task_created"), subject)
 	case "swarm_task_complete":
-		return true, "✅ 任务已完成"
+		return true, "✅ " + imLabel(toolLang(tr.Lang), "task_completed")
 	case "a2a_remote":
 		target := extractArgValue(tr.Args, "target")
 		if target == "" {
 			target = tr.Detail
 		}
-		return true, fmt.Sprintf("🔗 远程调用 → %s", target)
+		return true, fmt.Sprintf("🔗 %s → %s", imLabel(toolLang(tr.Lang), "a2a_remote"), target)
 	case "a2a_send_task":
 		target := extractArgValue(tr.Args, "target")
 		if target == "" {
 			target = tr.Detail
 		}
-		return true, fmt.Sprintf("🔗 任务已发送 → %s", target)
+		return true, fmt.Sprintf("🔗 %s → %s", imLabel(toolLang(tr.Lang), "task_sent"), target)
 	// Team/swarm/a2a tools — body markdown
 	case "teammate_results":
 		return true, formatIMTeammateResultsResult(tr)

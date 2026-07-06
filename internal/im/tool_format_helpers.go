@@ -116,6 +116,42 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Todos"
 		case "results":
 			return "results"
+		case "team_create":
+			return "Create team"
+		case "team_delete":
+			return "Delete team"
+		case "teammate_spawn":
+			return "Spawn teammate"
+		case "teammate_shutdown":
+			return "Shutdown teammate"
+		case "send_message":
+			return "Send message"
+		case "teammate_results":
+			return "Collect team results"
+		case "swarm_task_create":
+			return "Create task"
+		case "swarm_task_complete":
+			return "Complete task"
+		case "a2a_remote":
+			return "Remote call"
+		case "a2a_send_task":
+			return "Send task"
+		case "team_created":
+			return "Team created"
+		case "team_deleted":
+			return "Team deleted"
+		case "teammate_created":
+			return "Teammate created"
+		case "teammate_shutdown_done":
+			return "Teammate shut down"
+		case "message_sent":
+			return "Message sent"
+		case "task_created":
+			return "Task created"
+		case "task_completed":
+			return "Task completed"
+		case "task_sent":
+			return "Task sent"
 		}
 	default: // zh-CN
 		switch key {
@@ -219,6 +255,42 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "待办"
 		case "results":
 			return "条结果"
+		case "team_create":
+			return "创建团队"
+		case "team_delete":
+			return "删除团队"
+		case "teammate_spawn":
+			return "创建队友"
+		case "teammate_shutdown":
+			return "关闭队友"
+		case "send_message":
+			return "发送消息"
+		case "teammate_results":
+			return "收集团队结果"
+		case "swarm_task_create":
+			return "创建任务"
+		case "swarm_task_complete":
+			return "完成任务"
+		case "a2a_remote":
+			return "远程调用"
+		case "a2a_send_task":
+			return "发送任务"
+		case "team_created":
+			return "团队已创建"
+		case "team_deleted":
+			return "团队已删除"
+		case "teammate_created":
+			return "队友已创建"
+		case "teammate_shutdown_done":
+			return "队友已关闭"
+		case "message_sent":
+			return "消息已发送"
+		case "task_created":
+			return "任务已创建"
+		case "task_completed":
+			return "任务已完成"
+		case "task_sent":
+			return "任务已发送"
 		}
 	}
 	return key
