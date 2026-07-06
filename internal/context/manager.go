@@ -893,13 +893,18 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Pass 1: count clearable tool_results (large, non-error, not yet cleared)
+	// Pass 1: count clearable tool_results (large, non-error, not yet cleared).
+	// Also skip results with semantic importance (error/debugging context) to
+	// avoid "context collapse" — the phenomenon where iterative clearing erodes
+	// critical debugging information (inspired by SWE-Pruner task-aware pruning
+	// and ACE context collapse research, ICLR 2026).
 	type clearTarget struct {
 		msgIdx  int
 		blkIdx  int
 		origLen int
 	}
 	var targets []clearTarget
+	skippedImportant := 0
 	for i, msg := range m.messages {
 		for j, b := range msg.Content {
 			if b.Type != "tool_result" {
@@ -912,6 +917,12 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 				continue
 			}
 			if strings.HasPrefix(b.Output, "[cleared:") {
+				continue
+			}
+			// Semantic importance: preserve results containing build/test
+			// error output that the agent may still need for debugging.
+			if hasSemanticImportance(b.Output) {
+				skippedImportant++
 				continue
 			}
 			targets = append(targets, clearTarget{msgIdx: i, blkIdx: j, origLen: len(b.Output)})
@@ -942,9 +953,51 @@ func (m *Manager) ClearOldToolResults(keepN int) int {
 	m.version++
 	m.recalcTokens()
 	freed := before - m.tokens
-	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d)",
-		len(toClear), freed, keepN, len(targets))
+	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d, skipped_important=%d)",
+		len(toClear), freed, keepN, len(targets), skippedImportant)
 	return freed
+}
+
+// hasSemanticImportance checks whether a tool result output contains content
+// that is likely to be important for the agent's current debugging context.
+// Such results are preserved during context clearing to avoid losing critical
+// debugging information (SWE-Pruner task-aware pruning concept).
+//
+// This is a lightweight heuristic — no ML model needed. It checks for common
+// error/build/test failure markers that indicate the output is error-relevant
+// rather than just large file content.
+func hasSemanticImportance(output string) bool {
+	// Quick exit: only check outputs that might contain errors (> 50 chars).
+	// Very short outputs are unlikely to contain meaningful error context.
+	if len(output) < 50 {
+		return false
+	}
+
+	// Check first 2000 chars — errors typically appear early in output.
+	// This avoids scanning very large outputs fully (performance).
+	check := output
+	if len(check) > 2000 {
+		check = check[:2000]
+	}
+
+	// Lowercase check for case-insensitive matching.
+	checkLower := strings.ToLower(check)
+
+	// Strong error markers: lines that start with these are almost certainly
+	// build/compiler/test errors that the agent needs for debugging.
+	strongMarkers := []string{
+		"error:", "fail:", "failed:", "panic:", "fatal:",
+		"undefined:", "cannot find", "does not compile",
+		"syntax error", "type error", "referenceerror",
+		"traceback (most recent call last)",
+	}
+	for _, marker := range strongMarkers {
+		if strings.Contains(checkLower, marker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ClearOldToolUseInputs truncates the Input (arguments) of tool_use blocks

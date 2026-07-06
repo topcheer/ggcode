@@ -1364,3 +1364,124 @@ func TestClearOldToolUseInputs_SkipsSmallInput(t *testing.T) {
 		t.Fatalf("small input (< %d chars) should not be cleared, freed %d", toolUseInputClearMinLen, freed)
 	}
 }
+
+func TestHasSemanticImportance(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected bool
+	}{
+		{"empty", "", false},
+		{"short", "ok", false},
+		{"normal code", strings.Repeat("package main\n", 10), false},
+		{"build error", "main.go:10:5: undefined: foo (and more context here)", true},
+		{"panic", "panic: runtime error: index out of range [0] with length 0", true},
+		{"fatal", "fatal: not a git repository (or any parent up to mount point)", true},
+		{"syntax error", "syntax error: unexpected token 'foo' at line 5 column 10", true},
+		{"python traceback", "Traceback (most recent call last):\n  File \"test.py\"", true},
+		{"type error", "TypeError: Cannot read properties of undefined (reading 'x')", true},
+		{"test failure", "FAIL: test_foo/bar [0.001s] -- expected true got false", true},
+		{"compiler error", "error: cannot find package \"foo\" in any of /go/src", true},
+		{"normal file listing", strings.Repeat("drwxr-xr-x 2 user user 4096 Jan 1 file\n", 50), false},
+		{"normal function", "func processData(input string) string {\n    return input\n}", false},
+		{"error in comment", strings.Repeat("// handle error gracefully\n", 50), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := hasSemanticImportance(tt.output)
+			if result != tt.expected {
+				t.Errorf("hasSemanticImportance(%q) = %v, want %v", truncate(tt.output, 50), result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestClearOldToolResults_SemanticImportancePreserved(t *testing.T) {
+	m := NewManager(100000)
+
+	// Result with build error output — should be preserved even with keepN=0.
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("err-build", "run_command", []byte(`{}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "err-build", Output: "exit status 1\nmain.go:10:5: error: undefined: processData"},
+	}})
+
+	// Normal large result — should be cleared.
+	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+		provider.ToolUseBlock("ok-read", "read_file", []byte(`{}`)),
+	}})
+	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "ok-read", Output: strings.Repeat("line of code\n", 50)},
+	}})
+
+	freed := m.ClearOldToolResults(0) // clear everything possible
+
+	// The build error result should be preserved (semantic importance).
+	errResult := findToolResult(t, m.Messages(), "err-build")
+	if strings.HasPrefix(errResult.Output, "[cleared:") {
+		t.Error("result with build error markers should be preserved (semantic importance)")
+	}
+
+	// The normal result should be cleared.
+	okResult := findToolResult(t, m.Messages(), "ok-read")
+	if !strings.HasPrefix(okResult.Output, "[cleared:") {
+		t.Error("normal result should be cleared")
+	}
+	if freed <= 0 {
+		t.Error("expected tokens freed from normal result")
+	}
+}
+
+func TestClearOldToolResults_MixedImportance(t *testing.T) {
+	m := NewManager(100000)
+
+	// 4 results: 2 normal, 2 with error markers.
+	// With keepN=1, we should clear 1 normal (the oldest) and preserve both error results.
+	results := []struct {
+		id     string
+		output string
+	}{
+		{"r1", strings.Repeat("normal content line\n", 50)},                // clearable
+		{"r2", "panic: something went wrong\n" + strings.Repeat("x", 500)}, // important
+		{"r3", strings.Repeat("another file\n", 50)},                       // clearable
+		{"r4", "FAIL: test_bar/baz [0.003s]\n" + strings.Repeat("y", 500)}, // important
+	}
+
+	for _, r := range results {
+		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock(r.id, "run_command", []byte(`{}`)),
+		}})
+		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: r.id, Output: r.output},
+		}})
+	}
+
+	m.ClearOldToolResults(1) // keep last 1 clearable
+
+	// r2 should be preserved (has error markers).
+	r2Result := findToolResult(t, m.Messages(), "r2")
+	if strings.HasPrefix(r2Result.Output, "[cleared:") {
+		t.Error("r2 (panic output) should be preserved")
+	}
+
+	// r4 should be preserved (has error markers).
+	r4Result := findToolResult(t, m.Messages(), "r4")
+	if strings.HasPrefix(r4Result.Output, "[cleared:") {
+		t.Error("r4 (FAIL output) should be preserved")
+	}
+
+	// r1 should be cleared (oldest normal result, beyond keepN).
+	r1Result := findToolResult(t, m.Messages(), "r1")
+	if !strings.HasPrefix(r1Result.Output, "[cleared:") {
+		t.Error("r1 (normal output, oldest) should be cleared")
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
