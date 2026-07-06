@@ -728,6 +728,16 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
 	}
+	// DingTalk API can also return HTTP 200 with errcode in JSON body on failure.
+	// Same pattern as webhook — must check errcode to avoid silent failures.
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	var aresp struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal(respBody, &aresp); err == nil && aresp.ErrCode != 0 {
+		return fmt.Errorf("api send errcode %d: %s", aresp.ErrCode, redactDingTalkResponse(aresp.ErrMsg))
+	}
 	return nil
 }
 
