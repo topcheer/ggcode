@@ -58,6 +58,11 @@ type overseerState struct {
 	// Intervention tracking — which patterns have already fired.
 	fired map[string]bool
 
+	// Drift detection level (0=not fired, 1/2/3=escalation levels).
+	// Unlike other patterns, drift can fire multiple times with escalating
+	// guidance for long autonomous runs (SICA progressive intervention concept).
+	driftLevel int
+
 	// Last analysis iteration (to avoid re-analyzing too frequently).
 	lastAnalysisIter int
 }
@@ -133,6 +138,9 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)
+		// Reset drift level — a productive action means the agent is
+		// making progress, so future drift should start from level 1 again.
+		o.driftLevel = 0
 	} else {
 		o.itersSinceProductive++
 	}
@@ -324,13 +332,36 @@ func (o *overseerState) checkErrorEscalation(traj []trajectoryEntry) string {
 }
 
 // checkDrift detects when no productive action has occurred for too long.
+// Uses progressive escalation (SICA-inspired): each level fires at most once,
+// with increasingly direct guidance for long autonomous runs.
+//
+// Level 1 (driftThreshold, 20 iters): "re-anchor your task"
+// Level 2 (2×driftThreshold, 40 iters): "summarize progress and consider asking user"
+// Level 3 (3×driftThreshold, 60 iters): "escalate — try fundamentally different approach"
 func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
-	if o.fired["drift"] {
+	// Determine which level we should be at based on iterations without progress.
+	var targetLevel int
+	switch {
+	case o.itersSinceProductive >= driftThreshold*3:
+		targetLevel = 3
+	case o.itersSinceProductive >= driftThreshold*2:
+		targetLevel = 2
+	case o.itersSinceProductive >= driftThreshold:
+		targetLevel = 1
+	default:
 		return ""
 	}
-	if o.itersSinceProductive >= driftThreshold {
-		o.fired["drift"] = true
-		debug.Log("overseer", "drift: %d iterations since last productive action", o.itersSinceProductive)
+
+	// Only fire if we haven't already fired at this level.
+	if o.driftLevel >= targetLevel {
+		return ""
+	}
+	o.driftLevel = targetLevel
+	debug.Log("overseer", "drift level %d: %d iterations since last productive action",
+		targetLevel, o.itersSinceProductive)
+
+	switch targetLevel {
+	case 1:
 		return fmt.Sprintf(
 			"Overseer: %d iterations since you last made a productive change (edit, command, commit). "+
 				"You may be drifting from the original task. Re-anchor:\n"+
@@ -339,8 +370,26 @@ func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 				"3. Execute it immediately — stop researching and start doing",
 			o.itersSinceProductive,
 		)
+	case 2:
+		return fmt.Sprintf(
+			"Overseer: %d iterations without productive changes. This is a significant stall.\n"+
+				"1. Summarize what you've accomplished so far in 2-3 sentences\n"+
+				"2. Identify the specific blocker preventing progress\n"+
+				"3. If stuck on the same problem, try a completely different approach\n"+
+				"4. If the task is unclear, ask the user for clarification rather than continuing to spin",
+			o.itersSinceProductive,
+		)
+	default: // level 3
+		return fmt.Sprintf(
+			"Overseer: %d iterations without productive changes — critical stall detected.\n"+
+				"This task may require:\n"+
+				"- Asking the user for guidance or clarification\n"+
+				"- Skipping the current subtask and moving to the next one\n"+
+				"- Using ask_user to surface the blocker\n"+
+				"Stop researching and take decisive action now.",
+			o.itersSinceProductive,
+		)
 	}
-	return ""
 }
 
 // overseerCheck is called from the agent loop. It records the tool call and
@@ -402,8 +451,9 @@ func extractFileHint(toolName string, args []byte) string {
 // overseerAnalysisTiming returns a human-readable description of the overseer
 // configuration for debugging.
 func overseerAnalysisTiming() string {
-	return fmt.Sprintf("interval=%d spam>%d stall>%d fileStuck>%d drift>%d",
-		overseerInterval, spamThreshold, stallThreshold, fileStuckThreshold, driftThreshold)
+	return fmt.Sprintf("interval=%d spam>%d stall>%d fileStuck>%d drift>%d(%d/%d/%d)",
+		overseerInterval, spamThreshold, stallThreshold, fileStuckThreshold,
+		driftThreshold, driftThreshold, driftThreshold*2, driftThreshold*3)
 }
 
 // Compile-time assertion that time is used (for the duration tracking we may

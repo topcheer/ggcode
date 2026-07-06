@@ -309,3 +309,94 @@ func TestOverseer_SuccessfulCommandResetsProductive(t *testing.T) {
 		t.Fatalf("expected fileReadsSinceEdit cleared after successful command, got %d entries", len(o.fileReadsSinceEdit))
 	}
 }
+
+func TestOverseer_ProgressiveDrift(t *testing.T) {
+	o := newOverseerState()
+	tools := []string{"read_file", "grep", "search_files", "glob"}
+
+	// Level 1: driftThreshold iterations
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg1 := o.checkDrift(o.trajectory)
+	if msg1 == "" {
+		t.Fatal("expected drift level 1 intervention")
+	}
+	if !strings.Contains(msg1, "Re-anchor") {
+		t.Fatalf("level 1 should mention re-anchoring, got: %s", msg1)
+	}
+	if o.driftLevel != 1 {
+		t.Fatalf("expected driftLevel=1, got %d", o.driftLevel)
+	}
+
+	// Level 2: 2×driftThreshold iterations
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg2 := o.checkDrift(o.trajectory)
+	if msg2 == "" {
+		t.Fatal("expected drift level 2 intervention")
+	}
+	if !strings.Contains(msg2, "significant stall") {
+		t.Fatalf("level 2 should mention significant stall, got: %s", msg2)
+	}
+	if o.driftLevel != 2 {
+		t.Fatalf("expected driftLevel=2, got %d", o.driftLevel)
+	}
+
+	// Level 3: 3×driftThreshold iterations
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg3 := o.checkDrift(o.trajectory)
+	if msg3 == "" {
+		t.Fatal("expected drift level 3 intervention")
+	}
+	if !strings.Contains(msg3, "critical stall") {
+		t.Fatalf("level 3 should mention critical stall, got: %s", msg3)
+	}
+	if o.driftLevel != 3 {
+		t.Fatalf("expected driftLevel=3, got %d", o.driftLevel)
+	}
+
+	// No further escalation beyond level 3
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg4 := o.checkDrift(o.trajectory)
+	if msg4 != "" {
+		t.Fatalf("expected no further drift escalation beyond level 3, got: %s", msg4)
+	}
+}
+
+func TestOverseer_DriftResetsOnProductiveAction(t *testing.T) {
+	o := newOverseerState()
+	tools := []string{"read_file", "grep", "search_files", "glob"}
+
+	// Trigger drift level 1
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg := o.checkDrift(o.trajectory)
+	if msg == "" {
+		t.Fatal("expected drift intervention")
+	}
+
+	// Productive action resets drift tracking (including driftLevel)
+	o.recordToolCall("edit_file", false, "/path.go")
+	if o.driftLevel != 0 {
+		t.Fatalf("expected driftLevel reset to 0 after productive action, got %d", o.driftLevel)
+	}
+
+	// More read-only calls — should trigger level 1 again, not level 2
+	for i := 0; i < driftThreshold; i++ {
+		o.recordToolCall(tools[i%len(tools)], false, "/path.go")
+	}
+	msg2 := o.checkDrift(o.trajectory)
+	if msg2 == "" {
+		t.Fatal("expected drift level 1 again after productive action")
+	}
+	if !strings.Contains(msg2, "Re-anchor") {
+		t.Fatalf("expected level 1 guidance after reset, got: %s", msg2)
+	}
+}
