@@ -48,6 +48,11 @@ const (
 	wsPingInterval = 120 * time.Second
 	wsPongWait     = 5 * time.Second
 	reconnectDelay = 3 * time.Second
+
+	// DingTalk limits each robot to 20 messages per minute. Sending multi-chunk
+	// messages without delay can trigger rate limiting and get blocked for 10 min.
+	// Source: https://help.dingtalk.io/open/development/call-frequency-limit
+	dingtalkInterMsgDelay = 3 * time.Second
 )
 
 var (
@@ -619,6 +624,15 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	a.mu.RUnlock()
 
 	for i, chunk := range chunks {
+		// Rate limit: DingTalk allows max 20 msgs/min per robot.
+		// Without this delay, multi-chunk sends get throttled and blocked for 10 min.
+		if i > 0 {
+			select {
+			case <-time.After(dingtalkInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		if webhook != "" {
 			debug.Log("dingtalk", "adapter=%s Send via webhook chunk=%d/%d text_len=%d", a.name, i+1, len(chunks), len(chunk))
 			err := a.sendMarkdownViaWebhook(ctx, webhook, chunk, robotCode)

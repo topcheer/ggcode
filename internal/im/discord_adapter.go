@@ -39,6 +39,11 @@ const (
 	discordOpInvalidSession = 9
 	discordOpHello          = 10
 	discordOpHeartbeatACK   = 11
+
+	// Discord allows 5 messages per 5 seconds per channel. Adding a brief delay
+	// between chunks prevents hitting the per-channel rate limit.
+	// Source: https://docs.discord.com/developers/topics/rate-limits
+	discordInterMsgDelay = 500 * time.Millisecond
 )
 
 type discordAdapter struct {
@@ -511,7 +516,16 @@ func (a *discordAdapter) Send(ctx context.Context, binding ChannelBinding, event
 		return nil
 	}
 	chunks := splitDiscordMessage(remainingText, discordMaxTextLen)
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
+		// Discord allows 5 messages per 5 seconds per channel.
+		// Adding a brief delay between chunks prevents hitting the rate limit.
+		if i > 0 {
+			select {
+			case <-time.After(discordInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		if err := a.sendChannelMessage(ctx, channelID, chunk); err != nil {
 			return err
 		}
