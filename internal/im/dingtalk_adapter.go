@@ -642,6 +642,15 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 
 // sendMarkdownViaWebhook sends a reply using the sessionWebhook URL from the callback.
 // This is the official SDK's method for replying to bot messages.
+// dingTalkRateLimitErrcodes contains errcodes that indicate DingTalk rate limiting.
+// When these codes appear, the send should retry with backoff rather than failing.
+// Sources:
+//   - 90002: Global rate limit triggered (all orgs/apps on the platform).
+//     https://help.dingtalk.io/open/development/call-frequency-limit
+//   - 130101: Custom robot webhook frequency limit (20 messages/minute per robot).
+//     https://open.dingtalk.com/document/orgapp/custom-robot-access
+var dingTalkRateLimitErrcodes = map[int]bool{90002: true, 130101: true}
+
 func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL, text, robotCode string) error {
 	if webhookURL == "" || text == "" {
 		return nil
@@ -661,31 +670,43 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 		return fmt.Errorf("marshal webhook request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		// Re-create the request each attempt since the body reader is consumed.
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(bodyJSON))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp, err := a.client().Do(req)
-	if err != nil {
-		return fmt.Errorf("webhook send: %w", err)
+		resp, err := a.client().Do(req)
+		if err != nil {
+			return fmt.Errorf("webhook send: %w", err)
+		}
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
+		}
+		// DingTalk returns HTTP 200 with errcode in JSON body on failure
+		// (rate limits, content too long, etc.). Must check errcode.
+		var wresp struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if err := json.Unmarshal(respBody, &wresp); err == nil && wresp.ErrCode != 0 {
+			if dingTalkRateLimitErrcodes[wresp.ErrCode] && attempt < maxRateLimitRetries {
+				debug.Log("dingtalk", "adapter=%s webhook rate-limited (errcode=%d), retry %d/%d after %v",
+					a.name, wresp.ErrCode, attempt+1, maxRateLimitRetries, defaultRetryDelay)
+				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("webhook send errcode %d: %s", wresp.ErrCode, redactDingTalkResponse(wresp.ErrMsg))
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
-	}
-	// DingTalk returns HTTP 200 with errcode in JSON body on failure
-	// (rate limits, content too long, etc.). Must check errcode.
-	var wresp struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-	}
-	if err := json.Unmarshal(respBody, &wresp); err == nil && wresp.ErrCode != 0 {
-		return fmt.Errorf("webhook send errcode %d: %s", wresp.ErrCode, redactDingTalkResponse(wresp.ErrMsg))
-	}
-	return nil
+	return rateLimitExhausted("DingTalk webhook")
 }
 
 // sendMarkdownViaAPI sends a message via the DingTalk REST API (for outbound messages
@@ -717,33 +738,45 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 		return fmt.Errorf("marshal api send request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingtalkAPIBase+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyJSON))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-acs-dingtalk-access-token", token)
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingtalkAPIBase+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyJSON))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-acs-dingtalk-access-token", token)
 
-	resp, err := a.client().Do(req)
-	if err != nil {
-		return fmt.Errorf("api send: %w", err)
+		resp, err := a.client().Do(req)
+		if err != nil {
+			return fmt.Errorf("api send: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			resp.Body.Close()
+			return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
+		}
+		// DingTalk API can also return HTTP 200 with errcode in JSON body on failure.
+		// Same pattern as webhook — must check errcode to avoid silent failures.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		resp.Body.Close()
+		var aresp struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if err := json.Unmarshal(respBody, &aresp); err == nil && aresp.ErrCode != 0 {
+			if dingTalkRateLimitErrcodes[aresp.ErrCode] && attempt < maxRateLimitRetries {
+				debug.Log("dingtalk", "adapter=%s API rate-limited (errcode=%d), retry %d/%d after %v",
+					a.name, aresp.ErrCode, attempt+1, maxRateLimitRetries, defaultRetryDelay)
+				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("api send errcode %d: %s", aresp.ErrCode, redactDingTalkResponse(aresp.ErrMsg))
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
-	}
-	// DingTalk API can also return HTTP 200 with errcode in JSON body on failure.
-	// Same pattern as webhook — must check errcode to avoid silent failures.
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	var aresp struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-	}
-	if err := json.Unmarshal(respBody, &aresp); err == nil && aresp.ErrCode != 0 {
-		return fmt.Errorf("api send errcode %d: %s", aresp.ErrCode, redactDingTalkResponse(aresp.ErrMsg))
-	}
-	return nil
+	return rateLimitExhausted("DingTalk API")
 }
 
 // ---- Helpers ----

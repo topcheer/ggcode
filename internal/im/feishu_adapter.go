@@ -1153,22 +1153,38 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 		"content":    string(msgContent),
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		// Feishu returns HTTP 429 with x-ogw-ratelimit-reset header when rate-limited.
+		// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			delay := parseRetryAfter(resp)
+			resp.Body.Close()
+			debug.Log("feishu", "adapter=%s sendText rate-limited, retry %d/%d after %v",
+				a.name, attempt+1, maxRateLimitRetries, delay)
+			if err := sleepRetry(ctx, delay); err != nil {
+				return "", err
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+			return "", fmt.Errorf("Feishu API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+		return parseFeishuMessageID(resp.Body)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return "", fmt.Errorf("Feishu API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return parseFeishuMessageID(resp.Body)
+	return "", rateLimitExhausted("Feishu")
 }
 
 // TriggerTyping adds a "Typing" emoji reaction on the latest real user message to
@@ -1434,31 +1450,46 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 		"content":    string(msgContent),
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		// Feishu returns HTTP 429 with x-ogw-ratelimit-reset header when rate-limited.
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			delay := parseRetryAfter(resp)
+			resp.Body.Close()
+			debug.Log("feishu", "adapter=%s sendImage rate-limited, retry %d/%d after %v",
+				a.name, attempt+1, maxRateLimitRetries, delay)
+			if err := sleepRetry(ctx, delay); err != nil {
+				return err
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+			return fmt.Errorf("Feishu send image [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+		// Feishu API returns HTTP 200 with code != 0 for errors.
+		var imgResult struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		imgBody, _ := util.ReadAll(io.LimitReader(resp.Body, 2048), util.ReadLimitGeneral)
+		if json.Unmarshal(imgBody, &imgResult) == nil && imgResult.Code != 0 {
+			return fmt.Errorf("Feishu send image error [%d]: %s", imgResult.Code, imgResult.Msg)
+		}
+		return nil
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return fmt.Errorf("Feishu send image [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	// Feishu API returns HTTP 200 with code != 0 for errors.
-	var imgResult struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}
-	imgBody, _ := util.ReadAll(io.LimitReader(resp.Body, 2048), util.ReadLimitGeneral)
-	if json.Unmarshal(imgBody, &imgResult) == nil && imgResult.Code != 0 {
-		return fmt.Errorf("Feishu send image error [%d]: %s", imgResult.Code, imgResult.Msg)
-	}
-	return nil
+	return rateLimitExhausted("Feishu")
 }
 
 func splitFeishuMessage(text string, maxLen int) []string {

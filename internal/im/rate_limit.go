@@ -61,6 +61,14 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 		}
 	}
 
+	// Feishu uses x-ogw-ratelimit-reset (seconds until reset).
+	// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
+	if reset := resp.Header.Get("x-ogw-ratelimit-reset"); reset != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(reset)); err == nil && secs >= 0 {
+			return capDuration(time.Duration(secs) * time.Second)
+		}
+	}
+
 	return defaultRetryDelay
 }
 
