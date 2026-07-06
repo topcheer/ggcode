@@ -80,8 +80,9 @@ func pcResolveAppWsURL(baseURL string) string {
 }
 
 type pcAdapter struct {
-	name    string
-	manager *Manager
+	name       string
+	manager    *Manager
+	httpClient *http.Client
 
 	mu sync.RWMutex
 
@@ -139,6 +140,7 @@ func newPCAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 	adapter := &pcAdapter{
 		name:           name,
 		manager:        mgr,
+		httpClient:     util.NewInsecureAwareClient(30 * time.Second),
 		relayBaseURL:   relayBaseURL,
 		providerLabel:  providerLabel,
 		sessionTTLMs:   sessionTTLMs,
@@ -147,6 +149,14 @@ func newPCAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 		sessionStore:   sessionStore,
 	}
 	return adapter, nil
+}
+
+// getHTTPClient returns the adapter's HTTP client, initializing one on first use.
+func (a *pcAdapter) getHTTPClient() *http.Client {
+	if a.httpClient == nil {
+		a.httpClient = util.NewInsecureAwareClient(30 * time.Second)
+	}
+	return a.httpClient
 }
 
 // Sink interface
@@ -690,7 +700,7 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 			if err != nil {
 				return nil, err
 			}
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := a.getHTTPClient().Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("download image: %w", err)
 			}

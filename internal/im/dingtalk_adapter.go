@@ -99,10 +99,11 @@ type dingtalkBotCallbackData struct {
 // ---- dingtalkAdapter ----
 
 type dingtalkAdapter struct {
-	name      string
-	manager   *Manager
-	appKey    string
-	appSecret string
+	name       string
+	manager    *Manager
+	appKey     string
+	appSecret  string
+	httpClient *http.Client
 
 	mu            sync.RWMutex
 	writeMu       sync.Mutex // protects websocket writes
@@ -124,11 +125,21 @@ func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterCo
 		return nil, fmt.Errorf("dingtalk adapter requires app_key and app_secret")
 	}
 	return &dingtalkAdapter{
-		name:      name,
-		manager:   mgr,
-		appKey:    appKey,
-		appSecret: appSecret,
+		name:       name,
+		manager:    mgr,
+		appKey:     appKey,
+		appSecret:  appSecret,
+		httpClient: util.NewInsecureAwareClient(30 * time.Second),
 	}, nil
+}
+
+// client returns the adapter's HTTP client, initializing one on first use
+// if the constructor didn't set it (e.g. in tests).
+func (a *dingtalkAdapter) client() *http.Client {
+	if a.httpClient == nil {
+		a.httpClient = util.NewInsecureAwareClient(30 * time.Second)
+	}
+	return a.httpClient
 }
 
 // ---- Sink interface ----
@@ -489,7 +500,7 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return err
 	}
@@ -554,7 +565,7 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-acs-dingtalk-access-token", token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -651,7 +662,7 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("webhook send: %w", err)
 	}
@@ -699,7 +710,7 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-acs-dingtalk-access-token", token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("api send: %w", err)
 	}
