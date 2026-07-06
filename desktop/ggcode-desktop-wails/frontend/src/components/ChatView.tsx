@@ -516,6 +516,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
   const suppressNextScrollEventRef = useRef(false)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const dragCounterRef = useRef(0)
   const currentTabStreaming = activeTab === 'main'
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
@@ -1037,6 +1039,59 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     await sendUserText(text || 'Please analyze this image.', undefined, images)
   }, [input, pastedImages, sendUserText])
 
+  // ── Drag-and-drop image support ────────────────────────────────────────────
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return
+    e.preventDefault()
+    dragCounterRef.current++
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current--
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0
+      setIsDragOver(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setIsDragOver(false)
+    const files = Array.from(e.dataTransfer?.files || [])
+    const imageFiles = files.filter(f => f.type.startsWith('image/'))
+    if (imageFiles.length === 0) return
+    void Promise.all(imageFiles.map(file => new Promise<PastedImageAttachment>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const previewUrl = String(reader.result || '')
+        const comma = previewUrl.indexOf(',')
+        resolve({
+          id: nextID(),
+          mimeType: file.type || 'image/png',
+          data: comma >= 0 ? previewUrl.slice(comma + 1) : previewUrl,
+          previewUrl,
+          name: file.name || 'dropped-image',
+        })
+      }
+      reader.onerror = () => reject(reader.error || new Error('Failed to read dropped image'))
+      reader.readAsDataURL(file)
+    }))).then(images => {
+      setPastedImages(prev => [...prev, ...images])
+    }).catch(err => {
+      showToast?.('error', err?.message || 'Failed to process dropped image')
+    })
+  }, [showToast])
+
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items || [])
     const imageFiles = items
@@ -1230,7 +1285,34 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1, position: 'relative' }}>
+      <div
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, flex: 1, position: 'relative' }}>
+      {/* Drop zone overlay */}
+      {isDragOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 999,
+          background: 'rgba(59, 130, 246, 0.08)',
+          border: '2px dashed var(--color-primary)',
+          borderRadius: 'var(--radius-lg)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            padding: 'var(--spacing-lg) var(--spacing-xl)',
+            borderRadius: 'var(--radius-lg)',
+            background: 'var(--color-card)',
+            border: '1px solid var(--color-primary)',
+            fontSize: 14, fontWeight: 600,
+            color: 'var(--color-primary)',
+          }}>
+            Drop images to attach
+          </div>
+        </div>
+      )}
       {/* Top bar */}
       <div style={{
         height: 'var(--topbar-height)',
