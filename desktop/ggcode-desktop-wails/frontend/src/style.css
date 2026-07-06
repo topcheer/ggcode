@@ -73,6 +73,27 @@ body {
     padding: 4px 12px;
     color: var(--text-secondary);
 }
+.markdown-body hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 12px 0;
+}
+.markdown-body strong {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.markdown-body em {
+    font-style: italic;
+}
+.markdown-body del {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+.markdown-body img {
+    max-width: 100%;
+    border-radius: 8px;
+    margin: 4px 0;
+}
 .markdown-body h1, .markdown-body h2, .markdown-body h3 {
     margin: 0.6em 0 0.3em;
     font-weight: 600;
