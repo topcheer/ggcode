@@ -139,3 +139,13 @@ func TestMarkdownToWhatsApp_PreservesListBullets(t *testing.T) {
 		t.Errorf("list changed: got %q, want %q", got, input)
 	}
 }
+
+func TestMarkdownToWhatsApp_Table(t *testing.T) {
+	input := "| **Name** | Value |\n|----------|--------|\n| foo      | bar    |"
+	got := markdownToWhatsApp(input)
+	// Bold should convert to WhatsApp *bold*, pipes and separator removed
+	want := "*Name*  Value\nfoo  bar"
+	if got != want {
+		t.Errorf("table: got %q, want %q", got, want)
+	}
+}

@@ -46,6 +46,8 @@ var (
 	mdBlockquoteRe = regexp.MustCompile(`(?m)^>\s?(.+)$`)
 	// Horizontal rules: --- or *** → —
 	mdHRRe = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
+	// GFM tables: consecutive lines starting with | (bordered table syntax)
+	mdTableRe = regexp.MustCompile(`(?m)^(?:\|[^\n]*\|\s*\n)+\|[^\n]*\|`)
 )
 
 // stripMarkdown converts markdown-formatted text to plain text for platforms
@@ -69,6 +71,31 @@ func stripMarkdown(text string) string {
 		// First line is ```lang, last is ```
 		inner := strings.Join(lines[1:len(lines)-1], "\n")
 		return inner
+	})
+
+	// 1b. GFM tables: convert to plain text (after code blocks to avoid
+	// corrupting code content that contains pipe characters)
+	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
+		lines := strings.Split(match, "\n")
+		var result []string
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			// Skip separator lines (contain only dashes, colons, pipes, spaces)
+			if isTableSeparator(trimmed) {
+				continue
+			}
+			// Strip leading/trailing pipes, split by |, trim each cell
+			core := strings.Trim(trimmed, "|")
+			cells := strings.Split(core, "|")
+			for i := range cells {
+				cells[i] = strings.TrimSpace(cells[i])
+			}
+			result = append(result, strings.Join(cells, "  "))
+		}
+		return strings.Join(result, "\n")
 	})
 
 	// 2. Inline code: `code` → code
@@ -107,4 +134,23 @@ func stripMarkdown(text string) string {
 	}
 
 	return strings.TrimSpace(text)
+}
+
+// isTableSeparator reports whether a table line is a separator row (contains
+// only dashes, colons, pipes, and spaces). GFM separator rows look like:
+// |---|---| or |:--:|---:| or | --- | --- |
+func isTableSeparator(line string) bool {
+	// Remove all pipe characters (both border and internal)
+	core := strings.ReplaceAll(line, "|", "")
+	core = strings.TrimSpace(core)
+	if !strings.Contains(core, "-") {
+		return false
+	}
+	for _, ch := range core {
+		if ch == '-' || ch == ':' || ch == ' ' || ch == '\t' {
+			continue
+		}
+		return false
+	}
+	return true
 }

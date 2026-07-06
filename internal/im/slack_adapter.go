@@ -769,6 +769,27 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, filename strin
 // Slack mrkdwn reference: https://docs.slack.dev/messaging/formatting-message-text/
 // Bold: *text* (single asterisk), Italic: _text_ (underscore), Strike: ~text~ (single tilde)
 func markdownToMrkdwn(text string) string {
+	// Convert GFM tables to plain text (Slack mrkdwn doesn't support tables)
+	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
+		lines := strings.Split(match, "\n")
+		var result []string
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if isTableSeparator(trimmed) {
+				continue
+			}
+			core := strings.Trim(trimmed, "|")
+			cells := strings.Split(core, "|")
+			for i := range cells {
+				cells[i] = strings.TrimSpace(cells[i])
+			}
+			result = append(result, strings.Join(cells, "  "))
+		}
+		return strings.Join(result, "\n")
+	})
 	// Escape HTML entities
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")

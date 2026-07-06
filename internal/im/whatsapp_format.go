@@ -57,6 +57,27 @@ func markdownToWhatsApp(text string) string {
 		return text
 	}
 
+	// 0. GFM tables: convert to plain text (WhatsApp doesn't render tables)
+	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
+		lines := strings.Split(match, "\n")
+		var result []string
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if isTableSeparator(trimmed) {
+				continue
+			}
+			core := strings.Trim(trimmed, "|")
+			cells := strings.Split(core, "|")
+			for i := range cells {
+				cells[i] = strings.TrimSpace(cells[i])
+			}
+			result = append(result, strings.Join(cells, "  "))
+		}
+		return strings.Join(result, "\n")
+	})
 	// 1. Images: ![alt](url) → remove entirely (before link processing)
 	text = waImageRe.ReplaceAllString(text, "")
 

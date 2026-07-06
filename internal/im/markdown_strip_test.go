@@ -1,6 +1,7 @@
 package im
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,65 @@ func TestStripMarkdown_AsteriskItalic(t *testing.T) {
 				t.Errorf("stripMarkdown(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStripMarkdown_Table(t *testing.T) {
+	input := "| Name | Value |\n|------|-------|\n| foo  | bar   |\n| baz  | qux   |"
+	got := stripMarkdown(input)
+	want := "Name  Value\nfoo  bar\nbaz  qux"
+	if got != want {
+		t.Errorf("stripMarkdown table = %q, want %q", got, want)
+	}
+}
+
+func TestStripMarkdown_TableWithFormatting(t *testing.T) {
+	input := "| **Bold** | `code` |\n|----------|--------|\n| **data** | `val`  |"
+	got := stripMarkdown(input)
+	want := "Bold  code\ndata  val"
+	if got != want {
+		t.Errorf("stripMarkdown table with formatting = %q, want %q", got, want)
+	}
+}
+
+func TestStripMarkdown_TableWithLinks(t *testing.T) {
+	input := "| [Docs](https://example.com) | text |\n|--------|--------|\n| cell   | data   |"
+	got := stripMarkdown(input)
+	// Links become "text (url)" format
+	if !strings.Contains(got, "Docs") || !strings.Contains(got, "cell") {
+		t.Errorf("stripMarkdown table with links = %q, expected Docs and cell", got)
+	}
+}
+
+func TestStripMarkdown_TableWithColons(t *testing.T) {
+	// GFM alignment colons in separator should be handled
+	input := "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    | b      | c      |"
+	got := stripMarkdown(input)
+	want := "Left  Center  Right\na  b  c"
+	if got != want {
+		t.Errorf("stripMarkdown table with colons = %q, want %q", got, want)
+	}
+}
+
+func TestStripMarkdown_TablePreservesSurroundingText(t *testing.T) {
+	input := "Before table\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter table"
+	got := stripMarkdown(input)
+	if !strings.Contains(got, "Before table") || !strings.Contains(got, "After table") {
+		t.Errorf("stripMarkdown = %q, expected surrounding text preserved", got)
+	}
+	if strings.Contains(got, "|") {
+		t.Errorf("stripMarkdown = %q, expected no pipe characters", got)
+	}
+	if strings.Contains(got, "---") {
+		t.Errorf("stripMarkdown = %q, expected no separator dashes", got)
+	}
+}
+
+func TestStripMarkdown_NotATableJustPipes(t *testing.T) {
+	// Single line with pipe should not be treated as a table
+	input := "Use the pipe | command"
+	got := stripMarkdown(input)
+	if got != "Use the pipe | command" {
+		t.Errorf("stripMarkdown single pipe = %q, want unchanged", got)
 	}
 }
