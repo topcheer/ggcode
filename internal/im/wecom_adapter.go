@@ -17,15 +17,13 @@ import (
 )
 
 const (
-	wecomDefaultWSURL        = "wss://openws.work.weixin.qq.com"
-	wecomConnectTimeout      = 20 * time.Second
-	wecomRequestTimeout      = 15 * time.Second
-	wecomHeartbeatPeriod     = 30 * time.Second
-	wecomMaxTextLen          = 2048 // Official: text content max 2048 bytes (https://developer.work.weixin.qq.com/document/path/90236)
-	wecomDedupMaxSize        = 1000
-	wecomSplitThreshold      = 3900
-	wecomTextBatchDelay      = 600 * time.Millisecond
-	wecomTextBatchSplitDelay = 2 * time.Second
+	wecomDefaultWSURL    = "wss://openws.work.weixin.qq.com"
+	wecomConnectTimeout  = 20 * time.Second
+	wecomRequestTimeout  = 15 * time.Second
+	wecomHeartbeatPeriod = 30 * time.Second
+	wecomMaxTextLen      = 2048 // Official: text content max 2048 bytes (https://developer.work.weixin.qq.com/document/path/90236)
+	wecomDedupMaxSize    = 1000
+	wecomInterMsgDelay   = 600 * time.Millisecond // delay between consecutive proactive sends
 )
 
 // WeCom WebSocket command constants (official WeCom AI Bot gateway).
@@ -642,13 +640,16 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if chatID == "" {
 		return nil
 	}
-	text := stripMarkdown(a.outboundText(event))
+	text := a.outboundText(event)
 	if text == "" {
 		return nil
 	}
 
 	// Split long messages instead of truncating — losing content is worse UX
 	// than sending multiple messages. WeCom limit is 2048 bytes per message.
+	// Note: do NOT strip markdown here — sendProactive uses msgtype=markdown
+	// which renders formatting. sendRespond strips markdown per-call since
+	// the stream msgtype renders plain text only.
 	chunks := SplitMessageForPlatform(text, PlatformWeCom)
 
 	// First chunk: try respond_msg if we have a tracked req_id.
@@ -666,10 +667,15 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 		}
 	}
 
+	firstProactive := true
 	for i := 0; i < len(chunks); i++ {
 		if hasReply && i == 0 {
 			continue // already sent via respond_msg
 		}
+		if !firstProactive {
+			time.Sleep(wecomInterMsgDelay) // avoid WeCom rate limits
+		}
+		firstProactive = false
 		if err := a.sendProactive(chatID, chunks[i]); err != nil {
 			return err
 		}
@@ -722,6 +728,9 @@ func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 	if ws == nil {
 		return fmt.Errorf("WeCom: not connected")
 	}
+
+	// stream msgtype renders plain text only — strip markdown formatting
+	text = stripMarkdown(text)
 
 	respondMsg := map[string]any{
 		"cmd":     wecomCmdRespond,
