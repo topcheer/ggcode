@@ -179,11 +179,11 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 		hint := ""
 		if m.configSaveScope == "instance" {
 			if _, err := os.Stat(m.config.InstanceDirPath()); os.IsNotExist(err) {
-				hint = " (new config will be created on save)"
+				hint = m.t("config.save_target_new_hint")
 			}
 		}
 		scopeLine = "\n" + lipgloss.NewStyle().Foreground(scopeColor).Render(
-			fmt.Sprintf(" Save target: %s%s  [Ctrl+T toggle]", scopeLabel, hint))
+			fmt.Sprintf(m.t("config.save_target_line"), scopeLabel, hint))
 	}
 	content += scopeLine
 	return lipgloss.NewStyle().

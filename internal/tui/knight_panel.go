@@ -48,7 +48,7 @@ func newKnightPanel() *knightPanelState {
 
 func (m *Model) openKnightPanel() {
 	if m.knight == nil {
-		m.chatWriteSystem(nextSystemID(), "Knight is not available")
+		m.chatWriteSystem(nextSystemID(), m.t("knight.unavailable"))
 		return
 	}
 	// Close other panels first

@@ -82,7 +82,7 @@ func shellStatusActivity(lang Language) string {
 func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		m.chatWriteSystem(nextSystemID(), "Shell command is empty.")
+		m.chatWriteSystem(nextSystemID(), m.t("shell.empty"))
 		return nil
 	}
 	if addToHistory {

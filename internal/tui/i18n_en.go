@@ -1445,6 +1445,42 @@ Mouse:
 		return "No active sharing session."
 	case "tunnel.mobile_connected":
 		return "Mobile client connected."
+	case "config.save_scope_global":
+		return "Save target → Global"
+	case "config.save_scope_instance":
+		return "Save target → Instance"
+	case "config.save_scope_instance_new":
+		return "Save target → Instance (new config will be created)"
+	case "config.instance_unavailable":
+		return "Instance config not available for this workspace"
+	case "config.scope_instance":
+		return "Instance"
+	case "config.scope_global":
+		return "Global"
+	case "config.save_target_new_hint":
+		return " (new config will be created on save)"
+	case "config.save_target_line":
+		return " Save target: %s%s  [Ctrl+T toggle]"
+	case "shell.empty":
+		return "Shell command is empty."
+	case "lanchat.unavailable":
+		return "LAN Chat is not available."
+	case "reflect.no_agent":
+		return "Agent not initialized."
+	case "reflect.no_workdir":
+		return "Working directory not set."
+	case "reflect.no_memory":
+		return "Project memory not available for this directory."
+	case "reflect.load_failed":
+		return "Failed to load insights: %v"
+	case "reflect.empty":
+		return "No run insights yet. Insights are automatically generated after each agent run with 3+ tool calls or file edits."
+	case "reflect.title":
+		return "## Accumulated Run Insights\n\n"
+	case "reflect.memory_location":
+		return "Memory location: %s\n"
+	case "knight.unavailable":
+		return "Knight is not available"
 	case "pairing.rejected":
 		return "The current pairing request has been rejected. Please re-initiate to continue."
 	case "pairing.blacklisted":

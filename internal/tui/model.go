@@ -1393,7 +1393,7 @@ func (m *Model) saveConfig() error {
 func (m *Model) toggleConfigSaveScope() string {
 	if m.configSaveScope == "instance" {
 		m.configSaveScope = "global"
-		return "Save target → Global"
+		return m.t("config.save_scope_global")
 	}
 	// Only allow instance scope if instance workspace is attached
 	if m.config != nil && m.config.HasInstanceConfigAttached() {
@@ -1403,19 +1403,19 @@ func (m *Model) toggleConfigSaveScope() string {
 			hasFile = true
 		}
 		if hasFile {
-			return "Save target → Instance"
+			return m.t("config.save_scope_instance")
 		}
-		return "Save target → Instance (new config will be created)"
+		return m.t("config.save_scope_instance_new")
 	}
-	return "Instance config not available for this workspace"
+	return m.t("config.instance_unavailable")
 }
 
 // configSaveScopeLabel returns a display label for the current save scope.
 func (m *Model) configSaveScopeLabel() string {
 	if m.configSaveScope == "instance" {
-		return "Instance"
+		return m.t("config.scope_instance")
 	}
-	return "Global"
+	return m.t("config.scope_global")
 }
 
 func (m *Model) vendorNames() string {

@@ -59,40 +59,38 @@ func setupReflection(a *agent.Agent) {
 // handleReflectCommand displays accumulated run insights.
 func (m *Model) handleReflectCommand() tea.Cmd {
 	if m.agent == nil {
-		m.chatWriteSystem(nextSystemID(), "Agent not initialized.")
+		m.chatWriteSystem(nextSystemID(), m.t("reflect.no_agent"))
 		return nil
 	}
 
 	workingDir := m.agent.WorkingDir()
 	if workingDir == "" {
-		m.chatWriteSystem(nextSystemID(), "Working directory not set.")
+		m.chatWriteSystem(nextSystemID(), m.t("reflect.no_workdir"))
 		return nil
 	}
 
 	autoMem := memory.NewProjectAutoMemory(workingDir)
 	if autoMem == nil {
-		m.chatWriteSystem(nextSystemID(), "Project memory not available for this directory.")
+		m.chatWriteSystem(nextSystemID(), m.t("reflect.no_memory"))
 		return nil
 	}
 
 	content, _, err := autoMem.LoadAll()
 	if err != nil {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to load insights: %v", err))
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("reflect.load_failed"), err))
 		return nil
 	}
 
 	if content == "" {
-		m.chatWriteSystem(nextSystemID(),
-			"No run insights yet. Insights are automatically generated after each agent run "+
-				"with 3+ tool calls or file edits.")
+		m.chatWriteSystem(nextSystemID(), m.t("reflect.empty"))
 		return nil
 	}
 
 	var b strings.Builder
-	b.WriteString("## Accumulated Run Insights\n\n")
+	b.WriteString(m.t("reflect.title"))
 	b.WriteString(content)
 	b.WriteString("\n\n---\n")
-	b.WriteString(fmt.Sprintf("Memory location: %s\n", autoMem.Dir()))
+	b.WriteString(fmt.Sprintf(m.t("reflect.memory_location"), autoMem.Dir()))
 	m.chatWriteSystem(nextSystemID(), b.String())
 	return nil
 }

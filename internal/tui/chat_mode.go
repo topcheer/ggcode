@@ -86,7 +86,7 @@ func (m *Model) submitChatMessage(text string) {
 	}
 
 	if m.lanChatHub == nil {
-		m.chatWriteSystem(nextSystemID(), "LAN Chat is not available.")
+		m.chatWriteSystem(nextSystemID(), m.t("lanchat.unavailable"))
 		return
 	}
 

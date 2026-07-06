@@ -1449,6 +1449,42 @@ func zhCatalog(key string) string {
 		return "正在运行 harness"
 	case "command.harness_cancelled":
 		return "Harness 运行已取消。"
+	case "config.save_scope_global":
+		return "保存目标 → 全局"
+	case "config.save_scope_instance":
+		return "保存目标 → 实例"
+	case "config.save_scope_instance_new":
+		return "保存目标 → 实例（将创建新配置）"
+	case "config.instance_unavailable":
+		return "此工作区无实例配置"
+	case "config.scope_instance":
+		return "实例"
+	case "config.scope_global":
+		return "全局"
+	case "config.save_target_new_hint":
+		return "（保存时将创建新配置）"
+	case "config.save_target_line":
+		return " 保存目标：%s%s  [Ctrl+T 切换]"
+	case "shell.empty":
+		return "Shell 命令为空。"
+	case "lanchat.unavailable":
+		return "局域网聊天不可用。"
+	case "reflect.no_agent":
+		return "Agent 尚未初始化。"
+	case "reflect.no_workdir":
+		return "工作目录未设置。"
+	case "reflect.no_memory":
+		return "此目录无项目记忆。"
+	case "reflect.load_failed":
+		return "加载洞察失败：%v"
+	case "reflect.empty":
+		return "尚无运行洞察。每次 Agent 运行（含 3+ 次工具调用或文件编辑）后会自动生成洞察。"
+	case "reflect.title":
+		return "## 累积的运行洞察\n\n"
+	case "reflect.memory_location":
+		return "记忆位置：%s\n"
+	case "knight.unavailable":
+		return "Knight 不可用"
 	default:
 		if v, ok := lookupModuleCatalog(LangZhCN, key); ok {
 			return v
