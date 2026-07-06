@@ -27,9 +27,10 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
     ? statusBarData.usagePercent
     : 0
   const formatTokens = (n?: number) => {
-    if (!n) return '0'
-    if (n >= 1000000 && n % 1000000 === 0) return `${n / 1000000}m`
-    if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`
+    if (!n || n === 0) return '0'
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}m`
+    if (n >= 10000) return `${Math.round(n / 1000)}k`
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
     return String(n)
   }
   const ctxTotal = formatTokens(statusBarData?.contextTotal)
