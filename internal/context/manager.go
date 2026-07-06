@@ -1014,22 +1014,27 @@ func hasSemanticImportance(output string) bool {
 		check = check[:2000]
 	}
 
-	// Strong error markers: when a LINE starts with one of these (after
-	// optional whitespace), it is almost certainly a build/compiler/test
-	// error. Using line-start matching avoids false positives from source
-	// code that merely contains words like "error:" in comments or strings.
+	// Strong error markers: these substrings are almost certainly from
+	// build/compiler/test/runtime errors. We check per-line and skip lines
+	// that are code comments (// # /*) to reduce false positives.
 	strongMarkers := []string{
 		"error:", "fail:", "failed:", "panic:", "fatal:",
 		"undefined:", "cannot find", "does not compile",
-		"syntax error", "type error", "referenceerror",
+		"syntax error", "type error", "referenceerror", "typeerror:",
 		"traceback (most recent call last)",
 	}
-	for _, line := range strings.Split(check, "\n") {
-		trimmed := strings.TrimLeft(line, " \t")
-		trimmedLower := strings.ToLower(trimmed)
-		for _, marker := range strongMarkers {
-			if strings.HasPrefix(trimmedLower, marker) {
-				return true
+	checkLower := strings.ToLower(check)
+	for _, marker := range strongMarkers {
+		if strings.Contains(checkLower, marker) {
+			// Verify the marker is not solely inside a comment line.
+			for _, line := range strings.Split(check, "\n") {
+				trimmed := strings.TrimLeft(line, " \t")
+				if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "/*") {
+					continue // skip comment lines
+				}
+				if strings.Contains(strings.ToLower(trimmed), marker) {
+					return true
+				}
 			}
 		}
 	}
