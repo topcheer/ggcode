@@ -128,3 +128,25 @@ func TestStripMarkdown_PreservesListBullets(t *testing.T) {
 		t.Errorf("list changed: got %q, want %q", got, input)
 	}
 }
+
+func TestStripMarkdown_AsteriskItalic(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"basic", "This is *italic* text", "This is italic text"},
+		{"single_char", "Use *x* for variable", "Use x for variable"},
+		{"multiple", "*one* and *two*", "one and two"},
+		{"no_space_after_open", "5 * 3 = 15", "5 * 3 = 15"}, // math, not italic
+		{"bullet_list", "* Item one", "* Item one"},         // bullet, not italic
+		{"no_match_space_inside", "* not italic *", "* not italic *"},
+		{"combined_bold_italic", "**bold** and *italic*", "bold and italic"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripMarkdown(tc.input)
+			if got != tc.want {
+				t.Errorf("stripMarkdown(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}

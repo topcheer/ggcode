@@ -28,6 +28,10 @@ var (
 	mdInlineCodeRe = regexp.MustCompile("`([^`]+)`")
 	// Bold: **text** → text
 	mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	// Asterisk italic: *text* → text (processed after bold ** is stripped)
+	// Requires non-space immediately after opening * and before closing * to
+	// avoid matching bullet lists (* item), math (5 * 3), or literal asterisks.
+	mdAsteriskItalicRe = regexp.MustCompile(`\*([^\s*](?:[^*]*?[^\s*])?)\*`)
 	// Italic: _text_ → text (avoid matching __ or word_middle)
 	mdItalicRe = regexp.MustCompile(`(?m)\b_([^_]+)_\b`)
 	// Strikethrough: ~~text~~ → text
@@ -73,25 +77,28 @@ func stripMarkdown(text string) string {
 	// 3. Bold: **text** → text (before italic to avoid ** being seen as *)
 	text = mdBoldRe.ReplaceAllString(text, "$1")
 
-	// 4. Strikethrough: ~~text~~ → text (before italic)
+	// 4. Asterisk italic: *text* → text (after bold so ** is already stripped)
+	text = mdAsteriskItalicRe.ReplaceAllString(text, "$1")
+
+	// 5. Strikethrough: ~~text~~ → text (before italic)
 	text = mdStrikeRe.ReplaceAllString(text, "$1")
 
-	// 5. Images: ![alt](url) → remove entirely
+	// 6. Images: ![alt](url) → remove entirely
 	text = mdImageRe.ReplaceAllString(text, "")
 
-	// 6. Links: [text](url) → text (url)
+	// 7. Links: [text](url) → text (url)
 	text = mdLinkRe.ReplaceAllString(text, "$1 ($2)")
 
-	// 7. Italic: _text_ → text
+	// 8. Italic: _text_ → text
 	text = mdItalicRe.ReplaceAllString(text, "$1")
 
-	// 8. Headers: ### Header → Header
+	// 9. Headers: ### Header → Header
 	text = mdHeaderRe.ReplaceAllString(text, "$1")
 
-	// 9. Blockquotes: > text → text
+	// 10. Blockquotes: > text → text
 	text = mdBlockquoteRe.ReplaceAllString(text, "$1")
 
-	// 10. Horizontal rules → em dash
+	// 11. Horizontal rules → em dash
 	text = mdHRRe.ReplaceAllString(text, "—")
 
 	// Clean up: collapse multiple blank lines
