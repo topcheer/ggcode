@@ -642,7 +642,7 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if chatID == "" {
 		return nil
 	}
-	text := a.outboundText(event)
+	text := stripMarkdown(a.outboundText(event))
 	if text == "" {
 		return nil
 	}

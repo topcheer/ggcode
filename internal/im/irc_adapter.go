@@ -482,7 +482,7 @@ func (a *ircAdapter) Send(ctx context.Context, binding ChannelBinding, event Out
 	if target == "" {
 		target = binding.TargetID
 	}
-	text := defaultOutboundText(event)
+	text := stripMarkdown(defaultOutboundText(event))
 	return a.sendIRCMessage(target, text)
 }
 
