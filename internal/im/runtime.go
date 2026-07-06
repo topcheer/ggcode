@@ -856,6 +856,9 @@ func (m *Manager) RegisterApproval(req ApprovalRequest) (ApprovalRequest, <-chan
 		state:    ApprovalState{Request: req},
 		response: resp,
 	}
+	// Prune stale entries to bound memory. Resolved entries older than
+	// 5 minutes and unresolved entries older than 1 hour are removed.
+	m.pruneApprovalsLocked()
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -942,12 +945,34 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	})
 	snapshot.PendingApprovals = make([]ApprovalState, 0, len(m.approvals))
 	for _, approval := range m.approvals {
-		snapshot.PendingApprovals = append(snapshot.PendingApprovals, approval.state)
+		if !approval.state.Resolved {
+			snapshot.PendingApprovals = append(snapshot.PendingApprovals, approval.state)
+		}
 	}
 	sort.Slice(snapshot.PendingApprovals, func(i, j int) bool {
 		return snapshot.PendingApprovals[i].Request.RequestedAt.Before(snapshot.PendingApprovals[j].Request.RequestedAt)
 	})
 	return snapshot
+}
+
+// pruneApprovalsLocked removes stale entries from the approvals map to bound
+// memory. Resolved entries are removed immediately (the snapshot was already
+// taken at resolution time). Unresolved entries older than 1 hour are removed
+// (the user likely abandoned them). Must be called with m.mu held.
+func (m *Manager) pruneApprovalsLocked() {
+	if len(m.approvals) < 32 {
+		return // not worth pruning for small maps
+	}
+	now := time.Now()
+	for id, ap := range m.approvals {
+		if ap.state.Resolved {
+			delete(m.approvals, id)
+		} else if now.Sub(ap.state.Request.RequestedAt) > time.Hour {
+			// Abandoned approval — close the channel and remove.
+			close(ap.response)
+			delete(m.approvals, id)
+		}
+	}
 }
 
 func (m *Manager) reloadBindingLocked() error {
