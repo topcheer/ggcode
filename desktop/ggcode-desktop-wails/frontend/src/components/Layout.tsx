@@ -13,6 +13,7 @@ import { MCPServers } from './MCPServers'
 import { LanChatView } from './LanChatView'
 import { ContextPanel } from './ContextPanel'
 import { CommandPalette, type CommandAction } from './CommandPalette'
+import { KeyboardShortcuts } from './KeyboardShortcuts'
 import RealShareDialog from './ShareDialog'
 import { AboutDialog, UpdateNotification } from './Dialogs'
 import { StatusBar } from './StatusBar'
@@ -34,6 +35,7 @@ function LayoutInner() {
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
+  const [kbShortcutsOpen, setKbShortcutsOpen] = useState(false)
   const [updateNotifOpen, setUpdateNotifOpen] = useState(false)
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
   const [lanChatUnread, setLanChatUnread] = useState(0)
@@ -261,6 +263,15 @@ function LayoutInner() {
         setCmdPaletteOpen(false)
         setShareDialogOpen(false)
         setAboutDialogOpen(false)
+        setKbShortcutsOpen(false)
+      }
+      // ? shows keyboard shortcuts (skip if typing in an input)
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
+        const target = e.target as HTMLElement
+        if (target && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && !target.isContentEditable) {
+          e.preventDefault()
+          setKbShortcutsOpen(prev => !prev)
+        }
       }
     }
     window.addEventListener('keydown', handler)
@@ -292,6 +303,7 @@ function LayoutInner() {
     { nameKey: 'cmd.goMCP', categoryKey: 'cmd.cat.view', icon: Server, action: () => setView('mcp') },
     { nameKey: 'cmd.goLanChat', categoryKey: 'cmd.cat.view', icon: Radio, action: () => setView('lanchat') },
     { nameKey: 'cmd.goDebug', categoryKey: 'cmd.cat.view', icon: Bug, action: () => setView('debug') },
+    { nameKey: 'cmd.showShortcuts', shortcut: '?', categoryKey: 'cmd.cat.navigation', icon: Search, action: () => setKbShortcutsOpen(true) },
   ], [])
 
   return (
@@ -359,6 +371,7 @@ function LayoutInner() {
       )}
       {shareDialogOpen && <RealShareDialog onClose={() => setShareDialogOpen(false)} />}
       {aboutDialogOpen && <AboutDialog onClose={() => setAboutDialogOpen(false)} />}
+      {kbShortcutsOpen && <KeyboardShortcuts onClose={() => setKbShortcutsOpen(false)} />}
       {updateNotifOpen && <UpdateNotification onClose={() => setUpdateNotifOpen(false)} />}
       {approvalRequest && <ApprovalDialog request={approvalRequest} onClose={() => setApprovalRequest(null)} />}
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}

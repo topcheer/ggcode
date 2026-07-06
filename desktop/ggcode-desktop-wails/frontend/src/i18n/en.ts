@@ -59,6 +59,28 @@ const en = {
   'cmd.goMCP': 'Go to MCP Servers',
   'cmd.goLanChat': 'Go to LAN Chat',
   'cmd.goDebug': 'Go to Debug Console',
+  'cmd.showShortcuts': 'Show Keyboard Shortcuts',
+
+  // KeyboardShortcuts
+  'kb.title': 'Keyboard Shortcuts',
+  'kb.footer': 'Tip: Press ⌘K anytime to open the command palette',
+  'kb.global': 'Global',
+  'kb.chat': 'Chat',
+  'kb.navigation': 'Navigation',
+  'kb.cmdPalette': 'Open Command Palette',
+  'kb.toggleSidebar': 'Toggle Sidebar',
+  'kb.toggleContext': 'Toggle Context Panel',
+  'kb.openSettings': 'Open Settings',
+  'kb.showShortcuts': 'Show This Help',
+  'kb.closeDialog': 'Close Dialog',
+  'kb.newSession': 'New Session',
+  'kb.shareSession': 'Share Session',
+  'kb.toggleIdentity': 'Toggle Agent Identity',
+  'kb.sendMessage': 'Send Message',
+  'kb.newline': 'New Line (in Input)',
+  'kb.navigateList': 'Navigate List',
+  'kb.vimNav': 'Vim-style Navigation',
+  'kb.selectItem': 'Select Item',
 
   // ContextPanel
   'context.title': 'Context',

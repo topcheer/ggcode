@@ -61,6 +61,28 @@ const zh: Record<TranslationKey, string> = {
   'cmd.goMCP': 'MCP 服务器',
   'cmd.goLanChat': '局域网聊天',
   'cmd.goDebug': '调试控制台',
+  'cmd.showShortcuts': '显示快捷键',
+
+  // KeyboardShortcuts
+  'kb.title': '快捷键',
+  'kb.footer': '提示：随时按 ⌘K 打开命令面板',
+  'kb.global': '全局',
+  'kb.chat': '聊天',
+  'kb.navigation': '导航',
+  'kb.cmdPalette': '打开命令面板',
+  'kb.toggleSidebar': '切换侧边栏',
+  'kb.toggleContext': '切换上下文面板',
+  'kb.openSettings': '打开设置',
+  'kb.showShortcuts': '显示此帮助',
+  'kb.closeDialog': '关闭对话框',
+  'kb.newSession': '新建会话',
+  'kb.shareSession': '分享会话',
+  'kb.toggleIdentity': '切换 Agent 身份',
+  'kb.sendMessage': '发送消息',
+  'kb.newline': '换行（输入框内）',
+  'kb.navigateList': '导航列表',
+  'kb.vimNav': 'Vim 风格导航',
+  'kb.selectItem': '选择项目',
 
   // ContextPanel
   'context.title': '上下文',
