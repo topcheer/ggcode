@@ -570,7 +570,7 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			continue
 		}
 
-		req, err := http.NewRequest("POST", a.baseURL+endpoint, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+endpoint, bytes.NewReader(body))
 		if err != nil {
 			lastErr = err
 			continue
@@ -591,7 +591,11 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			// Retry on rate limit with exponential backoff.
 			backoff := signalInterMessageDelay * 2
 			debug.Log("signal", "adapter=%s rate-limited (429) to %s, retrying after %v", a.name, chatID, backoff)
-			time.Sleep(backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			// Retry the same chunk
 			resp2, err2 := a.conn.Do(req)
 			if err2 != nil {
