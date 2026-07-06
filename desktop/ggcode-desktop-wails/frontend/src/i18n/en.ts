@@ -30,6 +30,13 @@ const en = {
   // ChatView
   'chat.placeholder': 'Message ggcode...',
   'chat.agentWorking': 'Agent is working...',
+  'chat.welcome.title': 'How can I help you today?',
+  'chat.welcome.subtitle': 'Ask me anything about your code, or try one of these:',
+  'chat.welcome.prompt.explain': 'Explain this codebase',
+  'chat.welcome.prompt.review': 'Review recent changes',
+  'chat.welcome.prompt.test': 'Write a test',
+  'chat.welcome.prompt.debug': 'Help me debug an issue',
+  'chat.inputHint': 'Enter to send • Shift+Enter for new line',
 
   // CommandPalette
   'cmd.recent': 'Recent',

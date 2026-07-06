@@ -1536,6 +1536,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         {activeTab === 'main' ? (
           // Main chat messages
           <>
+            {messages.length === 0 && !thinking && (
+              <WelcomeScreen workspace={workspace} onPick={(text) => {
+                setInput(text)
+                inputRef.current?.focus()
+              }} />
+            )}
             {messages.map(msg => (
               <MessageCard key={msg.id} msg={msg} onRetry={handleRetrySend} />
             ))}
@@ -1723,6 +1729,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <ArrowUp size={18} strokeWidth={2.5} />
           </button>
       </div>
+      <div style={{
+        padding: '0 var(--spacing-lg) var(--spacing-xs)',
+        textAlign: 'right', fontSize: 10,
+        color: 'var(--text-tertiary)', opacity: 0.6,
+        pointerEvents: 'none', userSelect: 'none',
+      }}>
+        {t('chat.inputHint')}
+      </div>
 
       {/* Pulse animation keyframe */}
       <style>{`
@@ -1742,6 +1756,92 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       {teamBoardOpen && (
         <TeamBoard teams={teamBoard} onClose={closeTeamBoard} onSelectTeammate={selectTeammatePanel} />
       )}
+    </div>
+  )
+}
+
+// ── Welcome screen (empty state) ─────────────────────────────────────────────
+
+function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; workspace?: string }) {
+  const { t } = useTranslation()
+  const prompts = [
+    { icon: '🔍', text: t('chat.welcome.prompt.explain') },
+    { icon: '📝', text: t('chat.welcome.prompt.review') },
+    { icon: '🧪', text: t('chat.welcome.prompt.test') },
+    { icon: '🐛', text: t('chat.welcome.prompt.debug') },
+  ]
+
+  return (
+    <div style={{
+      flex: 1, display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      gap: 'var(--spacing-lg)', padding: 'var(--spacing-xl)',
+      opacity: 0,
+      animation: 'fadeIn 0.3s ease forwards',
+    }}>
+      <style>{`@keyframes fadeIn { to { opacity: 1; } }`}</style>
+      {/* Logo/icon */}
+      <div style={{
+        width: 64, height: 64, borderRadius: '50%',
+        background: 'var(--color-primary)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 32, color: '#fff', fontWeight: 700,
+        boxShadow: '0 4px 24px rgba(59, 130, 246, 0.25)',
+      }}>
+        G
+      </div>
+      <div style={{ textAlign: 'center', maxWidth: 480 }}>
+        <h2 style={{
+          fontSize: 22, fontWeight: 600,
+          color: 'var(--text-primary)',
+          margin: 0, marginBottom: 6,
+        }}>
+          {t('chat.welcome.title')}
+        </h2>
+        <p style={{
+          fontSize: 13, color: 'var(--text-tertiary)',
+          margin: 0,
+        }}>
+          {workspace ? `${workspace} • ` : ''}{t('chat.welcome.subtitle')}
+        </p>
+      </div>
+      {/* Quick-start prompts */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 'var(--spacing-sm)',
+        maxWidth: 520, width: '100%',
+      }}>
+        {prompts.map((p, i) => (
+          <button
+            key={i}
+            onClick={() => onPick(p.text)}
+            style={{
+              padding: 'var(--spacing-sm) var(--spacing-md)',
+              borderRadius: 'var(--radius-lg)',
+              background: 'var(--color-card)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: 13,
+              textAlign: 'left',
+              display: 'flex', alignItems: 'center', gap: 8,
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-primary)'
+              e.currentTarget.style.background = 'var(--color-surface)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-border)'
+              e.currentTarget.style.background = 'var(--color-card)'
+            }}
+          >
+            <span style={{ fontSize: 16 }}>{p.icon}</span>
+            {p.text}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

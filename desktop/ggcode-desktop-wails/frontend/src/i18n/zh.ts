@@ -32,6 +32,13 @@ const zh: Record<TranslationKey, string> = {
   // ChatView
   'chat.placeholder': '给 ggcode 发消息...',
   'chat.agentWorking': 'Agent 工作中...',
+  'chat.welcome.title': '今天我能帮你做什么？',
+  'chat.welcome.subtitle': '问我任何关于代码的问题，或者试试：',
+  'chat.welcome.prompt.explain': '解释这个代码库',
+  'chat.welcome.prompt.review': '审查最近的改动',
+  'chat.welcome.prompt.test': '写一个测试',
+  'chat.welcome.prompt.debug': '帮我调试一个问题',
+  'chat.inputHint': 'Enter 发送 • Shift+Enter 换行',
 
   // CommandPalette
   'cmd.recent': '最近使用',
