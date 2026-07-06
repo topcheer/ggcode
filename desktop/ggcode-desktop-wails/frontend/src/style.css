@@ -128,6 +128,22 @@ body {
     background: rgba(255,255,255,0.05);
     font-weight: 600;
 }
+.markdown-body tr:nth-child(even) {
+    background: rgba(255,255,255,0.02);
+}
+.markdown-body tbody tr:hover {
+    background: rgba(255,255,255,0.05);
+}
+/* GFM task list checkboxes */
+.markdown-body li input[type="checkbox"] {
+    margin-right: 6px;
+    accent-color: var(--color-primary);
+    cursor: default;
+}
+.markdown-body li:has(input[type="checkbox"]) {
+    list-style: none;
+    margin-left: -1.2em;
+}
 /* Mermaid diagram containers */
 .mermaid-src {
     margin: 8px 0;

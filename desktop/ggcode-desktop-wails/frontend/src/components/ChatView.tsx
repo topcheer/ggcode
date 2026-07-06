@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -1195,6 +1195,23 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     } catch { /* ignore */ }
   }, [])
 
+  const [exported, setExported] = useState(false)
+  const handleExportConversation = useCallback(() => {
+    const lines = messages.filter(m => !m.toolName && m.content).map(m => {
+      const role = m.role === 'user' ? '**User**' : m.agentID ? `**Agent (${m.agentID})**` : '**Assistant**'
+      const ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+      return `${role}${ts ? ` _${ts}_` : ''}\n\n${m.content}\n`
+    })
+    const text = lines.join('\n---\n\n')
+    navigator.clipboard.writeText(text).then(() => {
+      setExported(true)
+      showToast?.('success', `Copied ${lines.length} messages to clipboard`)
+      setTimeout(() => setExported(false), 2000)
+    }).catch(() => {
+      showToast?.('error', 'Failed to copy conversation')
+    })
+  }, [messages, showToast])
+
   const cycleReasoningEffort = useCallback(async () => {
     try {
       const result = await App.CycleReasoningEffort() as Record<string, any>
@@ -1566,6 +1583,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </span>
         )}
 
+        {messages.length > 0 && (
+          <button onClick={handleExportConversation} title="Copy conversation" style={{
+            width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+            background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
+            border: '1px solid ' + (exported ? 'var(--color-success)' : 'transparent'),
+            color: exported ? 'var(--color-success)' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.15s',
+          }}>
+            {exported ? <Check size={14} /> : <ClipboardCopy size={14} />}
+          </button>
+        )}
         {onShare && (
           <button onClick={onShare} style={{
             width: 28, height: 28, borderRadius: 'var(--radius-sm)',
