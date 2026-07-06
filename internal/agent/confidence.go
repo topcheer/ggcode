@@ -263,7 +263,7 @@ func (c *confidenceState) maybeIntervene() string {
 // isEditTool returns true for tools that modify files.
 func isEditTool(toolName string) bool {
 	switch toolName {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit", "notebook_edit":
+	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit", "multi_file_write", "notebook_edit":
 		return true
 	default:
 		return false

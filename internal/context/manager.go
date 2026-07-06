@@ -1014,20 +1014,23 @@ func hasSemanticImportance(output string) bool {
 		check = check[:2000]
 	}
 
-	// Lowercase check for case-insensitive matching.
-	checkLower := strings.ToLower(check)
-
-	// Strong error markers: lines that start with these are almost certainly
-	// build/compiler/test errors that the agent needs for debugging.
+	// Strong error markers: when a LINE starts with one of these (after
+	// optional whitespace), it is almost certainly a build/compiler/test
+	// error. Using line-start matching avoids false positives from source
+	// code that merely contains words like "error:" in comments or strings.
 	strongMarkers := []string{
 		"error:", "fail:", "failed:", "panic:", "fatal:",
 		"undefined:", "cannot find", "does not compile",
 		"syntax error", "type error", "referenceerror",
 		"traceback (most recent call last)",
 	}
-	for _, marker := range strongMarkers {
-		if strings.Contains(checkLower, marker) {
-			return true
+	for _, line := range strings.Split(check, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		trimmedLower := strings.ToLower(trimmed)
+		for _, marker := range strongMarkers {
+			if strings.HasPrefix(trimmedLower, marker) {
+				return true
+			}
 		}
 	}
 

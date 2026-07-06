@@ -75,6 +75,7 @@ type Agent struct {
 	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
 	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
 	toolMemo                     *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
+	confidence                   *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
@@ -119,6 +120,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		repetition:       newRepetitionTracker(),
 		speculator:       newSpeculator(),
 		toolMemo:         newToolMemo(),
+		confidence:       newConfidenceState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -694,14 +696,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	contextWarningInjected := false
 	todoCheckCount := 0
 
+	// Reset monitoring systems once at run start, NOT inside the iteration
+	// loop. These systems accumulate state across iterations within a run.
+	a.resetOverseer()
+	a.speculator.resetSequence()
+	a.toolMemo.reset()
+	a.confidence.reset()
+
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		runStats.Iterations = i + 1
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		a.resetOverseer()            // clear trajectory state for new run
-		a.speculator.resetSequence() // clear speculative pattern sequence for new run
-		a.toolMemo.reset()           // clear memoized tool results for new run
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
@@ -1047,6 +1053,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					} else {
 						result.Content = readGuidance
 					}
+				}
+			}
+
+			// Trajectory confidence: record result and check for early warning.
+			// HTC-inspired: detect "overconfidence in failure" before errors compound.
+			a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
+			if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
+				if result.Content != "" {
+					result.Content = result.Content + "\n\n" + confidenceGuidance
+				} else {
+					result.Content = confidenceGuidance
 				}
 			}
 
