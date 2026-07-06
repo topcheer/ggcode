@@ -1449,6 +1449,15 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Feishu send image [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
+	// Feishu API returns HTTP 200 with code != 0 for errors.
+	var imgResult struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	imgBody, _ := util.ReadAll(io.LimitReader(resp.Body, 2048), util.ReadLimitGeneral)
+	if json.Unmarshal(imgBody, &imgResult) == nil && imgResult.Code != 0 {
+		return fmt.Errorf("Feishu send image error [%d]: %s", imgResult.Code, imgResult.Msg)
+	}
 	return nil
 }
 
@@ -1546,12 +1555,19 @@ func parseFeishuMessageID(r io.Reader) (string, error) {
 		return "", nil
 	}
 	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
 		Data struct {
 			MessageID string `json:"message_id"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return "", nil
+	}
+	// Feishu Open API returns HTTP 200 with code != 0 for errors
+	// (rate limits, invalid token, content too long, etc.)
+	if result.Code != 0 {
+		return "", fmt.Errorf("Feishu API error [%d]: %s", result.Code, result.Msg)
 	}
 	return strings.TrimSpace(result.Data.MessageID), nil
 }
@@ -1694,14 +1710,19 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 		return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	// Extract message_id from response
-	var result map[string]any
+	// Extract message_id from response, checking code field for API errors.
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			MessageID string `json:"message_id"`
+		} `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-		if data, ok := result["data"].(map[string]any); ok {
-			if msgID, ok := data["message_id"].(string); ok {
-				return msgID, nil
-			}
+		if result.Code != 0 {
+			return "", fmt.Errorf("Feishu interactive API error [%d]: %s", result.Code, result.Msg)
 		}
+		return strings.TrimSpace(result.Data.MessageID), nil
 	}
 	return "", nil
 }
