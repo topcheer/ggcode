@@ -151,6 +151,16 @@ func (a *Agent) StartPreCompact() {
 	// results are skipped, so re-running a tier is a no-op.
 	if threshold > 0 {
 		if mgr, ok := cm.(*ctxpkg.Manager); ok {
+			// Superseded read compaction: before the tiered clearing, compact
+			// any file reads that have been superseded by a later read of the
+			// same file. This is the safest mechanical operation because the
+			// newer read always has more current content (Headroom-inspired
+			// context deduplication).
+			if freed := mgr.CompactSupersededReads(); freed > 0 {
+				tokens = cm.TokenCount()
+				debug.Log("precompact", "SUPERSEDED: freed %d tokens from superseded reads, tokens now %d (threshold=%d)",
+					freed, tokens, threshold)
+			}
 			for _, tier := range toolClearTiers {
 				if tokens < int(float64(threshold)*tier.trigger) {
 					break // not yet at this tier's trigger point

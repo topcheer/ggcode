@@ -1253,6 +1253,142 @@ func (m *Manager) ClearOldToolUseInputs() int {
 	return freed
 }
 
+// CompactSupersededReads finds pairs of read_file/multi_file_read tool calls
+// that target the same file path, and replaces the earlier (stale) result with
+// a compact placeholder. When an agent reads a file, edits it, then re-reads
+// it (or simply reads the same file twice), the earlier result holds outdated
+// content that wastes context space. This method removes that redundancy
+// proactively — before the general tool-result clearing tiers need to kick in.
+//
+// Inspired by Headroom's cross-agent context deduplication concept: if the
+// same resource appears multiple times in context, only the latest copy needs
+// to be retained. This is a purely mechanical operation (no LLM call needed)
+// and is safe because the newer read always has the more current content.
+//
+// Returns the approximate number of tokens freed.
+func (m *Manager) CompactSupersededReads() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Phase 1: Scan tool_use blocks for read_file and multi_file_read.
+	// Track file path → ordered list of ToolIDs that read it.
+	pathToToolIDs := make(map[string][]string)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			paths := extractReadPaths(b.ToolName, b.Input)
+			for _, p := range paths {
+				norm := normalizeFilePath(p)
+				pathToToolIDs[norm] = append(pathToToolIDs[norm], b.ToolID)
+			}
+		}
+	}
+
+	// Phase 2: For paths read more than once, all but the last read are superseded.
+	supersededIDs := make(map[string]bool)
+	for _, ids := range pathToToolIDs {
+		if len(ids) > 1 {
+			for _, id := range ids[:len(ids)-1] {
+				supersededIDs[id] = true
+			}
+		}
+	}
+
+	if len(supersededIDs) == 0 {
+		return 0
+	}
+
+	// Phase 3: Compact tool_results for superseded ToolIDs.
+	freedChars := 0
+	compacted := 0
+	for i := range m.messages {
+		for j := range m.messages[i].Content {
+			b := &m.messages[i].Content[j]
+			if b.Type != "tool_result" {
+				continue
+			}
+			if !supersededIDs[b.ToolID] {
+				continue
+			}
+			// Skip already-cleared or superseded results (idempotent).
+			if strings.HasPrefix(b.Output, "[superseded:") || strings.HasPrefix(b.Output, "[cleared:") {
+				continue
+			}
+			origLen := len(b.Output)
+			if origLen < 200 {
+				continue // skip small results — not worth compacting
+			}
+			b.Output = fmt.Sprintf("[superseded: file was re-read later in the conversation, output was %d chars]", origLen)
+			b.Images = nil
+			freedChars += origLen
+			compacted++
+		}
+	}
+
+	if freedChars == 0 {
+		return 0
+	}
+
+	before := m.tokens
+	m.version++
+	m.recalcTokens()
+	freed := before - m.tokens
+	debug.Log("ctx", "CompactSupersededReads: compacted %d superseded file reads, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// extractReadPaths extracts file paths from the Input JSON of read tools.
+// Supports read_file ({"path": "..."}) and multi_file_read ({"files": [{"path": "..."}]}).
+func extractReadPaths(toolName string, input json.RawMessage) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	switch toolName {
+	case "read_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(input, &args) == nil && args.Path != "" {
+			return []string{args.Path}
+		}
+	case "multi_file_read":
+		var args struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(input, &args) == nil {
+			paths := make([]string, 0, len(args.Files))
+			for _, f := range args.Files {
+				if f.Path != "" {
+					paths = append(paths, f.Path)
+				}
+			}
+			return paths
+		}
+	}
+	return nil
+}
+
+// normalizeFilePath normalizes a file path for comparison purposes.
+// Strips "./" prefix, converts backslashes to forward slashes, and lowercases
+// for case-insensitive filesystems (macOS, Windows).
+func normalizeFilePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.ReplaceAll(p, "\\", "/")
+	// Strip leading "./" repeatedly
+	for strings.HasPrefix(p, "./") {
+		p = p[2:]
+	}
+	// Collapse duplicate slashes
+	for strings.Contains(p, "//") {
+		p = strings.ReplaceAll(p, "//", "/")
+	}
+	return strings.ToLower(p)
+}
+
 // countTokens uses the provider's token counting API when available,
 // falling back to heuristic estimation.
 func (m *Manager) countTokens(msg provider.Message) int {

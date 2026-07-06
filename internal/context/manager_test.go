@@ -1638,3 +1638,416 @@ func TestClearOldToolResults_ProducesToolAwareSummary(t *testing.T) {
 		t.Errorf("expected file name in summary, got: %s", clearedOutput)
 	}
 }
+
+// --- CompactSupersededReads tests ---
+
+func TestCompactSupersededReads_SingleRead(t *testing.T) {
+	m := NewManager(100000)
+
+	// Single read — nothing to compact.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/foo.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("x", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed != 0 {
+		t.Errorf("expected 0 freed for single read, got %d", freed)
+	}
+}
+
+func TestCompactSupersededReads_DuplicateRead(t *testing.T) {
+	m := NewManager(100000)
+
+	// Two reads of the same file — first should be compacted.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/foo.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("a", 500), false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/foo.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", strings.Repeat("b", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed for superseded read")
+	}
+
+	msgs := m.Messages()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && b.ToolID == "read-1" {
+				if !strings.HasPrefix(b.Output, "[superseded:") {
+					t.Errorf("expected [superseded: prefix for read-1, got: %s", b.Output[:min(50, len(b.Output))])
+				}
+			}
+			if b.Type == "tool_result" && b.ToolID == "read-2" {
+				if strings.HasPrefix(b.Output, "[superseded:") {
+					t.Error("read-2 should NOT be compacted (latest read)")
+				}
+			}
+		}
+	}
+}
+
+func TestCompactSupersededReads_DifferentFiles(t *testing.T) {
+	m := NewManager(100000)
+
+	// Reads of different files — nothing to compact.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/foo.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("a", 500), false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/bar.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", strings.Repeat("b", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed != 0 {
+		t.Errorf("expected 0 freed for different files, got %d", freed)
+	}
+}
+
+func TestCompactSupersededReads_MultiFileRead(t *testing.T) {
+	m := NewManager(100000)
+
+	// multi_file_read reads multiple files. If one of those files was
+	// previously read via read_file, the earlier read is superseded.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/shared.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("a", 500), false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "multi_file_read",
+			Input:    json.RawMessage(`{"files":[{"path":"/shared.go"},{"path":"/other.go"}]}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", strings.Repeat("b", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed when multi_file_read supersedes read_file")
+	}
+
+	// Verify read-1 is compacted, read-2 is not.
+	msgs := m.Messages()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && b.ToolID == "read-1" {
+				if !strings.HasPrefix(b.Output, "[superseded:") {
+					t.Errorf("expected [superseded: prefix for read-1")
+				}
+			}
+		}
+	}
+}
+
+func TestCompactSupersededReads_Idempotent(t *testing.T) {
+	m := NewManager(100000)
+
+	// Two reads of same file.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/dup.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("a", 500), false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/dup.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", strings.Repeat("b", 500), false),
+		},
+	})
+
+	freed1 := m.CompactSupersededReads()
+	if freed1 <= 0 {
+		t.Fatal("expected first call to free tokens")
+	}
+	// Second call should be a no-op (already compacted).
+	freed2 := m.CompactSupersededReads()
+	if freed2 != 0 {
+		t.Errorf("expected 0 freed on second call (idempotent), got %d", freed2)
+	}
+}
+
+func TestCompactSupersededReads_SkipsSmallResults(t *testing.T) {
+	m := NewManager(100000)
+
+	// Two reads of same file, but results are small (<200 chars).
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/small.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", "small content", false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/small.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", "small content 2", false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed != 0 {
+		t.Errorf("expected 0 freed for small results, got %d", freed)
+	}
+}
+
+func TestCompactSupersededReads_PathNormalization(t *testing.T) {
+	m := NewManager(100000)
+
+	// Read with "./" prefix and without — should be treated as same file.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"./src/main.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-1", strings.Repeat("a", 500), false),
+		},
+	})
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "read-2",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"src/main.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("read-2", strings.Repeat("b", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed — ./prefix normalization should match")
+	}
+}
+
+func TestCompactSupersededReads_ThreeReadsSameFile(t *testing.T) {
+	m := NewManager(100000)
+
+	// Three reads of the same file — first two should be compacted.
+	for i := 0; i < 3; i++ {
+		toolID := fmt.Sprintf("read-%d", i+1)
+		m.Add(provider.Message{
+			Role: "assistant",
+			Content: []provider.ContentBlock{{
+				Type:     "tool_use",
+				ToolID:   toolID,
+				ToolName: "read_file",
+				Input:    json.RawMessage(`{"path":"/triple.go"}`),
+			}},
+		})
+		m.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{
+				provider.ToolResultBlock(toolID, strings.Repeat(string(rune('a'+i)), 500), false),
+			},
+		})
+	}
+
+	freed := m.CompactSupersededReads()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed for 3 reads of same file")
+	}
+
+	// Verify read-3 is NOT compacted, read-1 and read-2 ARE.
+	msgs := m.Messages()
+	compactedCount := 0
+	aliveCount := 0
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" || !strings.HasPrefix(b.Output, "[superseded:") {
+				continue
+			}
+			compactedCount++
+		}
+	}
+	// Count alive (non-superseded, non-cleared) read results for /triple.go
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if !strings.HasPrefix(b.Output, "[superseded:") && !strings.HasPrefix(b.Output, "[cleared:") {
+				aliveCount++
+			}
+		}
+	}
+	if compactedCount != 2 {
+		t.Errorf("expected 2 compacted results, got %d", compactedCount)
+	}
+	if aliveCount != 1 {
+		t.Errorf("expected 1 alive result (latest read), got %d", aliveCount)
+	}
+}
+
+func TestNormalizeFilePath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"/abs/path.go", "/abs/path.go"},
+		{"./rel/path.go", "rel/path.go"},
+		{"foo//bar.go", "foo/bar.go"},
+		{"/foo/./bar.go", "/foo/./bar.go"}, // we only strip leading ./
+		{"", ""},
+		{"UPPER.CASE", "upper.case"},
+	}
+	for _, tc := range tests {
+		got := normalizeFilePath(tc.input)
+		if got != tc.expected {
+			t.Errorf("normalizeFilePath(%q) = %q, want %q", tc.input, got, tc.expected)
+		}
+	}
+}
+
+func TestExtractReadPaths(t *testing.T) {
+	// read_file
+	paths := extractReadPaths("read_file", json.RawMessage(`{"path":"/foo.go"}`))
+	if len(paths) != 1 || paths[0] != "/foo.go" {
+		t.Errorf("read_file: expected [/foo.go], got %v", paths)
+	}
+
+	// multi_file_read
+	paths = extractReadPaths("multi_file_read", json.RawMessage(`{"files":[{"path":"/a.go"},{"path":"/b.go"}]}`))
+	if len(paths) != 2 || paths[0] != "/a.go" || paths[1] != "/b.go" {
+		t.Errorf("multi_file_read: expected [/a.go /b.go], got %v", paths)
+	}
+
+	// non-read tool
+	paths = extractReadPaths("edit_file", json.RawMessage(`{"file_path":"/foo.go"}`))
+	if len(paths) != 0 {
+		t.Errorf("edit_file: expected [], got %v", paths)
+	}
+
+	// empty input
+	paths = extractReadPaths("read_file", nil)
+	if len(paths) != 0 {
+		t.Errorf("empty input: expected [], got %v", paths)
+	}
+}
