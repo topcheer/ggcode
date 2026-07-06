@@ -96,14 +96,16 @@ func (t *OpenAICompatible) Transcribe(ctx context.Context, req Request) (Result,
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode >= 400 {
+		body, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		return Result{}, fmt.Errorf("STT API error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
 	var payload struct {
 		Text string `json:"text"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return Result{}, fmt.Errorf("decode STT response: %w", err)
-	}
-	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("STT API error [%d]", resp.StatusCode)
 	}
 	return Result{
 		Text:     strings.TrimSpace(payload.Text),
