@@ -152,7 +152,11 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 			return fmt.Errorf("whatsapp %q: send chunk %d: %w", a.name, i+1, err)
 		}
 		if i < len(chunks)-1 {
-			time.Sleep(300 * time.Millisecond)
+			select {
+			case <-time.After(300 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 	debug.Log("whatsapp", "adapter %q: outbound delivered target=%s chunks=%d", a.name, target, len(chunks))

@@ -42,6 +42,17 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		{"<script>", "&lt;script&gt;"},
 		{"a & b", "a &amp; b"},
 		{"plain text", "plain text"},
+		// Link conversion: [text](url) → <url|text>
+		{"[docs](https://example.com)", "<https://example.com|docs>"},
+		{"See [link](https://foo.bar/baz) here", "See <https://foo.bar/baz|link> here"},
+		// Header conversion: # Header → *Header*
+		{"# Title", "*Title*"},
+		{"## Section", "*Section*"},
+		{"### Subsection", "*Subsection*"},
+		// Header + text on next line
+		{"# Header\nBody", "*Header*\nBody"},
+		// No header conversion for inline # (not at line start)
+		{"not a # header", "not a # header"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {

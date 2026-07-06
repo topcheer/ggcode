@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,9 +26,17 @@ import (
 )
 
 const (
-	slackAPIBase    = "https://slack.com/api"
-	slackMaxTextLen = 4000
+	slackAPIBase       = "https://slack.com/api"
+	slackMaxTextLen    = 4000
+	slackInterMsgDelay = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
 )
+
+// Slack mrkdwn link format: [text](url) → <url|text>
+// Slack mrkdwn doesn't support standard markdown links.
+var slackLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
+// Slack mrkdwn has no native header support; convert to bold.
+var slackHeaderRe = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 
 type slackAdapter struct {
 	name       string
@@ -500,12 +509,21 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	}
 	remainingText = markdownToMrkdwn(remainingText)
 	chunks := splitSlackMessage(remainingText, slackMaxTextLen)
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
 		msgID, err := a.sendChannelMessage(ctx, channelID, chunk)
 		if err != nil {
 			return err
 		}
 		a.recordOutboundMessage(binding, msgID)
+		// Inter-message delay to respect Slack's ~1 msg/sec per-channel rate limit.
+		// Short bursts >1 are tolerated but sustained bursts risk rate limiting.
+		if i < len(chunks)-1 {
+			select {
+			case <-time.After(slackInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	return nil
 }
@@ -839,6 +857,11 @@ func markdownToMrkdwn(text string) string {
 	text = strings.ReplaceAll(text, boldPlaceholder, "*")
 	// Convert ~~strikethrough~~ to ~strikethrough~
 	text = replaceDelimiters(text, "~~", "~")
+	// Convert markdown links [text](url) to Slack mrkdwn <url|text>
+	text = slackLinkRe.ReplaceAllString(text, "<$2|$1>")
+	// Convert markdown headers (# H1, ## H2, etc.) to Slack bold (*text*)
+	// Slack mrkdwn has no native header support.
+	text = slackHeaderRe.ReplaceAllString(text, "*$2*")
 	return text
 }
 
