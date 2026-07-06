@@ -681,7 +681,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		} else {
 			output := msg.result.Output
 			if len(output) > 500 {
-				output = output[:500] + "…"
+				output = util.Truncate(output, 500) + "…"
 			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("❌ [Verification failed: `%s`]\n```\n%s\n```", msg.result.Command, output))
 		}

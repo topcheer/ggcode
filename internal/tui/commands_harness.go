@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -858,7 +859,8 @@ func titleizeHarnessText(text string) string {
 		if part == "" {
 			continue
 		}
-		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		r, size := utf8.DecodeRuneInString(part)
+		parts[i] = strings.ToUpper(string(r)) + part[size:]
 	}
 	return strings.Join(parts, " ")
 }
