@@ -511,7 +511,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const autoScrollByTabRef = useRef<Record<string, boolean>>({ main: true })
   const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
   const suppressNextScrollEventRef = useRef(false)
@@ -1030,10 +1030,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const images = pastedImages
     setInput('')
     setPastedImages([])
+    // Reset textarea height after clearing
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
     await sendUserText(text || 'Please analyze this image.', undefined, images)
   }, [input, pastedImages, sendUserText])
 
-  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items || [])
     const imageFiles = items
       .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
@@ -1661,7 +1665,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       <div style={{
         padding: 'var(--spacing-md) var(--spacing-lg)',
         borderTop: '1px solid var(--color-border)',
-        display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center',
+        display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-end',
         flexShrink: 0,
       }}>
         <button type="button" onClick={handlePasteButton} title="Paste from clipboard" style={{
@@ -1674,20 +1678,28 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }}>
           <ClipboardPaste size={16} />
         </button>
-        <input
+        <textarea
           ref={inputRef}
           value={input}
-          onChange={e => setInput(e.target.value)}
+          rows={1}
+          onChange={e => {
+            setInput(e.target.value)
+            // Auto-resize: reset to scrollHeight, capped at 200px
+            const el = e.target
+            el.style.height = 'auto'
+            el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+          }}
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           placeholder={isStreaming ? t('chat.agentWorking') : t('chat.placeholder')}
           style={{
-            flex: 1, height: 40, padding: '0 var(--spacing-md)',
+            flex: 1, minHeight: 40, maxHeight: 200, padding: '8px var(--spacing-md)',
             borderRadius: 'var(--radius-lg)',
             background: 'var(--color-card)',
             border: '1px solid var(--color-border)',
             color: 'var(--text-primary)', outline: 'none',
-            fontSize: 13,
+            fontSize: 13, lineHeight: 1.5, resize: 'none', overflowY: 'auto',
+            fontFamily: 'inherit',
           }}
         />
         {isStreaming ? (
