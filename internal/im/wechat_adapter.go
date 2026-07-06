@@ -497,6 +497,25 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content st
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sendmessage status=%d", resp.StatusCode)
 	}
+	// Parse iLink response body to check for API-level errors.
+	// The iLink API returns HTTP 200 with {"ret":0} on success,
+	// but non-zero ret/errcode indicates failure (e.g. rate limit,
+	// expired token, content too long).
+	var result struct {
+		Ret     int    `json:"ret"`
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		// If we can't decode the body, don't fail the send — the
+		// HTTP status was 200, so the message was likely accepted.
+		debug.Log("wechat", "adapter=%s sendmessage response decode failed: %v", a.name, err)
+		return nil
+	}
+	if result.Ret != 0 {
+		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
+	}
+	debug.Log("wechat", "adapter=%s sendmessage OK", a.name)
 	return nil
 }
 
@@ -568,6 +587,17 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		debug.Log("wechat", "adapter=%s sendmessage failed: status=%d body=%s", a.name, resp.StatusCode, string(respBody))
 		return fmt.Errorf("sendmessage failed: status=%d body=%s", resp.StatusCode, string(respBody))
+	}
+	// Parse iLink response body for API-level errors (same pattern as sendTextToUser).
+	var sendResp struct {
+		Ret     int    `json:"ret"`
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sendResp); err != nil {
+		debug.Log("wechat", "adapter=%s sendmessage response parse error (non-fatal): %v", a.name, err)
+	} else if sendResp.Ret != 0 || sendResp.ErrCode != 0 {
+		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", sendResp.Ret, sendResp.ErrCode, sendResp.ErrMsg)
 	}
 	debug.Log("wechat", "adapter=%s sendmessage OK to=%s", a.name, toUserID)
 
