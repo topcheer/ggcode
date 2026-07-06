@@ -673,7 +673,11 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 			continue // already sent via respond_msg
 		}
 		if !firstProactive {
-			time.Sleep(wecomInterMsgDelay) // avoid WeCom rate limits
+			select {
+			case <-time.After(wecomInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		firstProactive = false
 		if err := a.sendProactive(chatID, chunks[i]); err != nil {

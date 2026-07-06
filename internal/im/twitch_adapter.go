@@ -363,7 +363,7 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
-			_ = a.sendTwitchMessage(channelID, pairingResult.ReplyText)
+			_ = a.sendTwitchMessage(ctx, channelID, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				a.publishState(false, "warning", err.Error())
 			}
@@ -391,10 +391,10 @@ func (a *twitchAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if target == "" {
 		target = binding.TargetID
 	}
-	return a.sendTwitchMessage(target, stripMarkdown(defaultOutboundText(event)))
+	return a.sendTwitchMessage(ctx, target, stripMarkdown(defaultOutboundText(event)))
 }
 
-func (a *twitchAdapter) sendTwitchMessage(target, text string) error {
+func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text string) error {
 	if text == "" || target == "" {
 		return nil
 	}
@@ -409,7 +409,11 @@ func (a *twitchAdapter) sendTwitchMessage(target, text string) error {
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
 		for i, chunk := range chunks {
 			if i > 0 {
-				time.Sleep(twitchInterMessageDelay)
+				select {
+				case <-time.After(twitchInterMessageDelay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
 		}

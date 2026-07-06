@@ -464,7 +464,7 @@ func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
-			_ = a.sendIRCMessage(channelID, pairingResult.ReplyText)
+			_ = a.sendIRCMessage(ctx, channelID, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				a.publishState(false, "warning", err.Error())
 			}
@@ -487,10 +487,10 @@ func (a *ircAdapter) Send(ctx context.Context, binding ChannelBinding, event Out
 		target = binding.TargetID
 	}
 	text := stripMarkdown(defaultOutboundText(event))
-	return a.sendIRCMessage(target, text)
+	return a.sendIRCMessage(ctx, target, text)
 }
 
-func (a *ircAdapter) sendIRCMessage(target, text string) error {
+func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) error {
 	if text == "" || target == "" {
 		return nil
 	}
@@ -503,7 +503,11 @@ func (a *ircAdapter) sendIRCMessage(target, text string) error {
 		chunks := splitIRCMessage(line, ircMaxMessageLen)
 		for i, chunk := range chunks {
 			if i > 0 {
-				time.Sleep(ircInterMessageDelay)
+				select {
+				case <-time.After(ircInterMessageDelay):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
 		}

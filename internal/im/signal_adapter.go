@@ -468,7 +468,7 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		}
 		if pairingResult.Consumed {
 			// Auto-add first paired group to allowlist
-			_ = a.sendText(chatID, pairingResult.ReplyText)
+			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				a.publishState(false, "warning", err.Error())
 			}
@@ -529,10 +529,10 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(chatID, stripMarkdown(defaultOutboundText(event)))
+	return a.sendText(ctx, chatID, stripMarkdown(defaultOutboundText(event)))
 }
 
-func (a *signalAdapter) sendText(chatID, text string) error {
+func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error {
 	if text == "" || chatID == "" {
 		return nil
 	}
@@ -542,7 +542,11 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 	for i, chunk := range chunks {
 		// Rate limit: signal-cli-rest-api returns 429 on rapid sends.
 		if i > 0 {
-			time.Sleep(signalInterMessageDelay)
+			select {
+			case <-time.After(signalInterMessageDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		endpoint := "/v2/send"
 		payload := map[string]any{
