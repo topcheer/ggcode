@@ -333,7 +333,7 @@ func (a *nostrAdapter) sendNostrDM(recipientPubKey, text string) error {
 	// Resolve npub → hex if needed
 	recipientPubKey = resolveNostrPubkey(recipientPubKey)
 
-	chunks := splitSignalMessage(text, nostrMaxMessageLen)
+	chunks := splitNostrMessage(text, nostrMaxMessageLen)
 	var lastErr error
 	for _, chunk := range chunks {
 		// Compute shared secret for NIP-04 encryption
@@ -414,6 +414,12 @@ func resolveNostrPubkey(input string) string {
 		return input
 	}
 	return input
+}
+
+// splitNostrMessage splits text into chunks fitting within maxLen runes.
+// Uses balanced breaking: prefers newline boundaries, then hard cut.
+func splitNostrMessage(text string, maxLen int) []string {
+	return splitMessageRunes(text, maxLen, false, false, true)
 }
 
 // ---------------------------------------------------------------------------

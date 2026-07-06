@@ -21,7 +21,7 @@ const (
 	wecomConnectTimeout      = 20 * time.Second
 	wecomRequestTimeout      = 15 * time.Second
 	wecomHeartbeatPeriod     = 30 * time.Second
-	wecomMaxTextLen          = 4000
+	wecomMaxTextLen          = 2048 // Official: text content max 2048 bytes (https://developer.work.weixin.qq.com/document/path/90236)
 	wecomDedupMaxSize        = 1000
 	wecomSplitThreshold      = 3900
 	wecomTextBatchDelay      = 600 * time.Millisecond

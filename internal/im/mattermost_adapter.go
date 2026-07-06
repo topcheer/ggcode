@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	mattermostDefaultMaxPostLen = 4000
+	mattermostDefaultMaxPostLen = 16383 // Official hard limit: https://docs.mattermost.com/administration-guide/manage/product-limits.html
 	mattermostAPIVersion        = "api/v4"
 	mattermostConnectTimeout    = 20 * time.Second
 	mattermostHeartbeatPeriod   = 30 * time.Second
