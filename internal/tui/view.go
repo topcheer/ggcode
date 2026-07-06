@@ -198,7 +198,15 @@ func (m Model) isAnyPanelOpen() bool {
 		m.qqPanel != nil || m.tgPanel != nil || m.pcPanel != nil ||
 		m.discordPanel != nil || m.feishuPanel != nil || m.slackPanel != nil ||
 		m.dingtalkPanel != nil || m.imPanel != nil || m.mcpPanel != nil ||
-		m.impersonatePanel != nil
+		m.impersonatePanel != nil ||
+		m.wechatPanel != nil || m.wecomPanel != nil ||
+		m.matrixPanel != nil || m.mattermostPanel != nil ||
+		m.signalPanel != nil || m.ircPanel != nil ||
+		m.nostrPanel != nil || m.twitchPanel != nil ||
+		m.whatsappPanel != nil || m.streamPanel != nil ||
+		m.inspectorPanel != nil || m.harnessContextPrompt != nil ||
+		m.harnessPanel != nil || m.lanChatPanel != nil ||
+		m.skillsPanel != nil
 }
 
 func (m Model) currentSelection() (string, string, string) {
