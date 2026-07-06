@@ -164,6 +164,9 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   // Keyboard navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (sortedFiltered.length === 0) return
+    // Don't hijack keyboard when user is typing in an input/textarea
+    const target = e.target as HTMLElement
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
     if (e.key === 'ArrowDown' || e.key === 'j') {
       e.preventDefault()
       setSelectedIndex(prev => Math.min(prev + 1, sortedFiltered.length - 1))

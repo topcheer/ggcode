@@ -274,6 +274,18 @@ function LayoutInner() {
     setShareDialogOpen(false)
   }, [])
 
+  // Command palette actions — memoized at top level to avoid Rules of Hooks violation
+  const cmdPaletteActions = useMemo<CommandAction[]>(() => [
+    { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session', action: () => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) } },
+    { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', action: () => { setView('chat'); setSidebarOpen(true) } },
+    { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', action: () => setShareDialogOpen(true) },
+    { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', action: () => setContextPanelOpen(prev => !prev) },
+    { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', action: () => { document.documentElement.classList.toggle('dark') } },
+    { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
+    { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
+    { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', action: () => setSidebarOpen(prev => !prev) },
+  ], [])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
       {/* Onboarding flow */}
@@ -334,16 +346,7 @@ function LayoutInner() {
       {cmdPaletteOpen && (
         <CommandPalette
           onClose={() => setCmdPaletteOpen(false)}
-          actions={useMemo<CommandAction[]>(() => [
-            { nameKey: 'cmd.newSession', shortcut: '⌘N', categoryKey: 'cmd.cat.session', action: () => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) } },
-            { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', action: () => { setView('chat'); setSidebarOpen(true) } },
-            { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', action: () => setShareDialogOpen(true) },
-            { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', action: () => setContextPanelOpen(prev => !prev) },
-            { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', action: () => { document.documentElement.classList.toggle('dark') } },
-            { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
-            { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', action: () => setView('settings') },
-            { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', action: () => setSidebarOpen(prev => !prev) },
-          ], [setView, setSidebarOpen, setContextPanelOpen, setShareDialogOpen])}
+          actions={cmdPaletteActions}
         />
       )}
       {shareDialogOpen && <RealShareDialog onClose={() => setShareDialogOpen(false)} />}
