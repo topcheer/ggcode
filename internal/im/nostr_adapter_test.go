@@ -1,6 +1,7 @@
 package im
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -242,10 +243,10 @@ func TestNostrSendNoDMEmptyTarget(t *testing.T) {
 		Extra: map[string]interface{}{"private_key": sk},
 	}, nil)
 	// Should not error on empty target
-	if err := a.sendNostrDM("", "hello"); err != nil {
+	if err := a.sendNostrDM(context.Background(), "", "hello"); err != nil {
 		t.Errorf("sendNostrDM empty target should be nil, got: %v", err)
 	}
-	if err := a.sendNostrDM(strings.Repeat("a", 64), ""); err != nil {
+	if err := a.sendNostrDM(context.Background(), strings.Repeat("a", 64), ""); err != nil {
 		t.Errorf("sendNostrDM empty text should be nil, got: %v", err)
 	}
 }

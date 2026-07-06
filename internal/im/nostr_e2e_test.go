@@ -532,10 +532,10 @@ func TestNostrE2E_TriggerTypingNoop(t *testing.T) {
 
 func TestNostrE2E_SendNostrDMEdgeCases(t *testing.T) {
 	adapter, _, _, _, _ := setupNostrTest(t, "e2e-send-edge")
-	if err := adapter.sendNostrDM("", "hello"); err != nil {
+	if err := adapter.sendNostrDM(context.Background(), "", "hello"); err != nil {
 		t.Errorf("empty target should be nil, got: %v", err)
 	}
-	if err := adapter.sendNostrDM(strings.Repeat("a", 64), ""); err != nil {
+	if err := adapter.sendNostrDM(context.Background(), strings.Repeat("a", 64), ""); err != nil {
 		t.Errorf("empty text should be nil, got: %v", err)
 	}
 }

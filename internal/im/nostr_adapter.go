@@ -24,6 +24,9 @@ const (
 	nostrMaxBackoff       = 120 * time.Second
 	nostrDedupMaxSize     = 5000
 	nostrStartupLookback  = 120
+	// nostrInterMsgDelay is the delay between consecutive chunk sends.
+	// Relays may rate-limit rapid publishes; 300ms is conservative.
+	nostrInterMsgDelay = 300 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -300,7 +303,7 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("nostr", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 		if pairingResult.Consumed {
-			_ = a.sendNostrDM(evt.PubKey, pairingResult.ReplyText)
+			_ = a.sendNostrDM(ctx, evt.PubKey, pairingResult.ReplyText)
 			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 				debug.Log("nostr", "adapter=%s notify previous: %v", a.name, err)
 			}
@@ -322,10 +325,10 @@ func (a *nostrAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if target == "" {
 		target = binding.TargetID
 	}
-	return a.sendNostrDM(target, stripMarkdown(defaultOutboundText(event)))
+	return a.sendNostrDM(ctx, target, stripMarkdown(defaultOutboundText(event)))
 }
 
-func (a *nostrAdapter) sendNostrDM(recipientPubKey, text string) error {
+func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text string) error {
 	if text == "" || recipientPubKey == "" {
 		return nil
 	}
@@ -368,8 +371,16 @@ func (a *nostrAdapter) sendNostrDM(recipientPubKey, text string) error {
 		a.mu.RUnlock()
 
 		for _, relay := range conns {
-			if err := relay.Publish(context.Background(), evt); err != nil {
+			if err := relay.Publish(ctx, evt); err != nil {
 				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
+			}
+		}
+		// Inter-chunk delay to avoid relay rate-limiting on multi-chunk sends.
+		if len(chunks) > 1 {
+			select {
+			case <-time.After(nostrInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	}
