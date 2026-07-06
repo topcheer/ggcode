@@ -100,6 +100,8 @@ const en = {
   'context.cacheWrite': 'Cache Write',
   'context.cacheHit': 'Cache Hit',
   'context.contextLabel': '{n}K context',
+  'context.warning': 'Context window is {pct}% full. Consider starting a new session.',
+  'context.critical': 'Context window is {pct}% full. Older messages may be dropped.',
 
   // SettingsPage
   'settings.title': 'Settings',

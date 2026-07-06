@@ -500,6 +500,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     return () => { cancelled = true }
   }, [sessionId])
 
+  // Draft persistence: save/restore unsent input text per session
+  useEffect(() => {
+    if (!sessionId || !input) return
+    try { sessionStorage.setItem(`draft:${sessionId}`, input) } catch {}
+  }, [input, sessionId])
+  useEffect(() => {
+    if (!sessionId) { setInput(''); return }
+    try {
+      const draft = sessionStorage.getItem(`draft:${sessionId}`)
+      setInput(draft ?? '')
+    } catch { setInput('') }
+  }, [sessionId])
+
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
   const isStreamingRef = useRef(false)
@@ -517,6 +530,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const suppressNextScrollEventRef = useRef(false)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [contextBannerDismissed, setContextBannerDismissed] = useState(false)
   const prevMsgCountRef = useRef(0)
 
   // Track unread messages when scrolled up
@@ -530,6 +544,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // Reset unread when scrolled back to bottom
   useEffect(() => { if (!showScrollBtn) setUnreadCount(0) }, [showScrollBtn])
+  // Re-enable context banner when usage drops back below 80%
+  useEffect(() => { if (statusBar.usagePercent < 80) setContextBannerDismissed(false) }, [statusBar.usagePercent])
   const [isDragOver, setIsDragOver] = useState(false)
   const dragCounterRef = useRef(0)
   const currentTabStreaming = activeTab === 'main'
@@ -1045,6 +1061,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
     const images = pastedImages
     setInput('')
+    if (sessionId) { try { sessionStorage.removeItem(`draft:${sessionId}`) } catch {} }
     setPastedImages([])
     // Reset textarea height after clearing
     if (inputRef.current) {
@@ -1638,6 +1655,30 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               color={panel.status === 'running' ? 'var(--color-warning)' : panel.status === 'completed' ? 'var(--color-success)' : undefined}
             />
           ))}
+        </div>
+      )}
+
+      {/* Context window warning banner */}
+      {statusBar.usagePercent > 80 && !contextBannerDismissed && (
+        <div style={{
+          padding: '6px var(--spacing-lg)',
+          background: statusBar.usagePercent > 90 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(245, 158, 11, 0.10)',
+          borderBottom: '1px solid var(--color-border)',
+          display: 'flex', alignItems: 'center', gap: 8,
+          fontSize: 12,
+        }}>
+          <span style={{ fontSize: 14 }}>{statusBar.usagePercent > 90 ? '🔴' : '🟡'}</span>
+          <span style={{ color: statusBar.usagePercent > 90 ? 'var(--color-error)' : 'var(--color-warning)', flex: 1 }}>
+            {t(
+              statusBar.usagePercent > 90 ? 'context.critical' : 'context.warning',
+              { pct: Math.round(statusBar.usagePercent) }
+            )}
+          </span>
+          <button onClick={() => setContextBannerDismissed(true)} style={{
+            background: 'none', border: 'none',
+            color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 13,
+            padding: '0 4px',
+          }}>✕</button>
         </div>
       )}
 

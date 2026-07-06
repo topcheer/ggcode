@@ -68,14 +68,17 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 		return nil, fmt.Errorf("no checkpoints to undo")
 	}
 
-	cp := &m.checkpoints[len(m.checkpoints)-1]
+	// Copy the checkpoint value before truncating the slice. Without this copy,
+	// the returned pointer would alias the backing array slot that a subsequent
+	// Save() call could overwrite (append into the truncated capacity).
+	cp := m.checkpoints[len(m.checkpoints)-1]
 
 	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	m.checkpoints = m.checkpoints[:len(m.checkpoints)-1]
-	return cp, nil
+	return &cp, nil
 }
 
 // Revert rolls back to a specific checkpoint by ID, writing OldContent back to the file.
@@ -96,14 +99,16 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 		return nil, fmt.Errorf("checkpoint %q not found", id)
 	}
 
-	cp := &m.checkpoints[idx]
+	// Copy the checkpoint value before truncating the slice to avoid aliasing
+	// the backing array (see Undo for details).
+	cp := m.checkpoints[idx]
 
 	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
 	m.checkpoints = m.checkpoints[:idx]
-	return cp, nil
+	return &cp, nil
 }
 
 // FileSummary summarizes the edits made to a single file.
@@ -163,7 +168,9 @@ func (m *Manager) Last() *Checkpoint {
 	if len(m.checkpoints) == 0 {
 		return nil
 	}
-	return &m.checkpoints[len(m.checkpoints)-1]
+	// Return a copy to avoid aliasing the backing array.
+	cp := m.checkpoints[len(m.checkpoints)-1]
+	return &cp
 }
 
 // Clear removes all checkpoints.
