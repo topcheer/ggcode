@@ -444,7 +444,7 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 	}
 
 	// Split into chunks that respect rune boundaries (Mattermost max post = 4000 chars)
-	chunks := splitMattermostText(text, mattermostDefaultMaxPostLen)
+	chunks := splitMessageRunes(text, mattermostDefaultMaxPostLen, false, false, true)
 	for i, chunk := range chunks {
 		payload := map[string]any{
 			"channel_id": channelID,
@@ -467,40 +467,6 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 		}
 	}
 	return nil
-}
-
-// splitMattermostText splits text into chunks at most maxLen runes,
-// preferring newline boundaries for cleaner splits.
-func splitMattermostText(text string, maxLen int) []string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(runes) > 0 {
-		end := maxLen
-		if end > len(runes) {
-			end = len(runes)
-		}
-		// Prefer splitting at a newline within the last 200 runes
-		if end < len(runes) {
-			lookBack := end - 200
-			if lookBack < 0 {
-				lookBack = 0
-			}
-			bestSplit := end
-			for i := end - 1; i >= lookBack; i-- {
-				if runes[i] == '\n' {
-					bestSplit = i + 1
-					break
-				}
-			}
-			end = bestSplit
-		}
-		chunks = append(chunks, string(runes[:end]))
-		runes = runes[end:]
-	}
-	return chunks
 }
 
 // TriggerTyping adds a reaction acknowledgement to the latest real user post

@@ -587,37 +587,10 @@ func (a *whatsappAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// chunkWARunes splits text into chunks at most maxLen runes,
-// preferring newline boundaries for cleaner splits.
-// Uses rune-safe splitting to avoid breaking multi-byte characters.
+// chunkWARunes delegates to the shared splitMessageRunes with balanced
+// break preference, which searches the entire chunk for newline boundaries
+// (wider than the previous 200-rune lookback) while still avoiding splits
+// at very early newlines.
 func chunkWARunes(text string, maxLen int) []string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(runes) > 0 {
-		end := maxLen
-		if end > len(runes) {
-			end = len(runes)
-		}
-		// Prefer splitting at a newline within the last 200 runes
-		if end < len(runes) {
-			lookBack := end - 200
-			if lookBack < 0 {
-				lookBack = 0
-			}
-			bestSplit := end
-			for i := end - 1; i >= lookBack; i-- {
-				if runes[i] == '\n' {
-					bestSplit = i + 1
-					break
-				}
-			}
-			end = bestSplit
-		}
-		chunks = append(chunks, string(runes[:end]))
-		runes = runes[end:]
-	}
-	return chunks
+	return splitMessageRunes(text, maxLen, false, false, true)
 }

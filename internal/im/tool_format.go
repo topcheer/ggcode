@@ -7,34 +7,7 @@ import (
 )
 
 func (a *tgAdapter) outboundText(event OutboundEvent) string {
-	switch event.Kind {
-	case OutboundEventText:
-		return event.Text
-	case OutboundEventStatus:
-		return event.Status
-	case OutboundEventToolCall:
-		if event.ToolCall == nil {
-			return ""
-		}
-		return formatToolCallText(event.ToolCall)
-	case OutboundEventToolResult:
-		if event.ToolRes == nil {
-			return ""
-		}
-		return formatToolResultText(event.ToolRes)
-	case OutboundEventApprovalRequest:
-		if event.Approval == nil {
-			return ""
-		}
-		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, event.Approval.Input)
-	case OutboundEventApprovalResult:
-		if event.Result == nil {
-			return ""
-		}
-		return fmt.Sprintf("[approval result] %s", event.Result.Decision)
-	default:
-		return ""
-	}
+	return defaultOutboundText(event)
 }
 
 // toolLang returns the ToolLanguage from a struct's Lang field, defaulting to zh-CN.
