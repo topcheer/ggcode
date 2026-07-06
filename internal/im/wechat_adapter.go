@@ -548,6 +548,22 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",
 		a.name, toUserID, truncateStr(contextToken, 12), len(text), event.Kind)
 
+	// Split long messages — WeChat iLink API has a ~2048 byte limit per message.
+	// Without splitting, long messages get silently truncated or rejected.
+	chunks := SplitMessageForPlatform(text, PlatformWechat)
+	for i, chunk := range chunks {
+		if err := a.sendSingleChunk(ctx, token, toUserID, contextToken, chunk); err != nil {
+			debug.Log("wechat", "adapter=%s chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
+			return err
+		}
+	}
+
+	debug.Log("wechat", "adapter=%s sendmessage OK to=%s chunks=%d", a.name, toUserID, len(chunks))
+	return nil
+}
+
+// sendSingleChunk sends one text chunk via the iLink sendmessage API.
+func (a *WechatAdapter) sendSingleChunk(ctx context.Context, token, toUserID, contextToken, text string) error {
 	items := []ilinkItem{
 		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: text}},
 	}
@@ -599,8 +615,6 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	} else if sendResp.Ret != 0 || sendResp.ErrCode != 0 {
 		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", sendResp.Ret, sendResp.ErrCode, sendResp.ErrMsg)
 	}
-	debug.Log("wechat", "adapter=%s sendmessage OK to=%s", a.name, toUserID)
-
 	return nil
 }
 
