@@ -2496,6 +2496,14 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function ErrorMessage({ msg }: { msg: ChatMessage }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(msg.content).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [msg.content])
+
   return (
     <div style={{
       padding: 'var(--spacing-sm) var(--spacing-md)',
@@ -2504,8 +2512,23 @@ function ErrorMessage({ msg }: { msg: ChatMessage }) {
       border: '1px solid var(--color-error)',
       color: 'var(--color-error)',
       fontSize: 'var(--font-size-base)', lineHeight: 1.6,
+      position: 'relative',
     }}>
       {msg.content}
+      <button
+        onClick={handleCopy}
+        title="Copy error"
+        style={{
+          position: 'absolute', top: 4, right: 4,
+          padding: '1px 6px', borderRadius: 3,
+          background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
+          border: '1px solid var(--color-border)',
+          color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
+          cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {copied ? '✓' : 'Copy'}
+      </button>
     </div>
   )
 }
