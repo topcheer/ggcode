@@ -243,7 +243,7 @@ func (e *IMEmitter) EmitUserText(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	e.EmitText("【用户】" + text + "\n")
+	e.EmitText(e.userEchoLabel() + text + "\n")
 }
 
 // EmitUserTextExcept sends a user echo message to all bound IM channels except the originating adapter.
@@ -255,7 +255,7 @@ func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	echoText := "【用户】" + text + "\n"
+	echoText := e.userEchoLabel() + text + "\n"
 	if strings.TrimSpace(echoText) == "" {
 		return
 	}
@@ -408,6 +408,14 @@ func (e *IMEmitter) FormatAskUserPrompt(rawArgs string) string {
 }
 
 // Helper functions
+
+// userEchoLabel returns the localized prefix for user echo messages.
+func (e *IMEmitter) userEchoLabel() string {
+	if e.language == "zh-CN" {
+		return "【用户】"
+	}
+	return "[User] "
+}
 
 func truncateEmitter(s string, maxLen int) string {
 	if len(s) <= maxLen {

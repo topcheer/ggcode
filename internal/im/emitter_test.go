@@ -118,7 +118,7 @@ func TestIMEmitterEmitUserText(t *testing.T) {
 	if !strings.Contains(events[len(events)-1].Text, "hello") {
 		t.Errorf("event text = %q", events[len(events)-1].Text)
 	}
-	if !strings.Contains(events[len(events)-1].Text, "用户") {
+	if !strings.Contains(events[len(events)-1].Text, "User") {
 		t.Errorf("should contain user marker: %q", events[len(events)-1].Text)
 	}
 }
