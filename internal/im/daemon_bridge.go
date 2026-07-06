@@ -319,9 +319,13 @@ func (b *DaemonBridge) beginRunSlot() context.Context {
 
 func (b *DaemonBridge) finishRunSlot() {
 	b.mu.Lock()
+	cancel := b.cancelFunc
 	b.cancelFunc = nil
 	b.agent.SetInterruptionHandler(nil)
 	b.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	b.notifyRunStateChange(false)
 }
 
@@ -887,12 +891,17 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 func (b *DaemonBridge) Close() {
 	b.mu.Lock()
 	collector := b.metricCollector
-	cancel := b.metricCancel
+	metricCancel := b.metricCancel
+	runCancel := b.cancelFunc
 	b.metricCollector = nil
 	b.metricCancel = nil
+	b.cancelFunc = nil
 	b.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if metricCancel != nil {
+		metricCancel()
+	}
+	if runCancel != nil {
+		runCancel()
 	}
 	if collector != nil {
 		collector.Stop()
