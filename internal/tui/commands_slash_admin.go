@@ -71,6 +71,11 @@ func (m *Model) persistSidebarPreference() {
 }
 
 func (m *Model) handleCompactCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return compactResultMsg{err: m.t("compact.unavailable")}
+		}
+	}
 	// Enter loading state and start spinner immediately.
 	m.setLoading(true)
 	m.statusActivity = m.t("status.compacting")
@@ -96,6 +101,11 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 }
 
 func (m *Model) handleUndoCommand() tea.Cmd {
+	if m.agent == nil {
+		return func() tea.Msg {
+			return streamMsg(m.t("checkpoint.disabled"))
+		}
+	}
 	return func() tea.Msg {
 		cpMgr := m.agent.CheckpointManager()
 		if cpMgr == nil {
