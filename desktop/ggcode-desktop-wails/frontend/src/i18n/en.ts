@@ -7,11 +7,16 @@ const en = {
   'nav.settings': 'Settings (⌘,)',
 
   // Sidebar
+  'sidebar.sessions': 'Sessions',
   'sidebar.search': 'Search sessions...',
   'sidebar.newSession': 'New Session',
   'sidebar.untitled': 'Untitled',
   'sidebar.delete': 'Delete',
   'sidebar.loading': 'Loading...',
+  'sidebar.group.today': 'Today',
+  'sidebar.group.yesterday': 'Yesterday',
+  'sidebar.group.thisWeek': 'This Week',
+  'sidebar.group.older': 'Older',
   'sidebar.time.justNow': 'just now',
   'sidebar.time.minutesAgo': '{n}m ago',
   'sidebar.time.hoursAgo': '{n}h ago',

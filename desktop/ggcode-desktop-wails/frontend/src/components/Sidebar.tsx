@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Search, Smartphone, Trash2, Lock } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
@@ -35,6 +35,20 @@ function relativeTime(dateStr: string, t: (key: any, params?: Record<string, str
   return d.toLocaleDateString()
 }
 
+function getDateGroup(dateStr: string): string {
+  if (!dateStr) return 'older'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return 'older'
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterday = new Date(today.getTime() - 86400000)
+  const weekAgo = new Date(today.getTime() - 7 * 86400000)
+  if (d >= today) return 'today'
+  if (d >= yesterday) return 'yesterday'
+  if (d >= weekAgo) return 'thisWeek'
+  return 'older'
+}
+
 export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace, showToast }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
@@ -42,6 +56,8 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   const [loading, setLoading] = useState(true)
 
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -76,6 +92,27 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   const filtered = sessions.filter(s =>
     s.title.toLowerCase().includes(search.toLowerCase())
   )
+
+  // Sort filtered sessions by date desc for grouping
+  const sortedFiltered = useMemo(() =>
+    [...filtered].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    [filtered]
+  )
+
+  // Group sessions by date
+  const grouped = useMemo(() => {
+    const groups: Record<string, SessionItem[]> = { today: [], yesterday: [], thisWeek: [], older: [] }
+    sortedFiltered.forEach(s => { groups[getDateGroup(s.updatedAt)].push(s) })
+    return groups
+  }, [sortedFiltered])
+
+  const groupOrder: string[] = ['today', 'yesterday', 'thisWeek', 'older']
+  const groupLabels: Record<string, string> = {
+    today: t('sidebar.group.today'),
+    yesterday: t('sidebar.group.yesterday'),
+    thisWeek: t('sidebar.group.thisWeek'),
+    older: t('sidebar.group.older'),
+  }
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
@@ -121,6 +158,35 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     }
   }
 
+  // Reset selection when filter changes
+  useEffect(() => { setSelectedIndex(0) }, [search])
+
+  // Keyboard navigation
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (sortedFiltered.length === 0) return
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+      e.preventDefault()
+      setSelectedIndex(prev => Math.min(prev + 1, sortedFiltered.length - 1))
+    } else if (e.key === 'ArrowUp' || e.key === 'k') {
+      e.preventDefault()
+      setSelectedIndex(prev => Math.max(prev - 1, 0))
+    } else if (e.key === 'Enter' && sortedFiltered[selectedIndex]) {
+      e.preventDefault()
+      handleSelect(sortedFiltered[selectedIndex])
+    }
+  }, [sortedFiltered, selectedIndex])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
+
+  // Auto-scroll selected item into view
+  useEffect(() => {
+    const el = itemRefs.current[selectedIndex]
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [selectedIndex])
+
   return (
     <div style={{
       width: 'var(--sidebar-width)',
@@ -138,8 +204,13 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         height: 52, gap: 8,
       }}>
         <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>
-          Sessions
+          {t('sidebar.sessions')}
         </span>
+        {sessions.length > 0 && (
+          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            {sessions.length}
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         <button onClick={handleNew} title={t('sidebar.newSession')} style={{
           width: 28, height: 28, borderRadius: 'var(--radius-sm)',
@@ -181,76 +252,111 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
             {t('sidebar.loading')}
           </div>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && sortedFiltered.length === 0 && (
           <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
             {search ? 'No matches' : 'No sessions yet'}
           </div>
         )}
-        {filtered.map(s => (
-          <div
-            key={s.id}
-            onClick={() => handleSelect(s)}
-            onMouseEnter={() => setHoveredSessionId(s.id)}
-            onMouseLeave={() => setHoveredSessionId(prev => prev === s.id ? null : prev)}
-            style={{
-              padding: 'var(--spacing-sm) var(--spacing-md)',
-              background: s.id === activeSessionId ? 'var(--color-card)' : 'transparent',
-              borderLeft: s.id === activeSessionId ? '2px solid var(--color-primary)' : '2px solid transparent',
-              cursor: s.locked ? 'not-allowed' : 'pointer',
-              opacity: s.locked ? 0.5 : 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              width: '100%',
-              boxSizing: 'border-box',
-              gap: 2,
-              transition: 'background 0.1s',
-              position: 'relative',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
-              <span style={{
-                fontSize: 13, fontWeight: s.id === activeSessionId ? 500 : 400,
-                color: s.id === activeSessionId ? 'var(--text-primary)' : 'var(--text-secondary)',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                flex: 1,
-              }}>
-                {s.title || t('sidebar.untitled')}
-              </span>
-              {s.locked && (
-                <Lock size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginRight: 2 }} />
+        {sortedFiltered.map((s, idx) => {
+          const group = getDateGroup(s.updatedAt)
+          const prevGroup = idx > 0 ? getDateGroup(sortedFiltered[idx - 1].updatedAt) : null
+          const showHeader = group !== prevGroup
+          const isSelected = idx === selectedIndex
+          return (
+            <React.Fragment key={s.id}>
+              {showHeader && (
+                <div style={{
+                  padding: 'var(--spacing-sm) var(--spacing-md) var(--spacing-xs)',
+                  fontSize: 11, fontWeight: 600,
+                  color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                }}>
+                  {groupLabels[group]}
+                </div>
               )}
-              <button
-                onClick={e => handleDelete(e, s.id)}
+              <div
+                ref={el => { itemRefs.current[idx] = el }}
+                onClick={() => { setSelectedIndex(idx); handleSelect(s) }}
+                onMouseEnter={() => { setHoveredSessionId(s.id); setSelectedIndex(idx) }}
+                onMouseLeave={() => setHoveredSessionId(prev => prev === s.id ? null : prev)}
                 style={{
-                  background: 'none', border: 'none',
-                  color: 'var(--text-tertiary)', cursor: 'pointer',
-                  opacity: hoveredSessionId === s.id || s.id === activeSessionId ? 0.7 : 0.28,
-                  transition: 'opacity 0.15s, color 0.15s',
-                  display: 'flex', alignItems: 'center',
-                  flexShrink: 0,
-                  padding: 4,
+                  padding: 'var(--spacing-sm) var(--spacing-md)',
+                  background: s.id === activeSessionId
+                    ? 'var(--color-card)'
+                    : isSelected
+                      ? 'rgba(128,128,128,0.08)'
+                      : 'transparent',
+                  borderLeft: s.id === activeSessionId ? '2px solid var(--color-primary)' : '2px solid transparent',
+                  cursor: s.locked ? 'not-allowed' : 'pointer',
+                  opacity: s.locked ? 0.5 : 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  gap: 2,
+                  transition: 'background 0.1s',
+                  position: 'relative',
                 }}
-                aria-label="Delete session"
-                title="Delete session"
-                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-error)' }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = hoveredSessionId === s.id || s.id === activeSessionId ? '0.7' : '0.28'; e.currentTarget.style.color = 'var(--text-tertiary)' }}
               >
-                <Trash2 size={12} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                {relativeTime(s.updatedAt, t)}
-              </span>
-              {s.msgCount > 0 && (
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                  {s.msgCount} msgs
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: '100%' }}>
+                  <span style={{
+                    fontSize: 13, fontWeight: s.id === activeSessionId ? 500 : 400,
+                    color: s.id === activeSessionId ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    flex: 1,
+                  }}>
+                    {s.title || t('sidebar.untitled')}
+                  </span>
+                  {s.locked && (
+                    <Lock size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginRight: 2 }} />
+                  )}
+                  <button
+                    onClick={e => handleDelete(e, s.id)}
+                    style={{
+                      background: 'none', border: 'none',
+                      color: 'var(--text-tertiary)', cursor: 'pointer',
+                      opacity: hoveredSessionId === s.id || s.id === activeSessionId ? 0.7 : 0.28,
+                      transition: 'opacity 0.15s, color 0.15s',
+                      display: 'flex', alignItems: 'center',
+                      flexShrink: 0,
+                      padding: 4,
+                    }}
+                    aria-label="Delete session"
+                    title="Delete session"
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-error)' }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = hoveredSessionId === s.id || s.id === activeSessionId ? '0.7' : '0.28'; e.currentTarget.style.color = 'var(--text-tertiary)' }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                    {relativeTime(s.updatedAt, t)}
+                  </span>
+                  {s.msgCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                      {s.msgCount} msgs
+                    </span>
+                  )}
+                  {s.model && (
+                    <span style={{
+                      fontSize: 10, color: 'var(--text-tertiary)',
+                      background: 'var(--color-card)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '1px 5px',
+                      maxWidth: 100,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {s.model}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </React.Fragment>
+          )
+        })}
       </div>
 
       {/* Bottom bar */}

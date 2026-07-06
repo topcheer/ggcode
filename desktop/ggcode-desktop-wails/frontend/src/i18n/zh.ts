@@ -9,11 +9,16 @@ const zh: Record<TranslationKey, string> = {
   'nav.settings': '设置 (⌘,)',
 
   // Sidebar
+  'sidebar.sessions': '会话',
   'sidebar.search': '搜索会话...',
   'sidebar.newSession': '新建会话',
   'sidebar.untitled': '未命名',
   'sidebar.delete': '删除',
   'sidebar.loading': '加载中...',
+  'sidebar.group.today': '今天',
+  'sidebar.group.yesterday': '昨天',
+  'sidebar.group.thisWeek': '本周',
+  'sidebar.group.older': '更早',
   'sidebar.time.justNow': '刚刚',
   'sidebar.time.minutesAgo': '{n}分钟前',
   'sidebar.time.hoursAgo': '{n}小时前',
