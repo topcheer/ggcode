@@ -183,6 +183,8 @@ func (m *Manager) DeleteTeam(teamID string) error {
 			tm.cancel()
 		}
 		tm.setStatus(TeammateShuttingDown)
+		// Clean up stored results to prevent unbounded growth in m.results.
+		delete(m.results, tm.ID)
 	}
 	team.mu.Unlock()
 
