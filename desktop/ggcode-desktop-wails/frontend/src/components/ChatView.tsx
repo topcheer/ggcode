@@ -516,6 +516,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
   const suppressNextScrollEventRef = useRef(false)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const prevMsgCountRef = useRef(0)
+
+  // Track unread messages when scrolled up
+  useEffect(() => {
+    const delta = messages.length - prevMsgCountRef.current
+    if (delta > 0 && showScrollBtn) {
+      setUnreadCount(c => c + delta)
+    }
+    prevMsgCountRef.current = messages.length
+  }, [messages, showScrollBtn])
+
+  // Reset unread when scrolled back to bottom
+  useEffect(() => { if (!showScrollBtn) setUnreadCount(0) }, [showScrollBtn])
   const [isDragOver, setIsDragOver] = useState(false)
   const dragCounterRef = useRef(0)
   const currentTabStreaming = activeTab === 'main'
@@ -1730,6 +1744,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
             </svg>
+            {unreadCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -4, right: -4,
+                minWidth: 16, height: 16, padding: '0 4px',
+                borderRadius: 8,
+                background: 'var(--color-primary)',
+                color: '#fff',
+                fontSize: 10, fontWeight: 600, lineHeight: '16px',
+                textAlign: 'center',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+              }}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </button>
         )}
 
