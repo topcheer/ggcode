@@ -94,3 +94,18 @@ a {
 a:hover {
   text-decoration: underline;
 }
+
+/* Skeleton shimmer animation for loading placeholders */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg,
+    var(--color-surface) 0%,
+    var(--color-border) 50%,
+    var(--color-surface) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}

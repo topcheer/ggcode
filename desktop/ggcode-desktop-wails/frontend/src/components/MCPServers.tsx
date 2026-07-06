@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { SkeletonList } from './Skeleton'
 import { ChevronLeft, Server, Plus, Trash2, Terminal, Globe, Wifi, RefreshCw, Power, KeyRound } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
@@ -316,8 +317,8 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
       {/* Server list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px' }}>
         {loading && (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: 12 }}>
-            Loading servers...
+          <div>
+            <SkeletonList count={3} variant="row" />
           </div>
         )}
         {error && (

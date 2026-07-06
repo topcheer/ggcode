@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { SkeletonList } from './Skeleton'
 import {
   ChevronRight, ChevronDown, File, Folder, FileCode, FileJson,
   Settings, FileText, Image, FileTerminal, X
@@ -546,9 +547,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
         </div>
         <div style={{ flex: 1, overflowY: 'auto', textAlign: 'left' }}>
           {loading && (
-            <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>
-              Loading files...
-            </div>
+            <SkeletonList count={8} variant="row" />
           )}
           {!loading && tree.length === 0 && (
             <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>

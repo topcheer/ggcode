@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, Search, Smartphone, Trash2, Lock } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
+import { SkeletonList } from './Skeleton'
 
 interface Props {
   onClose: () => void
@@ -251,9 +252,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       {/* Session list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0', textAlign: 'left' }}>
         {loading && (
-          <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
-            {t('sidebar.loading')}
-          </div>
+          <SkeletonList count={5} variant="session" />
         )}
         {!loading && sortedFiltered.length === 0 && (
           <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
