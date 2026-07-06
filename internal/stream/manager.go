@@ -249,7 +249,14 @@ func (m *Manager) frameLoop() {
 				// On first frame, targets haven't connected yet.
 				// On resize, old broadcaster exits when old encoder stdout closes.
 				if !frameLoopInit {
+					// Snapshot targets under lock to avoid concurrent map iteration race
+					m.mu.Lock()
+					snapshot := make([]*Target, 0, len(m.targets))
 					for _, target := range m.targets {
+						snapshot = append(snapshot, target)
+					}
+					m.mu.Unlock()
+					for _, target := range snapshot {
 						if _, err := target.Connect(); err != nil {
 							debug.Log("stream", "target %s connect failed: %v", target.Name(), err)
 						}
@@ -324,14 +331,16 @@ func (m *Manager) fanOutBroadcaster() {
 	buf := make([]byte, 32*1024)
 	broadcastCount := 0
 
-	// Collect target channels
+	// Collect target channels under lock to prevent concurrent map write (StopTarget)
 	var targets []chan []byte
+	m.mu.Lock()
 	for _, t := range m.targets {
 		ch := make(chan []byte, 64)
 		t.broadcastCh = ch
 		targets = append(targets, ch)
 		safego.Go("stream.targetWriter", func() { m.targetWriter(t, ch) })
 	}
+	m.mu.Unlock()
 
 	defer func() {
 		for _, ch := range targets {
