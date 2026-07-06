@@ -588,6 +588,16 @@ func enCatalog(key string) string {
 		return "Compressing context..."
 	case "status.compacted":
 		return "[conversation compacted]"
+	case "reasoning.effort.status":
+		return "Reasoning effort: %s"
+	case "reasoning.effort.set":
+		return "Reasoning effort set to %s for this session"
+	case "reasoning.effort.unsupported.status":
+		return "Reasoning effort not supported by current provider"
+	case "reasoning.effort.unsupported":
+		return "Reasoning effort is not supported by the current provider"
+	case "follow.loading":
+		return "  Loading follow view..."
 	case "status.tools_used":
 		return "%d tools used"
 	case "tool.done":

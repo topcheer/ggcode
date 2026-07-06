@@ -44,7 +44,7 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		// has different line widths than the follow view content.
 		placeholder := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
-			Render("  Loading follow view...")
+			Render(m.t("follow.loading"))
 		return style.Render(placeholder)
 	}
 

@@ -45,11 +45,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		effort, ok := m.cycleReasoningEffort()
 		if ok {
 			label := displayReasoningEffort(effort)
-			m.statusActivity = fmt.Sprintf("Reasoning effort: %s", label)
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Reasoning effort set to %s for this session", label))
+			m.statusActivity = m.t("reasoning.effort.status", label)
+			m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.set", label))
 		} else {
-			m.statusActivity = "Reasoning effort not supported by current provider"
-			m.chatWriteSystem(nextSystemID(), "Reasoning effort is not supported by the current provider")
+			m.statusActivity = m.t("reasoning.effort.unsupported.status")
+			m.chatWriteSystem(nextSystemID(), m.t("reasoning.effort.unsupported"))
 		}
 		return m, nil
 	}

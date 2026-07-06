@@ -596,6 +596,16 @@ func zhCatalog(key string) string {
 		return "压缩中..."
 	case "status.compacted":
 		return "[会话已压缩]"
+	case "reasoning.effort.status":
+		return "推理强度: %s"
+	case "reasoning.effort.set":
+		return "本次会话推理强度已设为 %s"
+	case "reasoning.effort.unsupported.status":
+		return "当前提供商不支持推理强度"
+	case "reasoning.effort.unsupported":
+		return "当前提供商不支持推理强度"
+	case "follow.loading":
+		return "  正在加载跟随视图..."
 	case "status.tools_used":
 		return "已调用 %d 个工具"
 	case "tool.done":
