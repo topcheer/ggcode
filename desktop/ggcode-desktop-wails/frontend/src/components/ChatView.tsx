@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -1758,8 +1758,22 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
   const isSubAgent = !!msg.agentID
+  const [copied, setCopied] = useState(false)
+  const [hovered, setHovered] = useState(false)
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(msg.content).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [msg.content])
+
   return (
-    <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
+    <div
+      style={{ maxWidth: '85%', alignSelf: 'flex-start', position: 'relative' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <div style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
         color: isSubAgent ? 'var(--color-info)' : 'var(--color-success)',
@@ -1770,6 +1784,24 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
             writing...
           </span>
+        )}
+        {/* Copy button — appears on hover */}
+        {!msg.streaming && msg.content && (
+          <button
+            onClick={handleCopy}
+            title="Copy message"
+            style={{
+              marginLeft: 'auto', padding: '1px 6px', borderRadius: 3,
+              background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
+              border: '1px solid var(--color-border)',
+              color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
+              cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+              opacity: hovered || copied ? 1 : 0,
+              transition: 'opacity 0.15s ease',
+            }}
+          >
+            {copied ? '✓ Copied' : 'Copy'}
+          </button>
         )}
       </div>
       <div style={{

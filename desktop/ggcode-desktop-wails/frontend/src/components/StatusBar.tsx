@@ -58,7 +58,37 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       }}>
         {modelLabel}
       </span>
-      <span style={{ color: 'var(--text-secondary)' }}>ctx {formatTokens(info.contextUsed)}</span>
+      {/* Context usage progress bar */}
+      {(() => {
+        const pct = info.usagePercent || (info.contextTotal > 0 ? (info.contextUsed / info.contextTotal) * 100 : 0)
+        const color = pct >= 85 ? '#ef4444' : pct >= 65 ? '#f59e0b' : '#22c55e'
+        const bgColor = pct >= 85 ? 'rgba(239,68,68,0.15)' : pct >= 65 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.12)'
+        return (
+          <div
+            title={`Context: ${formatTokens(info.contextUsed)} / ${formatTokens(info.contextTotal)} (${Math.round(pct)}%)`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              cursor: 'default',
+            }}
+          >
+            <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>ctx</span>
+            <div style={{
+              width: 60, height: 6, borderRadius: 3,
+              background: bgColor, overflow: 'hidden',
+              border: `1px solid ${color}30`,
+            }}>
+              <div style={{
+                width: `${Math.min(100, pct)}%`, height: '100%',
+                background: color, borderRadius: 3,
+                transition: 'width 0.3s ease, background 0.3s ease',
+              }} />
+            </div>
+            <span style={{ color, fontSize: 10, minWidth: 28 }}>
+              {Math.round(pct)}%
+            </span>
+          </div>
+        )
+      })()}
       <span style={{ color: 'var(--text-secondary)' }}>in {formatTokens(info.inputTokens)}</span>
       <span style={{ color: 'var(--text-secondary)' }}>out {formatTokens(info.outputTokens)}</span>
       {info.cacheHit > 0 && (
