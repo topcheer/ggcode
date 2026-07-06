@@ -124,7 +124,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	if a.client == nil || !a.Connected() {
 		return nil
 	}
-	text := stripMarkdown(defaultOutboundText(event))
+	text := markdownToWhatsApp(defaultOutboundText(event))
 	if text == "" {
 		return nil
 	}
