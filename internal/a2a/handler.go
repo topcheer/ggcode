@@ -297,6 +297,16 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	h.cleanupCancel(t.ID)
 
+	// If RequestInput was called during execution, the task is already in
+	// input-required state. Don't override it with completed — the client
+	// needs to send a follow-up message via continueTask.
+	h.mu.Lock()
+	currentState := t.Status.State
+	h.mu.Unlock()
+	if currentState == TaskStateInputRequired {
+		return
+	}
+
 	t.Artifacts = []Artifact{{
 		ArtifactID: generateID(),
 		Parts: []Part{{
@@ -582,6 +592,16 @@ func (h *TaskHandler) RequestInput(id string, prompt string) error {
 			}},
 		})
 	}
+	// Close the done channel so SSE clients and Done() waiters unblock.
+	// Input-required is a pseudo-terminal state: the SSE handler will send
+	// a non-final status update (IsTerminal() == false) and then end the
+	// stream, signalling the client to send a follow-up message.
+	// continueTask re-creates the channel before resuming execution.
+	if t.done != nil {
+		close(t.done)
+		t.done = nil
+	}
+	debug.Log("a2a", "task %s → input-required", t.ID)
 	return nil
 }
 
