@@ -2,9 +2,11 @@ package im
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"time"
 
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -83,8 +85,18 @@ func (m InboundMessage) ProviderContent() []provider.ContentBlock {
 			if hint := attachmentPromptHint(attachment); hint != "" {
 				blocks = append(blocks, provider.TextBlock(hint))
 			}
-			if strings.TrimSpace(attachment.MIME) != "" && strings.TrimSpace(attachment.DataBase64) != "" {
-				blocks = append(blocks, provider.ImageBlock(attachment.MIME, attachment.DataBase64))
+			mime := strings.TrimSpace(attachment.MIME)
+			b64 := strings.TrimSpace(attachment.DataBase64)
+			// Auto-detect MIME from base64 data when not provided by the adapter.
+			// Some adapters (e.g. WeCom) provide base64 image data without a MIME type,
+			// which would cause the image to be silently dropped.
+			if mime == "" && b64 != "" {
+				if data, err := base64.StdEncoding.DecodeString(b64); err == nil {
+					mime = imagepkg.DetectMIME(data)
+				}
+			}
+			if mime != "" && b64 != "" {
+				blocks = append(blocks, provider.ImageBlock(mime, b64))
 				continue
 			}
 		case AttachmentVoice, AttachmentAudio:
