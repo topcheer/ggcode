@@ -143,8 +143,10 @@ func isRetryable(err error) bool {
 	}
 
 	// Any other error with a recognizable HTTP status code is retryable.
+	// 400 is excluded — Bad Request is always permanent (malformed request body,
+	// invalid tool_use/tool_result pairing, bad parameters).
 	for _, code := range []string{
-		"400", "408", "409", "422", "429",
+		"408", "409", "422", "429",
 		"500", "502", "503", "504", "520", "521", "522", "523", "524",
 	} {
 		if strings.Contains(msg, code) {
@@ -177,11 +179,11 @@ func isRetryableForContext(ctx context.Context, err error) bool {
 }
 
 // isRetryableHTTPStatus returns true unless the status code is a permanent
-// client error (401, 403, 404). All other codes — including 429, 5xx, and
+// client error (400, 401, 403, 404). All other codes — including 429, 5xx, and
 // unexpected 4xx — are retried.
 func isRetryableHTTPStatus(status int) bool {
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
 		return false
 	default:
 		return true
