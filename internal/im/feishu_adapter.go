@@ -1098,7 +1098,7 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		if err != nil {
 			// Fallback to plain text if post format fails
 			debug.Log("feishu", "adapter=%s post send failed, falling back to text: %v", a.name, err)
-			msgID, err = a.sendTextMessage(ctx, chatID, stripFeishuMarkdown(chunk))
+			msgID, err = a.sendTextMessage(ctx, chatID, stripMarkdown(chunk))
 			if err != nil {
 				return err
 			}
@@ -1554,21 +1554,6 @@ func parseFeishuMessageID(r io.Reader) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(result.Data.MessageID), nil
-}
-
-// stripFeishuMarkdown removes basic markdown formatting for plain text fallback.
-func stripFeishuMarkdown(text string) string {
-	text = strings.ReplaceAll(text, "**", "")
-	result := strings.Builder{}
-	inCode := false
-	for _, ch := range text {
-		if ch == '`' {
-			inCode = !inCode
-			continue
-		}
-		result.WriteRune(ch)
-	}
-	return result.String()
 }
 
 func (l *feishuSilentLogger) Debug(_ context.Context, args ...interface{}) {
