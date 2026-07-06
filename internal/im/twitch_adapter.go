@@ -393,9 +393,18 @@ func (a *twitchAdapter) sendTwitchMessage(target, text string) error {
 	if text == "" || target == "" {
 		return nil
 	}
-	chunks := splitIRCMessage(text, twitchMaxMessageLen)
-	for _, chunk := range chunks {
-		a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+	// Split by newlines first — IRC uses CRLF as message delimiter, so
+	// embedded \n would prematurely terminate the PRIVMSG. Each line is
+	// sent as a separate PRIVMSG, matching the standard IRC pattern.
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		chunks := splitIRCMessage(line, twitchMaxMessageLen)
+		for _, chunk := range chunks {
+			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+		}
 	}
 	return nil
 }
