@@ -74,6 +74,7 @@ type Agent struct {
 	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
 	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                     *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
 	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
 	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
@@ -117,6 +118,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		overseer:         newOverseerState(),
 		repetition:       newRepetitionTracker(),
 		speculator:       newSpeculator(),
+		toolMemo:         newToolMemo(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -699,6 +701,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.resetOverseer()            // clear trajectory state for new run
 		a.speculator.resetSequence() // clear speculative pattern sequence for new run
+		a.toolMemo.reset()           // clear memoized tool results for new run
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
@@ -973,10 +976,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			// Don't log executeToolWithPermission start — the permission check log already covers this
-			// Check speculative cache: if a read-only tool was pre-executed speculatively
-			// while the LLM was generating, return the cached result instantly.
+			// Check memoization cache: if a read-only tool was called with identical args
+			// earlier in this run (and the underlying resource hasn't changed), return the
+			// cached result. This prevents redundant re-execution after tool-result clearing.
 			var result tool.Result
-			if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
+			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
+				result = memoResult
+				debug.Log("memoize", "memo hit for %s (saved tool execution)", tc.Name)
+			} else if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
 				result = cachedResult
 				debug.Log("speculate", "speculative cache hit for %s (saved tool execution)", tc.Name)
 			} else if pre, ok := preExecuted[idx]; ok {
@@ -988,6 +995,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
+			// Store result in memoization cache for read-only tools.
+			if speculativeSafeTools[tc.Name] && !result.IsError {
+				a.toolMemo.put(tc.Name, tc.Arguments, result)
+			}
 			// Inject matching harness rules into the result
 			result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
 			if result.IsError {
