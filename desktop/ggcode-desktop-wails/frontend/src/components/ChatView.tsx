@@ -1624,9 +1624,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 inputRef.current?.focus()
               }} />
             )}
-            {messages.map(msg => (
-              <MessageCard key={msg.id} msg={msg} onRetry={handleRetrySend} />
-            ))}
+            {messages.map((msg, i) => {
+              const showSep = i === 0 || (() => {
+                const prev = messages[i - 1]
+                if (!prev?.timestamp || !msg.timestamp) return false
+                const prevDay = new Date(prev.timestamp); prevDay.setHours(0, 0, 0, 0)
+                const currDay = new Date(msg.timestamp); currDay.setHours(0, 0, 0, 0)
+                return prevDay.getTime() !== currDay.getTime()
+              })()
+              return (
+                <React.Fragment key={msg.id}>
+                  {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
+                  <MessageCard msg={msg} onRetry={handleRetrySend} />
+                </React.Fragment>
+              )
+            })}
           </>
         ) : (
           // Agent panel messages
@@ -1838,6 +1850,35 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       {teamBoardOpen && (
         <TeamBoard teams={teamBoard} onClose={closeTeamBoard} onSelectTeammate={selectTeammatePanel} />
       )}
+    </div>
+  )
+}
+
+// ── Date separator ───────────────────────────────────────────────────────────
+
+function dateLabel(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterday = new Date(today.getTime() - 86400000)
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  if (msgDay.getTime() === today.getTime()) return 'Today'
+  if (msgDay.getTime() === yesterday.getTime()) return 'Yesterday'
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: msgDay.getFullYear() !== now.getFullYear() ? 'numeric' : undefined })
+}
+
+function DateSeparator({ label }: { label: string }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)',
+      margin: 'var(--spacing-sm) 0', flexShrink: 0,
+    }}>
+      <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+      <span style={{
+        fontSize: 11, color: 'var(--text-tertiary)',
+        fontWeight: 500, whiteSpace: 'nowrap' as const,
+      }}>{label}</span>
+      <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
     </div>
   )
 }
