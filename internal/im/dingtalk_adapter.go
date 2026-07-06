@@ -417,7 +417,7 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 	debug.Log("dingtalk", "adapter=%s calling HandleInbound channel=%s sender=%s", a.name, channelID, senderID)
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
-			_ = a.sendMarkdownViaWebhook(ctx, callbackData.SessionWebhook, "你是未授权用户", callbackData.RobotCode)
+			_ = a.sendMarkdownViaWebhook(ctx, callbackData.SessionWebhook, UnauthorizedMessage(a.manager.Language()), callbackData.RobotCode)
 			return
 		}
 		if err != ErrNoChannelBound {

@@ -433,7 +433,7 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
 			debug.Log("wechat", "adapter=%s unauthorized inbound channel=%s", a.name, channelID)
-			_ = a.sendTextToUser(ctx, channelID, "你是未授权用户")
+			_ = a.sendTextToUser(ctx, channelID, UnauthorizedMessage(a.manager.Language()))
 			return
 		}
 		if err != ErrNoChannelBound {

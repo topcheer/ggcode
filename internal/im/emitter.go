@@ -85,6 +85,9 @@ const imTypingKeepaliveInterval = 5 * time.Second
 
 // NewIMEmitter creates a new IM emitter for the given manager, language, and working directory.
 func NewIMEmitter(mgr *Manager, lang, workDir string) *IMEmitter {
+	if mgr != nil {
+		mgr.SetLanguage(lang)
+	}
 	return &IMEmitter{
 		manager:  mgr,
 		language: lang,

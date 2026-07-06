@@ -67,6 +67,10 @@ type Manager struct {
 	// onInteractiveCallback is called when an adapter receives an interactive
 	// button/menu callback. Set via SetInteractiveCallback.
 	onInteractiveCallback func(InteractiveCallback)
+
+	// language stores the UI language ("zh-CN" or "en") so adapters can
+	// localize messages. Set via SetLanguage, typically from NewIMEmitter.
+	language string
 }
 
 type pendingApproval struct {
@@ -81,6 +85,40 @@ type PairingResult struct {
 	Bound           bool
 	PreviousBinding *ChannelBinding
 	NewBinding      *ChannelBinding
+}
+
+// SetLanguage sets the UI language for adapter message localization.
+// Typically called once during initialization from NewIMEmitter.
+func (m *Manager) SetLanguage(lang string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.language = lang
+	m.mu.Unlock()
+}
+
+// Language returns the configured UI language ("zh-CN" or "en").
+func (m *Manager) Language() string {
+	if m == nil {
+		return "en"
+	}
+	m.mu.RLock()
+	lang := m.language
+	m.mu.RUnlock()
+	if lang == "" {
+		return "en"
+	}
+	return lang
+}
+
+// UnauthorizedMessage returns the localized "unauthorized user" message
+// for use by IM adapters when HandleInbound returns ErrInboundChannelDenied.
+func UnauthorizedMessage(lang string) string {
+	if lang == "zh-CN" {
+		return "你是未授权用户"
+	}
+	return "You are not an authorized user."
 }
 
 func NewManager() *Manager {

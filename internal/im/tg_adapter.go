@@ -563,7 +563,7 @@ func (a *tgAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 }
 
 func (a *tgAdapter) sendUnauthorized(ctx context.Context, chatID, replyTo string) error {
-	return a.sendReplyText(ctx, chatID, replyTo, "你是未授权用户")
+	return a.sendReplyText(ctx, chatID, replyTo, UnauthorizedMessage(a.manager.Language()))
 }
 
 func (a *tgAdapter) sendReplyText(ctx context.Context, chatID, replyTo, content string) error {

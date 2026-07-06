@@ -274,7 +274,7 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 }
 
 func (a *qqAdapter) sendUnauthorized(ctx context.Context, channelID, replyTo string) error {
-	return a.sendReplyText(ctx, channelID, replyTo, "你是未授权用户")
+	return a.sendReplyText(ctx, channelID, replyTo, UnauthorizedMessage(a.manager.Language()))
 }
 
 func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, content string) error {
