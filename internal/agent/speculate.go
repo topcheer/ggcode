@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -391,6 +392,7 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 
 		// Launch background goroutine for speculative execution.
 		go func(toolName string, toolArgs json.RawMessage) {
+			defer safego.Recover("agent.speculate.exec")
 			defer func() {
 				s.mu.Lock()
 				s.activeSpeculations--

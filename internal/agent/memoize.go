@@ -155,6 +155,12 @@ func (m *toolMemo) put(toolName string, args []byte, result tool.Result) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// If key already exists, remove it from LRU order first to prevent
+	// duplicate entries that cause premature eviction and unbounded order growth.
+	if _, exists := m.entries[k]; exists {
+		m.removeLocked(k)
+	}
+
 	// Evict if at capacity.
 	for len(m.entries) >= memoizeMaxEntries {
 		if len(m.order) == 0 {

@@ -206,3 +206,31 @@ func TestExtractJSONStringField(t *testing.T) {
 		})
 	}
 }
+
+// TestMemoize_PutDuplicateKeyNoLRUDuplication verifies that putting the same
+// key multiple times does not create duplicate entries in the LRU order slice.
+// Before the fix, each put would append the key to m.order without removing
+// the old occurrence, causing premature eviction and unbounded order growth.
+func TestMemoize_PutDuplicateKeyNoLRUDuplication(t *testing.T) {
+	m := newToolMemo()
+	args := []byte(`{"pattern":"TODO","path":"."}`)
+
+	// Put the same key multiple times
+	for i := 0; i < 10; i++ {
+		m.put("grep", args, tool.Result{Content: "result"})
+	}
+
+	// Should have exactly 1 entry and 1 order entry (no duplicates)
+	if len(m.entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(m.entries))
+	}
+	if len(m.order) != 1 {
+		t.Fatalf("expected order length 1 (no duplicates), got %d", len(m.order))
+	}
+
+	// Should still get a hit after repeated puts
+	_, hit := m.get("grep", args)
+	if !hit {
+		t.Fatal("expected hit after repeated puts")
+	}
+}
