@@ -667,9 +667,18 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 		return fmt.Errorf("webhook send: %w", err)
 	}
 	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, redactDingTalkResponse(string(respBody)))
+	}
+	// DingTalk returns HTTP 200 with errcode in JSON body on failure
+	// (rate limits, content too long, etc.). Must check errcode.
+	var wresp struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal(respBody, &wresp); err == nil && wresp.ErrCode != 0 {
+		return fmt.Errorf("webhook send errcode %d: %s", wresp.ErrCode, redactDingTalkResponse(wresp.ErrMsg))
 	}
 	return nil
 }
