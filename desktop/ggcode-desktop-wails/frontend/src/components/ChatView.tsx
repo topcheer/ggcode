@@ -2157,8 +2157,22 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
   const pending = msg.deliveryStatus === 'pending'
   const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
   const isMarkdown = isLanChat || msg.source === 'im' || msg.source === 'mobile'
+  const [copied, setCopied] = useState(false)
+  const [hovered, setHovered] = useState(false)
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(msg.content).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [msg.content])
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       {msg.lanchatFrom && (
         <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 2, marginRight: 4 }}>
           LAN Chat from {msg.lanchatFrom}
@@ -2213,10 +2227,31 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
           )}
         </div>
       )}
-      {msg.timestamp && !pending && !failed && (
-        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginRight: 4 }}>
-          {formatTimestamp(msg.timestamp)}
-        </span>
+      {(msg.timestamp || msg.content) && !pending && !failed && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, marginRight: 4 }}>
+          {msg.timestamp && (
+            <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+              {formatTimestamp(msg.timestamp)}
+            </span>
+          )}
+          {msg.content && (
+            <button
+              onClick={handleCopy}
+              title="Copy message"
+              style={{
+                padding: '1px 6px', borderRadius: 3,
+                background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
+                border: '1px solid var(--color-border)',
+                color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
+                cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+                opacity: hovered || copied ? 1 : 0,
+                transition: 'opacity 0.15s ease',
+              }}
+            >
+              {copied ? '✓' : 'Copy'}
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
