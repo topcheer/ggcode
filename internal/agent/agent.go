@@ -939,6 +939,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		var deferredMemoryFiles []string
 		var deferredMemoryTarget string
 
+		// Parallel pre-execution of read-only tools (LLMCompiler/W&D-inspired).
+		// When the LLM returns multiple tool calls, independent read-only tools
+		// are executed concurrently before the sequential loop. Results are
+		// consumed in-order; side-effect tools still run sequentially.
+		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
+
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				// Context cancelled mid-tool-execution. The assistant message
@@ -973,6 +979,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
 				result = cachedResult
 				debug.Log("speculate", "speculative cache hit for %s (saved tool execution)", tc.Name)
+			} else if pre, ok := preExecuted[idx]; ok {
+				// Parallel pre-execution result (LLMCompiler/W&D-inspired).
+				// Runs permission check; if denied, the read-only result is discarded.
+				result = a.usePreExecutedWithPermission(ctx, tc, pre)
 			} else {
 				result = a.executeToolWithPermission(ctx, tc)
 			}
