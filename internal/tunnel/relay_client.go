@@ -147,7 +147,9 @@ func (rc *RelayClient) dial() (*websocket.Conn, error) {
 	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{})
 	if err != nil {
 		if resp != nil {
-			body, readErr := io.ReadAll(resp.Body)
+			// Limit error body to prevent memory exhaustion from a
+			// misconfigured relay that sends large HTML error pages.
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			_ = resp.Body.Close()
 			reason := strings.TrimSpace(string(body))
 			if readErr == nil && reason != "" {
