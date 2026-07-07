@@ -634,7 +634,11 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 		return fmt.Errorf("matrix adapter not connected")
 	}
 
-	chunks := chunkText(text, matrixMaxMessageLen)
+	// Use markdown-aware splitting so fenced code blocks are not split mid-way.
+	// Each chunk gets proper ``` open/close markers, producing valid HTML when
+	// goldmark renders it. Plain rune-based splitting (chunkText) would break
+	// code blocks, causing goldmark to emit malformed/incomplete HTML.
+	chunks := SplitMarkdown(text, matrixMaxMessageLen)
 	for i, chunk := range chunks {
 		// Rate limit: most homeservers limit ~1 msg/sec/user.
 		if i > 0 {
