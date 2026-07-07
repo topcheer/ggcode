@@ -28,6 +28,8 @@ var (
 	mdInlineCodeRe = regexp.MustCompile("`([^`]+)`")
 	// Bold: **text** → text
 	mdBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	// Underscore bold: __text__ → text (CommonMark strong emphasis)
+	mdUnderscoreBoldRe = regexp.MustCompile(`__(.+?)__`)
 	// Asterisk italic: *text* → text (processed after bold ** is stripped)
 	// Requires non-space immediately after opening * and before closing * to
 	// avoid matching bullet lists (* item), math (5 * 3), or literal asterisks.
@@ -114,6 +116,9 @@ func stripMarkdown(text string) string {
 
 	// 3. Bold: **text** → text (before italic to avoid ** being seen as *)
 	text = mdBoldRe.ReplaceAllString(text, "$1")
+
+	// 3b. Underscore bold: __text__ → text (before italic _text_ to avoid partial match)
+	text = mdUnderscoreBoldRe.ReplaceAllString(text, "$1")
 
 	// 4. Asterisk italic: *text* → text (after bold so ** is already stripped)
 	text = mdAsteriskItalicRe.ReplaceAllString(text, "$1")

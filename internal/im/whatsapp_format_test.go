@@ -10,6 +10,13 @@ func TestMarkdownToWhatsApp_Bold(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+
+	// CommonMark __bold__ → WhatsApp *bold*
+	got = markdownToWhatsApp("This is __bold__ text")
+	want = "This is *bold* text"
+	if got != want {
+		t.Errorf("underscore bold: got %q, want %q", got, want)
+	}
 }
 
 func TestMarkdownToWhatsApp_Strikethrough(t *testing.T) {

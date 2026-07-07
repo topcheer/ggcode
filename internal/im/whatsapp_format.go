@@ -36,6 +36,8 @@ var (
 	// WhatsApp-specific patterns
 	// Match **bold** but not *bold* (which WhatsApp uses natively)
 	waBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	// Match __bold__ (CommonMark underscore strong emphasis)
+	waUnderscoreBoldRe = regexp.MustCompile(`__(.+?)__`)
 	// Match ~~strikethrough~~ but not ~text~ (which WhatsApp uses natively)
 	waStrikeRe = regexp.MustCompile(`~~(.+?)~~`)
 	// Markdown headers: ### Text → *Text* (WhatsApp bold)
@@ -91,6 +93,10 @@ func markdownToWhatsApp(text string) string {
 	// Uses null-byte placeholder to protect bold from italic regex below.
 	// The italic regex would otherwise match the inner *text* of **text**.
 	text = waBoldRe.ReplaceAllString(text, "\x00${1}\x00")
+
+	// 3b. Underscore bold: __text__ → \x00text\x00 (CommonMark strong emphasis)
+	// Same placeholder as **bold** above. Must run before italic step.
+	text = waUnderscoreBoldRe.ReplaceAllString(text, "\x00${1}\x00")
 
 	// 4. Italic: *text* → _text_ (markdown single-asterisk italic → WhatsApp underscore)
 	// WhatsApp uses *text* for bold, so markdown *italic* must become _italic_.

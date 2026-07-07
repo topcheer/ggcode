@@ -11,6 +11,13 @@ func TestStripMarkdown_Bold(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+
+	// CommonMark __bold__ (underscore strong emphasis)
+	got = stripMarkdown("This is __bold__ text")
+	want = "This is bold text"
+	if got != want {
+		t.Errorf("underscore bold: got %q, want %q", got, want)
+	}
 }
 
 func TestStripMarkdown_Italic(t *testing.T) {
