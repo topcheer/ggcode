@@ -342,13 +342,15 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		// Compute shared secret for NIP-04 encryption
 		sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
 		if err != nil {
+			// Recipient-level error — will fail for every chunk
 			lastErr = fmt.Errorf("ECDH: %w", err)
-			continue
+			break
 		}
 		encrypted, err := nip04.Encrypt(chunk, sharedSecret)
 		if err != nil {
+			// Encryption error is also recipient-level
 			lastErr = fmt.Errorf("NIP-04 encrypt: %w", err)
-			continue
+			break
 		}
 
 		// Build and sign event
