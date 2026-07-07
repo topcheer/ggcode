@@ -304,8 +304,8 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	err = cmd.Run()
 
-	output := stdout.String()
-	errOutput := stderr.String()
+	output := util.StripANSI(stdout.String())
+	errOutput := util.StripANSI(stderr.String())
 
 	// Truncate output if too large — keep both head and tail.
 	// For most commands (tests, builds, lints), the important info is at the
@@ -431,7 +431,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 		)}, nil
 	}
 
-	content := commandSnapshotOutput(*snapshot)
+	content := util.StripANSI(commandSnapshotOutput(*snapshot))
 	if snapshot.Status == CommandJobFailed || snapshot.Status == CommandJobCancelled || snapshot.Status == CommandJobTimedOut {
 		t.JobManager.forget(snapshot.ID)
 		if t.OnPostExec != nil {

@@ -491,7 +491,7 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 		sb.WriteString(fmt.Sprintf("Buffered lines start at: %d\n", snapshot.BufferedFrom))
 	}
 	if snapshot.ErrText != "" {
-		sb.WriteString(fmt.Sprintf("Error: %s\n", snapshot.ErrText))
+		sb.WriteString(fmt.Sprintf("Error: %s\n", util.StripANSI(snapshot.ErrText)))
 	}
 	if includeLines {
 		sb.WriteString("Recent output:\n")
@@ -499,7 +499,7 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 			sb.WriteString("(no output yet)\n")
 		} else {
 			for _, line := range snapshot.Lines {
-				sb.WriteString(line)
+				sb.WriteString(util.StripANSI(line))
 				sb.WriteString("\n")
 			}
 		}
