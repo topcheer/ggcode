@@ -51,14 +51,15 @@ func WithBearerToken(token string) ClientOption {
 // WithMTLS configures the client to use mutual TLS.
 func WithMTLS(tlsConfig *tls.Config) ClientOption {
 	return func(c *Client) {
-		if util.InsecureMode() {
-			tlsConfig.InsecureSkipVerify = true
-		}
+		// Use util.WrapTransport to preserve proxy support (ProxyFromEnvironment)
+		// and insecure-mode handling that the non-mTLS path gets automatically.
+		transport := util.WrapTransport(&http.Transport{
+			TLSClientConfig:   tlsConfig,
+			ForceAttemptHTTP2: true,
+		})
 		c.httpClient = &http.Client{
-			Timeout: 15 * time.Minute,
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
+			Timeout:   15 * time.Minute,
+			Transport: transport,
 		}
 		c.authMethod = "mtls"
 	}
