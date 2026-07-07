@@ -617,8 +617,10 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, thread
 	}
 	url := baseURL + "/chat.postMessage"
 	body := map[string]any{
-		"channel": channelID,
-		"text":    content,
+		"channel":      channelID,
+		"text":         content,
+		"unfurl_links": false,
+		"unfurl_media": false,
 	}
 	if strings.TrimSpace(threadTS) != "" {
 		body["thread_ts"] = threadTS
