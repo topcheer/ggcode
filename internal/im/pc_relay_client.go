@@ -84,7 +84,10 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 	wsURL := c.buildProviderURL()
 	debug.Log("pc", "relay connecting to %s", wsURL)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	// 30s dial timeout prevents indefinite hang on unreachable relay
+	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
+	dialCancel()
 	if err != nil {
 		return fmt.Errorf("connect relay: %w", err)
 	}

@@ -171,7 +171,10 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 		return err
 	}
 	debug.Log("qq", "adapter=%s gateway ready", a.name)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, gatewayURL, nil)
+	// 30s dial timeout prevents indefinite hang on unreachable QQ gateway
+	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, gatewayURL, nil)
+	dialCancel()
 	if err != nil {
 		return fmt.Errorf("connect QQ gateway: %w", err)
 	}

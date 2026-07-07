@@ -237,8 +237,10 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("stream open: %w", err)
 	}
 
-	// 3. Connect WebSocket
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	// 3. Connect WebSocket (30s dial timeout prevents indefinite hang on unreachable endpoints)
+	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
+	dialCancel()
 	if err != nil {
 		return fmt.Errorf("dial stream: %w", err)
 	}

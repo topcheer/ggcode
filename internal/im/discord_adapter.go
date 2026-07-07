@@ -140,7 +140,10 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 	debug.Log("discord", "adapter=%s gateway URL=%s", a.name, gatewayURL)
 
 	wsURL := gatewayURL + "?v=10&encoding=json"
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	// 30s dial timeout prevents indefinite hang on unreachable Discord gateway
+	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
+	dialCancel()
 	if err != nil {
 		return fmt.Errorf("dial gateway: %w", err)
 	}
