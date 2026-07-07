@@ -1,6 +1,7 @@
 package lanchat
 
 import (
+	"context"
 	"io"
 	"mime"
 	"net/http"
@@ -134,9 +135,17 @@ func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *
 	w.Write(att.data)
 }
 
+// attachmentDownloadClient is a shared HTTP client with a timeout for peer attachment downloads.
+var attachmentDownloadClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
+
 // DownloadAttachment fetches an attachment from a peer's URL.
 func DownloadAttachment(url, apiKey string) ([]byte, string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -144,7 +153,7 @@ func DownloadAttachment(url, apiKey string) ([]byte, string, error) {
 		req.Header.Set("X-API-Key", apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := attachmentDownloadClient.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
