@@ -95,9 +95,6 @@ func (m Model) statsPanelBody(width int) string {
 	}
 
 	rows = append(rows, "", lipgloss.NewStyle().Bold(true).Render(statsPanelText(m.currentLanguage(), "recent_turns")))
-	for _, turn := range summary.Turns {
-		_ = turn
-	}
 	for i := len(summary.Turns) - 1; i >= 0; i-- {
 		turn := summary.Turns[i]
 		line := fmt.Sprintf("#%d  %s  %s  %s  %dt", turn.TurnIndex, metrics.FormatDuration(turn.TTFT), metrics.FormatDuration(turn.Duration), metrics.FormatDuration(turn.ThinkTime), turn.ToolCallCount)
