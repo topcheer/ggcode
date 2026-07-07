@@ -79,6 +79,8 @@ const zh: Record<TranslationKey, string> = {
   'kb.cmdPalette': '打开命令面板',
   'kb.toggleSidebar': '切换侧边栏',
   'kb.toggleContext': '切换上下文面板',
+  'kb.toggleTheme': '切换深色/浅色主题',
+  'kb.searchSessions': '搜索会话',
   'kb.openSettings': '打开设置',
   'kb.showShortcuts': '显示此帮助',
   'kb.closeDialog': '关闭对话框',

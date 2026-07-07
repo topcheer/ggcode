@@ -289,6 +289,27 @@ function LayoutInner() {
         e.preventDefault()
         setSidebarOpen(prev => !prev)
       }
+      // ⌘N: New session
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {})
+      }
+      // ⌘⇧S: Share session
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        setShareDialogOpen(true)
+      }
+      // ⌘⇧T: Toggle theme
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        document.documentElement.classList.toggle('dark')
+      }
+      // ⌘⇧F: Focus session search (open sidebar + switch to chat)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        setView('chat')
+        setSidebarOpen(true)
+      }
       if (e.key === 'Escape') {
         setCmdPaletteOpen(false)
         setShareDialogOpen(false)

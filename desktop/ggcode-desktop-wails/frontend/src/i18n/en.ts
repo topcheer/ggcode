@@ -77,6 +77,8 @@ const en = {
   'kb.cmdPalette': 'Open Command Palette',
   'kb.toggleSidebar': 'Toggle Sidebar',
   'kb.toggleContext': 'Toggle Context Panel',
+  'kb.toggleTheme': 'Toggle Dark/Light Theme',
+  'kb.searchSessions': 'Search Sessions',
   'kb.openSettings': 'Open Settings',
   'kb.showShortcuts': 'Show This Help',
   'kb.closeDialog': 'Close Dialog',
