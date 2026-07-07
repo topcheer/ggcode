@@ -135,7 +135,7 @@ func TestSplitMessageForPlatform(t *testing.T) {
 func TestPlatformLimits(t *testing.T) {
 	limits := map[Platform]int{
 		PlatformDiscord:  2000,
-		PlatformSlack:    4000,
+		PlatformSlack:    12000,
 		PlatformDingTalk: 4000,
 		PlatformTelegram: 4096,
 		PlatformQQ:       3000,
