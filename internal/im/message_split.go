@@ -28,9 +28,9 @@ var ByteLimitPlatforms = map[Platform]bool{
 //   - Twitch: https://discuss.dev.twitch.tv/t/message-character-limit/7793 (500 chars)
 //   - Signal: https://github.com/AsamK/signal-cli/issues/1598 (65536 bytes; 16000 chars conservative for CJK)
 //   - Nostr: NIP-04 — no protocol limit; 2000 is conservative (relay-dependent)
-//   - Matrix: Matrix spec — total event ≤ 65KB; 4000 is conservative for body text
+//   - Matrix: Synapse default max_event_size 100KB; 60K chars leaves room for event JSON metadata
 //   - Mattermost: https://docs.mattermost.com/administration-guide/manage/product-limits.html (16383 chars)
-//   - WhatsApp: https://developers.facebook.com/docs/whatsapp/cloud-api/messages/text-messages (4096 chars)
+//   - WhatsApp: https://faq.whatsapp.com/539171692017362527 (personal accounts 65536 chars)
 //   - WeCom: https://developer.work.weixin.qq.com/document/path/90236 (2048 bytes)
 //   - WeChat: WeChat Official Account API (2048 bytes, same engine as WeCom)
 //   - Dummy: No practical limit
@@ -45,9 +45,9 @@ var PlatformLimits = map[Platform]int{
 	PlatformTwitch:     500,
 	PlatformSignal:     16000,
 	PlatformNostr:      2000,
-	PlatformMatrix:     4000,
+	PlatformMatrix:     60000,
 	PlatformMattermost: 16383,
-	PlatformWhatsApp:   4096,
+	PlatformWhatsApp:   65536,
 	PlatformWeCom:      2048,
 	PlatformWechat:     2048,
 	PlatformDummy:      50000,

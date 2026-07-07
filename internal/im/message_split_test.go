@@ -140,6 +140,8 @@ func TestPlatformLimits(t *testing.T) {
 		PlatformTelegram: 4096,
 		PlatformQQ:       3000,
 		PlatformFeishu:   28000,
+		PlatformMatrix:   60000,
+		PlatformWhatsApp: 65536,
 	}
 	for platform, expected := range limits {
 		actual, ok := PlatformLimits[platform]
