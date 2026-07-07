@@ -1271,8 +1271,11 @@ func (m *Manager) CompactSupersededReads() int {
 	defer m.mu.Unlock()
 
 	// Phase 1: Scan tool_use blocks for read_file and multi_file_read.
-	// Track file path → ordered list of ToolIDs that read it.
+	// Track:
+	//   file path → ordered list of ToolIDs that read it
+	//   ToolID → set of (normalized) paths it read (for multi-file reads)
 	pathToToolIDs := make(map[string][]string)
+	toolIDToPaths := make(map[string]map[string]bool)
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
 			if b.Type != "tool_use" {
@@ -1282,17 +1285,42 @@ func (m *Manager) CompactSupersededReads() int {
 			for _, p := range paths {
 				norm := normalizeFilePath(p)
 				pathToToolIDs[norm] = append(pathToToolIDs[norm], b.ToolID)
+				if toolIDToPaths[b.ToolID] == nil {
+					toolIDToPaths[b.ToolID] = make(map[string]bool)
+				}
+				toolIDToPaths[b.ToolID][norm] = true
 			}
 		}
 	}
 
-	// Phase 2: For paths read more than once, all but the last read are superseded.
-	supersededIDs := make(map[string]bool)
+	// Phase 2: For each path read more than once, all but the last read
+	// are candidates for supersession. However, a multi_file_read tool_id
+	// that read files A, B, C should only be compacted if ALL of A, B, C
+	// have been re-read later — otherwise we lose content for files that
+	// were NOT re-read. For single read_file calls (one path), the
+	// current behavior is correct: the single file was re-read.
+	partiallySuperseded := make(map[string]bool) // toolIDs with ≥1 file superseded
 	for _, ids := range pathToToolIDs {
 		if len(ids) > 1 {
 			for _, id := range ids[:len(ids)-1] {
-				supersededIDs[id] = true
+				partiallySuperseded[id] = true
 			}
+		}
+	}
+
+	supersededIDs := make(map[string]bool)
+	for id := range partiallySuperseded {
+		allFilesSuperseded := true
+		for p := range toolIDToPaths[id] {
+			ids := pathToToolIDs[p]
+			// This file is superseded if a later tool_id also read it.
+			if len(ids) <= 1 || ids[len(ids)-1] == id {
+				allFilesSuperseded = false
+				break
+			}
+		}
+		if allFilesSuperseded {
+			supersededIDs[id] = true
 		}
 	}
 

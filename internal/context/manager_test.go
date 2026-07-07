@@ -1819,6 +1819,62 @@ func TestCompactSupersededReads_MultiFileRead(t *testing.T) {
 	}
 }
 
+// TestCompactSupersededReads_PartialMultiFileRead verifies that a multi_file_read
+// result is NOT compacted when only one of its files is re-read later.
+// Compacting it would lose content for the other files that were NOT re-read.
+func TestCompactSupersededReads_PartialMultiFileRead(t *testing.T) {
+	m := NewManager(100000)
+
+	// multi_file_read reads files A, B, C
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "mfr-1",
+			ToolName: "multi_file_read",
+			Input:    json.RawMessage(`{"files":[{"path":"/a.go"},{"path":"/b.go"},{"path":"/c.go"}]}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("mfr-1", strings.Repeat("x", 500), false),
+		},
+	})
+
+	// Later: read_file reads only file A
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "rf-1",
+			ToolName: "read_file",
+			Input:    json.RawMessage(`{"path":"/a.go"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			provider.ToolResultBlock("rf-1", strings.Repeat("y", 500), false),
+		},
+	})
+
+	freed := m.CompactSupersededReads()
+
+	// mfr-1 should NOT be compacted — files B and C were not re-read.
+	msgs := m.Messages()
+	for _, msg := range msgs {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && b.ToolID == "mfr-1" {
+				if strings.HasPrefix(b.Output, "[superseded:") {
+					t.Errorf("multi_file_read mfr-1 should NOT be compacted: files B and C were not re-read (output prefix=%q)", b.Output[:min(50, len(b.Output))])
+				}
+			}
+		}
+	}
+	_ = freed // may or may not free tokens, but must not compact mfr-1
+}
+
 func TestCompactSupersededReads_Idempotent(t *testing.T) {
 	m := NewManager(100000)
 
