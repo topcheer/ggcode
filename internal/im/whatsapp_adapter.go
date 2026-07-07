@@ -2,8 +2,11 @@ package im
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,8 +128,8 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	if a.client == nil || !a.Connected() {
 		return nil
 	}
-	text := markdownToWhatsApp(defaultOutboundText(event))
-	if text == "" {
+	content := defaultOutboundText(event)
+	if content == "" {
 		return nil
 	}
 
@@ -143,8 +146,23 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return fmt.Errorf("whatsapp %q: parse JID %q: %w", a.name, target, err)
 	}
 
+	// Extract images from text and send them as WhatsApp image messages.
+	images, remainingText := ExtractImagesFromText(content)
+	for i, img := range images {
+		if err := a.sendExtractedImage(ctx, jid, img); err != nil {
+			debug.Log("whatsapp", "adapter %q: image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
+		}
+	}
+
+	// Send remaining text
+	text := markdownToWhatsApp(remainingText)
+	if text == "" {
+		debug.Log("whatsapp", "adapter %q: outbound target=%s images=%d (text empty after extraction)", a.name, target, len(images))
+		return nil
+	}
+
 	chunks := chunkWARunes(text, waMaxTextLen)
-	debug.Log("whatsapp", "adapter %q: outbound target=%s chunks=%d len=%d", a.name, target, len(chunks), len(text))
+	debug.Log("whatsapp", "adapter %q: outbound target=%s chunks=%d images=%d len=%d", a.name, target, len(chunks), len(images), len(text))
 	for i, chunk := range chunks {
 		msg := &waE2E.Message{Conversation: proto.String(chunk)}
 		_, err := a.client.SendMessage(ctx, jid, msg)
@@ -160,7 +178,79 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 			}
 		}
 	}
-	debug.Log("whatsapp", "adapter %q: outbound delivered target=%s chunks=%d", a.name, target, len(chunks))
+	debug.Log("whatsapp", "adapter %q: outbound delivered target=%s chunks=%d images=%d", a.name, target, len(chunks), len(images))
+	return nil
+}
+
+// sendExtractedImage dispatches image sending based on the image kind.
+func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID, img ExtractedImage) error {
+	switch img.Kind {
+	case "url":
+		if IsLocalFilePath(img.Data) {
+			data, err := os.ReadFile(img.Data)
+			if err != nil {
+				return fmt.Errorf("read local image: %w", err)
+			}
+			return a.sendImageByUpload(ctx, jid, data, "")
+		}
+		// Download remote URL
+		req, err := http.NewRequestWithContext(ctx, "GET", img.Data, nil)
+		if err != nil {
+			return fmt.Errorf("create request for image URL: %w", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("download image: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20)) // 20MB max
+		if err != nil {
+			return fmt.Errorf("read image data: %w", err)
+		}
+		return a.sendImageByUpload(ctx, jid, data, "")
+	case "data_url":
+		parts := strings.SplitN(img.Data, ",", 2)
+		if len(parts) < 2 {
+			return fmt.Errorf("invalid data URL")
+		}
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid base64 in data URL: %w", err)
+		}
+		return a.sendImageByUpload(ctx, jid, data, "")
+	default:
+		return fmt.Errorf("unknown image kind: %s", img.Kind)
+	}
+}
+
+// sendImageByUpload uploads image data to WhatsApp servers and sends as ImageMessage.
+func (a *whatsappAdapter) sendImageByUpload(ctx context.Context, jid types.JID, data []byte, caption string) error {
+	uploaded, err := a.client.Upload(ctx, data, whatsmeow.MediaImage)
+	if err != nil {
+		return fmt.Errorf("whatsapp upload image: %w", err)
+	}
+
+	imgMsg := &waE2E.ImageMessage{
+		Mimetype:      proto.String(http.DetectContentType(data)),
+		URL:           &uploaded.URL,
+		DirectPath:    &uploaded.DirectPath,
+		MediaKey:      uploaded.MediaKey,
+		FileEncSHA256: uploaded.FileEncSHA256,
+		FileSHA256:    uploaded.FileSHA256,
+		FileLength:    proto.Uint64(uint64(len(data))),
+	}
+	if caption != "" {
+		imgMsg.Caption = proto.String(caption)
+	}
+
+	_, err = a.client.SendMessage(ctx, jid, &waE2E.Message{ImageMessage: imgMsg})
+	if err != nil {
+		return fmt.Errorf("whatsapp send image: %w", err)
+	}
+	debug.Log("whatsapp", "adapter %q: image sent to=%s bytes=%d", a.name, jid.String(), len(data))
 	return nil
 }
 
