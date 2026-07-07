@@ -23,7 +23,7 @@ import { ApprovalDialog, ApprovalRequest } from './ApprovalDialog'
 import { AskUserDialog, AskUserRequest } from './AskUserDialog'
 import { PairingCodeDialog, PairingRequest } from './PairingCodeDialog'
 import { LanChatApprovalDialog } from './LanChatApprovalDialog'
-import { Toast, ToastMessage, ToastType } from './Toast'
+import { ToastContainer, ToastMessage, ToastType } from './Toast'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 
@@ -44,18 +44,19 @@ function LayoutInner() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [needsOnboard, setNeedsOnboard] = useState(false)
   const [currentWorkspace, setCurrentWorkspace] = useState('')
-  const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
 
   const showToast = useCallback((type: ToastType, message: string) => {
-    setToast({ id: Date.now(), type, message })
+    const id = Date.now() + Math.random()
+    setToasts(prev => [...prev, { id, type, message }].slice(-5))
   }, [])
 
-  const dismissToast = useCallback(() => {
-    setToast(null)
+  const dismissToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
   useEffect(() => {
-    setToast(null)
+    setToasts([])
   }, [view])
 
   // Shared status bar data
@@ -377,7 +378,7 @@ function LayoutInner() {
       {askUserRequest && <AskUserDialog request={askUserRequest} onClose={() => setAskUserRequest(null)} />}
       {pairingRequest && <PairingCodeDialog request={pairingRequest} onClose={() => setPairingRequest(null)} />}
       <LanChatApprovalDialog />
-      <Toast toast={toast} onClose={dismissToast} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   )
 }

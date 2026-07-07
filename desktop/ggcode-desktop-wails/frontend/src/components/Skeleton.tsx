@@ -49,6 +49,41 @@ export function SkeletonSessionItem() {
   )
 }
 
+/** Skeleton for a single chat message bubble (alternating user/assistant widths) */
+export function SkeletonMessage({ align = 'left' }: { align?: 'left' | 'right' }) {
+  const isRight = align === 'right'
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: isRight ? 'flex-end' : 'flex-start',
+      padding: 'var(--spacing-xs) var(--spacing-lg)',
+    }}>
+      <div style={{
+        maxWidth: '70%',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        width: isRight ? '45%' : 'auto',
+      }}>
+        <Skeleton width={isRight ? '100%' : '55%'} height={14} />
+        <Skeleton width="90%" height={14} />
+        <Skeleton width="75%" height={14} />
+      </div>
+    </div>
+  )
+}
+
+/** Render N skeleton chat messages (alternating user/assistant alignment) */
+export function SkeletonMessages({ count = 4 }: { count?: number }) {
+  return (
+    <>
+      {Array.from({ length: count }).map((_, i) => (
+        <SkeletonMessage key={i} align={i % 3 === 0 ? 'right' : 'left'} />
+      ))}
+    </>
+  )
+}
+
 /** Render N skeleton rows */
 export function SkeletonList({ count = 5, variant = 'row' }: { count?: number; variant?: 'row' | 'session' }) {
   const Component = variant === 'session' ? SkeletonSessionItem : SkeletonRow

@@ -4,6 +4,7 @@ import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { useTranslation } from '../i18n'
+import { SkeletonMessages } from './Skeleton'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
 import { appendAssistantChunk, appendReasoningChunk, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
 
@@ -346,6 +347,39 @@ function formatTextAttachment(att: any): string {
   return `\n\n--- ${name}${path} ---\n${att.content || ''}\n--- end ${name} ---`
 }
 
+// ── Slash command definitions ────────────────────────────────────────────────
+
+interface SlashCommand {
+  cmd: string
+  desc: string
+  category: 'chat' | 'config' | 'session' | 'code' | 'system'
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { cmd: '/help', desc: 'Show available commands', category: 'system' },
+  { cmd: '/model', desc: 'Switch or view AI model', category: 'config' },
+  { cmd: '/mode', desc: 'Change permission mode (auto/supervised/plan/bypass)', category: 'config' },
+  { cmd: '/clear', desc: 'Clear chat history', category: 'chat' },
+  { cmd: '/compact', desc: 'Compact context window', category: 'chat' },
+  { cmd: '/context', desc: 'Show context usage details', category: 'chat' },
+  { cmd: '/cost', desc: 'Show token usage and cost', category: 'chat' },
+  { cmd: '/copy', desc: 'Copy conversation to clipboard', category: 'chat' },
+  { cmd: '/sessions', desc: 'Browse and switch sessions', category: 'session' },
+  { cmd: '/config', desc: 'View or edit configuration', category: 'config' },
+  { cmd: '/status', desc: 'Show runtime status', category: 'system' },
+  { cmd: '/skills', desc: 'Browse available skills', category: 'system' },
+  { cmd: '/mcp', desc: 'Manage MCP servers', category: 'system' },
+  { cmd: '/review', desc: 'Review code changes (git diff)', category: 'code' },
+  { cmd: '/diff', desc: 'Show working tree diff', category: 'code' },
+  { cmd: '/reflect', desc: 'Trigger self-reflection', category: 'system' },
+  { cmd: '/undo', desc: 'Undo last file edit', category: 'code' },
+  { cmd: '/regenerate', desc: 'Regenerate last response', category: 'chat' },
+  { cmd: '/todo', desc: 'Task management', category: 'system' },
+  { cmd: '/init', desc: 'Initialize project memory files', category: 'system' },
+  { cmd: '/lang', desc: 'Change interface language', category: 'config' },
+  { cmd: '/bug', desc: 'Report a bug', category: 'system' },
+]
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void }) {
@@ -356,6 +390,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
   const [statusBar, setStatusBar] = useState<StatusBarState>({
     vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
@@ -384,6 +419,35 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchIdx, setSearchMatchIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // --- Slash command autocomplete ---
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashIdx, setSlashIdx] = useState(0)
+  const slashListRef = useRef<HTMLDivElement>(null)
+
+  // Filter commands based on current input
+  const slashFiltered = useMemo(() => {
+    const trimmed = input.trimStart()
+    if (!trimmed.startsWith('/')) return []
+    // Only trigger when the slash is at the beginning of the line
+    const beforeCursor = input.slice(0, inputRef.current?.selectionStart ?? input.length)
+    const lineStart = beforeCursor.lastIndexOf('\n') + 1
+    const linePrefix = beforeCursor.slice(lineStart)
+    if (!linePrefix.startsWith('/')) return []
+    // Don't trigger if there's a space (command name complete)
+    if (linePrefix.includes(' ')) return []
+    const query = linePrefix.toLowerCase()
+    return SLASH_COMMANDS.filter(c => c.cmd.startsWith(query))
+  }, [input])
+
+  useEffect(() => {
+    if (slashFiltered.length > 0 && !slashOpen) {
+      setSlashOpen(true)
+      setSlashIdx(0)
+    } else if (slashFiltered.length === 0 && slashOpen) {
+      setSlashOpen(false)
+    }
+  }, [slashFiltered, slashOpen])
 
   // --- Identity (nick/role/team) ---
   const [selfNick, setSelfNick] = useState('')
@@ -488,13 +552,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
         if (sid) {
           // Load history directly
+          setHistoryLoading(true)
           App.GetSessionHistory().then((history: any[]) => {
-            if (cancelled || !history || history.length === 0) return
+            if (cancelled || !history || history.length === 0) { setHistoryLoading(false); return }
             autoScrollByTabRef.current.main = true
             const loaded = materializeHistory(history, [])
             messagesRef.current = loaded
             setMessages(loaded)
-          }).catch(() => {})
+            setHistoryLoading(false)
+          }).catch(() => { setHistoryLoading(false) })
         }
       }).catch(() => {})
       return () => { cancelled = true }
@@ -504,19 +570,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     setMessages([])
     messagesRef.current = []
     setThinking(false)
+    setHistoryLoading(true)
     let cancelled = false
     App.GetSessionHistory().then((history: any[]) => {
-      if (cancelled || runActiveRef.current) return
+      if (cancelled || runActiveRef.current) { setHistoryLoading(false); return }
       if (!history || history.length === 0) {
-        // New/empty session — nothing to load, messages already cleared above
+        setHistoryLoading(false)
         return
       }
       autoScrollByTabRef.current.main = true
       const loaded = materializeHistory(history, messagesRef.current)
-      if (cancelled || runActiveRef.current) return
+      if (cancelled || runActiveRef.current) { setHistoryLoading(false); return }
       messagesRef.current = loaded
       setMessages(loaded)
-    }).catch(() => {})
+      setHistoryLoading(false)
+    }).catch(() => { setHistoryLoading(false) })
     return () => { cancelled = true }
   }, [sessionId])
 
@@ -1279,6 +1347,33 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // ── Key handler ───────────────────────────────────────────────────────────
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Slash autocomplete navigation
+    if (slashOpen && slashFiltered.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashIdx(i => (i + 1) % slashFiltered.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashIdx(i => (i - 1 + slashFiltered.length) % slashFiltered.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        const sel = slashFiltered[slashIdx]
+        if (sel) {
+          setInput(prev => sel.cmd + ' ')
+          setSlashOpen(false)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashOpen(false)
+        return
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
       e.preventDefault()
       void cycleReasoningEffort()
@@ -1288,7 +1383,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       e.preventDefault()
       handleSend()
     }
-  }, [cycleReasoningEffort, handleSend])
+  }, [cycleReasoningEffort, handleSend, slashOpen, slashFiltered, slashIdx])
 
   // ── In-conversation search ────────────────────────────────────────────────
 
@@ -1301,6 +1396,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       .filter(m => m.content.toLowerCase().includes(q))
       .map(m => m.idx)
   }, [messages, searchQuery])
+
+  // Compute sets for persistent highlighting (message IDs)
+  const searchMatchIds = useMemo(() => {
+    if (!searchQuery.trim()) return new Set<string>()
+    return new Set(searchMatches.map(idx => messages[idx]?.id).filter(Boolean) as string[])
+  }, [searchMatches, messages, searchQuery])
+
+  const activeSearchMatchId = useMemo(() => {
+    if (searchMatches.length === 0) return null
+    const idx = searchMatches[Math.min(searchMatchIdx, searchMatches.length - 1)]
+    return messages[idx]?.id ?? null
+  }, [searchMatches, searchMatchIdx, messages])
 
   // Reset match index when query changes
   useEffect(() => { setSearchMatchIdx(0) }, [searchQuery])
@@ -1341,9 +1448,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const el = document.querySelector(`[data-msg-id="${msgId}"]`)
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      // Brief highlight flash
-      el.classList.add('search-match-highlight')
-      setTimeout(() => el.classList.remove('search-match-highlight'), 1500)
     }
   }, [searchMatchIdx, searchMatches, searchOpen, messages])
 
@@ -1865,7 +1969,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         {activeTab === 'main' ? (
           // Main chat messages
           <>
-            {messages.length === 0 && !thinking && (
+            {historyLoading && <SkeletonMessages count={5} />}
+            {messages.length === 0 && !thinking && !historyLoading && (
               <WelcomeScreen workspace={workspace} onPick={(text) => {
                 setInput(text)
                 inputRef.current?.focus()
@@ -1880,7 +1985,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 return prevDay.getTime() !== currDay.getTime()
               })()
               return (
-                <div key={msg.id} data-msg-id={msg.id}>
+                <div
+                  key={msg.id}
+                  data-msg-id={msg.id}
+                  className={[
+                    searchMatchIds.has(msg.id) ? 'search-match-highlight' : '',
+                    activeSearchMatchId === msg.id ? 'search-active-match' : '',
+                  ].filter(Boolean).join(' ')}
+                >
                   {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
                   <MessageCard msg={msg} onRetry={handleRetrySend} />
                 </div>
@@ -2035,11 +2147,40 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
       )}
       <div style={{
+        position: 'relative',
         padding: 'var(--spacing-md) var(--spacing-lg)',
         borderTop: '1px solid var(--color-border)',
         display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-end',
         flexShrink: 0,
       }}>
+        {/* Slash command autocomplete dropdown */}
+        {slashOpen && slashFiltered.length > 0 && (
+          <div ref={slashListRef} style={{
+            position: 'absolute', bottom: '100%', left: 'var(--spacing-lg)',
+            width: 320, maxHeight: 280, overflowY: 'auto',
+            background: 'var(--color-card)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: '0 -4px 16px rgba(0,0,0,0.15)',
+            zIndex: 100, marginBottom: 4,
+          }}>
+            {slashFiltered.map((c, i) => (
+              <div key={c.cmd} onClick={() => {
+                setInput(c.cmd + ' ')
+                setSlashOpen(false)
+                inputRef.current?.focus()
+              }} style={{
+                padding: '8px 12px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: i === slashIdx ? 'var(--color-surface)' : 'transparent',
+                borderBottom: i < slashFiltered.length - 1 ? '1px solid var(--color-border)' : 'none',
+              }}>
+                <code style={{ color: 'var(--color-primary)', fontSize: 13, fontWeight: 600 }}>{c.cmd}</code>
+                <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>{c.desc}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <button type="button" onClick={handlePasteButton} title="Paste from clipboard" style={{
           width: 36, height: 36, borderRadius: 'var(--radius-lg)',
           background: 'var(--color-surface)',

@@ -233,6 +233,18 @@ div[style*="overflow"] {
     animation: shimmerSlide 1.2s ease-in-out infinite;
 }
 
+/* ── Skeleton loading placeholders ───────────────────────────────────────── */
+.skeleton-shimmer {
+    background: linear-gradient(
+        90deg,
+        var(--color-surface) 0%,
+        var(--color-border) 50%,
+        var(--color-surface) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmerSlide 1.5s ease-in-out infinite;
+}
+
 /* ── Streaming UX: Smooth gradient cursor for streaming text ─────────────── */
 /* A more refined cursor than the plain pulse bar — uses a gradient that */
 /* shifts hue gently, giving a "thinking" feel. */
@@ -277,10 +289,50 @@ div[style*="overflow"] {
     .msg-enter,
     .tool-shimmer,
     .streaming-cursor,
-    .reasoning-active {
+    .reasoning-active,
+    .toast-enter,
+    .toast-progress {
         animation: none !important;
     }
     div[style*="overflow"] {
         scroll-behavior: auto;
     }
+}
+
+/* ── Toast notifications: enter/exit animations ─────────────────────────── */
+.toast-enter {
+    animation: toastEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes toastEnter {
+    from {
+        opacity: 0;
+        transform: translateX(120%) scale(0.92);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+
+@keyframes toastProgressShrink {
+    from { width: 100%; }
+    to { width: 0%; }
+}
+
+/* ── In-conversation search: persistent match highlighting ──────────────── */
+/* Applied to message wrapper divs via className when search is active. */
+.search-match-highlight {
+    border-left: 3px solid var(--color-warning) !important;
+    background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+    border-radius: var(--radius-sm);
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.search-active-match {
+    border-left: 3px solid var(--color-primary) !important;
+    background: color-mix(in srgb, var(--color-primary) 15%, transparent);
+    box-shadow: -2px 0 8px color-mix(in srgb, var(--color-primary) 30%, transparent);
+    border-radius: var(--radius-sm);
+    transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.3s ease;
 }
