@@ -43,6 +43,13 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 	if w.mgr.logFile == nil {
 		return 0, nil
 	}
+	// In-session rotation: if the log file exceeds the size limit, truncate
+	// it to keep disk usage bounded during long sessions. The pane's tail -f
+	// detects the truncation and resets automatically.
+	if info, err := w.mgr.logFile.Stat(); err == nil && info.Size()+int64(len(p)) > maxCmdPaneLogSize {
+		_ = w.mgr.logFile.Truncate(0)
+		_, _ = w.mgr.logFile.Seek(0, io.SeekStart)
+	}
 	return w.mgr.logFile.Write(p)
 }
 
@@ -59,6 +66,14 @@ func (m *Manager) logFilePath() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("ggcode-cmdpane-%s.log", short))
 }
 
+// maxCmdPaneLogSize is the maximum size of the command pane log file before it
+// is truncated on open. If a previous session crashed without calling Close()
+// (which removes the file), the stale file persists and O_APPEND would grow it
+// unbounded across sessions. Truncating on open is safe because the pane's
+// `tail -f` starts fresh each session and only shows content written after
+// the pane was created.
+const maxCmdPaneLogSize = 5 << 20 // 5 MB
+
 // Writer returns an io.Writer that appends to the command pane log file.
 // The writer is safe for concurrent use — writes are serialized so that
 // parallel command executions (e.g. from sub-agents) don't interleave.
@@ -70,6 +85,11 @@ func (m *Manager) Writer() (io.Writer, error) {
 		m.logPath = m.logFilePath()
 		if err := os.MkdirAll(filepath.Dir(m.logPath), 0o755); err != nil {
 			return nil, fmt.Errorf("cmdpane: failed to create log dir: %w", err)
+		}
+		// Truncate stale log from a previous session to avoid unbounded growth.
+		// The pane's tail -f starts at end-of-file, so old content is never shown.
+		if info, err := os.Stat(m.logPath); err == nil && info.Size() > maxCmdPaneLogSize {
+			_ = os.Truncate(m.logPath, 0)
 		}
 		f, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
