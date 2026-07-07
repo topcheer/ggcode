@@ -40,6 +40,10 @@ type rejectFeedbackStore struct {
 // idea on the next tick, short enough that a genuinely useful skill can resurface.
 const rejectCoolDownWindow = 7 * 24 * time.Hour
 
+// maxRejectFeedbackEntries caps in-memory entries to prevent unbounded growth
+// from long-running sessions with many reject cycles.
+const maxRejectFeedbackEntries = 500
+
 func newRejectFeedbackStore(path string) *rejectFeedbackStore {
 	return &rejectFeedbackStore{path: path}
 }
@@ -62,6 +66,7 @@ func (s *rejectFeedbackStore) load() {
 		}
 		s.entries = append(s.entries, entry)
 	}
+	s.trimOld(time.Time{}) // trim stale entries on load
 }
 
 // Append persists a new feedback entry and returns the stored copy.
@@ -88,7 +93,36 @@ func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 		return err
 	}
 	s.entries = append(s.entries, entry)
+	s.trimOld(entry.Time)
 	return nil
+}
+
+// trimOld removes entries that are beyond the cool-down window (no longer
+// useful for lookups) and caps the in-memory slice at maxRejectFeedbackEntries.
+// This prevents unbounded growth from long-running sessions. The on-disk file
+// is not rewritten — only the in-memory index is trimmed. Old entries in the
+// file are harmless (they fall outside the cool-down window and are naturally
+// ignored by LastFor/coolDownActive).
+func (s *rejectFeedbackStore) trimOld(now time.Time) {
+	if len(s.entries) == 0 {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	cutoff := now.Add(-rejectCoolDownWindow)
+	trimmed := s.entries[:0]
+	for _, e := range s.entries {
+		if e.Time.After(cutoff) {
+			trimmed = append(trimmed, e)
+		}
+	}
+	s.entries = trimmed
+	// Hard cap: keep only the most recent N entries.
+	if len(s.entries) > maxRejectFeedbackEntries {
+		sort.SliceStable(s.entries, func(i, j int) bool { return s.entries[i].Time.After(s.entries[j].Time) })
+		s.entries = s.entries[:maxRejectFeedbackEntries]
+	}
 }
 
 // LastFor returns the most recent feedback entry for a (scope, name) pair, if
