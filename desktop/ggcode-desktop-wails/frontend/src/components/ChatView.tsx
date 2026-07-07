@@ -3,6 +3,7 @@ import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, Use
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
+import hljs from 'highlight.js'
 import { useTranslation } from '../i18n'
 import { SkeletonMessages } from './Skeleton'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
@@ -69,6 +70,17 @@ function enhanceCodeBlocks(container: HTMLElement) {
     const langClass = Array.from(code.classList).find((c: string) => c.startsWith('language-'))
     const lang = langClass ? langClass.replace('language-', '') : ''
 
+    // Apply syntax highlighting (CSS theme already imported via FileBrowser)
+    try {
+      if (!code.hasAttribute('data-highlighted')) {
+        if (lang && hljs.getLanguage(lang)) {
+          hljs.highlightElement(code)
+        } else {
+          hljs.highlightElement(code) // auto-detect
+        }
+      }
+    } catch { /* ignore highlighting errors */ }
+
     // Create wrapper: make <pre> position relative, add header bar
     pre.style.position = 'relative'
 
@@ -116,6 +128,39 @@ function enhanceCodeBlocks(container: HTMLElement) {
 
     // Adjust <pre> padding top since header is now inside
     pre.style.paddingTop = '4px'
+
+    // Collapse long code blocks (>30 lines) with expand toggle
+    const lineCount = (code.textContent || '').split('\n').length
+    if (lineCount > 30) {
+      const collapsedMaxHeight = '420px'
+      pre.style.maxHeight = collapsedMaxHeight
+      pre.style.overflow = 'hidden'
+      pre.style.position = 'relative'
+
+      const expandBtn = document.createElement('button')
+      expandBtn.textContent = `Expand (${lineCount} lines)`
+      expandBtn.style.cssText = 'position:absolute;bottom:0;left:0;right:0;padding:6px 0;background:linear-gradient(transparent,var(--color-surface));border:none;color:var(--color-primary);cursor:pointer;font-size:11px;font-family:var(--font-mono,monospace);text-align:center;transition:background 0.15s;'
+      let expanded = false
+      expandBtn.addEventListener('click', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        expanded = !expanded
+        if (expanded) {
+          pre.style.maxHeight = ''
+          pre.style.overflow = ''
+          expandBtn.textContent = 'Collapse'
+          expandBtn.style.position = 'sticky'
+          expandBtn.style.background = 'var(--color-surface)'
+        } else {
+          pre.style.maxHeight = collapsedMaxHeight
+          pre.style.overflow = 'hidden'
+          expandBtn.textContent = `Expand (${lineCount} lines)`
+          expandBtn.style.position = 'absolute'
+          expandBtn.style.background = 'linear-gradient(transparent,var(--color-surface))'
+        }
+      })
+      pre.appendChild(expandBtn)
+    }
     // Intercept external links: open in system browser instead of navigating webview
     const anchors = container.querySelectorAll<HTMLAnchorElement>('a[href]')
     anchors.forEach((a) => {

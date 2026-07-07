@@ -71,6 +71,7 @@ type Agent struct {
 	autopilotGoalCheckedThisTurn bool                // prevents infinite goal-check loops within a single idle turn
 	reflectionFunc               ReflectionFunc      // called after each run with accumulated stats
 	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier              *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
 	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
 	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
@@ -123,6 +124,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:         newToolMemo(),
 		confidence:       newConfidenceState(),
 		budgetGuard:      newBudgetGuardState(),
+		errorClassifier:  NewErrorClassifier(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
@@ -586,6 +588,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	// Reset loop detector for each new user turn.
 	a.resetLoopDetector()
+	a.errorClassifier.reset()
 	a.resetPostEditVerify()
 	a.resetRepetitionTracker()
 
@@ -1032,6 +1035,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {
 				runStats.recordToolError(tc.Name, result.Content)
+			}
+
+			// Error classifier: immediate type-specific guidance on the first
+			// occurrence of each error category (AgentDebug-inspired).
+			// Fires before error-streak so the agent gets targeted feedback
+			// immediately, not after 4 consecutive failures.
+			if result.IsError {
+				if catGuidance := a.errorClassifier.classifyToolError(tc.Name, result.Content); catGuidance.Name != "" {
+					g := fmt.Sprintf("[Error guidance: %s] %s", catGuidance.Name, catGuidance.Guidance)
+					if result.Content != "" {
+						result.Content = result.Content + "\n\n" + g
+					} else {
+						result.Content = g
+					}
+				}
 			}
 
 			// Error-streak detection: if consecutive tool calls are failing,
