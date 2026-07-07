@@ -445,6 +445,16 @@ div[style*="overflow"] {
     pointer-events: auto;
 }
 
+/* ── Consecutive message grouping ────────────────────────────────────── */
+/* Tighter spacing for consecutive messages from the same sender (Slack/iMessage pattern). */
+.message-row--continuation {
+    margin-top: calc(var(--spacing-xs) * -1 + 2px);
+}
+/* Hide the role label (e.g. "Assistant") on continuation messages */
+.message-row--continuation .msg-role-label {
+    display: none;
+}
+
 /* ── Diff code block highlighting ─────────────────────────────────────── */
 /* GitHub-style green/red backgrounds for diff blocks in code output */
 .diff-add {

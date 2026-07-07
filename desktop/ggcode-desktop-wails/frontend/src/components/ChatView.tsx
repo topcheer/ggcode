@@ -2358,20 +2358,33 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               return (
                 <div
                   key={msg.id}
-                  data-msg-id={msg.id}
                   className={[
-                    'message-row',
                     searchMatchIds.has(msg.id) ? 'search-match-highlight' : '',
                     activeSearchMatchId === msg.id ? 'search-active-match' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
-                  {msg.timestamp && (
-                    <span className="msg-timestamp" title={new Date(msg.timestamp).toLocaleString()}>
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
-                  <MessageCard msg={msg} onRetry={handleRetrySend} onEdit={handleEditMessage} />
+                  {(() => {
+                    // Consecutive message grouping: same role + within 2 min of previous message
+                    const prevMsg = i > 0 ? messages[i - 1] : null
+                    const isContinuation = prevMsg &&
+                      prevMsg.role === msg.role &&
+                      (msg.agentID || '') === (prevMsg.agentID || '') &&
+                      msg.timestamp && prevMsg.timestamp &&
+                      (msg.timestamp - prevMsg.timestamp) < 120000
+                    // Only show hover timestamp on first message in group
+                    const showTimestamp = msg.timestamp && !isContinuation
+                    return <>
+                      {showTimestamp && (
+                        <span className="msg-timestamp" title={new Date(msg.timestamp).toLocaleString()}>
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                      <div className={isContinuation ? 'message-row message-row--continuation' : 'message-row'} data-msg-id={msg.id}>
+                        <MessageCard msg={msg} onRetry={handleRetrySend} onEdit={handleEditMessage} />
+                      </div>
+                    </>
+                  })()}
                 </div>
               )
             })}
@@ -3060,7 +3073,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div style={{
+      <div className="msg-role-label" style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
         color: isSubAgent ? 'var(--color-info)' : 'var(--color-success)',
         display: 'flex', alignItems: 'center', gap: 6,
