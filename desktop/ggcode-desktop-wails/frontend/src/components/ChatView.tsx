@@ -530,6 +530,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
   }, [])
 
+  // Helper: remove a completed/failed agent panel (close tab)
+  const removeAgentPanel = useCallback((agentID: string) => {
+    setAgentPanels(prev => {
+      const next = new Map(prev)
+      next.delete(agentID)
+      return next
+    })
+    setActiveTab(prev => prev === agentID ? 'main' : prev)
+  }, [])
+
   const messagesRef = useRef<ChatMessage[]>([])
 
   // Load session history when sessionId changes.
@@ -1848,10 +1858,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           {Array.from(agentPanels.values()).map(panel => (
             <TabButton
               key={panel.id}
-              label={`${panel.status === 'running' ? '● ' : panel.status === 'completed' ? '✓ ' : ''}${panel.name}`}
+              label={panel.name}
               active={activeTab === panel.id}
               onClick={() => setActiveTab(panel.id)}
-              color={panel.status === 'running' ? 'var(--color-warning)' : panel.status === 'completed' ? 'var(--color-success)' : undefined}
+              status={panel.status}
+              title={panel.task || panel.status}
+              onClose={() => removeAgentPanel(panel.id)}
             />
           ))}
         </div>
@@ -1989,11 +2001,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                   key={msg.id}
                   data-msg-id={msg.id}
                   className={[
+                    'message-row',
                     searchMatchIds.has(msg.id) ? 'search-match-highlight' : '',
                     activeSearchMatchId === msg.id ? 'search-active-match' : '',
                   ].filter(Boolean).join(' ')}
                 >
                   {showSep && msg.timestamp && <DateSeparator label={dateLabel(msg.timestamp)} />}
+                  {msg.timestamp && (
+                    <span className="msg-timestamp" title={new Date(msg.timestamp).toLocaleString()}>
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
                   <MessageCard msg={msg} onRetry={handleRetrySend} />
                 </div>
               )
@@ -2390,18 +2408,54 @@ function WelcomeScreen({ onPick, workspace }: { onPick: (text: string) => void; 
 // ── MessageCard ──────────────────────────────────────────────────────────────
 
 // ── Tab button component ──
-function TabButton({ label, active, onClick, color }: { label: string; active: boolean; onClick: () => void; color?: string }) {
+function TabButton({ label, active, onClick, color, status, title, onClose }: {
+  label: string; active: boolean; onClick: () => void; color?: string;
+  status?: 'running' | 'completed' | 'failed' | 'idle';
+  title?: string; onClose?: () => void;
+}) {
+  const [hovered, setHovered] = useState(false)
+  const dotColor = status === 'running' ? 'var(--color-warning)' : status === 'completed' ? 'var(--color-success)' : status === 'failed' ? 'var(--color-error)' : undefined
   return (
-    <button onClick={onClick} style={{
-      padding: '6px 14px', border: 'none', cursor: 'pointer',
-      fontSize: 12, fontWeight: active ? 600 : 400,
-      color: active ? (color || 'var(--text-primary)') : 'var(--text-tertiary)',
-      background: active ? 'var(--color-card)' : 'transparent',
-      borderBottom: active ? '2px solid var(--color-primary)' : '2px solid transparent',
-      whiteSpace: 'nowrap' as const,
-    }}>
-      {label}
-    </button>
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      title={title}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '6px 10px', cursor: 'pointer', position: 'relative',
+        fontSize: 12, fontWeight: active ? 600 : 400,
+        color: active ? (color || 'var(--text-primary)') : 'var(--text-tertiary)',
+        background: active ? 'var(--color-card)' : 'transparent',
+        borderBottom: active ? '2px solid var(--color-primary)' : '2px solid transparent',
+        whiteSpace: 'nowrap' as const,
+        transition: 'background 0.15s',
+        ...(hovered && !active ? { background: 'var(--color-card)' } : {}),
+      }}
+    >
+      {dotColor && (
+        <span
+          className={status === 'running' ? 'agent-status-dot' : undefined}
+          style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: dotColor, flexShrink: 0,
+            display: 'inline-block',
+          }}
+        />
+      )}
+      <span>{label}</span>
+      {onClose && status !== 'running' && hovered && (
+        <span
+          onClick={(e) => { e.stopPropagation(); onClose() }}
+          style={{
+            marginLeft: 2, cursor: 'pointer', fontSize: 14, lineHeight: 1,
+            color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center',
+          }}
+        >
+          ×
+        </span>
+      )}
+    </div>
   )
 }
 
