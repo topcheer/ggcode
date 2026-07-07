@@ -18,6 +18,7 @@ import (
 
 	"github.com/topcheer/ggcode/desktop/wailskit"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	imgpkg "github.com/topcheer/ggcode/internal/image"
@@ -95,12 +96,33 @@ func (a *App) startup(ctx context.Context) {
 			// Cached workspace no longer exists — fall back to home dir
 			// and clear the stale cache so we don't keep trying.
 			debug.Log("desktop", "cached workspace %q no longer exists, falling back to home", a.dc.WorkDir)
-			a.workDir, _ = os.UserHomeDir()
+			a.workDir = config.HomeDir()
 			_ = os.Chdir(a.workDir)
 			a.dc.WorkDir = ""
 		}
 	} else {
-		a.workDir, _ = os.Getwd()
+		// No cached workspace — default to the user's home directory.
+		// Using os.Getwd() would inherit the terminal's CWD, which often
+		// has an existing ggcode.yaml (e.g. the repo root) that masks the
+		// intended HOME-based config. This is especially important for
+		// onboarding: with HOME=/tmp/test-home, the desktop should see no
+		// config and show the onboarding wizard.
+		a.workDir = config.HomeDir()
+		_ = os.Chdir(a.workDir)
+	}
+
+	// Check if onboarding is needed before initializing workspace.
+	// If the user has no API key configured, skip workspace init and let
+	// the frontend show the onboarding wizard. The frontend will call
+	// SwitchWorkspace (→ initWorkspace) after onboarding completes.
+	cfg, err := wailskit.LoadConfigForWorkspace(a.workDir)
+	if err != nil || cfg == nil || cfg.NeedsOnboard() {
+		debug.Log("desktop", "onboarding needed, skipping workspace init")
+		// Set partial config so frontend GetConfig returns NeedsSetup=true
+		if cfg != nil {
+			wailskit.SetConfig(cfg)
+		}
+		return
 	}
 
 	a.initWorkspace(a.workDir)

@@ -93,6 +93,10 @@ func VendorPresets() []VendorPreset {
 				Models:       ep.Models,
 			})
 		}
+		// Skip vendors with no endpoints — they crash the onboard UI.
+		if len(vp.Endpoints) == 0 {
+			continue
+		}
 		out = append(out, vp)
 	}
 	// Sort by display name for consistent ordering.

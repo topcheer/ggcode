@@ -34,9 +34,9 @@ func main() {
 		Height:    860,
 		MinWidth:  900,
 		MinHeight: 600,
-		// Frameless removes the native title bar on Windows/Linux.
-		// On macOS, Mac.TitleBar config below takes precedence and
-		// keeps the traffic lights while hiding the title text.
+		// Frameless: fully custom-drawn title bar on ALL platforms.
+		// TopDragBar.tsx draws traffic lights (macOS) or flat buttons
+		// (Windows/Linux) entirely in the webview — no native chrome.
 		Frameless: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
@@ -52,7 +52,7 @@ func main() {
 			TitleBar: &mac.TitleBar{
 				TitlebarAppearsTransparent: true,
 				HideTitle:                  true,
-				HideTitleBar:               false,
+				HideTitleBar:               true,
 				FullSizeContent:            true,
 				UseToolbar:                 false,
 			},

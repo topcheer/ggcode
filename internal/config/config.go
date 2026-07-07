@@ -838,7 +838,20 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			cfg.FirstRun = true
-			applyFirstLaunchAnthropicBootstrap(cfg)
+			skipAuto := skipAutoConfig()
+			if !skipAuto {
+				applyFirstLaunchAnthropicBootstrap(cfg)
+			}
+			// When skipAutoConfig is set on first launch, clear the default
+			// vendor/endpoint/model so NeedsOnboard() returns true and the
+			// user gets the onboarding wizard instead of silently using a
+			// default vendor whose ${VAR} API key may resolve from the
+			// ambient environment.
+			if skipAuto {
+				cfg.Vendor = ""
+				cfg.Endpoint = ""
+				cfg.Model = ""
+			}
 			cfg.expandEnvWithLookup(lookup)
 			cfg.normalizeActiveModel()
 			if err := cfg.Validate(); err != nil {
@@ -858,14 +871,22 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("legacy provider/providers config is no longer supported; use vendor/endpoint/vendors instead")
 	}
 	migrateLegacyA2AAPIKey(raw)
-	if shouldApplyFirstLaunchAnthropicBootstrap(raw) {
+	skipAuto := skipAutoConfig()
+	if !skipAuto && shouldApplyFirstLaunchAnthropicBootstrap(raw) {
 		applyFirstLaunchAnthropicBootstrap(cfg)
 	}
 
 	// Auto-migrate plaintext API keys to environment variable references.
 	// This sets os.Setenv for the current process and writes ~/.ggcode/keys.env
 	// for future sessions, then rewrites the YAML to use ${VAR} references.
-	migrated, migrateErr := MigratePlaintextAPIKeys(path)
+	var migrated []APIKeyFinding
+	var migrateErr error
+	if !skipAuto {
+		migrated, migrateErr = MigratePlaintextAPIKeys(path)
+		if migrateErr != nil {
+			debug.Log("config", "MigratePlaintextAPIKeys error: %v", migrateErr)
+		}
+	}
 	if migrateErr != nil {
 		debug.Log("config", "MigratePlaintextAPIKeys error: %v", migrateErr)
 	}
@@ -895,10 +916,12 @@ func Load(path string) (*Config, error) {
 	lookup = runtimeEnvLookup(raw)
 
 	// Remove deprecated system_prompt key from YAML if present.
-	if _, has := raw["system_prompt"]; has {
-		delete(raw, "system_prompt")
-		if rewriteErr := rewriteYAML(path, raw); rewriteErr != nil {
-			debug.Log("config", "failed to rewrite config after removing system_prompt: %v", rewriteErr)
+	if !skipAuto {
+		if _, has := raw["system_prompt"]; has {
+			delete(raw, "system_prompt")
+			if rewriteErr := rewriteYAML(path, raw); rewriteErr != nil {
+				debug.Log("config", "failed to rewrite config after removing system_prompt: %v", rewriteErr)
+			}
 		}
 	}
 
@@ -914,7 +937,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
 	mergeDefaultEndpoints(cfg, DefaultConfig())
-	migrateLegacyMaxIterations(path, raw, cfg)
+	if !skipAuto {
+		migrateLegacyMaxIterations(path, raw, cfg)
+	}
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
@@ -923,10 +948,13 @@ func Load(path string) (*Config, error) {
 
 	// Re-save to apply compact format (strip default vendors, inline models/tags).
 	// Idempotent: compact files stay compact.
-	cfg.globalSnap = nil
-	cfg.instanceFields = nil
-	if saveErr := cfg.Save(); saveErr != nil {
-		return nil, fmt.Errorf("compact migration save: %w", saveErr)
+	// Skipped when GGCODE_SKIP_AUTOCONFIG is set to avoid rewriting config file.
+	if !skipAuto {
+		cfg.globalSnap = nil
+		cfg.instanceFields = nil
+		if saveErr := cfg.Save(); saveErr != nil {
+			return nil, fmt.Errorf("compact migration save: %w", saveErr)
+		}
 	}
 
 	return cfg, nil
@@ -1054,6 +1082,12 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 
 // Validate checks for invalid core configuration values that should fail fast.
 func (c *Config) Validate() error {
+	// On first run (no config file yet), allow empty vendor/endpoint so the
+	// onboarding wizard can trigger. NeedsOnboard() will return true and the
+	// caller will run onboarding instead of proceeding with an invalid config.
+	if c.FirstRun && strings.TrimSpace(c.Vendor) == "" {
+		return nil
+	}
 	if strings.TrimSpace(c.Vendor) == "" {
 		return fmt.Errorf("vendor must not be empty")
 	}
@@ -1207,6 +1241,14 @@ func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {
 		}
 	}
 	return true
+}
+
+// skipAutoConfig returns true when the GGCODE_SKIP_AUTOCONFIG environment
+// variable is set. This disables ALL auto-initialization side effects during
+// Load(): Anthropic bootstrap, plaintext key migration, system_prompt
+// cleanup, legacy max_iterations migration, and the compact re-save.
+func skipAutoConfig() bool {
+	return os.Getenv("GGCODE_SKIP_AUTOCONFIG") != ""
 }
 
 func boolPtr(v bool) *bool {

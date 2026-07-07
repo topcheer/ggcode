@@ -1158,7 +1158,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       }
     }
     load()
-  }, [])
+  }, [sessionId])
 
   // ── Send message ──────────────────────────────────────────────────────────
 

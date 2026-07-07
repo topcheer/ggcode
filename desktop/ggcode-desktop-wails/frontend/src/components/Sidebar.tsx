@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 import { SkeletonList } from './Skeleton'
@@ -241,6 +241,19 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex])
 
+  // On initial load, scroll active session into view
+  const scrolledToActive = useRef(false)
+  useEffect(() => {
+    if (scrolledToActive.current || loading || sortedFiltered.length === 0) return
+    if (!activeSessionId) { scrolledToActive.current = true; return }
+    const idx = sortedFiltered.findIndex(s => s.id === activeSessionId)
+    if (idx >= 0) {
+      const el = itemRefs.current[idx]
+      if (el) el.scrollIntoView({ block: 'nearest' })
+    }
+    scrolledToActive.current = true
+  }, [loading, sortedFiltered, activeSessionId])
+
   return (
     <div style={{
       width: width ? `${width}px` : 'var(--sidebar-width)',
@@ -297,7 +310,25 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
             fontSize: 12,
           }}
         />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            title="Clear"
+            style={{
+              flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer',
+              padding: 2, display: 'flex', alignItems: 'center',
+              color: 'var(--text-tertiary)',
+            }}
+          >
+            <X size={13} />
+          </button>
+        )}
       </div>
+      {search && sortedFiltered.length > 0 && (
+        <div style={{ padding: '0 var(--spacing-md) var(--spacing-xs)', fontSize: 11, color: 'var(--text-tertiary)' }}>
+          {sortedFiltered.length} {sortedFiltered.length === 1 ? 'match' : 'matches'}
+        </div>
+      )}
 
       {/* Session list */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-xs) 0', textAlign: 'left' }}>
@@ -305,8 +336,46 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           <SkeletonList count={5} variant="session" />
         )}
         {!loading && sortedFiltered.length === 0 && (
-          <div style={{ padding: 'var(--spacing-md)', color: 'var(--text-tertiary)', fontSize: 12, textAlign: 'center' }}>
-            {search ? 'No matches' : 'No sessions yet'}
+          <div style={{
+            padding: 'var(--spacing-xl) var(--spacing-md)',
+            textAlign: 'center',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--spacing-sm)',
+          }}>
+            {search ? (
+              <>
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  No sessions matching "{search}"
+                </div>
+                <button
+                  onClick={() => setSearch('')}
+                  style={{
+                    background: 'none', border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-sm)', padding: '4px 12px',
+                    color: 'var(--text-secondary)', fontSize: 11, cursor: 'pointer',
+                  }}
+                >
+                  Clear search
+                </button>
+              </>
+            ) : (
+              <>
+                <MessageSquare size={28} style={{ color: 'var(--text-tertiary)', opacity: 0.5 }} />
+                <div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>
+                  No sessions yet
+                </div>
+                <button
+                  onClick={handleNew}
+                  style={{
+                    background: 'var(--color-primary)', border: 'none',
+                    borderRadius: 'var(--radius-sm)', padding: '6px 16px',
+                    color: '#fff', fontSize: 12, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <Plus size={13} /> Start a conversation
+                </button>
+              </>
+            )}
           </div>
         )}
         {sortedFiltered.map((s, idx) => {

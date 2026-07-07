@@ -722,6 +722,26 @@ func (b *ChatBridge) LoadSession(id string) error {
 		b.refreshSystemPrompt()
 	}
 
+	// Restore session-scoped model/vendor/endpoint (if set).
+	// InitAgent uses the global config's model; we need to switch to the
+	// model that was active when the session was last used.
+	if state.Session.Model != "" {
+		sesModel := state.Session.Model
+		sesVendor := state.Session.Vendor
+		sesEndpoint := state.Session.Endpoint
+		// Only switch if the session's model differs from what InitAgent resolved.
+		if b.resolved == nil || b.resolved.Model != sesModel {
+			resolved, prov, err := agentruntime.ActivateCurrentSelection(b.cfg, sesVendor, sesEndpoint, sesModel)
+			if err == nil {
+				b.mu.Lock()
+				b.resolved = resolved
+				agent := b.agent
+				b.mu.Unlock()
+				agentruntime.ApplyProviderToAgent(agent, prov, resolved)
+			}
+		}
+	}
+
 	return nil
 }
 

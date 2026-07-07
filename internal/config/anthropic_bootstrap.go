@@ -27,7 +27,7 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 	}
 
 	// Allow skipping env-based auto-config entirely (e.g. for onboarding testing).
-	if os.Getenv("GGCODE_SKIP_AUTOCONFIG") != "" {
+	if skipAutoConfig() {
 		return false
 	}
 

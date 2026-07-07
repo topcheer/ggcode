@@ -113,15 +113,18 @@ function LayoutInner() {
     async function load() {
       try {
         const cfg = await App.GetConfig()
-        const [dir, info] = await Promise.all([App.GetWorkDir(), App.GetModelInfo()])
         if (cancelled) return
+        // Set needsOnboard immediately — subsequent calls may fail when
+        // workspace isn't initialized, and we must not lose this flag.
         setNeedsOnboard(cfg.needsSetup || false)
-        setCurrentWorkspace(dir || cfg.workDir || '')
-        // Initialize locale from saved language preference
         if (cfg.language === 'zh' || cfg.language === 'zh-CN') {
           setLocale('zh')
         }
-        if (!cfg.needsSetup) {
+        if (cfg.needsSetup) return // skip further init during onboarding
+        const [dir, info] = await Promise.all([App.GetWorkDir(), App.GetModelInfo()])
+        if (cancelled) return
+        setCurrentWorkspace(dir || cfg.workDir || '')
+        {
           setStatusBarData(prev => ({
             ...prev,
             vendor: (info as any)?.vendor || cfg.vendor || prev.vendor,

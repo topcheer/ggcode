@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react'
-import { ShieldAlert, XCircle, CheckCircle2, ShieldCheck, FileEdit, FilePlus, Terminal, FileJson } from 'lucide-react'
+import { ShieldAlert, XCircle, CheckCircle2, ShieldCheck, FileEdit, FilePlus, Terminal, FileJson, Copy, Check, Zap, AlertTriangle, Eye } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
@@ -135,6 +135,154 @@ function DiffView({ diff }: { diff: DiffLine[] }) {
         )
       })}
     </div>
+  )
+}
+
+// ─── Risk level + diff stats helpers ───────────────────────────
+
+type RiskLevel = 'high' | 'medium' | 'low'
+
+/** Assess risk level based on tool type and arguments */
+function getRiskLevel(toolName: string, input: string): RiskLevel {
+  // High risk: commands can execute arbitrary code; git ops modify repo state
+  if (toolName === 'run_command' || toolName.startsWith('git_')) return 'high'
+  // High risk: write_file/multi_file_write can overwrite entire files
+  if (toolName === 'write_file' || toolName === 'multi_file_write') {
+    const parsed = parseInput(input)
+    const totalLen = parsed?.args?.content?.length || 0
+    const files = parsed?.args?.files
+    if (files && Array.isArray(files)) {
+      return files.some((f: any) => (f.content || '').length > 500) ? 'high' : 'medium'
+    }
+    return totalLen > 500 ? 'high' : 'medium'
+  }
+  // Medium risk: file edits modify existing code
+  if (toolName === 'edit_file' || toolName === 'multi_edit_file' || toolName === 'multi_file_edit') {
+    return 'medium'
+  }
+  // Low risk: everything else (read-only, search, etc.)
+  return 'low'
+}
+
+interface DiffStats {
+  additions: number
+  deletions: number
+  filesChanged: number
+}
+
+/** Count diff additions/deletions from tool input */
+function getDiffStats(toolName: string, input: string): DiffStats | null {
+  const parsed = parseInput(input)
+  if (!parsed) return null
+
+  const countDiff = (oldText: string, newText: string) => {
+    const diff = computeDiff(oldText, newText)
+    return {
+      additions: diff.filter(l => l.type === 'add').length,
+      deletions: diff.filter(l => l.type === 'remove').length,
+    }
+  }
+
+  if (toolName === 'edit_file') {
+    const { old_text, new_text } = parsed.args
+    if (typeof old_text === 'string' && typeof new_text === 'string') {
+      const c = countDiff(old_text, new_text)
+      return { ...c, filesChanged: 1 }
+    }
+  }
+
+  if (toolName === 'multi_edit_file') {
+    const edits = parsed.args.edits
+    if (Array.isArray(edits)) {
+      let additions = 0, deletions = 0
+      for (const edit of edits) {
+        if (typeof edit.old_text === 'string' && typeof edit.new_text === 'string') {
+          const c = countDiff(edit.old_text, edit.new_text)
+          additions += c.additions
+          deletions += c.deletions
+        }
+      }
+      return { additions, deletions, filesChanged: 1 }
+    }
+  }
+
+  if (toolName === 'multi_file_edit') {
+    const files = parsed.args.files
+    if (Array.isArray(files)) {
+      let additions = 0, deletions = 0
+      for (const f of files) {
+        const oldText = f.old_text || ''
+        const newText = f.new_text || f.content || ''
+        if (oldText && newText) {
+          const c = countDiff(oldText, newText)
+          additions += c.additions
+          deletions += c.deletions
+        }
+      }
+      return { additions, deletions, filesChanged: files.length }
+    }
+  }
+
+  if (toolName === 'write_file' || toolName === 'multi_file_write') {
+    const files = parsed.args.files
+    if (files && Array.isArray(files)) {
+      let additions = 0
+      for (const f of files) {
+        additions += (f.content || '').split('\n').length
+      }
+      return { additions, deletions: 0, filesChanged: files.length }
+    }
+    const content = parsed.args.content || ''
+    return { additions: content.split('\n').length, deletions: 0, filesChanged: 1 }
+  }
+
+  return null
+}
+
+function RiskBadge({ level }: { level: RiskLevel }) {
+  const config = {
+    high: { color: '#f87171', bg: 'rgba(220,38,38,0.15)', icon: Zap, label: 'High Risk' },
+    medium: { color: '#fbbf24', bg: 'rgba(251,191,36,0.15)', icon: AlertTriangle, label: 'Medium Risk' },
+    low: { color: '#4ade80', bg: 'rgba(34,197,94,0.15)', icon: Eye, label: 'Low Risk' },
+  }[level]
+  const Icon = config.icon
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '3px 8px', borderRadius: 'var(--radius-sm)',
+      background: config.bg, color: config.color,
+      fontWeight: 600, fontSize: 11,
+    }}>
+      <Icon size={11} />
+      {config.label}
+    </div>
+  )
+}
+
+function CopyButton({ getText }: { getText: () => string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(getText()).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {})
+  }, [getText])
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy to clipboard"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '3px 8px', borderRadius: 'var(--radius-sm)',
+        background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+        color: copied ? '#4ade80' : 'var(--text-tertiary)',
+        cursor: 'pointer', fontSize: 11, fontWeight: 500,
+        transition: 'color 0.2s',
+      }}
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   )
 }
 
@@ -388,6 +536,10 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
 
   const isWide = ['edit_file', 'multi_edit_file', 'multi_file_edit', 'write_file', 'multi_file_write', 'run_command'].includes(request.toolName)
 
+  // Compute risk level and diff stats once per request
+  const riskLevel = useMemo(() => getRiskLevel(request.toolName, request.input), [request.toolName, request.input])
+  const diffStats = useMemo(() => getDiffStats(request.toolName, request.input), [request.toolName, request.input])
+
   return (
     <div style={{
       position: 'fixed', inset: 0,
@@ -418,8 +570,8 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
           </span>
         </div>
 
-        {/* Tool badge */}
-        <div style={{ padding: '12px 20px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Tool badge + risk + stats */}
+        <div style={{ padding: '12px 20px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
             padding: '4px 10px', borderRadius: 'var(--radius-md)',
@@ -429,6 +581,18 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
             <ToolIcon toolName={request.toolName} />
             {request.toolName}
           </div>
+          <RiskBadge level={riskLevel} />
+          {diffStats && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 11, fontFamily: 'var(--font-mono)',
+              color: 'var(--text-tertiary)',
+            }}>
+              <span style={{ color: '#4ade80' }}>+{diffStats.additions}</span>
+              <span style={{ color: '#f87171' }}>-{diffStats.deletions}</span>
+              {diffStats.filesChanged > 1 && <span>in {diffStats.filesChanged} files</span>}
+            </div>
+          )}
         </div>
 
         {/* Preview area */}
@@ -437,7 +601,12 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
           padding: 12, borderRadius: 'var(--radius-md)',
           background: 'var(--color-card)', border: '1px solid var(--color-border)',
           overflow: 'auto', maxHeight: 400,
+          position: 'relative',
         }}>
+          {/* Copy button — top-right of preview area */}
+          <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>
+            <CopyButton getText={() => request.input} />
+          </div>
           <ToolPreview toolName={request.toolName} input={request.input} />
         </div>
 

@@ -5,7 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/user"
+
 	"path/filepath"
 	"strings"
 	"sync"
@@ -649,18 +649,19 @@ type asyncFileSink struct {
 // resolveDebugDir returns the debug log directory.
 // Prefers ~/.ggcode/debug/ (user-private); falls back to /tmp/ggcode-debug-{uid}.
 func resolveDebugDir() string {
-	if home, err := os.UserHomeDir(); err == nil {
+	home := util.HomeDir()
+	if home != "" {
 		dir := filepath.Join(home, ".ggcode", "debug")
 		if os.MkdirAll(dir, 0o700) == nil {
 			return dir
 		}
 	}
 	// Fallback: use UID-scoped dir in /tmp
-	uid := "0"
-	if u, err := user.Current(); err == nil {
-		uid = u.Uid
+	uidNum := os.Getuid()
+	if uidNum > 0 {
+		return filepath.Join(os.TempDir(), fmt.Sprintf("ggcode-debug-%d", uidNum))
 	}
-	return filepath.Join(os.TempDir(), "ggcode-debug-"+uid)
+	return filepath.Join(os.TempDir(), "ggcode-debug-0")
 }
 
 func newAsyncFileSink(basePath, compatPath string, maxSize int64, maxFiles, buffer int) (*asyncFileSink, error) {

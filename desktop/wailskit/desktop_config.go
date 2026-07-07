@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // DesktopConfig stores window state and preferences, shared with the Fyne desktop.
@@ -20,8 +22,7 @@ type DesktopConfig struct {
 }
 
 func desktopConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ggcode", "desktop-config.json")
+	return filepath.Join(config.HomeDir(), ".ggcode", "desktop-config.json")
 }
 
 // LoadDesktopConfig reads the shared desktop config file.
