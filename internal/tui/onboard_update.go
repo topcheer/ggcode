@@ -43,11 +43,17 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if kp.String() == "up" && m.vendorCursor > 0 {
 					m.vendorCursor--
 				}
-				if kp.String() == "down" && m.vendorCursor < len(m.vendorFiltered)-1 {
+				if kp.String() == "down" && m.vendorCursor < len(m.vendorFiltered) {
 					m.vendorCursor++
 				}
 				return m, nil
 			case "enter":
+				if m.vendorCursor == len(m.vendorFiltered) {
+					m.step = onboardStepCustom
+					m.customFields[0].Focus()
+					m.vendorFilter.Blur()
+					return m, textinput.Blink
+				}
 				if len(m.vendorFiltered) == 0 {
 					return m, nil
 				}
@@ -77,10 +83,15 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vendorCursor--
 		}
 	case "down", "j":
-		if m.vendorCursor < len(m.vendorFiltered)-1 {
+		if m.vendorCursor < len(m.vendorFiltered) {
 			m.vendorCursor++
 		}
 	case "enter":
+		if m.vendorCursor == len(m.vendorFiltered) {
+			m.step = onboardStepCustom
+			m.customFields[0].Focus()
+			return m, textinput.Blink
+		}
 		if len(m.vendorFiltered) == 0 {
 			return m, nil
 		}
@@ -415,4 +426,129 @@ func (m *onboardModel) updateIM(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m *onboardModel) updateCustom(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Text input fields (cursor 1-4)
+	if m.customCursor >= 1 && m.customCursor <= 4 {
+		fieldIdx := m.customCursor - 1
+		switch kp := msg.(type) {
+		case tea.KeyPressMsg:
+			switch kp.String() {
+			case "enter":
+				m.customFields[fieldIdx].Blur()
+				if m.customCursor < 5 {
+					m.customCursor++
+				}
+				if m.customCursor == 5 {
+					return m, nil
+				}
+				if m.customCursor <= 4 {
+					m.customFields[m.customCursor-1].Focus()
+					return m, textinput.Blink
+				}
+			case "tab":
+				m.customFields[fieldIdx].Blur()
+				if m.customCursor < 5 {
+					m.customCursor++
+				}
+				if m.customCursor <= 4 {
+					m.customFields[m.customCursor-1].Focus()
+					return m, textinput.Blink
+				}
+				return m, nil
+			case "up":
+				m.customFields[fieldIdx].Blur()
+				if m.customCursor > 0 {
+					m.customCursor--
+				}
+				if m.customCursor >= 1 && m.customCursor <= 4 {
+					m.customFields[m.customCursor-1].Focus()
+					return m, textinput.Blink
+				}
+				return m, nil
+			case "down":
+				m.customFields[fieldIdx].Blur()
+				if m.customCursor < 5 {
+					m.customCursor++
+				}
+				if m.customCursor <= 4 {
+					m.customFields[m.customCursor-1].Focus()
+					return m, textinput.Blink
+				}
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		m.customFields[fieldIdx], cmd = m.customFields[fieldIdx].Update(msg)
+		return m, cmd
+	}
+
+	// Protocol selector (cursor 0)
+	if m.customCursor == 0 {
+		switch kp := msg.(type) {
+		case tea.KeyPressMsg:
+			switch kp.String() {
+			case "left":
+				if m.customProtocolIdx > 0 {
+					m.customProtocolIdx--
+				}
+			case "right":
+				if m.customProtocolIdx < len(customProtocols)-1 {
+					m.customProtocolIdx++
+				}
+			case "down", "tab", "enter":
+				m.customCursor = 1
+				m.customFields[0].Focus()
+				return m, textinput.Blink
+			}
+		}
+		return m, nil
+	}
+
+	// Submit button (cursor 5)
+	if m.customCursor == 5 {
+		switch kp := msg.(type) {
+		case tea.KeyPressMsg:
+			switch kp.String() {
+			case "enter":
+				return m, m.submitCustom()
+			case "up":
+				m.customCursor = 4
+				m.customFields[3].Focus()
+				return m, textinput.Blink
+			case "s":
+				return m, m.submitCustom()
+			}
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *onboardModel) submitCustom() tea.Cmd {
+	name := strings.TrimSpace(m.customFields[0].Value())
+	url := strings.TrimSpace(m.customFields[1].Value())
+	model := strings.TrimSpace(m.customFields[3].Value())
+	m.err = ""
+	if name == "" {
+		m.err = m.tr("custom_err_name")
+		m.customCursor = 1
+		m.customFields[0].Focus()
+		return textinput.Blink
+	}
+	if url == "" {
+		m.err = m.tr("custom_err_url")
+		m.customCursor = 2
+		m.customFields[1].Focus()
+		return textinput.Blink
+	}
+	if model == "" {
+		m.err = m.tr("custom_err_model")
+		m.customCursor = 4
+		m.customFields[3].Focus()
+		return textinput.Blink
+	}
+	m.step = onboardStepOptional
+	return nil
 }

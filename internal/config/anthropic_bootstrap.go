@@ -26,6 +26,11 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 		return false
 	}
 
+	// Allow skipping env-based auto-config entirely (e.g. for onboarding testing).
+	if os.Getenv("GGCODE_SKIP_AUTOCONFIG") != "" {
+		return false
+	}
+
 	baseURL := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL"))
 	authVar, authValue := preferredAnthropicCredential()
 	if baseURL == "" || authValue == "" {

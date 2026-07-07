@@ -712,9 +712,13 @@ func (a *dingtalkAdapter) sendMarkdownViaWebhook(ctx context.Context, webhookURL
 		}
 		if err := json.Unmarshal(respBody, &wresp); err == nil && wresp.ErrCode != 0 {
 			if dingTalkRateLimitErrcodes[wresp.ErrCode] && attempt < maxRateLimitRetries {
+				// Use dingtalkInterMsgDelay (3s) instead of defaultRetryDelay (2s) because
+				// DingTalk's limit is 20 msgs/min = 3s/msg. Retrying after 2s stays within
+				// the rate window and triggers a 10-minute ban on the 21st message.
+				// Source: https://help.dingtalk.io/open/development/call-frequency-limit
 				debug.Log("dingtalk", "adapter=%s webhook rate-limited (errcode=%d), retry %d/%d after %v",
-					a.name, wresp.ErrCode, attempt+1, maxRateLimitRetries, defaultRetryDelay)
-				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					a.name, wresp.ErrCode, attempt+1, maxRateLimitRetries, dingtalkInterMsgDelay)
+				if err := sleepRetry(ctx, dingtalkInterMsgDelay); err != nil {
 					return err
 				}
 				continue
@@ -783,8 +787,8 @@ func (a *dingtalkAdapter) sendMarkdownViaAPI(ctx context.Context, binding Channe
 		if err := json.Unmarshal(respBody, &aresp); err == nil && aresp.ErrCode != 0 {
 			if dingTalkRateLimitErrcodes[aresp.ErrCode] && attempt < maxRateLimitRetries {
 				debug.Log("dingtalk", "adapter=%s API rate-limited (errcode=%d), retry %d/%d after %v",
-					a.name, aresp.ErrCode, attempt+1, maxRateLimitRetries, defaultRetryDelay)
-				if err := sleepRetry(ctx, defaultRetryDelay); err != nil {
+					a.name, aresp.ErrCode, attempt+1, maxRateLimitRetries, dingtalkInterMsgDelay)
+				if err := sleepRetry(ctx, dingtalkInterMsgDelay); err != nil {
 					return err
 				}
 				continue

@@ -25,8 +25,6 @@ export function CycleReasoningEffort():Promise<Record<string, any>>;
 
 export function DeleteSession(arg1:string):Promise<void>;
 
-export function RenameSession(arg1:string,arg2:string):Promise<void>;
-
 export function DrainLogStream():Promise<string>;
 
 export function DrainStreamEvents():Promise<Array<main.StreamEventEnvelope>>;
@@ -130,6 +128,8 @@ export function ReconnectMCPServer(arg1:string):Promise<boolean>;
 export function RemoveIMAdapter(arg1:string):Promise<void>;
 
 export function RemoveMCPServer(arg1:string):Promise<void>;
+
+export function RenameSession(arg1:string,arg2:string):Promise<void>;
 
 export function RespondApproval(arg1:string,arg2:string):Promise<void>;
 

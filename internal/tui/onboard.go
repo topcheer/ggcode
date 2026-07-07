@@ -12,17 +12,27 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// CustomProviderConfig holds user-entered custom provider details.
+type CustomProviderConfig struct {
+	Name     string
+	Protocol string
+	BaseURL  string
+	APIKey   string
+	Model    string
+}
+
 // OnboardResult holds the user's selections from the onboard wizard.
 type OnboardResult struct {
-	Language   string
-	VendorID   string
-	EndpointID string
-	APIKey     string
-	Model      string
-	Mode       string
-	Knight     bool
-	A2A        bool
-	IMAdapters map[string]config.IMAdapterConfig
+	Language       string
+	VendorID       string
+	EndpointID     string
+	APIKey         string
+	Model          string
+	Mode           string
+	Knight         bool
+	A2A            bool
+	IMAdapters     map[string]config.IMAdapterConfig
+	CustomProvider *CustomProviderConfig
 }
 
 type onboardStep int
@@ -30,6 +40,7 @@ type onboardStep int
 const (
 	onboardStepLanguage onboardStep = iota
 	onboardStepVendor
+	onboardStepCustom
 	onboardStepEndpoint
 	onboardStepModel
 	onboardStepOptional
@@ -69,6 +80,8 @@ var modeColors = []color.Color{
 	lipgloss.Color("13"), // magenta - autopilot
 }
 
+var customProtocols = []string{"openai", "anthropic", "ollama"}
+
 type onboardModel struct {
 	cfg     *config.Config
 	presets []config.VendorPreset
@@ -107,6 +120,11 @@ type onboardModel struct {
 	imCursor  int
 	imInputs  [5]textinput.Model // 0=telegram, 1=discord, 2=qq_appid, 3=qq_secret, 4=(unused, wechat=scan)
 	imFocused int
+
+	// Custom provider
+	customProtocolIdx int
+	customFields      [4]textinput.Model // 0=name, 1=url, 2=apikey, 3=model
+	customCursor      int                // 0=protocol, 1-4=fields, 5=submit
 }
 
 func (m *onboardModel) currentLanguage() Language {
@@ -131,6 +149,11 @@ func (m *onboardModel) refreshInputPlaceholders() {
 	for i := range m.imInputs {
 		m.imInputs[i].Placeholder = placeholderWithPasteShortcutHint(imLabels[i], lang)
 	}
+	// Custom provider field placeholders
+	m.customFields[0].Placeholder = "My Provider..."
+	m.customFields[1].Placeholder = "https://api.example.com/v1"
+	m.customFields[2].Placeholder = "sk-..."
+	m.customFields[3].Placeholder = "gpt-4o"
 }
 
 // RunOnboard starts the onboard wizard as an independent Bubble Tea program.
@@ -169,6 +192,15 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		imInputs[i].EchoCharacter = '•'
 	}
 
+	// Custom provider inputs: 0=name, 1=url, 2=apikey, 3=model
+	var customFields [4]textinput.Model
+	for i := range customFields {
+		customFields[i] = textinput.New()
+		customFields[i].Prompt = "> "
+	}
+	customFields[2].EchoMode = textinput.EchoPassword
+	customFields[2].EchoCharacter = '•'
+
 	m := onboardModel{
 		cfg:            cfg,
 		presets:        presets,
@@ -179,6 +211,8 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		modelFilter:    mf,
 		imInputs:       imInputs,
 		imFocused:      -1,
+		customFields:   customFields,
+		customCursor:   0,
 	}
 	m.refreshInputPlaceholders()
 
@@ -241,6 +275,17 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 			}
 		}
 
+		// Collect custom provider if user entered one
+		if strings.TrimSpace(om.customFields[0].Value()) != "" {
+			r.CustomProvider = &CustomProviderConfig{
+				Name:     strings.TrimSpace(om.customFields[0].Value()),
+				Protocol: customProtocols[om.customProtocolIdx],
+				BaseURL:  strings.TrimSpace(om.customFields[1].Value()),
+				APIKey:   strings.TrimSpace(om.customFields[2].Value()),
+				Model:    strings.TrimSpace(om.customFields[3].Value()),
+			}
+		}
+
 		return r, nil
 	}
 	return nil, fmt.Errorf("onboard cancelled")
@@ -292,6 +337,8 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLanguage(msg)
 	case onboardStepVendor:
 		return m.updateVendor(msg)
+	case onboardStepCustom:
+		return m.updateCustom(msg)
 	case onboardStepEndpoint:
 		return m.updateEndpoint(msg)
 	case onboardStepModel:
@@ -314,6 +361,10 @@ func (m *onboardModel) restoreFocus() {
 		}
 	case onboardStepModel:
 		m.modelFilter.Focus()
+	case onboardStepCustom:
+		if m.customCursor >= 1 && m.customCursor <= 4 {
+			m.customFields[m.customCursor-1].Focus()
+		}
 	case onboardStepIM:
 		if m.imFocused >= 0 && m.imFocused < len(m.imInputs) {
 			m.imInputs[m.imFocused].Focus()

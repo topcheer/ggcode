@@ -19,6 +19,8 @@ func (m *onboardModel) View() tea.View {
 		content = m.viewLanguage()
 	case onboardStepVendor:
 		content = m.viewVendor()
+	case onboardStepCustom:
+		content = m.viewCustom()
 	case onboardStepEndpoint:
 		content = m.viewEndpoint()
 	case onboardStepModel:
@@ -84,6 +86,14 @@ func (m *onboardModel) viewVendor() string {
 	}
 	if len(m.vendorFiltered) == 0 {
 		b.WriteString("  No matching vendors.\n")
+	}
+	// Custom provider entry (always shown)
+	{
+		cursor := "  "
+		if m.vendorCursor == len(m.vendorFiltered) {
+			cursor = "> "
+		}
+		b.WriteString(fmt.Sprintf("  %s%s\n", cursor, m.tr("custom_vendor")))
 	}
 	b.WriteString("\n  " + m.tr("hint_filter"))
 	return b.String()
@@ -245,5 +255,59 @@ func (m *onboardModel) viewIMChannel(idx int, label string, hint string) string 
 	b.WriteString(fmt.Sprintf("%s%s\n", focus, label))
 	b.WriteString("  " + m.imInputs[idx].View() + "\n")
 	b.WriteString("  " + lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(hint) + "\n\n")
+	return b.String()
+}
+
+func (m *onboardModel) viewCustom() string {
+	var b strings.Builder
+	b.WriteString(m.tr("step_custom") + ":\n\n")
+
+	// Protocol selector
+	protoCursor := "  "
+	if m.customCursor == 0 {
+		protoCursor = "> "
+	}
+	protoName := customProtocols[m.customProtocolIdx]
+	b.WriteString(fmt.Sprintf("  %s%s %s ←→\n", protoCursor, m.tr("custom_protocol"), protoName))
+
+	// Name
+	nameCursor := "  "
+	if m.customCursor == 1 {
+		nameCursor = "▸ "
+	}
+	b.WriteString(fmt.Sprintf("\n  %s%s\n", nameCursor, m.tr("custom_name")))
+	b.WriteString("    " + m.customFields[0].View() + "\n")
+
+	// URL
+	urlCursor := "  "
+	if m.customCursor == 2 {
+		urlCursor = "▸ "
+	}
+	b.WriteString(fmt.Sprintf("\n  %s%s\n", urlCursor, m.tr("custom_url")))
+	b.WriteString("    " + m.customFields[1].View() + "\n")
+
+	// API Key
+	keyCursor := "  "
+	if m.customCursor == 3 {
+		keyCursor = "▸ "
+	}
+	b.WriteString(fmt.Sprintf("\n  %s%s\n", keyCursor, m.tr("custom_apikey")))
+	b.WriteString("    " + m.customFields[2].View() + "\n")
+
+	// Model
+	modelCursor := "  "
+	if m.customCursor == 4 {
+		modelCursor = "▸ "
+	}
+	b.WriteString(fmt.Sprintf("\n  %s%s\n", modelCursor, m.tr("custom_model")))
+	b.WriteString("    " + m.customFields[3].View() + "\n")
+
+	// Submit
+	submitCursor := "  "
+	if m.customCursor == 5 {
+		submitCursor = "> "
+	}
+	b.WriteString(fmt.Sprintf("\n  %s%s\n", submitCursor, m.tr("custom_submit")))
+	b.WriteString("\n  " + lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.tr("custom_hint")))
 	return b.String()
 }

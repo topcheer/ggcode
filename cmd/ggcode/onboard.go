@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -20,25 +21,55 @@ func runOnboardAndRestart(cfg *config.Config) error {
 	// Apply language.
 	cfg.Language = result.Language
 
-	// Apply vendor and endpoint selection.
-	cfg.Vendor = result.VendorID
-	cfg.Endpoint = result.EndpointID
+	// Handle custom provider — create vendor + endpoint dynamically.
+	if result.CustomProvider != nil {
+		cp := result.CustomProvider
+		// Sanitize vendor ID from display name.
+		vendorID := sanitizeVendorID(cp.Name)
+		endpointID := "default"
 
-	// Apply API key: set at vendor level.
-	if result.APIKey != "" {
-		vc, ok := cfg.Vendors[result.VendorID]
-		if ok {
-			vc.APIKey = result.APIKey
-			cfg.Vendors[result.VendorID] = vc
+		// Create vendor if not exists.
+		if err := cfg.AddVendor(vendorID, cp.Name, cp.APIKey); err != nil {
+			// Vendor may already exist from a previous onboard; that's fine.
 		}
-	}
+		// Create endpoint.
+		if err := cfg.AddEndpoint(vendorID, endpointID, cp.Protocol, cp.BaseURL, cp.APIKey); err != nil {
+			return fmt.Errorf("creating custom endpoint: %w", err)
+		}
+		// Set default model on the endpoint.
+		if vc, ok := cfg.Vendors[vendorID]; ok {
+			if ep, ok := vc.Endpoints[endpointID]; ok {
+				ep.DefaultModel = cp.Model
+				ep.SelectedModel = cp.Model
+				vc.Endpoints[endpointID] = ep
+				cfg.Vendors[vendorID] = vc
+			}
+		}
 
-	// Apply model.
-	cfg.Model = result.Model
-	ep, ok := cfg.Vendors[result.VendorID].Endpoints[result.EndpointID]
-	if ok {
-		ep.SelectedModel = result.Model
-		cfg.Vendors[result.VendorID].Endpoints[result.EndpointID] = ep
+		cfg.Vendor = vendorID
+		cfg.Endpoint = endpointID
+		cfg.Model = cp.Model
+	} else {
+		// Apply vendor and endpoint selection.
+		cfg.Vendor = result.VendorID
+		cfg.Endpoint = result.EndpointID
+
+		// Apply API key: set at vendor level.
+		if result.APIKey != "" {
+			vc, ok := cfg.Vendors[result.VendorID]
+			if ok {
+				vc.APIKey = result.APIKey
+				cfg.Vendors[result.VendorID] = vc
+			}
+		}
+
+		// Apply model.
+		cfg.Model = result.Model
+		ep, ok := cfg.Vendors[result.VendorID].Endpoints[result.EndpointID]
+		if ok {
+			ep.SelectedModel = result.Model
+			cfg.Vendors[result.VendorID].Endpoints[result.EndpointID] = ep
+		}
 	}
 
 	// Apply optional settings — only set when user explicitly opted in.
@@ -79,4 +110,23 @@ func runOnboardAndRestart(cfg *config.Config) error {
 	}
 	args := os.Args[1:]
 	return syscall.Exec(executable, append([]string{executable}, args...), os.Environ())
+}
+
+// sanitizeVendorID creates a YAML-safe vendor ID from a display name.
+func sanitizeVendorID(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = strings.ReplaceAll(s, " ", "-")
+	s = strings.ReplaceAll(s, "_", "-")
+	// Remove any char that's not lowercase letter, digit, or hyphen.
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	result := b.String()
+	if result == "" {
+		result = "custom"
+	}
+	return result
 }

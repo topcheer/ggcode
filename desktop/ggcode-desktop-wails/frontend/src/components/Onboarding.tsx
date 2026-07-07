@@ -27,6 +27,9 @@ interface EndpointPreset {
   defaultEndpoint: boolean
 }
 
+const CUSTOM_ID = '__custom__'
+const CUSTOM_PROTOCOLS = ['openai', 'anthropic', 'ollama']
+
 export function Onboarding({ onComplete }: Props) {
   const { t } = useTranslation()
   const [step, setStep] = useState<'workspace' | 'setup' | 'mode'>('workspace')
@@ -41,6 +44,15 @@ export function Onboarding({ onComplete }: Props) {
   const [selectedMode, setSelectedMode] = useState('supervised')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // Custom provider state
+  const [customName, setCustomName] = useState('')
+  const [customProtocol, setCustomProtocol] = useState('openai')
+  const [customBaseURL, setCustomBaseURL] = useState('')
+  const [customModels, setCustomModels] = useState<string[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
+
+  const isCustom = selectedVendor === CUSTOM_ID
 
   const currentPreset = presets.find(p => p.id === selectedVendor)
   const currentEndpoint = currentPreset?.endpoints.find(e => e.id === selectedEndpoint)
@@ -69,15 +81,48 @@ export function Onboarding({ onComplete }: Props) {
     } catch {}
   }
 
-  const handleSubmit = async () => {
-    if (!selectedVendor || !selectedEndpoint || !apiKey || !selectedModel) {
-      setError('Please fill in all fields')
-      return
+  const sanitizeVendorID = (name: string): string =>
+    name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'custom'
+
+  const handleFetchModels = async () => {
+    if (!customBaseURL.trim() || !apiKey.trim()) return
+    setFetchingModels(true)
+    setError('')
+    try {
+      const models = await App.FetchModels(sanitizeVendorID(customName), 'default', apiKey, customBaseURL)
+      setCustomModels((models as string[]) || [])
+      if (!models || models.length === 0) {
+        setError('No models found. Enter a model name manually.')
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Failed to fetch models. You can enter the model name manually.')
+    } finally {
+      setFetchingModels(false)
     }
+  }
+
+  const handleSubmit = async () => {
     setSaving(true)
     setError('')
     try {
-      await App.CompleteOnboard(selectedVendor, selectedEndpoint, selectedModel, apiKey)
+      if (isCustom) {
+        const vendorID = sanitizeVendorID(customName)
+        const model = selectedModel || customModels[0] || ''
+        if (!customName.trim() || !customBaseURL.trim() || !apiKey.trim() || !model) {
+          setError('Please fill in all custom provider fields')
+          setSaving(false)
+          return
+        }
+        await App.AddCustomEndpoint(vendorID, 'default', customProtocol, customBaseURL, apiKey)
+        await App.CompleteOnboard(vendorID, 'default', model, apiKey)
+      } else {
+        if (!selectedVendor || !selectedEndpoint || !apiKey || !selectedModel) {
+          setError('Please fill in all fields')
+          setSaving(false)
+          return
+        }
+        await App.CompleteOnboard(selectedVendor, selectedEndpoint, selectedModel, apiKey)
+      }
       // Save permission mode
       try { await App.SaveDefaultMode(selectedMode) } catch {}
       onComplete()
@@ -170,7 +215,10 @@ export function Onboarding({ onComplete }: Props) {
     )
   }
 
-  // ─── Step 2: Setup (Vendor/Endpoint/API Key/Model) ───
+  const canProceed = isCustom
+    ? !!customName.trim() && !!customBaseURL.trim() && !!apiKey.trim() && (!!selectedModel.trim() || customModels.length > 0)
+    : !!selectedVendor && !!selectedEndpoint && !!apiKey && !!selectedModel
+
   return (
     <div style={{
       flex: 1, display: 'flex', flexDirection: 'column',
@@ -195,64 +243,143 @@ export function Onboarding({ onComplete }: Props) {
             setSelectedVendor(e.target.value)
             setSelectedEndpoint('')
             setSelectedModel('')
+            setApiKey('')
+            setCustomModels([])
           }} style={selectStyle}>
             <option value="">Choose vendor...</option>
             {presets.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
+            <option value={CUSTOM_ID} style={{ fontWeight: 600 }}>+ Custom Provider</option>
           </select>
         </label>
 
-        {/* Endpoint */}
-        {currentPreset && (
-          <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.endpoint')}</span>
-            <select value={selectedEndpoint} onChange={e => {
-              setSelectedEndpoint(e.target.value)
-              setSelectedModel('')
-            }} style={selectStyle}>
-              <option value="">Choose endpoint...</option>
-              {currentPreset.endpoints.map(ep => (
-                <option key={ep.id} value={ep.id}>{ep.displayName || ep.id}</option>
-              ))}
-            </select>
-          </label>
-        )}
+        {isCustom ? (
+          <>
+            {/* Custom Provider Name */}
+            <label style={{ display: 'block', marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Provider Name</span>
+              <input
+                value={customName}
+                onChange={e => setCustomName(e.target.value)}
+                placeholder="My Provider..."
+                style={inputStyle}
+              />
+            </label>
 
-        {/* API Key */}
-        {selectedEndpoint && (
-          <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              placeholder={t('settings.apiKeyPlaceholder')}
-              style={inputStyle}
-            />
-          </label>
-        )}
+            {/* Protocol */}
+            <label style={{ display: 'block', marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Protocol</span>
+              <select value={customProtocol} onChange={e => setCustomProtocol(e.target.value)} style={selectStyle}>
+                {CUSTOM_PROTOCOLS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
 
-        {/* Model */}
-        {showModels && (
-          <label style={{ display: 'block', marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.model')}</span>
-            <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
-              <option value="">Choose model...</option>
-              {models.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </label>
+            {/* Base URL */}
+            <label style={{ display: 'block', marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Base URL</span>
+              <input
+                value={customBaseURL}
+                onChange={e => setCustomBaseURL(e.target.value)}
+                placeholder="https://api.example.com/v1"
+                style={inputStyle}
+              />
+            </label>
+
+            {/* API Key */}
+            <label style={{ display: 'block', marginBottom: 16 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                placeholder={t('settings.apiKeyPlaceholder')}
+                style={inputStyle}
+              />
+            </label>
+
+            {/* Fetch Models button + Model */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <button
+                onClick={handleFetchModels}
+                disabled={fetchingModels || !customBaseURL.trim() || !apiKey.trim()}
+                style={{
+                  padding: '0 12px', height: 36, borderRadius: 'var(--radius-md)',
+                  background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                  color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer',
+                  whiteSpace: 'nowrap', flexShrink: 0,
+                }}
+              >{fetchingModels ? 'Fetching...' : 'Fetch Models'}</button>
+              <div style={{ flex: 1 }}>
+                {customModels.length > 0 ? (
+                  <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
+                    <option value="">Choose model...</option>
+                    {customModels.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    value={selectedModel}
+                    onChange={e => setSelectedModel(e.target.value)}
+                    placeholder="gpt-4o (enter manually or fetch)"
+                    style={inputStyle}
+                  />
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Endpoint */}
+            {currentPreset && (
+              <label style={{ display: 'block', marginBottom: 16 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.endpoint')}</span>
+                <select value={selectedEndpoint} onChange={e => {
+                  setSelectedEndpoint(e.target.value)
+                  setSelectedModel('')
+                }} style={selectStyle}>
+                  <option value="">Choose endpoint...</option>
+                  {currentPreset.endpoints.map(ep => (
+                    <option key={ep.id} value={ep.id}>{ep.displayName || ep.id}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {/* API Key */}
+            {selectedEndpoint && (
+              <label style={{ display: 'block', marginBottom: 16 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.apiKey')}</span>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={e => setApiKey(e.target.value)}
+                  placeholder={t('settings.apiKeyPlaceholder')}
+                  style={inputStyle}
+                />
+              </label>
+            )}
+
+            {/* Model */}
+            {showModels && (
+              <label style={{ display: 'block', marginBottom: 16 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.model')}</span>
+                <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
+                  <option value="">Choose model...</option>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </label>
+            )}
+          </>
         )}
 
         {error && (
           <div style={{ color: 'var(--color-error)', fontSize: 12, marginBottom: 12 }}>{error}</div>
         )}
 
-        {/* Submit → go to mode selection */}
         <button
           onClick={() => setStep('mode')}
-          disabled={saving || !selectedVendor || !selectedEndpoint || !apiKey || !selectedModel}
+          disabled={saving || !canProceed}
           style={{
             width: '100%', padding: '10px 0', borderRadius: 'var(--radius-md)',
-            background: (saving || !selectedVendor || !selectedEndpoint || !apiKey || !selectedModel)
+            background: (saving || !canProceed)
               ? 'var(--color-surface)' : 'var(--color-primary)',
             color: '#fff', border: 'none', cursor: 'pointer',
             fontSize: 14, fontWeight: 500,
