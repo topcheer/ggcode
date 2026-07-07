@@ -6,6 +6,10 @@ export function AddCustomEndpoint(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['AddCustomEndpoint'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function CompleteAnthropicOAuth() {
+  return window['go']['main']['App']['CompleteAnthropicOAuth']();
+}
+
 export function AddMCPServer(arg1) {
   return window['go']['main']['App']['AddMCPServer'](arg1);
 }
@@ -76,6 +80,10 @@ export function GetEndpointDetails(arg1, arg2) {
 
 export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
+}
+
+export function LogoutAnthropicOAuth() {
+  return window['go']['main']['App']['LogoutAnthropicOAuth']();
 }
 
 export function GetIMPlatformRegistry() {
@@ -296,6 +304,14 @@ export function SetIMAdapterEnabled(arg1, arg2) {
 
 export function SetMCPServerEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
+}
+
+export function SetEndpointLimits(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetEndpointLimits'](arg1, arg2, arg3, arg4);
+}
+
+export function StartAnthropicOAuth() {
+  return window['go']['main']['App']['StartAnthropicOAuth']();
 }
 
 export function SetPermissionMode(arg1) {

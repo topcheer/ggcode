@@ -795,6 +795,40 @@ func (a *App) AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) 
 	return wailskit.AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey)
 }
 
+// SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
+// A value of 0 means "auto" (clears the override).
+func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
+	return wailskit.SetEndpointLimits(vendor, endpoint, contextWindow, maxTokens)
+}
+
+// GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
+func (a *App) GetAnthropicOAuthStatus() bool {
+	return wailskit.AnthropicOAuthStatus()
+}
+
+// StartAnthropicOAuth initiates the OAuth flow, opens the browser, and returns the URL.
+func (a *App) StartAnthropicOAuth() (string, error) {
+	url, err := wailskit.StartAnthropicOAuth()
+	if err != nil {
+		return "", err
+	}
+	if a.ctx != nil && url != "" {
+		runtime.BrowserOpenURL(a.ctx, url)
+	}
+	return url, nil
+}
+
+// CompleteAnthropicOAuth blocks until the OAuth callback is received and saves the token.
+// Should be called from a goroutine after StartAnthropicOAuth.
+func (a *App) CompleteAnthropicOAuth() error {
+	return wailskit.CompleteAnthropicOAuth()
+}
+
+// LogoutAnthropicOAuth removes the stored Anthropic OAuth token.
+func (a *App) LogoutAnthropicOAuth() error {
+	return wailskit.LogoutAnthropicOAuth()
+}
+
 // ─── Sessions ─────────────────────────────────────────────
 
 // ListSessions returns sessions for the current workspace.

@@ -17,6 +17,8 @@ export function CancelMessage():Promise<void>;
 
 export function CheckForUpdates():Promise<Record<string, any>>;
 
+export function CompleteAnthropicOAuth():Promise<void>;
+
 export function CompleteMCPOAuth(arg1:string):Promise<void>;
 
 export function CompleteOnboard(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
@@ -33,6 +35,8 @@ export function FetchModels(arg1:string,arg2:string,arg3:string,arg4:string):Pro
 
 export function ForceReauthMCPServer(arg1:string):Promise<boolean>;
 
+export function GetAnthropicOAuthStatus():Promise<boolean>;
+
 export function GetAvailableModels():Promise<Array<string>>;
 
 export function GetConfig():Promise<wailskit.FullConfig>;
@@ -42,6 +46,8 @@ export function GetCurrentSessionID():Promise<string>;
 export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.EndpointDetails>;
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
+
+export function LogoutAnthropicOAuth():Promise<void>;
 
 export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
 
@@ -151,6 +157,8 @@ export function SendMessageWithImages(arg1:string,arg2:Array<main.PastedImage>):
 
 export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
+export function SetEndpointLimits(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
+
 export function SetMCPServerEnabled(arg1:string,arg2:boolean):Promise<boolean>;
 
 export function SetPermissionMode(arg1:string):Promise<void>;
@@ -160,6 +168,8 @@ export function StartMCPOAuth(arg1:string):Promise<wailskit.MCPOAuthStartResult>
 export function StartShare():Promise<main.ShareInfo>;
 
 export function StopShare():Promise<void>;
+
+export function StartAnthropicOAuth():Promise<string>;
 
 export function SwitchModel(arg1:string):Promise<void>;
 

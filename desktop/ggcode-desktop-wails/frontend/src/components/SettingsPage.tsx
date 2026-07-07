@@ -51,6 +51,14 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  // Endpoint limits
+  const [contextWindow, setContextWindow] = useState('')
+  const [maxTokens, setMaxTokens] = useState('')
+
+  // Anthropic OAuth
+  const [oauthConnected, setOauthConnected] = useState(false)
+  const [oauthBusy, setOauthBusy] = useState(false)
+
   // Impersonation state
   const [presets, setPresets] = useState<ImpersonationPreset[]>([])
   const [selectedPreset, setSelectedPreset] = useState('none')
@@ -152,12 +160,24 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setResolvedProtocol(details.protocol || '')
         setApiKeySet(details.apiKeySet || false)
         setApiKeyMasked(details.apiKeyMasked || '')
+        setContextWindow(details.contextWindow ? String(details.contextWindow) : '')
+        setMaxTokens(details.maxTokens ? String(details.maxTokens) : '')
         if (details.models && details.models.length > 0) {
           setModels(details.models)
         }
       }
     } catch (e: any) {
       showToast?.('error', `Failed to load endpoint details: ${e?.message || e}`)
+    }
+
+    // Load OAuth status if this is an Anthropic OAuth endpoint
+    if (currentVendor === 'anthropic' && endpoint === 'oauth') {
+      try {
+        const connected = await App.GetAnthropicOAuthStatus() as any
+        setOauthConnected(!!connected)
+      } catch { setOauthConnected(false) }
+    } else {
+      setOauthConnected(false)
     }
 
     // Also load static models as fallback
@@ -222,7 +242,54 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     } finally {
       setSaving(false)
     }
-  }, [currentVendor, currentEndpoint, currentModel, apiKey, language, defaultMode, resolvedBaseURL, setLocale, showToast])
+  }, [currentVendor, currentEndpoint, apiKey, language, defaultMode, resolvedBaseURL, contextWindow, maxTokens, setLocale, showToast])
+
+  // Save endpoint limits
+  const saveEndpointLimits = useCallback(async () => {
+    if (!currentVendor || !currentEndpoint) return
+    const cw = contextWindow ? parseInt(contextWindow, 10) : 0
+    const mt = maxTokens ? parseInt(maxTokens, 10) : 0
+    if (Number.isNaN(cw) || Number.isNaN(mt)) {
+      showToast?.('error', 'Context window and max tokens must be numbers')
+      return
+    }
+    try {
+      await App.SetEndpointLimits(currentVendor, currentEndpoint, cw, mt)
+      showToast?.('success', 'Endpoint limits saved')
+      EventsEmit('config:updated')
+    } catch (e: any) {
+      showToast?.('error', `Failed to save limits: ${e?.message || e}`)
+    }
+  }, [currentVendor, currentEndpoint, contextWindow, maxTokens, showToast])
+
+  // Anthropic OAuth login
+  const handleOAuthLogin = useCallback(async () => {
+    setOauthBusy(true)
+    try {
+      await App.StartAnthropicOAuth()
+      // Now wait for the callback in background
+      await App.CompleteAnthropicOAuth()
+      setOauthConnected(true)
+      showToast?.('success', 'Anthropic OAuth login successful')
+      EventsEmit('config:updated')
+    } catch (e: any) {
+      showToast?.('error', `OAuth login failed: ${e?.message || e}`)
+    } finally {
+      setOauthBusy(false)
+    }
+  }, [showToast])
+
+  // Anthropic OAuth logout
+  const handleOAuthLogout = useCallback(async () => {
+    try {
+      await App.LogoutAnthropicOAuth()
+      setOauthConnected(false)
+      showToast?.('success', 'Anthropic OAuth logged out')
+      EventsEmit('config:updated')
+    } catch (e: any) {
+      showToast?.('error', `OAuth logout failed: ${e?.message || e}`)
+    }
+  }, [showToast])
 
   const applyImpersonation = useCallback(async () => {
     setSaving(true)
@@ -348,6 +415,67 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                   </button>
                 </div>
               </div>
+            </FieldRow>
+
+            {/* Anthropic OAuth: login/logout when vendor=anthropic and endpoint=oauth */}
+            {currentVendor === 'anthropic' && currentEndpoint === 'oauth' && (
+              <FieldRow label="Anthropic OAuth">
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{
+                    fontSize: 12,
+                    color: oauthConnected ? 'var(--color-success)' : 'var(--text-tertiary)',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 4,
+                      background: oauthConnected ? 'var(--color-success)' : 'var(--text-tertiary)',
+                      display: 'inline-block',
+                    }} />
+                    {oauthConnected ? 'Connected' : 'Not connected'}
+                  </span>
+                  {!oauthConnected ? (
+                    <button onClick={handleOAuthLogin} disabled={oauthBusy}
+                      style={{ ...primaryBtnStyle, padding: '4px 12px', fontSize: 12 }}>
+                      {oauthBusy ? 'Logging in...' : 'Login'}
+                    </button>
+                  ) : (
+                    <button onClick={handleOAuthLogout}
+                      style={{ ...iconBtnStyle, padding: '4px 12px', fontSize: 12, color: 'var(--color-danger)' }}>
+                      Logout
+                    </button>
+                  )}
+                </div>
+              </FieldRow>
+            )}
+
+            {/* Context Window & Max Tokens */}
+            <FieldRow label="Context Window & Max Tokens">
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="number"
+                  value={contextWindow}
+                  onChange={e => setContextWindow(e.target.value)}
+                  placeholder="auto"
+                  style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>tokens</span>
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '0 4px' }}>/</span>
+                <input
+                  type="number"
+                  value={maxTokens}
+                  onChange={e => setMaxTokens(e.target.value)}
+                  placeholder="auto"
+                  style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                />
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>max out</span>
+                <button onClick={saveEndpointLimits} disabled={!currentVendor || !currentEndpoint}
+                  title="Save limits" style={iconBtnStyle}>
+                  <Check size={14} />
+                </button>
+              </div>
+              <span style={{ display: 'block', marginTop: 4, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                Set to 0 or leave empty for auto-detection from model specs.
+              </span>
             </FieldRow>
 
             {/* Model selection with refresh */}
@@ -793,7 +921,8 @@ function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
         <select value={protocol} onChange={e => setProtocol(e.target.value)} style={selectStyle}>
           <option value="openai">OpenAI</option>
           <option value="anthropic">Anthropic</option>
-          <option value="google">Google</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="copilot">GitHub Copilot</option>
         </select>
       </FieldRow>
       <FieldRow label="Base URL">

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -703,6 +704,8 @@ type EndpointDetails struct {
 	DefaultModel   string   `json:"defaultModel"`
 	Models         []string `json:"models"`
 	ContextWindow  int      `json:"contextWindow"`
+	MaxTokens      int      `json:"maxTokens"`
+	AuthType       string   `json:"authType"`
 	SupportsVision bool     `json:"supportsVision"`
 }
 
@@ -735,6 +738,110 @@ func GetEndpointDetails(vendor, endpoint string) *EndpointDetails {
 		DefaultModel:   ep.DefaultModel,
 		Models:         ep.Models,
 		ContextWindow:  ep.ContextWindow,
+		MaxTokens:      ep.MaxTokens,
+		AuthType:       ep.AuthType,
 		SupportsVision: ep.SupportsVision != nil && *ep.SupportsVision,
 	}
 }
+
+// SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
+// A value of 0 means "auto" (clears the override).
+func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if globalCfg == nil {
+		return fmt.Errorf("config not initialized")
+	}
+	vc, ok := globalCfg.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q not found", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
+	}
+	ep.ContextWindow = contextWindow
+	ep.MaxTokens = maxTokens
+	vc.Endpoints[endpoint] = ep
+	globalCfg.Vendors[vendor] = vc
+	return globalCfg.Save()
+}
+
+// AnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
+func AnthropicOAuthStatus() bool {
+	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
+	if err != nil || info == nil {
+		return false
+	}
+	return info.AccessToken != ""
+}
+
+// StartAnthropicOAuth initiates the OAuth flow and returns the URL for the user to visit.
+func StartAnthropicOAuth() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	flow, err := auth.StartClaudeOAuthFlow(ctx)
+	if err != nil {
+		return "", fmt.Errorf("starting OAuth flow: %w", err)
+	}
+	// Store flow for completion
+	oauthMu.Lock()
+	currentOAuthFlow = flow
+	oauthMu.Unlock()
+	return flow.AutoURL, nil
+}
+
+// CompleteAnthropicOAuth blocks until the OAuth callback is received and the token is saved.
+// Should be called from a goroutine after the browser is opened.
+func CompleteAnthropicOAuth() error {
+	oauthMu.Lock()
+	flow := currentOAuthFlow
+	oauthMu.Unlock()
+	if flow == nil {
+		return fmt.Errorf("no OAuth flow in progress")
+	}
+	defer func() {
+		oauthMu.Lock()
+		flow.Close()
+		currentOAuthFlow = nil
+		oauthMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	code, isAutomatic, err := auth.WaitForClaudeAuthCode(ctx, flow)
+	if err != nil {
+		return fmt.Errorf("waiting for auth code: %w", err)
+	}
+	_ = isAutomatic
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel2()
+	tokenResp, err := auth.ExchangeClaudeCodeForTokens(ctx2, code, flow.CodeVerifier, !isAutomatic, flow.Port)
+	if err != nil {
+		return fmt.Errorf("exchanging token: %w", err)
+	}
+
+	expiresIn := tokenResp.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+	info := &auth.Info{
+		ProviderID:   auth.ProviderAnthropic,
+		Type:         "oauth",
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
+	}
+	return auth.DefaultStore().Save(info)
+}
+
+// LogoutAnthropicOAuth removes the stored Anthropic OAuth token.
+func LogoutAnthropicOAuth() error {
+	return auth.DefaultStore().Delete(auth.ProviderAnthropic)
+}
+
+var (
+	oauthMu          sync.Mutex
+	currentOAuthFlow *auth.ClaudeOAuthFlow
+)
