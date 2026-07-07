@@ -41,8 +41,8 @@ var (
 	mdItalicRe = regexp.MustCompile(`(?m)\b_([^_]+)_\b`)
 	// Strikethrough: ~~text~~ → text
 	mdStrikeRe = regexp.MustCompile(`~~(.+?)~~`)
-	// Images: ![alt](url) → (remove)
-	mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`)
+	// Images: ![alt](url) → url (preserve URL so text-only platforms show the link)
+	mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	// Links: [text](url) → text (url)
 	mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	// GFM task lists: - [ ] item → ○ item, - [x] item → ✓ item
@@ -129,8 +129,8 @@ func stripMarkdown(text string) string {
 	// 5. Strikethrough: ~~text~~ → text (before italic)
 	text = mdStrikeRe.ReplaceAllString(text, "$1")
 
-	// 6. Images: ![alt](url) → remove entirely
-	text = mdImageRe.ReplaceAllString(text, "")
+	// 6. Images: ![alt](url) → url (preserve URL so text-only platforms show the link)
+	text = mdImageRe.ReplaceAllString(text, "$2")
 
 	// 7. Links: [text](url) → text (url)
 	text = mdLinkRe.ReplaceAllString(text, "$1 ($2)")

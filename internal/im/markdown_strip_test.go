@@ -96,7 +96,7 @@ func TestStripMarkdown_Links(t *testing.T) {
 
 func TestStripMarkdown_Images(t *testing.T) {
 	got := stripMarkdown("Before ![logo](https://example.com/logo.png) After")
-	want := "Before  After"
+	want := "Before https://example.com/logo.png After"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
