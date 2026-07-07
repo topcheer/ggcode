@@ -856,10 +856,11 @@ func markdownToMrkdwn(text string) string {
 		}
 		return strings.Join(result, "\n")
 	})
-	// Escape HTML entities
-	text = strings.ReplaceAll(text, "&", "&amp;")
-	text = strings.ReplaceAll(text, "<", "&lt;")
-	text = strings.ReplaceAll(text, ">", "&gt;")
+	// NOTE: Slack mrkdwn does NOT decode HTML entities (&amp;, &lt;, &gt;).
+	// Escaping them causes literal display (e.g., code blocks show &lt;div&gt;
+	// instead of <div>). The < character is only special in Slack when part of
+	// recognized patterns like <@U12345> or <http://url|text>, so standalone
+	// < and > characters are safe to leave unescaped.
 	// Convert **bold** to *bold* using a placeholder to avoid collision
 	// with the *italic* → _italic_ conversion below.
 	// Without the placeholder, step 1 would produce *bold* and step 2 would

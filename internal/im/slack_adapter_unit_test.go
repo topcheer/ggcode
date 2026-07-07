@@ -39,8 +39,10 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		{"*italic*", "_italic_"},
 		{"~~strike~~", "~strike~"},
 		{"**bold** and *italic*", "*bold* and _italic_"},
-		{"<script>", "&lt;script&gt;"},
-		{"a & b", "a &amp; b"},
+		// HTML entities are NOT escaped — Slack mrkdwn doesn't decode them.
+		// Escaping would cause literal &lt; display instead of <.
+		{"<script>", "<script>"},
+		{"a & b", "a & b"},
 		{"plain text", "plain text"},
 		// Link conversion: [text](url) → <url|text>
 		{"[docs](https://example.com)", "<https://example.com|docs>"},
