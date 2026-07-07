@@ -85,6 +85,43 @@ func TestParseRetryAfter_CapsAtMax(t *testing.T) {
 	}
 }
 
+func TestParseRetryAfter_FloatSeconds(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Retry-After", "0.5")
+	d := parseRetryAfter(resp)
+	if d != 500*time.Millisecond {
+		t.Fatalf("expected 500ms, got %v", d)
+	}
+}
+
+func TestParseRetryAfter_FloatSecondsLarge(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("Retry-After", "5.75")
+	d := parseRetryAfter(resp)
+	expected := 5*time.Second + 750*time.Millisecond
+	if d != expected {
+		t.Fatalf("expected %v, got %v", expected, d)
+	}
+}
+
+func TestParseRetryAfter_DiscordXRateLimitResetAfter(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("X-RateLimit-Reset-After", "2.5")
+	d := parseRetryAfter(resp)
+	if d != 2500*time.Millisecond {
+		t.Fatalf("expected 2500ms, got %v", d)
+	}
+}
+
+func TestParseRetryAfter_FeishuFloatReset(t *testing.T) {
+	resp := &http.Response{Header: http.Header{}}
+	resp.Header.Set("x-ogw-ratelimit-reset", "1.5")
+	d := parseRetryAfter(resp)
+	if d != 1500*time.Millisecond {
+		t.Fatalf("expected 1500ms, got %v", d)
+	}
+}
+
 // --- capDuration unit tests ---
 
 func TestCapDuration_NegativeReturnsDefault(t *testing.T) {

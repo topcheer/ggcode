@@ -37,9 +37,14 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 
 	// Standard Retry-After header (seconds or HTTP-date).
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		ra = strings.TrimSpace(ra)
 		// Try integer seconds first.
-		if secs, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && secs >= 0 {
+		if secs, err := strconv.Atoi(ra); err == nil && secs >= 0 {
 			return capDuration(time.Duration(secs) * time.Second)
+		}
+		// Try float seconds (e.g. Discord sends "0.5"; some APIs use fractional values).
+		if fsecs, err := strconv.ParseFloat(ra, 64); err == nil && fsecs >= 0 {
+			return capDuration(time.Duration(fsecs * float64(time.Second)))
 		}
 		// Try HTTP-date format.
 		if t, err := http.ParseTime(ra); err == nil {
@@ -61,11 +66,19 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 		}
 	}
 
-	// Feishu uses x-ogw-ratelimit-reset (seconds until reset).
+	// Discord uses X-RateLimit-Reset-After (seconds until reset, can be fractional).
+	// https://discord.com/developers/docs/topics/rate-limits
+	if resetAfter := resp.Header.Get("X-RateLimit-Reset-After"); resetAfter != "" {
+		if fsecs, err := strconv.ParseFloat(strings.TrimSpace(resetAfter), 64); err == nil && fsecs >= 0 {
+			return capDuration(time.Duration(fsecs * float64(time.Second)))
+		}
+	}
+
+	// Feishu uses x-ogw-ratelimit-reset (seconds until reset, may be fractional).
 	// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
 	if reset := resp.Header.Get("x-ogw-ratelimit-reset"); reset != "" {
-		if secs, err := strconv.Atoi(strings.TrimSpace(reset)); err == nil && secs >= 0 {
-			return capDuration(time.Duration(secs) * time.Second)
+		if fsecs, err := strconv.ParseFloat(strings.TrimSpace(reset), 64); err == nil && fsecs >= 0 {
+			return capDuration(time.Duration(fsecs * float64(time.Second)))
 		}
 	}
 
