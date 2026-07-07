@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -12,14 +13,15 @@ import (
 )
 
 type SessionSummary struct {
-	ID        string
-	Title     string
-	Workspace string
-	Vendor    string
-	Endpoint  string
-	Model     string
-	MsgCount  int
-	UpdatedAt time.Time
+	ID          string
+	Title       string
+	Workspace   string
+	Vendor      string
+	Endpoint    string
+	Model       string
+	MsgCount    int
+	UpdatedAt   time.Time
+	LastMessage string
 }
 
 func WorkspaceMatches(sessionWorkspace, workingDir string) bool {
@@ -54,19 +56,51 @@ func FilterWorkspaceSessions(sessions []*session.Session, workingDir string) []*
 	return filtered
 }
 
+// lastMessagePreview extracts a short preview of the last text message.
+// It scans messages backward, skipping system messages and tool blocks,
+// and returns the first non-empty text content truncated to ~80 chars.
+func lastMessagePreview(msgs []provider.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role == "system" {
+			continue
+		}
+		for _, block := range m.Content {
+			if block.Type == "text" {
+				text := strings.TrimSpace(block.Text)
+				if text == "" {
+					continue
+				}
+				// Take first line only
+				if idx := strings.IndexByte(text, '\n'); idx > 0 {
+					text = text[:idx]
+				}
+				text = strings.TrimSpace(text)
+				if len([]rune(text)) > 80 {
+					runes := []rune(text)
+					text = string(runes[:77]) + "..."
+				}
+				return text
+			}
+		}
+	}
+	return ""
+}
+
 func SummarizeSession(ses *session.Session) SessionSummary {
 	if ses == nil {
 		return SessionSummary{}
 	}
 	return SessionSummary{
-		ID:        ses.ID,
-		Title:     ses.Title,
-		Workspace: ses.Workspace,
-		Vendor:    ses.Vendor,
-		Endpoint:  ses.Endpoint,
-		Model:     ses.Model,
-		MsgCount:  len(ses.Messages),
-		UpdatedAt: ses.UpdatedAt,
+		ID:          ses.ID,
+		Title:       ses.Title,
+		Workspace:   ses.Workspace,
+		Vendor:      ses.Vendor,
+		Endpoint:    ses.Endpoint,
+		Model:       ses.Model,
+		MsgCount:    len(ses.Messages),
+		UpdatedAt:   ses.UpdatedAt,
+		LastMessage: lastMessagePreview(ses.Messages),
 	}
 }
 

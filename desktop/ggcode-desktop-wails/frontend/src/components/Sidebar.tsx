@@ -23,6 +23,7 @@ interface SessionItem {
   model: string
   msgCount: number
   locked: boolean
+  lastMessage?: string
 }
 
 function relativeTime(dateStr: string, t: (key: any, params?: Record<string, string | number>) => string): string {
@@ -85,6 +86,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           model: s.Model || s.model || '',
           msgCount: s.MsgCount || s.msgCount || 0,
           locked: s.Locked || s.locked || false,
+          lastMessage: s.LastMessage || s.lastMessage || '',
         })))
       } catch (e) {
         showToast?.('error', `Failed to load sessions: ${e instanceof Error ? e.message : String(e)}`)
@@ -145,6 +147,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         model: s.Model || s.model || '',
         msgCount: s.MsgCount || s.msgCount || 0,
         locked: s.Locked || s.locked || false,
+        lastMessage: s.LastMessage || s.lastMessage || '',
       })))
       onSessionSelect?.(id || '')
     } catch (e) {
@@ -474,6 +477,19 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                     <Trash2 size={12} />
                   </button>
                 </div>
+                {s.lastMessage && (
+                  <div style={{
+                    fontSize: 11,
+                    color: 'var(--text-tertiary)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    marginTop: 1,
+                    lineHeight: 1.3,
+                  }}>
+                    {s.lastMessage}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
                     {relativeTime(s.updatedAt, t)}

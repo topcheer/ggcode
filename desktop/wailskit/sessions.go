@@ -14,14 +14,15 @@ import (
 
 // SessionInfo is a lightweight session record for the frontend.
 type SessionInfo struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Workspace string `json:"workspace"`
-	Vendor    string `json:"vendor"`
-	Model     string `json:"model"`
-	MsgCount  int    `json:"msgCount"`
-	UpdatedAt string `json:"updatedAt"`
-	Locked    bool   `json:"locked"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Workspace   string `json:"workspace"`
+	Vendor      string `json:"vendor"`
+	Model       string `json:"model"`
+	MsgCount    int    `json:"msgCount"`
+	UpdatedAt   string `json:"updatedAt"`
+	Locked      bool   `json:"locked"`
+	LastMessage string `json:"lastMessage"`
 }
 
 // ListSessions returns sessions for the given workspace, sorted by UpdatedAt descending.
@@ -60,14 +61,15 @@ func ListSessions(workingDir string, bridge *ChatBridge) ([]SessionInfo, error) 
 			}
 		}
 		result = append(result, SessionInfo{
-			ID:        s.ID,
-			Title:     s.Title,
-			Workspace: s.Workspace,
-			Vendor:    s.Vendor,
-			Model:     s.Model,
-			MsgCount:  s.MsgCount,
-			UpdatedAt: s.UpdatedAt.Format(time.DateTime),
-			Locked:    locked,
+			ID:          s.ID,
+			Title:       s.Title,
+			Workspace:   s.Workspace,
+			Vendor:      s.Vendor,
+			Model:       s.Model,
+			MsgCount:    s.MsgCount,
+			UpdatedAt:   s.UpdatedAt.Format(time.DateTime),
+			Locked:      locked,
+			LastMessage: s.LastMessage,
 		})
 	}
 	return result, nil
