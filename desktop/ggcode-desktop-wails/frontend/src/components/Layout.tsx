@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal } from 'lucide-react'
 import { ViewMode, StatusBarData } from '../types'
 import { I18nProvider, useTranslation, type Locale } from '../i18n'
@@ -31,6 +31,35 @@ import * as App from '../../wailsjs/go/main/App'
 function LayoutInner() {
   const [view, setView] = useState<ViewMode>('chat')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('sidebar-width')
+    return saved ? parseInt(saved, 10) : 280
+  })
+  const sidebarDragRef = useRef(false)
+
+  // Sidebar drag-to-resize
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!sidebarDragRef.current) return
+      const navRailWidth = 48 // NavRail fixed width
+      const newWidth = Math.max(200, Math.min(500, e.clientX - navRailWidth))
+      setSidebarWidth(newWidth)
+    }
+    const onMouseUp = () => {
+      if (sidebarDragRef.current) {
+        sidebarDragRef.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        localStorage.setItem('sidebar-width', String(sidebarWidth))
+      }
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [sidebarWidth])
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
@@ -331,7 +360,26 @@ function LayoutInner() {
             <NavRail view={view} onViewChange={setView} onAbout={() => setAboutDialogOpen(true)} lanChatUnread={view === 'lanchat' ? 0 : lanChatUnread} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
             {sidebarOpen && view === 'chat' && (
-              <Sidebar key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
+              <>
+                <Sidebar key={currentWorkspace || 'default-workspace'} width={sidebarWidth} workspace={currentWorkspace} onClose={() => setSidebarOpen(false)} activeSessionId={activeSessionId} onSessionSelect={setActiveSessionId} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
+                {/* Drag handle for resize */}
+                <div
+                  onMouseDown={() => {
+                    sidebarDragRef.current = true
+                    document.body.style.cursor = 'col-resize'
+                    document.body.style.userSelect = 'none'
+                  }}
+                  style={{
+                    width: 5,
+                    cursor: 'col-resize',
+                    flexShrink: 0,
+                    background: 'transparent',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'var(--color-border)' }}
+                  onMouseLeave={(e) => { if (!sidebarDragRef.current) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
+                />
+              </>
             )}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>

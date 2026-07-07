@@ -12,6 +12,7 @@ interface Props {
   activeSessionId?: string
   workspace?: string
   showToast?: (type: 'success' | 'error' | 'info', message: string) => void
+  width?: number
 }
 
 interface SessionItem {
@@ -51,7 +52,7 @@ function getDateGroup(dateStr: string): string {
   return 'older'
 }
 
-export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace, showToast }: Props) {
+export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, workspace, showToast, width }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -242,7 +243,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
 
   return (
     <div style={{
-      width: 'var(--sidebar-width)',
+      width: width ? `${width}px` : 'var(--sidebar-width)',
       height: '100%',
       background: 'var(--color-bg)',
       borderRight: '1px solid var(--color-border)',
