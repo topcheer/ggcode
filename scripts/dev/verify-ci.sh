@@ -60,7 +60,7 @@ echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-GOMEMLIMIT=1GiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
+GOMEMLIMIT=512MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
@@ -80,5 +80,5 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
 
   echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=512MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
+  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=256MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
 fi
