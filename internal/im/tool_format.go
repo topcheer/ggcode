@@ -174,6 +174,69 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			target = tc.Detail
 		}
 		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_send_task"), target)
+	// Multi-file operations
+	case "multi_file_read":
+		return fmt.Sprintf("📖 %s", imLabel(lang, "read_multi"))
+	case "multi_file_edit":
+		return fmt.Sprintf("✏ %s", imLabel(lang, "edit_multi"))
+	case "multi_file_write":
+		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
+	// Git operations (beyond diff/status/log already handled)
+	case "git_add":
+		return fmt.Sprintf("📦 %s", imLabel(lang, "git_stage"))
+	case "git_commit":
+		msg := extractArgValue(args, "message")
+		if msg == "" {
+			msg = tc.Detail
+		}
+		return fmt.Sprintf("💾 %s: %s", imLabel(lang, "git_commit"), msg)
+	case "git_show":
+		return fmt.Sprintf("🔍 %s", imLabel(lang, "git_show"))
+	case "git_blame":
+		return fmt.Sprintf("🔍 %s", imLabel(lang, "git_blame"))
+	case "git_branch_list":
+		return fmt.Sprintf("🌿 %s", imLabel(lang, "git_branch_list"))
+	// Browser automation
+	case "browser":
+		action := extractArgValue(args, "action")
+		url := extractArgValue(args, "url")
+		if url != "" {
+			return fmt.Sprintf("🌐 %s: %s", imLabel(lang, "browser"), url)
+		}
+		if action != "" {
+			return fmt.Sprintf("🌐 %s: %s", imLabel(lang, "browser"), action)
+		}
+		return fmt.Sprintf("🌐 %s", imLabel(lang, "browser"))
+	// Mode switching
+	case "switch_mode":
+		mode := extractArgValue(args, "mode")
+		if mode == "" {
+			mode = tc.Detail
+		}
+		return fmt.Sprintf("🔄 %s → %s", imLabel(lang, "switch_mode"), mode)
+	// Notebook editing
+	case "notebook_edit":
+		path := extractFilePathFromArgs(args)
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("📓 %s: `%s`", imLabel(lang, "edit_notebook"), path)
+	// Delegate to external agent
+	case "delegate":
+		agent := extractArgValue(args, "agent")
+		if agent == "" {
+			agent = tc.Detail
+		}
+		return fmt.Sprintf("🤝 %s: %s", imLabel(lang, "delegate"), agent)
+	// Newer cron tools
+	case "cron_update":
+		return fmt.Sprintf("⏰ %s", imLabel(lang, "cron_update"))
+	case "cron_pause":
+		return fmt.Sprintf("⏸ %s", imLabel(lang, "cron_pause"))
+	case "cron_resume":
+		return fmt.Sprintf("▶ %s", imLabel(lang, "cron_resume"))
+	case "cron_get":
+		return fmt.Sprintf("⏰ %s", imLabel(lang, "cron_get"))
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -332,6 +395,38 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	// Team/swarm/a2a tools — body markdown
 	case "teammate_results":
 		return true, formatIMTeammateResultsResult(tr)
+	// Newer cron tools
+	case "cron_update":
+		return true, "⏰ " + imLabel(toolLang(tr.Lang), "cron_update_done")
+	case "cron_pause":
+		return true, "⏸ " + imLabel(toolLang(tr.Lang), "cron_paused")
+	case "cron_resume":
+		return true, "▶ " + imLabel(toolLang(tr.Lang), "cron_resumed")
+	case "cron_get":
+		return true, "" // hidden — detail consumed by LLM
+	// Git operations — show stage/commit, hide others
+	case "git_add":
+		return true, "📦 " + imLabel(toolLang(tr.Lang), "git_staged")
+	case "git_commit":
+		return true, "💾 " + imLabel(toolLang(tr.Lang), "git_committed")
+	case "git_show", "git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_stash":
+		return true, "" // hidden — secondary git tools
+	// Mode switching
+	case "switch_mode":
+		return true, "🔄 " + imLabel(toolLang(tr.Lang), "mode_switched")
+	// Multi-file operations — hidden (verbose)
+	case "multi_file_read", "multi_file_edit", "multi_file_write":
+		return true, ""
+	// Browser/notebook results — hidden (verbose)
+	case "browser", "notebook_edit":
+		return true, ""
+	case "delegate":
+		agent := extractArgValue(tr.Args, "agent")
+		if agent == "" {
+			agent = tr.Detail
+		}
+		return true, fmt.Sprintf("🤝 %s: %s", imLabel(toolLang(tr.Lang), "delegated_to"), agent)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -340,9 +435,6 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
 			return true, formatIMMCPToolResult(tr)
 		}
-	case "git_show", "git_blame", "git_branch_list", "git_remote",
-		"git_stash_list", "git_add", "git_commit", "git_stash":
-		return true, "" // hidden — secondary git tools
 	}
 	// LSP tools → hidden
 	if strings.HasPrefix(tr.ToolName, "lsp_") {

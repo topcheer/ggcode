@@ -38,8 +38,9 @@ func init() {
 }
 
 const (
-	waMaxTextLen   = 4096
-	waMaxReconnect = 5
+	waMaxTextLen    = 4096
+	waMaxReconnect  = 5
+	waInterMsgDelay = 300 * time.Millisecond // Conservative inter-chunk delay to avoid WhatsApp rate limiting
 )
 
 var waBackoffs = []time.Duration{
@@ -153,7 +154,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		}
 		if i < len(chunks)-1 {
 			select {
-			case <-time.After(300 * time.Millisecond):
+			case <-time.After(waInterMsgDelay):
 			case <-ctx.Done():
 				return ctx.Err()
 			}

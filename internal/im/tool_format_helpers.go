@@ -152,6 +152,52 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Task completed"
 		case "task_sent":
 			return "Task sent"
+		case "read_multi":
+			return "Read multiple files"
+		case "edit_multi":
+			return "Edit multiple files"
+		case "write_multi":
+			return "Write multiple files"
+		case "git_stage":
+			return "Stage files"
+		case "git_commit":
+			return "Commit"
+		case "git_show":
+			return "Git show"
+		case "git_blame":
+			return "Git blame"
+		case "git_branch_list":
+			return "List branches"
+		case "git_staged":
+			return "Files staged"
+		case "git_committed":
+			return "Committed"
+		case "switch_mode":
+			return "Switch mode"
+		case "mode_switched":
+			return "Mode switched"
+		case "browser":
+			return "Browser"
+		case "edit_notebook":
+			return "Edit notebook"
+		case "delegate":
+			return "Delegate"
+		case "delegated_to":
+			return "Delegated to"
+		case "cron_update":
+			return "Update cron job"
+		case "cron_pause":
+			return "Pause cron job"
+		case "cron_resume":
+			return "Resume cron job"
+		case "cron_get":
+			return "Get cron job"
+		case "cron_update_done":
+			return "Cron job updated"
+		case "cron_paused":
+			return "Cron job paused"
+		case "cron_resumed":
+			return "Cron job resumed"
 		}
 	default: // zh-CN
 		switch key {
@@ -291,6 +337,52 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "任务已完成"
 		case "task_sent":
 			return "任务已发送"
+		case "read_multi":
+			return "读取多文件"
+		case "edit_multi":
+			return "编辑多文件"
+		case "write_multi":
+			return "写入多文件"
+		case "git_stage":
+			return "暂存文件"
+		case "git_commit":
+			return "提交"
+		case "git_show":
+			return "Git show"
+		case "git_blame":
+			return "Git blame"
+		case "git_branch_list":
+			return "列出分支"
+		case "git_staged":
+			return "文件已暂存"
+		case "git_committed":
+			return "已提交"
+		case "switch_mode":
+			return "切换模式"
+		case "mode_switched":
+			return "模式已切换"
+		case "browser":
+			return "浏览器"
+		case "edit_notebook":
+			return "编辑笔记本"
+		case "delegate":
+			return "委托"
+		case "delegated_to":
+			return "委托给"
+		case "cron_update":
+			return "更新定时任务"
+		case "cron_pause":
+			return "暂停定时任务"
+		case "cron_resume":
+			return "恢复定时任务"
+		case "cron_get":
+			return "查看定时任务"
+		case "cron_update_done":
+			return "定时任务已更新"
+		case "cron_paused":
+			return "定时任务已暂停"
+		case "cron_resumed":
+			return "定时任务已恢复"
 		}
 	}
 	return key
