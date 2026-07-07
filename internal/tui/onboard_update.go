@@ -40,11 +40,12 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyPressMsg:
 			switch kp.String() {
 			case "up", "down":
-				if kp.String() == "up" && m.vendorCursor > 0 {
-					m.vendorCursor--
+				total := len(m.vendorFiltered) + 1 // +1 for "Custom Provider" entry
+				if kp.String() == "up" {
+					m.vendorCursor = (m.vendorCursor - 1 + total) % total
 				}
-				if kp.String() == "down" && m.vendorCursor < len(m.vendorFiltered) {
-					m.vendorCursor++
+				if kp.String() == "down" {
+					m.vendorCursor = (m.vendorCursor + 1) % total
 				}
 				return m, nil
 			case "enter":
@@ -81,13 +82,11 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp.String() {
 	case "up", "k":
-		if m.vendorCursor > 0 {
-			m.vendorCursor--
-		}
+		total := len(m.vendorFiltered) + 1 // +1 for "Custom Provider" entry
+		m.vendorCursor = (m.vendorCursor - 1 + total) % total
 	case "down", "j":
-		if m.vendorCursor < len(m.vendorFiltered) {
-			m.vendorCursor++
-		}
+		total := len(m.vendorFiltered) + 1
+		m.vendorCursor = (m.vendorCursor + 1) % total
 	case "enter":
 		if m.vendorCursor == len(m.vendorFiltered) {
 			m.step = onboardStepCustom
