@@ -207,6 +207,21 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		if path, ok := args["file_path"].(string); ok {
 			s.recordFileEdit(path)
 		}
+	case "multi_file_edit", "multi_file_write":
+		// {"files": [{"path": "...", ...}, ...]}
+		if files, ok := args["files"].([]any); ok {
+			for _, f := range files {
+				if fm, ok := f.(map[string]any); ok {
+					if path, ok := fm["path"].(string); ok {
+						s.recordFileEdit(path)
+					}
+				}
+			}
+		}
+	case "notebook_edit":
+		if path, ok := args["notebook_path"].(string); ok {
+			s.recordFileEdit(path)
+		}
 	case "run_command", "start_command":
 		if cmd, ok := args["command"].(string); ok {
 			s.recordCommand(cmd)

@@ -102,8 +102,29 @@ func TestExtractPathsFromToolCall(t *testing.T) {
 	args, _ = json.Marshal(map[string]string{"command": "go build ./..."})
 	extractPathsFromToolCall("run_command", args, s)
 
-	if len(s.FilesEdited) != 2 {
-		t.Errorf("expected 2 files, got %d: %v", len(s.FilesEdited), s.FilesEdited)
+	// multi_file_edit with files array
+	args, _ = json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{"path": "/src/a.go", "edits": []any{}},
+			{"path": "/src/b.go", "edits": []any{}},
+		},
+	})
+	extractPathsFromToolCall("multi_file_edit", args, s)
+
+	// multi_file_write with files array
+	args, _ = json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{"path": "/src/c.go", "content": "package main"},
+		},
+	})
+	extractPathsFromToolCall("multi_file_write", args, s)
+
+	// notebook_edit
+	args, _ = json.Marshal(map[string]string{"notebook_path": "/notebooks/analysis.ipynb"})
+	extractPathsFromToolCall("notebook_edit", args, s)
+
+	if len(s.FilesEdited) != 6 {
+		t.Errorf("expected 6 files, got %d: %v", len(s.FilesEdited), s.FilesEdited)
 	}
 	if len(s.CommandsRun) != 1 {
 		t.Errorf("expected 1 command, got %d", len(s.CommandsRun))
