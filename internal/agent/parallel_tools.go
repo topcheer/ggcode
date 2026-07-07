@@ -53,9 +53,34 @@ type preExecutedResult struct {
 //  3. If permission denies a tool in the sequential loop, the pre-computed
 //     result is simply discarded (no harm from executing a read-only tool)
 //  4. Context cancellation propagates to all goroutines
+//
+// Context-fill-aware throttling: when the context window is getting full,
+// pre-execution is reduced or skipped to avoid pushing in multiple large
+// results simultaneously (research: "parallel tool results arrive in batches,
+// potentially pushing context length significantly").
 func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provider.ToolCallDelta) map[int]preExecutedResult {
 	if len(toolCalls) <= 1 {
 		return nil
+	}
+
+	// Context-fill-aware throttling: reduce or skip parallel pre-execution
+	// when the context window is under pressure. At 75%+ fill, a batch of
+	// 3 large results landing simultaneously could trigger compaction.
+	maxConcurrent := parallelMaxConcurrent
+	if a.contextManager != nil {
+		if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
+			fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
+			switch {
+			case fillRatio >= contextFillCritical:
+				// Context critically full — skip pre-execution entirely.
+				debug.Log("parallel", "skipping pre-execution: context fill %.0f%%", fillRatio*100)
+				return nil
+			case fillRatio >= contextFillHigh:
+				// High fill — reduce to single tool at a time.
+				maxConcurrent = 1
+				debug.Log("parallel", "reduced pre-execution to 1: context fill %.0f%%", fillRatio*100)
+			}
+		}
 	}
 
 	// Identify which tool calls are read-only and not cached.
@@ -79,9 +104,9 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	if len(batch) == 0 {
 		return nil
 	}
-	// Cap at parallelMaxConcurrent to bound resource usage.
-	if len(batch) > parallelMaxConcurrent {
-		batch = batch[:parallelMaxConcurrent]
+	// Cap at maxConcurrent to bound resource usage.
+	if len(batch) > maxConcurrent {
+		batch = batch[:maxConcurrent]
 	}
 
 	results := make(map[int]preExecutedResult)

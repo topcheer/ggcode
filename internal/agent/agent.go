@@ -1196,8 +1196,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// next response. Use that idle window to speculatively pre-execute
 		// likely next read-only tool calls based on learned patterns.
 		if len(toolCalls) > 0 {
-			lastTC := toolCalls[len(toolCalls)-1]
-			a.speculator.speculate(ctx, a.tools, lastTC.Name, lastTC.Arguments)
+			// Context-fill-aware: skip speculation when context is critically
+			// full (>75%). Speculative results arriving into a nearly-full
+			// context window can trigger unnecessary compaction. Speculation
+			// is optional — skipping it is always safe.
+			speculateOK := true
+			if a.contextManager != nil {
+				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
+					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
+					if fillRatio >= contextFillCritical {
+						speculateOK = false
+						debug.Log("speculate", "skipping speculation: context fill %.0f%%", fillRatio*100)
+					}
+				}
+			}
+			if speculateOK {
+				lastTC := toolCalls[len(toolCalls)-1]
+				a.speculator.speculate(ctx, a.tools, lastTC.Name, lastTC.Arguments)
+			}
 		}
 
 		// Inject follow-up messages from tools (e.g., inline skill instructions).
