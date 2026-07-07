@@ -98,6 +98,13 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		if a.speculator.hasCached(tc.Name, tc.Arguments) {
 			continue
 		}
+		// Skip if already in memoization cache (avoids redundant execution
+		// when the same read-only tool was called earlier in this run).
+		if a.toolMemo != nil {
+			if _, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
+				continue
+			}
+		}
 		batch = append(batch, pending{i, tc.Name, tc.Arguments})
 	}
 

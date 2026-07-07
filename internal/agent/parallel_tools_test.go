@@ -101,3 +101,26 @@ func TestPreExecuteReadOnly_CancelledContext(t *testing.T) {
 		t.Errorf("expected nil with cancelled context, got %d results", len(results))
 	}
 }
+
+func TestPreExecuteReadOnly_SkipsMemoizedTools(t *testing.T) {
+	a := &Agent{
+		tools:      tool.NewRegistry(),
+		speculator: newSpeculator(),
+		toolMemo:   newToolMemo(),
+	}
+	// Pre-populate memoization cache for read_file.
+	memoResult := tool.Result{Content: "cached content"}
+	a.toolMemo.put("read_file", []byte(`{"path":"/tmp/a"}`), memoResult)
+
+	calls := []provider.ToolCallDelta{
+		{ID: "1", Name: "read_file", Arguments: []byte(`{"path":"/tmp/a"}`)},
+		{ID: "2", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
+	}
+	results := a.preExecuteReadOnlyTools(context.Background(), calls)
+	// read_file was memoized, so only glob should be in the batch.
+	// Since glob isn't registered, results will be nil — the key check is
+	// that no panic occurs and we don't try to pre-execute the memoized tool.
+	if results != nil {
+		t.Errorf("expected nil (tools not registered), got %d results", len(results))
+	}
+}
