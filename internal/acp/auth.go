@@ -61,7 +61,7 @@ func NewAuthHandler(transport *Transport, sessionID string) *AuthHandler {
 // notifications, then polls GitHub for the token.
 func (ah *AuthHandler) HandleAgentAuth(ctx context.Context) error {
 	// Step 1: Request device code
-	deviceResp, err := ah.requestDeviceCode()
+	deviceResp, err := ah.requestDeviceCode(ctx)
 	if err != nil {
 		return fmt.Errorf("requesting device code: %w", err)
 	}
@@ -98,13 +98,23 @@ func (ah *AuthHandler) HandleEnvVarAuth(vars []AuthEnvVar) error {
 }
 
 // requestDeviceCode initiates the GitHub Device Flow.
-func (ah *AuthHandler) requestDeviceCode() (*DeviceCodeResponse, error) {
+func (ah *AuthHandler) requestDeviceCode(ctx context.Context) (*DeviceCodeResponse, error) {
 	data := url.Values{
 		"client_id": {githubDeviceClientID},
 		"scope":     {githubDeviceScope},
 	}
 
-	resp, err := http.PostForm(githubDeviceCodeURL, data)
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", githubDeviceCodeURL, bytes.NewBufferString(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("building device/code request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST device/code: %w", err)
 	}
@@ -156,7 +166,7 @@ func (ah *AuthHandler) pollForToken(ctx context.Context, deviceResp *DeviceCodeR
 		case <-expiry:
 			return "", fmt.Errorf("device code expired")
 		case <-ticker.C:
-			token, err := ah.checkToken(deviceResp.DeviceCode)
+			token, err := ah.checkToken(ctx, deviceResp.DeviceCode)
 			if err != nil {
 				// "authorization_pending" means user hasn't entered code yet
 				if err.Error() == "authorization_pending" {
@@ -175,14 +185,17 @@ func (ah *AuthHandler) pollForToken(ctx context.Context, deviceResp *DeviceCodeR
 }
 
 // checkToken checks if the user has completed the device flow.
-func (ah *AuthHandler) checkToken(deviceCode string) (string, error) {
+func (ah *AuthHandler) checkToken(ctx context.Context, deviceCode string) (string, error) {
 	data := url.Values{
 		"client_id":   {githubDeviceClientID},
 		"device_code": {deviceCode},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 	}
 
-	req, err := http.NewRequest("POST", githubAccessTokenURL, bytes.NewBufferString(data.Encode()))
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", githubAccessTokenURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return "", err
 	}
