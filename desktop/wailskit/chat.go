@@ -516,6 +516,17 @@ func (b *ChatBridge) Cancel() {
 		b.interactions.CancelAll()
 	}
 
+	// Cancel all running sub-agents and swarm teammates — mirrors TUI's
+	// cancelActiveRun() which calls subAgentMgr.CancelAll() + swarmMgr.CancelAll().
+	// Without this, sub-agents continue running in the background after the user
+	// cancels the main task, consuming tokens with no way to stop them.
+	if b.subAgentMgr != nil {
+		b.subAgentMgr.CancelAll()
+	}
+	if b.swarmMgr != nil {
+		b.swarmMgr.CancelAll()
+	}
+
 	// Notify frontend to close dialogs
 	if b.OnStreamEvent != nil {
 		b.OnStreamEvent("approval:cancel", json.RawMessage(`{}`))
