@@ -137,6 +137,8 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 }
 
 // AddRule adds a new rule, enforcing the max limit with LRU eviction.
+// If a semantically similar rule already exists, it merges hit counts
+// instead of creating a duplicate.
 func (rs *RuleStore) AddRule(r Rule) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -151,12 +153,135 @@ func (rs *RuleStore) AddRule(r Rule) {
 		r.HitCount = 1
 	}
 
+	// Check for semantic duplicates before adding.
+	for i := range rs.rules {
+		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
+			// Merge into existing rule: bump hit count and update LastSeen
+			rs.rules[i].HitCount += r.HitCount
+			rs.rules[i].LastSeen = r.LastSeen
+			debug.Log("ratchet", "merged duplicate rule into %s (similarity >= 0.75): %s", rs.rules[i].ID, r.Rule)
+			if err := rs.save(); err != nil {
+				debug.Log("ratchet", "failed to save rules after merge: %v", err)
+			}
+			return
+		}
+	}
+
 	rs.rules = append(rs.rules, r)
 	rs.evict()
 	if err := rs.save(); err != nil {
 		debug.Log("ratchet", "failed to save rules after adding rule %s: %v", r.ID, err)
 	}
 	debug.Log("ratchet", "added rule %s: %s (match=%s, tool=%s)", r.ID, r.Rule, r.MatchPattern, r.ToolPattern)
+}
+
+// ruleSimilarity returns a 0-1 similarity score between two rules based on
+// Jaccard similarity of normalized word tokens from their Rule text and
+// MatchPattern. If both rules share the same ToolPattern, a bonus is applied
+// since rules targeting the same tool with overlapping keywords are very
+// likely semantic duplicates. Used to prevent near-duplicate rules from
+// accumulating.
+func ruleSimilarity(a, b Rule) float64 {
+	tokensA := tokenizeRule(a)
+	tokensB := tokenizeRule(b)
+	if len(tokensA) == 0 || len(tokensB) == 0 {
+		return 0
+	}
+	// Jaccard similarity: intersection / union
+	intersection := 0
+	for t := range tokensA {
+		if tokensB[t] {
+			intersection++
+		}
+	}
+	union := len(tokensA) + len(tokensB) - intersection
+	base := float64(intersection) / float64(union)
+
+	// If both rules target the same tool pattern, boost similarity.
+	// Rules like "run gofmt before commit" vs "run gofmt before staging"
+	// have low Jaccard but are clearly the same concept.
+	if a.ToolPattern == b.ToolPattern && a.ToolPattern != "" {
+		base += 0.3
+	}
+	return base
+}
+
+// tokenizeRule extracts normalized lowercase word tokens from a rule,
+// combining Rule text and MatchPattern. Filters common stopwords.
+func tokenizeRule(r Rule) map[string]bool {
+	stopwords := map[string]bool{
+		"the": true, "a": true, "an": true, "to": true, "is": true,
+		"are": true, "in": true, "on": true, "for": true, "of": true,
+		"and": true, "or": true, "before": true, "after": true,
+		"with": true, "that": true, "this": true, "it": true,
+		"from": true, "by": true, "be": true, "not": true,
+		"will": true, "was": true, "all": true, "if": true,
+		"use": true, "using": true, "used": true, "ensure": true,
+	}
+	text := strings.ToLower(r.Rule + " " + r.MatchPattern + " " + r.ToolPattern)
+	// Split on non-alphanumeric
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_')
+	})
+	tokens := make(map[string]bool, len(fields))
+	for _, f := range fields {
+		if f == "" || stopwords[f] {
+			continue
+		}
+		tokens[f] = true
+	}
+	return tokens
+}
+
+// DeduplicateRules removes semantically similar rules from the store,
+// merging hit counts into the higher-hit-count rule. This is intended
+// for periodic cleanup of accumulated near-duplicates.
+func (rs *RuleStore) DeduplicateRules() int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+
+	if len(rs.rules) <= 1 {
+		return 0
+	}
+
+	merged := 0
+	kept := []Rule{rs.rules[0]}
+
+	for i := 1; i < len(rs.rules); i++ {
+		isDup := false
+		for j := range kept {
+			sim := ruleSimilarity(kept[j], rs.rules[i])
+			if sim >= 0.55 {
+				// Merge into the kept rule: sum hit counts, keep latest LastSeen
+				kept[j].HitCount += rs.rules[i].HitCount
+				kept[j].LastSeen = maxTime(kept[j].LastSeen, rs.rules[i].LastSeen)
+				merged++
+				isDup = true
+				debug.Log("ratchet", "dedup merged #%d into #%d (sim=%.2f)", i+1, j+1, sim)
+				break
+			}
+		}
+		if !isDup {
+			kept = append(kept, rs.rules[i])
+		}
+	}
+
+	if merged > 0 {
+		rs.rules = kept
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save after dedup: %v", err)
+		}
+		debug.Log("ratchet", "dedup removed %d duplicate rules (%d → %d)", merged, len(rs.rules)+merged, len(kept))
+	}
+	return merged
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // Rules returns a copy of all rules.
