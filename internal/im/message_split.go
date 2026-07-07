@@ -229,3 +229,42 @@ func truncateRunes(text string, maxLen int, suffix string) string {
 	}
 	return string(runes[:maxLen-len(suffixRunes)]) + suffix
 }
+
+// SplitMarkdown splits text for markdown-capable platforms (Discord, Slack,
+// Mattermost, Matrix), ensuring fenced code blocks are not broken across
+// chunk boundaries. When a split point falls inside a ``` code block, the
+// block is closed at the end of the current chunk and reopened at the start
+// of the next chunk.
+//
+// This prevents broken rendering where a code block's opening ``` appears
+// in one message and the closing ``` in the next, causing the platform to
+// render non-code text as monospace or vice versa.
+func SplitMarkdown(text string, maxLen int) []string {
+	chunks := SplitMessage(text, maxLen)
+	if len(chunks) <= 1 {
+		return chunks
+	}
+
+	var result []string
+	inCodeBlock := false
+
+	for _, chunk := range chunks {
+		// If continuing a code block from the previous chunk, reopen it
+		if inCodeBlock {
+			chunk = "```\n" + chunk
+		}
+
+		// Count triple-backtick fences to determine if we end inside a code block
+		fenceCount := strings.Count(chunk, "```")
+		inCodeBlock = (fenceCount % 2) == 1
+
+		// If ending inside a code block, close it
+		if inCodeBlock {
+			chunk += "\n```"
+		}
+
+		result = append(result, chunk)
+	}
+
+	return result
+}

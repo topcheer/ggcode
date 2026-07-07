@@ -810,7 +810,7 @@ func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filenam
 }
 
 func splitDiscordMessage(text string, maxLen int) []string {
-	return splitMessageRunes(text, maxLen, true, false, false)
+	return SplitMarkdown(strings.TrimSpace(text), maxLen)
 }
 
 func jsonInt(v any) int {

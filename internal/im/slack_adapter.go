@@ -896,7 +896,7 @@ func replaceDelimiters(text, from, to string) string {
 }
 
 func splitSlackMessage(text string, maxLen int) []string {
-	return splitMessageRunes(text, maxLen, true, false, false)
+	return SplitMarkdown(strings.TrimSpace(text), maxLen)
 }
 
 // transcribeSlackAudio downloads an audio file from Slack and transcribes it via STT.
