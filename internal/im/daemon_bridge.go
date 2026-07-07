@@ -841,7 +841,7 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 }
 
 // appendAssistantMessages saves new agent messages to the session JSONL.
-// ⚠️ Only appends new messages via AppendMessage — NEVER overwrites
+// Only appends new messages via AppendMessage — NEVER overwrites
 // b.sess.Messages with agent.Messages() (compacted). Overwriting would
 // lose pre-compaction history. Instead, append only what's new beyond
 // what ses.Messages already holds.
@@ -965,12 +965,12 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 
 	// Header line
 	if ToolLanguage(lang) == ToolLangZhCN {
-		sb.WriteString(fmt.Sprintf("⚙️ 执行了 %d 个工具调用", total))
+		sb.WriteString(fmt.Sprintf("⚙ 执行了 %d 个工具调用", total))
 		if failures > 0 {
 			sb.WriteString(fmt.Sprintf("（%d 成功，%d 失败）", successes, failures))
 		}
 	} else {
-		sb.WriteString(fmt.Sprintf("⚙️ %d tool calls", total))
+		sb.WriteString(fmt.Sprintf("⚙ %d tool calls", total))
 		if failures > 0 {
 			sb.WriteString(fmt.Sprintf(" (%d ok, %d failed)", successes, failures))
 		}

@@ -54,7 +54,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if path == "" {
 			path = tc.Detail
 		}
-		return fmt.Sprintf("✏️ %s: `%s`", imLabel(lang, "edit_file"), path)
+		return fmt.Sprintf("✏ %s: `%s`", imLabel(lang, "edit_file"), path)
 	case "write_file":
 		path := extractFilePathFromArgs(args)
 		if path == "" {

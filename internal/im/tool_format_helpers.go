@@ -352,12 +352,12 @@ func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("⌨️ %s\n```\n%s\n```", imLabel(lang, "send_input"), output)
+		return fmt.Sprintf("⌨ %s\n```\n%s\n```", imLabel(lang, "send_input"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("⌨️ %s", imLabel(lang, "input_sent"))
+		return fmt.Sprintf("⌨ %s", imLabel(lang, "input_sent"))
 	}
-	return fmt.Sprintf("⌨️\n```\n%s\n```", output)
+	return fmt.Sprintf("⌨\n```\n%s\n```", output)
 }
 
 // formatIMListCommandsResult renders list_commands result.
@@ -762,7 +762,7 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 		path = tr.Detail
 	}
 	baseName := filepath.Base(path)
-	icon := "✏️"
+	icon := "✏"
 	if tr.IsError {
 		if path != "" {
 			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
@@ -979,7 +979,7 @@ func imFileExtIcon(path string) string {
 	case ".pages", ".numbers", ".key":
 		return "📄"
 	case ".svg":
-		return "🖼️"
+		return "🖼"
 	case ".odt", ".ods", ".odp":
 		return "📄"
 	case ".epub":

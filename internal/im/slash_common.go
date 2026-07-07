@@ -76,7 +76,7 @@ func CommonIMHelpText(extraLines ...string) string {
 		"/listim - List IM adapters and their status",
 		"/muteim <name> - Mute a specific adapter",
 		"/muteall - Mute all adapters except the one you're using",
-		"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)",
+		"/muteself - Mute THIS adapter (you'll stop receiving replies; use /restart from another adapter to recover)",
 	}
 	lines = append(lines, extraLines...)
 	lines = append(lines, "/help - Show this help")
@@ -99,7 +99,7 @@ func executeMuteIMCommand(manager *Manager, selfAdapter string, parts []string) 
 	}
 	name := parts[1]
 	if name == selfAdapter {
-		return "⚠️ Cannot mute yourself. Use /muteself instead."
+		return "Cannot mute yourself. Use /muteself instead."
 	}
 	if err := manager.MuteBinding(name); err != nil {
 		return fmt.Sprintf("❌ Failed to mute %s: %v", name, err)
