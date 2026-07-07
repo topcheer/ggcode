@@ -70,8 +70,6 @@ func SplitMessage(text string, maxLen int) []string {
 
 // SplitMessageForPlatform is a convenience wrapper that looks up the
 // platform's limit and calls SplitMessage.
-// SplitMessageForPlatform is a convenience wrapper that looks up the
-// platform's limit and calls SplitMessage.
 func SplitMessageForPlatform(text string, p Platform) []string {
 	maxLen, ok := PlatformLimits[p]
 	if !ok {
