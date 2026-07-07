@@ -133,6 +133,29 @@ function enhanceCodeBlocks(container: HTMLElement) {
   })
 }
 
+// Highlight diff code blocks: green for added lines, red for removed lines
+function enhanceDiffBlocks(container: HTMLElement) {
+  const diffBlocks = container.querySelectorAll<HTMLPreElement>('pre code.language-diff')
+  diffBlocks.forEach((code) => {
+    if (code.getAttribute('data-diff-enhanced')) return
+    code.setAttribute('data-diff-enhanced', 'true')
+    const lines = (code.textContent || '').split('\n')
+    code.innerHTML = lines.map((line) => {
+      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        return `<span class="diff-add">${escaped}</span>`
+      }
+      if (line.startsWith('-') && !line.startsWith('---')) {
+        return `<span class="diff-del">${escaped}</span>`
+      }
+      if (line.startsWith('@@')) {
+        return `<span class="diff-hunk">${escaped}</span>`
+      }
+      return escaped
+    }).join('\n')
+  })
+}
+
 // Render message content: split into markdown + mermaid segments
 function MessageContent({ content }: { content: string }) {
   const segments = splitContent(content)
@@ -141,6 +164,7 @@ function MessageContent({ content }: { content: string }) {
   useEffect(() => {
     if (containerRef.current) {
       enhanceCodeBlocks(containerRef.current)
+      enhanceDiffBlocks(containerRef.current)
     }
   }, [segments])
 

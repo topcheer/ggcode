@@ -351,6 +351,23 @@ div[style*="overflow"] {
     pointer-events: auto;
 }
 
+/* ── Diff code block highlighting ─────────────────────────────────────── */
+/* GitHub-style green/red backgrounds for diff blocks in code output */
+.diff-add {
+    background: color-mix(in srgb, var(--color-success) 15%, transparent);
+    display: block;
+    border-radius: 2px;
+}
+.diff-del {
+    background: color-mix(in srgb, var(--color-error) 15%, transparent);
+    display: block;
+    border-radius: 2px;
+}
+.diff-hunk {
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
 /* ── In-conversation search: persistent match highlighting ──────────────── */
 /* Applied to message wrapper divs via className when search is active. */
 .search-match-highlight {
