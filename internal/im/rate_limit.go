@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -105,6 +106,18 @@ func sleepRetry(ctx context.Context, d time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// jitterDuration applies ±25% random jitter to a duration to prevent the
+// thundering herd problem where multiple adapters reconnect at identical
+// intervals. For example, a 10s backoff becomes a random value in [7.5s, 12.5s).
+func jitterDuration(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	// Multiplier in [0.75, 1.25).
+	multiplier := 0.75 + rand.Float64()*0.5
+	return time.Duration(float64(d) * multiplier)
 }
 
 // rateLimitExhausted formats a standard error for when all retries are used up.

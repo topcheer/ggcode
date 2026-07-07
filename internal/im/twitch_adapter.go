@@ -142,7 +142,7 @@ func (a *twitchAdapter) run(ctx context.Context) {
 		case <-ctx.Done():
 			a.publishState(false, "stopped", "")
 			return
-		case <-time.After(backoff):
+		case <-time.After(jitterDuration(backoff)):
 		}
 		if backoff < twitchMaxBackoff {
 			backoff *= 2

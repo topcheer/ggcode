@@ -154,7 +154,7 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(jitterDuration(backoff)):
 		}
 		if backoff < nostrMaxBackoff {
 			backoff *= 2

@@ -173,7 +173,7 @@ func (a *ircAdapter) run(ctx context.Context) {
 		case <-ctx.Done():
 			a.publishState(false, "stopped", "")
 			return
-		case <-time.After(backoff):
+		case <-time.After(jitterDuration(backoff)):
 		}
 		if backoff < ircMaxReconnectBackoff {
 			backoff *= 2

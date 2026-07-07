@@ -168,6 +168,40 @@ func TestSleepRetry_ContextCancelled(t *testing.T) {
 	}
 }
 
+// --- JitterDuration tests ---
+
+func TestJitterDuration_ZeroOrNegative(t *testing.T) {
+	if d := jitterDuration(0); d != 0 {
+		t.Errorf("jitterDuration(0) = %v, want 0", d)
+	}
+	if d := jitterDuration(-1 * time.Second); d != -1*time.Second {
+		t.Errorf("jitterDuration(-1s) = %v, want -1s", d)
+	}
+}
+
+func TestJitterDuration_StaysWithinBounds(t *testing.T) {
+	base := 10 * time.Second
+	minAllowed := time.Duration(float64(base) * 0.74) // slightly below 0.75 for float rounding
+	maxAllowed := time.Duration(float64(base) * 1.26) // slightly above 1.25
+	for i := 0; i < 1000; i++ {
+		d := jitterDuration(base)
+		if d < minAllowed || d > maxAllowed {
+			t.Fatalf("iteration %d: jitterDuration(%v) = %v, want [%v, %v]", i, base, d, minAllowed, maxAllowed)
+		}
+	}
+}
+
+func TestJitterDuration_ProducesVariedOutput(t *testing.T) {
+	base := 5 * time.Second
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 100; i++ {
+		seen[jitterDuration(base)] = true
+	}
+	if len(seen) < 10 {
+		t.Errorf("expected at least 10 distinct jittered values from 100 calls, got %d", len(seen))
+	}
+}
+
 // --- Integration: HTTP 429 retry behavior ---
 
 // TestRetryOn429_SlackResponse simulates a Slack-style 429 then 200.
