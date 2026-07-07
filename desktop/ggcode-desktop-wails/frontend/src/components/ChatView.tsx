@@ -1749,12 +1749,25 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [searchOpen])
 
   // Global Cmd+F / Ctrl+F to open search, Esc to close
+  // Cmd+Shift+Down/Up to scroll to bottom/top of conversation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         e.stopPropagation()
         setSearchOpen(prev => !prev)
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'ArrowDown') {
+        e.preventDefault()
+        const c = scrollContainerRef.current
+        if (c) c.scrollTo({ top: c.scrollHeight, behavior: 'smooth' })
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'ArrowUp') {
+        e.preventDefault()
+        const c = scrollContainerRef.current
+        if (c) c.scrollTo({ top: 0, behavior: 'smooth' })
         return
       }
       if (e.key === 'Escape' && searchOpen) {
