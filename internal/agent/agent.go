@@ -1114,6 +1114,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.mu.Unlock()
 				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
 			}
+			// Context-fill-aware output guard: proactively truncate large
+			// non-error results when context is getting full. This prevents
+			// a single 50KB build log from consuming 12K+ tokens when the
+			// context window is already under pressure. Head-tail preservation
+			// ensures the agent sees both context (head) and errors/results (tail).
+			if !result.IsError {
+				threshold := a.contextManager.AutoCompactThreshold()
+				if threshold > 0 {
+					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
+					if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
+						debug.Log("agent", "tool output guarded: tool=%s fill=%.0f%% %d→%d bytes", tc.Name, fillRatio*100, len(result.Content), len(truncated))
+						result.Content = truncated
+					}
+				}
+			}
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
