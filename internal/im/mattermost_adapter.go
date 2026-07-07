@@ -177,7 +177,9 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 
 	// 2. Connect WebSocket
 	wsURL := strings.Replace(a.baseURL, "http", "ws", 1) + "/" + mattermostAPIVersion + "/websocket"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer dialCancel()
+	ws, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}

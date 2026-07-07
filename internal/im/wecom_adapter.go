@@ -215,7 +215,9 @@ func (a *wecomAdapter) connect() error {
 	}
 	a.mu.Unlock()
 
-	ws, _, err := websocket.DefaultDialer.Dial(a.wsURL, nil)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer dialCancel()
+	ws, _, err := websocket.DefaultDialer.DialContext(dialCtx, a.wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", a.wsURL, err)
 	}
