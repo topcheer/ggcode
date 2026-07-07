@@ -17,13 +17,9 @@ func (m *onboardModel) updateLanguage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp.String() {
 	case "up", "k":
-		if m.langCursor > 0 {
-			m.langCursor--
-		}
+		m.langCursor = (m.langCursor - 1 + len(m.langs)) % len(m.langs)
 	case "down", "j":
-		if m.langCursor < len(m.langs)-1 {
-			m.langCursor++
-		}
+		m.langCursor = (m.langCursor + 1) % len(m.langs)
 	case "enter":
 		m.refreshInputPlaceholders()
 		m.step = onboardStepVendor
@@ -146,11 +142,14 @@ func (m *onboardModel) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "down":
 				m.epFocus = focusEndpoint
 				m.apiKeyInput.Blur()
-				if kp.String() == "up" && m.endpointCursor > 0 {
-					m.endpointCursor--
-				}
-				if kp.String() == "down" && m.endpointCursor < len(m.selectedVendor.Endpoints)-1 {
-					m.endpointCursor++
+				epCount := len(m.selectedVendor.Endpoints)
+				if epCount > 0 {
+					if kp.String() == "up" {
+						m.endpointCursor = (m.endpointCursor - 1 + epCount) % epCount
+					}
+					if kp.String() == "down" {
+						m.endpointCursor = (m.endpointCursor + 1) % epCount
+					}
 				}
 				return m, nil
 			}
@@ -166,12 +165,14 @@ func (m *onboardModel) updateEndpoint(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp.String() {
 	case "up", "k":
-		if m.endpointCursor > 0 {
-			m.endpointCursor--
+		epCount := len(m.selectedVendor.Endpoints)
+		if epCount > 0 {
+			m.endpointCursor = (m.endpointCursor - 1 + epCount) % epCount
 		}
 	case "down", "j":
-		if m.endpointCursor < len(m.selectedVendor.Endpoints)-1 {
-			m.endpointCursor++
+		epCount := len(m.selectedVendor.Endpoints)
+		if epCount > 0 {
+			m.endpointCursor = (m.endpointCursor + 1) % epCount
 		}
 	case "tab":
 		m.epFocus = focusAPIKey
@@ -235,11 +236,14 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyPressMsg:
 			switch kp.String() {
 			case "up", "down":
-				if kp.String() == "up" && m.modelCursor > 0 {
-					m.modelCursor--
-				}
-				if kp.String() == "down" && m.modelCursor < len(m.modelFiltered)-1 {
-					m.modelCursor++
+				modelCount := len(m.modelFiltered)
+				if modelCount > 0 {
+					if kp.String() == "up" {
+						m.modelCursor = (m.modelCursor - 1 + modelCount) % modelCount
+					}
+					if kp.String() == "down" {
+						m.modelCursor = (m.modelCursor + 1) % modelCount
+					}
 				}
 				return m, nil
 			case "enter":
@@ -268,12 +272,14 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch kp.String() {
 	case "up", "k":
-		if m.modelCursor > 0 {
-			m.modelCursor--
+		modelCount := len(m.modelFiltered)
+		if modelCount > 0 {
+			m.modelCursor = (m.modelCursor - 1 + modelCount) % modelCount
 		}
 	case "down", "j":
-		if m.modelCursor < len(m.modelFiltered)-1 {
-			m.modelCursor++
+		modelCount := len(m.modelFiltered)
+		if modelCount > 0 {
+			m.modelCursor = (m.modelCursor + 1) % modelCount
 		}
 	case "enter":
 		if len(m.modelFiltered) > 0 {
