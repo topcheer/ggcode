@@ -338,7 +338,7 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 
 	chunks := splitNostrMessage(text, nostrMaxMessageLen)
 	var lastErr error
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
 		// Compute shared secret for NIP-04 encryption
 		sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
 		if err != nil {
@@ -363,7 +363,7 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 		}
 		if err := evt.Sign(a.privKey); err != nil {
 			lastErr = fmt.Errorf("sign: %w", err)
-			continue
+			break // signing key error: will fail for every chunk
 		}
 
 		// Publish to all connected relays
@@ -377,8 +377,8 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
 			}
 		}
-		// Inter-chunk delay to avoid relay rate-limiting on multi-chunk sends.
-		if len(chunks) > 1 {
+		// Inter-chunk delay to avoid relay rate-limiting (skip after last chunk).
+		if i < len(chunks)-1 {
 			select {
 			case <-time.After(nostrInterMsgDelay):
 			case <-ctx.Done():
