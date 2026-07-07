@@ -627,8 +627,9 @@ func (a *tgAdapter) formatMessages(text string) ([]tgmd.Message, error) {
 func (a *tgAdapter) sendTextMessage(ctx context.Context, chatID string, msg tgmd.Message, replyTo string) error {
 	path := fmt.Sprintf(tgSendMessagePath, a.botToken)
 	body := map[string]any{
-		"chat_id": chatID,
-		"text":    msg.Text,
+		"chat_id":                  chatID,
+		"text":                     msg.Text,
+		"disable_web_page_preview": true, // Suppress link preview cards for cleaner UX
 	}
 
 	if a.parseMode == "" {
@@ -1224,8 +1225,9 @@ func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding,
 
 	path := fmt.Sprintf(tgSendMessagePath, a.botToken)
 	body := map[string]any{
-		"chat_id": chatID,
-		"text":    textContent,
+		"chat_id":                  chatID,
+		"text":                     textContent,
+		"disable_web_page_preview": true, // Suppress link preview cards for cleaner UX
 		"reply_markup": map[string]any{
 			"inline_keyboard": rows,
 		},
