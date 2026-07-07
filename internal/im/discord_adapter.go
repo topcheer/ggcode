@@ -44,6 +44,12 @@ const (
 	// between chunks prevents hitting the per-channel rate limit.
 	// Source: https://docs.discord.com/developers/topics/rate-limits
 	discordInterMsgDelay = 500 * time.Millisecond
+
+	// discordSuppressEmbeds is the MessageFlags bit that prevents Discord from
+	// auto-generating embed cards (link previews) from URLs in message content.
+	// Without this, code output containing URLs creates noisy preview cards.
+	// Source: https://discord.com/developers/docs/resources/message#message-object-message-flags
+	discordSuppressEmbeds = 1 << 2 // = 4
 )
 
 type discordAdapter struct {
@@ -566,7 +572,10 @@ func (a *discordAdapter) outboundText(event OutboundEvent) string {
 
 func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, content string) error {
 	url := a.apiBase + "/channels/" + channelID + "/messages"
-	body := map[string]any{"content": content}
+	body := map[string]any{
+		"content": content,
+		"flags":   discordSuppressEmbeds, // Suppress link preview embeds for cleaner UX
+	}
 	bodyBytes, _ := json.Marshal(body)
 
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
@@ -941,6 +950,7 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 	url := a.apiBase + "/channels/" + channelID + "/messages"
 	body := map[string]any{
 		"content": msg.Text,
+		"flags":   discordSuppressEmbeds, // Suppress link preview embeds for cleaner UX
 		"components": []map[string]any{
 			{
 				"type":       1, // ActionRow
