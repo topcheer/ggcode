@@ -2742,6 +2742,15 @@ func parseA2ATimeout(s string) time.Duration {
 }
 
 func (b *ChatBridge) Close() {
+	// Cancel all running sub-agents and swarm teammates before shutdown.
+	// Without this, closing the app orphans all background work.
+	if b.subAgentMgr != nil {
+		b.subAgentMgr.CancelAll()
+	}
+	if b.swarmMgr != nil {
+		b.swarmMgr.CancelAll()
+	}
+
 	// Clean up ephemeral empty session before shutting down.
 	b.cleanupEphemeralSession()
 
