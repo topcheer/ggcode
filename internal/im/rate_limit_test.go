@@ -158,7 +158,7 @@ func TestRetryOn429_SlackResponse(t *testing.T) {
 		botToken:   "x",
 	}
 
-	ts, err := adapter.sendChannelMessage(context.Background(), "C123", "hello")
+	ts, err := adapter.sendChannelMessage(context.Background(), "C123", "", "hello")
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestRetryOn429_SlackExhausted(t *testing.T) {
 		botToken:   "x",
 	}
 
-	_, err := adapter.sendChannelMessage(context.Background(), "C123", "hello")
+	_, err := adapter.sendChannelMessage(context.Background(), "C123", "", "hello")
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
@@ -327,7 +327,7 @@ func TestSlackRatelimitedInBody(t *testing.T) {
 		botToken:   "x",
 	}
 
-	ts, err := adapter.sendChannelMessage(context.Background(), "C123", "hello")
+	ts, err := adapter.sendChannelMessage(context.Background(), "C123", "", "hello")
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}

@@ -279,6 +279,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	channel, _ := event["channel"].(string)
 	text, _ := event["text"].(string)
 	ts, _ := event["ts"].(string)
+	threadTS, _ := event["thread_ts"].(string)
 	subtype, _ := event["subtype"].(string)
 
 	// Skip non-text subtypes (except file_share)
@@ -308,6 +309,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			Adapter:    a.name,
 			Platform:   PlatformSlack,
 			ChannelID:  channel,
+			ThreadID:   threadTS,
 			SenderID:   userID,
 			MessageID:  ts,
 			ReceivedAt: time.Now(),
@@ -321,7 +323,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		if _, sendErr := a.sendChannelMessage(ctx, channel, pairingResult.ReplyText); sendErr != nil {
+		if _, sendErr := a.sendChannelMessage(ctx, channel, threadTS, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
 		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
@@ -497,7 +499,7 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	// Extract images from text and upload them first
 	images, remainingText := ExtractImagesFromText(content)
 	for _, img := range images {
-		if err := a.sendExtractedImage(ctx, channelID, img); err != nil {
+		if err := a.sendExtractedImage(ctx, channelID, binding.ThreadID, img); err != nil {
 			debug.Log("slack", "adapter=%s image upload failed: %v", a.name, err)
 		}
 	}
@@ -510,7 +512,7 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	remainingText = markdownToMrkdwn(remainingText)
 	chunks := splitSlackMessage(remainingText, slackMaxTextLen)
 	for i, chunk := range chunks {
-		msgID, err := a.sendChannelMessage(ctx, channelID, chunk)
+		msgID, err := a.sendChannelMessage(ctx, channelID, binding.ThreadID, chunk)
 		if err != nil {
 			return err
 		}
@@ -608,7 +610,7 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
-func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, content string) (string, error) {
+func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, threadTS, content string) (string, error) {
 	baseURL := slackAPIBase
 	if a.apiBase != "" {
 		baseURL = a.apiBase
@@ -617,6 +619,9 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, conten
 	body := map[string]any{
 		"channel": channelID,
 		"text":    content,
+	}
+	if strings.TrimSpace(threadTS) != "" {
+		body["thread_ts"] = threadTS
 	}
 	bodyBytes, _ := json.Marshal(body)
 
@@ -708,7 +713,7 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 }
 
 // sendExtractedImage resolves and sends an extracted image to a Slack channel.
-func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string, img ExtractedImage) error {
+func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, threadTS string, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
@@ -716,35 +721,35 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string,
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
 			}
-			return a.uploadFile(ctx, channelID, filepath.Base(img.Data), data, "")
+			return a.uploadFile(ctx, channelID, threadTS, filepath.Base(img.Data), data, "")
 		}
 		// For remote URLs, download first then upload (with context for cancellation)
 		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
 		if err != nil {
-			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
 			return err
 		}
 		resp, err := a.httpClient.Do(dlReq)
 		if err != nil {
 			// Fallback: send URL as text
-			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
 			return err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 400 {
-			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
 			return err
 		}
 		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		if err != nil {
-			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
 			return err
 		}
 		filename := filepath.Base(img.Data)
 		if filename == "" || filename == "." {
 			filename = "image.png"
 		}
-		return a.uploadFile(ctx, channelID, filename, data, "")
+		return a.uploadFile(ctx, channelID, threadTS, filename, data, "")
 	case "data_url":
 		parts := strings.SplitN(img.Data, ",", 2)
 		if len(parts) < 2 {
@@ -762,14 +767,14 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string,
 		} else if strings.Contains(parts[0], "webp") {
 			ext = ".webp"
 		}
-		return a.uploadFile(ctx, channelID, "image"+ext, data, "")
+		return a.uploadFile(ctx, channelID, threadTS, "image"+ext, data, "")
 	default:
 		return fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
 }
 
 // uploadFile uploads a file to a Slack channel via multipart/form-data.
-func (a *slackAdapter) uploadFile(ctx context.Context, channelID, filename string, data []byte, comment string) error {
+func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, filename string, data []byte, comment string) error {
 	url := slackAPIBase + "/files.upload"
 
 	var buf bytes.Buffer
@@ -781,6 +786,11 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, filename strin
 	if comment != "" {
 		if err := writer.WriteField("initial_comment", comment); err != nil {
 			return fmt.Errorf("write initial_comment: %w", err)
+		}
+	}
+	if strings.TrimSpace(threadTS) != "" {
+		if err := writer.WriteField("thread_ts", threadTS); err != nil {
+			return fmt.Errorf("write thread_ts: %w", err)
 		}
 	}
 
@@ -1024,6 +1034,9 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 	body := map[string]any{
 		"channel": channelID,
 		"blocks":  blocks,
+	}
+	if strings.TrimSpace(binding.ThreadID) != "" {
+		body["thread_ts"] = binding.ThreadID
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))

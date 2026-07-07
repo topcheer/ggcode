@@ -87,7 +87,7 @@ func TestSlackSplitMessage(t *testing.T) {
 func TestSlackSendExtractedImage_UnknownKind(t *testing.T) {
 	adapter := &slackAdapter{}
 	img := ExtractedImage{Kind: "unknown", Data: "test"}
-	err := adapter.sendExtractedImage(nil, "C123", img)
+	err := adapter.sendExtractedImage(nil, "C123", "", img)
 	if err == nil {
 		t.Error("expected error for unknown kind")
 	}
