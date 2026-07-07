@@ -826,10 +826,13 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 // callback correlation. Adapters that don't support interactive messages
 // are skipped (caller should fall back to text).
 func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) map[string]string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	type interactiveTarget struct {
+		binding ChannelBinding
+		sender  InteractiveSender
+	}
 
-	result := make(map[string]string)
+	m.mu.RLock()
+	targets := make([]interactiveTarget, 0)
 	for _, b := range m.currentBindings {
 		if strings.TrimSpace(b.ChannelID) == "" {
 			continue
@@ -842,13 +845,19 @@ func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) m
 		if !ok {
 			continue
 		}
-		msgID, err := is.SendInteractive(ctx, *b, msg)
+		targets = append(targets, interactiveTarget{binding: *b, sender: is})
+	}
+	m.mu.RUnlock()
+
+	result := make(map[string]string)
+	for _, t := range targets {
+		msgID, err := t.sender.SendInteractive(ctx, t.binding, msg)
 		if err != nil {
-			debug.Log("im", "interactive send failed adapter=%s: %v", b.Adapter, err)
+			debug.Log("im", "interactive send failed adapter=%s: %v", t.binding.Adapter, err)
 			continue
 		}
 		if msgID != "" {
-			result[b.Adapter] = msgID
+			result[t.binding.Adapter] = msgID
 		}
 	}
 	return result

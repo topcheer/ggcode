@@ -457,47 +457,14 @@ func (s *Scheduler) SetEnqueue(fn func(prompt string, queueIfBusy bool)) {
 	}
 }
 
+// scheduleJob registers a timer for the job's NextFire time.
+// It acquires the lock and delegates to scheduleJobLocked to ensure
+// the timer is created and stored atomically, preventing a race where
+// a delay=0 timer fires before being stored in s.timers.
 func (s *Scheduler) scheduleJob(job *Job) {
-	delay := time.Until(job.NextFire)
-	if delay < 0 {
-		delay = 0
-	}
-
-	timer := time.AfterFunc(delay, func() {
-		// Read mutable fields under lock to avoid data race with Update().
-		s.mu.Lock()
-		prompt := job.Prompt
-		queueIfBusy := job.QueueIfBusy
-		s.mu.Unlock()
-
-		s.enqueue(prompt, queueIfBusy)
-
-		s.mu.Lock()
-		if job.Recurring {
-			next, err := NextTime(job.CronExpr, time.Now())
-			if err != nil {
-				delete(s.jobs, job.ID)
-				delete(s.timers, job.ID)
-				s.mu.Unlock()
-				if err := s.save(); err != nil {
-					debug.Log("cron", "failed to persist removal of broken job %s: %v", job.ID, err)
-				} else {
-					debug.Log("cron", "removed broken cron job %s (invalid expression: %s)", job.ID, job.CronExpr)
-				}
-				return
-			}
-			job.NextFire = next
-			s.scheduleJobLocked(job)
-		} else {
-			delete(s.jobs, job.ID)
-			delete(s.timers, job.ID)
-		}
-		s.mu.Unlock()
-	})
-
 	s.mu.Lock()
-	s.timers[job.ID] = timer
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	s.scheduleJobLocked(job)
 }
 
 // scheduleJobLocked registers a timer for the job's NextFire time.
