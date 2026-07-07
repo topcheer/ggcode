@@ -1404,11 +1404,14 @@ func (m *Manager) countTokens(msg provider.Message) int {
 }
 
 func estimateTokens(msg provider.Message) int {
-	var text string
+	var sb strings.Builder
 	var hasImage bool
 	var toolCallCount int
 	for _, b := range msg.Content {
-		text += b.Text + b.ToolName + b.Output + string(b.Input)
+		sb.WriteString(b.Text)
+		sb.WriteString(b.ToolName)
+		sb.WriteString(b.Output)
+		sb.Write(b.Input)
 		if b.Type == "image" || b.ImageData != "" || len(b.Images) > 0 {
 			hasImage = true
 		}
@@ -1416,7 +1419,7 @@ func estimateTokens(msg provider.Message) int {
 			toolCallCount++
 		}
 	}
-	n := EstimateTokens(text)
+	n := EstimateTokens(sb.String())
 	// Each message has ~4 tokens of structural overhead (role, separators).
 	n += 4
 	// Tool calls carry JSON structure overhead beyond their input text:
