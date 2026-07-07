@@ -111,10 +111,22 @@ func TestStripMarkdown_Blockquote(t *testing.T) {
 }
 
 func TestStripMarkdown_HorizontalRule(t *testing.T) {
-	got := stripMarkdown("Above\n---\nBelow")
-	want := "Above\n—\nBelow"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	tests := []struct {
+		name, input, want string
+	}{
+		{"dashes", "Above\n---\nBelow", "Above\n—\nBelow"},
+		{"asterisks", "Above\n***\nBelow", "Above\n—\nBelow"},
+		{"underscores", "Above\n___\nBelow", "Above\n—\nBelow"},
+		{"long_dashes", "Above\n-----\nBelow", "Above\n—\nBelow"},
+		{"long_underscores", "Above\n_____\nBelow", "Above\n—\nBelow"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripMarkdown(tc.input)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

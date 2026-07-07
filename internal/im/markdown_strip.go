@@ -55,8 +55,12 @@ var (
 	mdHeaderRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
 	// Blockquotes: > text → text
 	mdBlockquoteRe = regexp.MustCompile(`(?m)^>\s?(.+)$`)
-	// Horizontal rules: --- or *** → —
+	// Horizontal rules (dash and asterisk): --- or *** → —
+	// Underscore HRs are handled separately at step 3a (before __bold__).
 	mdHRRe = regexp.MustCompile(`(?m)^(-{3,}|\*{3,})$`)
+	// Underscore horizontal rules: ___ → —
+	// Must be processed BEFORE __bold__ to prevent ________ being consumed.
+	mdUnderscoreHRRe = regexp.MustCompile(`(?m)^_{3,}$`)
 	// GFM tables: consecutive lines starting with | (bordered table syntax)
 	mdTableRe = regexp.MustCompile(`(?m)^(?:\|[^\n]*\|\s*\n)+\|[^\n]*\|`)
 )
@@ -66,7 +70,7 @@ var (
 //   - Removing formatting markers (**, *, _, ~~, `)
 //   - Converting headers to plain text
 //   - Converting links to "text (url)" format
-//   - Removing image syntax entirely
+//   - Converting images to their URL (text-only platforms show the link)
 //   - Preserving list structure with bullet characters
 func stripMarkdown(text string) string {
 	if text == "" {
@@ -119,6 +123,10 @@ func stripMarkdown(text string) string {
 
 	// 3. Bold: **text** → text (before italic to avoid ** being seen as *)
 	text = mdBoldRe.ReplaceAllString(text, "$1")
+
+	// 3a. Underscore horizontal rules: ___ (3+) on its own line → em dash
+	// Must be before __bold__ to prevent _____ being consumed as __ + _ + __.
+	text = mdUnderscoreHRRe.ReplaceAllString(text, "—")
 
 	// 3b. Underscore bold: __text__ → text (before italic _text_ to avoid partial match)
 	text = mdUnderscoreBoldRe.ReplaceAllString(text, "$1")
