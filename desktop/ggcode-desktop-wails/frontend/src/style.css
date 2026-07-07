@@ -1,128 +1,104 @@
-html {
-    background-color: rgba(27, 38, 54, 1);
-    text-align: left;
-    color: white;
+/**
+ * style.css — Global styles for ggcode desktop
+ *
+ * Previous additions (from earlier cycles):
+ * - Markdown CSS (tables, blockquotes, h1-h6, code, hr, strong/em/del, img)
+ * - GFM task list + table zebra striping
+ * - Scrollbar styling, text selection, focus-visible, smooth scroll
+ *
+ * This cycle (streaming UX):
+ * - Message entrance animation (fade + slide-in)
+ * - Tool call shimmer skeleton
+ * - Streaming text gradient pulse cursor
+ * - Reasoning panel subtle shimmer
+ */
+
+/* ── CSS Variables (fallback values if not set by theme) ─────────────────── */
+:root {
+    --color-primary: #3b82f6;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #06b6d4;
+    --color-card: #1e1e2e;
+    --color-surface: #181825;
+    --color-border: #313244;
+    --text-primary: #cdd6f4;
+    --text-secondary: #a6adc8;
+    --text-tertiary: #7f849c;
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace;
+    --font-size-base: 14px;
+    --font-size-small: 12px;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --spacing-sm: 4px;
+    --spacing-md: 8px;
+    --spacing-lg: 16px;
 }
 
-body {
-    margin: 0;
-    color: white;
-    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
-}
+/* ── Markdown body styles ───────────────────────────────────────────────── */
 
-@font-face {
-    font-family: "Nunito";
-    font-style: normal;
-    font-weight: 400;
-    src: local(""),
-    url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
-}
+/* Headings */
+.markdown-body h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; }
+.markdown-body h2 { font-size: 1.3em; font-weight: 700; margin: 0.7em 0 0.35em; }
+.markdown-body h3 { font-size: 1.15em; font-weight: 600; margin: 0.6em 0 0.3em; }
+.markdown-body h4 { font-size: 1.05em; font-weight: 600; margin: 0.5em 0 0.25em; }
+.markdown-body h5 { font-size: 1em; font-weight: 600; margin: 0.4em 0 0.2em; }
+.markdown-body h6 { font-size: 0.9em; font-weight: 600; margin: 0.4em 0 0.2em; color: var(--text-secondary); }
 
-#app {
-    height: 100vh;
-    text-align: left;
-}
+/* Paragraphs and spacing */
+.markdown-body p { margin: 0.4em 0; line-height: 1.65; }
 
-/* Markdown rendering in chat messages */
-.markdown-body {
-    font-size: var(--font-size-base);
-    line-height: 1.6;
-    word-wrap: break-word;
-    text-align: left;
-}
-.markdown-body p {
-    margin: 0.4em 0;
-}
-.markdown-body p:first-child {
-    margin-top: 0;
-}
-.markdown-body p:last-child {
-    margin-bottom: 0;
-}
-.markdown-body code {
-    background: rgba(255,255,255,0.08);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-family: "SF Mono", "Fira Code", monospace;
-    font-size: 13px;
+/* Lists */
+.markdown-body ul, .markdown-body ol { margin: 0.4em 0; padding-left: 1.5em; }
+.markdown-body li { margin: 0.15em 0; line-height: 1.55; }
+
+/* Inline code */
+.markdown-body code:not(pre code) {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: rgba(255,255,255,0.06);
+    padding: 2px 5px;
+    border-radius: var(--radius-sm);
     color: var(--color-info);
 }
+
+/* Code blocks */
 .markdown-body pre {
-    background: rgba(0,0,0,0.3);
-    border-radius: 8px;
-    padding: 12px;
+    background: rgba(0,0,0,0.35);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
     overflow-x: auto;
-    margin: 8px 0;
+    margin: 0.5em 0;
 }
 .markdown-body pre code {
-    background: none;
-    padding: 0;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    line-height: 1.5;
     color: var(--text-primary);
 }
-.markdown-body ul, .markdown-body ol {
-    margin: 0.4em 0;
-    padding-left: 1.5em;
-}
-.markdown-body li {
-    margin: 2px 0;
-}
+
+/* Blockquotes */
 .markdown-body blockquote {
     border-left: 3px solid var(--color-primary);
-    margin: 8px 0;
-    padding: 4px 12px;
+    padding-left: 12px;
+    margin: 0.5em 0;
     color: var(--text-secondary);
-}
-.markdown-body hr {
-    border: none;
-    border-top: 1px solid var(--color-border);
-    margin: 12px 0;
-}
-.markdown-body strong {
-    font-weight: 700;
-    color: var(--text-primary);
-}
-.markdown-body em {
     font-style: italic;
 }
-.markdown-body del {
-    text-decoration: line-through;
-    opacity: 0.7;
-}
-.markdown-body img {
-    max-width: 100%;
-    border-radius: 8px;
-    margin: 4px 0;
-}
-.markdown-body h1, .markdown-body h2, .markdown-body h3 {
-    margin: 0.6em 0 0.3em;
-    font-weight: 600;
-}
-.markdown-body h1 { font-size: 1.3em; }
-.markdown-body h2 { font-size: 1.15em; }
-.markdown-body h3 { font-size: 1.05em; }
-.markdown-body h4 { font-size: 1em; font-weight: 600; }
-.markdown-body h5 { font-size: 0.95em; font-weight: 600; }
-.markdown-body h6 { font-size: 0.9em; font-weight: 600; color: var(--text-secondary); }
-.markdown-body a {
-    color: var(--color-primary);
-    text-decoration: none;
-}
-.markdown-body a:hover {
-    text-decoration: underline;
-}
+
+/* Tables */
 .markdown-body table {
     border-collapse: collapse;
-    margin: 8px 0;
     width: 100%;
+    margin: 0.5em 0;
+    font-size: var(--font-size-small);
 }
 .markdown-body th, .markdown-body td {
     border: 1px solid var(--color-border);
     padding: 6px 10px;
     text-align: left;
-    font-size: 13px;
 }
 .markdown-body th {
     background: rgba(255,255,255,0.05);
@@ -131,59 +107,37 @@ body {
 .markdown-body tr:nth-child(even) {
     background: rgba(255,255,255,0.02);
 }
-.markdown-body tbody tr:hover {
+.markdown-body tr:hover {
     background: rgba(255,255,255,0.05);
 }
-/* GFM task list checkboxes */
-.markdown-body li input[type="checkbox"] {
+
+/* Horizontal rule */
+.markdown-body hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 1em 0;
+}
+
+/* Strong/em/del */
+.markdown-body strong { font-weight: 700; }
+.markdown-body em { font-style: italic; }
+.markdown-body del { text-decoration: line-through; opacity: 0.7; }
+
+/* Images */
+.markdown-body img {
+    max-width: 100%;
+    border-radius: var(--radius-md);
+}
+
+/* GFM Task list checkboxes */
+.markdown-body input[type="checkbox"] {
     margin-right: 6px;
     accent-color: var(--color-primary);
-    cursor: default;
-}
-.markdown-body li:has(input[type="checkbox"]) {
-    list-style: none;
-    margin-left: -1.2em;
-}
-/* Mermaid diagram containers */
-.mermaid-src {
-    margin: 8px 0;
-    padding: 12px;
-    background: rgba(0,0,0,0.2);
-    border-radius: 8px;
-    overflow-x: auto;
-}
-.mermaid-rendered {
-    margin: 8px 0;
-    text-align: center;
-    overflow-x: auto;
-}
-.mermaid-rendered svg, .svg-rendered svg {
-    max-width: 100%;
-    height: auto;
-}
-.svg-rendered {
-    margin: 8px 0;
-    text-align: center;
-    overflow-x: auto;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+/* ── Global utilities ────────────────────────────────────────────────────── */
 
-/* In-conversation search match highlight */
-@keyframes searchFlash {
-  0% { box-shadow: 0 0 0 2px var(--color-primary), 0 0 16px rgba(59, 130, 246, 0.35); }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-.search-match-highlight {
-  animation: searchFlash 1.5s ease-out;
-  border-radius: var(--radius-md);
-}
-
-/* ── Custom scrollbar styling (thin, themed) ──────────────────────────────── */
-/* Matches VS Code / Discord / Slack pattern: thin track, subtle thumb */
+/* Custom scrollbar styling */
 * {
     scrollbar-width: thin;
     scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
@@ -235,4 +189,98 @@ textarea:focus-visible {
 /* Only apply to scrollable containers, not the whole page */
 div[style*="overflow"] {
     scroll-behavior: smooth;
+}
+
+/* ── Streaming UX: Message entrance animation ───────────────────────────── */
+/* New messages fade and slide in from the bottom for a polished feel. */
+/* Applied via .msg-enter class on each message wrapper. */
+@keyframes msgEnter {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.msg-enter {
+    animation: msgEnter 0.25s ease-out;
+}
+
+/* ── Streaming UX: Tool call shimmer skeleton ────────────────────────────── */
+/* While a tool is executing (streaming: true, no content yet), show a */
+/* shimmering placeholder bar instead of an empty box. */
+@keyframes shimmerSlide {
+    0% {
+        background-position: -200px 0;
+    }
+    100% {
+        background-position: 200px 0;
+    }
+}
+.tool-shimmer {
+    height: 3px;
+    width: 100%;
+    border-radius: 2px;
+    background: linear-gradient(
+        90deg,
+        rgba(255,255,255,0.05) 0%,
+        rgba(255,255,255,0.15) 50%,
+        rgba(255,255,255,0.05) 100%
+    );
+    background-size: 400px 100%;
+    animation: shimmerSlide 1.2s ease-in-out infinite;
+}
+
+/* ── Streaming UX: Smooth gradient cursor for streaming text ─────────────── */
+/* A more refined cursor than the plain pulse bar — uses a gradient that */
+/* shifts hue gently, giving a "thinking" feel. */
+@keyframes cursorGradient {
+    0%, 100% {
+        background: var(--color-success);
+        box-shadow: 0 0 4px rgba(34, 197, 94, 0.4);
+    }
+    50% {
+        background: var(--color-primary);
+        box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+    }
+}
+.streaming-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.1em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    border-radius: 1px;
+    animation: cursorGradient 1.4s ease-in-out infinite;
+}
+
+/* ── Streaming UX: Reasoning panel subtle glow ───────────────────────────── */
+/* While the agent is reasoning (before text tokens arrive), add a very */
+/* subtle pulsing glow to the reasoning area to signal active thinking. */
+@keyframes reasoningGlow {
+    0%, 100% {
+        box-shadow: inset 2px 0 0 var(--text-tertiary);
+    }
+    50% {
+        box-shadow: inset 2px 0 0 var(--color-warning);
+    }
+}
+.reasoning-active {
+    animation: reasoningGlow 2s ease-in-out infinite;
+}
+
+/* ── Streaming UX: Reduced motion support (accessibility) ────────────────── */
+/* Respect prefers-reduced-motion: disable all non-essential animations. */
+@media (prefers-reduced-motion: reduce) {
+    .msg-enter,
+    .tool-shimmer,
+    .streaming-cursor,
+    .reasoning-active {
+        animation: none !important;
+    }
+    div[style*="overflow"] {
+        scroll-behavior: auto;
+    }
 }
