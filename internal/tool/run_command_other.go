@@ -24,4 +24,9 @@ func configureCommandCancellation(cmd *exec.Cmd) {
 		return cmd.Process.Kill()
 	}
 	cmd.WaitDelay = 750 * time.Millisecond
+	// CREATE_NO_WINDOW prevents console window flashing (GUI mode) and
+	// gives the child process a new hidden console instead of inheriting
+	// the parent's visible terminal. This reduces the surface for
+	// WriteConsole-based output that bypasses Go's stdout/stderr pipes.
+	applyCreateNoWindow(cmd)
 }
