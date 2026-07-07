@@ -1566,6 +1566,7 @@ Focus on preserving:
 - Errors encountered and how they were resolved
 - Incomplete or pending work the assistant was about to do
 - User preferences or constraints mentioned
+- **User requests** — the verbatim user requests are provided at the top of the payload; preserve them near-verbatim in a "User Requests" section
 
 You may omit:
 - Full source code contents (reference file paths and key changes instead)
@@ -1727,9 +1728,23 @@ func buildSummaryPayload(msgs []provider.Message) string {
 		payloadToolResultMaxLen = 500 // max chars for tool result in summary payload
 		payloadToolResultHead   = 200 // keep first N chars
 		payloadToolInputMaxLen  = 300 // max chars for tool input in summary payload
+		payloadUserMsgMaxLen    = 500 // max chars per user message in verbatim section
 	)
 
 	var sb strings.Builder
+
+	// Extract user requests verbatim — these are the most critical signal for
+	// continuing work (ACE paper: "brevity bias" causes summaries to drop
+	// domain insights, especially the original user intent).
+	userRequests := extractUserRequests(msgs, payloadUserMsgMaxLen)
+	if len(userRequests) > 0 {
+		sb.WriteString("=== VERBATIM USER REQUESTS (preserve these near-verbatim in your summary) ===\n")
+		for i, req := range userRequests {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, req))
+		}
+		sb.WriteString("\n=== CONVERSATION LOG ===\n")
+	}
+
 	for _, msg := range msgs {
 		sb.WriteString(fmt.Sprintf("[%s]\n", msg.Role))
 		for _, block := range msg.Content {
@@ -1755,6 +1770,35 @@ func buildSummaryPayload(msgs []provider.Message) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// extractUserRequests collects text content from user-role messages, returning
+// them as a list of truncated strings. This is used to prepend verbatim user
+// requests to the summarization payload, preventing "brevity bias" (ACE paper)
+// where summaries drop the original user intent.
+func extractUserRequests(msgs []provider.Message, maxLen int) []string {
+	var requests []string
+	for _, msg := range msgs {
+		if msg.Role != "user" {
+			continue
+		}
+		for _, block := range msg.Content {
+			if block.Type != "text" {
+				continue
+			}
+			text := strings.TrimSpace(block.Text)
+			if text == "" {
+				continue
+			}
+			// Skip tool result echoes (some providers put tool_result content
+			// in user messages with only tool_result blocks, but we check text)
+			if len(text) > maxLen {
+				text = text[:maxLen] + "..."
+			}
+			requests = append(requests, text)
+		}
+	}
+	return requests
 }
 
 // formatToolInputForSummary extracts the most informative fields from a tool

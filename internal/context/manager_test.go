@@ -1262,6 +1262,70 @@ func TestBuildSummaryPayloadIncludesToolInputs(t *testing.T) {
 
 // ── ClearOldToolUseInputs tests ──
 
+func TestBuildSummaryPayload_IncludesUserRequests(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Fix the memory leak in agent.go"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "I'll investigate."}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Also add tests for the fix"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Done."}}},
+	}
+
+	payload := buildSummaryPayload(msgs)
+
+	if !strings.Contains(payload, "VERBATIM USER REQUESTS") {
+		t.Error("payload missing VERBATIM USER REQUESTS section")
+	}
+	if !strings.Contains(payload, "Fix the memory leak in agent.go") {
+		t.Error("payload missing first user request")
+	}
+	if !strings.Contains(payload, "Also add tests for the fix") {
+		t.Error("payload missing second user request")
+	}
+}
+
+func TestBuildSummaryPayload_UserRequestsTruncated(t *testing.T) {
+	longText := strings.Repeat("A", 600)
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: longText}}},
+	}
+
+	payload := buildSummaryPayload(msgs)
+
+	if !strings.Contains(payload, "...") {
+		t.Error("payload should contain truncation marker for long user message")
+	}
+}
+
+func TestExtractUserRequests(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi there"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "  "}}}, // whitespace only
+		{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "c1", Output: "result"}}},
+	}
+
+	requests := extractUserRequests(msgs, 500)
+
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 user request, got %d", len(requests))
+	}
+	if requests[0] != "Hello" {
+		t.Errorf("expected 'Hello', got %q", requests[0])
+	}
+}
+
+func TestExtractUserRequests_Empty(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System message"}}},
+	}
+
+	requests := extractUserRequests(msgs, 500)
+	if len(requests) != 0 {
+		t.Errorf("expected 0 user requests, got %d", len(requests))
+	}
+}
+
 func TestClearOldToolUseInputs_ClearsLargeInputAfterResultCleared(t *testing.T) {
 	m := NewManager(100000)
 	largeInput := fmt.Sprintf(`{"path":"/large/file.go","old_text":%q}`, strings.Repeat("line\n", 100))
