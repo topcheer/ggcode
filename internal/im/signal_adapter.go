@@ -582,58 +582,62 @@ func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error
 			continue
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+endpoint, bytes.NewReader(body))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := a.conn.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("Signal send: %w", err)
-			debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, err)
-			continue
-		}
-
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusTooManyRequests {
-			// Retry on rate limit with exponential backoff.
-			backoff := signalInterMessageDelay * 2
-			debug.Log("signal", "adapter=%s rate-limited (429) to %s, retrying after %v", a.name, chatID, backoff)
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return ctx.Err()
+		// Send with rate-limit retry loop (shared pattern).
+		var respBody []byte
+		sent := false
+		for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL+endpoint, bytes.NewReader(body))
+			if err != nil {
+				lastErr = err
+				break
 			}
-			// Retry the same chunk
-			resp2, err2 := a.conn.Do(req)
-			if err2 != nil {
-				lastErr = fmt.Errorf("Signal send retry: %w", err2)
-				continue
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := a.conn.Do(req)
+			if err != nil {
+				lastErr = fmt.Errorf("Signal send: %w", err)
+				debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, err)
+				break // non-retryable transport error
 			}
-			respBody2, _ := io.ReadAll(io.LimitReader(resp2.Body, 4096))
-			resp2.Body.Close()
-			if resp2.StatusCode != http.StatusCreated && resp2.StatusCode != http.StatusOK {
-				lastErr = fmt.Errorf("Signal send status %d: %s", resp2.StatusCode, string(respBody2))
-				debug.Log("signal", "adapter=%s send retry error to %s: %s", a.name, chatID, string(respBody2))
-				continue
+
+			// Handle HTTP 429 (Too Many Requests) with Retry-After backoff.
+			if resp.StatusCode == http.StatusTooManyRequests {
+				resp.Body.Close()
+				if attempt < maxRateLimitRetries {
+					delay := parseRetryAfter(resp)
+					debug.Log("signal", "adapter=%s rate-limited (429) to %s, retry %d/%d in %v",
+						a.name, chatID, attempt+1, maxRateLimitRetries, delay)
+					if err := sleepRetry(ctx, delay); err != nil {
+						return err
+					}
+					continue
+				}
+				lastErr = rateLimitExhausted("Signal")
+				break
 			}
-			respBody = respBody2
-		} else if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
-			debug.Log("signal", "adapter=%s send error to %s: %s", a.name, chatID, string(respBody))
-			continue
+
+			respBody, _ = io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
+				debug.Log("signal", "adapter=%s send error to %s: %s", a.name, chatID, string(respBody))
+				break
+			}
+
+			// Success
+			sent = true
+			break
 		}
 
 		// Track sent timestamp for echo suppression
-		var result struct {
-			Timestamp int64 `json:"timestamp"`
-		}
-		if json.Unmarshal(respBody, &result) == nil && result.Timestamp > 0 {
-			a.addSentTimestamp(result.Timestamp)
+		if sent {
+			var result struct {
+				Timestamp int64 `json:"timestamp"`
+			}
+			if json.Unmarshal(respBody, &result) == nil && result.Timestamp > 0 {
+				a.addSentTimestamp(result.Timestamp)
+			}
 		}
 	}
 	return lastErr
