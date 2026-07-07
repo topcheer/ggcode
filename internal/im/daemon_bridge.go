@@ -977,31 +977,52 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 	}
 	sb.WriteString("\n")
 
-	// Aggregate tool names with counts
-	toolCounts := make(map[string]int)
+	// Aggregate tool names with counts and failure tracking
+	type toolStat struct {
+		count    int
+		failures int
+	}
+	toolStats := make(map[string]*toolStat)
 	for _, t := range tools {
 		name := formatIMToolDisplayName(t.ToolName)
-		toolCounts[name]++
+		stat := toolStats[name]
+		if stat == nil {
+			stat = &toolStat{}
+			toolStats[name] = stat
+		}
+		stat.count++
+		if t.IsError {
+			stat.failures++
+		}
 	}
 
 	// Sort by count descending
 	type kv struct {
-		name  string
-		count int
+		name     string
+		count    int
+		failures int
 	}
 	var sorted []kv
-	for k, v := range toolCounts {
-		sorted = append(sorted, kv{k, v})
+	for k, v := range toolStats {
+		sorted = append(sorted, kv{k, v.count, v.failures})
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].count > sorted[j].count
 	})
 
 	for _, item := range sorted {
-		if item.count == 1 {
-			sb.WriteString(fmt.Sprintf("  ✓ %s\n", item.name))
+		var symbol string
+		if item.failures > 0 && item.failures == item.count {
+			symbol = "✗" // all calls failed
+		} else if item.failures > 0 {
+			symbol = "⚠" // partial failure
 		} else {
-			sb.WriteString(fmt.Sprintf("  ✓ %s ×%d\n", item.name, item.count))
+			symbol = "✓" // all succeeded
+		}
+		if item.count == 1 {
+			sb.WriteString(fmt.Sprintf("  %s %s\n", symbol, item.name))
+		} else {
+			sb.WriteString(fmt.Sprintf("  %s %s ×%d\n", symbol, item.name, item.count))
 		}
 	}
 

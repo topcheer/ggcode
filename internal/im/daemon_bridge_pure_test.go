@@ -99,6 +99,32 @@ func TestFormatToolSummary(t *testing.T) {
 	if !strings.Contains(got4, "Run ×2") {
 		t.Errorf("multi count: %q", got4)
 	}
+
+	// Failure indicator: all calls failed -> ✗
+	failedTools := []ToolResultInfo{{ToolName: "edit_file", IsError: true}}
+	got5 := formatToolSummary("en", failedTools, 1, 0, 1)
+	if !strings.Contains(got5, "✗") {
+		t.Errorf("all failed: expected ✗, got %q", got5)
+	}
+
+	// Failure indicator: partial failure -> ⚠
+	mixedTools := []ToolResultInfo{
+		{ToolName: "run_command"},
+		{ToolName: "run_command", IsError: true},
+	}
+	got6 := formatToolSummary("en", mixedTools, 2, 1, 1)
+	if !strings.Contains(got6, "⚠") {
+		t.Errorf("partial failure: expected ⚠, got %q", got6)
+	}
+
+	// Success indicator: all succeeded -> ✓
+	got7 := formatToolSummary("en", tools2, 3, 3, 0)
+	if !strings.Contains(got7, "✓") {
+		t.Errorf("all succeeded: expected ✓, got %q", got7)
+	}
+	if strings.Contains(got7, "✗") || strings.Contains(got7, "⚠") {
+		t.Errorf("no failures: should not contain ✗ or ⚠, got %q", got7)
+	}
 }
 
 func TestFormatToolSummaryChinese(t *testing.T) {
