@@ -33,7 +33,8 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
+# Limit parallelism and heap to prevent OOM kills on memory-constrained CI runners.
+GOMEMLIMIT=2GiB go build -tags goolm -p 2 -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] cross-platform compile check (linux + windows)"
 # Catch errors in platform-specific files (*_darwin.go, *_linux.go, *_windows.go)
@@ -41,7 +42,7 @@ echo "[verify-ci] cross-platform compile check (linux + windows)"
 for target in "linux/amd64" "windows/amd64"; do
   os="${target%%/*}"
   arch="${target##*/}"
-  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
+  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT=1GiB go build -tags goolm -p 2 ./cmd/ggcode 2>/tmp/cross-build.err; then
     echo "[verify-ci] cross-compile FAILED for ${os}/${arch}:"
     cat /tmp/cross-build.err
     exit 1
@@ -50,7 +51,7 @@ done
 echo "[verify-ci] cross-platform compile check passed"
 
 echo "[verify-ci] running go vet (main module)"
-go vet -tags goolm ./cmd/... ./internal/...
+GOMEMLIMIT=2GiB go vet -tags goolm -p 2 ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # Limit parallelism to prevent OOM kills on machines with many packages.
@@ -60,7 +61,7 @@ echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-GOMEMLIMIT=512MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
+GOMEMLIMIT=1GiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
