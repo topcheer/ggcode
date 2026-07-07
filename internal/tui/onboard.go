@@ -317,7 +317,7 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.step == onboardStepLanguage {
 				return m, tea.Quit
 			}
-			m.step--
+			m.step = m.prevStep()
 			m.err = ""
 			m.restoreFocus()
 			return m, nil
@@ -325,7 +325,7 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.step == onboardStepLanguage {
 				return m, tea.Quit
 			}
-			m.step--
+			m.step = m.prevStep()
 			m.err = ""
 			m.restoreFocus()
 			return m, nil
@@ -349,6 +349,30 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateIM(msg)
 	}
 	return m, nil
+}
+
+// prevStep returns the correct previous step, accounting for the non-linear
+// step structure where Custom(2) is a branch off Vendor that jumps to Optional(5).
+// A naive m.step-- from Endpoint(3) would land on Custom(2) instead of Vendor(1),
+// and from Optional(5) would land on Model(4) even if the user came via Custom.
+func (m *onboardModel) prevStep() onboardStep {
+	switch m.step {
+	case onboardStepEndpoint:
+		// Endpoint is always reached from Vendor, never from Custom.
+		return onboardStepVendor
+	case onboardStepOptional:
+		// If the user came via Custom path (selectedVendor not set),
+		// go back to Custom, not Model.
+		if m.selectedVendor.ID == "" {
+			return onboardStepCustom
+		}
+		return onboardStepModel
+	default:
+		if m.step > onboardStepLanguage {
+			return m.step - 1
+		}
+		return m.step
+	}
 }
 
 func (m *onboardModel) restoreFocus() {

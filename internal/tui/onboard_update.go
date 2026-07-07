@@ -67,8 +67,10 @@ func (m *onboardModel) updateVendor(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.vendorFilter, cmd = m.vendorFilter.Update(msg)
 		m.applyVendorFilter()
-		if m.vendorCursor >= len(m.vendorFiltered) {
-			m.vendorCursor = max(0, len(m.vendorFiltered)-1)
+		// Use > (not >=) so the cursor at len(vendorFiltered) — the
+		// "Custom Provider" entry — is preserved across keystrokes and blinks.
+		if m.vendorCursor > len(m.vendorFiltered) {
+			m.vendorCursor = len(m.vendorFiltered)
 		}
 		return m, cmd
 	}
