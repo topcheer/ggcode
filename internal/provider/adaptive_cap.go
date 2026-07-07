@@ -225,15 +225,25 @@ func loadAdaptiveCaps() {
 // writes it. Caller may hold an individual cap's mu; we briefly take the
 // registry mu to enumerate.
 func saveAdaptiveCaps() {
+	// Snapshot the registry keys first under the registry lock, then read
+	// each cap's fields under its own lock. This avoids holding both locks
+	// simultaneously (which would deadlock with OnTruncated's lock ordering:
+	// cap.mu → saveAdaptiveCaps → capRegistryMu).
 	capRegistryMu.Lock()
-	snap := make(map[string]persistedCap, len(capRegistry))
+	keys := make([]string, 0, len(capRegistry))
+	caps := make([]*adaptiveCap, 0, len(capRegistry))
 	for k, c := range capRegistry {
-		// Read fields without taking c.mu — we're already inside the caller's
-		// lock for the cap being mutated, and other caps' fields are read
-		// atomically (cur) or are stable enough for a snapshot.
-		snap[k] = persistedCap{Lo: c.lo, Hi: c.hi, Cur: c.cur.Load()}
+		keys = append(keys, k)
+		caps = append(caps, c)
 	}
 	capRegistryMu.Unlock()
+
+	snap := make(map[string]persistedCap, len(caps))
+	for i, c := range caps {
+		c.mu.Lock()
+		snap[keys[i]] = persistedCap{Lo: c.lo, Hi: c.hi, Cur: c.cur.Load()}
+		c.mu.Unlock()
+	}
 
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
