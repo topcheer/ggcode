@@ -58,7 +58,7 @@ import (
 
 const (
 	feishuDefaultDomain    = "feishu"
-	feishuMaxTextLen       = 4000
+	feishuMaxTextLen       = 28000                  // Feishu interactive card body supports ~30KB total JSON; 28000 chars leaves room for card structure
 	feishuTokenExpireDelta = 300                    // refresh 5 minutes early
 	feishuInterMsgDelay    = 300 * time.Millisecond // Feishu allows 5 QPS per user; 300ms ≈ 3.3 QPS is safe
 )

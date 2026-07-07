@@ -19,14 +19,14 @@ var ByteLimitPlatforms = map[Platform]bool{
 //
 // Sources:
 //   - Discord: https://discord.com/developers/docs/resources/channel#create-message (2000 chars)
-//   - Slack: https://api.slack.com/reference/block-kit/blocks (4000 chars per text block)
+//   - Slack: https://api.slack.com/messaging/retrieving#text (markdown_text 12000 chars)
 //   - DingTalk: https://open.dingtalk.com/document/orgapp/robot-message-types (markdown ~5000 chars)
 //   - Telegram: https://core.telegram.org/bots/api#sendmessage (4096 chars)
 //   - QQ: QQ Bot API (text ~3000 chars)
-//   - Feishu: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/im-v1/message/create (post text ~30000 chars, conservative 4000)
+//   - Feishu: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/im-v1/message/create (interactive card body ~30KB; 28000 chars leaves room for card JSON structure)
 //   - IRC: RFC 2812 §2.3.1 — 512 bytes total minus overhead (~400 usable)
 //   - Twitch: https://discuss.dev.twitch.tv/t/message-character-limit/7793 (500 chars)
-//   - Signal: https://github.com/signalapp/Signal-Desktop/issues/724 (2000 chars)
+//   - Signal: https://github.com/AsamK/signal-cli/issues/1598 (65536 bytes; 16000 chars conservative for CJK)
 //   - Nostr: NIP-04 — no protocol limit; 2000 is conservative (relay-dependent)
 //   - Matrix: Matrix spec — total event ≤ 65KB; 4000 is conservative for body text
 //   - Mattermost: https://docs.mattermost.com/administration-guide/manage/product-limits.html (16383 chars)
@@ -36,14 +36,14 @@ var ByteLimitPlatforms = map[Platform]bool{
 //   - Dummy: No practical limit
 var PlatformLimits = map[Platform]int{
 	PlatformDiscord:    2000,
-	PlatformSlack:      4000,
+	PlatformSlack:      12000,
 	PlatformDingTalk:   4000,
 	PlatformTelegram:   4096,
 	PlatformQQ:         3000,
-	PlatformFeishu:     4000,
+	PlatformFeishu:     28000,
 	PlatformIRC:        400,
 	PlatformTwitch:     500,
-	PlatformSignal:     2000,
+	PlatformSignal:     16000,
 	PlatformNostr:      2000,
 	PlatformMatrix:     4000,
 	PlatformMattermost: 16383,
