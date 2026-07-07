@@ -813,7 +813,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// Budget guard: track per-step output token cost trend (BAGEN-inspired).
 		// Detects cost-escalation patterns that indicate a doomed trajectory.
-		a.budgetGuard.recordStep(resp.Usage.OutputTokens)
+		a.budgetGuard.recordStep(resp.Usage.OutputTokens, resp.Usage.InputTokens)
 		if budgetWarning := a.budgetGuard.maybeWarn(a.contextManager.ContextWindow(), a.contextManager.TokenCount()); budgetWarning != "" {
 			debug.Log("budget-guard", "cost escalation detected: steps=%d consumed=%d", len(a.budgetGuard.stepCosts), a.budgetGuard.totalConsumed)
 			a.contextManager.Add(provider.Message{

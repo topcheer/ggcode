@@ -7,7 +7,7 @@ import (
 func TestBudgetGuard_NoWarningWithFewSteps(t *testing.T) {
 	b := newBudgetGuardState()
 	for i := 0; i < budgetMinSteps-1; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
 	// Should not fire with fewer than budgetMinSteps steps
 	if w := b.maybeWarn(128000, 50000); w != "" {
@@ -17,9 +17,9 @@ func TestBudgetGuard_NoWarningWithFewSteps(t *testing.T) {
 
 func TestBudgetGuard_NoWarningWithStableCosts(t *testing.T) {
 	b := newBudgetGuardState()
-	// Record many steps with stable costs (~100 tokens each)
+	// Record many steps with stable costs (~100 output tokens each)
 	for i := 0; i < 15; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*50) // stable input growth too
 	}
 	// Should not fire when costs are stable
 	if w := b.maybeWarn(128000, 80000); w != "" {
@@ -31,17 +31,17 @@ func TestBudgetGuard_WarnsOnCostEscalation(t *testing.T) {
 	b := newBudgetGuardState()
 	// First several steps: low cost
 	for i := 0; i < 6; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
-	// Recent steps: significantly higher cost (backtracking pattern)
-	b.recordStep(300)
-	b.recordStep(350)
-	b.recordStep(400)
+	// Recent steps: significantly higher output cost (backtracking pattern)
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
 
 	// Context at 60% utilization (above threshold)
 	w := b.maybeWarn(128000, 76800)
 	if w == "" {
-		t.Error("expected warning with escalating costs and high context utilization")
+		t.Error("expected warning with escalating output costs and high context utilization")
 	}
 	if !b.warningGiven {
 		t.Error("warningGiven should be true after firing")
@@ -52,11 +52,11 @@ func TestBudgetGuard_NoWarnAtLowContextUtilization(t *testing.T) {
 	b := newBudgetGuardState()
 	// Escalating costs but context only at 30%
 	for i := 0; i < 6; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
-	b.recordStep(300)
-	b.recordStep(350)
-	b.recordStep(400)
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
 
 	// Context at 30% utilization (below threshold)
 	if w := b.maybeWarn(128000, 38400); w != "" {
@@ -67,11 +67,11 @@ func TestBudgetGuard_NoWarnAtLowContextUtilization(t *testing.T) {
 func TestBudgetGuard_FiresOncePerRun(t *testing.T) {
 	b := newBudgetGuardState()
 	for i := 0; i < 6; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
-	b.recordStep(300)
-	b.recordStep(350)
-	b.recordStep(400)
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
 
 	// First call should fire
 	w1 := b.maybeWarn(128000, 76800)
@@ -89,7 +89,7 @@ func TestBudgetGuard_FiresOncePerRun(t *testing.T) {
 func TestBudgetGuard_ResetClearsState(t *testing.T) {
 	b := newBudgetGuardState()
 	for i := 0; i < 10; i++ {
-		b.recordStep(200)
+		b.recordStep(200, 10000+i*200)
 	}
 	b.warningGiven = true
 
@@ -97,6 +97,12 @@ func TestBudgetGuard_ResetClearsState(t *testing.T) {
 
 	if len(b.stepCosts) != 0 {
 		t.Errorf("stepCosts not cleared: %d", len(b.stepCosts))
+	}
+	if len(b.stepInputDeltas) != 0 {
+		t.Errorf("stepInputDeltas not cleared: %d", len(b.stepInputDeltas))
+	}
+	if b.prevInputTokens != 0 {
+		t.Errorf("prevInputTokens not cleared: %d", b.prevInputTokens)
 	}
 	if b.totalConsumed != 0 {
 		t.Errorf("totalConsumed not cleared: %d", b.totalConsumed)
@@ -109,8 +115,8 @@ func TestBudgetGuard_ResetClearsState(t *testing.T) {
 func TestBudgetGuard_ComputeStatsStable(t *testing.T) {
 	b := newBudgetGuardState()
 	costs := []int{100, 110, 95, 105, 100, 110}
-	for _, c := range costs {
-		b.recordStep(c)
+	for i, c := range costs {
+		b.recordStep(c, 10000+i*100) // stable input growth
 	}
 
 	overall, recent, escalating := b.computeStats()
@@ -126,8 +132,8 @@ func TestBudgetGuard_ComputeStatsStable(t *testing.T) {
 func TestBudgetGuard_ComputeStatsEscalating(t *testing.T) {
 	b := newBudgetGuardState()
 	costs := []int{100, 90, 110, 95, 100, 105, 400, 500, 600}
-	for _, c := range costs {
-		b.recordStep(c)
+	for i, c := range costs {
+		b.recordStep(c, 10000+i*100)
 	}
 
 	overall, recent, escalating := b.computeStats()
@@ -148,11 +154,11 @@ func TestBudgetGuard_ZeroContextWindow(t *testing.T) {
 	b := newBudgetGuardState()
 	// Escalating costs, but context window is 0 (unknown)
 	for i := 0; i < 6; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
-	b.recordStep(300)
-	b.recordStep(350)
-	b.recordStep(400)
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
 
 	// With contextWindow=0, the utilization check is skipped,
 	// so the warning should still fire
@@ -165,11 +171,11 @@ func TestBudgetGuard_ZeroContextWindow(t *testing.T) {
 func TestBudgetGuard_WarningContainsDiagnostics(t *testing.T) {
 	b := newBudgetGuardState()
 	for i := 0; i < 6; i++ {
-		b.recordStep(100)
+		b.recordStep(100, 10000+i*100)
 	}
-	b.recordStep(300)
-	b.recordStep(350)
-	b.recordStep(400)
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
 
 	w := b.maybeWarn(128000, 76800)
 	if w == "" {
@@ -186,3 +192,43 @@ func TestBudgetGuard_WarningContainsDiagnostics(t *testing.T) {
 }
 
 // containsStr and indexStr are already defined in reflection_test.go
+
+// TestBudgetGuard_InputDeltaEscalation tests the new dual-signal detection.
+// Output stays flat but input grows rapidly (agent re-reading large files).
+func TestBudgetGuard_InputDeltaEscalation(t *testing.T) {
+	b := newBudgetGuardState()
+	// Steps 1-6: stable output, moderate input growth (~100 tokens/step)
+	for i := 0; i < 6; i++ {
+		b.recordStep(100, 10000+i*100)
+	}
+	// Steps 7-9: output stays flat (100) but input grows 5x faster
+	// (agent reading huge files it already read before)
+	b.recordStep(100, 16000+500)
+	b.recordStep(100, 16500+500)
+	b.recordStep(100, 17000+500)
+
+	// Context at 60% utilization
+	w := b.maybeWarn(128000, 76800)
+	if w == "" {
+		t.Error("expected warning when input delta escalates even with stable output")
+	}
+}
+
+func TestBudgetGuard_ProjectionUsesContextBudget(t *testing.T) {
+	b := newBudgetGuardState()
+	for i := 0; i < 6; i++ {
+		b.recordStep(100, 10000+i*100)
+	}
+	b.recordStep(300, 10600+100)
+	b.recordStep(350, 10700+100)
+	b.recordStep(400, 10800+100)
+
+	w := b.maybeWarn(256000, 128000) // 50% utilization
+	if w == "" {
+		t.Fatal("expected warning")
+	}
+	// Should mention steps remaining (context-budget-based projection)
+	if !containsStr(w, "steps remaining") {
+		t.Error("warning should include steps remaining estimate based on context budget")
+	}
+}
