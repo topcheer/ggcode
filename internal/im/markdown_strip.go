@@ -23,7 +23,10 @@ import (
 // Ordered for correct processing: code blocks → bold → italic → other.
 var (
 	// Fenced code blocks: ```lang\ncode\n``` → code
-	mdCodeFenceRe = regexp.MustCompile("(?s)```[^`]*```")
+	// Use .*? (non-greedy) with (?s) so code containing backtick chars
+	// (Go raw strings, inline code) is handled correctly. The old [^`]*
+	// pattern would break on any backtick inside the code block.
+	mdCodeFenceRe = regexp.MustCompile("(?s)```.*?```")
 	// Inline code: `code` → code
 	mdInlineCodeRe = regexp.MustCompile("`([^`]+)`")
 	// Bold: **text** → text

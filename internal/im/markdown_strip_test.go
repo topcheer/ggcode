@@ -53,6 +53,20 @@ func TestStripMarkdown_CodeBlock(t *testing.T) {
 	}
 }
 
+func TestStripMarkdown_CodeBlockWithBackticks(t *testing.T) {
+	// Code block containing a Go raw string with backtick — the
+	// old [^`]* regex would fail to match the entire fenced block,
+	// leaking raw ``` markers to plain-text platforms.
+	input := "Code:\n```go\ns := `raw`\n```\nEnd"
+	got := stripMarkdown(input)
+	// Fence markers removed, code content preserved. Inner backticks
+	// are stripped by inline code regex (acceptable for plain text).
+	want := "Code:\ns := raw\nEnd"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestStripMarkdown_Headers(t *testing.T) {
 	tests := []struct {
 		input string
