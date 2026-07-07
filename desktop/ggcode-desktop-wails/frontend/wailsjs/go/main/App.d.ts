@@ -47,8 +47,6 @@ export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.End
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
-export function LogoutAnthropicOAuth():Promise<void>;
-
 export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
 
 export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPresetInfo>>;
@@ -113,6 +111,8 @@ export function ListSessions():Promise<Array<wailskit.SessionInfo>>;
 
 export function LoadSession(arg1:string):Promise<void>;
 
+export function LogoutAnthropicOAuth():Promise<void>;
+
 export function MuteIMAdapter(arg1:string,arg2:boolean):Promise<void>;
 
 export function NeedsOnboard():Promise<boolean>;
@@ -155,21 +155,21 @@ export function SendMessage(arg1:string):Promise<void>;
 
 export function SendMessageWithImages(arg1:string,arg2:Array<main.PastedImage>):Promise<void>;
 
-export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
-
 export function SetEndpointLimits(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
+
+export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:boolean):Promise<boolean>;
 
 export function SetPermissionMode(arg1:string):Promise<void>;
+
+export function StartAnthropicOAuth():Promise<string>;
 
 export function StartMCPOAuth(arg1:string):Promise<wailskit.MCPOAuthStartResult>;
 
 export function StartShare():Promise<main.ShareInfo>;
 
 export function StopShare():Promise<void>;
-
-export function StartAnthropicOAuth():Promise<string>;
 
 export function SwitchModel(arg1:string):Promise<void>;
 

@@ -6,10 +6,6 @@ export function AddCustomEndpoint(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['AddCustomEndpoint'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function CompleteAnthropicOAuth() {
-  return window['go']['main']['App']['CompleteAnthropicOAuth']();
-}
-
 export function AddMCPServer(arg1) {
   return window['go']['main']['App']['AddMCPServer'](arg1);
 }
@@ -28,6 +24,10 @@ export function CancelMessage() {
 
 export function CheckForUpdates() {
   return window['go']['main']['App']['CheckForUpdates']();
+}
+
+export function CompleteAnthropicOAuth() {
+  return window['go']['main']['App']['CompleteAnthropicOAuth']();
 }
 
 export function CompleteMCPOAuth(arg1) {
@@ -62,6 +62,10 @@ export function ForceReauthMCPServer(arg1) {
   return window['go']['main']['App']['ForceReauthMCPServer'](arg1);
 }
 
+export function GetAnthropicOAuthStatus() {
+  return window['go']['main']['App']['GetAnthropicOAuthStatus']();
+}
+
 export function GetAvailableModels() {
   return window['go']['main']['App']['GetAvailableModels']();
 }
@@ -80,10 +84,6 @@ export function GetEndpointDetails(arg1, arg2) {
 
 export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
-}
-
-export function LogoutAnthropicOAuth() {
-  return window['go']['main']['App']['LogoutAnthropicOAuth']();
 }
 
 export function GetIMPlatformRegistry() {
@@ -214,6 +214,10 @@ export function LoadSession(arg1) {
   return window['go']['main']['App']['LoadSession'](arg1);
 }
 
+export function LogoutAnthropicOAuth() {
+  return window['go']['main']['App']['LogoutAnthropicOAuth']();
+}
+
 export function MuteIMAdapter(arg1, arg2) {
   return window['go']['main']['App']['MuteIMAdapter'](arg1, arg2);
 }
@@ -298,6 +302,10 @@ export function SendMessageWithImages(arg1, arg2) {
   return window['go']['main']['App']['SendMessageWithImages'](arg1, arg2);
 }
 
+export function SetEndpointLimits(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetEndpointLimits'](arg1, arg2, arg3, arg4);
+}
+
 export function SetIMAdapterEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetIMAdapterEnabled'](arg1, arg2);
 }
@@ -306,16 +314,12 @@ export function SetMCPServerEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
 }
 
-export function SetEndpointLimits(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['SetEndpointLimits'](arg1, arg2, arg3, arg4);
+export function SetPermissionMode(arg1) {
+  return window['go']['main']['App']['SetPermissionMode'](arg1);
 }
 
 export function StartAnthropicOAuth() {
   return window['go']['main']['App']['StartAnthropicOAuth']();
-}
-
-export function SetPermissionMode(arg1) {
-  return window['go']['main']['App']['SetPermissionMode'](arg1);
 }
 
 export function StartMCPOAuth(arg1) {

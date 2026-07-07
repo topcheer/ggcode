@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../core/qr_scanner.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
@@ -1122,20 +1122,13 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
               ),
             ),
             Expanded(
-              child: MobileScanner(
-                controller: MobileScannerController(
-                  facing: CameraFacing.back,
-                  detectionSpeed: DetectionSpeed.normal,
-                  torchEnabled: false,
-                ),
-                onDetect: (capture) {
+              child: buildQrScanner(
+                onDetect: (raw) {
                   if (_handled) return;
-                  if (capture.barcodes.isEmpty) return;
-                  final barcode = capture.barcodes.first;
-                  final raw = barcode.rawValue?.trim() ?? '';
-                  if (raw.isEmpty) return;
+                  final trimmed = raw.trim();
+                  if (trimmed.isEmpty) return;
                   _handled = true;
-                  Navigator.of(context).pop(raw);
+                  Navigator.of(context).pop(trimmed);
                 },
               ),
             ),

@@ -1,0 +1,70 @@
+name: ggcode_mobile
+description: Remote control client for GGCode AI coding agent.
+publish_to: 'none'
+version: 1.3.137+2026070801
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # --- Pure Dart dependencies (work as-is) ---
+  flutter_riverpod: ^2.5.1
+  web_socket_channel: ^3.0.0
+  uuid: ^4.2.2
+  google_fonts: ^6.2.1
+  animations: ^2.0.8
+  cryptography: ^2.7.0
+  path: ^1.9.0
+  highlight: ^0.7.0
+  flutter_highlight: ^0.7.0
+  flutter_markdown_plus: ^1.0.0
+  flutter_mermaid: ^0.1.0
+
+  # --- ohos-adapted plugins (official OpenHarmony-TPC versions) ---
+  shared_preferences:
+    git:
+      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
+      path: packages/shared_preferences/shared_preferences
+      ref: br_shared_preferences-v2.3.2_ohos
+  path_provider:
+    git:
+      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
+      path: packages/path_provider/path_provider
+      ref: br_path_provider-v2.1.5_ohos
+  url_launcher:
+    git:
+      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
+      path: packages/url_launcher/url_launcher
+      ref: br_url_launcher-v6.3.0_ohos
+  image_picker:
+    git:
+      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
+      path: packages/image_picker/image_picker
+      ref: br_image_picker-v1.1.2_ohos
+
+  # --- SQLite: use community ohos fork ---
+  sqlite3:
+    git:
+      url: https://github.com/SageMik/sqlite3-ohos.dart
+      path: sqlite3
+  sqlite3_flutter_libs:
+    git:
+      url: https://github.com/SageMik/sqlite3-ohos.dart
+      path: sqlite3_flutter_libs
+
+  # --- wakelock_plus & mobile_scanner: NOT available on ohos ---
+  # Stubbed out via conditional imports. See lib/core/platform_ohos.dart
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon.png
+    - assets/translations/

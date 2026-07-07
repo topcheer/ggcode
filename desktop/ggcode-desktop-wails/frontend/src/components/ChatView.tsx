@@ -418,6 +418,109 @@ function formatTextAttachment(att: any): string {
   return `\n\n--- ${name}${path} ---\n${att.content || ''}\n--- end ${name} ---`
 }
 
+// ── Code paste detection ────────────────────────────────────────────────────
+
+/** Detects programming language from text content using heuristics. */
+function detectCodeLanguage(text: string): string | null {
+  const t = text.trim()
+  const first50 = t.slice(0, 50)
+
+  // Shebang line
+  if (/^#!\/(usr\/)?bin\//.test(t)) {
+    if (/bash|sh|zsh/.test(first50)) return 'bash'
+    if (/python/.test(first50)) return 'python'
+    if (/node/.test(first50)) return 'javascript'
+    if (/ruby/.test(first50)) return 'ruby'
+    return 'bash'
+  }
+
+  // Dockerfile directives
+  if (/^(FROM|RUN|COPY|ADD|CMD|ENTRYPOINT|ENV|ARG|WORKDIR|EXPOSE|VOLUME|LABEL|HEALTHCHECK)\s/m.test(t)) return 'dockerfile'
+
+  // Go: package + func + :=
+  if (/^package\s+\w+/m.test(t) || /\bfunc\s+(\(\s*\w+\s+\*?\w+\s*\)\s+)?\w+\s*\(/.test(t)) return 'go'
+
+  // Rust
+  if (/^(pub\s+)?(fn|impl|trait|use|mod|struct|enum|match)\s/m.test(t)) return 'rust'
+
+  // Python: def/class/import + colon-indent
+  if (/^(def |class |import |from )/m.test(t) || /^\s+(if |elif |else:|for |while |try:|except|finally:)/m.test(t)) return 'python'
+
+  // TypeScript/JavaScript: import/export/const/=>/interface
+  if (/\b(import|export)\s+/.test(t) || /\binterface\s+\w+/.test(t)) return 'typescript'
+  if (/=>/.test(t) || /\bconst\s+\w+\s*=/.test(t) || /\blet\s+\w+\s*=/.test(t)) return 'javascript'
+
+  // Java/C#: class with access modifiers
+  if (/\b(public|private|protected)\s+(static\s+)?(class|void|int|String|boolean)\b/.test(t)) return 'java'
+
+  // C/C++: #include + main
+  if (/^#include\s+[<\"]/.test(t) || /\bint\s+main\s*\(/.test(t)) return 'cpp'
+
+  // SQL
+  if (/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\s+/i.test(t) && /\b(FROM|INTO|TABLE|SET|WHERE)\b/i.test(t)) return 'sql'
+
+  // HTML/XML
+  if (/^<\?xml/.test(t) || /^<!DOCTYPE\s+html/i.test(t) || /^<html/i.test(t)) return 'html'
+
+  // CSS/SCSS: selector { ... }
+  if (/^[\w\-.#:\[\]>,\s]+\s*\{[^}]*[:;]/m.test(t)) return 'css'
+
+  // YAML: key: value on multiple lines
+  if (/^[\w\-.]+\s*:\s/m.test(t) && /\n[\w\-.]+\s*:\s/m.test(t)) return 'yaml'
+
+  // JSON (starts with { or [)
+  if (/^[{[]/.test(t) && /[}\]]\s*$/.test(t)) return 'json'
+
+  // Shell commands
+  if (/^(echo |cd |ls |mkdir |rm |cp |mv |sudo |apt |brew |git |npm |yarn |pip |cargo |go |docker |kubectl )/m.test(t)) return 'bash'
+
+  return null
+}
+
+/** Heuristic: is this pasted text likely to be source code? */
+function isLikelyCode(text: string): { isCode: boolean; language: string | null } {
+  const trimmed = text.trim()
+  if (trimmed.length < 10) return { isCode: false, language: null }
+
+  // Reject URLs (commonly pasted, can match patterns)
+  if (/^https?:\/\//.test(trimmed)) return { isCode: false, language: null }
+
+  const lines = trimmed.split('\n')
+
+  // Strong signal: tab indentation
+  if (/\t/.test(text) && lines.length > 1) {
+    return { isCode: true, language: detectCodeLanguage(text) }
+  }
+
+  // Strong signal: 4+ space indentation on multiple lines
+  const indentedLines = lines.filter(l => /^ {4,}\S/.test(l))
+  if (indentedLines.length >= 2) {
+    return { isCode: true, language: detectCodeLanguage(text) }
+  }
+
+  // Language-specific patterns
+  const language = detectCodeLanguage(text)
+  if (language) {
+    return { isCode: true, language }
+  }
+
+  // Multiple lines ending with semicolons (C-like)
+  const semicolonLines = lines.filter(l => /;\s*$/.test(l))
+  if (semicolonLines.length >= 3 && lines.length > 2) {
+    return { isCode: true, language: null }
+  }
+
+  // Multiple brace lines
+  if (/\{/.test(text) && /\}/.test(text)) {
+    const braceLines = lines.filter(l => /[{}]/.test(l))
+    if (braceLines.length >= 3) {
+      return { isCode: true, language: null }
+    }
+  }
+
+  return { isCode: false, language: null }
+}
+
 // ── Slash command definitions ────────────────────────────────────────────────
 
 interface SlashCommand {
@@ -1358,9 +1461,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
       .map(item => item.getAsFile())
       .filter((file): file is File => !!file)
-    if (imageFiles.length === 0) return
-
-    e.preventDefault()
+    if (imageFiles.length > 0) {
+      e.preventDefault()
     void Promise.all(imageFiles.map(file => new Promise<PastedImageAttachment>((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => {
@@ -1381,7 +1483,38 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }).catch(err => {
       showToast?.('error', err?.message || 'Failed to paste image')
     })
-  }, [showToast])
+      return
+    }
+
+    // ── Code paste detection ──
+    const text = e.clipboardData?.getData('text/plain') || ''
+    if (text.trim().length < 10) return // too short to be code
+
+    const detection = isLikelyCode(text)
+    if (!detection.isCode) return // normal text paste
+
+    e.preventDefault()
+    const lang = detection.language || ''
+    const needsLeadingNewline = input.length > 0 && !input.endsWith('\n')
+    const fenced = `${needsLeadingNewline ? '\n' : ''}\`\`\`${lang}\n${text}\n\`\`\`\n`
+
+    const textarea = inputRef.current
+    if (textarea) {
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const newValue = input.slice(0, start) + fenced + input.slice(end)
+      setInput(newValue)
+      requestAnimationFrame(() => {
+        textarea.focus()
+        const pos = start + fenced.length
+        textarea.setSelectionRange(pos, pos)
+      })
+    } else {
+      setInput(prev => prev + fenced)
+    }
+
+    showToast?.('info', `Code detected${detection.language ? ` (${detection.language})` : ''}, wrapped in code block`)
+  }, [showToast, input])
 
   const handlePasteButton = useCallback(async () => {
     inputRef.current?.focus()

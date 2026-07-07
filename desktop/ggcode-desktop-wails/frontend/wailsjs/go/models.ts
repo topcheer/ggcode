@@ -367,6 +367,8 @@ export namespace wailskit {
 	    defaultModel: string;
 	    models: string[];
 	    contextWindow: number;
+	    maxTokens: number;
+	    authType: string;
 	    supportsVision: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -383,6 +385,8 @@ export namespace wailskit {
 	        this.defaultModel = source["defaultModel"];
 	        this.models = source["models"];
 	        this.contextWindow = source["contextWindow"];
+	        this.maxTokens = source["maxTokens"];
+	        this.authType = source["authType"];
 	        this.supportsVision = source["supportsVision"];
 	    }
 	}

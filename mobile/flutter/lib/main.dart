@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'core/wakelock.dart';
 
 import 'core/l10n/app_localizations.dart';
 import 'core/models/protocol.dart' as proto;
@@ -109,7 +109,7 @@ class _AppShellState extends ConsumerState<AppShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _connSub?.cancel();
-    WakelockPlus.disable();
+    wakelockDisable();
     super.dispose();
   }
 
@@ -164,9 +164,9 @@ class _AppShellState extends ConsumerState<AppShell>
     // Manage wakelock based on connection state
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
       if (next.status == ConnectionStatus.connected) {
-        WakelockPlus.enable();
+        wakelockEnable();
       } else if (prev?.status == ConnectionStatus.connected) {
-        WakelockPlus.disable();
+        wakelockDisable();
       }
     });
 

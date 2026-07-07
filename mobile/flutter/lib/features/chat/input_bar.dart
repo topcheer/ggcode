@@ -222,6 +222,7 @@ class _InputBarState extends ConsumerState<InputBar>
                       contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
                     ),
                     enabled: inputEnabled,
+                    onChanged: (_) => setState(() {}),
                     onSubmitted: (_) => _send(),
                   ),
                 ),

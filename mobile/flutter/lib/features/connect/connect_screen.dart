@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import '../../core/qr_scanner.dart';
 
 import '../../core/l10n/app_localizations.dart';
 import '../../core/providers/connection_store.dart';
@@ -178,19 +178,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               ),
               // Scanner
               Expanded(
-                child: MobileScanner(
-                  controller: MobileScannerController(
-                    facing: CameraFacing.back,
-                    detectionSpeed: DetectionSpeed.normal,
-                    torchEnabled: false,
-                  ),
-                  onDetect: (capture) {
-                    if (capture.barcodes.isEmpty) return;
-                    final rawValue = capture.barcodes.first.rawValue;
-                    if (rawValue != null && rawValue.isNotEmpty) {
-                      _handleQrCode(rawValue);
-                    }
-                  },
+                child: buildQrScanner(
+                  onDetect: _handleQrCode,
                 ),
               ),
               Padding(
