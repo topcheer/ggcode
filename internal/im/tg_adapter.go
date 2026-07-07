@@ -33,9 +33,10 @@ const (
 	tgPollTimeout    = 30
 	tgMaxTextLen     = 4096
 	// tgInterMessageDelay is the delay between consecutive messages to the same
-	// chat. Telegram limits bots to ~1 message/second per chat.
+	// chat. Telegram recommends avoiding more than 1 message/second per chat.
 	// Source: https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this
-	tgInterMessageDelay = 500 * time.Millisecond
+	// Quote: "In a single chat, avoid sending more than one message per second."
+	tgInterMessageDelay = 1000 * time.Millisecond
 	tgGetUpdatesPath    = "/bot%s/getUpdates"
 	tgSendMessagePath   = "/bot%s/sendMessage"
 	tgSetReactionPath   = "/bot%s/setMessageReaction"
