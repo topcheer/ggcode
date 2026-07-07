@@ -27,9 +27,9 @@ const (
 	twitchMaxMessageLen    = 500
 	// twitchInterMessageDelay is the delay between consecutive PRIVMSG lines.
 	// Twitch limits non-VIP/mod accounts to 20 messages per 30 seconds
-	// and 1 message per second per channel.
+	// (= 1500ms minimum between messages) and 1 message per second per channel.
 	// Source: https://dev.twitch.tv/docs/irc/#rate-limits
-	twitchInterMessageDelay = 1100 * time.Millisecond
+	twitchInterMessageDelay = 1500 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
