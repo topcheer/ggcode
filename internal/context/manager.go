@@ -878,6 +878,50 @@ const toolResultClearMinLen = 500
 // that aren't worth truncating.
 const toolUseInputClearMinLen = 200
 
+// EstimateClearableTokens performs a read-only scan to estimate how many
+// characters would be freed by ClearOldToolResults(keepN) WITHOUT actually
+// mutating any content. This enables cache-break-aware decisions: only clear
+// when the token savings justify the prompt cache prefix disruption.
+//
+// TokenPilot (arXiv:2606.17016, June 2026) found that in-place context
+// mutations break the cached prefix for all content after the first mutated
+// position. If savings are trivial (< 3% of context), the cache miss penalty
+// exceeds the token savings — clearing is net-negative.
+func (m *Manager) EstimateClearableTokens(keepN int) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var targets int
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if b.IsError {
+				continue
+			}
+			if len(b.Output) < toolResultClearMinLen {
+				continue
+			}
+			if strings.HasPrefix(b.Output, "[cleared:") {
+				continue
+			}
+			if hasSemanticImportance(b.Output) {
+				continue
+			}
+			targets++
+		}
+	}
+	if targets <= keepN {
+		return 0
+	}
+	toClear := targets - keepN
+	// Conservative estimate: average clearable result is ~2x the minimum
+	// threshold (toolResultClearMinLen = 500 chars). Placeholder is ~80 chars.
+	// So each clear saves ~920 chars ≈ 230 tokens.
+	return toClear * 920
+}
+
 // ClearOldToolResults replaces large tool_result outputs from older messages
 // with short placeholders, keeping the most recent `keepN` tool results intact.
 // This is a cheap, mechanical context-recovery technique that avoids the cost

@@ -70,6 +70,18 @@ var toolClearTiers = []clearTier{
 	{trigger: 0.75, keepN: 4, clearInputs: true},   // aggressive: also clear tool_use inputs
 }
 
+// cacheAwareMinSavingsFraction is the minimum estimated token savings
+// (as a fraction of the compaction threshold) required to justify a
+// clearing tier. Below this, the prompt cache prefix disruption from
+// in-place mutations exceeds the token savings.
+//
+// TokenPilot (arXiv:2606.17016) found that cache breaks from context
+// mutations cost ~1.5-3x the nominal token savings when the saved
+// fraction is small. Setting this to 0.02 (2%) means clearing is
+// skipped unless it would save at least 2% of the threshold (~4K
+// tokens for a 200K threshold).
+const cacheAwareMinSavingsFraction = 0.02
+
 // precompactDelayCtx is the delay applied before the background compression
 // request fires. Tests override this to zero for fast execution.
 var precompactDelay = precompactStartDelay
@@ -164,6 +176,16 @@ func (a *Agent) StartPreCompact() {
 			for _, tier := range toolClearTiers {
 				if tokens < int(float64(threshold)*tier.trigger) {
 					break // not yet at this tier's trigger point
+				}
+				// TokenPilot-inspired cache-break awareness: estimate
+				// savings before mutating. If trivial, skip to preserve
+				// prompt cache prefix stability.
+				estimated := mgr.EstimateClearableTokens(tier.keepN)
+				minSavings := int(float64(threshold) * cacheAwareMinSavingsFraction)
+				if estimated < minSavings {
+					debug.Log("precompact", "SKIP TIER %.0f%%: estimated savings %d < cache-break minimum %d (preserving cache prefix)",
+						tier.trigger*100, estimated, minSavings)
+					continue
 				}
 				freed := mgr.ClearOldToolResults(tier.keepN)
 				if freed > 0 {
