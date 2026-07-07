@@ -3037,6 +3037,10 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
     }).catch(() => {})
   }, [msg.content])
 
+  const handleRegenerate = useCallback(() => {
+    App.SendMessage('/regenerate').catch(() => {})
+  }, [])
+
   return (
     <div
       style={{ maxWidth: '85%', alignSelf: 'flex-start', position: 'relative' }}
@@ -3054,23 +3058,36 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
             writing...
           </span>
         )}
-        {/* Copy button — appears on hover */}
+        {/* Action buttons — appear on hover */}
         {!msg.streaming && msg.content && (
-          <button
-            onClick={handleCopy}
-            title="Copy message"
-            style={{
-              marginLeft: 'auto', padding: '1px 6px', borderRadius: 3,
-              background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
-              border: '1px solid var(--color-border)',
-              color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
-              cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
-              opacity: hovered || copied ? 1 : 0,
-              transition: 'opacity 0.15s ease',
-            }}
-          >
-            {copied ? '✓ Copied' : 'Copy'}
-          </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, opacity: hovered || copied ? 1 : 0, transition: 'opacity 0.15s ease' }}>
+            <button
+              onClick={handleRegenerate}
+              title="Regenerate response"
+              style={{
+                padding: '1px 6px', borderRadius: 3,
+                background: 'transparent',
+                border: '1px solid var(--color-border)',
+                color: 'var(--text-tertiary)',
+                cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+              }}
+            >
+              ⟳ Regenerate
+            </button>
+            <button
+              onClick={handleCopy}
+              title="Copy message"
+              style={{
+                padding: '1px 6px', borderRadius: 3,
+                background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
+                border: '1px solid var(--color-border)',
+                color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
+                cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+              }}
+            >
+              {copied ? '✓ Copied' : 'Copy'}
+            </button>
+          </div>
         )}
       </div>
       <div style={{
