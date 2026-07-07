@@ -284,7 +284,9 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 		return
 	}
 	defer f.Close()
-	f.Write(append(line, '\n'))
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		debug.Log("knight-promoter", "failed to append changelog entry for %s: %v", name, err)
+	}
 }
 
 func (p *Promoter) listSnapshots(name string) ([]string, error) {
