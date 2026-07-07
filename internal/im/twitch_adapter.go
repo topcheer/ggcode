@@ -410,17 +410,19 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 			continue
 		}
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
-		for _, chunk := range chunks {
-			if sent {
-				select {
-				case <-time.After(twitchInterMessageDelay):
-				case <-ctx.Done():
-					return ctx.Err()
+			for _, chunk := range chunks {
+				if sent {
+					select {
+					case <-time.After(twitchInterMessageDelay):
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
+				if err := a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk)); err != nil {
+					return fmt.Errorf("send to %s: %w", target, err)
+				}
+				sent = true
 			}
-			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
-			sent = true
-		}
 	}
 	return nil
 }

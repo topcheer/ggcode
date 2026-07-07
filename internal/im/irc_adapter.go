@@ -512,7 +512,9 @@ func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) er
 					return ctx.Err()
 				}
 			}
-			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+			if err := a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk)); err != nil {
+				return fmt.Errorf("send to %s: %w", target, err)
+			}
 			sent = true
 		}
 	}

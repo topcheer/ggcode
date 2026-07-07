@@ -199,15 +199,25 @@
     padding: 1px 3px;
 }
 
-/* Links */
+/* Links — animated underline on hover (discoverability micro-interaction) */
 .markdown-body a {
     color: var(--color-primary);
     text-decoration: none;
-    transition: color 0.15s, text-decoration 0.15s;
+    background-image: linear-gradient(currentColor, currentColor);
+    background-position: 0 100%;
+    background-size: 0% 1px;
+    background-repeat: no-repeat;
+    transition: color 0.15s ease, background-size 0.2s ease;
 }
 .markdown-body a:hover {
-    text-decoration: underline;
     color: #60a5fa;
+    background-size: 100% 1px;
+}
+/* External links get a subtle indicator */
+.markdown-body a[href^="http"]::after {
+    content: "\2009↗";
+    font-size: 0.8em;
+    opacity: 0.5;
 }
 
 /* GFM Task list checkboxes */
@@ -464,4 +474,69 @@ div[style*="overflow"] {
     box-shadow: -2px 0 8px color-mix(in srgb, var(--color-primary) 30%, transparent);
     border-radius: var(--radius-sm);
     transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.3s ease;
+}
+
+/* ── Print styles: conversation export ──────────────────────────────────── */
+/* Enables Cmd+P / Ctrl+P to produce clean readable conversation transcripts.
+   Hides chrome (sidebar, input, toolbars), shows only messages. */
+@media print {
+    /* Hide everything by default */
+    body * { visibility: hidden; }
+    /* Show only the chat messages container and its children */
+    .chat-messages, .chat-messages * { visibility: visible; }
+    /* Reset layout for print */
+    .chat-messages {
+        position: absolute;
+        left: 0; top: 0; width: 100%;
+        max-height: none !important;
+        overflow: visible !important;
+        padding: 0 !important;
+    }
+    /* Force light theme for print readability */
+    .markdown-body {
+        color: #1a1a2e !important;
+        background: white !important;
+    }
+    .markdown-body pre {
+        background: #f5f5f5 !important;
+        color: #1a1a2e !important;
+        border: 1px solid #ddd;
+    }
+    .markdown-body code:not(pre code) {
+        background: #f0f0f0 !important;
+        color: #c7254e !important;
+    }
+    /* Avoid page breaks inside code blocks */
+    .markdown-body pre, .markdown-body blockquote, .markdown-body table {
+        page-break-inside: avoid;
+    }
+    /* Ensure links show their URLs in print */
+    .markdown-body a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 0.8em;
+        color: #666;
+        opacity: 1;
+    }
+}
+
+/* ── Reduced motion: respect OS accessibility preference ─────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    /* Disable link underline animation */
+    .markdown-body a {
+        transition: color 0.01ms ease !important;
+        background-image: none !important;
+    }
+    .markdown-body a:hover {
+        text-decoration: underline;
+        background-size: 0 !important;
+    }
+    /* Disable image hover zoom */
+    .markdown-body img { transition: none !important; }
+    /* Disable streaming cursor pulse */
+    .streaming-cursor { animation: none !important; }
 }
