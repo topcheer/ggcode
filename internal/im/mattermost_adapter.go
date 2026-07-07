@@ -444,8 +444,8 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 		return nil
 	}
 
-	// Split into chunks that respect rune boundaries (Mattermost max post = 4000 chars)
-	chunks := splitMessageRunes(text, mattermostDefaultMaxPostLen, false, false, true)
+	// Split using markdown-aware logic so code blocks aren't broken across chunks.
+	chunks := SplitMarkdown(text, mattermostDefaultMaxPostLen)
 	for i, chunk := range chunks {
 		payload := map[string]any{
 			"channel_id": channelID,
