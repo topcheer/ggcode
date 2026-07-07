@@ -538,9 +538,15 @@ func TestFeishuTriggerTyping_NoMessageID(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &feishuAdapter{
-		httpClient: srv.Client(),
-		domain:     "feishu",
-		token:      "token",
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://open.feishu.cn/open-apis", "https://open.larksuite.com/open-apis"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		domain: "feishu",
+		token:  "token",
 	}
 
 	err := adapter.TriggerTyping(context.Background(), ChannelBinding{
@@ -563,9 +569,15 @@ func TestFeishuTriggerTyping_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &feishuAdapter{
-		httpClient: srv.Client(),
-		domain:     "feishu",
-		token:      "token",
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://open.feishu.cn/open-apis", "https://open.larksuite.com/open-apis"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		domain: "feishu",
+		token:  "token",
 	}
 
 	// Should not return error (logged only).
