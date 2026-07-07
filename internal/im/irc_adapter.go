@@ -495,14 +495,17 @@ func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) er
 		return nil
 	}
 	// Split by newlines first — each line is a separate PRIVMSG.
+	// The delay applies between ALL messages (not just chunks within a line),
+	// so a multi-line message doesn't burst all lines at once.
+	sent := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		chunks := splitIRCMessage(line, ircMaxMessageLen)
-		for i, chunk := range chunks {
-			if i > 0 {
+		for _, chunk := range chunks {
+			if sent {
 				select {
 				case <-time.After(ircInterMessageDelay):
 				case <-ctx.Done():
@@ -510,6 +513,7 @@ func (a *ircAdapter) sendIRCMessage(ctx context.Context, target, text string) er
 				}
 			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+			sent = true
 		}
 	}
 	return nil

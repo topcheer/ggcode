@@ -401,14 +401,17 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 	// Split by newlines first — IRC uses CRLF as message delimiter, so
 	// embedded \n would prematurely terminate the PRIVMSG. Each line is
 	// sent as a separate PRIVMSG, matching the standard IRC pattern.
+	// The delay applies between ALL messages (not just chunks within a line),
+	// so a multi-line message doesn't burst all lines at once.
+	sent := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
-		for i, chunk := range chunks {
-			if i > 0 {
+		for _, chunk := range chunks {
+			if sent {
 				select {
 				case <-time.After(twitchInterMessageDelay):
 				case <-ctx.Done():
@@ -416,6 +419,7 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 				}
 			}
 			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+			sent = true
 		}
 	}
 	return nil
