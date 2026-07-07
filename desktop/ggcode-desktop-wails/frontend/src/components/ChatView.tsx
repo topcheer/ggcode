@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -434,6 +434,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/context', desc: 'Show context usage details', category: 'chat' },
   { cmd: '/cost', desc: 'Show token usage and cost', category: 'chat' },
   { cmd: '/copy', desc: 'Copy conversation to clipboard', category: 'chat' },
+  { cmd: '/export', desc: 'Download conversation as markdown file', category: 'chat' },
   { cmd: '/sessions', desc: 'Browse and switch sessions', category: 'session' },
   { cmd: '/config', desc: 'View or edit configuration', category: 'config' },
   { cmd: '/status', desc: 'Show runtime status', category: 'system' },
@@ -1223,9 +1224,65 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }
   }, [isStreaming, markMessageDelivery, showToast])
 
+  // ── Export / Download conversation ───────────────────────────────────────
+
+  const [exported, setExported] = useState(false)
+  const handleExportConversation = useCallback(() => {
+    const lines = messages.filter(m => !m.toolName && m.content).map(m => {
+      const role = m.role === 'user' ? '**User**' : m.agentID ? `**Agent (${m.agentID})**` : '**Assistant**'
+      const ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+      return `${role}${ts ? ` _${ts}_` : ''}\n\n${m.content}\n`
+    })
+    const text = lines.join('\n---\n\n')
+    navigator.clipboard.writeText(text).then(() => {
+      setExported(true)
+      showToast?.('success', `Copied ${lines.length} messages to clipboard`)
+      setTimeout(() => setExported(false), 2000)
+    }).catch(() => {
+      showToast?.('error', 'Failed to copy conversation')
+    })
+  }, [messages, showToast])
+
+  const [downloaded, setDownloaded] = useState(false)
+  const handleDownloadConversation = useCallback(() => {
+    const lines = messages.filter(m => !m.toolName && m.content).map(m => {
+      const role = m.role === 'user' ? '**User**' : m.agentID ? `**Agent (${m.agentID})**` : '**Assistant**'
+      const ts = m.timestamp
+        ? new Date(m.timestamp).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : ''
+      return `${role}${ts ? ` _${ts}_` : ''}\n\n${m.content}\n`
+    })
+    const header = `# ggcode Conversation\n\nExported: ${new Date().toLocaleString()}\nMessages: ${lines.length}\n\n---\n\n`
+    const text = header + lines.join('\n---\n\n')
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const now = new Date()
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+    a.download = `ggcode-conversation-${stamp}.md`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setDownloaded(true)
+    showToast?.('success', `Downloaded ${lines.length} messages as markdown`)
+    setTimeout(() => setDownloaded(false), 2000)
+  }, [messages, showToast])
+
   const handleSend = useCallback(async () => {
     const text = input.trim()
     if (!text && pastedImages.length === 0) return
+
+    // Intercept frontend-only slash commands
+    if (text === '/copy' || text === '/export') {
+      setInput('')
+      if (sessionId) { try { sessionStorage.removeItem(`draft:${sessionId}`) } catch {} }
+      if (inputRef.current) { inputRef.current.style.height = 'auto' }
+      if (text === '/copy') handleExportConversation()
+      else handleDownloadConversation()
+      return
+    }
 
     const images = pastedImages
     setInput('')
@@ -1236,7 +1293,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       inputRef.current.style.height = 'auto'
     }
     await sendUserText(text || 'Please analyze this image.', undefined, images)
-  }, [input, pastedImages, sendUserText])
+  }, [input, pastedImages, sendUserText, handleExportConversation, handleDownloadConversation, sessionId])
 
   // ── Drag-and-drop image support ────────────────────────────────────────────
 
@@ -1393,23 +1450,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       App.CancelMessage()
     } catch { /* ignore */ }
   }, [])
-
-  const [exported, setExported] = useState(false)
-  const handleExportConversation = useCallback(() => {
-    const lines = messages.filter(m => !m.toolName && m.content).map(m => {
-      const role = m.role === 'user' ? '**User**' : m.agentID ? `**Agent (${m.agentID})**` : '**Assistant**'
-      const ts = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-      return `${role}${ts ? ` _${ts}_` : ''}\n\n${m.content}\n`
-    })
-    const text = lines.join('\n---\n\n')
-    navigator.clipboard.writeText(text).then(() => {
-      setExported(true)
-      showToast?.('success', `Copied ${lines.length} messages to clipboard`)
-      setTimeout(() => setExported(false), 2000)
-    }).catch(() => {
-      showToast?.('error', 'Failed to copy conversation')
-    })
-  }, [messages, showToast])
 
   const cycleReasoningEffort = useCallback(async () => {
     try {
@@ -1894,17 +1934,30 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </span>
         )}
         {messages.length > 0 && (
-          <button onClick={handleExportConversation} title="Copy conversation" style={{
-            width: 28, height: 28, borderRadius: 'var(--radius-sm)',
-            background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
-            border: '1px solid ' + (exported ? 'var(--color-success)' : 'transparent'),
-            color: exported ? 'var(--color-success)' : 'var(--text-secondary)',
-            cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'all 0.15s',
-          }}>
-            {exported ? <Check size={14} /> : <ClipboardCopy size={14} />}
-          </button>
+          <>
+            <button onClick={handleExportConversation} title="Copy conversation to clipboard" style={{
+              width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+              background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
+              border: '1px solid ' + (exported ? 'var(--color-success)' : 'transparent'),
+              color: exported ? 'var(--color-success)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'all 0.15s',
+            }}>
+              {exported ? <Check size={14} /> : <ClipboardCopy size={14} />}
+            </button>
+            <button onClick={handleDownloadConversation} title="Download as markdown file" style={{
+              width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+              background: downloaded ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
+              border: '1px solid ' + (downloaded ? 'var(--color-success)' : 'transparent'),
+              color: downloaded ? 'var(--color-success)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'all 0.15s',
+            }}>
+              {downloaded ? <Check size={14} /> : <Download size={14} />}
+            </button>
+          </>
         )}
         {onShare && (
           <button onClick={onShare} style={{
