@@ -89,6 +89,32 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           </div>
         )
       })()}
+      {/* Permission mode indicator */}
+      {(() => {
+        const modeColors: Record<string, string> = {
+          auto: 'var(--color-success)',
+          supervised: 'var(--color-warning)',
+          bypass: '#ef4444',
+          plan: 'var(--text-secondary)',
+          autopilot: '#8b5cf6',
+        }
+        const modeLabels: Record<string, string> = {
+          auto: 'auto',
+          supervised: 'manual',
+          bypass: 'bypass',
+          plan: 'plan',
+          autopilot: 'pilot',
+        }
+        const mc = modeColors[info.mode] || 'var(--text-secondary)'
+        const ml = modeLabels[info.mode] || info.mode
+        return (
+          <span title={`Permission mode: ${info.mode}`} style={{
+            color: mc, cursor: 'default',
+            border: `1px solid ${mc}40`, borderRadius: 3,
+            padding: '0 4px', fontSize: 10,
+          }}>{ml}</span>
+        )
+      })()}
       <span style={{ color: 'var(--text-secondary)' }}>in {formatTokens(info.inputTokens)}</span>
       <span style={{ color: 'var(--text-secondary)' }}>out {formatTokens(info.outputTokens)}</span>
       {info.cacheHit > 0 && (
