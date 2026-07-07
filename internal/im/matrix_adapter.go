@@ -144,6 +144,12 @@ func (a *matrixAdapter) Start(ctx context.Context) {
 	safego.Go("im.matrix.run", func() { a.run(ctx) })
 }
 
+func (a *matrixAdapter) isClosed() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.closed
+}
+
 func (a *matrixAdapter) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -162,7 +168,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 	maxBackoff := 60 * time.Second
 
 	for {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || a.isClosed() {
 			a.publishState(false, "stopped", "")
 			return
 		}
@@ -170,6 +176,10 @@ func (a *matrixAdapter) run(ctx context.Context) {
 		err := a.runOnce(ctx)
 		if err == nil {
 			// Clean shutdown
+			return
+		}
+
+		if a.isClosed() {
 			return
 		}
 
