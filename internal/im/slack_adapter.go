@@ -1042,28 +1042,49 @@ func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBindi
 		body["thread_ts"] = binding.ThreadID
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+a.botToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+
+		// Handle HTTP 429 rate limit with Retry-After backoff.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("slack", "adapter=%s interactive 429 rate limited, retry %d/%d in %v",
+					a.name, attempt+1, maxRateLimitRetries, delay)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", rateLimitExhausted("Slack")
+		}
+
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return "", err
+		}
+		resp.Body.Close()
+		if ok, _ := result["ok"].(bool); !ok {
+			errMsg, _ := result["error"].(string)
+			return "", fmt.Errorf("Slack chat.postMessage: %s", errMsg)
+		}
+		// Extract ts (message ID)
+		messageTs, _ := result["ts"].(string)
+		return messageTs, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+a.botToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-	if ok, _ := result["ok"].(bool); !ok {
-		errMsg, _ := result["error"].(string)
-		return "", fmt.Errorf("Slack chat.postMessage: %s", errMsg)
-	}
-	// Extract ts (message ID)
-	messageTs, _ := result["ts"].(string)
-	return messageTs, nil
+	return "", rateLimitExhausted("Slack")
 }
 
 // handleInteractive processes Slack interactive payloads (button clicks).
