@@ -1,6 +1,18 @@
 package im
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// ByteLimitPlatforms are platforms whose API message length limit is measured
+// in bytes rather than characters/runes. For these platforms, the splitter
+// must account for UTF-8 multi-byte encoding (e.g. Chinese characters are
+// 3 bytes each).
+var ByteLimitPlatforms = map[Platform]bool{
+	PlatformWeCom:  true, // 2048 bytes
+	PlatformWechat: true, // 2048 bytes
+}
 
 // PlatformLimits defines the maximum message length for each IM platform.
 // All values are verified against official API documentation.
@@ -58,10 +70,15 @@ func SplitMessage(text string, maxLen int) []string {
 
 // SplitMessageForPlatform is a convenience wrapper that looks up the
 // platform's limit and calls SplitMessage.
+// SplitMessageForPlatform is a convenience wrapper that looks up the
+// platform's limit and calls SplitMessage.
 func SplitMessageForPlatform(text string, p Platform) []string {
 	maxLen, ok := PlatformLimits[p]
 	if !ok {
 		maxLen = 4000 // safe default
+	}
+	if ByteLimitPlatforms[p] {
+		return splitMessageBytes(text, maxLen)
 	}
 	return SplitMessage(text, maxLen)
 }
@@ -90,6 +107,87 @@ func splitMessageRunes(text string, maxLen int, trim bool, allowSpace bool, requ
 	}
 
 	return chunks
+}
+
+// splitMessageBytes splits text so that each chunk's UTF-8 byte length
+// does not exceed maxBytes. It prefers splitting at newline boundaries
+// for readability, falling back to hard cuts when necessary.
+func splitMessageBytes(text string, maxBytes int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" || maxBytes <= 0 {
+		return []string{text}
+	}
+	if len(text) <= maxBytes {
+		return []string{text}
+	}
+
+	runes := []rune(text)
+	var chunks []string
+	start := 0
+	byteCount := 0
+
+	for i, r := range runes {
+		runeBytes := utf8.RuneLen(r)
+		if byteCount+runeBytes > maxBytes {
+			// Find the best split point in runes[start:i]
+			end := preferredByteSplit(runes[start:i], maxBytes)
+			chunks = append(chunks, string(runes[start:start+end]))
+			start += end
+			byteCount = 0
+			// Re-sync byte count from start
+			for j := start; j <= i; j++ {
+				byteCount += utf8.RuneLen(runes[j])
+				if byteCount > maxBytes {
+					// Current rune pushes over; flush and restart
+					end2 := preferredByteSplit(runes[start:j], maxBytes)
+					chunks = append(chunks, string(runes[start:start+end2]))
+					start += end2
+					byteCount = utf8.RuneLen(runes[start])
+					break
+				}
+			}
+			if start > i {
+				byteCount = 0
+				continue
+			}
+			continue
+		}
+		byteCount += runeBytes
+	}
+
+	if start < len(runes) {
+		remaining := string(runes[start:])
+		if len(remaining) > maxBytes {
+			// Recursively split the tail in case of very large remaining text
+			chunks = append(chunks, splitMessageBytes(remaining, maxBytes)...)
+		} else {
+			chunks = append(chunks, remaining)
+		}
+	}
+
+	return chunks
+}
+
+// preferredByteSplit finds the best rune index to split at within runes[0:maxBytes].
+// Prefers newline boundaries, then falls back to a byte-budget-limited hard cut.
+func preferredByteSplit(runes []rune, maxBytes int) int {
+	best := 0
+	byteCount := 0
+	for i, r := range runes {
+		rb := utf8.RuneLen(r)
+		if byteCount+rb > maxBytes {
+			break
+		}
+		byteCount += rb
+		if r == '\n' {
+			return i + 1
+		}
+		best = i + 1
+	}
+	if best == 0 {
+		best = 1 // at least one rune
+	}
+	return best
 }
 
 func preferredRuneSplit(runes []rune, maxLen int, allowSpace bool, requireBalancedBreak bool) int {

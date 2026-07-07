@@ -161,6 +161,90 @@ func TestTruncateRunes_DoesNotBreakUTF8(t *testing.T) {
 	}
 }
 
+// --- Byte-aware splitting tests ---
+
+func TestSplitMessageBytes_ShortMessage(t *testing.T) {
+	chunks := splitMessageBytes("hello", 100)
+	if len(chunks) != 1 || chunks[0] != "hello" {
+		t.Errorf("expected single chunk, got %v", chunks)
+	}
+}
+
+func TestSplitMessageBytes_CJKRespectsByteLimit(t *testing.T) {
+	// 800 Chinese characters = 2400 bytes, limit is 2048 bytes
+	msg := strings.Repeat("你", 800) // 800 runes, 2400 bytes
+	chunks := splitMessageBytes(msg, 2048)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected >= 2 chunks for 2400-byte CJK message, got %d", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if n := len(chunk); n > 2048 {
+			t.Errorf("chunk %d is %d bytes, exceeds 2048", i, n)
+		}
+		if !utf8.ValidString(chunk) {
+			t.Errorf("chunk %d is not valid UTF-8", i)
+		}
+	}
+	// Verify reassembly
+	reassembled := strings.Join(chunks, "")
+	if reassembled != msg {
+		t.Errorf("reassembled doesn't match original")
+	}
+}
+
+func TestSplitMessageBytes_NewlinePreference(t *testing.T) {
+	// Each line is 6 bytes (5 chars + newline), split at 12 bytes
+	msg := "hello\nhello\nhello\nhello"
+	chunks := splitMessageBytes(msg, 12)
+	if len(chunks) < 2 {
+		t.Fatalf("expected >= 2 chunks, got %d", len(chunks))
+	}
+	// Should prefer splitting at newline boundary
+	if !strings.HasSuffix(chunks[0], "\n") {
+		t.Errorf("expected chunk to end with newline, got %q", chunks[0])
+	}
+}
+
+func TestSplitMessageBytes_ASCIIOnly(t *testing.T) {
+	// Pure ASCII: bytes == runes, should behave like rune-based splitting
+	msg := strings.Repeat("a", 300)
+	chunks := splitMessageBytes(msg, 100)
+	if len(chunks) != 3 {
+		t.Errorf("expected 3 chunks, got %d", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if len(chunk) > 100 {
+			t.Errorf("chunk %d is %d bytes, exceeds 100", i, len(chunk))
+		}
+	}
+}
+
+func TestSplitMessageForPlatform_WeComByteAware(t *testing.T) {
+	// WeCom limit is 2048 bytes; Chinese chars are 3 bytes each.
+	// 700 Chinese chars = 2100 bytes, should split.
+	msg := strings.Repeat("好", 700) // 2100 bytes
+	chunks := SplitMessageForPlatform(msg, PlatformWeCom)
+
+	if len(chunks) < 2 {
+		t.Fatalf("expected WeCom to split 2100-byte CJK message, got %d chunk(s)", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if n := len(chunk); n > 2048 {
+			t.Errorf("WeCom chunk %d is %d bytes, exceeds 2048", i, n)
+		}
+	}
+}
+
+func TestSplitMessageForPlatform_WeComASCII(t *testing.T) {
+	// Pure ASCII: 2048 bytes = 2048 chars, should not split for 2000-char text
+	msg := strings.Repeat("a", 2000)
+	chunks := SplitMessageForPlatform(msg, PlatformWeCom)
+	if len(chunks) != 1 {
+		t.Errorf("expected 1 chunk for 2000-byte ASCII, got %d", len(chunks))
+	}
+}
+
 func BenchmarkSplitMessage(b *testing.B) {
 	msg := strings.Repeat("This is a test line.\n", 200) // ~4200 bytes
 	b.ResetTimer()
