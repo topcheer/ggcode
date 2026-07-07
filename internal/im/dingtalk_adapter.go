@@ -58,6 +58,9 @@ const (
 var (
 	dingtalkMarkdownLinkRe      = regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 	dingtalkOrderedListPrefixRe = regexp.MustCompile(`^\d+[.)]\s+`)
+	// dingtalkImageToLinkRe converts ![alt](url) → [alt](url) for platforms
+	// that don't render inline markdown images reliably.
+	dingtalkImageToLinkRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 )
 
 // ---- DataFrame protocol ----
@@ -613,6 +616,11 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	if content == "" {
 		return nil
 	}
+
+	// DingTalk markdown renderer has unreliable inline image support for
+	// ![alt](url) syntax. Convert to clickable [alt](url) links so users
+	// always get a usable reference to the image.
+	content = dingtalkImageToLinkRe.ReplaceAllString(content, `[$1]($2)`)
 
 	// Split long messages for readability. DingTalk webhook markdown allows
 	// up to ~20480 bytes and API markdown up to ~5000 chars; 4000 chars is
