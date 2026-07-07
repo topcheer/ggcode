@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/util"
+
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -90,7 +92,7 @@ func (rs *RuleStore) save() error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(rs.path, data, 0644)
+	return util.AtomicWriteFile(rs.path, data, 0644)
 }
 
 // MatchErrors checks each error against existing rules. Returns matched

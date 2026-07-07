@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Job represents a scheduled prompt job.
@@ -145,12 +146,15 @@ func (s *Scheduler) Load() {
 }
 
 // save persists all recurring jobs for this session to the store file.
+// The mutex is held throughout to prevent concurrent writes from racing.
 func (s *Scheduler) save() error {
 	if s.storePath == "" {
 		return nil
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	jobs := make([]jobJSON, 0)
 	for _, j := range s.jobs {
 		if !j.Recurring {
@@ -166,7 +170,6 @@ func (s *Scheduler) save() error {
 			CreatedAt:   j.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	s.mu.Unlock()
 
 	if len(jobs) == 0 {
 		// Remove the file when no recurring jobs remain.
@@ -183,7 +186,7 @@ func (s *Scheduler) save() error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create cron store dir %s: %w", dir, err)
 	}
-	if err := os.WriteFile(s.storePath, out, 0644); err != nil {
+	if err := util.AtomicWriteFile(s.storePath, out, 0644); err != nil {
 		return fmt.Errorf("write cron store %s: %w", s.storePath, err)
 	}
 	return nil
