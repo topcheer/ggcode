@@ -1737,39 +1737,52 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
-	}
 	a.mu.RLock()
 	token := a.token
 	a.mu.RUnlock()
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	// Extract message_id from response, checking code field for API errors.
-	var result struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data struct {
-			MessageID string `json:"message_id"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-		if result.Code != 0 {
-			return "", fmt.Errorf("Feishu interactive API error [%d]: %s", result.Code, result.Msg)
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return "", err
 		}
-		return strings.TrimSpace(result.Data.MessageID), nil
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			delay := parseRetryAfter(resp)
+			resp.Body.Close()
+			debug.Log("feishu", "adapter=%s SendInteractive rate-limited, retry %d/%d after %v",
+				a.name, attempt+1, maxRateLimitRetries, delay)
+			if err := sleepRetry(ctx, delay); err != nil {
+				return "", err
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+			return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+
+		// Extract message_id from response, checking code field for API errors.
+		var result struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				MessageID string `json:"message_id"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+			if result.Code != 0 {
+				return "", fmt.Errorf("Feishu interactive API error [%d]: %s", result.Code, result.Msg)
+			}
+			return strings.TrimSpace(result.Data.MessageID), nil
+		}
+		return "", nil
 	}
-	return "", nil
+	return "", rateLimitExhausted("Feishu")
 }

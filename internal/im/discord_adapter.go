@@ -962,25 +962,44 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 		},
 	}
 	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bot "+a.token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return "", err
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			if attempt < maxRateLimitRetries {
+				delay := parseRetryAfter(resp)
+				debug.Log("discord", "adapter=%s SendInteractive 429 rate limited, retry %d/%d in %v",
+					a.name, attempt+1, maxRateLimitRetries, delay)
+				if err := sleepRetry(ctx, delay); err != nil {
+					return "", err
+				}
+				continue
+			}
+			return "", rateLimitExhausted("Discord")
+		}
+
+		defer resp.Body.Close()
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return "", err
+		}
+		if id, ok := result["id"].(string); ok {
+			return id, nil
+		}
+		return "", nil
 	}
-	req.Header.Set("Authorization", "Bot "+a.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
-	}
-	if id, ok := result["id"].(string); ok {
-		return id, nil
-	}
-	return "", nil
+	return "", rateLimitExhausted("Discord")
 }
 
 // handleInteraction processes Discord INTERACTION_CREATE events (button clicks).
