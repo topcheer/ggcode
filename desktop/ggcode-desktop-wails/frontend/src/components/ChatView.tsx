@@ -78,6 +78,7 @@ function enhanceCodeBlocks(container: HTMLElement) {
         } else {
           hljs.highlightElement(code) // auto-detect
         }
+        code.setAttribute('data-highlighted', 'true')
       }
     } catch { /* ignore highlighting errors */ }
 
