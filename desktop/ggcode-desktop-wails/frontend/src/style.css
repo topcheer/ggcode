@@ -101,6 +101,9 @@
     width: 100%;
     margin: 0.5em 0;
     font-size: var(--font-size-small);
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 .markdown-body th, .markdown-body td {
     border: 1px solid var(--color-border);
