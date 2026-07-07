@@ -563,6 +563,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
   const [activeTab, setActiveTab] = useState<string>('main') // 'main' or agentID
   const [input, setInput] = useState('')
+  const [inputHistory, setInputHistory] = useState<string[]>([])
+  const historyIdxRef = useRef(-1)
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -1381,6 +1383,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const text = input.trim()
     if (!text && pastedImages.length === 0) return
 
+    // Save to input history (dedup consecutive, max 50)
+    if (text) {
+      setInputHistory(prev => {
+        if (prev.length > 0 && prev[prev.length - 1] === text) return prev
+        return [...prev.slice(-49), text]
+      })
+    }
+    historyIdxRef.current = -1
+
     // Intercept frontend-only slash commands
     if (text === '/copy' || text === '/export') {
       setInput('')
@@ -1652,11 +1663,55 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       void cycleReasoningEffort()
       return
     }
+    // Input history navigation (up/down arrows when not in slash menu)
+    if (!slashOpen && inputHistory.length > 0) {
+      const el = e.currentTarget as HTMLTextAreaElement
+      const atStart = el.selectionStart === 0 && el.selectionEnd === 0
+      const atEnd = el.selectionStart === input.length && el.selectionEnd === input.length
+      if (e.key === 'ArrowUp' && atStart) {
+        e.preventDefault()
+        if (historyIdxRef.current === -1) {
+          historyIdxRef.current = inputHistory.length - 1
+        } else if (historyIdxRef.current > 0) {
+          historyIdxRef.current--
+        }
+        const h = inputHistory[historyIdxRef.current]
+        setInput(h)
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.style.height = 'auto'
+            inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 200) + 'px'
+            inputRef.current.setSelectionRange(h.length, h.length)
+          }
+        })
+        return
+      }
+      if (e.key === 'ArrowDown' && atEnd && historyIdxRef.current !== -1) {
+        e.preventDefault()
+        if (historyIdxRef.current < inputHistory.length - 1) {
+          historyIdxRef.current++
+          const h = inputHistory[historyIdxRef.current]
+          setInput(h)
+          requestAnimationFrame(() => {
+            if (inputRef.current) {
+              inputRef.current.style.height = 'auto'
+              inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 200) + 'px'
+              inputRef.current.setSelectionRange(h.length, h.length)
+            }
+          })
+        } else {
+          historyIdxRef.current = -1
+          setInput('')
+          if (inputRef.current) { inputRef.current.style.height = 'auto' }
+        }
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
-  }, [cycleReasoningEffort, handleSend, slashOpen, slashFiltered, slashIdx])
+  }, [cycleReasoningEffort, handleSend, slashOpen, slashFiltered, slashIdx, inputHistory, input])
 
   // ── In-conversation search ────────────────────────────────────────────────
 
