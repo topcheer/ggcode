@@ -337,15 +337,17 @@ func (a *nostrAdapter) sendNostrDM(ctx context.Context, recipientPubKey, text st
 	recipientPubKey = resolveNostrPubkey(recipientPubKey)
 
 	chunks := splitNostrMessage(text, nostrMaxMessageLen)
+
+	// Compute shared secret once — it only depends on recipientPubKey and our
+	// private key, both constant across all chunks. ECDH scalar multiplication
+	// is expensive (~0.1ms), so this avoids N redundant computations.
+	sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
+	if err != nil {
+		return fmt.Errorf("ECDH: %w", err)
+	}
+
 	var lastErr error
 	for i, chunk := range chunks {
-		// Compute shared secret for NIP-04 encryption
-		sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
-		if err != nil {
-			// Recipient-level error — will fail for every chunk
-			lastErr = fmt.Errorf("ECDH: %w", err)
-			break
-		}
 		encrypted, err := nip04.Encrypt(chunk, sharedSecret)
 		if err != nil {
 			// Encryption error is also recipient-level
