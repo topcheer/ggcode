@@ -124,12 +124,22 @@ func TestMarkdownToWhatsApp_HorizontalRule(t *testing.T) {
 	}
 }
 
-func TestMarkdownToWhatsApp_PreservesWhatsAppNativeBold(t *testing.T) {
-	// Single *text* is WhatsApp native bold — should not be converted
-	input := "This is *already* WhatsApp bold"
-	got := markdownToWhatsApp(input)
-	if got != input {
-		t.Errorf("WhatsApp native bold changed: got %q, want %q", got, input)
+func TestMarkdownToWhatsApp_AsteriskItalic(t *testing.T) {
+	// Markdown *text* means italic, but WhatsApp *text* means bold.
+	// markdownToWhatsApp must convert *italic* → _italic_ to preserve semantics.
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"This is *italic* text", "This is _italic_ text"},
+		{"*emphasis* here", "_emphasis_ here"},
+		{"Multi *word emphasis* here", "Multi _word emphasis_ here"},
+	}
+	for _, tc := range tests {
+		got := markdownToWhatsApp(tc.input)
+		if got != tc.want {
+			t.Errorf("markdownToWhatsApp(%q) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 

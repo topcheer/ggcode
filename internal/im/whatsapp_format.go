@@ -87,21 +87,32 @@ func markdownToWhatsApp(text string) string {
 	// Source: https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/text-messages/
 	text = waLinkRe.ReplaceAllString(text, "$1 ($2)")
 
-	// 3. Bold: **text** → *text* (double → single asterisk)
-	// Must run before strikethrough to avoid ** interfering with ~~ patterns.
-	text = waBoldRe.ReplaceAllString(text, "*$1*")
+	// 3. Bold: **text** → \x00text\x00 (temporary placeholder)
+	// Uses null-byte placeholder to protect bold from italic regex below.
+	// The italic regex would otherwise match the inner *text* of **text**.
+	text = waBoldRe.ReplaceAllString(text, "\x00${1}\x00")
 
-	// 4. Strikethrough: ~~text~~ → ~text~ (double → single tilde)
+	// 4. Italic: *text* → _text_ (markdown single-asterisk italic → WhatsApp underscore)
+	// WhatsApp uses *text* for bold, so markdown *italic* must become _italic_.
+	// Now safe because **bold** has been replaced with \x00bold\x00 placeholders.
+	// The mdAsteriskItalicRe regex requires [^\s*] after the opening *, so it
+	// correctly excludes * list items and * * * horizontal rules.
+	text = mdAsteriskItalicRe.ReplaceAllString(text, "_${1}_")
+
+	// 5. Restore bold: \x00text\x00 → *text* (WhatsApp bold)
+	text = strings.ReplaceAll(text, "\x00", "*")
+
+	// 6. Strikethrough: ~~text~~ → ~text~ (double → single tilde)
 	text = waStrikeRe.ReplaceAllString(text, "~$1~")
 
-	// 5. Headers: ### Header → *Header* (WhatsApp has no header syntax)
+	// 7. Headers: ### Header → *Header* (WhatsApp has no header syntax)
 	text = waHeaderRe.ReplaceAllString(text, "*$1*")
 
-	// 6. Horizontal rules: --- or *** → —
+	// 8. Horizontal rules: --- or *** → —
 	text = waHRRe.ReplaceAllString(text, "—")
 
 	// Note: The following are already compatible with WhatsApp and need no conversion:
-	//   - _italic_  (underscore syntax is the same)
+	//   - _italic_  (underscore syntax is the same; markdown *italic* is handled in step 4)
 	//   - `code`    (single backtick is the same)
 	//   - ```code``` (triple backtick is the same)
 	//   - > quote   (blockquote syntax is the same)
