@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -144,7 +145,9 @@ func (rc *RelayClient) Connect() error {
 
 func (rc *RelayClient) dial() (*websocket.Conn, error) {
 	url := rc.currentShareDescriptor().RuntimeConnectURL(rc.relayURL, rc.role, rc.meta, true)
-	conn, resp, err := websocket.DefaultDialer.Dial(url, http.Header{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, url, http.Header{})
 	if err != nil {
 		if resp != nil {
 			// Limit error body to prevent memory exhaustion from a
