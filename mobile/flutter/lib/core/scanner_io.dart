@@ -21,7 +21,7 @@ Widget buildQrScanner({
         }
       }
     },
-    errorBuilder: (context, error, child) {
+    errorBuilder: (context, error) {
       onPermissionError?.call();
       return Center(child: Text('Camera error: $error'));
     },
