@@ -980,46 +980,100 @@ func (a *tgAdapter) apiRequest(ctx context.Context, method, path string, body an
 		}
 		bodyBytes = buf.Bytes()
 	}
-	var reader io.Reader
-	if bodyBytes != nil {
-		reader = bytes.NewReader(bodyBytes)
-	}
 	url := a.apiBase + path
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
-	if err != nil {
-		return nil, err
+
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		var reader io.Reader
+		if bodyBytes != nil {
+			reader = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, url, reader)
+		if err != nil {
+			return nil, err
+		}
+		if bodyBytes != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		// Handle HTTP 429 (Too Many Requests). Telegram returns retry_after
+		// in the JSON response body: {"ok":false,"error_code":429,
+		// "parameters":{"retry_after":N}} where retry_after is seconds.
+		// Source: https://core.telegram.org/bots/api#responseparameters
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+			retryAfter := tgExtractRetryAfter(resp)
+			resp.Body.Close()
+			debug.Log("tg", "adapter=%s rate-limited (429), retry %d/%d after %v",
+				a.name, attempt+1, maxRateLimitRetries, retryAfter)
+			if err := sleepRetry(ctx, retryAfter); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil && len(data) > 0 {
+			return nil, fmt.Errorf("Telegram API parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+		if resp.StatusCode >= 400 {
+			desc := strings.TrimSpace(stringFromAny(payload["description"]))
+			if desc == "" {
+				desc = http.StatusText(resp.StatusCode)
+			}
+			return nil, fmt.Errorf("Telegram API [%d] %s: %s", resp.StatusCode, path, desc)
+		}
+		if ok, _ := payload["ok"].(bool); !ok {
+			desc := strings.TrimSpace(stringFromAny(payload["description"]))
+			return nil, fmt.Errorf("Telegram API not ok: %s", desc)
+		}
+		if out != nil {
+			*out = payload
+		}
+		return resp, nil
 	}
-	if bodyBytes != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+
+	return nil, rateLimitExhausted("Telegram")
+}
+
+// tgExtractRetryAfter reads the response body and extracts the retry_after
+// value from a Telegram 429 response.
+// Response format: {"ok":false,"error_code":429,"description":"...",
+//
+//	"parameters":{"retry_after":N}}
+//
+// retry_after is in seconds (integer). Falls back to the Retry-After header
+// via parseRetryAfter, then defaultRetryDelay.
+func tgExtractRetryAfter(resp *http.Response) time.Duration {
 	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
-		return nil, err
+		return parseRetryAfter(resp)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil && len(data) > 0 {
-		return nil, fmt.Errorf("Telegram API parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return parseRetryAfter(resp)
 	}
-	if resp.StatusCode >= 400 {
-		desc := strings.TrimSpace(stringFromAny(payload["description"]))
-		if desc == "" {
-			desc = http.StatusText(resp.StatusCode)
+	if params, ok := payload["parameters"].(map[string]any); ok {
+		switch v := params["retry_after"].(type) {
+		case float64:
+			if v > 0 {
+				return capDuration(time.Duration(int(v)) * time.Second)
+			}
+		case int:
+			if v > 0 {
+				return capDuration(time.Duration(v) * time.Second)
+			}
 		}
-		return nil, fmt.Errorf("Telegram API [%d] %s: %s", resp.StatusCode, path, desc)
 	}
-	if ok, _ := payload["ok"].(bool); !ok {
-		desc := strings.TrimSpace(stringFromAny(payload["description"]))
-		return nil, fmt.Errorf("Telegram API not ok: %s", desc)
-	}
-	if out != nil {
-		*out = payload
-	}
-	return resp, nil
+	// Final fallback: check the standard Retry-After header.
+	return parseRetryAfter(resp)
 }
 
 func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {

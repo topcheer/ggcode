@@ -147,6 +147,8 @@ func (m *Manager) StopTarget(name string) error {
 // EncoderSize returns the actual encoder output resolution.
 // Returns 0,0 if streaming hasn't started yet.
 func (m *Manager) EncoderSize() (int, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.encW, m.encH
 }
 
@@ -209,6 +211,7 @@ func (m *Manager) frameLoop() {
 				// Lock encoder resolution for the entire streaming session.
 				// YouTube Live locks resolution from the first frame and cannot change mid-stream.
 				// Detect orientation at startup and keep it; ignore subsequent resize changes.
+				m.mu.Lock()
 				if m.encW == 0 {
 					if cols >= rows {
 						m.encW, m.encH = 1920, 1080
@@ -217,6 +220,7 @@ func (m *Manager) frameLoop() {
 					}
 				}
 				encW, encH := m.encW, m.encH
+				m.mu.Unlock()
 
 				// Auto-calc fontSize to fit cols into encoder width.
 				// DejaVu Mono: charW ≈ pt*10/16.
