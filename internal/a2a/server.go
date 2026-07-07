@@ -101,8 +101,10 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	}
 
 	s.server = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", host, cfg.Port),
-		Handler: mux,
+		Addr:         fmt.Sprintf("%s:%d", host, cfg.Port),
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 0, // no write timeout — agent tasks can stream for minutes
 		BaseContext: func(_ net.Listener) context.Context {
 			return context.Background()
 		},

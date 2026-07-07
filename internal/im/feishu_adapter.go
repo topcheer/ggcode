@@ -474,8 +474,10 @@ func (a *feishuAdapter) startWebhookServer(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleWebhook)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", a.webhookPort),
-		Handler: mux,
+		Addr:         fmt.Sprintf(":%d", a.webhookPort),
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 	a.mu.Lock()
 	a.httpServer = server
