@@ -1443,6 +1443,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     void sendUserText(text, id, images || [])
   }, [sendUserText])
 
+  // Edit & resend: populate input with original message text for user to modify
+  const handleEditMessage = useCallback((text: string) => {
+    setInput(text)
+    // Focus and move cursor to end
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(text.length, text.length)
+        // Trigger auto-resize
+        el.style.height = 'auto'
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+      }
+    })
+  }, [])
+
   // ── Cancel ────────────────────────────────────────────────────────────────
 
   const handleCancel = useCallback(() => {
@@ -2135,7 +2151,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                       {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   )}
-                  <MessageCard msg={msg} onRetry={handleRetrySend} />
+                  <MessageCard msg={msg} onRetry={handleRetrySend} onEdit={handleEditMessage} />
                 </div>
               )
             })}
@@ -2582,10 +2598,14 @@ function TabButton({ label, active, onClick, color, status, title, onClose }: {
   )
 }
 
-function MessageCard({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void }) {
+function MessageCard({ msg, onRetry, onEdit }: {
+    msg: ChatMessage;
+    onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void;
+    onEdit?: (text: string) => void;
+  }) {
   switch (msg.role) {
     case 'user':
-      return <UserMessage msg={msg} onRetry={onRetry} />
+      return <UserMessage msg={msg} onRetry={onRetry} onEdit={onEdit} />
     case 'assistant':
       return <AssistantMessage msg={msg} />
     case 'tool':
@@ -2645,7 +2665,11 @@ function ReasoningMessage({ msg }: { msg: ChatMessage }) {
   )
 }
 
-function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void }) {
+function UserMessage({ msg, onRetry, onEdit }: {
+    msg: ChatMessage;
+    onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void;
+    onEdit?: (text: string) => void;
+  }) {
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
   const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
@@ -2726,6 +2750,23 @@ function UserMessage({ msg, onRetry }: { msg: ChatMessage; onRetry?: (id: string
             <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
               {formatTimestamp(msg.timestamp)}
             </span>
+          )}
+          {msg.content && onEdit && (
+            <button
+              onClick={() => onEdit(msg.content)}
+              title="Edit & resend"
+              style={{
+                padding: '1px 6px', borderRadius: 3,
+                background: 'transparent',
+                border: '1px solid var(--color-border)',
+                color: 'var(--text-tertiary)',
+                cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
+                opacity: hovered ? 1 : 0,
+                transition: 'opacity 0.15s ease',
+              }}
+            >
+              Edit
+            </button>
           )}
           {msg.content && (
             <button
