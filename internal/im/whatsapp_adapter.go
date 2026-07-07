@@ -41,7 +41,7 @@ func init() {
 }
 
 const (
-	waMaxTextLen    = 4096
+	waMaxTextLen    = 65536 // Official: WhatsApp personal accounts support up to 65,536 characters per text message
 	waMaxReconnect  = 5
 	waInterMsgDelay = 300 * time.Millisecond // Conservative inter-chunk delay to avoid WhatsApp rate limiting
 )

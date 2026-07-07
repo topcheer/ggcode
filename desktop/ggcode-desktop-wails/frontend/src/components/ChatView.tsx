@@ -264,6 +264,7 @@ interface ChatMessage {
   source?: string // 'im' | 'mobile' | 'lanchat' — non-UI message origin
   lanchatFrom?: string // parsed nick from [LAN Chat from xxx]:
   deliveryStatus?: 'pending' | 'sent' | 'failed'
+  reasoningDuration?: number // seconds, set when reasoning completes
 }
 
 /** Parse LAN Chat injection format:
@@ -819,8 +820,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           break
         }
         case 'reasoning_done': {
+          const doneTime = Date.now()
           setMessages(prev => prev.map(m =>
-            m.role === 'reasoning' && m.streaming ? { ...m, streaming: false } : m
+            m.role === 'reasoning' && m.streaming
+              ? { ...m, streaming: false, reasoningDuration: Math.max(1, Math.round((doneTime - m.timestamp) / 1000)) }
+              : m
           ))
           break
         }
@@ -1951,6 +1955,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         )}
         {messages.length > 0 && (
           <>
+            <button
+              onClick={() => setSearchOpen(prev => !prev)}
+              title="Search in conversation (Cmd+F)"
+              style={{
+                width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+                background: searchOpen ? 'color-mix(in srgb, var(--color-primary) 15%, transparent)' : 'var(--color-surface)',
+                border: '1px solid ' + (searchOpen ? 'var(--color-primary)' : 'transparent'),
+                color: searchOpen ? 'var(--color-primary)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'all 0.15s',
+              }}
+            >
+              <Search size={14} />
+            </button>
             <button onClick={handleExportConversation} title="Copy conversation to clipboard" style={{
               width: 28, height: 28, borderRadius: 'var(--radius-sm)',
               background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
@@ -2623,8 +2642,24 @@ function MessageCard({ msg, onRetry, onEdit }: {
 
 // ── Reasoning block (collapsible, shown before the message it belongs to) ──
 
-function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning' }: { text: string; defaultOpen?: boolean; label?: string }) {
+function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', streaming = false, durationSec }: {
+  text: string; defaultOpen?: boolean; label?: string; streaming?: boolean; durationSec?: number
+}) {
   const [open, setOpen] = useState(defaultOpen)
+  const wasStreamingRef = useRef(false)
+
+  // Auto-collapse when streaming transitions from true → false
+  useEffect(() => {
+    if (wasStreamingRef.current && !streaming) {
+      setOpen(false)
+    }
+    wasStreamingRef.current = streaming
+  }, [streaming])
+
+  const displayLabel = streaming
+    ? 'Thinking...'
+    : (durationSec ? `Thought for ${durationSec}s` : label)
+
   return (
     <div style={{
       borderRadius: 'var(--radius-md)',
@@ -2639,7 +2674,7 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning' }: { te
         color: 'var(--text-tertiary)', fontSize: 11,
       }}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {label}
+        {displayLabel}
       </button>
       {open && (
         <div style={{
@@ -2660,7 +2695,12 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning' }: { te
 function ReasoningMessage({ msg }: { msg: ChatMessage }) {
   return (
     <div style={{ maxWidth: '85%', alignSelf: 'flex-start' }}>
-      <ReasoningBlock text={msg.content} defaultOpen={true} label={msg.streaming ? 'Thinking...' : 'Thought'} />
+      <ReasoningBlock
+        text={msg.content}
+        defaultOpen={true}
+        streaming={msg.streaming}
+        durationSec={msg.reasoningDuration}
+      />
     </div>
   )
 }

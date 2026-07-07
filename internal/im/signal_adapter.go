@@ -23,7 +23,7 @@ import (
 
 const (
 	signalDefaultBaseURL    = "http://127.0.0.1:8080"
-	signalMaxMessageLen     = 2000
+	signalMaxMessageLen     = 16000
 	signalConnectTimeout    = 20 * time.Second
 	signalRequestTimeout    = 30 * time.Second
 	signalDedupMaxSize      = 1000

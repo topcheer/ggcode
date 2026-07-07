@@ -27,7 +27,7 @@ import (
 
 const (
 	slackAPIBase       = "https://slack.com/api"
-	slackMaxTextLen    = 4000
+	slackMaxTextLen    = 12000
 	slackInterMsgDelay = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
 )
 

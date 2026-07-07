@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	matrixMaxMessageLen = 4000
+	matrixMaxMessageLen = 60000 // Synapse default max_event_size is 100KB; 60K leaves room for event JSON metadata
 	matrixSyncTimeout   = 30000
 	matrixCryptoDBName  = "matrix-crypto.db"
 
