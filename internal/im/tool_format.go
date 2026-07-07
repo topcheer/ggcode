@@ -237,6 +237,63 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("▶ %s", imLabel(lang, "cron_resume"))
 	case "cron_get":
 		return fmt.Sprintf("⏰ %s", imLabel(lang, "cron_get"))
+	// Agent lifecycle
+	case "spawn_agent":
+		task := extractArgValue(args, "task")
+		if task == "" {
+			task = tc.Detail
+		}
+		return fmt.Sprintf("🚀 %s", imLabel(lang, "spawn_agent"))
+	case "wait_agent":
+		return fmt.Sprintf("⏳ %s", imLabel(lang, "wait_agent"))
+	// Memory & config
+	case "save_memory":
+		key := extractArgValue(args, "key")
+		if key == "" {
+			key = tc.Detail
+		}
+		return fmt.Sprintf("💾 %s: `%s`", imLabel(lang, "save_memory"), key)
+	case "config":
+		setting := extractArgValue(args, "setting")
+		if setting == "" {
+			setting = tc.Detail
+		}
+		return fmt.Sprintf("⚙ %s: `%s`", imLabel(lang, "config"), setting)
+	// Visual tools
+	case "screenshot":
+		return "📸 Screenshot"
+	case "mobile_device":
+		action := extractArgValue(args, "action")
+		if action == "" {
+			action = tc.Detail
+		}
+		return fmt.Sprintf("📱 %s: %s", imLabel(lang, "mobile_device"), action)
+	// IM management
+	case "im":
+		action := extractArgValue(args, "action")
+		if action == "" {
+			action = tc.Detail
+		}
+		return fmt.Sprintf("💬 %s: %s", imLabel(lang, "im_manage"), action)
+	// Additional git operations
+	case "git_diff":
+		return fmt.Sprintf("🔍 %s", imLabel(lang, "git_diff"))
+	case "git_status":
+		return fmt.Sprintf("📊 %s", imLabel(lang, "git_status"))
+	case "git_log":
+		return fmt.Sprintf("📜 %s", imLabel(lang, "git_log"))
+	case "git_remote":
+		return fmt.Sprintf("🔗 %s", imLabel(lang, "git_remote"))
+	case "git_stash", "git_stash_list":
+		return fmt.Sprintf("📦 %s", imLabel(lang, "git_stash"))
+	// User interaction
+	case "ask_user":
+		return "❓ " + imLabel(lang, "ask_user")
+	// Background command management
+	case "stop_command", "wait_command":
+		return fmt.Sprintf("⏹ %s", imLabel(lang, "command_manage"))
+	case "write_command_input":
+		return fmt.Sprintf("⌨ %s", imLabel(lang, "command_input"))
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)

@@ -198,6 +198,34 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "Cron job paused"
 		case "cron_resumed":
 			return "Cron job resumed"
+		case "spawn_agent":
+			return "Spawn agent"
+		case "wait_agent":
+			return "Wait for agent"
+		case "save_memory":
+			return "Save memory"
+		case "config":
+			return "Config"
+		case "mobile_device":
+			return "Mobile device"
+		case "im_manage":
+			return "IM adapter"
+		case "git_diff":
+			return "Git diff"
+		case "git_status":
+			return "Git status"
+		case "git_log":
+			return "Git log"
+		case "git_remote":
+			return "Git remote"
+		case "git_stash":
+			return "Git stash"
+		case "ask_user":
+			return "Ask user"
+		case "command_manage":
+			return "Manage command"
+		case "command_input":
+			return "Send input"
 		}
 	default: // zh-CN
 		switch key {
@@ -383,6 +411,34 @@ func imLabel(lang ToolLanguage, key string) string {
 			return "定时任务已暂停"
 		case "cron_resumed":
 			return "定时任务已恢复"
+		case "spawn_agent":
+			return "创建子代理"
+		case "wait_agent":
+			return "等待子代理"
+		case "save_memory":
+			return "保存记忆"
+		case "config":
+			return "配置"
+		case "mobile_device":
+			return "移动设备"
+		case "im_manage":
+			return "IM 适配器"
+		case "git_diff":
+			return "查看差异"
+		case "git_status":
+			return "查看状态"
+		case "git_log":
+			return "查看日志"
+		case "git_remote":
+			return "查看远程"
+		case "git_stash":
+			return "储藏"
+		case "ask_user":
+			return "询问用户"
+		case "command_manage":
+			return "管理命令"
+		case "command_input":
+			return "发送输入"
 		}
 	}
 	return key
