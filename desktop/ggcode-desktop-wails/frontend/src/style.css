@@ -53,6 +53,9 @@
 /* Lists */
 .markdown-body ul, .markdown-body ol { margin: 0.4em 0; padding-left: 1.5em; }
 .markdown-body li { margin: 0.15em 0; line-height: 1.55; }
+.markdown-body ul > li::marker { color: var(--color-primary); }
+.markdown-body ol > li::marker { color: var(--color-primary); font-weight: 600; }
+.markdown-body li > ul, .markdown-body li > ol { margin: 0.1em 0; }
 
 /* Inline code */
 .markdown-body code:not(pre code) {
@@ -82,11 +85,15 @@
 /* Blockquotes */
 .markdown-body blockquote {
     border-left: 3px solid var(--color-primary);
-    padding-left: 12px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 8px 14px 8px 12px;
     margin: 0.5em 0;
     color: var(--text-secondary);
     font-style: italic;
 }
+.markdown-body blockquote p { margin: 0.2em 0; }
+.markdown-body blockquote blockquote { margin: 0.3em 0; }
 
 /* Tables */
 .markdown-body table {
@@ -127,6 +134,17 @@
 .markdown-body img {
     max-width: 100%;
     border-radius: var(--radius-md);
+}
+
+/* Links */
+.markdown-body a {
+    color: var(--color-primary);
+    text-decoration: none;
+    transition: color 0.15s, text-decoration 0.15s;
+}
+.markdown-body a:hover {
+    text-decoration: underline;
+    color: #60a5fa;
 }
 
 /* GFM Task list checkboxes */
