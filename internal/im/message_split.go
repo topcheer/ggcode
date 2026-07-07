@@ -238,7 +238,19 @@ func truncateRunes(text string, maxLen int, suffix string) string {
 // in one message and the closing ``` in the next, causing the platform to
 // render non-code text as monospace or vice versa.
 func SplitMarkdown(text string, maxLen int) []string {
-	chunks := SplitMessage(text, maxLen)
+	// Reserve space for code block markers that SplitMarkdown adds to chunks
+	// crossing fenced code block boundaries: "```\n" (4) prefix + "\n```" (4)
+	// suffix = 8 runes overhead in the worst case. Without this, a chunk that
+	// fills maxLen and then gets both markers could exceed the platform's hard
+	// limit (e.g. Discord rejects messages > 2000 chars with HTTP 400).
+	splitLen := maxLen
+	if strings.Contains(text, "```") {
+		splitLen = maxLen - 8
+		if splitLen < 1 {
+			splitLen = 1
+		}
+	}
+	chunks := SplitMessage(text, splitLen)
 	if len(chunks) <= 1 {
 		return chunks
 	}

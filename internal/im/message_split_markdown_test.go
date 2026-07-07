@@ -75,3 +75,31 @@ func TestSplitMarkdown_EmptyCodeBlock(t *testing.T) {
 		t.Errorf("short code block should not be split, got %d chunks", len(chunks))
 	}
 }
+
+func TestSplitMarkdown_ChunkSizeRespectsMaxLen(t *testing.T) {
+	// Regression: chunks crossing code block boundaries get "```\n" prefix and
+	// "\n```" suffix added (8 chars total). Previously these markers could push
+	// a chunk beyond maxLen, causing Discord HTTP 400 rejections.
+	maxLen := 2000
+	text := "```go\n" + strings.Repeat("x", 5000) + "\n```"
+	chunks := SplitMarkdown(text, maxLen)
+	for i, chunk := range chunks {
+		if len(chunk) > maxLen {
+			t.Errorf("chunk %d is %d chars, exceeds maxLen %d (code block markers overflow)",
+				i, len(chunk), maxLen)
+		}
+	}
+}
+
+func TestSplitMarkdown_ChunkSizeRespectsMaxLenSlack(t *testing.T) {
+	// Same regression test with a different limit (Slack uses 4000)
+	maxLen := 4000
+	text := "```js\n" + strings.Repeat("const x = 1;\n", 500) + "\n```"
+	chunks := SplitMarkdown(text, maxLen)
+	for i, chunk := range chunks {
+		if len(chunk) > maxLen {
+			t.Errorf("chunk %d is %d chars, exceeds maxLen %d (code block markers overflow)",
+				i, len(chunk), maxLen)
+		}
+	}
+}
