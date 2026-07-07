@@ -14,7 +14,7 @@ import (
 //   - Block quote:   > text   (at start of line)
 //   - Lists:         - item / * item / 1. item
 //   - Headers:       NOT supported (convert to bold)
-//   - Links:         NOT supported (convert to plain text)
+//   - Links:         NOT rendered as markdown (convert to plain text with URL)
 //
 // Sources:
 //   - https://faq.whatsapp.com/539178204879377 (official FAQ)
@@ -81,8 +81,11 @@ func markdownToWhatsApp(text string) string {
 	// 1. Images: ![alt](url) → remove entirely (before link processing)
 	text = waImageRe.ReplaceAllString(text, "")
 
-	// 2. Links: [text](url) → text (WhatsApp doesn't render markdown links)
-	text = waLinkRe.ReplaceAllString(text, "$1")
+	// 2. Links: [text](url) → text (url)
+	// WhatsApp doesn't render markdown link syntax, but the client
+	// auto-hyperlinks plain URLs in the body text.
+	// Source: https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/text-messages/
+	text = waLinkRe.ReplaceAllString(text, "$1 ($2)")
 
 	// 3. Bold: **text** → *text* (double → single asterisk)
 	// Must run before strikethrough to avoid ** interfering with ~~ patterns.

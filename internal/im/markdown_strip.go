@@ -40,6 +40,12 @@ var (
 	mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`)
 	// Links: [text](url) → text (url)
 	mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	// GFM task lists: - [ ] item → ○ item, - [x] item → ✓ item
+	// Processed after code blocks (so code containing [ ] is preserved)
+	// and before links (so [ ] isn't confused with link syntax).
+	mdTaskUncheckedRe = regexp.MustCompile(`(?m)^([-*])\s+\[ \]\s+`)
+	mdTaskCheckedRe   = regexp.MustCompile(`(?m)^([-*])\s+\[[xX]\]\s+`)
+
 	// Headers: ### Header → Header
 	mdHeaderRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
 	// Blockquotes: > text → text
@@ -97,6 +103,11 @@ func stripMarkdown(text string) string {
 		}
 		return strings.Join(result, "\n")
 	})
+
+	// 1c. GFM task lists: convert checkboxes to Unicode symbols
+	// - [ ] item → ○ item, - [x] item → ✓ item
+	text = mdTaskCheckedRe.ReplaceAllString(text, "$1 ✓ ")
+	text = mdTaskUncheckedRe.ReplaceAllString(text, "$1 ○ ")
 
 	// 2. Inline code: `code` → code
 	text = mdInlineCodeRe.ReplaceAllString(text, "$1")

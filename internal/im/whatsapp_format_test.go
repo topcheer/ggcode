@@ -66,9 +66,10 @@ func TestMarkdownToWhatsApp_Headers(t *testing.T) {
 }
 
 func TestMarkdownToWhatsApp_Links(t *testing.T) {
-	// WhatsApp doesn't support markdown links — keep text, drop URL
+	// WhatsApp auto-hyperlinks plain URLs, so keep the URL as plain text.
+	// Source: https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/text-messages/
 	got := markdownToWhatsApp("See [the docs](https://example.com) for more")
-	want := "See the docs for more"
+	want := "See the docs (https://example.com) for more"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -109,7 +110,7 @@ func TestMarkdownToWhatsApp_NoMarkdown(t *testing.T) {
 func TestMarkdownToWhatsApp_Combined(t *testing.T) {
 	input := "## Report\n\n**Important:** See [docs](https://example.com) and ~~old~~ info.\n\n`code` here."
 	got := markdownToWhatsApp(input)
-	want := "*Report*\n\n*Important:* See docs and ~old~ info.\n\n`code` here."
+	want := "*Report*\n\n*Important:* See docs (https://example.com) and ~old~ info.\n\n`code` here."
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

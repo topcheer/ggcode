@@ -211,3 +211,26 @@ func TestStripMarkdown_NotATableJustPipes(t *testing.T) {
 		t.Errorf("stripMarkdown single pipe = %q, want unchanged", got)
 	}
 }
+
+func TestStripMarkdown_TaskListCheckboxes(t *testing.T) {
+	// GFM task lists should convert [ ] and [x] to readable symbols
+	input := "- [ ] unchecked task\n- [x] checked task\n- [X] capital X checked"
+	got := stripMarkdown(input)
+
+	if !strings.Contains(got, "○ unchecked task") {
+		t.Errorf("unchecked task: got %q, expected ○ symbol", got)
+	}
+	if !strings.Contains(got, "✓ checked task") {
+		t.Errorf("checked task: got %q, expected ✓ symbol", got)
+	}
+	if !strings.Contains(got, "✓ capital X checked") {
+		t.Errorf("capital X checked: got %q, expected ✓ symbol", got)
+	}
+	// Should not contain raw bracket syntax
+	if strings.Contains(got, "[ ]") {
+		t.Errorf("raw [ ] should be replaced: got %q", got)
+	}
+	if strings.Contains(got, "[x]") || strings.Contains(got, "[X]") {
+		t.Errorf("raw [x] should be replaced: got %q", got)
+	}
+}
