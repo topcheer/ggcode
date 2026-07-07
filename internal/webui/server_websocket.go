@@ -297,23 +297,7 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 	}
 }
 
-func (s *Server) wsSend(conn *websocket.Conn, msg interface{}) {
-	// Use Lock (not RLock) — gorilla/websocket forbids concurrent writes.
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := conn.WriteJSON(msg); err != nil {
-		debug.Log("webui", "ws write error: %v", err)
-	}
-}
-
-func (s *Server) wsSendError(conn *websocket.Conn, errMsg string) {
-	s.wsSend(conn, map[string]interface{}{"type": "error", "error": errMsg})
-}
-
-// wsSendEvent is used in legacy (non-bridge) mode only.
-func (s *Server) wsSendEvent(conn *websocket.Conn, event provider.StreamEvent) {
-	msg := streamEventToJSON(event)
-	if msg != nil {
-		s.wsSend(conn, msg)
-	}
-}
+// Dead code removed: wsSend, wsSendError, wsSendEvent were never called.
+// All WebSocket writes go through the per-connection writeCh channel +
+// dedicated write goroutine (lines 100-109), which properly serializes
+// writes without needing s.mu.
