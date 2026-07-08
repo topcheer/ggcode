@@ -62,6 +62,11 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		{"Use `git log --oneline *.*` to list", "Use `git log --oneline *.*` to list"},
 		// Code protected, surrounding markdown converted
 		{"See `a * b` and *italic*", "See `a * b` and _italic_"},
+		// Unpaired asterisks (math, bullet points) should NOT be converted to _
+		{"5 * 3 = 15", "5 * 3 = 15"},
+		{"a * b * c", "a * b * c"},
+		// Unpaired tildes should NOT be converted
+		{"~ approximate ~", "~ approximate ~"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {

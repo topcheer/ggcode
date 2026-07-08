@@ -42,6 +42,13 @@ var slackHeaderRe = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 var slackCodeBlockRe = regexp.MustCompile("(?s)```.*?```")
 var slackInlineCodeRe = regexp.MustCompile("`[^`]+`")
 
+// Match paired *italic* — requires non-whitespace start to avoid matching
+// math expressions like "5 * 3 * 2" where asterisks are multiplication operators.
+var slackItalicRe = regexp.MustCompile(`\*([^\s*][^*]*?)\*`)
+
+// Match paired ~~strikethrough~~ — same non-whitespace guard.
+var slackStrikeRe = regexp.MustCompile(`~~([^\s~][^~]*?)~~`)
+
 type slackAdapter struct {
 	name       string
 	manager    *Manager
@@ -885,12 +892,13 @@ func markdownToMrkdwn(text string) string {
 	// then convert that *bold* to _bold_ (wrong — bold would render as italic).
 	const boldPlaceholder = "\x00B\x00"
 	text = replaceDelimiters(text, "**", boldPlaceholder)
-	// Convert remaining *italic* to _italic_
-	text = replaceDelimiters(text, "*", "_")
+	// Convert *italic* to _italic_ using regex to avoid false positives on
+	// unpaired asterisks (e.g., "5 * 3" would become "5 _ 3" with naive replacement).
+	text = slackItalicRe.ReplaceAllString(text, "_${1}_")
 	// Restore bold placeholders as Slack mrkdwn *bold*
 	text = strings.ReplaceAll(text, boldPlaceholder, "*")
-	// Convert ~~strikethrough~~ to ~strikethrough~
-	text = replaceDelimiters(text, "~~", "~")
+	// Convert ~~strikethrough~~ to ~strikethrough~ using regex (same guard).
+	text = slackStrikeRe.ReplaceAllString(text, "~$1~")
 	// Convert markdown links [text](url) to Slack mrkdwn <url|text>
 	text = slackLinkRe.ReplaceAllString(text, "<$2|$1>")
 	// Convert markdown headers (# H1, ## H2, etc.) to Slack bold (*text*)
