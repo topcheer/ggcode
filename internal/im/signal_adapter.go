@@ -541,7 +541,7 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(ctx, chatID, stripMarkdown(defaultOutboundText(event)))
+	return a.sendText(ctx, chatID, signalMarkdown(defaultOutboundText(event)))
 }
 
 func (a *signalAdapter) sendText(ctx context.Context, chatID, text string) error {

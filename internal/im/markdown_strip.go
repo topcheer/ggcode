@@ -9,8 +9,6 @@ import (
 // These adapters should call stripMarkdown() on outbound text.
 //
 // Verified via official documentation:
-//   - Signal: https://support.signal.org/hc/en-us/articles/6325622209178
-//     (select-and-format only, no text-based syntax)
 //   - IRC: https://modern.ircdocs.horse/formatting
 //     (uses control characters, not markdown)
 //   - Twitch: no text formatting support in chat
@@ -18,6 +16,9 @@ import (
 //     (text type only, no formatting)
 //   - WeChat: Official Account API text type, no formatting
 //   - Nostr: NIP-04 DMs are plain text; client rendering varies
+//
+// Signal now supports text formatting (*bold*, _italic_, ~strike~, `code`).
+// Use signalMarkdown() instead of stripMarkdown() for the Signal adapter.
 
 // Markdown element regex patterns.
 // Ordered for correct processing: code blocks → bold → italic → other.
@@ -160,6 +161,103 @@ func stripMarkdown(text string) string {
 	text = mdBlockquoteRe.ReplaceAllString(text, "$1")
 
 	// 11. Horizontal rules → em dash
+	text = mdHRRe.ReplaceAllString(text, "—")
+
+	// Clean up: collapse multiple blank lines
+	for strings.Contains(text, "\n\n\n") {
+		text = strings.ReplaceAll(text, "\n\n\n", "\n\n")
+	}
+
+	return strings.TrimSpace(text)
+}
+
+// signalMarkdown converts standard markdown to Signal's text formatting syntax.
+// Signal supports: *bold*, _italic_, ~strike~, `code`, ||spoiler||.
+//
+// Key differences from standard markdown:
+//   - Bold uses single * (not **)
+//   - Italic uses _ (not *, since * means bold in Signal)
+//   - Strikethrough uses single ~ (not ~~)
+//   - Inline code uses ` (same as markdown)
+//
+// Non-formatting elements (headers, links, lists, tables) are processed the
+// same way as stripMarkdown since Signal has no equivalent rendering for them.
+func signalMarkdown(text string) string {
+	if text == "" {
+		return text
+	}
+
+	// 1. Fenced code blocks: preserve content (Signal renders `code` inline,
+	// but doesn't have code blocks — extract inner content)
+	text = mdCodeFenceRe.ReplaceAllStringFunc(text, func(match string) string {
+		lines := strings.Split(match, "\n")
+		if len(lines) < 2 {
+			return strings.Trim(match, "`")
+		}
+		return strings.Join(lines[1:len(lines)-1], "\n")
+	})
+
+	// 2. Tables → plain text (same as stripMarkdown)
+	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
+		lines := strings.Split(match, "\n")
+		var result []string
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || isTableSeparator(trimmed) {
+				continue
+			}
+			core := strings.Trim(trimmed, "|")
+			cells := strings.Split(core, "|")
+			for i := range cells {
+				cells[i] = strings.TrimSpace(cells[i])
+			}
+			result = append(result, strings.Join(cells, "  "))
+		}
+		return strings.Join(result, "\n")
+	})
+
+	// 3. Task lists (same as stripMarkdown)
+	text = mdTaskCheckedRe.ReplaceAllString(text, "$1 ✓ ")
+	text = mdTaskUncheckedRe.ReplaceAllString(text, "$1 ○ ")
+
+	// 4. Bullet lists (same as stripMarkdown)
+	text = mdBulletRe.ReplaceAllString(text, "• ")
+
+	// 5. Underscore HR (before __bold__)
+	text = mdUnderscoreHRRe.ReplaceAllString(text, "—")
+
+	// 6. Convert **bold** → *bold* (Signal bold)
+	// Use placeholder to distinguish from *italic* processing later.
+	text = mdBoldRe.ReplaceAllString(text, "\x00b\x00$1\x00/b\x00")
+	// 6b. Convert __bold__ → *bold* (Signal bold)
+	text = mdUnderscoreBoldRe.ReplaceAllString(text, "\x00b\x00$1\x00/b\x00")
+
+	// 7. Strikethrough: ~~text~~ → ~text~ (Signal strike)
+	text = mdStrikeRe.ReplaceAllString(text, "\x00s\x00$1\x00/s\x00")
+
+	// 8. Convert remaining *italic* → _italic_ (Signal italic, not bold)
+	// Use ${1} not $1 because $1_ is parsed as capture group named "1_" in Go regexp.
+	text = mdAsteriskItalicRe.ReplaceAllString(text, "_${1}_")
+
+	// 9. Restore placeholders → Signal formatting syntax
+	text = strings.ReplaceAll(text, "\x00b\x00", "*")
+	text = strings.ReplaceAll(text, "\x00/b\x00", "*")
+	text = strings.ReplaceAll(text, "\x00s\x00", "~")
+	text = strings.ReplaceAll(text, "\x00/s\x00", "~")
+
+	// 10. Images: ![alt](url) → url
+	text = mdImageRe.ReplaceAllString(text, "$2")
+
+	// 11. Links: [text](url) → text (url)
+	text = mdLinkRe.ReplaceAllString(text, "$1 ($2)")
+
+	// 12. Headers: ### Header → Header
+	text = mdHeaderRe.ReplaceAllString(text, "$1")
+
+	// 13. Blockquotes: > text → text
+	text = mdBlockquoteRe.ReplaceAllString(text, "$1")
+
+	// 14. Horizontal rules → em dash
 	text = mdHRRe.ReplaceAllString(text, "—")
 
 	// Clean up: collapse multiple blank lines

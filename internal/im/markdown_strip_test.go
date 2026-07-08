@@ -246,6 +246,113 @@ func TestStripMarkdown_NotATableJustPipes(t *testing.T) {
 	}
 }
 
+// --- signalMarkdown tests ---
+
+func TestSignalMarkdown_Bold(t *testing.T) {
+	// **bold** → *bold* (Signal bold uses single asterisk)
+	got := signalMarkdown("This is **bold** text")
+	want := "This is *bold* text"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_UnderscoreBold(t *testing.T) {
+	// __bold__ → *bold* (Signal bold uses single asterisk)
+	got := signalMarkdown("This is __bold__ text")
+	want := "This is *bold* text"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_Italic(t *testing.T) {
+	// _italic_ stays _italic_ (Signal supports underscore italic)
+	got := signalMarkdown("This is _italic_ text")
+	want := "This is _italic_ text"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_AsteriskItalic(t *testing.T) {
+	// *italic* → _italic_ (Signal * means bold, so convert to _)
+	got := signalMarkdown("This is *italic* text")
+	want := "This is _italic_ text"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_Strikethrough(t *testing.T) {
+	// ~~strike~~ → ~strike~ (Signal uses single tilde)
+	got := signalMarkdown("This is ~~deleted~~ text")
+	want := "This is ~deleted~ text"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_BoldAndItalic(t *testing.T) {
+	// **bold** and *italic* → *bold* and _italic_
+	got := signalMarkdown("**bold** and *italic*")
+	want := "*bold* and _italic_"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_InlineCode(t *testing.T) {
+	// `code` stays `code` (Signal supports backtick monospace)
+	got := signalMarkdown("Use `fmt.Println` here")
+	want := "Use `fmt.Println` here"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_Headers(t *testing.T) {
+	got := signalMarkdown("## Section")
+	want := "Section"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_Links(t *testing.T) {
+	got := signalMarkdown("See [docs](https://example.com) for more")
+	want := "See docs (https://example.com) for more"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_BulletList(t *testing.T) {
+	input := "- Item one\n- Item two"
+	want := "• Item one\n• Item two"
+	got := signalMarkdown(input)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_Combined(t *testing.T) {
+	input := "## Report\n\n**Important:** See [docs](https://example.com) and ~~old~~ info.\n\n`code` here."
+	got := signalMarkdown(input)
+	want := "Report\n\n*Important:* See docs (https://example.com) and ~old~ info.\n\n`code` here."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSignalMarkdown_NoFormatting(t *testing.T) {
+	input := "Just plain text."
+	got := signalMarkdown(input)
+	if got != input {
+		t.Errorf("plain text changed: got %q, want %q", got, input)
+	}
+}
+
 func TestStripMarkdown_TaskListCheckboxes(t *testing.T) {
 	// GFM task lists should convert [ ] and [x] to readable symbols
 	input := "- [ ] unchecked task\n- [x] checked task\n- [X] capital X checked"
