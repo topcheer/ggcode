@@ -308,10 +308,12 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		}
 		return "🖥 Warp"
 	default:
+		// Prettify tool names (especially MCP tools like mcp__cf__search → Mcp Cf Search)
+		pretty := prettifyToolName(name)
 		if tc.Detail != "" {
-			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
+			return fmt.Sprintf("🔧 %s: `%s`", pretty, tc.Detail)
 		}
-		return fmt.Sprintf("🔧 %s", name)
+		return fmt.Sprintf("🔧 %s", pretty)
 	}
 }
 
