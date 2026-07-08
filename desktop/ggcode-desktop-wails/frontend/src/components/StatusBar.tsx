@@ -33,8 +33,8 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
   }, [data])
 
   const formatTokens = (n: number) => {
-    if (n >= 1000000 && n % 1000000 === 0) return `${n / 1000000}m`
-    if (n >= 1000 && n % 1000 === 0) return `${n / 1000}k`
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}m`
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
     return String(n)
   }
 
@@ -115,8 +115,17 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           }}>{ml}</span>
         )
       })()}
-      <span style={{ color: 'var(--text-secondary)' }}>in {formatTokens(info.inputTokens)}</span>
-      <span style={{ color: 'var(--text-secondary)' }}>out {formatTokens(info.outputTokens)}</span>
+      <span title={`Input: ${info.inputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)' }}>in {formatTokens(info.inputTokens)}</span>
+      <span title={`Output: ${info.outputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)' }}>out {formatTokens(info.outputTokens)}</span>
+      {(() => {
+        const total = info.inputTokens + info.outputTokens
+        if (total === 0) return null
+        return (
+          <span title={`Total session tokens: ${total.toLocaleString()}`} style={{
+            color: 'var(--text-primary)', fontWeight: 600,
+          }}>Σ {formatTokens(total)}</span>
+        )
+      })()}
       {info.cacheHit > 0 && (
         <span style={{ color: 'var(--color-success)' }}>cache {info.cacheHit}%</span>
       )}
@@ -128,7 +137,9 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       }}>⌘.</button>
       <span style={{
         color: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
-      }}>● {info.status}</span>
+      }}>
+        {info.status === t('status.ready') ? '●' : '◐'} {info.status}
+      </span>
     </div>
   )
 }
