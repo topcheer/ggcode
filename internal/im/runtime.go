@@ -1128,13 +1128,14 @@ func (m *Manager) reloadBindingLocked() error {
 		}
 
 		// Session-based ownership:
-		// - If LastSessionID matches our session → we own it, activate (respect prevMuted).
-		// - If LastSessionID is set and differs from our session → skip (belongs to other session).
-		// - If LastSessionID is empty → workspace-level binding, load it (legacy behavior).
+		// - If LastSessionID matches our session → we own it, activate.
+		// - If LastSessionID is set and differs → load it but force muted
+		//   (so the IM panel shows ALL workspace bindings, not just owned ones).
+		// - If LastSessionID is empty → workspace-level binding, load normally.
 		if copy.LastSessionID != "" && sessionID != "" && copy.LastSessionID != sessionID {
-			debug.Log("im", "reloadBindingLocked: skip %s (owned by session=%s, we are %s)",
+			debug.Log("im", "reloadBindingLocked: load %s as muted (owned by session=%s, we are %s)",
 				copy.Adapter, copy.LastSessionID, sessionID)
-			continue
+			copy.Muted = true
 		}
 
 		m.currentBindings[copy.Adapter] = &copy
