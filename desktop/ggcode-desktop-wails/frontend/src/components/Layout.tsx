@@ -239,6 +239,17 @@ function LayoutInner() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
+  // Dynamic window title — shows workspace + model + activity status
+  useEffect(() => {
+    const wsName = currentWorkspace ? currentWorkspace.split('/').pop() || 'GGCode' : 'GGCode'
+    const model = statusBarData.model && statusBarData.model !== '...' ? statusBarData.model : ''
+    const isWorking = statusBarData.status === 'Working'
+    let title = wsName
+    if (model) title += ` — ${model}`
+    if (isWorking) title = `\u25CF ${title}`
+    document.title = title
+  }, [currentWorkspace, statusBarData.model, statusBarData.status])
+
   // Listen for approval and ask_user events from Go backend
   useEffect(() => {
     const offApprovalRequest = EventsOn('approval:request', (data: any) => {
