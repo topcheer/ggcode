@@ -431,7 +431,7 @@ function LayoutInner() {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
               {/* ChatView always mounted — hidden via display:none to preserve state */}
               <div style={{ display: view === 'chat' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minWidth: 0, overflow: 'hidden', height: 0 }}>
-                <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} showToast={showToast} />
+                <ChatView key={currentWorkspace || 'default-workspace'} workspace={currentWorkspace} sessionId={activeSessionId} onWorkspaceSelected={handleWorkspaceSelected} onShare={() => setShareDialogOpen(true)} showToast={showToast} onNewSession={() => { App.NewSession().then((id: any) => { if (typeof id === 'string') setActiveSessionId(id) }).catch(() => {}) }} />
               </div>
               {view === 'settings' && <SettingsPage onBack={backToChat} onNavigate={setView} onOpenContext={() => { setView('chat'); setContextPanelOpen(true) }} onOpenShare={() => setShareDialogOpen(true)} onOpenAbout={() => setAboutDialogOpen(true)} showToast={showToast} />}
               {view === 'debug' && <DebugConsole />}

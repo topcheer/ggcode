@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus, Plus } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -558,7 +558,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void }) {
+export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast, onNewSession }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void; onNewSession?: () => void }) {
   const { t } = useTranslation()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [agentPanels, setAgentPanels] = useState<Map<string, AgentPanel>>(new Map())
@@ -2303,6 +2303,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               {downloaded ? <Check size={14} /> : <Download size={14} />}
             </button>
           </>
+        )}
+        {onNewSession && (
+          <button onClick={onNewSession} title="New session" style={{
+            width: 28, height: 28, borderRadius: 'var(--radius-sm)',
+            background: 'var(--color-surface)', border: 'none',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'color-mix(in srgb, var(--color-primary) 15%, transparent)'; e.currentTarget.style.color = 'var(--color-primary)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--color-surface)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+          >
+            <Plus size={15} />
+          </button>
         )}
         {onShare && (
           <button onClick={onShare} title="Share session (Cmd+Shift+S)" style={{
