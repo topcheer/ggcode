@@ -747,6 +747,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             messagesRef.current = loaded
             setMessages(loaded)
             setHistoryLoading(false)
+            // Restore saved scroll position for this session
+            scrollRestorePendingRef.current = sessionId || null
           }).catch(() => { setHistoryLoading(false) })
         }
       }).catch(() => {})
@@ -771,6 +773,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       messagesRef.current = loaded
       setMessages(loaded)
       setHistoryLoading(false)
+      // Restore saved scroll position for this session
+      scrollRestorePendingRef.current = sessionId || null
     }).catch(() => { setHistoryLoading(false) })
     return () => { cancelled = true }
   }, [sessionId])
@@ -788,6 +792,27 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     } catch { setInput('') }
   }, [sessionId])
 
+  // Restore scroll position after history loads (session switch)
+  useEffect(() => {
+    const sid = scrollRestorePendingRef.current
+    if (!sid) return
+    scrollRestorePendingRef.current = null
+    try {
+      const saved = sessionStorage.getItem(`scroll:${sid}`)
+      if (saved !== null && scrollContainerRef.current) {
+        const scrollTop = parseInt(saved, 10)
+        if (!isNaN(scrollTop)) {
+          requestAnimationFrame(() => {
+            if (scrollContainerRef.current) {
+              scrollContainerRef.current.scrollTop = scrollTop
+              suppressNextScrollEventRef.current = true
+            }
+          })
+        }
+      }
+    } catch {}
+  }, [messages])
+
   // Ref to streaming assistant message ID for efficient updates
   const streamingMsgID = useRef<string | null>(null)
   const isStreamingRef = useRef(false)
@@ -803,6 +828,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const autoScrollByTabRef = useRef<Record<string, boolean>>({ main: true })
   const lastManualScrollAtByTabRef = useRef<Record<string, number>>({})
   const suppressNextScrollEventRef = useRef(false)
+  const scrollRestorePendingRef = useRef<string | null>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [contextBannerDismissed, setContextBannerDismissed] = useState(false)
@@ -2361,6 +2387,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           autoScrollByTabRef.current[activeTab] = nearBottom
           lastManualScrollAtByTabRef.current[activeTab] = Date.now()
           setShowScrollBtn(!nearBottom && messages.length > 3)
+          // Persist scroll position for this session (for restore on session switch)
+          if (sessionId && scrollContainerRef.current) {
+            try { sessionStorage.setItem(`scroll:${sessionId}`, String(scrollContainerRef.current.scrollTop)) } catch {}
+          }
         }}
         style={{
         flex: 1, overflowY: 'auto',
