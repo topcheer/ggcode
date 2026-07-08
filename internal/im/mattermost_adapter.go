@@ -3,10 +3,13 @@ package im
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 	"regexp"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -438,16 +442,59 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 	if text == "" {
 		return nil
 	}
-	return a.sendText(ctx, chatID, binding.ThreadID, text)
+
+	// Extract images from markdown text and upload them as file attachments.
+	images, remainingText := ExtractImagesFromText(text)
+	var fileIDs []string
+	for i, img := range images {
+		data, mimeType, err := a.resolveImageToBytes(ctx, img)
+		if err != nil {
+			debug.Log("mattermost", "adapter=%s image resolve failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		fileID, err := a.uploadFile(ctx, chatID, data, mimeType)
+		if err != nil {
+			debug.Log("mattermost", "adapter=%s image upload failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		fileIDs = append(fileIDs, fileID)
+		debug.Log("mattermost", "adapter=%s image uploaded [%d/%d] mime=%s size=%d file_id=%s", a.name, i+1, len(images), mimeType, len(data), fileID)
+		// Rate limit between uploads
+		if i < len(images)-1 {
+			select {
+			case <-time.After(mattermostInterMsgDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	if remainingText == "" && len(fileIDs) == 0 {
+		return nil
+	}
+	return a.sendTextWithFiles(ctx, chatID, binding.ThreadID, remainingText, fileIDs)
 }
 
 func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, text string) error {
-	if text == "" || channelID == "" {
+	return a.sendTextWithFiles(ctx, channelID, rootID, text, nil)
+}
+
+// sendTextWithFiles sends text (optionally with file attachments) to a Mattermost channel.
+// File attachments are only attached to the first chunk; subsequent chunks are plain text.
+func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, rootID, text string, fileIDs []string) error {
+	if text == "" && len(fileIDs) == 0 {
+		return nil
+	}
+	if channelID == "" {
 		return nil
 	}
 
 	// Split using markdown-aware logic so code blocks aren't broken across chunks.
 	chunks := SplitMarkdown(text, mattermostDefaultMaxPostLen)
+	if len(chunks) == 0 && len(fileIDs) > 0 {
+		// No text but we have files — send a post with just file attachments
+		chunks = []string{""}
+	}
 	for i, chunk := range chunks {
 		payload := map[string]any{
 			"channel_id": channelID,
@@ -463,6 +510,10 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 		}
 		// If this is the first chunk in a thread and we have no rootID yet,
 		// use the new post's ID as root for subsequent chunks.
+		// Attach file_ids to the first chunk only
+		if i == 0 && len(fileIDs) > 0 {
+			payload["file_ids"] = fileIDs
+		}
 		if rootID == "" && len(chunks) > 1 && i == 0 {
 			if newID, ok := result["id"].(string); ok && newID != "" {
 				rootID = newID
@@ -663,6 +714,132 @@ func (a *mattermostAdapter) fetchTeamInfo(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// resolveImageToBytes resolves an ExtractedImage to raw bytes and MIME type.
+func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
+	switch img.Kind {
+	case "data":
+		parts := strings.SplitN(img.Data, ",", 2)
+		if len(parts) != 2 {
+			return nil, "", fmt.Errorf("invalid data URL")
+		}
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid base64 in data URL: %w", err)
+		}
+		decoded, err := imagepkg.Decode(data)
+		if err != nil {
+			return nil, "", fmt.Errorf("data URL is not a valid image: %w", err)
+		}
+		return data, decoded.MIME, nil
+
+	case "local":
+		data, err := os.ReadFile(img.Data)
+		if err != nil {
+			return nil, "", fmt.Errorf("read local image: %w", err)
+		}
+		decoded, err := imagepkg.Decode(data)
+		if err != nil {
+			return nil, "", fmt.Errorf("decode local image: %w", err)
+		}
+		return data, decoded.MIME, nil
+
+	case "url":
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("create request: %w", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, "", fmt.Errorf("download image: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+		if err != nil {
+			return nil, "", fmt.Errorf("read image response: %w", err)
+		}
+		mimeType := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(mimeType, "image/") {
+			mimeType = imagepkg.DetectMIME(data)
+		}
+		if !strings.HasPrefix(mimeType, "image/") {
+			return nil, "", fmt.Errorf("content is not an image: %s", mimeType)
+		}
+		return data, mimeType, nil
+
+	default:
+		return nil, "", fmt.Errorf("unknown image kind: %s", img.Kind)
+	}
+}
+
+// uploadFile uploads a file to Mattermost via multipart form POST and returns the file ID.
+// API: POST /api/v4/files?channel_id=<channel_id>
+func (a *mattermostAdapter) uploadFile(ctx context.Context, channelID string, data []byte, mimeType string) (string, error) {
+	// Determine file extension from MIME type
+	ext := ".png"
+	switch mimeType {
+	case "image/jpeg", "image/jpg":
+		ext = ".jpg"
+	case "image/gif":
+		ext = ".gif"
+	case "image/webp":
+		ext = ".webp"
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Create a form file field with proper MIME header
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="files"; filename="image%s"`, ext))
+	h.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return "", fmt.Errorf("create multipart field: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", fmt.Errorf("write image data: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	url := a.apiURL(fmt.Sprintf("files?channel_id=%s", channelID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return "", fmt.Errorf("create upload request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := a.conn.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("upload file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("upload file → %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Mattermost API v4 returns an array of FileInfo objects
+	var fileInfos []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&fileInfos); err != nil {
+		return "", fmt.Errorf("decode upload response: %w", err)
+	}
+	if len(fileInfos) == 0 {
+		return "", fmt.Errorf("upload returned no file infos")
+	}
+	fileID, ok := fileInfos[0]["id"].(string)
+	if !ok || fileID == "" {
+		return "", fmt.Errorf("upload response missing file ID")
+	}
+	return fileID, nil
 }
 
 // --- Helpers ---
