@@ -55,6 +55,13 @@ func TestSlackMarkdownToMrkdwn(t *testing.T) {
 		{"# Header\nBody", "*Header*\nBody"},
 		// No header conversion for inline # (not at line start)
 		{"not a # header", "not a # header"},
+		// Code protection: * and ~~ inside code spans/blocks are preserved
+		{"`a * b`", "`a * b`"},
+		{"`~~tilde~~`", "`~~tilde~~`"},
+		{"```\nx * y\n```", "```\nx * y\n```"},
+		{"Use `git log --oneline *.*` to list", "Use `git log --oneline *.*` to list"},
+		// Code protected, surrounding markdown converted
+		{"See `a * b` and *italic*", "See `a * b` and _italic_"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {

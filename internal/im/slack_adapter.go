@@ -38,6 +38,10 @@ var slackLinkRe = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 // Slack mrkdwn has no native header support; convert to bold.
 var slackHeaderRe = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+)$`)
 
+// Code block/span regexes — used to protect code content from delimiter conversion.
+var slackCodeBlockRe = regexp.MustCompile("(?s)```.*?```")
+var slackInlineCodeRe = regexp.MustCompile("`[^`]+`")
+
 type slackAdapter struct {
 	name       string
 	manager    *Manager
@@ -837,6 +841,18 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, threadTS, file
 // Slack mrkdwn reference: https://docs.slack.dev/messaging/formatting-message-text/
 // Bold: *text* (single asterisk), Italic: _text_ (underscore), Strike: ~text~ (single tilde)
 func markdownToMrkdwn(text string) string {
+	// Protect code blocks and inline code from delimiter conversion.
+	// Without this, characters like * or ~~ inside code would be incorrectly
+	// converted (e.g., `a * b` → `a _ b`).
+	var codeSegments []string
+	protectCode := func(match string) string {
+		idx := len(codeSegments)
+		codeSegments = append(codeSegments, match)
+		return fmt.Sprintf("\x00C%d\x00", idx)
+	}
+	text = slackCodeBlockRe.ReplaceAllStringFunc(text, protectCode)
+	text = slackInlineCodeRe.ReplaceAllStringFunc(text, protectCode)
+
 	// Convert GFM tables to plain text (Slack mrkdwn doesn't support tables)
 	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
 		lines := strings.Split(match, "\n")
@@ -880,6 +896,11 @@ func markdownToMrkdwn(text string) string {
 	// Convert markdown headers (# H1, ## H2, etc.) to Slack bold (*text*)
 	// Slack mrkdwn has no native header support.
 	text = slackHeaderRe.ReplaceAllString(text, "*$2*")
+
+	// Restore protected code segments
+	for i, seg := range codeSegments {
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x00C%d\x00", i), seg)
+	}
 	return text
 }
 
