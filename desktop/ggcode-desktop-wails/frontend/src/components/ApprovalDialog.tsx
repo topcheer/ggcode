@@ -541,7 +541,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
   const diffStats = useMemo(() => getDiffStats(request.toolName, request.input), [request.toolName, request.input])
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Tool approval" style={{
+    <div role="dialog" aria-modal="true" aria-label="Tool approval" tabIndex={-1} style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',

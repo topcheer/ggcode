@@ -20,7 +20,7 @@ export function PairingCodeDialog({ request, onClose }: { request: PairingReques
   const codeDigits = request.code.split('').join('   ')
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Mobile pairing" style={{
+    <div role="dialog" aria-modal="true" aria-label="Mobile pairing" tabIndex={-1} style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',

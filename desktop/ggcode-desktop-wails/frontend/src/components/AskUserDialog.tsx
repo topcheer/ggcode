@@ -141,6 +141,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-label={request.title || t('askUser.title')}
+        tabIndex={-1}
         style={{
         background: 'var(--color-surface)',
         borderRadius: 'var(--radius-lg)',
