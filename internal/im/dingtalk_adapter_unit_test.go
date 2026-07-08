@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -522,5 +523,36 @@ func TestDingtalkMarshalErrorWithUnmarshallableField(t *testing.T) {
 	}
 	if decoded.Name != "test" || decoded.Value != 42 {
 		t.Errorf("round-trip failed: %+v", decoded)
+	}
+}
+
+func TestDingtalkTriggerTyping_NoIncomingMessage(t *testing.T) {
+	a := &dingtalkAdapter{name: "test"}
+	// No lastConvID/lastMsgID set — should be a silent no-op
+	err := a.TriggerTyping(context.Background(), ChannelBinding{})
+	if err != nil {
+		t.Errorf("TriggerTyping with no incoming message should be noop, got: %v", err)
+	}
+}
+
+func TestDingtalkTriggerTyping_DeduplicatesPerMessage(t *testing.T) {
+	a := &dingtalkAdapter{
+		name:        "test",
+		accessToken: "fake-token",
+		reactedMsgs: make(map[string]bool),
+		lastConvID:  "cid123",
+		lastMsgID:   "mid456",
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
+	}
+	// First call marks the message as reacted
+	_ = a.TriggerTyping(context.Background(), ChannelBinding{})
+	if !a.reactedMsgs["mid456"] {
+		t.Error("expected mid456 to be marked as reacted")
+	}
+	// Second call should be a no-op (dedup)
+	_ = a.TriggerTyping(context.Background(), ChannelBinding{})
+	// Should still only have one entry
+	if len(a.reactedMsgs) != 1 {
+		t.Errorf("expected 1 reacted message, got %d", len(a.reactedMsgs))
 	}
 }

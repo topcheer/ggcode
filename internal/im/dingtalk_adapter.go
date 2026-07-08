@@ -120,8 +120,11 @@ type dingtalkAdapter struct {
 	ws            *websocket.Conn
 	connected     bool
 	cancel        context.CancelFunc
-	lastWebhook   string // Latest sessionWebhook from callback
-	lastRobotCode string // Latest robotCode from callback
+	lastWebhook   string          // Latest sessionWebhook from callback
+	lastRobotCode string          // Latest robotCode from callback
+	lastConvID    string          // Latest conversationId from callback (for reactions)
+	lastMsgID     string          // Latest msgId from callback (for reactions)
+	reactedMsgs   map[string]bool // Dedup: messages already reacted to
 }
 
 func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterConfig) (*dingtalkAdapter, error) {
@@ -133,11 +136,12 @@ func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterCo
 		return nil, fmt.Errorf("dingtalk adapter requires app_key and app_secret")
 	}
 	return &dingtalkAdapter{
-		name:       name,
-		manager:    mgr,
-		appKey:     appKey,
-		appSecret:  appSecret,
-		httpClient: util.NewInsecureAwareClient(30 * time.Second),
+		name:        name,
+		manager:     mgr,
+		appKey:      appKey,
+		appSecret:   appSecret,
+		httpClient:  util.NewInsecureAwareClient(30 * time.Second),
+		reactedMsgs: make(map[string]bool),
 	}, nil
 }
 
@@ -372,10 +376,12 @@ func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalk
 
 	// Strip @bot mention prefix
 
-	// Cache webhook and robotCode for Send fallback
+	// Cache webhook, robotCode, conversationId, msgId for Send/reactions
 	a.mu.Lock()
 	a.lastWebhook = callbackData.SessionWebhook
 	a.lastRobotCode = callbackData.RobotCode
+	a.lastConvID = callbackData.ConversationID
+	a.lastMsgID = callbackData.MsgID
 	a.mu.Unlock()
 	atPrefix := "@" + callbackData.RobotCode + " "
 	text = strings.TrimPrefix(text, atPrefix)
@@ -949,4 +955,79 @@ func redactSecret(value string) string {
 		return "[redacted]"
 	}
 	return value[:4] + "..." + value[len(value)-4:]
+}
+
+// TriggerTyping adds a thumbs-up reaction to the latest inbound message,
+// providing visual feedback that the bot received the message and is processing.
+// Uses DingTalk's robot messageReactions API.
+func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	a.mu.RLock()
+	convID := a.lastConvID
+	msgID := a.lastMsgID
+	token := a.accessToken
+	a.mu.RUnlock()
+
+	if convID == "" || msgID == "" {
+		return nil // no incoming message to react to
+	}
+
+	// Dedup: only react once per message
+	a.mu.Lock()
+	if a.reactedMsgs == nil {
+		a.reactedMsgs = make(map[string]bool)
+	}
+	if a.reactedMsgs[msgID] {
+		a.mu.Unlock()
+		return nil
+	}
+	a.reactedMsgs[msgID] = true
+	// Trim map to prevent unbounded growth
+	if len(a.reactedMsgs) > 50 {
+		for k := range a.reactedMsgs {
+			delete(a.reactedMsgs, k)
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	if token == "" {
+		if err := a.refreshToken(ctx); err != nil {
+			return fmt.Errorf("dingtalk triggerTyping refresh token: %w", err)
+		}
+		a.mu.RLock()
+		token = a.accessToken
+		a.mu.RUnlock()
+	}
+
+	body := map[string]string{
+		"conversationId": convID,
+		"messageId":      msgID,
+		"reactionType":   "THUMBSUP",
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal reaction request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		dingtalkAPIBase+"/v1.0/robot/messageReactions", bytes.NewReader(bodyJSON))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+
+	resp, err := a.client().Do(req)
+	if err != nil {
+		debug.Log("dingtalk", "adapter=%s TriggerTyping reaction failed: %v", a.name, err)
+		return nil // best-effort, don't block on reaction errors
+	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		debug.Log("dingtalk", "adapter=%s TriggerTyping HTTP %d: %s",
+			a.name, resp.StatusCode, redactDingTalkResponse(string(respBody)))
+	}
+	return nil // best-effort
 }
