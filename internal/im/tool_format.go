@@ -111,7 +111,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return "⏰ Delete cron job"
 	case "cron_list":
 		return "⏰ List cron jobs"
-	case "task_create", "task_get", "task_update", "task_list", "task_stop":
+	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
 		return "" // hidden
 	case "enter_plan_mode":
 		return "📝 Planning..."
@@ -398,7 +398,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "⏰ Cron job deleted"
 	case "cron_list":
 		return true, "" // hidden
-	case "task_create", "task_get", "task_update", "task_list", "task_stop":
+	case "task_create", "task_get", "task_update", "task_list", "task_stop", "task_output":
 		return true, "" // hidden — internal LLM task tracking
 	case "enter_plan_mode":
 		return true, "" // hidden — shows system message instead
