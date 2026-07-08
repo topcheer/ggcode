@@ -62,6 +62,23 @@ html, body, #root {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  /* Tell browser to render native UI elements (dropdowns, scrollbars, date pickers)
+     in dark mode — without this, macOS/Windows renders native controls in light theme */
+  color-scheme: dark;
+  /* Optimize text rendering for better kerning and ligatures */
+  text-rendering: optimizeLegibility;
+  /* Prevent layout shift when scrollbars appear/disappear in scrollable containers */
+  scrollbar-gutter: stable;
+}
+
+/* Theme-matched caret color for all text inputs */
+input, textarea {
+  caret-color: var(--color-primary);
+}
+
+/* Use tabular numbers in status/metric displays to prevent digit-width jitter */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 ::-webkit-scrollbar {

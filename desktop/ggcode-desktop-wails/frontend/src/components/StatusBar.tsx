@@ -108,7 +108,7 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
                 transition: 'width 0.3s ease, background 0.3s ease',
               }} />
             </div>
-            <span style={{ color, fontSize: 10, minWidth: 28 }}>
+            <span style={{ color, fontSize: 10, minWidth: 28, fontVariantNumeric: 'tabular-nums' }}>
               {Math.round(pct)}%
             </span>
           </div>
@@ -140,19 +140,19 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           }}>{ml}</span>
         )
       })()}
-      <span title={`Input: ${info.inputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)' }}>in {formatTokens(info.inputTokens)}</span>
-      <span title={`Output: ${info.outputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)' }}>out {formatTokens(info.outputTokens)}</span>
+      <span title={`Input: ${info.inputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>in {formatTokens(info.inputTokens)}</span>
+      <span title={`Output: ${info.outputTokens.toLocaleString()} tokens`} style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>out {formatTokens(info.outputTokens)}</span>
       {(() => {
         const total = info.inputTokens + info.outputTokens
         if (total === 0) return null
         return (
           <span title={`Total session tokens: ${total.toLocaleString()}`} style={{
-            color: 'var(--text-primary)', fontWeight: 600,
+            color: 'var(--text-primary)', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
           }}>Σ {formatTokens(total)}</span>
         )
       })()}
       {info.cacheHit > 0 && (
-        <span style={{ color: 'var(--color-success)' }}>cache {info.cacheHit}%</span>
+        <span style={{ color: 'var(--color-success)', fontVariantNumeric: 'tabular-nums' }}>cache {info.cacheHit}%</span>
       )}
       <div style={{ flex: 1 }} />
       {/* IM adapter count */}
