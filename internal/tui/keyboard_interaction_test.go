@@ -327,6 +327,22 @@ func TestScenario_UserSwitchesPermissionMode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: User clears the screen with Ctrl+L
+// ---------------------------------------------------------------------------
+
+func TestScenario_UserClearsScreenWithCtrlL(t *testing.T) {
+	m := newTestModel()
+
+	// Ctrl+L should be handled without error
+	updated, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+l"})
+	m = updated.(Model)
+	// After clearing, loading should be false (no agent running)
+	if m.loading {
+		t.Error("expected loading=false after ctrl+l clear")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: User submits text via enter key
 // ---------------------------------------------------------------------------
 
