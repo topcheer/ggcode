@@ -157,7 +157,7 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 		case <-ctx.Done():
 			a.publishState(false, "stopped", "")
 			return
-		case <-time.After(delay):
+		case <-time.After(jitterDuration(delay)):
 		}
 	}
 }

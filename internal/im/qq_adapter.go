@@ -156,7 +156,7 @@ func (a *qqAdapter) run(ctx context.Context) {
 			debug.Log("qq", "adapter=%s run loop exiting during backoff: ctx.Err=%v", a.name, ctx.Err())
 			a.publishState(false, "stopped", "")
 			return
-		case <-time.After(delay):
+		case <-time.After(jitterDuration(delay)):
 		}
 	}
 }

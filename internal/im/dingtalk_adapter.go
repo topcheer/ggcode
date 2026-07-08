@@ -221,7 +221,7 @@ func (a *dingtalkAdapter) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(delay):
+		case <-time.After(jitterDuration(delay)):
 		}
 	}
 }
