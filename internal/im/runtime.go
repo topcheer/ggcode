@@ -234,6 +234,32 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	}
 }
 
+// StartUnstartedOwnedAdapters starts adapters for non-muted bindings that
+// don't have an active sink yet. Called after session ownership is resolved.
+func (m *Manager) StartUnstartedOwnedAdapters() {
+	m.mu.Lock()
+	var toStart []string
+	for name, binding := range m.currentBindings {
+		if binding.Muted || strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, hasSink := m.adapterCancels[name]; hasSink {
+			continue // already running
+		}
+		toStart = append(toStart, name)
+	}
+	onRestart := m.onRestart
+	m.mu.Unlock()
+
+	for _, name := range toStart {
+		if onRestart != nil {
+			if err := onRestart(name); err != nil {
+				debug.Log("im", "StartUnstartedOwnedAdapters: failed to start %s: %v", name, err)
+			}
+		}
+	}
+}
+
 // muteNonOwnedBindings mutes all current bindings whose LastSessionID does not
 // match the given sessionID. Returns the number muted.
 func (m *Manager) muteNonOwnedBindings(sessionID string) int {

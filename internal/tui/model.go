@@ -968,6 +968,9 @@ func (m *Model) detectAndAutoMute() {
 	m.storeIMInstanceDetect(detect)
 
 	if len(others) == 0 {
+		// No other instances — start any owned bindings that weren't started
+		// during StartCurrentBindingAdapter (because sessionID was empty then).
+		m.startOwnedAdapters()
 		return
 	}
 
@@ -977,6 +980,19 @@ func (m *Model) detectAndAutoMute() {
 		msg := m.t("panel.im.message.auto_mute", autoMuteCount, primary.PID, primary.StartedAt.Format("15:04"))
 		m.chatWriteSystem(nextSystemID(), msg)
 	}
+	// Start owned bindings even when other instances exist — our session may
+	// own adapters that need to be active.
+	m.startOwnedAdapters()
+}
+
+// startOwnedAdapters starts adapters for non-muted bindings that don't have
+// an active connection yet. This is called after session-scoped binding
+// ownership is resolved in detectAndAutoMute.
+func (m *Model) startOwnedAdapters() {
+	if m.imManager == nil {
+		return
+	}
+	m.imManager.StartUnstartedOwnedAdapters()
 }
 
 func (m *Model) refreshIMRuntimeHooks() {
