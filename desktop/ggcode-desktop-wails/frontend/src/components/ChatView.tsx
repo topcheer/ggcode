@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
@@ -1437,6 +1437,36 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     e.dataTransfer.dropEffect = 'copy'
   }, [])
 
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFilePick = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    const imageFiles = files.filter(f => f.type.startsWith('image/'))
+    // Reset input so the same file can be selected again
+    e.target.value = ''
+    if (imageFiles.length === 0) return
+    void Promise.all(imageFiles.map(file => new Promise<PastedImageAttachment>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const previewUrl = String(reader.result || '')
+        const comma = previewUrl.indexOf(',')
+        resolve({
+          id: nextID(),
+          mimeType: file.type || 'image/png',
+          data: comma >= 0 ? previewUrl.slice(comma + 1) : previewUrl,
+          previewUrl,
+          name: file.name || 'attached-image',
+        })
+      }
+      reader.onerror = () => reject(reader.error || new Error('Failed to read attached image'))
+      reader.readAsDataURL(file)
+    }))).then(images => {
+      setPastedImages(prev => [...prev, ...images])
+    }).catch(err => {
+      showToast?.('error', err?.message || 'Failed to process attached image')
+    })
+  }, [showToast])
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     dragCounterRef.current = 0
@@ -2571,6 +2601,25 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             ))}
           </div>
         )}
+        {/* Hidden file input for image attachment */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleFilePick}
+        />
+        <button type="button" onClick={() => fileInputRef.current?.click()} title="Attach image" style={{
+          width: 36, height: 36, borderRadius: 'var(--radius-lg)',
+          background: 'var(--color-surface)',
+          border: '1px solid var(--color-border)', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--text-tertiary)',
+          transition: 'background 0.15s',
+        }}>
+          <ImagePlus size={16} />
+        </button>
         <button type="button" onClick={handlePasteButton} title="Paste from clipboard" style={{
           width: 36, height: 36, borderRadius: 'var(--radius-lg)',
           background: 'var(--color-surface)',
