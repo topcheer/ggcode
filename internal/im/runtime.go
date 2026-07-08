@@ -214,22 +214,26 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 		debug.Log("im", "claimUnclaimedBindings: ListByWorkspace error: %v", err)
 		return
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, b := range bindings {
 		if b.LastSessionID != "" {
 			continue // already claimed
 		}
 		// Skip disabled adapters
-		m.mu.RLock()
-		_, disabled := m.disabledBindings[b.Adapter]
-		m.mu.RUnlock()
-		if disabled {
+		if _, disabled := m.disabledBindings[b.Adapter]; disabled {
 			continue
 		}
-		// Claim it for this session
+		// Claim it for this session in the persistent store
 		if err := m.bindingStore.UpdateSessionID(m.session.Workspace, b.Adapter, sessionID); err != nil {
 			debug.Log("im", "claimUnclaimedBindings: UpdateSessionID error for %s: %v", b.Adapter, err)
 		} else {
 			debug.Log("im", "claimed binding %s for session=%s (was unclaimed)", b.Adapter, sessionID)
+		}
+		// Sync the in-memory currentBindings so muteNonOwnedBindings
+		// (which runs right after this) sees the updated LastSessionID.
+		if cb, ok := m.currentBindings[b.Adapter]; ok {
+			cb.LastSessionID = sessionID
 		}
 	}
 }
