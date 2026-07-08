@@ -294,6 +294,19 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("⏹ %s", imLabel(lang, "command_manage"))
 	case "write_command_input":
 		return fmt.Sprintf("⌨ %s", imLabel(lang, "command_input"))
+	case "lanchat":
+		action := extractArgValue(args, "action")
+		recipient := firstNonEmptyStr(extractArgValue(args, "to"), extractArgValue(args, "team"))
+		if recipient != "" {
+			return fmt.Sprintf("💬 LAN Chat %s → %s", action, recipient)
+		}
+		return fmt.Sprintf("💬 LAN Chat %s", action)
+	case "warp":
+		warpAction := extractArgValue(args, "action")
+		if warpAction != "" {
+			return fmt.Sprintf("🖥 Warp: %s", warpAction)
+		}
+		return "🖥 Warp"
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -484,6 +497,15 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 			agent = tr.Detail
 		}
 		return true, fmt.Sprintf("🤝 %s: %s", imLabel(toolLang(tr.Lang), "delegated_to"), agent)
+	case "lanchat":
+		// Hidden on success — LAN chat coordination is internal
+		if tr.IsError {
+			return true, formatIMErrorResult(tr)
+		}
+		return true, ""
+	case "warp":
+		// Hidden — terminal management results are not useful in IM
+		return true, ""
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
