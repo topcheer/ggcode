@@ -261,6 +261,7 @@ interface ChatMessage {
   isError?: boolean
   streaming?: boolean
   timestamp: number
+  toolDurationSec?: number // seconds the tool took to complete
   source?: string // 'im' | 'mobile' | 'lanchat' — non-UI message origin
   lanchatFrom?: string // parsed nick from [LAN Chat from xxx]:
   deliveryStatus?: 'pending' | 'sent' | 'failed'
@@ -1057,7 +1058,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (!toolID) break
           setMessages(prev => prev.map(m =>
             m.role === 'tool' && m.toolID === toolID
-              ? { ...m, content: p.result || '', isError: !!p.isError, toolDisplayName: p.displayName || m.toolDisplayName, toolDetail: p.detail || m.toolDetail, streaming: false }
+              ? { ...m, content: p.result || '', isError: !!p.isError, toolDisplayName: p.displayName || m.toolDisplayName, toolDetail: p.detail || m.toolDetail, streaming: false, toolDurationSec: m.timestamp ? Math.max(1, Math.round((Date.now() - m.timestamp) / 1000)) : undefined }
               : m
           ))
           break
@@ -3298,6 +3299,23 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 function ToolMessage({ msg }: { msg: ChatMessage }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [elapsedSec, setElapsedSec] = useState(0)
+
+  // Live elapsed timer for streaming tools
+  useEffect(() => {
+    if (!msg.streaming || !msg.timestamp) return
+    const update = () => setElapsedSec(Math.max(0, Math.round((Date.now() - msg.timestamp) / 1000)))
+    update()
+    const timer = setInterval(update, 1000)
+    return () => clearInterval(timer)
+  }, [msg.streaming, msg.timestamp])
+
+  const formatDuration = (sec: number) => {
+    if (sec < 60) return `${sec}s`
+    const m = Math.floor(sec / 60)
+    const s = sec % 60
+    return s > 0 ? `${m}m ${s}s` : `${m}m`
+  }
 
   const isCommandTool = ['run_command', 'start_command', 'bash', 'powershell'].includes(msg.toolName || '')
   const MAX_RESULT_LINES = 200
@@ -3400,7 +3418,14 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
 
         {msg.streaming && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-warning)' }}>
-            running...
+            {elapsedSec > 0 ? `running... ${formatDuration(elapsedSec)}` : 'running...'}
+          </span>
+        )}
+
+        {/* Duration badge for completed tools */}
+        {!msg.streaming && msg.toolDurationSec && msg.toolDurationSec >= 2 && (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-tertiary)' }}>
+            {formatDuration(msg.toolDurationSec)}
           </span>
         )}
 
