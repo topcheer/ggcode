@@ -50,6 +50,9 @@ var (
 	// and before links (so [ ] isn't confused with link syntax).
 	mdTaskUncheckedRe = regexp.MustCompile(`(?m)^([-*])\s+\[ \]\s+`)
 	mdTaskCheckedRe   = regexp.MustCompile(`(?m)^([-*])\s+\[[xX]\]\s+`)
+	// Bullet lists: - item or * item at start of line → • item
+	// Processed AFTER task lists (task lines already have ○/✓ prefixes).
+	mdBulletRe = regexp.MustCompile(`(?m)^[-*]\s+`)
 
 	// Headers: ### Header → Header
 	mdHeaderRe = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
@@ -71,7 +74,7 @@ var (
 //   - Converting headers to plain text
 //   - Converting links to "text (url)" format
 //   - Converting images to their URL (text-only platforms show the link)
-//   - Preserving list structure with bullet characters
+//   - Converting bullet lists to Unicode bullets (• item)
 func stripMarkdown(text string) string {
 	if text == "" {
 		return text
@@ -117,6 +120,10 @@ func stripMarkdown(text string) string {
 	// - [ ] item → ○ item, - [x] item → ✓ item
 	text = mdTaskCheckedRe.ReplaceAllString(text, "$1 ✓ ")
 	text = mdTaskUncheckedRe.ReplaceAllString(text, "$1 ○ ")
+
+	// 1d. Bullet lists: convert - or * at line start to Unicode bullet •
+	// Must come AFTER task list processing (those lines already have ○/✓).
+	text = mdBulletRe.ReplaceAllString(text, "• ")
 
 	// 2. Inline code: `code` → code
 	text = mdInlineCodeRe.ReplaceAllString(text, "$1")

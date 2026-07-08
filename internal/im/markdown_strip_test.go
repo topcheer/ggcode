@@ -154,12 +154,13 @@ func TestStripMarkdown_Combined(t *testing.T) {
 	}
 }
 
-func TestStripMarkdown_PreservesListBullets(t *testing.T) {
+func TestStripMarkdown_ConvertsListBullets(t *testing.T) {
 	input := "- Item one\n- Item two\n- Item three"
+	want := "• Item one\n• Item two\n• Item three"
 	got := stripMarkdown(input)
-	// List items with - are not stripped (no regex for lists)
-	if got != input {
-		t.Errorf("list changed: got %q, want %q", got, input)
+	// Bullet lists (- or *) at line start are converted to Unicode bullets
+	if got != want {
+		t.Errorf("bullets not converted: got %q, want %q", got, want)
 	}
 }
 
@@ -170,9 +171,9 @@ func TestStripMarkdown_AsteriskItalic(t *testing.T) {
 		{"basic", "This is *italic* text", "This is italic text"},
 		{"single_char", "Use *x* for variable", "Use x for variable"},
 		{"multiple", "*one* and *two*", "one and two"},
-		{"no_space_after_open", "5 * 3 = 15", "5 * 3 = 15"}, // math, not italic
-		{"bullet_list", "* Item one", "* Item one"},         // bullet, not italic
-		{"no_match_space_inside", "* not italic *", "* not italic *"},
+		{"no_space_after_open", "5 * 3 = 15", "5 * 3 = 15"},           // math, not italic
+		{"bullet_list", "* Item one", "• Item one"},                   // bullet → Unicode bullet
+		{"no_match_space_inside", "* not italic *", "• not italic *"}, // bullet with trailing *
 		{"combined_bold_italic", "**bold** and *italic*", "bold and italic"},
 	}
 	for _, tc := range tests {
