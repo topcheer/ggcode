@@ -2003,11 +2003,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (e.key === 'Escape' && searchOpen) {
         e.preventDefault()
         setSearchOpen(false)
+        return
+      }
+      // Esc to cancel generation (when agent is running and no other UI is open)
+      if (e.key === 'Escape' && runActiveRef.current && !slashOpen) {
+        e.preventDefault()
+        handleCancel()
       }
     }
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [searchOpen])
+  }, [searchOpen, slashOpen, handleCancel])
 
   // Scroll current match into view
   useEffect(() => {

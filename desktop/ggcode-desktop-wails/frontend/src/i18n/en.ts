@@ -90,6 +90,8 @@ const en = {
   'kb.searchInChat': 'Search in Conversation',
   'kb.sendMessage': 'Send Message',
   'kb.newline': 'New Line (in Input)',
+  'kb.cancelGen': 'Cancel Generation',
+  'kb.inputHistory': 'Recall Previous Input',
   'kb.navigateList': 'Navigate List',
   'kb.vimNav': 'Vim-style Navigation',
   'kb.selectItem': 'Select Item',

@@ -92,6 +92,8 @@ const zh: Record<TranslationKey, string> = {
   'kb.searchInChat': '在对话中搜索',
   'kb.sendMessage': '发送消息',
   'kb.newline': '换行（输入框内）',
+  'kb.cancelGen': '取消生成',
+  'kb.inputHistory': '调用历史输入',
   'kb.navigateList': '导航列表',
   'kb.vimNav': 'Vim 风格导航',
   'kb.selectItem': '选择项目',

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { X, Command, CornerDownLeft, ArrowUp, ArrowDown, Search, PanelLeft, PanelRight, Settings, Plus, Share2, UserCog, SunMoon, FolderSearch } from 'lucide-react'
+import { X, Command, CornerDownLeft, ArrowUp, ArrowDown, Search, PanelLeft, PanelRight, Settings, Plus, Share2, UserCog, SunMoon, FolderSearch, Square } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
 
 interface ShortcutGroup {
@@ -30,6 +30,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ['⌘', 'F'], labelKey: 'kb.searchInChat', icon: Search },
       { keys: ['↵'], labelKey: 'kb.sendMessage', icon: CornerDownLeft },
       { keys: ['⇧', '↵'], labelKey: 'kb.newline' },
+      { keys: ['Esc'], labelKey: 'kb.cancelGen', icon: Square },
+      { keys: ['↑'], labelKey: 'kb.inputHistory', icon: ArrowUp },
     ],
   },
   {
