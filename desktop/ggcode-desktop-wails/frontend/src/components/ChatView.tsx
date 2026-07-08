@@ -3141,6 +3141,7 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', stream
   text: string; defaultOpen?: boolean; label?: string; streaming?: boolean; durationSec?: number
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const [copied, setCopied] = useState(false)
   const wasStreamingRef = useRef(false)
 
   // Auto-collapse when streaming transitions from true → false
@@ -3155,6 +3156,13 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', stream
     ? 'Thinking...'
     : (durationSec ? `Thought for ${durationSec}s` : label)
 
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }, [text])
+
   return (
     <div style={{
       borderRadius: 'var(--radius-md)',
@@ -3162,15 +3170,27 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', stream
       overflow: 'hidden',
       marginBottom: 4,
     }}>
-      <button onClick={() => setOpen(!open)} style={{
-        width: '100%', padding: '4px 10px',
-        background: 'transparent', border: 'none', cursor: 'pointer',
-        display: 'flex', alignItems: 'center', gap: 4,
-        color: 'var(--text-tertiary)', fontSize: 11,
-      }}>
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {displayLabel}
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button onClick={() => setOpen(!open)} style={{
+          flex: 1, padding: '4px 10px',
+          background: 'transparent', border: 'none', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 4,
+          color: 'var(--text-tertiary)', fontSize: 11,
+        }}>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {displayLabel}
+        </button>
+        {!streaming && text && (
+          <button onClick={handleCopy} title="Copy reasoning" style={{
+            padding: '2px 8px', background: 'transparent', border: 'none',
+            cursor: 'pointer', color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
+            fontSize: 10, display: 'flex', alignItems: 'center', gap: 3,
+            transition: 'color 0.15s', marginRight: 6,
+          }}>
+            {copied ? <Check size={11} /> : <Copy size={11} />}
+          </button>
+        )}
+      </div>
       {open && (
         <div style={{
           padding: '6px 10px',
