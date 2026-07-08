@@ -74,6 +74,7 @@
     padding: 12px 14px;
     overflow-x: auto;
     margin: 0.5em 0;
+    border-left: 3px solid rgba(255,255,255,0.08);
 }
 .markdown-body pre code {
     font-family: var(--font-mono);
