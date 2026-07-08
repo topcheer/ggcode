@@ -581,11 +581,14 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	payload := body
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		eventData := extractSSEData(body)
-		if len(eventData) == 0 {
-			return nil, fmt.Errorf("parsing SSE response: no data event found")
+		// Some MCP servers send Notification messages (e.g., logging/progress)
+		// before the actual Response in the SSE stream. Parse all events and
+		// return the first one that is a valid JSON-RPC Response.
+		resp, err := extractSSEResponse(body)
+		if err != nil {
+			return nil, err
 		}
-		payload = eventData
+		return resp, nil
 	}
 	msg, err := ParseMessage(payload)
 	if err != nil {
@@ -596,6 +599,54 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 		return nil, fmt.Errorf("expected response, got %T", msg)
 	}
 	return resp, nil
+}
+
+// extractSSEResponse parses ALL SSE events from the body and returns the first
+// one that parses as a JSON-RPC Response. This handles servers that send
+// Notification messages (logging, progress) before the actual Response.
+func extractSSEResponse(body []byte) (*Response, error) {
+	events := extractAllSSEData(body)
+	if len(events) == 0 {
+		return nil, fmt.Errorf("parsing SSE response: no data event found")
+	}
+	var lastParseErr error
+	for _, payload := range events {
+		msg, err := ParseMessage(payload)
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		if resp, ok := msg.(*Response); ok {
+			return resp, nil
+		}
+		// Skip notifications — keep looking for the Response
+		debug.Log("mcp-http", "parseHTTPResponse: skipping non-response SSE event %T", msg)
+	}
+	if lastParseErr != nil {
+		return nil, fmt.Errorf("parsing SSE response: no valid JSON-RPC message found: %w", lastParseErr)
+	}
+	return nil, fmt.Errorf("parsing SSE response: no Response found in %d event(s)", len(events))
+}
+
+func extractAllSSEData(body []byte) [][]byte {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	var events [][]byte
+	var dataLines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.TrimSpace(line) == "" && len(dataLines) > 0:
+			events = append(events, []byte(strings.Join(dataLines, "\n")))
+			dataLines = nil
+		}
+	}
+	if len(dataLines) > 0 {
+		events = append(events, []byte(strings.Join(dataLines, "\n")))
+	}
+	return events
 }
 
 func extractSSEData(body []byte) []byte {
