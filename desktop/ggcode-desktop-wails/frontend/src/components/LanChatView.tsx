@@ -480,7 +480,7 @@ export function LanChatView({ onUnreadChange }: Props) {
         </div>
 
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
+        <div role="log" aria-live="polite" aria-label="LAN Chat messages" style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
           {activeMessages.length === 0 ? (
             <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
               {activeRoom === 'broadcast'
