@@ -116,6 +116,8 @@ const zh: Record<TranslationKey, string> = {
   'context.contextLabel': '{n}K 上下文',
   'context.warning': '上下文窗口已使用 {pct}%，建议开启新会话。',
   'context.critical': '上下文窗口已使用 {pct}%，较早的消息可能被丢弃。',
+  'context.estimatedCost': '预估费用',
+  'context.costDisclaimer': '基于 Token 使用量和模型定价的估算，实际费用可能不同。',
 
   // SettingsPage
   'settings.title': '设置',

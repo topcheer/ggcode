@@ -36,6 +36,39 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
   const ctxTotal = formatTokens(statusBarData?.contextTotal)
   const ctxUsed = formatTokens(statusBarData?.contextUsed)
 
+  // Estimate session cost based on token usage and model pricing
+  const estimateCost = () => {
+    const input = statusBarData?.inputTokens ?? 0
+    const output = statusBarData?.outputTokens ?? 0
+    const cacheRead = statusBarData?.cacheRead ?? 0
+    const cacheWrite = statusBarData?.cacheWrite ?? 0
+    if (input === 0 && output === 0) return null
+
+    // Rough pricing per 1M tokens (USD) — conservative estimates
+    const model = (statusBarData?.model ?? '').toLowerCase()
+    let inPrice = 3, outPrice = 15  // default (Sonnet-tier)
+    let cacheReadPrice = 0.3
+    let cacheWritePrice = 3.75
+
+    if (model.includes('opus')) {
+      inPrice = 15; outPrice = 75; cacheReadPrice = 1.5; cacheWritePrice = 18.75
+    } else if (model.includes('haiku')) {
+      inPrice = 0.8; outPrice = 4; cacheReadPrice = 0.08; cacheWritePrice = 1
+    } else if (model.includes('gpt-4o-mini') || model.includes('mini')) {
+      inPrice = 0.15; outPrice = 0.6; cacheReadPrice = 0.075; cacheWritePrice = 0.15
+    } else if (model.includes('gpt-4o') || model.includes('gpt4o')) {
+      inPrice = 5; outPrice = 15; cacheReadPrice = 2.5; cacheWritePrice = 5
+    } else if (model.includes('deepseek')) {
+      inPrice = 0.27; outPrice = 1.1; cacheReadPrice = 0.07; cacheWritePrice = 0.27
+    }
+
+    const cost = (input / 1e6 * inPrice) + (output / 1e6 * outPrice)
+      + (cacheRead / 1e6 * cacheReadPrice) + (cacheWrite / 1e6 * cacheWritePrice)
+    return cost
+  }
+  const estCost = estimateCost()
+  const formatCost = (c: number) => c < 0.01 ? `$${c.toFixed(4)}` : c < 1 ? `$${c.toFixed(3)}` : `$${c.toFixed(2)}`
+
   const tokens = [
     { label: t('context.input'), value: formatTokens(statusBarData?.inputTokens), color: 'var(--color-info)' },
     { label: t('context.output'), value: formatTokens(statusBarData?.outputTokens), color: 'var(--text-primary)' },
@@ -138,6 +171,25 @@ export function ContextPanel({ onClose, statusBarData }: ContextPanelProps) {
           </div>
         ))}
       </div>
+
+      {/* Estimated cost */}
+      {estCost !== null && (
+        <div style={{
+          padding: 'var(--spacing-md)', borderRadius: 'var(--radius-lg)',
+          background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', gap: 6,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 500 }}>{t('context.estimatedCost')}</span>
+            <div style={{ flex: 1 }} />
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 600, color: 'var(--color-warning)' }}>
+              {formatCost(estCost)}
+            </span>
+          </div>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>
+            {t('context.costDisclaimer')}
+          </span>
+        </div>
+      )}
 
       {/* IM adapters */}
       <div style={{

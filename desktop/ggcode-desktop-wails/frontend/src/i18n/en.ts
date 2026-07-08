@@ -114,6 +114,8 @@ const en = {
   'context.contextLabel': '{n}K context',
   'context.warning': 'Context window is {pct}% full. Consider starting a new session.',
   'context.critical': 'Context window is {pct}% full. Older messages may be dropped.',
+  'context.estimatedCost': 'Est. Cost',
+  'context.costDisclaimer': 'Estimated based on token usage and model pricing. Actual cost may vary.',
 
   // SettingsPage
   'settings.title': 'Settings',
