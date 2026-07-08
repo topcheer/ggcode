@@ -1149,7 +1149,7 @@ func (a *App) initIMRuntime() {
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 		Workspace:        workDir,
 		EnabledAdapters:  adapters,
-		RegisterInstance: workDir != "",
+		RegisterInstance: false, // Deferred to bindCurrentIMSession where session ID is available
 		OnUpdate: func(snap im.StatusSnapshot) {
 			// Pairing code dialog
 			if snap.PendingPairing != nil {
@@ -1323,7 +1323,10 @@ func (a *App) RemoveIMAdapter(name string) error {
 	return err
 }
 
-// imStartAdapter starts a single adapter by name in the background.
+// bindCurrentIMSession binds the current session to the IM manager and
+// registers this instance for auto-mute detection. This must be called
+// AFTER a session is available so that session-scoped binding ownership
+// (LastSessionID) works correctly.
 func (a *App) bindCurrentIMSession() {
 	if a.imManager == nil || a.chat == nil {
 		return
@@ -1333,6 +1336,21 @@ func (a *App) bindCurrentIMSession() {
 			SessionID: ses.ID,
 			Workspace: a.workDir,
 		})
+		// Register instance now that session ID is available.
+		// This enables session-scoped IM binding ownership: each instance
+		// claims/unclaims adapters via LastSessionID instead of all sharing
+		// the same workspace-level mutual exclusion.
+		if a.imInstanceDetect == nil && a.workDir != "" {
+			detect, others, err := a.imManager.RegisterInstance(a.workDir, ses.ID)
+			if err != nil {
+				debug.Log("desktop", "RegisterInstance error: %v", err)
+			} else {
+				a.imInstanceDetect = detect
+				if len(others) > 0 {
+					debug.Log("desktop", "im: registered with session=%s, %d other instance(s) running", ses.ID, len(others))
+				}
+			}
+		}
 	}
 }
 
