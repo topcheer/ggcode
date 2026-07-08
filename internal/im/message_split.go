@@ -237,15 +237,22 @@ func truncateRunes(text string, maxLen int, suffix string) string {
 // This prevents broken rendering where a code block's opening ``` appears
 // in one message and the closing ``` in the next, causing the platform to
 // render non-code text as monospace or vice versa.
+//
+// Language tags (e.g. ```go, ```python) are preserved across chunk boundaries
+// so that syntax highlighting is maintained on platforms that support it
+// (Discord, Slack, Matrix).
 func SplitMarkdown(text string, maxLen int) []string {
 	// Reserve space for code block markers that SplitMarkdown adds to chunks
-	// crossing fenced code block boundaries: "```\n" (4) prefix + "\n```" (4)
-	// suffix = 8 runes overhead in the worst case. Without this, a chunk that
-	// fills maxLen and then gets both markers could exceed the platform's hard
-	// limit (e.g. Discord rejects messages > 2000 chars with HTTP 400).
+	// crossing fenced code block boundaries: "```<lang>\n" prefix + "\n```"
+	// suffix. The prefix is 3 + len(lang) + 1 runes; the suffix is 4 runes.
+	// Common language tags are 0-10 chars (go, python, javascript), so 20 runes
+	// of reserve (8 for bare markers + 12 for language tag) covers all practical
+	// cases. Without this, a chunk that fills maxLen and then gets both markers
+	// could exceed the platform's hard limit (e.g. Discord rejects messages >
+	// 2000 chars with HTTP 400).
 	splitLen := maxLen
 	if strings.Contains(text, "```") {
-		splitLen = maxLen - 8
+		splitLen = maxLen - 20
 		if splitLen < 1 {
 			splitLen = 1
 		}
@@ -257,11 +264,40 @@ func SplitMarkdown(text string, maxLen int) []string {
 
 	var result []string
 	inCodeBlock := false
+	codeLang := "" // language tag from the most recent opening fence
 
 	for _, chunk := range chunks {
-		// If continuing a code block from the previous chunk, reopen it
+		// Capture the language tag for the prefix BEFORE scanning this chunk.
+		// The scan below may update codeLang to a different language if the chunk
+		// contains a close+reopen transition (e.g. end of go block, start of python
+		// block), but the prefix needs the language that was active when entering
+		// this chunk, not what it transitions to later.
+		prefixLang := codeLang
+
+		// Scan the original chunk for code fences to track the active language
+		// for FUTURE chunks. We update codeLang each time we encounter an opening
+		// fence (transition from outside to inside a code block).
+		scanInBlock := inCodeBlock
+		for _, line := range strings.Split(chunk, "\n") {
+			trimmed := strings.TrimLeft(line, " \t")
+			if strings.HasPrefix(trimmed, "```") {
+				if !scanInBlock {
+					// Opening fence — capture language tag
+					codeLang = strings.TrimSpace(trimmed[3:])
+				}
+				scanInBlock = !scanInBlock
+			}
+		}
+
+		// If continuing a code block from the previous chunk, reopen it with
+		// the original language tag (captured before scan) to preserve syntax
+		// highlighting
 		if inCodeBlock {
-			chunk = "```\n" + chunk
+			if prefixLang != "" {
+				chunk = "```" + prefixLang + "\n" + chunk
+			} else {
+				chunk = "```\n" + chunk
+			}
 		}
 
 		// Count triple-backtick fences to determine if we end inside a code block

@@ -103,3 +103,90 @@ func TestSplitMarkdown_ChunkSizeRespectsMaxLenSlack(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitMarkdown_LanguageTagPreserved(t *testing.T) {
+	// When a code block with a language tag spans multiple chunks, the
+	// continuation chunk should reopen with the same language tag to preserve
+	// syntax highlighting on platforms like Discord and Slack.
+	tests := []struct {
+		name string
+		lang string
+	}{
+		{"go", "go"},
+		{"python", "python"},
+		{"javascript", "javascript"},
+		{"no_language", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var text string
+			if tt.lang != "" {
+				text = "```" + tt.lang + "\n" + strings.Repeat("x = 1\n", 500) + "```"
+			} else {
+				text = "```\n" + strings.Repeat("x = 1\n", 500) + "```"
+			}
+
+			chunks := SplitMarkdown(text, 2000)
+			if len(chunks) < 2 {
+				t.Fatalf("expected multiple chunks, got %d", len(chunks))
+			}
+
+			// Every continuation chunk (index > 0) that reopens a code block
+			// should include the language tag
+			for i := 1; i < len(chunks); i++ {
+				if !strings.HasPrefix(chunks[i], "```") {
+					continue // this chunk doesn't reopen a code block
+				}
+				if tt.lang != "" {
+					expected := "```" + tt.lang + "\n"
+					if !strings.HasPrefix(chunks[i], expected) {
+						t.Errorf("chunk %d: expected prefix %q, got %q",
+							i, expected, chunks[i][:min(len(expected)+10, len(chunks[i]))])
+					}
+				} else {
+					// No language tag — should be bare ```
+					if !strings.HasPrefix(chunks[i], "```\n") {
+						t.Errorf("chunk %d: expected bare ```\\n prefix, got %q",
+							i, chunks[i][:min(20, len(chunks[i]))])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSplitMarkdown_MultipleCodeBlocksWithLanguage(t *testing.T) {
+	// Multiple code blocks with different languages in one message.
+	// Each continuation chunk should use the correct language for its block.
+	text := "```go\n" + strings.Repeat("a\n", 1000) +
+		"```\n```python\n" + strings.Repeat("b\n", 1000) + "```"
+
+	chunks := SplitMarkdown(text, 2000)
+	if len(chunks) < 2 {
+		t.Fatalf("expected at least 2 chunks, got %d", len(chunks))
+	}
+
+	// Verify all chunks have balanced fences
+	for i, chunk := range chunks {
+		fenceCount := strings.Count(chunk, "```")
+		if fenceCount%2 != 0 {
+			t.Errorf("chunk %d has unbalanced fences (%d): %s",
+				i, fenceCount, chunk[:min(80, len(chunk))])
+		}
+	}
+
+	// Find which continuation chunks have language tags
+	foundGo := false
+	for i := 1; i < len(chunks); i++ {
+		if strings.HasPrefix(chunks[i], "```go\n") {
+			foundGo = true
+		}
+	}
+
+	// At least one continuation chunk should use 'go' (the first block is longer
+	// and more likely to be split)
+	if !foundGo {
+		t.Error("no continuation chunk with 'go' language tag found")
+	}
+}
