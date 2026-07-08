@@ -2592,7 +2592,7 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 		lanchat.DetectWorkspaceMeta(b.workingDir),
 	)
 	b.lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
-	lanchat.MountHandlers(srv.Mux(), b.lanchatHub)
+	lanchat.MountHandlers(srv.Mux(), b.lanchatHub, srv.Port())
 
 	// Register lanchat tool so the agent can autonomously send/approve messages.
 	b.registry.Register(tool.LanChatTool{Hub: b.lanchatHub})

@@ -3,11 +3,13 @@ package lanchat
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// MountHandlers registers lanchat HTTP endpoints on the given mux.
-// All endpoints are wrapped with AuthMiddleware using the Hub's API key.
-func MountHandlers(mux *http.ServeMux, hub *Hub) {
+// MountHandlers registers lanchat HTTP endpoints on the given mux and
+// optionally starts a UDP transport on the same port for fallback delivery.
+func MountHandlers(mux *http.ServeMux, hub *Hub, tcpPort int) {
 	apiKey := hub.APIKey()
 	auth := func(next http.HandlerFunc) http.HandlerFunc {
 		return AuthMiddleware(apiKey, next)
@@ -19,6 +21,18 @@ func MountHandlers(mux *http.ServeMux, hub *Hub) {
 	mux.HandleFunc("/lanchat/participants", auth(hub.handleParticipantQuery))
 	if hub.attachments != nil {
 		mux.HandleFunc("/lanchat/attach/", hub.attachments.HandleAttachmentDownload)
+	}
+
+	// Start UDP transport on the same port as TCP for fallback delivery.
+	if tcpPort > 0 {
+		udp, err := NewUDPTransport(tcpPort, udpMulticastAddr, hub, hub.NodeID(), communityKey)
+		if err != nil {
+			debug.Log("lanchat", "UDP transport not started (port %d): %v", tcpPort, err)
+			return
+		}
+		udp.Start()
+		hub.SetUDPTransport(udp)
+		debug.Log("lanchat", "UDP transport started on port %d (unicast + multicast %s)", tcpPort, udpMulticastAddr)
 	}
 }
 

@@ -746,7 +746,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			lanchat.DetectWorkspaceMeta(workingDir),
 		)
 		lanchatHub.SetAttachments(lanchat.NewAttachmentManager())
-		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub)
+		lanchat.MountHandlers(a2aServer.Mux(), lanchatHub, a2aServer.Port())
 		// Sync peers from A2A registry
 		safego.Go("lanchat.syncPeers", func() {
 			syncPeers := func() {
