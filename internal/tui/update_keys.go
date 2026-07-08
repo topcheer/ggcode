@@ -57,6 +57,12 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.toggleFileBrowser()
 		return m, nil
 	}
+	// Ctrl+L clears the screen (starts a new session), matching universal
+	// terminal convention. Equivalent to /clear.
+	if msg.String() == "ctrl+l" {
+		m.handleClearChat()
+		return m, nil
+	}
 	if m.fileBrowser != nil {
 		return m.handleFileBrowserKey(msg)
 	}

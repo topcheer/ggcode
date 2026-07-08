@@ -68,10 +68,12 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 
 	mgr := im.NewManager()
 	// Use a binding store so bindings survive BindSession reload
+	// These bindings have LastSessionID set to a DIFFERENT session,
+	// simulating bindings owned by another instance.
 	mgr.SetBindingStore(&stubBindingStore{
 		bindings: []im.ChannelBinding{
-			{Workspace: dir, Platform: im.PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1"},
-			{Workspace: dir, Platform: im.PlatformTelegram, Adapter: "tg-bot-1", ChannelID: "ch-2"},
+			{Workspace: dir, Platform: im.PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1", LastSessionID: "other-session"},
+			{Workspace: dir, Platform: im.PlatformTelegram, Adapter: "tg-bot-1", ChannelID: "ch-2", LastSessionID: "other-session"},
 		},
 	})
 
@@ -81,11 +83,14 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	m.SetIMManager(mgr)
 	m.SetSession(&session.Session{ID: "test-session", Workspace: dir}, nil)
 
-	// Should have auto-muted all channels — bindings stay but are marked Muted
+	// Bindings owned by another session should be loaded but muted.
 	all := mgr.CurrentBindings()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 bindings loaded, got %d", len(all))
+	}
 	for _, b := range all {
 		if !b.Muted {
-			t.Fatalf("expected binding %s to be muted", b.Adapter)
+			t.Fatalf("expected binding %s to be muted (owned by other session)", b.Adapter)
 		}
 	}
 	muted := mgr.MutedBindings()

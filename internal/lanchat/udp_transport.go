@@ -22,22 +22,31 @@ type udpHandler interface {
 	handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr)
 }
 
+// maxFragmentEntries caps the fragment reassembly map to prevent unbounded growth.
+const maxFragmentEntries = 256
+
 // UDPTransport listens for UDP datagrams (both unicast and multicast) and
 // dispatches them to the Hub. It also provides methods for sending UDP
 // messages with automatic compression and fragmentation.
 type UDPTransport struct {
-	conn      *net.UDPConn // unicast listener
-	mcastConn *net.UDPConn // multicast listener (may be nil)
-	mcastAddr *net.UDPAddr // multicast group address
-	hub       udpHandler   // Hub
-	nodeID    string       // our node ID (for filtering multicast DMs)
-	apiKey    string       // community key for auth
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
+	conn       *net.UDPConn // unicast listener
+	mcastConn  *net.UDPConn // multicast listener (may be nil)
+	mcastSend  *net.UDPConn // dedicated multicast send socket (avoids RX interference)
+	mcastAddr  *net.UDPAddr // multicast group address
+	hub        udpHandler   // Hub
+	nodeID     string       // our node ID (for filtering multicast DMs)
+	apiKey     string       // community key for auth
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
+	listenPort int // port for self-filtering (ReadFromUDP remote port match)
 
 	// Fragment reassembly
 	fragMu    sync.Mutex
 	fragments map[string]*fragmentAssembly // keyed by FragmentID
+
+	// ACK registry: maps message ID → channel, signalled when ACK arrives
+	ackMu sync.Mutex
+	acks  map[string]chan struct{}
 }
 
 // fragmentAssembly collects fragments until all are received.
@@ -67,13 +76,18 @@ func NewUDPTransport(port int, mcastAddr string, hub udpHandler, nodeID, apiKey 
 		apiKey:    apiKey,
 		stopCh:    make(chan struct{}),
 		fragments: make(map[string]*fragmentAssembly),
+		acks:      make(map[string]chan struct{}),
+	}
+
+	// Resolve listen port for self-filtering
+	if laddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		t.listenPort = laddr.Port
 	}
 
 	// Join multicast group
 	if mcastAddr != "" {
 		ma, err := net.ResolveUDPAddr("udp4", mcastAddr)
 		if err == nil {
-			// Use net.ListenPacket for multicast support (JoinGroup requires PacketConn)
 			mcastListen := &net.UDPAddr{IP: net.IPv4zero, Port: ma.Port}
 			pc, err := net.ListenPacket("udp4", mcastListen.String())
 			if err == nil {
@@ -87,7 +101,15 @@ func NewUDPTransport(port int, mcastAddr string, hub udpHandler, nodeID, apiKey 
 					_ = pconn.JoinGroup(&iface, ma)
 				}
 				t.mcastConn = pc.(*net.UDPConn)
-				t.mcastAddr = ma
+
+				// Dedicated send socket bound to 0.0.0.0:0 for multicast writes.
+				// Writing on the receive socket can interfere with the read loop
+				// and cause source-address ambiguity on some platforms.
+				sendConn, err := net.DialUDP("udp4", nil, ma)
+				if err == nil {
+					t.mcastSend = sendConn
+				}
+
 				debug.Log("lanchat-udp", "multicast listener joined %s on port %d", mcastAddr, ma.Port)
 			}
 		}
@@ -138,6 +160,9 @@ func (t *UDPTransport) Stop() {
 	if t.mcastConn != nil {
 		t.mcastConn.Close()
 	}
+	if t.mcastSend != nil {
+		t.mcastSend.Close()
+	}
 	t.wg.Wait()
 }
 
@@ -159,6 +184,12 @@ func (t *UDPTransport) readLoop(conn *net.UDPConn, label string) {
 				continue
 			}
 		}
+
+		// Self-filter: skip our own multicast packets by source port
+		if label == "multicast" && t.listenPort > 0 && remoteAddr.Port == t.listenPort {
+			continue
+		}
+
 		data := make([]byte, n)
 		copy(data, buf[:n])
 		t.processDatagram(data, remoteAddr, label)
@@ -166,6 +197,9 @@ func (t *UDPTransport) readLoop(conn *net.UDPConn, label string) {
 }
 
 func (t *UDPTransport) processDatagram(data []byte, remoteAddr *net.UDPAddr, source string) {
+	// Decompress at the datagram level (handles single-datagram compressed messages)
+	data = decompressIfGzipped(data)
+
 	var env udpEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		debug.Log("lanchat-udp", "%s: parse error from %s: %v", source, remoteAddr, err)
@@ -178,36 +212,32 @@ func (t *UDPTransport) processDatagram(data []byte, remoteAddr *net.UDPAddr, sou
 		return
 	}
 
+	// Handle ACK: signal the waiting sender and skip hub processing
+	if env.Type == "ack" {
+		t.signalACK(env.ACKID)
+		return
+	}
+
 	// Handle fragment
 	if env.IsFragment {
 		t.handleFragment(env, remoteAddr, source)
 		return
 	}
 
-	// Handle ACK (no payload processing needed — just pass to hub)
-	if env.Type == "ack" {
-		t.hub.handleUDPEnvelope(env, remoteAddr)
-		return
-	}
-
-	// For multicast DMs: check if this message is for us
-	// (the Hub will do final filtering, but we can send ACK early)
+	// Normal message — dispatch to hub
 	t.hub.handleUDPEnvelope(env, remoteAddr)
 
 	// Send ACK for unicast (reliable delivery)
-	// Multicast doesn't get ACKs (ACK would be unicast which defeats the purpose)
-	if source == "unicast" && env.Type != "ack" {
+	if source == "unicast" {
+		ackID := env.FragmentID
+		if ackID == "" {
+			ackID = fmt.Sprintf("udp-%d", time.Now().UnixNano())
+		}
 		ack := udpEnvelope{
 			Type:     "ack",
 			APIKey:   t.apiKey,
 			FromNode: t.nodeID,
-			ACKID:    env.FragmentID, // reuse FragmentID as message ID for ack
-		}
-		// Use the FragmentID field as the message ID since all non-fragment
-		// messages set FragmentID to their message ID for tracking
-		if ack.ACKID == "" {
-			// Fall back: use a hash of the payload as ID
-			ack.ACKID = fmt.Sprintf("%d", time.Now().UnixNano())
+			ACKID:    ackID,
 		}
 		ackData, _ := json.Marshal(ack)
 		_, _ = t.conn.WriteToUDP(ackData, remoteAddr)
@@ -222,44 +252,50 @@ func (t *UDPTransport) SendUnicast(ctx context.Context, addr *net.UDPAddr, env u
 		env.FragmentID = fmt.Sprintf("udp-%d", time.Now().UnixNano())
 	}
 
-	data, err := t.preparePayload(env)
+	// Marshal the envelope to bytes (this is the canonical payload)
+	payloadBytes, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
 
-	// Split into fragments if needed
-	fragments := splitFragments(data, env.FragmentID)
+	// Compress the payload (compression is preserved through the fragment path)
+	compressed := compressIfNeeded(payloadBytes)
+
+	// Split into fragments if needed. Fragments carry raw compressed bytes
+	// as base64 chunks, preserving the compression end-to-end.
+	fragments := splitFragments(compressed, env.FragmentID, env.APIKey, env.FromNode, env.Type)
+
 	for _, frag := range fragments {
 		fragData, _ := json.Marshal(frag)
-		// Send with retry + ACK wait
+		// Send with retry + ACK wait (per-fragment ACK for reliability)
 		for attempt := 0; attempt <= udpMaxRetries; attempt++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			if _, err := t.conn.WriteToUDP(fragData, addr); err != nil {
 				debug.Log("lanchat-udp", "unicast send error attempt %d: %v", attempt+1, err)
 				continue
 			}
-			// Wait for ACK (only for single-fragment messages)
-			if len(fragments) == 1 {
-				if t.waitForACK(env.FragmentID, udpACKTimeout) {
-					return nil
-				}
-				debug.Log("lanchat-udp", "unicast ACK timeout attempt %d for %s", attempt+1, env.FragmentID)
-			} else {
-				// Multi-fragment: no per-fragment ACK, just brief delay between fragments
-				time.Sleep(5 * time.Millisecond)
+			// Wait for ACK for each fragment
+			ackID := frag.FragmentID
+			if frag.IsFragment {
+				ackID = fmt.Sprintf("%s-%d", frag.FragmentID, frag.FragmentSeq)
 			}
+			if t.waitForACK(ackID, udpACKTimeout) {
+				break // ACK received, move to next fragment
+			}
+			debug.Log("lanchat-udp", "unicast ACK timeout attempt %d for %s", attempt+1, ackID)
 		}
 	}
 
-	if len(fragments) > 1 {
-		// For multi-fragment, wait a bit for reassembly on the receiver side
-		time.Sleep(100 * time.Millisecond)
-	}
 	return nil
 }
 
 // SendMulticast sends an envelope via UDP multicast (no ACK).
 func (t *UDPTransport) SendMulticast(env udpEnvelope) error {
-	if t.mcastConn == nil {
+	if t.mcastSend == nil && t.mcastConn == nil {
 		return fmt.Errorf("multicast not available")
 	}
 
@@ -267,71 +303,62 @@ func (t *UDPTransport) SendMulticast(env udpEnvelope) error {
 		env.FragmentID = fmt.Sprintf("udp-mcast-%d", time.Now().UnixNano())
 	}
 
-	data, err := t.preparePayload(env)
+	payloadBytes, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
 
-	fragments := splitFragments(data, env.FragmentID)
+	compressed := compressIfNeeded(payloadBytes)
+	fragments := splitFragments(compressed, env.FragmentID, env.APIKey, env.FromNode, env.Type)
+
 	for _, frag := range fragments {
 		fragData, _ := json.Marshal(frag)
-		_, _ = t.mcastConn.WriteToUDP(fragData, t.mcastAddr)
+		if t.mcastSend != nil {
+			_, _ = t.mcastSend.Write(fragData) // dedicated send socket
+		} else {
+			_, _ = t.mcastConn.WriteToUDP(fragData, t.mcastAddr) // fallback
+		}
 	}
 	return nil
 }
 
-// preparePayload compresses the envelope payload with gzip and updates
-// the envelope to carry the compressed data.
-func (t *UDPTransport) preparePayload(env udpEnvelope) ([]byte, error) {
-	// Marshal the full envelope
-	fullData, err := json.Marshal(env)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if compression helps
+// compressIfNeeded returns gzip-compressed data only if it's actually smaller.
+// Otherwise returns the original data unchanged.
+func compressIfNeeded(data []byte) []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(fullData); err != nil {
-		return fullData, nil // fall back to uncompressed
+	if _, err := gz.Write(data); err != nil {
+		return data
 	}
 	gz.Close()
-
 	compressed := buf.Bytes()
-	// Use compressed only if it's actually smaller
-	if len(compressed) < len(fullData) {
-		// Return compressed data wrapped with a marker
-		// The receiver will detect gzip magic bytes and decompress
-		return compressed, nil
+	if len(compressed) < len(data) {
+		return compressed
 	}
-	return fullData, nil
+	return data
 }
 
-// splitFragments divides data into chunks of udpMaxPayload size.
-// If data fits in one chunk, returns a single-element slice with the
-// original envelope data.
-func splitFragments(data []byte, fragID string) []udpEnvelope {
-	// Decompress first if needed
-	decompressed := decompressIfGzipped(data)
-	var env udpEnvelope
-	if err := json.Unmarshal(decompressed, &env); err != nil {
-		// Not a valid envelope — wrap raw data
+// splitFragments divides raw payload bytes into fragment envelopes.
+// The payload bytes (which may be gzip-compressed) are base64-encoded and
+// split into chunks. Each fragment carries its chunk as a JSON string in Payload.
+// The receiver reassembles the base64 string, decodes it, and decompresses if needed.
+func splitFragments(data []byte, fragID, apiKey, fromNode, msgType string) []udpEnvelope {
+	// If data fits in one datagram, send a single non-fragment envelope
+	// containing the raw (possibly compressed) bytes as a base64 string.
+	// The receiver decompresses after base64 decode.
+	payloadStr := base64.StdEncoding.EncodeToString(data)
+	if len(payloadStr) <= udpMaxPayload-512 {
+		// Single datagram — wrap the original data as a non-fragment
 		return []udpEnvelope{{
-			IsFragment:    false,
-			FragmentID:    fragID,
-			FragmentTotal: 1,
-			FragmentSeq:   0,
+			Type:       msgType,
+			APIKey:     apiKey,
+			FromNode:   fromNode,
+			Payload:    json.RawMessage(`"` + payloadStr + `"`),
+			FragmentID: fragID,
 		}}
 	}
 
-	// Re-marshal to get clean JSON
-	cleanData, _ := json.Marshal(env)
-	if len(cleanData) <= udpMaxPayload {
-		return []udpEnvelope{env}
-	}
-
-	// Need to fragment: encode payload as base64 chunks
-	payloadStr := base64.StdEncoding.EncodeToString(cleanData)
+	// Need to fragment: split base64 string into chunks
 	chunkSize := udpMaxPayload - 512 // leave room for envelope overhead
 	totalFrags := (len(payloadStr) + chunkSize - 1) / chunkSize
 	fragments := make([]udpEnvelope, 0, totalFrags)
@@ -342,9 +369,9 @@ func splitFragments(data []byte, fragID string) []udpEnvelope {
 			end = len(payloadStr)
 		}
 		frag := udpEnvelope{
-			Type:          env.Type,
-			APIKey:        env.APIKey,
-			FromNode:      env.FromNode,
+			Type:          msgType,
+			APIKey:        apiKey,
+			FromNode:      fromNode,
 			Payload:       json.RawMessage(`"` + payloadStr[start:end] + `"`),
 			FragmentID:    fragID,
 			FragmentTotal: totalFrags,
@@ -373,29 +400,73 @@ func decompressIfGzipped(data []byte) []byte {
 	return buf.Bytes()
 }
 
-// waitForACK checks if an ACK for the given message ID has been received.
-// This is a simplified implementation — the Hub's handleUDPEnvelope handles
-// the actual ACK processing and stores results.
-func (t *UDPTransport) waitForACK(msgID string, timeout time.Duration) bool {
-	// Simple sleep-based wait — the ACK handler in processDatagram will
-	// process the ACK and the Hub marks the message as delivered.
-	// For a more robust implementation, we'd use a channel-based ACK registry.
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		// Check if Hub has processed the ACK (non-blocking)
-		// The Hub's ackTracker would need to be checked here.
-		// For now, use a brief sleep and let the Hub handle dedup.
-		time.Sleep(10 * time.Millisecond)
+// registerACK creates a channel for tracking an ACK for the given message ID.
+// Returns the channel. Caller should call unregisterACK when done.
+func (t *UDPTransport) registerACK(msgID string) chan struct{} {
+	ch := make(chan struct{}, 1)
+	t.ackMu.Lock()
+	t.acks[msgID] = ch
+	t.ackMu.Unlock()
+	return ch
+}
+
+// signalACK signals the waiting sender that an ACK was received.
+func (t *UDPTransport) signalACK(msgID string) {
+	t.ackMu.Lock()
+	ch, ok := t.acks[msgID]
+	if ok {
+		delete(t.acks, msgID)
 	}
-	// Without a proper ACK registry, we assume success if no error.
-	// The Hub's message ID dedup handles duplicates.
-	return true
+	t.ackMu.Unlock()
+	if ok {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// unregisterACK removes a pending ACK registration (cleanup on timeout).
+func (t *UDPTransport) unregisterACK(msgID string) {
+	t.ackMu.Lock()
+	delete(t.acks, msgID)
+	t.ackMu.Unlock()
+}
+
+// waitForACK blocks until an ACK for the given message ID is received or
+// the timeout expires. Uses a channel-based registry for deterministic delivery.
+func (t *UDPTransport) waitForACK(msgID string, timeout time.Duration) bool {
+	ch := t.registerACK(msgID)
+	defer t.unregisterACK(msgID)
+
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // handleFragment collects fragments and reassembles when complete.
 func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, source string) {
 	t.fragMu.Lock()
 	defer t.fragMu.Unlock()
+
+	// Cap fragment entries to prevent unbounded growth
+	if len(t.fragments) >= maxFragmentEntries {
+		// Evict the oldest by deadline
+		var oldestID string
+		var oldestDeadline time.Time
+		for id, a := range t.fragments {
+			if oldestID == "" || a.deadline.Before(oldestDeadline) {
+				oldestID = id
+				oldestDeadline = a.deadline
+			}
+		}
+		if oldestID != "" {
+			delete(t.fragments, oldestID)
+		}
+	}
 
 	assembly, exists := t.fragments[env.FragmentID]
 	if !exists {
@@ -417,6 +488,22 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		return
 	}
 	assembly.received[env.FragmentSeq] = []byte(chunkStr)
+
+	// Send per-fragment ACK for unicast
+	if source == "unicast" {
+		ackID := fmt.Sprintf("%s-%d", env.FragmentID, env.FragmentSeq)
+		ack := udpEnvelope{
+			Type:     "ack",
+			APIKey:   t.apiKey,
+			FromNode: t.nodeID,
+			ACKID:    ackID,
+		}
+		ackData, _ := json.Marshal(ack)
+		// Use goroutine to avoid holding fragMu during network write
+		go func(data []byte, addr *net.UDPAddr) {
+			_, _ = t.conn.WriteToUDP(data, addr)
+		}(ackData, remoteAddr)
+	}
 
 	// Check if we have all fragments
 	if len(assembly.received) < assembly.total {
@@ -442,7 +529,7 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 		return
 	}
 
-	// Decompress if needed
+	// Decompress if needed (preserved through fragment path)
 	fullData = decompressIfGzipped(fullData)
 
 	// Parse the complete envelope
