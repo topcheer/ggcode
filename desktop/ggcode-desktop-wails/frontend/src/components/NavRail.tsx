@@ -70,23 +70,39 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       </button>
 
       {/* Nav items */}
-      {navItems.map(item => (
-        <button
-          key={item.id}
-          onClick={() => onViewChange(item.id)}
-          title={item.tooltip}
-          style={{
-            width: 36, height: 36, borderRadius: 6,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: view === item.id ? 'var(--color-primary)' : 'transparent',
-            color: view === item.id ? '#fff' : 'var(--text-secondary)',
-            border: 'none', cursor: 'pointer',
-            transition: 'background 0.15s',
-          }}
-        >
-          {item.icon}
-        </button>
-      ))}
+      {navItems.map(item => {
+        const isActive = view === item.id
+        return (
+          <button
+            key={item.id}
+            onClick={() => onViewChange(item.id)}
+            title={item.tooltip}
+            className="nav-rail-btn"
+            style={{
+              width: 36, height: 36, borderRadius: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: isActive ? 'var(--color-primary)' : 'transparent',
+              color: isActive ? '#fff' : 'var(--text-secondary)',
+              border: 'none', cursor: 'pointer',
+              transition: 'background 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => {
+              if (!isActive) {
+                e.currentTarget.style.background = 'var(--color-nav-hover, rgba(255,255,255,0.08))'
+                e.currentTarget.style.color = 'var(--text-primary)'
+              }
+            }}
+            onMouseLeave={e => {
+              if (!isActive) {
+                e.currentTarget.style.background = 'transparent'
+                e.currentTarget.style.color = 'var(--text-secondary)'
+              }
+            }}
+          >
+            {item.icon}
+          </button>
+        )
+      })}
 
       {/* LAN Chat */}
       <button
@@ -99,8 +115,20 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
           background: view === 'lanchat' ? 'var(--color-nav-active)' : 'transparent',
           color: view === 'lanchat' ? 'var(--color-primary)' : 'var(--text-secondary)',
           border: 'none', cursor: 'pointer',
-          transition: 'background 0.15s',
+          transition: 'background 0.15s, color 0.15s',
           position: 'relative',
+        }}
+        onMouseEnter={e => {
+          if (view !== 'lanchat') {
+            e.currentTarget.style.background = 'var(--color-nav-hover, rgba(255,255,255,0.08))'
+            e.currentTarget.style.color = 'var(--text-primary)'
+          }
+        }}
+        onMouseLeave={e => {
+          if (view !== 'lanchat') {
+            e.currentTarget.style.background = 'transparent'
+            e.currentTarget.style.color = 'var(--text-secondary)'
+          }
         }}
       >
         <Users size={18} />
