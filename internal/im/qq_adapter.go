@@ -428,7 +428,18 @@ func (a *qqAdapter) heartbeatLoop(ctx context.Context) {
 				payload["d"] = seq
 			}
 			// Don't log routine heartbeats — extremely noisy
-			_ = a.writeJSON(payload)
+			if err := a.writeJSON(payload); err != nil {
+				debug.Log("qq", "adapter=%s heartbeat write error: %v", a.name, err)
+				// Close the WebSocket to unblock ReadMessage in the main loop,
+				// which triggers the reconnect cycle.
+				a.mu.RLock()
+				ws := a.ws
+				a.mu.RUnlock()
+				if ws != nil {
+					ws.Close()
+				}
+				return
+			}
 		}
 	}
 }

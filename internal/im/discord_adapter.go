@@ -281,6 +281,7 @@ func (a *discordAdapter) heartbeatLoop(ctx context.Context, conn *websocket.Conn
 			data, _ := json.Marshal(payload)
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				debug.Log("discord", "adapter=%s heartbeat write error: %v", a.name, err)
+				conn.Close() // Force ReadMessage to unblock → triggers reconnect
 				return
 			}
 		}
