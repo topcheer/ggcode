@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { Radio, Smartphone } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
 import { useTranslation } from '../i18n'
@@ -26,6 +26,31 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
     cacheHit: 0,
     status: t('status.ready'),
   })
+
+  // IM adapter active count + mobile tunnel connection status
+  const [imCount, setImCount] = useState(0)
+  const [mobileConnected, setMobileConnected] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const [adapters, sharing] = await Promise.all([
+          App.ListIMAdapters(),
+          App.IsSharing(),
+        ])
+        if (cancelled) return
+        const active = (adapters as any[])?.filter(a =>
+          (a.Enabled ?? a.enabled) && !(a.Muted ?? a.muted)
+        ).length ?? 0
+        setImCount(active)
+        setMobileConnected(!!sharing)
+      } catch {}
+    }
+    void poll()
+    const id = window.setInterval(poll, 3000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
 
   // Merge external data if provided
   useEffect(() => {
@@ -130,15 +155,39 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
         <span style={{ color: 'var(--color-success)' }}>cache {info.cacheHit}%</span>
       )}
       <div style={{ flex: 1 }} />
+      {/* IM adapter count */}
+      {imCount > 0 && (
+        <span title={`${imCount} IM adapter(s) active`} style={{
+          display: 'flex', alignItems: 'center', gap: 3,
+          color: 'var(--text-secondary)', fontSize: 10,
+        }}>
+          <Radio size={11} style={{ color: 'var(--color-success)' }} />
+          {imCount}
+        </span>
+      )}
+      {/* Mobile tunnel connected */}
+      {mobileConnected && (
+        <span title="Mobile connected" style={{
+          display: 'flex', alignItems: 'center',
+        }}>
+          <Smartphone size={11} style={{ color: 'var(--color-primary)' }} />
+        </span>
+      )}
       <button onClick={onContextToggle} style={{
         background: 'none', border: 'none',
         color: 'var(--text-secondary)', cursor: 'pointer',
         fontSize: 10, fontFamily: 'var(--font-mono)',
       }}>⌘.</button>
       <span style={{
+        display: 'flex', alignItems: 'center', gap: 4,
         color: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
       }}>
-        {info.status === t('status.ready') ? '●' : '◐'} {info.status}
+        <span className={info.status === t('status.ready') ? '' : 'agent-status-dot'} style={{
+          width: 6, height: 6, borderRadius: '50%',
+          background: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
+          display: 'inline-block',
+        }} />
+        {info.status}
       </span>
     </div>
   )
