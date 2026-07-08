@@ -31,6 +31,38 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
   const [imCount, setImCount] = useState(0)
   const [mobileConnected, setMobileConnected] = useState(false)
 
+  // Elapsed timer: tracks how long the agent has been working
+  const [workStartTime, setWorkStartTime] = useState<number | null>(null)
+  const [, setTick] = useState(0)
+
+  // Detect status transitions to start/stop the timer
+  useEffect(() => {
+    const isWorking = info.status !== t('status.ready') &&
+                      info.status !== 'Ready' &&
+                      info.status !== ''
+    if (isWorking && workStartTime === null) {
+      setWorkStartTime(Date.now())
+    } else if (!isWorking && workStartTime !== null) {
+      setWorkStartTime(null)
+    }
+  }, [info.status, t, workStartTime])
+
+  // 1-second tick to update elapsed display while working
+  useEffect(() => {
+    if (workStartTime === null) return
+    const id = window.setInterval(() => setTick(t => t + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [workStartTime])
+
+  const elapsedLabel = (() => {
+    if (workStartTime === null) return null
+    const secs = Math.floor((Date.now() - workStartTime) / 1000)
+    if (secs < 60) return `${secs}s`
+    const m = Math.floor(secs / 60)
+    const s = secs % 60
+    return `${m}m${String(s).padStart(2, '0')}s`
+  })()
+
   useEffect(() => {
     let cancelled = false
     const poll = async () => {
@@ -188,6 +220,13 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           display: 'inline-block',
         }} />
         {info.status}
+        {elapsedLabel && (
+          <span style={{
+            color: 'var(--text-tertiary)',
+            fontVariantNumeric: 'tabular-nums',
+            marginLeft: 2,
+          }}>· {elapsedLabel}</span>
+        )}
       </span>
     </div>
   )
