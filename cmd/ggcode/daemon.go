@@ -591,7 +591,29 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 
-	// Start adapters
+	// Bind session to IM manager so that session-scoped binding ownership
+	// works correctly. InitRuntime binds with an empty SessionID; we need
+	// to rebind with the real session ID before RegisterInstance.
+	imMgr.BindSession(im.SessionBinding{
+		SessionID: ses.ID,
+		Workspace: workingDir,
+	})
+
+	// Register this instance for multi-instance detection BEFORE starting adapters.
+	// This ensures session-scoped binding ownership (claimUnclaimedBindings +
+	// muteNonOwnedBindings) runs before StartCurrentBindingAdapter so only
+	// bindings owned by this session are started.
+	_, others, err := imMgr.RegisterInstance(workingDir, ses.ID)
+	if err != nil {
+		debug.Log("daemon", "instance detect register failed: %v", err)
+	} else if len(others) > 0 {
+		primary := others[0]
+		fmt.Fprintf(os.Stderr, "Auto-muted IM channels — primary instance (PID %d, started %s)\n",
+			primary.PID, primary.StartedAt.Format("15:04"))
+	}
+	defer imMgr.UnregisterInstance()
+
+	// Start adapters (only non-muted bindings will start)
 	if cfg.IM.Enabled {
 		controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, imMgr)
 		if err != nil {
@@ -599,19 +621,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		defer controller.Stop()
 	}
-
-	// Register this instance for multi-instance detection.
-	// If another instance is already running in the same workspace,
-	// auto-mute all IM channels so only the primary instance responds.
-	_, others, err := imMgr.RegisterInstance(workingDir, ses.ID)
-	if err != nil {
-		debug.Log("daemon", "instance detect register failed: %v", err)
-	} else if len(others) > 0 {
-		primary := others[0]
-		fmt.Fprintf(os.Stderr, "🔇 Auto-muted IM channels — primary instance (PID %d, started %s)\n",
-			primary.PID, primary.StartedAt.Format("15:04"))
-	}
-	defer imMgr.UnregisterInstance()
 
 	// Start background services (MCP connections, etc.)
 	if mcpMgr := core.MCPManager; mcpMgr != nil {
