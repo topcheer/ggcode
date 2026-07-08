@@ -721,3 +721,4 @@ func (s *stubBSForInitOrder) List() ([]im.ChannelBinding, error)                
 func (s *stubBSForInitOrder) ListByWorkspace(_ string) ([]im.ChannelBinding, error) { return nil, nil }
 func (s *stubBSForInitOrder) ListByAdapter(_ string) ([]im.ChannelBinding, error)   { return nil, nil }
 func (s *stubBSForInitOrder) BindExclusive(_ im.ChannelBinding) error               { return nil }
+func (s *stubBSForInitOrder) UpdateSessionID(_, _, _ string) error                  { return nil }

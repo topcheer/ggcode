@@ -21,7 +21,7 @@ func TestManagerRegisterInstance_Single(t *testing.T) {
 	// BindSession loads bindings from the store (same as real root.go/daemon.go flow)
 	mgr.BindSession(SessionBinding{Workspace: dir})
 
-	detect, others, err := mgr.RegisterInstance(dir)
+	detect, others, err := mgr.RegisterInstance(dir, "")
 	if err != nil {
 		t.Fatalf("RegisterInstance: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestManagerRegisterInstance_Secondary(t *testing.T) {
 	// BindSession loads bindings from the store
 	mgr.BindSession(SessionBinding{Workspace: dir})
 
-	detect, others, err := mgr.RegisterInstance(dir)
+	detect, others, err := mgr.RegisterInstance(dir, "")
 	if err != nil {
 		t.Fatalf("RegisterInstance: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestManagerRegisterInstance_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager()
 
-	detect1, _, err := mgr.RegisterInstance(dir)
+	detect1, _, err := mgr.RegisterInstance(dir, "")
 	if err != nil {
 		t.Fatalf("first RegisterInstance: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestManagerSyncActiveChannels(t *testing.T) {
 	// BindSession loads bindings from the store
 	mgr.BindSession(SessionBinding{Workspace: dir})
 
-	detect, _, _ := mgr.RegisterInstance(dir)
+	detect, _, _ := mgr.RegisterInstance(dir, "")
 
 	// Initially: HasActiveChannels=true (binding has ChannelID, not muted)
 	detect.mu.Lock()
@@ -247,7 +247,7 @@ func TestReloadBindingPreservesMutedState(t *testing.T) {
 	mgr.BindSession(SessionBinding{Workspace: dir})
 
 	// RegisterInstance should auto-mute all bindings (non-primary instance)
-	_, others, err := mgr.RegisterInstance(dir)
+	_, others, err := mgr.RegisterInstance(dir, "")
 	if err != nil {
 		t.Fatalf("RegisterInstance: %v", err)
 	}
@@ -335,6 +335,15 @@ func (s *memBindingStore) Delete(workspace, adapter string) error {
 	for i, b := range s.bindings {
 		if b.Workspace == workspace && b.Adapter == adapter {
 			s.bindings = append(s.bindings[:i], s.bindings[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+func (s *memBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
+	for i, b := range s.bindings {
+		if b.Workspace == workspace && b.Adapter == adapter {
+			s.bindings[i].LastSessionID = sessionID
 			return nil
 		}
 	}

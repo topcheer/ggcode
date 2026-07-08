@@ -959,6 +959,7 @@ func (s *stubBindingStoreForMute) ListByWorkspace(ws string) ([]ChannelBinding, 
 	}
 	return nil, nil
 }
+func (s *stubBindingStoreForMute) UpdateSessionID(string, string, string) error { return nil }
 func (s *stubBindingStoreForMute) ListByAdapter(string) ([]ChannelBinding, error) {
 	return nil, nil
 }

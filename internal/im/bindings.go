@@ -25,6 +25,9 @@ type BindingStore interface {
 	// cross-process TOCTOU races where two ggcode instances in different
 	// workspaces bind the same adapter simultaneously.
 	BindExclusive(binding ChannelBinding) error
+	// UpdateSessionID persists the LastSessionID field for a binding identified
+	// by (workspace, adapter). If sessionID is empty, the field is cleared.
+	UpdateSessionID(workspace, adapter, sessionID string) error
 }
 
 // compositeKey builds a map key from workspace and adapter name.
@@ -118,6 +121,17 @@ func (s *MemoryBindingStore) BindExclusive(binding ChannelBinding) error {
 		}
 	}
 	s.bindings[compositeKey(binding.Workspace, binding.Adapter)] = binding
+	return nil
+}
+
+func (s *MemoryBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := compositeKey(normalizeWorkspace(workspace), adapter)
+	if b, ok := s.bindings[key]; ok {
+		b.LastSessionID = sessionID
+		s.bindings[key] = b
+	}
 	return nil
 }
 
@@ -240,6 +254,22 @@ func (s *JSONFileBindingStore) ListByAdapter(adapter string) ([]ChannelBinding, 
 		}
 	}
 	return out, nil
+}
+
+func (s *JSONFileBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all, err := s.readAllLocked()
+	if err != nil {
+		return err
+	}
+	key := compositeKey(normalizeWorkspace(workspace), adapter)
+	if b, ok := all[key]; ok {
+		b.LastSessionID = sessionID
+		all[key] = b
+		return s.writeAllLocked(all)
+	}
+	return nil // binding not found — no-op
 }
 
 func (s *JSONFileBindingStore) readAllLocked() (map[string]ChannelBinding, error) {

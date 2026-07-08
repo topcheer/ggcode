@@ -56,7 +56,11 @@ func InitRuntime(opts RuntimeInitOptions) (*RuntimeInitResult, error) {
 		PairingStore: pairingStore,
 	}
 	if opts.RegisterInstance && opts.Workspace != "" {
-		detect, others, err := mgr.RegisterInstance(opts.Workspace)
+		sid := ""
+		if mgr.session != nil {
+			sid = mgr.session.SessionID
+		}
+		detect, others, err := mgr.RegisterInstance(opts.Workspace, sid)
 		if err != nil {
 			return nil, err
 		}

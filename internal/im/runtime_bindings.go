@@ -254,10 +254,22 @@ func (m *Manager) DisableBinding(adapterName string) error {
 	m.disabledBindings[adapterName] = &cp
 	delete(m.currentBindings, adapterName)
 	m.stopAdapter(adapterName)
+	workspace := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// Persist: clear LastSessionID so other sessions can claim this adapter.
+	// Disabled adapters are excluded from the startup claim logic.
+	if store != nil && workspace != "" {
+		if err := store.UpdateSessionID(workspace, adapterName, ""); err != nil {
+			debug.Log("im", "DisableBinding: failed to clear LastSessionID for %s: %v", adapterName, err)
+		}
 	}
 	m.syncInstanceActiveChannels()
 	return nil
@@ -265,6 +277,7 @@ func (m *Manager) DisableBinding(adapterName string) error {
 
 // EnableBinding re-enables a previously disabled adapter binding.
 // The binding is moved back to currentBindings so it resumes receiving messages.
+// LastSessionID is set to the current session to claim ownership.
 func (m *Manager) EnableBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.disabledBindings[adapterName]
@@ -273,13 +286,30 @@ func (m *Manager) EnableBinding(adapterName string) error {
 		return ErrNoChannelBound
 	}
 	copy := *binding
+	// Claim this binding for our session.
+	if m.session != nil {
+		copy.LastSessionID = m.session.SessionID
+	}
 	m.currentBindings[adapterName] = &copy
 	delete(m.disabledBindings, adapterName)
 	onRestart := m.onRestart
+	workspace := ""
+	sessionID := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+		sessionID = m.session.SessionID
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// Persist: claim this binding for our session.
+	if store != nil && workspace != "" {
+		if err := store.UpdateSessionID(workspace, adapterName, sessionID); err != nil {
+			debug.Log("im", "EnableBinding: failed to set LastSessionID for %s: %v", adapterName, err)
+		}
 	}
 	if onRestart != nil {
 		if err := onRestart(adapterName); err != nil {
@@ -327,10 +357,21 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	}
 	binding.Muted = true
 	m.stopAdapter(adapterName)
+	workspace := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// Persist: clear LastSessionID so other sessions can claim this adapter.
+	if store != nil && workspace != "" {
+		if err := store.UpdateSessionID(workspace, adapterName, ""); err != nil {
+			debug.Log("im", "MuteBinding: failed to clear LastSessionID for %s: %v", adapterName, err)
+		}
 	}
 	m.syncInstanceActiveChannels()
 	return nil
@@ -346,10 +387,23 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	}
 	binding.Muted = false
 	onRestart := m.onRestart
+	workspace := ""
+	sessionID := ""
+	if m.session != nil {
+		workspace = m.session.Workspace
+		sessionID = m.session.SessionID
+	}
+	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// Persist: claim this binding for our session.
+	if store != nil && workspace != "" {
+		if err := store.UpdateSessionID(workspace, adapterName, sessionID); err != nil {
+			debug.Log("im", "UnmuteBinding: failed to set LastSessionID for %s: %v", adapterName, err)
+		}
 	}
 	if onRestart != nil {
 		if err := onRestart(adapterName); err != nil {

@@ -215,3 +215,12 @@ func (s *stubBindingStore) BindExclusive(b im.ChannelBinding) error {
 	s.bindings = append(filtered, b)
 	return nil
 }
+func (s *stubBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
+	for i, b := range s.bindings {
+		if b.Workspace == workspace && b.Adapter == adapter {
+			s.bindings[i].LastSessionID = sessionID
+			return nil
+		}
+	}
+	return nil
+}

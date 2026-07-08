@@ -603,7 +603,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Register this instance for multi-instance detection.
 	// If another instance is already running in the same workspace,
 	// auto-mute all IM channels so only the primary instance responds.
-	_, others, err := imMgr.RegisterInstance(workingDir)
+	_, others, err := imMgr.RegisterInstance(workingDir, ses.ID)
 	if err != nil {
 		debug.Log("daemon", "instance detect register failed: %v", err)
 	} else if len(others) > 0 {

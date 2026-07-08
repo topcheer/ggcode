@@ -961,7 +961,7 @@ func (m *Model) detectAndAutoMute() {
 		autoMuteCount++
 	}
 
-	detect, others, err := m.imManager.RegisterInstance(session.Workspace)
+	detect, others, err := m.imManager.RegisterInstance(session.Workspace, session.ID)
 	if err != nil {
 		return
 	}

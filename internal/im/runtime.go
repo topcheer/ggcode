@@ -167,8 +167,10 @@ func (m *Manager) HandleInteractiveCallback(cb InteractiveCallback) {
 // RegisterInstance creates an InstanceDetect for the given workspace, registers
 // this process as a running instance, and stores it on the Manager.
 // If other instances are already running in the same workspace, this instance
-// is auto-muted (non-primary). Returns the detector and any other live instances.
-func (m *Manager) RegisterInstance(workspace string) (*InstanceDetect, []InstanceInfo, error) {
+// is auto-muted (non-primary) — UNLESS bindings have LastSessionID matching
+// this session, in which case those bindings are activated regardless.
+// Returns the detector and any other live instances.
+func (m *Manager) RegisterInstance(workspace string, sessionID string) (*InstanceDetect, []InstanceInfo, error) {
 	detect := NewInstanceDetect(workspace)
 	others, err := detect.Register()
 	if err != nil {
@@ -179,18 +181,86 @@ func (m *Manager) RegisterInstance(workspace string) (*InstanceDetect, []Instanc
 	m.instanceDetect = detect
 	m.mu.Unlock()
 
+	// Claim unclaimed bindings for this session (LastSessionID empty → mine).
+	// Skip disabled adapters.
+	m.claimUnclaimedBindings(sessionID)
+
 	// Sync HasActiveChannels based on current bindings
 	m.syncInstanceActiveChannels()
 
 	if len(others) > 0 {
-		count, _ := m.MuteAll()
+		// Mute bindings that belong to other sessions or have no session owner.
+		// Bindings whose LastSessionID == sessionID stay active.
+		count := m.muteNonOwnedBindings(sessionID)
 		if count > 0 {
-			debug.Log("im", "auto-muted %d channel(s), primary PID=%d started=%s",
-				count, others[0].PID, others[0].StartedAt.Format("15:04:05"))
+			debug.Log("im", "auto-muted %d channel(s) not owned by session=%s, primary PID=%d started=%s",
+				count, sessionID, others[0].PID, others[0].StartedAt.Format("15:04:05"))
 		}
 	}
 
 	return detect, others, nil
+}
+
+// claimUnclaimedBindings sets LastSessionID = sessionID for all workspace
+// bindings that have an empty LastSessionID. Disabled adapters are skipped.
+// This implements the "first launch claims all" behavior: after one round of
+// launches, every adapter is assigned to a session.
+func (m *Manager) claimUnclaimedBindings(sessionID string) {
+	if sessionID == "" || m.bindingStore == nil || m.session == nil {
+		return
+	}
+	bindings, err := m.bindingStore.ListByWorkspace(m.session.Workspace)
+	if err != nil {
+		debug.Log("im", "claimUnclaimedBindings: ListByWorkspace error: %v", err)
+		return
+	}
+	for _, b := range bindings {
+		if b.LastSessionID != "" {
+			continue // already claimed
+		}
+		// Skip disabled adapters
+		m.mu.RLock()
+		_, disabled := m.disabledBindings[b.Adapter]
+		m.mu.RUnlock()
+		if disabled {
+			continue
+		}
+		// Claim it for this session
+		if err := m.bindingStore.UpdateSessionID(m.session.Workspace, b.Adapter, sessionID); err != nil {
+			debug.Log("im", "claimUnclaimedBindings: UpdateSessionID error for %s: %v", b.Adapter, err)
+		} else {
+			debug.Log("im", "claimed binding %s for session=%s (was unclaimed)", b.Adapter, sessionID)
+		}
+	}
+}
+
+// muteNonOwnedBindings mutes all current bindings whose LastSessionID does not
+// match the given sessionID. Returns the number muted.
+func (m *Manager) muteNonOwnedBindings(sessionID string) int {
+	m.mu.Lock()
+	count := 0
+	for name, binding := range m.currentBindings {
+		// When sessionID is non-empty, skip bindings owned by this session.
+		// When sessionID is empty (no session claiming), mute everything.
+		if sessionID != "" && binding.LastSessionID == sessionID {
+			continue // belongs to us
+		}
+		if binding.Muted {
+			continue
+		}
+		binding.Muted = true
+		m.stopAdapter(name)
+		count++
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if count > 0 {
+		if cb != nil {
+			cb(snapshot)
+		}
+		m.syncInstanceActiveChannels()
+	}
+	return count
 }
 
 // UnregisterInstance removes this process's instance registration (PID file).
@@ -1041,6 +1111,10 @@ func (m *Manager) reloadBindingLocked() error {
 	if err != nil {
 		return err
 	}
+
+	// Determine the session ID for ownership filtering.
+	sessionID := m.session.SessionID
+
 	for i := range bindings {
 		copy := bindings[i]
 		copy.Muted = false // Muted is in-memory only, never restored from store
@@ -1052,6 +1126,17 @@ func (m *Manager) reloadBindingLocked() error {
 		if _, disabled := m.disabledBindings[copy.Adapter]; disabled {
 			continue
 		}
+
+		// Session-based ownership:
+		// - If LastSessionID matches our session → we own it, activate (respect prevMuted).
+		// - If LastSessionID is set and differs from our session → skip (belongs to other session).
+		// - If LastSessionID is empty → workspace-level binding, load it (legacy behavior).
+		if copy.LastSessionID != "" && sessionID != "" && copy.LastSessionID != sessionID {
+			debug.Log("im", "reloadBindingLocked: skip %s (owned by session=%s, we are %s)",
+				copy.Adapter, copy.LastSessionID, sessionID)
+			continue
+		}
+
 		m.currentBindings[copy.Adapter] = &copy
 	}
 	return nil
@@ -1064,6 +1149,10 @@ func (m *Manager) bindChannelLocked(binding ChannelBinding) (ChannelBinding, err
 	binding.Workspace = normalizeWorkspace(binding.Workspace)
 	if binding.BoundAt.IsZero() {
 		binding.BoundAt = time.Now()
+	}
+	// Claim the binding for this session.
+	if m.session != nil && binding.LastSessionID == "" {
+		binding.LastSessionID = m.session.SessionID
 	}
 	if m.bindingStore != nil {
 		// Auto-unbind: if adapter is bound to another workspace, remove old binding

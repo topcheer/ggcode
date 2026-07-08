@@ -192,6 +192,7 @@ type ChannelBinding struct {
 	Muted                 bool
 	ContextToken          string    // WeChat iLink: latest context_token for reply routing
 	ContextTokenUpdatedAt time.Time // When ContextToken was last refreshed by an inbound message
+	LastSessionID         string    // Session that last claimed this binding; empty = unclaimed (workspace-level)
 }
 
 type AdapterDescriptor struct {
