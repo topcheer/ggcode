@@ -210,16 +210,22 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
         color: 'var(--text-secondary)', cursor: 'pointer',
         fontSize: 10, fontFamily: 'var(--font-mono)',
       }}>⌘.</button>
+      {(() => {
+        const isReady = info.status === t('status.ready') || info.status === 'Ready' || info.status === ''
+        const isError = !isReady && /error|fail|panic/i.test(info.status)
+        const dotColor = isReady ? 'var(--color-success)' : isError ? 'var(--color-error, #ef4444)' : 'var(--color-warning)'
+        const textColor = isReady ? 'var(--color-success)' : isError ? 'var(--color-error, #ef4444)' : 'var(--color-warning)'
+        return (
       <span style={{
         display: 'flex', alignItems: 'center', gap: 4,
-        color: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
+        color: textColor,
       }}>
-        <span className={info.status === t('status.ready') ? '' : 'agent-status-dot'} style={{
+        <span className={isReady ? '' : isError ? '' : 'agent-status-dot'} style={{
           width: 6, height: 6, borderRadius: '50%',
-          background: info.status === t('status.ready') ? 'var(--color-success)' : 'var(--color-warning)',
+          background: dotColor,
           display: 'inline-block',
         }} />
-        {info.status}
+        {isReady ? (info.status || t('status.ready')) : info.status}
         {elapsedLabel && (
           <span style={{
             color: 'var(--text-tertiary)',
@@ -228,6 +234,8 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           }}>· {elapsedLabel}</span>
         )}
       </span>
+        )
+      })()}
     </div>
   )
 }
