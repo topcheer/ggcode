@@ -354,13 +354,14 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 			backoff = waBackoffs[len(waBackoffs)-1]
 		}
 		attempt++
-		debug.Log("whatsapp", "adapter %q: reconnect attempt %d in %v", a.name, attempt, backoff)
-		a.publishState(false, "reconnecting", fmt.Sprintf("attempt %d in %v", attempt, backoff))
+		jittered := jitterDuration(backoff)
+		debug.Log("whatsapp", "adapter %q: reconnect attempt %d in %v (jittered from %v)", a.name, attempt, jittered, backoff)
+		a.publishState(false, "reconnecting", fmt.Sprintf("attempt %d in %v", attempt, jittered))
 
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(jittered):
 		}
 	}
 }
