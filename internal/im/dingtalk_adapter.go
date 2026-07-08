@@ -631,7 +631,10 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	// Split long messages for readability. DingTalk webhook markdown allows
 	// up to ~20480 bytes and API markdown up to ~5000 chars; 4000 chars is
 	// a safe split that works for both delivery paths and keeps messages readable.
-	chunks := SplitMessageForPlatform(content, PlatformDingTalk)
+	// Use SplitMarkdown (not SplitMessageForPlatform) because DingTalk receives
+	// markdown-formatted messages — code blocks and other fenced syntax must not
+	// be broken mid-block across chunks, or the renderer will misinterpret content.
+	chunks := SplitMarkdown(content, PlatformLimits[PlatformDingTalk])
 
 	// Try sessionWebhook first (from the most recent callback).
 	// This is the recommended way to reply in DingTalk.

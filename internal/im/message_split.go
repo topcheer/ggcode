@@ -20,7 +20,7 @@ var ByteLimitPlatforms = map[Platform]bool{
 // Sources:
 //   - Discord: https://discord.com/developers/docs/resources/channel#create-message (2000 chars)
 //   - Slack: https://api.slack.com/messaging/retrieving#text (markdown_text 12000 chars)
-//   - DingTalk: https://open.dingtalk.com/document/orgapp/robot-message-types (markdown ~5000 chars)
+//   - DingTalk: https://open.dingtalk.com/document/orgapp/robot-message-types (markdown text field ~5000 chars; 4000 conservative for JSON overhead)
 //   - Telegram: https://core.telegram.org/bots/api#sendmessage (4096 chars)
 //   - QQ: QQ Bot API (text ~3000 chars)
 //   - Feishu: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/im-v1/message/create (interactive card body ~30KB; 28000 chars leaves room for card JSON structure)
