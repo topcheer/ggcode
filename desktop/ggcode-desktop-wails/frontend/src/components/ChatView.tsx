@@ -267,6 +267,16 @@ interface ChatMessage {
   deliveryStatus?: 'pending' | 'sent' | 'failed'
   reasoningDuration?: number // seconds, set when reasoning completes
   responseDuration?: number // seconds, set when assistant response completes
+  runSummary?: RunSummaryData // present on system messages that summarize a completed run
+}
+
+interface RunSummaryData {
+  durationSec: number
+  toolCalls: number
+  errors: number
+  inputTokens?: number
+  outputTokens?: number
+  filesEdited?: number
 }
 
 /** Parse LAN Chat injection format:
@@ -557,6 +567,87 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/bug', desc: 'Report a bug', category: 'system' },
 ]
 
+// ── Activity label helper ────────────────────────────────────────────────────
+
+/** Maps tool names to human-readable activity labels for the typing indicator. */
+function getActivityLabel(toolName: string): string {
+  switch (toolName) {
+    case 'read_file':
+    case 'multi_file_read':
+      return 'Reading files...'
+    case 'edit_file':
+    case 'multi_edit_file':
+    case 'multi_file_edit':
+      return 'Editing code...'
+    case 'write_file':
+    case 'multi_file_write':
+      return 'Writing files...'
+    case 'run_command':
+    case 'start_command':
+      return 'Running commands...'
+    case 'grep':
+    case 'search_files':
+    case 'glob':
+      return 'Searching...'
+    case 'list_directory':
+      return 'Browsing files...'
+    case 'git_status':
+    case 'git_diff':
+    case 'git_log':
+    case 'git_add':
+    case 'git_commit':
+    case 'git_branch_list':
+    case 'git_remote':
+    case 'git_show':
+    case 'git_blame':
+    case 'git_stash':
+    case 'git_stash_list':
+      return 'Git operations...'
+    case 'lsp_definition':
+    case 'lsp_references':
+    case 'lsp_hover':
+    case 'lsp_symbols':
+    case 'lsp_workspace_symbols':
+    case 'lsp_diagnostics':
+    case 'lsp_rename':
+    case 'lsp_code_actions':
+    case 'lsp_implementation':
+    case 'lsp_prepare_call_hierarchy':
+    case 'lsp_incoming_calls':
+    case 'lsp_outgoing_calls':
+      return 'Analyzing code...'
+    case 'web_search':
+    case 'web_fetch':
+      return 'Searching the web...'
+    case 'browser':
+      return 'Browsing...'
+    case 'task_create':
+    case 'task_update':
+    case 'task_get':
+    case 'task_list':
+    case 'task_stop':
+      return 'Managing tasks...'
+    case 'spawn_agent':
+    case 'wait_agent':
+    case 'list_agents':
+      return 'Running sub-agent...'
+    case 'enter_plan_mode':
+    case 'exit_plan_mode':
+      return 'Planning...'
+    case 'ask_user':
+      return 'Waiting for input...'
+    case 'save_memory':
+      return 'Saving memory...'
+    case 'sleep':
+      return 'Waiting...'
+    default:
+      // Unknown tools → generic
+      if (toolName.startsWith('mcp_'))
+        return 'Running MCP tool...'
+      return 'Working...'
+  }
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, showToast, onNewSession }: { onShare?: () => void; sessionId?: string; workspace?: string; onWorkspaceSelected?: (dir: string) => void; showToast?: (type: 'success' | 'error' | 'info', message: string) => void; onNewSession?: () => void }) {
@@ -569,6 +660,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const historyIdxRef = useRef(-1)
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [currentActivity, setCurrentActivity] = useState<string | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [agentElapsed, setAgentElapsed] = useState(0) // seconds since agent started working
   const [statusBar, setStatusBar] = useState<StatusBarState>({
@@ -861,6 +953,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const streamingMsgID = useRef<string | null>(null)
   const isStreamingRef = useRef(false)
   const runActiveRef = useRef(false)
+  const runMetricsRef = useRef<{ startTime: number; toolCalls: number; errors: number; fileEdits: number; inputTokens: number; outputTokens: number }>({ startTime: 0, toolCalls: 0, errors: 0, fileEdits: 0, inputTokens: 0, outputTokens: 0 })
 
   useEffect(() => {
     isStreamingRef.current = isStreaming
@@ -981,6 +1074,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         case 'text': {
           const p = parseJSON<{ content: string; message_id?: string }>(raw)
           if (!p || !p.content) break
+          setCurrentActivity('Writing response...')
           setMessages(prev => {
             const result = appendAssistantChunk(prev, streamingMsgID.current, p.content, nextID, undefined, p.message_id)
             streamingMsgID.current = result.streamingMessageID
@@ -1031,6 +1125,14 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             break
           }
 
+          // Track for run summary
+          runMetricsRef.current.toolCalls++
+          // Update context-aware activity label
+          setCurrentActivity(getActivityLabel(p.name))
+          if (p.name === 'edit_file' || p.name === 'write_file' || p.name === 'multi_edit_file' || p.name === 'multi_file_write' || p.name === 'multi_file_edit') {
+            runMetricsRef.current.fileEdits++
+          }
+
           setMessages(prev => {
             const exists = prev.some(m => m.role === 'tool' && m.toolID === toolID)
             if (exists) return prev
@@ -1056,6 +1158,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const p = parseJSON<{ id?: string; toolID?: string; tool_id?: string; result?: string; isError?: boolean; displayName?: string; detail?: string }>(raw)
           const toolID = p?.toolID || p?.tool_id || p?.id
           if (!toolID) break
+          if (p.isError) runMetricsRef.current.errors++
           setMessages(prev => prev.map(m =>
             m.role === 'tool' && m.toolID === toolID
               ? { ...m, content: p.result || '', isError: !!p.isError, toolDisplayName: p.displayName || m.toolDisplayName, toolDetail: p.detail || m.toolDetail, streaming: false, toolDurationSec: m.timestamp ? Math.max(1, Math.round((Date.now() - m.timestamp) / 1000)) : undefined }
@@ -1066,6 +1169,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         case 'done': {
           const p = parseJSON<{ message_id?: string }>(raw)
           setThinking(false)
+          setCurrentActivity(null)
           streamingMsgID.current = null
           // Close streaming for text/reasoning messages only. The overall run
           // remains busy until run_done because done only marks one model
@@ -1117,10 +1221,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setIsStreaming(false)
           runActiveRef.current = false
           setThinking(false)
+          setCurrentActivity(null)
           streamingMsgID.current = null
           setStatusBar(s => ({ ...s, status: 'idle' }))
           notifyTaskDone()
           setMessages(prev => finishAssistantRun(prev))
+          // Inject run summary card (skip trivial runs: <3s with no tools and no errors)
+          const rm = runMetricsRef.current
+          const dur = rm.startTime ? Math.max(1, Math.round((Date.now() - rm.startTime) / 1000)) : 0
+          if (dur >= 3 || rm.toolCalls > 0 || rm.errors > 0) {
+            const totalTokens = rm.inputTokens + rm.outputTokens
+            setMessages(prev => [...prev, {
+              id: nextID(), role: 'system' as ChatRole, content: '', timestamp: Date.now(),
+              runSummary: { durationSec: dur, toolCalls: rm.toolCalls, errors: rm.errors, inputTokens: rm.inputTokens || undefined, outputTokens: rm.outputTokens || undefined, filesEdited: rm.fileEdits || undefined },
+            }])
+            void totalTokens
+          }
           // Clear completed agent panels
           setAgentPanels(prev => {
             const next = new Map<string, AgentPanel>()
@@ -1135,6 +1251,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }
         case 'usage_update': {
           const p = parseJSON<any>(raw)
+          if (p?.inputTokens != null) runMetricsRef.current.inputTokens = p.inputTokens
+          if (p?.outputTokens != null) runMetricsRef.current.outputTokens = p.outputTokens
           setStatusBar(s => ({
             ...s,
             inputTokens: p?.inputTokens ?? s.inputTokens,
@@ -1378,8 +1496,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const wasStreaming = isStreaming
     if (!wasStreaming) {
       runActiveRef.current = true
+      runMetricsRef.current = { startTime: Date.now(), toolCalls: 0, errors: 0, fileEdits: 0, inputTokens: 0, outputTokens: 0 }
       setIsStreaming(true)
       setThinking(true)
+      setCurrentActivity(null)
       setStatusBar(s => ({ ...s, status: 'working' }))
     }
 
@@ -2623,7 +2743,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               ))}
             </div>
             <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic', fontSize: 13 }}>
-              {thinking ? 'Thinking...' : 'Working...'}
+              {currentActivity || (thinking ? 'Thinking...' : 'Working...')}
             </span>
             {agentElapsed > 0 && (
               <span style={{
@@ -3552,6 +3672,7 @@ function ErrorMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function SystemMessage({ msg }: { msg: ChatMessage }) {
+  if (msg.runSummary) return <RunSummaryCard data={msg.runSummary} />
   return (
     <div style={{
       padding: '4px 12px',
@@ -3560,6 +3681,38 @@ function SystemMessage({ msg }: { msg: ChatMessage }) {
       textAlign: 'center',
     }}>
       {msg.content}
+    </div>
+  )
+}
+
+function RunSummaryCard({ data }: { data: RunSummaryData }) {
+  const items: { label: string; value: string; variant?: 'error' }[] = []
+  const dur = data.durationSec >= 60
+    ? `${Math.floor(data.durationSec / 60)}m ${data.durationSec % 60}s`
+    : `${data.durationSec}s`
+  items.push({ label: 'Duration', value: dur })
+  if (data.toolCalls > 0) items.push({ label: 'Tools', value: String(data.toolCalls) })
+  if (data.filesEdited && data.filesEdited > 0) items.push({ label: 'Files', value: String(data.filesEdited) })
+  if (data.errors > 0) items.push({ label: 'Errors', value: String(data.errors), variant: 'error' })
+  const totalTokens = (data.inputTokens ?? 0) + (data.outputTokens ?? 0)
+  if (totalTokens > 0) {
+    items.push({ label: 'Tokens', value: totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : String(totalTokens) })
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '2px', flexWrap: 'wrap',
+      padding: '5px 12px', margin: '2px 0 6px',
+    }}>
+      {items.map((item, i) => (
+        <span key={item.label} style={{ display: 'inline-flex', alignItems: 'center' }}>
+          {i > 0 && <span style={{ color: 'var(--color-border)', margin: '0 7px' }}>·</span>}
+          <span style={{ fontSize: 'var(--font-size-small)', color: 'var(--text-tertiary)' }}>{item.label}</span>
+          <span style={{
+            fontSize: 'var(--font-size-small)', fontWeight: 600, marginLeft: '3px',
+            color: item.variant === 'error' ? 'var(--color-error)' : 'var(--text-secondary)',
+          }}>{item.value}</span>
+        </span>
+      ))}
     </div>
   )
 }
