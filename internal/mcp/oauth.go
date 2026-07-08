@@ -387,7 +387,9 @@ func (h *OAuthHandler) DeleteServerToken() error {
 	return h.store.Delete(h.legacyProviderID())
 }
 
-// Handle401 processes a 401 response. Returns true if OAuth is needed.
+// Handle401 processes a 401 or 403 response. Returns true if OAuth is needed.
+// Called on both 401 (no auth) and 403 (insufficient permissions) to trigger
+// OAuth DCR discovery as a fallback authentication method.
 func (h *OAuthHandler) Handle401(resp *http.Response) (bool, error) {
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
 	metadataURL, ok := parseWWWAuthenticate(wwwAuth)

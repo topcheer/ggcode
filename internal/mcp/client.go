@@ -509,10 +509,19 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}
 	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
-	if resp.StatusCode == http.StatusUnauthorized && c.oauthHandler != nil {
+	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && c.oauthHandler != nil {
+		// 401 = no auth; 403 = auth present but insufficient permissions.
+		// Both should trigger OAuth DCR discovery as a fallback — the user's
+		// configured API key may have limited scope while OAuth grants broader access.
 		needsOAuth, _ := c.oauthHandler.Handle401(resp)
 		if allowRetry {
 			if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" && "Bearer "+token != authHeader {
+				// OAuth succeeded — permanently switch auth mode by removing the
+				// user-configured API key header so future requests use OAuth token only.
+				if _, hasUserAuth := c.headers["Authorization"]; hasUserAuth {
+					delete(c.headers, "Authorization")
+					debug.Log("mcp-http", "auth_switched server=%s from_apikey=true to_oauth=true", c.name)
+				}
 				debug.Log("mcp-http", "retry_after_discovery server=%s has_token=true", c.name)
 				return c.sendHTTPWithRetry(ctx, msg, false)
 			}
