@@ -26,9 +26,11 @@ import (
 )
 
 const (
-	slackAPIBase       = "https://slack.com/api"
-	slackMaxTextLen    = 12000
-	slackInterMsgDelay = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
+	slackAPIBase        = "https://slack.com/api"
+	slackMaxTextLen     = 12000
+	slackInterMsgDelay  = 500 * time.Millisecond // Slack allows ~1 msg/sec/channel; 500ms is safe with burst tolerance
+	slackWSPingInterval = 60 * time.Second       // AWS API Gateway idle timeout is 10min; ping every 60s
+	slackWSReadTimeout  = 90 * time.Second       // ping interval + 30s grace
 )
 
 // Slack mrkdwn link format: [text](url) → <url|text>
@@ -154,12 +156,40 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 		conn.Close()
 	}()
 
+	conn.SetReadDeadline(time.Now().Add(slackWSReadTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(slackWSReadTimeout))
+		return nil
+	})
+
 	a.mu.Lock()
 	a.ws = conn
 	a.connected = true
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
 	debug.Log("slack", "adapter=%s connected", a.name)
+
+	// WebSocket ping ticker — prevents AWS API Gateway idle timeout (10min)
+	// and detects dead connections within slackWSReadTimeout.
+	pingDone := make(chan struct{})
+	safego.Go("im.slack.ping", func() {
+		ticker := time.NewTicker(slackWSPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+					debug.Log("slack", "adapter=%s ping write error: %v", a.name, err)
+					return
+				}
+			case <-pingDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+	defer close(pingDone)
 
 	// Message read loop
 	for {

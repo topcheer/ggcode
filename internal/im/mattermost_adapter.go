@@ -29,6 +29,7 @@ const (
 	mattermostAPIVersion        = "api/v4"
 	mattermostConnectTimeout    = 20 * time.Second
 	mattermostHeartbeatPeriod   = 30 * time.Second
+	mattermostWSReadTimeout     = mattermostHeartbeatPeriod + 30*time.Second
 	mattermostDedupMaxSize      = 1000
 	mattermostRequestTimeout    = 30 * time.Second
 	mattermostInterMsgDelay     = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
@@ -198,6 +199,15 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		ws.Close()
 		return fmt.Errorf("ws auth: %w", err)
 	}
+
+	// Set read deadline to detect dead connections. The heartbeat goroutine
+	// sends application-level pings every 30s; if no message (including pong)
+	// arrives within 60s, ReadMessage times out and triggers reconnect.
+	ws.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
+		return nil
+	})
 
 	a.mu.Lock()
 	a.ws = ws
