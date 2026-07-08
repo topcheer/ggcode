@@ -1,6 +1,7 @@
 package im
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -33,6 +34,10 @@ import (
 //   - > quote     → > quote    (already same)
 
 var (
+	// Code block and inline code protection (same pattern as Slack)
+	waCodeBlockRe  = regexp.MustCompile("(?s)```.*?```")
+	waInlineCodeRe = regexp.MustCompile("`[^`]+`")
+
 	// WhatsApp-specific patterns
 	// Match **bold** but not *bold* (which WhatsApp uses natively)
 	waBoldRe = regexp.MustCompile(`\*\*(.+?)\*\*`)
@@ -58,6 +63,18 @@ func markdownToWhatsApp(text string) string {
 	if text == "" {
 		return text
 	}
+
+	// Protect code blocks and inline code from delimiter conversion.
+	// Without this, characters like #, *, ~, []() inside code would be
+	// incorrectly converted (e.g., Python `# comment` → `*comment*` bold).
+	var codeSegments []string
+	protectCode := func(match string) string {
+		idx := len(codeSegments)
+		codeSegments = append(codeSegments, match)
+		return fmt.Sprintf("\x01C%d\x01", idx)
+	}
+	text = waCodeBlockRe.ReplaceAllStringFunc(text, protectCode)
+	text = waInlineCodeRe.ReplaceAllStringFunc(text, protectCode)
 
 	// 0a. GFM task lists: convert checkboxes to Unicode symbols
 	// - [ ] item → ○ item, - [x] item → ✓ item
@@ -129,6 +146,11 @@ func markdownToWhatsApp(text string) string {
 	//   - ```code``` (triple backtick is the same)
 	//   - > quote   (blockquote syntax is the same)
 	//   - - item / * item (list syntax is the same)
+
+	// Restore protected code segments
+	for i, seg := range codeSegments {
+		text = strings.ReplaceAll(text, fmt.Sprintf("\x01C%d\x01", i), seg)
+	}
 
 	// Clean up: collapse multiple blank lines
 	for strings.Contains(text, "\n\n\n") {

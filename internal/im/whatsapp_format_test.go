@@ -168,6 +168,40 @@ func TestMarkdownToWhatsApp_Table(t *testing.T) {
 	}
 }
 
+func TestMarkdownToWhatsApp_CodeBlockProtection(t *testing.T) {
+	// Code blocks must NOT have their content converted.
+	// A Python comment `# comment` should NOT become `*comment*` (WhatsApp bold).
+	// A link `[text](url)` inside code should NOT be converted.
+	// Bold `**text**` inside code should NOT become `*text*`.
+	input := "```python\n# This is a comment\nx = a * b\n[some](link)\n```"
+	got := markdownToWhatsApp(input)
+	want := "```python\n# This is a comment\nx = a * b\n[some](link)\n```"
+	if got != want {
+		t.Errorf("code block content modified:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestMarkdownToWhatsApp_InlineCodeProtection(t *testing.T) {
+	// Inline code with markdown-like chars must be preserved
+	input := "Use `a ** b` for multiplication"
+	got := markdownToWhatsApp(input)
+	want := "Use `a ** b` for multiplication"
+	if got != want {
+		t.Errorf("inline code modified: got %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownToWhatsApp_MixedCodeAndMarkdown(t *testing.T) {
+	// Markdown outside code blocks should still be converted,
+	// but code inside blocks should be preserved.
+	input := "**Bold text** then `a * b = c` and a header:\n\n## Section"
+	got := markdownToWhatsApp(input)
+	want := "*Bold text* then `a * b = c` and a header:\n\n*Section*"
+	if got != want {
+		t.Errorf("mixed content:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestMarkdownToWhatsApp_TaskList(t *testing.T) {
 	// GFM task lists should convert to Unicode checkbox symbols
 	input := "- [ ] Pending task\n- [x] Done task"
