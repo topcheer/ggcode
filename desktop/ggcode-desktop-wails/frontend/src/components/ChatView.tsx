@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus, Plus } from 'lucide-react'
+import { ArrowUp, Square, Share2, ChevronDown, ChevronRight, ClipboardPaste, User, Copy, Check, ClipboardCopy, Search, X, ChevronUp, Download, ImagePlus, Plus, RefreshCw } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { ClipboardGetText, EventsOn, BrowserOpenURL } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { useTranslation } from '../i18n'
 import { SkeletonMessages } from './Skeleton'
+import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { TeamBoard, type TeamBoardSnapshot } from './TeamBoard'
 import { appendAssistantChunk, appendReasoningChunk, appendUserMessage, finishAssistantMessage, finishAssistantRun, parseStreamData } from './chatStreamState'
 
@@ -3203,6 +3204,7 @@ function UserMessage({ msg, onRetry, onEdit }: {
   const isMarkdown = isLanChat || msg.source === 'im' || msg.source === 'mobile'
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(msg.content).then(() => {
@@ -3211,12 +3213,21 @@ function UserMessage({ msg, onRetry, onEdit }: {
     }).catch(() => {})
   }, [msg.content])
 
+  const ctxItems: ContextMenuItem[] = useMemo(() => [
+    { label: 'Copy', icon: <Copy size={14} />, onClick: handleCopy },
+    ...(onEdit ? [{ label: 'Edit', icon: <ClipboardPaste size={14} />, onClick: () => onEdit(msg.content) }] : []),
+  ], [handleCopy, onEdit, msg.content])
+
   return (
     <div
       style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '80%', alignSelf: 'flex-end' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }) }}
     >
+      {ctxMenu && (
+        <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxItems} onClose={() => setCtxMenu(null)} />
+      )}
       {msg.lanchatFrom && (
         <span style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 2, marginRight: 4 }}>
           LAN Chat from {msg.lanchatFrom}
@@ -3328,6 +3339,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   const isSubAgent = !!msg.agentID
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(msg.content).then(() => {
@@ -3340,12 +3352,21 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
     App.SendMessage('/regenerate').catch(() => {})
   }, [])
 
+  const ctxItems: ContextMenuItem[] = useMemo(() => [
+    { label: 'Copy', icon: <Copy size={14} />, onClick: handleCopy },
+    ...(!msg.streaming ? [{ label: 'Regenerate', icon: <RefreshCw size={14} />, onClick: handleRegenerate }] : []),
+  ], [handleCopy, handleRegenerate, msg.streaming])
+
   return (
     <div
       style={{ maxWidth: '85%', alignSelf: 'flex-start', position: 'relative' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onContextMenu={msg.streaming ? undefined : (e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }) }}
     >
+      {ctxMenu && (
+        <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxItems} onClose={() => setCtxMenu(null)} />
+      )}
       <div className="msg-role-label" style={{
         fontSize: 11, fontWeight: 600, marginBottom: 4,
         color: isSubAgent ? 'var(--color-info)' : 'var(--color-success)',
