@@ -318,6 +318,10 @@ func (a *wecomAdapter) heartbeatLoop(ctx context.Context) {
 			}
 			if err := ws.WriteJSON(pingMsg); err != nil {
 				debug.Log("wecom", "adapter=%s heartbeat send failed: %v", a.name, err)
+				// Close the WebSocket to unblock ReadMessage in the main loop,
+				// which triggers the reconnect cycle.
+				ws.Close()
+				return
 			}
 		}
 	}
