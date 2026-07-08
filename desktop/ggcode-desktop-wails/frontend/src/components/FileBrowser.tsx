@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { SkeletonList } from './Skeleton'
 import {
   ChevronRight, ChevronDown, File, Folder, FileCode, FileJson,
-  Settings, FileText, Image, FileTerminal, X
+  Settings, FileText, Image, FileTerminal, X, Search
 } from 'lucide-react'
 import { useTranslation } from '../i18n'
 import * as App from '../../wailsjs/go/main/App'
@@ -406,6 +406,27 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
   const [fileType, setFileType] = useState<'text' | 'markdown' | 'html' | 'image' | 'pdf' | 'media' | 'office' | 'binary' | 'too-large'>('text')
   const [imageSrc, setImageSrc] = useState('')
   const [mediaSrc, setMediaSrc] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Flatten tree to file-only list for search results
+  const flattenTree = useCallback((nodes: FileNode[]): FileNode[] => {
+    const result: FileNode[] = []
+    const walk = (items: FileNode[]) => {
+      for (const item of items) {
+        if (!item.isDir) result.push(item)
+        if (item.children) walk(item.children)
+      }
+    }
+    walk(nodes)
+    return result
+  }, [])
+
+  const filteredFiles = searchQuery.trim()
+    ? flattenTree(tree).filter(f =>
+        f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        f.path.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : []
 
   // Load workdir and initial file listing
   useEffect(() => {
@@ -545,6 +566,34 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
           <Folder size={14} style={{ color: 'var(--color-primary)' }} />
           {workDirName}/
         </div>
+        {/* File search/filter */}
+        <div style={{
+          padding: '6px 8px',
+          borderBottom: '1px solid var(--color-border)',
+          position: 'relative',
+        }}>
+          <Search size={12} style={{
+            position: 'absolute', left: 16, top: '50%',
+            transform: 'translateY(-50%)',
+            color: 'var(--text-tertiary)',
+          }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search files..."
+            style={{
+              width: '100%', height: 26,
+              padding: '0 8px 0 26px',
+              background: 'var(--color-bg)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-primary)',
+              fontFamily: 'var(--font-mono)', fontSize: 12,
+              outline: 'none',
+            }}
+          />
+        </div>
         <div style={{ flex: 1, overflowY: 'auto', textAlign: 'left' }}>
           {loading && (
             <SkeletonList count={8} variant="row" />
@@ -554,7 +603,46 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               Empty directory
             </div>
           )}
-          {tree.map(node => (
+          {/* Search results (flat list) */}
+          {searchQuery.trim() && (
+            filteredFiles.length === 0 ? (
+              <div style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-tertiary)' }}>
+                No matching files
+              </div>
+            ) : (
+              filteredFiles.slice(0, 100).map(f => {
+                const relPath = f.path.replace(workDir + '/', '')
+                const parts = relPath.split('/')
+                const fileName = parts[parts.length - 1]
+                const dirPath = parts.slice(0, -1).join('/')
+                return (
+                  <div key={f.path} onClick={() => handleSelectFile(f.path)} style={{
+                    padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 6,
+                    background: activeFile === f.path ? 'var(--color-surface)' : 'transparent',
+                    cursor: 'pointer',
+                  }}>
+                    <span style={{ flexShrink: 0 }}>{getFileIcon(fileName)}</span>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{
+                        fontFamily: 'var(--font-mono)', fontSize: 12,
+                        color: activeFile === f.path ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>{fileName}</div>
+                      {dirPath && (
+                        <div style={{
+                          fontFamily: 'var(--font-mono)', fontSize: 10,
+                          color: 'var(--text-tertiary)',
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>{dirPath}</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )
+          )}
+          {/* Normal tree view */}
+          {!searchQuery.trim() && tree.map(node => (
             <FileTreeItem key={node.path} node={node} depth={0}
               activeFile={activeFile} onSelect={handleSelectFile} onLoadDir={handleLoadDir} />
           ))}
