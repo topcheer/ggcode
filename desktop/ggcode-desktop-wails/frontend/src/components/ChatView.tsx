@@ -3451,7 +3451,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function ToolMessage({ msg }: { msg: ChatMessage }) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(!!msg.isError)
   const [copied, setCopied] = useState(false)
   const [elapsedSec, setElapsedSec] = useState(0)
 
