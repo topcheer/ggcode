@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -156,6 +157,11 @@ func DefaultBindingsPath() (string, error) {
 func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := lockBindingsFile(s.path)
+	if err != nil {
+		return fmt.Errorf("acquiring IM bindings lock: %w", err)
+	}
+	defer unlock()
 	all, err := s.readAllLocked()
 	if err != nil {
 		return err
@@ -171,6 +177,11 @@ func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 func (s *JSONFileBindingStore) Delete(workspace, adapter string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := lockBindingsFile(s.path)
+	if err != nil {
+		return fmt.Errorf("acquiring IM bindings lock: %w", err)
+	}
+	defer unlock()
 	all, err := s.readAllLocked()
 	if err != nil {
 		return err
@@ -200,6 +211,12 @@ func (s *JSONFileBindingStore) List() ([]ChannelBinding, error) {
 func (s *JSONFileBindingStore) BindExclusive(binding ChannelBinding) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	unlock, err := lockBindingsFile(s.path)
+	if err != nil {
+		return fmt.Errorf("acquiring IM bindings lock: %w", err)
+	}
+	defer unlock()
 
 	all, err := s.readAllLocked()
 	if err != nil {
@@ -259,6 +276,11 @@ func (s *JSONFileBindingStore) ListByAdapter(adapter string) ([]ChannelBinding, 
 func (s *JSONFileBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := lockBindingsFile(s.path)
+	if err != nil {
+		return fmt.Errorf("acquiring IM bindings lock: %w", err)
+	}
+	defer unlock()
 	all, err := s.readAllLocked()
 	if err != nil {
 		return err
@@ -303,7 +325,9 @@ func (s *JSONFileBindingStore) readAllLocked() (map[string]ChannelBinding, error
 		migrated = true
 	}
 	if migrated {
-		_ = s.writeAllLocked(raw)
+		if err := s.writeAllLocked(raw); err != nil {
+			debug.Log("im", "bindings migration write failed: %v", err)
+		}
 	}
 	return raw, nil
 }
@@ -313,7 +337,10 @@ func (s *JSONFileBindingStore) writeAllLocked(bindings map[string]ChannelBinding
 	if err != nil {
 		return fmt.Errorf("marshal IM bindings: %w", err)
 	}
-	tmp := s.path + ".tmp"
+	// Use a unique temp file name to avoid collision with other processes
+	// that may be writing concurrently (each holds the flock but uses the
+	// same .tmp path without the lock in legacy code paths).
+	tmp := fmt.Sprintf("%s.tmp.%d", s.path, os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing IM bindings: %w", err)
 	}
