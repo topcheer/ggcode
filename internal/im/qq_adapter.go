@@ -1533,7 +1533,13 @@ func truncateStr(s string, maxLen int) string {
 	if maxLen <= 0 || len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "…"
+	// Use rune-based truncation to avoid splitting multi-byte UTF-8 characters.
+	// This is critical for QQ adapter which frequently handles Chinese text.
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // resolveImageSource resolves an extracted image to a base64 string for upload.
