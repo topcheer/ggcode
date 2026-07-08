@@ -578,6 +578,48 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [teamBoard, setTeamBoard] = useState<TeamBoardSnapshot[]>([])
   const [teamBoardOpen, setTeamBoardOpen] = useState(false)
   const teamBoardDismissedRef = useRef(false)
+  const windowFocusedRef = useRef(true)
+  const titleFlashRef = useRef<{ interval: ReturnType<typeof setInterval> | null; origTitle: string }>({ interval: null, origTitle: '' })
+
+  // --- Task completion notification: flash document title when window not focused ---
+  useEffect(() => {
+    const origTitle = document.title
+    titleFlashRef.current.origTitle = origTitle
+
+    const handleFocus = () => {
+      windowFocusedRef.current = true
+      // Stop flashing and restore title
+      if (titleFlashRef.current.interval) {
+        clearInterval(titleFlashRef.current.interval)
+        titleFlashRef.current.interval = null
+        document.title = titleFlashRef.current.origTitle
+      }
+    }
+    const handleBlur = () => {
+      windowFocusedRef.current = false
+    }
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('blur', handleBlur)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') handleFocus()
+    })
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('blur', handleBlur)
+      if (titleFlashRef.current.interval) clearInterval(titleFlashRef.current.interval)
+    }
+  }, [])
+
+  const notifyTaskDone = useCallback(() => {
+    if (windowFocusedRef.current) return // Window is focused, no need to notify
+    if (titleFlashRef.current.interval) return // Already flashing
+    const orig = titleFlashRef.current.origTitle || 'ggcode'
+    let toggle = false
+    titleFlashRef.current.interval = setInterval(() => {
+      toggle = !toggle
+      document.title = toggle ? '✅ Response Ready — ggcode' : orig
+    }, 1000)
+  }, [])
 
   // --- Agent working timer ---
   useEffect(() => {
@@ -1076,6 +1118,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           setThinking(false)
           streamingMsgID.current = null
           setStatusBar(s => ({ ...s, status: 'idle' }))
+          notifyTaskDone()
           setMessages(prev => finishAssistantRun(prev))
           // Clear completed agent panels
           setAgentPanels(prev => {
