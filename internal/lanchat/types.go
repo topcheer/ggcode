@@ -5,6 +5,7 @@
 package lanchat
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,11 @@ type Participant struct {
 	// processing a task. Propagated via presence exchange so peers know
 	// which agents are available and which are occupied.
 	AgentBusy bool `json:"agent_busy,omitempty"`
+
+	// UDPCapable indicates this node supports UDP transport for lanchat
+	// messages. When true, peers can fallback to UDP unicast/multicast
+	// if TCP is blocked by a firewall.
+	UDPCapable bool `json:"udp_capable,omitempty"`
 
 	// Internal (not serialized): tracks notification state to prevent
 	// excessive online/offline churn.
@@ -145,6 +151,64 @@ var offlineNotifyDelay = 30 * time.Second
 // maxArchiveEntries is the maximum number of archived peers kept in the
 // ring buffer. When full, the oldest entry is evicted (FIFO).
 const maxArchiveEntries = 500
+
+// UDP transport constants.
+const (
+	// udpMaxPayload is the maximum payload size for a single UDP datagram
+	// (before compression). Messages larger than this after gzip are split
+	// into fragments.
+	udpMaxPayload = 32 * 1024 // 32 KB
+
+	// udpACKTimeout is how long the sender waits for an ACK before retrying.
+	udpACKTimeout = 2 * time.Second
+
+	// udpMaxRetries is the max number of retransmissions for unicast UDP.
+	udpMaxRetries = 2
+
+	// udpFragmentTimeout is how long the receiver waits for all fragments
+	// of a multi-fragment message before discarding the partial assembly.
+	udpFragmentTimeout = 5 * time.Second
+
+	// udpFailThreshold is the number of consecutive failures before marking
+	// a transport as unavailable for a peer.
+	udpFailThreshold = 3
+
+	// udpMulticastAddr is the multicast group for UDP fallback transport.
+	// Uses the same group as mDNS discovery for simplicity.
+	udpMulticastAddr = "224.0.0.251:5354" // separate port from mDNS (5353)
+)
+
+// udpEnvelope is the wire format for UDP lanchat messages. Unlike HTTP,
+// UDP doesn't have URL paths to distinguish message types, so we use a
+// unified envelope with a type field.
+type udpEnvelope struct {
+	Type     string          `json:"type"`      // "message", "presence", "nick", "receipt", "ack"
+	APIKey   string          `json:"api_key"`   // community key for auth
+	FromNode string          `json:"from_node"` // sender node ID
+	Payload  json.RawMessage `json:"payload"`   // type-specific JSON
+
+	// Fragmentation fields (only used when a message is split)
+	FragmentID    string `json:"fragment_id,omitempty"`    // unique ID for the fragment set
+	FragmentTotal int    `json:"fragment_total,omitempty"` // total number of fragments
+	FragmentSeq   int    `json:"fragment_seq,omitempty"`   // sequence number (0-based)
+	IsFragment    bool   `json:"is_fragment,omitempty"`    // true if this is a fragment
+
+	// ACK fields (only used for type="ack")
+	ACKID string `json:"ack_id,omitempty"` // message ID being acknowledged
+}
+
+// peerHealth tracks transport availability for each peer.
+type peerHealth struct {
+	tcpOK        bool
+	udpUniOK     bool
+	udpMcastOK   bool
+	tcpFail      int
+	udpUniFail   int
+	udpMcastFail int
+	lastTCP      time.Time
+	lastUDP      time.Time
+	lastMcast    time.Time
+}
 
 // ArchivedPeer is a snapshot of a participant stored when the peer is
 // deleted from the active peers map (after peerDeleteAfter). This allows

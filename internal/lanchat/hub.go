@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +94,15 @@ type Hub struct {
 
 	// HTTP client for peer communication
 	httpClient *http.Client
+
+	// UDP transport for fallback when TCP is blocked
+	udpTransport *UDPTransport
+
+	// peerHealthMap tracks TCP/UDP availability per peer nodeID
+	peerHealthMap map[string]*peerHealth
+
+	// ackTracker tracks received ACKs for unicast UDP messages
+	ackTracker sync.Map // msgID → bool (received)
 }
 
 // PendingAgentMsg is an incoming @agent direct message awaiting host approval.
@@ -141,6 +152,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		store:            store,
 		approvalPolicies: policies,
 		notifiedNicks:    make(map[string]bool),
+		peerHealthMap:    make(map[string]*peerHealth),
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -1371,4 +1383,226 @@ func (h *Hub) NotifyAgentComplete(messageID string) {
 		return
 	}
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(*msg, StatusCompleted, "") })
+}
+
+// handleUDPEnvelope processes incoming UDP messages (called by UDPTransport).
+func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
+	// Handle ACK
+	if env.Type == "ack" && env.ACKID != "" {
+		h.ackTracker.Store(env.ACKID, true)
+		return
+	}
+
+	// Dispatch based on type
+	switch env.Type {
+	case "message":
+		var msg Message
+		if err := json.Unmarshal(env.Payload, &msg); err != nil {
+			debug.Log("lanchat-udp", "message payload parse error: %v", err)
+			return
+		}
+		// For multicast DMs, check if this message is for us
+		h.mu.RLock()
+		myNodeID := h.nodeID
+		h.mu.RUnlock()
+		if msg.ToNodeID != "" && msg.ToNodeID != myNodeID {
+			return // not for us (multicast DM filtering)
+		}
+		h.handleReceiveMessageData(msg, remoteAddr.String())
+
+	case "presence":
+		var p Participant
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			debug.Log("lanchat-udp", "presence payload parse error: %v", err)
+			return
+		}
+		h.HandlePresence(p)
+
+	case "nick":
+		var nc NickChange
+		if err := json.Unmarshal(env.Payload, &nc); err != nil {
+			debug.Log("lanchat-udp", "nick payload parse error: %v", err)
+			return
+		}
+		h.handleNickChangeData(nc)
+
+	case "receipt":
+		var r Receipt
+		if err := json.Unmarshal(env.Payload, &r); err != nil {
+			debug.Log("lanchat-udp", "receipt payload parse error: %v", err)
+			return
+		}
+		h.handleReceiveReceiptData(r)
+	}
+}
+
+// SetUDPTransport connects the UDP transport to the Hub.
+func (h *Hub) SetUDPTransport(t *UDPTransport) {
+	h.udpTransport = t
+}
+
+// postToPeerWithFallback tries TCP first, then UDP unicast, then UDP multicast.
+func (h *Hub) postToPeerWithFallback(ctx context.Context, endpoint string, msgType string, payload interface{}) error {
+	// 1. Try TCP (HTTP POST)
+	if err := h.postToPeerTCPDirect(ctx, endpoint, msgType, payload); err == nil {
+		return nil
+	}
+
+	// 2. TCP failed — try UDP if available
+	if h.udpTransport == nil {
+		return fmt.Errorf("tcp failed and no udp transport")
+	}
+
+	// Extract host:port from endpoint
+	host, port, err := parseHostPort(endpoint)
+	if err != nil {
+		return fmt.Errorf("tcp failed, cannot parse endpoint for udp: %w", err)
+	}
+
+	payloadData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+
+	env := udpEnvelope{
+		Type:     msgType,
+		APIKey:   communityKey,
+		FromNode: h.nodeID,
+		Payload:  payloadData,
+	}
+
+	// 2a. Try UDP unicast
+	udpAddr := &net.UDPAddr{IP: net.ParseIP(host), Port: port}
+	if err := h.udpTransport.SendUnicast(ctx, udpAddr, env); err == nil {
+		debug.Log("lanchat", "delivered via udp unicast to %s", host)
+		return nil
+	}
+
+	// 3. Try UDP multicast (last resort — fire and forget, no ACK)
+	if err := h.udpTransport.SendMulticast(env); err == nil {
+		debug.Log("lanchat", "delivered via udp multicast")
+		return nil
+	}
+
+	return fmt.Errorf("all transports failed for %s", endpoint)
+}
+
+func parseHostPort(endpoint string) (string, int, error) {
+	// endpoint format: "http://192.168.1.100:38471"
+	u := strings.TrimPrefix(endpoint, "http://")
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimRight(u, "/")
+	host, portStr, err := net.SplitHostPort(u)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, err
+	}
+	return host, port, nil
+}
+
+// postToPeerTCPDirect sends a payload via HTTP POST to the TCP endpoint.
+// This is the internal TCP-only sender used by postToPeerWithFallback.
+func (h *Hub) postToPeerTCPDirect(ctx context.Context, endpoint string, msgType string, payload interface{}) error {
+	var path string
+	switch msgType {
+	case "message":
+		path = "/lanchat/message"
+	case "presence":
+		path = "/lanchat/presence"
+	case "nick":
+		path = "/lanchat/nick"
+	case "receipt":
+		path = "/lanchat/receipt"
+	default:
+		return fmt.Errorf("unknown message type: %s", msgType)
+	}
+
+	url := strings.TrimRight(endpoint, "/") + path
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", communityKey)
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST to %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("peer returned %d for %s", resp.StatusCode, endpoint)
+	}
+	return nil
+}
+
+// handleReceiveMessageData processes a message from any transport.
+func (h *Hub) handleReceiveMessageData(msg Message, source string) {
+	// Delegate to the existing handler (extracted from HTTP handler)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hasMessageLocked(msg.ID) {
+		return // dedup
+	}
+	h.messages = append(h.messages, msg)
+	if len(h.messages) > maxHistoryPerSession {
+		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
+	}
+	debug.Log("lanchat", "received message from %s via %s: %s", msg.FromNick, source, truncate(msg.Content, 40))
+	// Fire onMessage callback outside lock
+	msgCopy := msg
+	if h.onMessage != nil {
+		safego.Go("lanchat.onMessage", func() { h.onMessage(msgCopy) })
+	}
+}
+
+// handleReceiveReceiptData processes a receipt from any transport.
+func (h *Hub) handleReceiveReceiptData(r Receipt) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.onReceipt != nil {
+		rc := r
+		safego.Go("lanchat.onReceipt", func() { h.onReceipt(rc) })
+	}
+}
+
+// handleNickChangeData processes a nick change from any transport.
+func (h *Hub) handleNickChangeData(nc NickChange) {
+	h.mu.RLock()
+	peer, ok := h.peers[nc.NodeID]
+	h.mu.RUnlock()
+	if !ok {
+		return
+	}
+	peer.HumanNick = nc.HumanNick
+	peer.AgentNick = nc.AgentNick
+	peer.Role = nc.Role
+	peer.Team = nc.Team
+	if h.onNickChange != nil {
+		ncCopy := nc
+		safego.Go("lanchat.onNickChange", func() { h.onNickChange(ncCopy.NodeID, ncCopy.HumanNick, ncCopy.AgentNick) })
+	}
+}
+
+// hasMessageLocked checks if a message ID already exists (must be called with lock held).
+func (h *Hub) hasMessageLocked(msgID string) bool {
+	for _, m := range h.messages {
+		if m.ID == msgID {
+			return true
+		}
+	}
+	return false
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
