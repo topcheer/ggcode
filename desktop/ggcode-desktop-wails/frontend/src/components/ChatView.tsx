@@ -2196,7 +2196,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </>
         )}
         {onShare && (
-          <button onClick={onShare} style={{
+          <button onClick={onShare} title="Share session (Cmd+Shift+S)" style={{
             width: 28, height: 28, borderRadius: 'var(--radius-sm)',
             background: 'var(--color-surface)', border: 'none',
             color: 'var(--text-secondary)', cursor: 'pointer',
@@ -2615,7 +2615,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <Square size={16} fill="currentColor" />
           </button>
         ) : null}
-        <button onClick={handleSend} disabled={!input.trim() && pastedImages.length === 0} style={{
+        <button onClick={handleSend} disabled={!input.trim() && pastedImages.length === 0} title="Send message (Enter)" style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
             background: input.trim() || pastedImages.length > 0 ? 'var(--color-primary)' : 'var(--color-surface)',
             border: 'none', cursor: input.trim() || pastedImages.length > 0 ? 'pointer' : 'default',
@@ -2633,9 +2633,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         pointerEvents: 'none', userSelect: 'none',
       }}>
         {t('chat.inputHint')}
-        {input.length > 100 && (
-          <span style={{ marginLeft: 8, color: input.length > 4000 ? 'var(--color-error)' : input.length > 2000 ? 'var(--color-warning)' : 'inherit' }}>
-            {input.length > 1000 ? `~${Math.ceil(input.length / 4)} tokens · ` : ''}{input.length} chars
+        {input.length > 0 && (
+          <span style={{ marginLeft: 8, color: input.length > 4000 ? 'var(--color-error)' : input.length > 2000 ? 'var(--color-warning)' : 'var(--text-tertiary)' }}>
+            {input.length > 1000 ? `~${Math.ceil(input.length / 4)} tok · ` : ''}{input.length} chars
           </span>
         )}
       </div>

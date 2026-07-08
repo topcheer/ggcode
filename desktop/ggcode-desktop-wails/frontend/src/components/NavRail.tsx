@@ -52,7 +52,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       </button>
 
       {/* Sidebar toggle */}
-      <button onClick={onToggleSidebar} title={sidebarOpen ? 'Hide sessions' : 'Show sessions'} style={{
+      <button onClick={onToggleSidebar} title={sidebarOpen ? `Hide sessions (⌘B)` : `Show sessions (⌘B)`} style={{
         width: 36, height: 36, borderRadius: 6,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: 'transparent',
