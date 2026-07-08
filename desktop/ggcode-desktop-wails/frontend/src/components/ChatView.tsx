@@ -2384,12 +2384,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         )}
 
         {messages.length > 0 && (
-          <span style={{
-            fontSize: 10, color: 'var(--text-tertiary)',
-            fontFamily: 'var(--font-mono)', opacity: 0.7,
-          }}>
-            {messages.length} {messages.length === 1 ? 'msg' : 'msgs'}
-          </span>
+          (() => {
+            const toolCount = messages.filter(m => m.role === 'tool').length
+            return (
+              <span style={{
+                fontSize: 10, color: 'var(--text-tertiary)',
+                fontFamily: 'var(--font-mono)', opacity: 0.7,
+                display: 'flex', gap: 6, alignItems: 'center',
+              }}>
+                <span>{messages.length} {messages.length === 1 ? 'msg' : 'msgs'}</span>
+                {toolCount > 0 && <span>{toolCount} tools</span>}
+              </span>
+            )
+          })()
         )}
         {messages.length > 0 && (
           <>
