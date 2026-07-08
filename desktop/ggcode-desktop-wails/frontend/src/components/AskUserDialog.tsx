@@ -137,7 +137,11 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 1000,
     }}>
-      <div style={{
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={request.title || t('askUser.title')}
+        style={{
         background: 'var(--color-surface)',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--color-border)',
@@ -160,7 +164,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
               {request.title || t('askUser.title')}
             </span>
           </div>
-          <button onClick={handleCancel} style={{
+          <button onClick={handleCancel} aria-label="Close dialog" title="Cancel" style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'var(--text-tertiary)', padding: 4,
           }}><X size={18} /></button>
@@ -266,6 +270,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           <button
             onClick={handleCancel}
             disabled={responding}
+            aria-label="Cancel"
             style={{
               padding: '8px 20px', borderRadius: 'var(--radius-md)',
               background: 'var(--color-card)', color: 'var(--text-secondary)',
@@ -280,6 +285,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           <button
             onClick={handleSubmit}
             disabled={responding}
+            aria-label={t('askUser.submit')}
             style={{
               padding: '8px 20px', borderRadius: 'var(--radius-md)',
               background: 'var(--color-primary)', color: '#fff',
