@@ -265,6 +265,7 @@ interface ChatMessage {
   lanchatFrom?: string // parsed nick from [LAN Chat from xxx]:
   deliveryStatus?: 'pending' | 'sent' | 'failed'
   reasoningDuration?: number // seconds, set when reasoning completes
+  responseDuration?: number // seconds, set when assistant response completes
 }
 
 /** Parse LAN Chat injection format:
@@ -991,8 +992,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             const exists = prev.some(m => m.role === 'tool' && m.toolID === toolID)
             if (exists) return prev
             // Close streaming for text/reasoning only, not other tool calls
+            const doneAt = Date.now()
             const msgs = prev.map(m =>
-              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+              m.streaming && m.role !== 'tool'
+                ? { ...m, streaming: false, responseDuration: m.timestamp ? Math.max(1, Math.round((doneAt - m.timestamp) / 1000)) : undefined }
+                : m
             )
             msgs.push({
               id: nextID(), role: 'tool' as const,
@@ -1146,8 +1150,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           ensureAgentPanel(p.agentID, p.title || p.agentID, 'subagent')
           updateAgentPanel(p.agentID, panel => {
             // Only close text/reasoning streaming, not other tool calls
+            const closeAt = Date.now()
             const msgs = panel.messages.map(m =>
-              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+              m.streaming && m.role !== 'tool'
+                ? { ...m, streaming: false, responseDuration: m.timestamp ? Math.max(1, Math.round((closeAt - m.timestamp) / 1000)) : undefined }
+                : m
             )
             msgs.push({
               id: nextID(), role: 'tool' as ChatRole, content: '',
@@ -1194,8 +1201,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
           updateAgentPanel(p.teammateID, panel => {
             // Only close text/reasoning streaming, not other tool calls
+            const closeAt = Date.now()
             const msgs = panel.messages.map(m =>
-              m.streaming && m.role !== 'tool' ? { ...m, streaming: false } : m
+              m.streaming && m.role !== 'tool'
+                ? { ...m, streaming: false, responseDuration: m.timestamp ? Math.max(1, Math.round((closeAt - m.timestamp) / 1000)) : undefined }
+                : m
             )
             msgs.push({
               id: nextID(), role: 'tool' as ChatRole, content: '',
@@ -3214,8 +3224,13 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           }} />
         )}
         {msg.timestamp && !msg.streaming && (
-          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginLeft: 2 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, marginLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
             {formatTimestamp(msg.timestamp)}
+            {msg.responseDuration && msg.responseDuration >= 1 && (
+              <span style={{ fontFamily: 'var(--font-mono)', opacity: 0.7 }}>
+                · {msg.responseDuration}s
+              </span>
+            )}
           </span>
         )}
       </div>

@@ -7,6 +7,7 @@ export interface StreamChatMessage {
   streaming?: boolean
   timestamp?: number
   source?: string
+  responseDuration?: number // seconds, set when assistant streaming completes
 }
 
 export interface DesktopTextEvent {
@@ -47,11 +48,14 @@ export function parseStreamData<T>(raw: unknown): T | null {
 }
 
 export function closeOpenAssistantStreams<T extends StreamChatMessage>(messages: T[]): T[] {
-  return messages.map(m => (
-    (m.role === 'assistant' || m.role === 'reasoning') && m.streaming
-      ? { ...m, streaming: false }
-      : m
-  ))
+  const now = Date.now()
+  return messages.map(m => {
+    if ((m.role === 'assistant' || m.role === 'reasoning') && m.streaming) {
+      const dur = m.timestamp ? Math.max(1, Math.round((now - m.timestamp) / 1000)) : undefined
+      return { ...m, streaming: false, responseDuration: dur }
+    }
+    return m
+  })
 }
 
 export function appendAssistantChunk<T extends StreamChatMessage>(
@@ -139,11 +143,14 @@ export function finishAssistantMessage<T extends StreamChatMessage>(
   messageID?: string,
 ): T[] {
   if (!messageID) return closeOpenAssistantStreams(messages)
-  return messages.map(m => (
-    m.id === messageID && (m.role === 'assistant' || m.role === 'reasoning')
-      ? { ...m, streaming: false }
-      : m
-  ))
+  const now = Date.now()
+  return messages.map(m => {
+    if (m.id === messageID && (m.role === 'assistant' || m.role === 'reasoning')) {
+      const dur = m.timestamp ? Math.max(1, Math.round((now - m.timestamp) / 1000)) : undefined
+      return { ...m, streaming: false, responseDuration: dur }
+    }
+    return m
+  })
 }
 
 export function finishAssistantRun<T extends StreamChatMessage>(messages: T[]): T[] {
