@@ -10,7 +10,7 @@ import hljs from 'highlight.js'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
-import mermaid from 'mermaid'
+// mermaid imported dynamically to enable code-splitting (see MermaidBlock)
 
 // highlight.js dark theme CSS
 import 'highlight.js/styles/github-dark-dimmed.css'
@@ -195,13 +195,8 @@ function FileTreeItem({ node, depth, activeFile, onSelect, onLoadDir }: {
 
 // ─── Mermaid Renderer ─────────────────────────────────────
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  securityLevel: 'loose',
-})
-
 let mermaidCounter = 0
+let mermaidInitDone = false
 
 function MermaidBlock({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -211,9 +206,16 @@ function MermaidBlock({ chart }: { chart: string }) {
   useEffect(() => {
     let cancelled = false
     const id = `mermaid-${++mermaidCounter}`
-    mermaid.render(id, chart).then(({ svg: resultSvg }) => {
+    ;(async () => {
+      const mermaid = (await import('mermaid')).default
+      if (cancelled) return
+      if (!mermaidInitDone) {
+        mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+        mermaidInitDone = true
+      }
+      const { svg: resultSvg } = await mermaid.render(id, chart)
       if (!cancelled) setSvg(resultSvg)
-    }).catch((err: any) => {
+    })().catch((err: any) => {
       if (!cancelled) setError(err?.message || 'Mermaid render error')
     })
     return () => { cancelled = true }
