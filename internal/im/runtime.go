@@ -784,7 +784,7 @@ func (m *Manager) RejectPendingPairing() (*PairingChallenge, bool, error) {
 }
 
 const (
-	defaultSendTimeout = 10 * time.Second
+	defaultSendTimeout = 30 * time.Second
 	maxSendRetries     = 1
 	retryDelay         = 500 * time.Millisecond
 )
