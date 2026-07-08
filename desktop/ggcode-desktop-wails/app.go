@@ -1243,14 +1243,8 @@ func (a *App) startIMAdapters() {
 		},
 	})
 
-	controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, a.imManager)
-	if err != nil {
-		debug.Log("desktop", "IM start failed: %v", err)
-		debug.Log("desktop", "IM adapter start error: %v", err)
-		return
-	}
-	a.imController = controller
-	debug.Log("desktop", "IM start: adapter controller started successfully")
+	// StartCurrentBindingAdapter is deferred to bindCurrentIMSession()
+	// where session ID is available, so only session-owned adapters start.
 }
 
 // stopIMAdapters stops all running IM adapters.
@@ -1351,6 +1345,12 @@ func (a *App) bindCurrentIMSession() {
 				}
 			}
 		}
+
+		// Start adapters for session-owned bindings. This runs after
+		// RegisterInstance so session-scoped muting is already applied.
+		// StartUnstartedOwnedAdapters only starts non-muted bindings
+		// that don't have an active connection yet.
+		a.imManager.StartUnstartedOwnedAdapters()
 	}
 }
 
