@@ -33,6 +33,18 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    titleKey: 'kb.views',
+    shortcuts: [
+      { keys: ['⌘', '1'], labelKey: 'kb.goChat' },
+      { keys: ['⌘', '2'], labelKey: 'kb.goFiles' },
+      { keys: ['⌘', '3'], labelKey: 'kb.goIM' },
+      { keys: ['⌘', '4'], labelKey: 'kb.goMCP' },
+      { keys: ['⌘', '5'], labelKey: 'kb.goSettings' },
+      { keys: ['⌘', '6'], labelKey: 'kb.goDebug' },
+      { keys: ['⌘', '7'], labelKey: 'kb.goLanChat' },
+    ],
+  },
+  {
     titleKey: 'kb.navigation',
     shortcuts: [
       { keys: ['↑', '↓'], labelKey: 'kb.navigateList' },

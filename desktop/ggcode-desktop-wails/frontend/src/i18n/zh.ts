@@ -77,6 +77,7 @@ const zh: Record<TranslationKey, string> = {
   'kb.global': '全局',
   'kb.chat': '聊天',
   'kb.navigation': '导航',
+  'kb.views': '视图',
   'kb.cmdPalette': '打开命令面板',
   'kb.toggleSidebar': '切换侧边栏',
   'kb.toggleContext': '切换上下文面板',
@@ -94,6 +95,13 @@ const zh: Record<TranslationKey, string> = {
   'kb.navigateList': '导航列表',
   'kb.vimNav': 'Vim 风格导航',
   'kb.selectItem': '选择项目',
+  'kb.goChat': '跳到聊天',
+  'kb.goFiles': '跳到文件',
+  'kb.goIM': '跳到 IM 适配器',
+  'kb.goMCP': '跳到 MCP 服务器',
+  'kb.goSettings': '跳到设置',
+  'kb.goDebug': '跳到调试控制台',
+  'kb.goLanChat': '跳到局域网聊天',
 
   // ContextPanel
   'context.title': '上下文',

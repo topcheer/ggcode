@@ -14,7 +14,8 @@ interface Props {
 
 function NavItems() {
   const { t } = useTranslation()
-  return [
+  const shortcuts = ['⌘1', '⌘2', '⌘3', '⌘4', '⌘5', '⌘6']
+  const items = [
     { id: 'chat' as ViewMode, icon: <MessageSquare size={18} />, tooltip: t('nav.chat') },
     { id: 'files' as ViewMode, icon: <FolderOpen size={18} />, tooltip: t('nav.files') },
     { id: 'im' as ViewMode, icon: <Radio size={18} />, tooltip: t('nav.im') },
@@ -22,6 +23,10 @@ function NavItems() {
     { id: 'settings' as ViewMode, icon: <Settings size={18} />, tooltip: t('nav.settings') },
     { id: 'debug' as ViewMode, icon: <Terminal size={18} />, tooltip: 'Debug Console' },
   ]
+  return items.map((item, i) => ({
+    ...item,
+    tooltip: `${item.tooltip} (${shortcuts[i]})`,
+  }))
 }
 
 export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sidebarOpen, onToggleSidebar }: Props) {
@@ -86,6 +91,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       {/* LAN Chat */}
       <button
         onClick={() => onViewChange('lanchat')}
+        title={`LAN Chat (⌘7)`}
         style={{
           width: 'var(--nav-rail-width)',
           height: 'var(--nav-rail-width)',

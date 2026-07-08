@@ -75,6 +75,7 @@ const en = {
   'kb.global': 'Global',
   'kb.chat': 'Chat',
   'kb.navigation': 'Navigation',
+  'kb.views': 'Views',
   'kb.cmdPalette': 'Open Command Palette',
   'kb.toggleSidebar': 'Toggle Sidebar',
   'kb.toggleContext': 'Toggle Context Panel',
@@ -92,6 +93,13 @@ const en = {
   'kb.navigateList': 'Navigate List',
   'kb.vimNav': 'Vim-style Navigation',
   'kb.selectItem': 'Select Item',
+  'kb.goChat': 'Go to Chat',
+  'kb.goFiles': 'Go to Files',
+  'kb.goIM': 'Go to IM Adapters',
+  'kb.goMCP': 'Go to MCP Servers',
+  'kb.goSettings': 'Go to Settings',
+  'kb.goDebug': 'Go to Debug Console',
+  'kb.goLanChat': 'Go to LAN Chat',
 
   // ContextPanel
   'context.title': 'Context',

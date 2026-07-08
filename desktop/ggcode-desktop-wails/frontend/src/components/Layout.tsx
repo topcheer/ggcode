@@ -318,6 +318,17 @@ function LayoutInner() {
         setShareDialogOpen(false)
         setAboutDialogOpen(false)
         setKbShortcutsOpen(false)
+        setContextPanelOpen(false)
+      }
+      // ⌘1-7: Quick view switching
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        const num = parseInt(e.key)
+        if (num >= 1 && num <= 7) {
+          e.preventDefault()
+          const views: ViewMode[] = ['chat', 'files', 'im', 'mcp', 'settings', 'debug', 'lanchat']
+          const target = views[num - 1]
+          if (target) setView(target)
+        }
       }
       // ? shows keyboard shortcuts (skip if typing in an input)
       if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
