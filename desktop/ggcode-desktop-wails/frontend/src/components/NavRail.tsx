@@ -108,12 +108,12 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
       <button
         onClick={() => onViewChange('lanchat')}
         title={`LAN Chat (⌘7)`}
+        className="nav-rail-btn"
         style={{
-          width: 'var(--nav-rail-width)',
-          height: 'var(--nav-rail-width)',
+          width: 36, height: 36, borderRadius: 6,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: view === 'lanchat' ? 'var(--color-nav-active)' : 'transparent',
-          color: view === 'lanchat' ? 'var(--color-primary)' : 'var(--text-secondary)',
+          background: view === 'lanchat' ? 'var(--color-primary)' : 'transparent',
+          color: view === 'lanchat' ? '#fff' : 'var(--text-secondary)',
           border: 'none', cursor: 'pointer',
           transition: 'background 0.15s, color 0.15s',
           position: 'relative',
@@ -134,7 +134,7 @@ export function NavRail({ view, onViewChange, onAbout, lanChatUnread = 0, sideba
         <Users size={18} />
         {lanChatUnread > 0 && (
           <span style={{
-            position: 'absolute', top: 4, right: 4,
+            position: 'absolute', top: 2, right: 2,
             background: '#ef4444', color: '#fff',
             fontSize: 10, fontWeight: 700,
             minWidth: 16, height: 16,
