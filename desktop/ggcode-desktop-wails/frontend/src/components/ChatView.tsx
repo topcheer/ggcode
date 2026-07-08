@@ -2934,6 +2934,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
           30% { transform: translateY(-6px); opacity: 1; }
         }
+        @media (prefers-reduced-motion: reduce) {
+          * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+        }
       `}</style>
       </div>
       {teamBoardOpen && (
