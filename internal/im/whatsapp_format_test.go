@@ -167,3 +167,21 @@ func TestMarkdownToWhatsApp_Table(t *testing.T) {
 		t.Errorf("table: got %q, want %q", got, want)
 	}
 }
+
+func TestMarkdownToWhatsApp_TaskList(t *testing.T) {
+	// GFM task lists should convert to Unicode checkbox symbols
+	input := "- [ ] Pending task\n- [x] Done task"
+	got := markdownToWhatsApp(input)
+	want := "- ○ Pending task\n- ✓ Done task"
+	if got != want {
+		t.Errorf("task list: got %q, want %q", got, want)
+	}
+
+	// Asterisk variant
+	input2 := "* [ ] Pending\n* [x] Done"
+	got2 := markdownToWhatsApp(input2)
+	want2 := "* ○ Pending\n* ✓ Done"
+	if got2 != want2 {
+		t.Errorf("task list (*): got %q, want %q", got2, want2)
+	}
+}

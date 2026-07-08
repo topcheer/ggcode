@@ -59,7 +59,13 @@ func markdownToWhatsApp(text string) string {
 		return text
 	}
 
-	// 0. GFM tables: convert to plain text (WhatsApp doesn't render tables)
+	// 0a. GFM task lists: convert checkboxes to Unicode symbols
+	// - [ ] item → ○ item, - [x] item → ✓ item
+	// WhatsApp doesn't render checkboxes; use symbols for visual distinction.
+	text = mdTaskCheckedRe.ReplaceAllString(text, "$1 ✓ ")
+	text = mdTaskUncheckedRe.ReplaceAllString(text, "$1 ○ ")
+
+	// 0b. GFM tables: convert to plain text (WhatsApp doesn't render tables)
 	text = mdTableRe.ReplaceAllStringFunc(text, func(match string) string {
 		lines := strings.Split(match, "\n")
 		var result []string
