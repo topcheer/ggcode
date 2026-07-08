@@ -330,7 +330,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 		Workspace:        workingDir,
 		EnabledAdapters:  adapters,
-		RegisterInstance: workingDir != "",
+		RegisterInstance: false, // Deferred to line 606 where session ID is available
 	})
 	if err != nil {
 		return fmt.Errorf("initializing IM runtime: %w", err)

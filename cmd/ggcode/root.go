@@ -795,7 +795,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
 			Workspace:        workingDir,
 			EnabledAdapters:  adapters,
-			RegisterInstance: workingDir != "",
+			RegisterInstance: false, // Deferred to detectAndAutoMute where session ID is available
 		})
 		if err != nil {
 			return fmt.Errorf("initializing IM runtime: %w", err)
