@@ -255,10 +255,18 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
 	}
 
-	// Send remaining text (images stripped), split into chunks for QQ's message length limit
+	// Send remaining text (images stripped), split into chunks for QQ's message length limit.
+	// Use markdown-aware splitter when markdown is enabled so code blocks and fenced
+	// syntax aren't broken across chunks. When markdown is off, the plain splitter
+	// is fine (stripMarkdown runs per-chunk inside sendTextMessage).
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText != "" {
-		chunks := SplitMessageForPlatform(remainingText, PlatformQQ)
+		var chunks []string
+		if a.markdownSupport {
+			chunks = SplitMarkdown(remainingText, PlatformLimits[PlatformQQ])
+		} else {
+			chunks = SplitMessageForPlatform(remainingText, PlatformQQ)
+		}
 		for i, chunk := range chunks {
 			// Rate limit: max 5 messages/second per channel.
 			if i > 0 {
