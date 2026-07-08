@@ -190,7 +190,7 @@ func (a *matrixAdapter) run(ctx context.Context) {
 		case <-ctx.Done():
 			a.publishState(false, "stopped", "")
 			return
-		case <-time.After(backoff):
+		case <-time.After(jitterDuration(backoff)):
 		}
 
 		backoff = backoff * 2
