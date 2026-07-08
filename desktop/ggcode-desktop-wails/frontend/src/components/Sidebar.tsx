@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare, Pin } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare, Pin, ChevronRight, ChevronDown } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 import { SkeletonList } from './Skeleton'
@@ -98,9 +98,23 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     return () => { cancelled = true }
   }, [workspace, t])
 
+  const searchLower = search.trim().toLowerCase()
   const filtered = sessions.filter(s =>
-    s.title.toLowerCase().includes(search.toLowerCase())
+    s.title.toLowerCase().includes(searchLower) ||
+    (s.lastMessage && s.lastMessage.toLowerCase().includes(searchLower))
   )
+
+  // Highlight matched text segments for search results
+  const highlightMatch = useCallback((text: string, query: string) => {
+    if (!query || !text) return text
+    const idx = text.toLowerCase().indexOf(query.toLowerCase())
+    if (idx === -1) return text
+    return [
+      text.slice(0, idx),
+      <mark key="hl" style={{ background: 'var(--color-warning)', color: 'inherit', borderRadius: 2, padding: '0 1px' }}>{text.slice(idx, idx + query.length)}</mark>,
+      text.slice(idx + query.length),
+    ]
+  }, [])
 
   // Sort filtered sessions by date desc for grouping
   const sortedFiltered = useMemo(() =>
@@ -135,6 +149,22 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     })
     return groups
   }, [sortedFiltered, pinnedIds])
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('sidebar-collapsed-groups')
+      return saved ? new Set(JSON.parse(saved)) : new Set()
+    } catch { return new Set() }
+  })
+  const toggleGroup = useCallback((group: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(group)) next.delete(group)
+      else next.add(group)
+      localStorage.setItem('sidebar-collapsed-groups', JSON.stringify([...next]))
+      return next
+    })
+  }, [])
 
   const groupOrder: string[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'older']
   const groupLabels: Record<string, string> = {
@@ -411,16 +441,36 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           return (
             <React.Fragment key={s.id}>
               {showHeader && (
-                <div style={{
-                  padding: 'var(--spacing-sm) var(--spacing-md) var(--spacing-xs)',
-                  fontSize: 11, fontWeight: 600,
-                  color: 'var(--text-tertiary)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}>
+                <div
+                  onClick={(e) => { e.stopPropagation(); toggleGroup(group) }}
+                  style={{
+                    padding: 'var(--spacing-sm) var(--spacing-md) var(--spacing-xs)',
+                    fontSize: 11, fontWeight: 600,
+                    color: 'var(--text-tertiary)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    transition: 'color 0.1s',
+                  }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.color = 'var(--text-secondary)' }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.color = 'var(--text-tertiary)' }}
+                >
+                  {collapsedGroups.has(group)
+                    ? <ChevronRight size={12} style={{ flexShrink: 0 }} />
+                    : <ChevronDown size={12} style={{ flexShrink: 0 }} />}
                   {groupLabels[group]}
+                  {collapsedGroups.has(group) && grouped[group]?.length > 0 && (
+                    <span style={{ marginLeft: 'auto', fontWeight: 400, opacity: 0.6 }}>
+                      {grouped[group].length}
+                    </span>
+                  )}
                 </div>
               )}
+              {collapsedGroups.has(group) ? null : (
               <div
                 ref={el => { itemRefs.current[idx] = el }}
                 onClick={() => { setSelectedIndex(idx); handleSelect(s) }}
@@ -474,7 +524,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       flex: 1,
                     }}>
-                      {s.title || t('sidebar.untitled')}
+                      {searchLower ? highlightMatch(s.title || t('sidebar.untitled'), searchLower) : (s.title || t('sidebar.untitled'))}
                     </span>
                   )}
                   {pinnedIds.has(s.id) && (
@@ -505,14 +555,14 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                 {s.lastMessage && (
                   <div style={{
                     fontSize: 11,
-                    color: 'var(--text-tertiary)',
+                    color: searchLower && s.lastMessage.toLowerCase().includes(searchLower) ? 'var(--text-secondary)' : 'var(--text-tertiary)',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     marginTop: 1,
                     lineHeight: 1.3,
                   }}>
-                    {s.lastMessage}
+                    {searchLower ? highlightMatch(s.lastMessage, searchLower) : s.lastMessage}
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -538,6 +588,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                   )}
                 </div>
               </div>
+              )}
             </React.Fragment>
           )
         })}
