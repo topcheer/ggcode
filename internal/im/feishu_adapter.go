@@ -1634,8 +1634,9 @@ func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
 
 // SendInteractive implements InteractiveSender using Feishu Card buttons.
 // Works in both WebSocket and webhook modes. In WS mode, card callbacks
-// are received via a parallel WS connection (runCardWebSocket) since the
-// SDK's primary WS client silently drops MessageTypeCard frames.
+// (card.action.trigger) are received via the SDK's primary WS client
+// when the callback capability is properly registered (see file header
+// for console configuration steps).
 func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
