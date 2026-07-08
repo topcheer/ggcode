@@ -15,6 +15,7 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.untitled': '未命名',
   'sidebar.delete': '删除',
   'sidebar.loading': '加载中...',
+  'sidebar.group.pinned': '已置顶',
   'sidebar.group.today': '今天',
   'sidebar.group.yesterday': '昨天',
   'sidebar.group.thisWeek': '本周',

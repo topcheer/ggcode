@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare } from 'lucide-react'
+import { Plus, Search, Smartphone, Trash2, Lock, FolderOpen, Copy, Pencil, X, MessageSquare, Pin } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 import { SkeletonList } from './Skeleton'
@@ -109,14 +109,36 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
   )
 
   // Group sessions by date
-  const grouped = useMemo(() => {
-    const groups: Record<string, SessionItem[]> = { today: [], yesterday: [], thisWeek: [], older: [] }
-    sortedFiltered.forEach(s => { groups[getDateGroup(s.updatedAt)].push(s) })
-    return groups
-  }, [sortedFiltered])
+  // Pinned sessions (localStorage-based, workspace-scoped)
+  const pinnedKey = `ggcode:pinned:${workspace || 'default'}`
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(pinnedKey)
+      return new Set(raw ? JSON.parse(raw) : [])
+    } catch { return new Set() }
+  })
 
-  const groupOrder: string[] = ['today', 'yesterday', 'thisWeek', 'older']
+  const handleTogglePin = useCallback((s: SessionItem) => {
+    setPinnedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(s.id)) { next.delete(s.id) } else { next.add(s.id) }
+      try { localStorage.setItem(pinnedKey, JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }, [pinnedKey])
+
+  const grouped = useMemo(() => {
+    const groups: Record<string, SessionItem[]> = { pinned: [], today: [], yesterday: [], thisWeek: [], older: [] }
+    sortedFiltered.forEach(s => {
+      if (pinnedIds.has(s.id)) { groups.pinned.push(s) }
+      else { groups[getDateGroup(s.updatedAt)].push(s) }
+    })
+    return groups
+  }, [sortedFiltered, pinnedIds])
+
+  const groupOrder: string[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'older']
   const groupLabels: Record<string, string> = {
+    pinned: t('sidebar.group.pinned'),
     today: t('sidebar.group.today'),
     yesterday: t('sidebar.group.yesterday'),
     thisWeek: t('sidebar.group.thisWeek'),
@@ -455,6 +477,9 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                       {s.title || t('sidebar.untitled')}
                     </span>
                   )}
+                  {pinnedIds.has(s.id) && (
+                    <Pin size={11} style={{ color: 'var(--color-primary)', flexShrink: 0, marginRight: 2, fill: 'currentColor' }} />
+                  )}
                   {s.locked && (
                     <Lock size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginRight: 2 }} />
                   )}
@@ -553,6 +578,11 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
               icon: <Pencil size={14} />,
               onClick: () => handleRename(ctxMenu.session),
               disabled: ctxMenu.session.locked,
+            },
+            {
+              label: pinnedIds.has(ctxMenu.session.id) ? 'Unpin' : 'Pin',
+              icon: <Pin size={14} />,
+              onClick: () => handleTogglePin(ctxMenu.session),
             },
             {
               label: 'Copy ID',

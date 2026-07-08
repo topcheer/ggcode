@@ -13,6 +13,7 @@ const en = {
   'sidebar.untitled': 'Untitled',
   'sidebar.delete': 'Delete',
   'sidebar.loading': 'Loading...',
+  'sidebar.group.pinned': 'Pinned',
   'sidebar.group.today': 'Today',
   'sidebar.group.yesterday': 'Yesterday',
   'sidebar.group.thisWeek': 'This Week',
