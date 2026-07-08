@@ -1144,27 +1144,35 @@ func (m *Manager) reloadBindingLocked() error {
 	for i := range bindings {
 		copy := bindings[i]
 		copy.Muted = false // Muted is in-memory only, never restored from store
-		// Preserve muted state from before reload (e.g. auto-mute from RegisterInstance)
-		if prevMuted[copy.Adapter] {
+
+		// Session-based ownership — this takes PRECEDENCE over prevMuted.
+		// Session ownership is determined from the persisted LastSessionID
+		// and our current session. prevMuted only applies to bindings where
+		// session ownership is inconclusive (empty LastSessionID or empty sessionID).
+		isOwned := false
+		isForeign := false
+		if copy.LastSessionID != "" {
+			if sessionID == "" || copy.LastSessionID != sessionID {
+				isForeign = true
+			} else {
+				isOwned = true
+			}
+		}
+
+		if isOwned {
+			// We own this binding — always active, ignore prevMuted.
+			copy.Muted = false
+		} else if isForeign {
+			// Belongs to another session — always muted.
+			copy.Muted = true
+		} else if prevMuted[copy.Adapter] {
+			// No session ownership info — preserve previous muted state.
 			copy.Muted = true
 		}
+
 		// Skip adapters that were explicitly disabled via ApplyAdapterConfig
 		if _, disabled := m.disabledBindings[copy.Adapter]; disabled {
 			continue
-		}
-
-		// Session-based ownership:
-		// - If LastSessionID matches our session → we own it, activate.
-		// - If LastSessionID is set and differs → load as muted.
-		// - If LastSessionID is empty → workspace-level binding, load normally.
-		// - If our sessionID is empty (InitRuntime phase before SetSession):
-		//   mute ALL session-owned bindings — they must not start until we know
-		//   which session we are. Otherwise StartCurrentBindingAdapter would
-		//   activate bindings that belong to other sessions.
-		if copy.LastSessionID != "" {
-			if sessionID == "" || copy.LastSessionID != sessionID {
-				copy.Muted = true
-			}
 		}
 
 		m.currentBindings[copy.Adapter] = &copy

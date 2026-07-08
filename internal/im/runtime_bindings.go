@@ -357,22 +357,15 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	}
 	binding.Muted = true
 	m.stopAdapter(adapterName)
-	workspace := ""
-	if m.session != nil {
-		workspace = m.session.Workspace
-	}
-	store := m.bindingStore
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
 	}
-	// Persist: clear LastSessionID so other sessions can claim this adapter.
-	if store != nil && workspace != "" {
-		if err := store.UpdateSessionID(workspace, adapterName, ""); err != nil {
-			debug.Log("im", "MuteBinding: failed to clear LastSessionID for %s: %v", adapterName, err)
-		}
-	}
+	// Persist: keep LastSessionID on mute — mute is a temporary stop, not a
+	// release of session ownership. Only disable/unbind releases ownership.
+	// This prevents multi-instance races where one instance's mute clears
+	// the session ownership for all other instances.
 	m.syncInstanceActiveChannels()
 	return nil
 }
