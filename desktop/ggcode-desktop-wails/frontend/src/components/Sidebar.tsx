@@ -553,15 +553,18 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                   </button>
                 </div>
                 {s.lastMessage && (
-                  <div style={{
-                    fontSize: 11,
-                    color: searchLower && s.lastMessage.toLowerCase().includes(searchLower) ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    marginTop: 1,
-                    lineHeight: 1.3,
-                  }}>
+                  <div
+                    title={s.lastMessage}
+                    style={{
+                      fontSize: 11,
+                      color: searchLower && s.lastMessage.toLowerCase().includes(searchLower) ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      marginTop: 1,
+                      lineHeight: 1.3,
+                    }}
+                  >
                     {searchLower ? highlightMatch(s.lastMessage, searchLower) : s.lastMessage}
                   </div>
                 )}
