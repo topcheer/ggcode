@@ -199,17 +199,26 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       )}
       {/* Mobile tunnel connected */}
       {mobileConnected && (
-        <span title="Mobile connected" style={{
+        <span title="Mobile connected" aria-label="Mobile device connected" style={{
           display: 'flex', alignItems: 'center',
         }}>
           <Smartphone size={11} style={{ color: 'var(--color-primary)' }} />
         </span>
       )}
-      <button onClick={onContextToggle} style={{
-        background: 'none', border: 'none',
-        color: 'var(--text-secondary)', cursor: 'pointer',
-        fontSize: 10, fontFamily: 'var(--font-mono)',
-      }}>⌘.</button>
+      <button
+        onClick={onContextToggle}
+        title="Toggle context panel (⌘.)"
+        aria-label="Toggle context panel"
+        style={{
+          background: 'none', border: 'none',
+          color: 'var(--text-secondary)', cursor: 'pointer',
+          fontSize: 10, fontFamily: 'var(--font-mono)',
+          padding: '2px 4px', borderRadius: 'var(--radius-sm)',
+          transition: 'background 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'var(--color-card)' }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+      >⌘.</button>
       {(() => {
         const isReady = info.status === t('status.ready') || info.status === 'Ready' || info.status === ''
         const isError = !isReady && /error|fail|panic/i.test(info.status)
