@@ -3,9 +3,12 @@ package im
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -17,6 +20,8 @@ import (
 	"maunium.net/go/mautrix/crypto"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -593,10 +598,155 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 
-	debug.Log("matrix", "adapter=%s send room=%s kind=%s len=%d", a.name, chatID, event.Kind, len(text))
-	err := a.sendText(ctx, chatID, binding.ThreadID, text)
+	// Extract images from markdown text and send them as m.image events.
+	images, remainingText := ExtractImagesFromText(text)
+	for i, img := range images {
+		data, mimeType, err := a.resolveImageToBytes(ctx, img)
+		if err != nil {
+			debug.Log("matrix", "adapter=%s image resolve failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		if err := a.sendImage(ctx, chatID, binding.ThreadID, data, mimeType); err != nil {
+			debug.Log("matrix", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
+		} else {
+			debug.Log("matrix", "adapter=%s image sent [%d/%d] mime=%s size=%d", a.name, i+1, len(images), mimeType, len(data))
+		}
+		// Rate limit between image sends
+		select {
+		case <-time.After(matrixInterMessageDelay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	if remainingText == "" {
+		return nil
+	}
+
+	debug.Log("matrix", "adapter=%s send room=%s kind=%s len=%d images=%d", a.name, chatID, event.Kind, len(remainingText), len(images))
+	err := a.sendText(ctx, chatID, binding.ThreadID, remainingText)
 	if err != nil {
 		debug.Log("matrix", "adapter=%s send FAILED room=%s: %v", a.name, chatID, err)
+	}
+	return err
+}
+
+// resolveImageToBytes resolves an ExtractedImage to raw bytes and MIME type.
+func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedImage) ([]byte, string, error) {
+	switch img.Kind {
+	case "data":
+		// data:image/png;base64,XXXXX
+		parts := strings.SplitN(img.Data, ",", 2)
+		if len(parts) != 2 {
+			return nil, "", fmt.Errorf("invalid data URL")
+		}
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid base64 in data URL: %w", err)
+		}
+		decoded, err := imagepkg.Decode(data)
+		if err != nil {
+			return nil, "", fmt.Errorf("data URL is not a valid image: %w", err)
+		}
+		return data, decoded.MIME, nil
+
+	case "local":
+		data, err := os.ReadFile(img.Data)
+		if err != nil {
+			return nil, "", fmt.Errorf("read local image: %w", err)
+		}
+		decoded, err := imagepkg.Decode(data)
+		if err != nil {
+			return nil, "", fmt.Errorf("decode local image: %w", err)
+		}
+		return data, decoded.MIME, nil
+
+	case "url":
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("create request: %w", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, "", fmt.Errorf("download image: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return nil, "", fmt.Errorf("download image: HTTP %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+		if err != nil {
+			return nil, "", fmt.Errorf("read image response: %w", err)
+		}
+		mimeType := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(mimeType, "image/") {
+			mimeType = imagepkg.DetectMIME(data)
+		}
+		if !strings.HasPrefix(mimeType, "image/") {
+			return nil, "", fmt.Errorf("content is not an image: %s", mimeType)
+		}
+		return data, mimeType, nil
+
+	default:
+		return nil, "", fmt.Errorf("unknown image kind: %s", img.Kind)
+	}
+}
+
+// sendImage uploads image data to the Matrix homeserver and sends an m.image event.
+func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, data []byte, mimeType string) error {
+	if a.client == nil {
+		return fmt.Errorf("matrix adapter not connected")
+	}
+
+	// Upload to Matrix content repository
+	resp, err := a.client.UploadMedia(ctx, mautrix.ReqUploadMedia{
+		ContentBytes: data,
+		ContentType:  mimeType,
+		FileName:     "image",
+	})
+	if err != nil {
+		return fmt.Errorf("upload media: %w", err)
+	}
+
+	content := &event.MessageEventContent{
+		MsgType: event.MsgImage,
+		Body:    "image",
+		URL:     resp.ContentURI.CUString(),
+		Info: &event.FileInfo{
+			MimeType: mimeType,
+			Size:     len(data),
+		},
+	}
+
+	if threadID != "" {
+		content.RelatesTo = &event.RelatesTo{
+			Type:    event.RelThread,
+			EventID: id.EventID(threadID),
+		}
+	}
+
+	txnID := fmt.Sprintf("ggcode-img-%d", a.txnID.Add(1))
+	for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
+		_, err = a.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+		if err == nil {
+			return nil
+		}
+		var respErr *mautrix.RespError
+		if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
+			retryAfter := matrixInterMessageDelay * 2
+			if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
+				if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
+					retryAfter = time.Duration(msFloat) * time.Millisecond
+				}
+			}
+			select {
+			case <-time.After(retryAfter):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			continue
+		}
+		return err
 	}
 	return err
 }
