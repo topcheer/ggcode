@@ -27,6 +27,13 @@ const (
 	// nostrInterMsgDelay is the delay between consecutive chunk sends.
 	// Relays may rate-limit rapid publishes; 300ms is conservative.
 	nostrInterMsgDelay = 300 * time.Millisecond
+
+	// nostrWatchdogTimeout is the maximum idle period before forcing a reconnect.
+	// Since go-nostr doesn't expose the underlying WebSocket for read deadlines,
+	// we use a watchdog timer instead. Nostr events are persistent on relays,
+	// so a brief reconnection gap doesn't cause data loss — the Since filter
+	// on re-subscribe picks up any missed events.
+	nostrWatchdogTimeout = 5 * time.Minute
 )
 
 // ---------------------------------------------------------------------------
@@ -220,7 +227,13 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 	}
 	debug.Log("nostr", "adapter=%s subscribed to DMs on %s", a.name, relayURL)
 
-	// Event loop
+	// Event loop with watchdog timer for dead connection detection.
+	// Since go-nostr doesn't expose the WebSocket for read deadlines, we use
+	// a periodic watchdog. Nostr relays persist events, so reconnection with
+	// a Since filter recovers any missed events.
+	watchdog := time.NewTimer(nostrWatchdogTimeout)
+	defer watchdog.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -232,8 +245,14 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 			if evt != nil {
 				a.handleEvent(ctx, evt)
 			}
+			// Reset watchdog on any activity
+			watchdog.Reset(nostrWatchdogTimeout)
 		case <-sub.EndOfStoredEvents:
 			debug.Log("nostr", "adapter=%s EOSE from %s", a.name, relayURL)
+			watchdog.Reset(nostrWatchdogTimeout)
+		case <-watchdog.C:
+			debug.Log("nostr", "adapter=%s watchdog timeout on %s, forcing reconnect", a.name, relayURL)
+			return fmt.Errorf("watchdog: no activity within %s", nostrWatchdogTimeout)
 		}
 	}
 }
