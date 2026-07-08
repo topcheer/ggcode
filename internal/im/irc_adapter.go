@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -240,7 +241,31 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
 
-	lastPong := time.Now()
+	var lastPongNs atomic.Int64
+	lastPongNs.Store(time.Now().UnixNano())
+
+	// Keepalive: send periodic PING and detect dead connections.
+	// scanner.Scan() blocks indefinitely when the server goes silent,
+	// so the timeout must run in a separate goroutine.
+	keepAliveDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(ircPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-keepAliveDone:
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, lastPongNs.Load())) > ircPingInterval+ircPongTimeout {
+					debug.Log("irc", "adapter=%s pong timeout, closing connection", a.name)
+					conn.Close()
+					return
+				}
+				a.sendRaw("PING :ggcode")
+			}
+		}
+	}()
+	defer close(keepAliveDone)
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -259,9 +284,9 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 		switch msg.Command {
 		case "PING":
 			a.sendRaw(fmt.Sprintf("PONG :%s", msg.Trailing))
-			lastPong = time.Now()
+			lastPongNs.Store(time.Now().UnixNano())
 		case "PONG":
-			lastPong = time.Now()
+			lastPongNs.Store(time.Now().UnixNano())
 		case "001": // RPL_WELCOME
 			debug.Log("irc", "adapter=%s registered as %s", a.name, a.nick)
 			// NickServ identify
@@ -287,11 +312,9 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 			a.handlePRIVMSG(ctx, msg)
 		}
 
-		// Pong timeout
-		if time.Since(lastPong) > ircPingInterval+ircPongTimeout {
-			return fmt.Errorf("pong timeout")
-		}
 	}
+
+	// Connection closed (by keepalive goroutine on timeout, or by server)
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read: %w", err)
