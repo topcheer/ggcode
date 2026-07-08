@@ -47,6 +47,7 @@ const (
 	// Heartbeat and reconnect intervals (from official SDK)
 	wsPingInterval = 120 * time.Second
 	wsPongWait     = 5 * time.Second
+	wsReadTimeout  = wsPingInterval + 30*time.Second // must exceed ping interval
 	reconnectDelay = 3 * time.Second
 
 	// DingTalk limits each robot to 20 messages per minute. Sending multi-chunk
@@ -268,7 +269,9 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	}()
 
 	// 4. Read loop with ping/pong
+	conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 	conn.SetPongHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 		debug.Log("dingtalk", "adapter=%s pong received", a.name)
 		return nil
 	})
