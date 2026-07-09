@@ -21,7 +21,7 @@ function NavItems() {
     { id: 'im' as ViewMode, icon: <Radio size={18} />, tooltip: t('nav.im') },
     { id: 'mcp' as ViewMode, icon: <Server size={18} />, tooltip: t('nav.mcp') },
     { id: 'settings' as ViewMode, icon: <Settings size={18} />, tooltip: t('nav.settings') },
-    { id: 'debug' as ViewMode, icon: <Terminal size={18} />, tooltip: 'Debug Console' },
+    { id: 'debug' as ViewMode, icon: <Terminal size={18} />, tooltip: t('nav.debug') },
   ]
   return items.map((item, i) => ({
     ...item,

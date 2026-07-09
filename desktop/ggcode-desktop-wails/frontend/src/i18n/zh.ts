@@ -2,11 +2,13 @@ import type { TranslationKey } from './en'
 
 const zh: Record<TranslationKey, string> = {
   // NavRail
-  'nav.chat': '聊天 (⌘1)',
-  'nav.files': '文件 (⌘2)',
+  'nav.chat': '聊天',
+  'nav.files': '文件',
   'nav.im': 'IM 适配器',
   'nav.mcp': 'MCP 服务器',
-  'nav.settings': '设置 (⌘,)',
+  'nav.settings': '设置',
+  'nav.debug': '调试控制台',
+  'nav.lanchat': '局域网聊天',
 
   // Sidebar
   'sidebar.sessions': '会话',

@@ -1,10 +1,12 @@
 const en = {
   // NavRail
-  'nav.chat': 'Chat (⌘1)',
-  'nav.files': 'Files (⌘2)',
+  'nav.chat': 'Chat',
+  'nav.files': 'Files',
   'nav.im': 'IM Adapters',
   'nav.mcp': 'MCP Servers',
-  'nav.settings': 'Settings (⌘,)',
+  'nav.settings': 'Settings',
+  'nav.debug': 'Debug Console',
+  'nav.lanchat': 'LAN Chat',
 
   // Sidebar
   'sidebar.sessions': 'Sessions',
