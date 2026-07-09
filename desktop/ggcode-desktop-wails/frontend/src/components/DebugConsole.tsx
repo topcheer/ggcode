@@ -161,7 +161,7 @@ export default function DebugConsole() {
         <Terminal size={16} style={{ color: '#58a6ff' }} />
         <span style={{ fontWeight: 600, color: '#58a6ff', fontSize: 13 }}>{t('debug.title')}</span>
 
-        <button onClick={toggle} style={{
+        <button onClick={toggle} title={enabled ? t('debug.stop') : t('debug.start')} aria-label={enabled ? t('debug.stop') : t('debug.start')} style={{
           marginLeft: 8, padding: '4px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
           background: enabled ? '#da3633' : '#238636', color: '#fff', fontSize: 11, fontWeight: 600,
           display: 'flex', alignItems: 'center', gap: 4,
@@ -169,7 +169,7 @@ export default function DebugConsole() {
           {enabled ? <><Pause size={12} /> {t('debug.stop')}</> : <><Play size={12} /> {t('debug.start')}</>}
         </button>
 
-        <button onClick={clear} style={{
+        <button onClick={clear} title={t('debug.clear')} aria-label={t('debug.clear')} style={{
           padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', cursor: 'pointer',
           background: 'transparent', color: '#8b949e', fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 4,
@@ -185,7 +185,7 @@ export default function DebugConsole() {
         <div style={{ flex: 1 }} />
 
         {/* Category filter */}
-        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{
+        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label="Filter by category" title="Filter by category" style={{
           padding: '3px 6px', borderRadius: 4, border: '1px solid #30363d',
           background: '#161b22', color: '#c9d1d9', fontSize: 11,
         }}>
@@ -196,7 +196,7 @@ export default function DebugConsole() {
         {/* Search */}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
           <Search size={12} style={{ position: 'absolute', left: 6, color: '#484f58' }} />
-          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('debug.filterPlaceholder')} style={{
+          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('debug.filterPlaceholder')} aria-label="Filter debug logs" title="Filter debug logs" style={{
             padding: '3px 6px 3px 22px', borderRadius: 4, border: '1px solid #30363d',
             background: '#161b22', color: '#c9d1d9', fontSize: 11, width: 140,
             outline: 'none',
