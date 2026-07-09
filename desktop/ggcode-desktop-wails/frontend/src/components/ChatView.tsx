@@ -404,7 +404,7 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
   return next
 }
 
-function isNearBottom(el: HTMLElement | null, threshold = 48): boolean {
+function isNearBottom(el: HTMLElement | null, threshold = 120): boolean {
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
 }
@@ -991,24 +991,42 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
 
-  // Auto-scroll to bottom — only if user is already near bottom
-  useEffect(() => {
-    if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-    const container = scrollContainerRef.current
-    if (container) {
-      // Suppress scroll events from programmatic scroll BEFORE setting it
-      // (scroll event fires synchronously when scrollTop changes)
-      suppressNextScrollEventRef.current = true
-      // Use rAF to wait for browser layout to settle before scrolling
-      requestAnimationFrame(() => {
-        if (!scrollContainerRef.current) return
+  // Debounced auto-scroll: one rAF per frame, no suppress flags needed.
+  // The scroll handler's isNearBottom check naturally prevents fighting
+  // user scrolls because once we scroll to bottom, isNearBottom is true
+  // and autoScroll stays true.
+  const scrollRafRef = useRef<number | null>(null)
+
+  const scrollToBottomIfAuto = useCallback(() => {
+    if (scrollRafRef.current !== null) return // already queued
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+      const container = scrollContainerRef.current
+      if (container) {
+        // Suppress the scroll event that fires from this programmatic scroll
         suppressNextScrollEventRef.current = true
-        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-      })
-    } else {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+        container.scrollTop = container.scrollHeight
+      } else {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+      }
+    })
+  }, [activeTab])
+
+  // Auto-scroll to bottom when messages change (debounced via rAF)
+  useEffect(() => {
+    scrollToBottomIfAuto()
+  }, [messages, agentPanels, thinking, activeTab, scrollToBottomIfAuto])
+
+  // Cleanup pending rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
+      }
     }
-  }, [messages, agentPanels, thinking, activeTab])
+  }, [])
 
   useEffect(() => {
     messagesRef.current = messages
@@ -1022,20 +1040,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (last === 0) return
       if (Date.now() - last < 10_000) return
       autoScrollByTabRef.current[activeTab] = true
-      const container = scrollContainerRef.current
-      if (container) {
-        suppressNextScrollEventRef.current = true
-        requestAnimationFrame(() => {
-          if (!scrollContainerRef.current) return
-          suppressNextScrollEventRef.current = true
-          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-        })
-      } else {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-      }
-    }, 1000)
+      scrollToBottomIfAuto()
+    }, 2000)
     return () => window.clearInterval(id)
-  }, [currentTabStreaming, activeTab])
+  }, [currentTabStreaming, activeTab, scrollToBottomIfAuto])
 
   // Render mermaid diagrams — eagerly try on every message update.
   // Success: replace with SVG, mark data-done (no retry).
@@ -2596,13 +2604,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             suppressNextScrollEventRef.current = false
             return
           }
-          const nearBottom = isNearBottom(scrollContainerRef.current)
-          autoScrollByTabRef.current[activeTab] = nearBottom
-          lastManualScrollAtByTabRef.current[activeTab] = Date.now()
+          const el = scrollContainerRef.current
+          if (!el) return
+          const nearBottom = isNearBottom(el)
+          // Only set autoScroll=false when user scrolls AWAY from bottom.
+          // Don't set it to true here — that's handled by the scrollToBottom logic.
+          if (!nearBottom) {
+            autoScrollByTabRef.current[activeTab] = false
+            lastManualScrollAtByTabRef.current[activeTab] = Date.now()
+          }
           setShowScrollBtn(!nearBottom && messages.length > 3)
-          // Persist scroll position for this session (for restore on session switch)
-          if (sessionId && scrollContainerRef.current) {
-            try { sessionStorage.setItem(`scroll:${sessionId}`, String(scrollContainerRef.current.scrollTop)) } catch {}
+          if (sessionId) {
+            try { sessionStorage.setItem(`scroll:${sessionId}`, String(el.scrollTop)) } catch {}
           }
         }}
         style={{
