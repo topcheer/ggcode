@@ -877,22 +877,28 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // Load session history when sessionId changes.
   // Do not let an async history response overwrite an active live stream.
+  // Track the last sessionId we loaded history for — prevents duplicate loads
+  const loadedSessionRef = useRef<string | undefined>(undefined)
+
   useEffect(() => {
     // If no sessionId from parent, try to fetch it directly from backend.
     if (!sessionId) {
-      // Don't clear messages when sessionId is undefined — Layout hasn't
-      // fetched the session ID yet. Just try to fetch it.
       App.GetCurrentSessionID().then((id: any) => {
         if (typeof id === 'string' && id) {
-          // This will trigger the session:changed event in Layout,
-          // which will set activeSessionId and re-run this effect.
+          // session:changed event in Layout will provide the sessionId
         }
       }).catch(() => {})
       return
     }
 
-    // Session changed — clear old messages immediately so stale content
-    // from the previous session doesn't linger while loading.
+    // Skip if we already loaded this session — prevents clearing on re-renders
+    if (sessionId === loadedSessionRef.current) return
+    loadedSessionRef.current = sessionId
+
+    // If agent is actively running, don't clear
+    if (runActiveRef.current) return
+
+    // Session changed — load history
     setMessages([])
     messagesRef.current = []
     setThinking(false)
