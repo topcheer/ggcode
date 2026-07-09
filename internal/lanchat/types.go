@@ -198,17 +198,22 @@ type udpEnvelope struct {
 }
 
 // peerHealth tracks transport availability for each peer.
+// Updated by recordTransportResult, read by shouldTryTCP.
 type peerHealth struct {
-	tcpOK        bool
-	udpUniOK     bool
-	udpMcastOK   bool
-	tcpFail      int
-	udpUniFail   int
-	udpMcastFail int
-	lastTCP      time.Time
-	lastUDP      time.Time
-	lastMcast    time.Time
+	tcpOK      bool
+	tcpFail    int       // consecutive failures
+	tcpRetryAt time.Time // when to retry TCP after marking it down
+	lastTCP    time.Time
+	lastUDP    time.Time
+	lastMcast  time.Time
 }
+
+const (
+	// tcpRetryInterval: how long to skip TCP before probing again.
+	// In LAN environments, TCP either works or it doesn't — no partial degradation.
+	// One failure = TCP down. Probed again by sendPresence heartbeat every ~30s.
+	tcpRetryInterval = 30 * time.Second
+)
 
 // ArchivedPeer is a snapshot of a participant stored when the peer is
 // deleted from the active peers map (after peerDeleteAfter). This allows

@@ -154,7 +154,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		notifiedNicks:    make(map[string]bool),
 		peerHealthMap:    make(map[string]*peerHealth),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: 2 * time.Second, // LAN: if TCP doesn't connect in 2s, it's down
 		},
 	}
 }
@@ -789,6 +789,9 @@ func (h *Hub) HandlePresence(p Participant) {
 }
 
 // sendPresence POSTs our participant info to a peer so they learn our nick.
+// sendPresence sends our presence to a peer and acts as a TCP health probe.
+// On success: marks TCP as up for this peer. On failure: marks TCP as down.
+// This is the primary transport health mechanism — no separate probe needed.
 func (h *Hub) sendPresence(peer Participant) {
 	self := h.SelfParticipant()
 	url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/presence"
@@ -807,9 +810,14 @@ func (h *Hub) sendPresence(peer Participant) {
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
+		// TCP failed — mark peer TCP as down immediately
+		h.recordTransportResult(peer.NodeID, "tcp", false)
 		return
 	}
 	defer resp.Body.Close()
+
+	// TCP succeeded — mark peer TCP as up
+	h.recordTransportResult(peer.NodeID, "tcp", true)
 
 	// The response contains the peer's own presence — learn it too
 	var peerInfo Participant
@@ -967,7 +975,7 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 		h.mu.RUnlock()
 
 		for _, peer := range peers {
-			safego.Go("lanchat.postToPeer", func() { h.postToPeerWithRetry(ctx, peer.Endpoint, msg, 1) })
+			safego.Go("lanchat.postToPeer", func() { h.postToPeerWithRetry(ctx, peer.NodeID, peer.Endpoint, msg, 1) })
 		}
 		return nil
 	}
@@ -980,12 +988,13 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", msg.ToNodeID)
 	}
-	return h.postToPeerWithRetry(ctx, peer.Endpoint, msg, 2)
+	return h.postToPeerWithRetry(ctx, peer.NodeID, peer.Endpoint, msg, 2)
 }
 
 // postToPeerWithRetry sends a message to a peer, retrying up to maxRetries
-// times on transient failures. Returns an error if all attempts fail.
-func (h *Hub) postToPeerWithRetry(ctx context.Context, endpoint string, msg Message, maxRetries int) error {
+// times on transient failures. Uses smart transport selection: skips TCP
+// when peerHealthMap indicates TCP is down for this peer.
+func (h *Hub) postToPeerWithRetry(ctx context.Context, nodeID, endpoint string, msg Message, maxRetries int) error {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
@@ -995,14 +1004,89 @@ func (h *Hub) postToPeerWithRetry(ctx context.Context, endpoint string, msg Mess
 			case <-time.After(time.Duration(attempt) * time.Second):
 			}
 		}
-		if err := h.postToPeer(ctx, endpoint, msg); err != nil {
+		if err := h.sendToPeerSmart(ctx, nodeID, endpoint, msg); err != nil {
 			lastErr = err
-			debug.Log("lanchat", "POST to %s failed (attempt %d/%d): %v", endpoint, attempt+1, maxRetries, err)
+			debug.Log("lanchat", "delivery to %s failed (attempt %d/%d): %v", endpoint, attempt+1, maxRetries, err)
 			continue
 		}
 		return nil
 	}
 	return lastErr
+}
+
+// sendToPeerSmart sends a message to a peer using smart transport selection.
+// It checks peerHealthMap to decide whether to try TCP first or go straight to UDP.
+// This is zero-wait: if TCP is marked down, UDP is used immediately.
+func (h *Hub) sendToPeerSmart(ctx context.Context, nodeID, endpoint string, msg Message) error {
+	// Check if TCP is known to be down for this peer
+	if !h.shouldTryTCP(nodeID) {
+		debug.Log("lanchat", "TCP marked down for %s, using UDP fallback", nodeID)
+		return h.postToPeerWithFallback(ctx, endpoint, "message", msg)
+	}
+
+	// Try TCP first
+	if err := h.postToPeer(ctx, endpoint, msg); err != nil {
+		// TCP failed — record and fallback to UDP immediately
+		h.recordTransportResult(nodeID, "tcp", false)
+		debug.Log("lanchat", "TCP failed for %s, falling back to UDP: %v", nodeID, err)
+		return h.postToPeerWithFallback(ctx, endpoint, "message", msg)
+	}
+
+	// TCP succeeded
+	h.recordTransportResult(nodeID, "tcp", true)
+	return nil
+}
+
+// shouldTryTCP returns true if TCP should be attempted for this peer.
+// Returns true when: peer is unknown (no health data), TCP is healthy,
+// or the retry cooldown has expired.
+func (h *Hub) shouldTryTCP(nodeID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ph, ok := h.peerHealthMap[nodeID]
+	if !ok {
+		return true // unknown peer — try TCP
+	}
+	if ph.tcpOK {
+		return true
+	}
+	// TCP is down — check if retry cooldown has expired
+	return time.Now().After(ph.tcpRetryAt)
+}
+
+// recordTransportResult updates the peer health map based on transport results.
+// For TCP: single failure marks TCP as down immediately (LAN env — TCP either
+// works or it doesn't, no partial degradation). Retry after tcpRetryInterval.
+func (h *Hub) recordTransportResult(nodeID, transport string, success bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ph, ok := h.peerHealthMap[nodeID]
+	if !ok {
+		ph = &peerHealth{}
+		h.peerHealthMap[nodeID] = ph
+	}
+	switch transport {
+	case "tcp":
+		ph.lastTCP = time.Now()
+		if success {
+			if !ph.tcpOK {
+				debug.Log("lanchat", "TCP recovered for %s", nodeID)
+			}
+			ph.tcpOK = true
+			ph.tcpFail = 0
+		} else {
+			ph.tcpFail++
+			if ph.tcpOK {
+				ph.tcpOK = false
+				ph.tcpRetryAt = time.Now().Add(tcpRetryInterval)
+				debug.Log("lanchat", "TCP marked down for %s (retry in %v)", nodeID, tcpRetryInterval)
+			}
+		}
+	case "udp":
+		ph.lastUDP = time.Now()
+	case "mcast":
+		ph.lastMcast = time.Now()
+	}
 }
 
 func (h *Hub) postToPeer(ctx context.Context, endpoint string, msg Message) error {

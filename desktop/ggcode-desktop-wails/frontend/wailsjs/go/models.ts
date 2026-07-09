@@ -83,6 +83,7 @@ export namespace lanchat {
 	    has_git?: boolean;
 	    has_tests?: boolean;
 	    agent_busy?: boolean;
+	    udp_capable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Participant(source);
@@ -106,6 +107,7 @@ export namespace lanchat {
 	        this.has_git = source["has_git"];
 	        this.has_tests = source["has_tests"];
 	        this.agent_busy = source["agent_busy"];
+	        this.udp_capable = source["udp_capable"];
 	    }
 	}
 	export class PendingAgentMsg {
@@ -801,6 +803,7 @@ export namespace wailskit {
 	    msgCount: number;
 	    updatedAt: string;
 	    locked: boolean;
+	    lastMessage: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SessionInfo(source);
@@ -816,6 +819,7 @@ export namespace wailskit {
 	        this.msgCount = source["msgCount"];
 	        this.updatedAt = source["updatedAt"];
 	        this.locked = source["locked"];
+	        this.lastMessage = source["lastMessage"];
 	    }
 	}
 	export class SessionMessage {

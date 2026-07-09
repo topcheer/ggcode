@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.139`](docs/releases/v1.3.139.md) |
+| Latest documented release | [`v1.3.140`](docs/releases/v1.3.140.md) |
 
 ## Build & Validation
 
@@ -378,6 +378,14 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **TUI session auto-selection**: When `ggcode tui` starts without `--resume`, it iterates all workspace sessions (newest-first) via `ListForWorkspace()`, loading the first unlocked one. If all are locked, a new session is created. This enables N instances to each grab a different session automatically.
 - **MCP protocol version negotiation**: The MCP client sends `2025-11-25` (latest) during initialize and accepts all known versions (`2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`). The server's negotiated version is stored in `Client.negotiatedVersion`. Unknown versions are rejected.
 - **MCP OAuth DCR health check**: After Dynamic Client Registration, the client polls the authorize endpoint with PKCE params to wait for the client_id to propagate. All 4xx responses are retried (not just 200). The retry loop is infinite with a status display in the MCP panel.
+- **MCP 403 OAuth fallback**: HTTP MCP servers returning 403 (in addition to 401) trigger OAuth DCR discovery. On success, the API key Authorization header is removed and replaced with the OAuth Bearer token permanently.
+- **MCP SSE Notification handling**: Some MCP servers send Notification messages before the JSON-RPC Response. The parser skips non-Response SSE events and also falls back to SSE extraction for non-SSE content types.
+- **MCP Windows no-window**: Stdio MCP processes on Windows use `CREATE_NO_WINDOW` flag to prevent console window popups.
+- **IM Session-Scoped Binding Ownership**: `ChannelBinding.LastSessionID` field enables per-session IM adapter ownership. Each instance claims adapters via LastSessionID instead of workspace-level mutual exclusion. Mute/Disable do NOT clear LastSessionID (only Unbind does). `RegisterInstance` auto-claims unclaimed bindings and mutes foreign-owned ones. `StartUnstartedOwnedAdapters` launches adapters after session ownership resolves.
+- **IM RegisterInstance timing**: All three platforms (TUI, Daemon, Desktop) defer `RegisterInstance` to after `BindSession(real sessionID)`. InitRuntime uses `RegisterInstance: false` — the real session ID isn't available yet.
+- **LAN Chat UDP Transport**: Three-layer fallback: TCP (HTTP POST) → UDP unicast (ACK + retry + gzip + fragmentation) → UDP multicast (fire-and-forget for restricted networks). Uses same port as TCP. Participant.UDPCapable for negotiation. peerHealth tracking per peer.
+- **TUI Provider Panel endpoint-scoped refresh**: Model discovery only refreshes the currently selected endpoint, not all vendor endpoints. AI Gateway vendors skip vendor-level API key fallback.
+- **Desktop Settings auto-refresh models**: Settings page auto-fetches models from API (DiscoverModels) on load and endpoint switch. Falls back to static list on failure.
 - **Microcompact vs precompact**: Microcompact (context exceeds soft limit) is now silent — no user message. Only LLM-triggered precompact (explicit compaction request) shows a system message. A 2-minute cooldown after precompact prevents tight compaction loops. Auto-compact thresholds raised from 0.65/0.75 to 0.80/0.88 of context window.
 - **Fuzzy line match for edit_file**: When exact `old_text` matching fails, `edit_file` falls back to fuzzy matching — stripping leading whitespace and comparing line content. This handles tab/space mismatches in the original file.
 - **lanchat & im always allowed**: The `lanchat` and `im` tools are always allowed in every permission mode (including plan mode) via `IsAlwaysAllowedTool()`. They are checked before mode-specific rules in `ConfigPolicy.Check()`.

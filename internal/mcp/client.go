@@ -352,6 +352,11 @@ func (c *Client) nextRequestID() *ID {
 	return &i
 }
 
+// mcpRequestTimeout is the per-request deadline for all MCP requests
+// (HTTP, WebSocket, and stdio). Prevents indefinite hangs when a server
+// accepts the connection but never responds.
+const mcpRequestTimeout = 120 * time.Second
+
 func (c *Client) sendRequest(ctx context.Context, method string, params interface{}, result interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -359,6 +364,11 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	if c.closed {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
+
+	// Apply per-request timeout so a slow/hung MCP server can't block forever.
+	// If the caller's ctx already has a shorter deadline, that takes priority.
+	ctx, cancel := context.WithTimeout(ctx, mcpRequestTimeout)
+	defer cancel()
 
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
