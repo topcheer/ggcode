@@ -1,13 +1,13 @@
 import React, { useState } from 'react'
 
-interface DiffLine {
+export interface DiffLine {
   type: 'add' | 'remove' | 'context' | 'header'
   content: string
   oldLine?: number
   newLine?: number
 }
 
-function parseDiff(text: string): DiffLine[] {
+export function parseDiff(text: string): DiffLine[] {
   const lines = text.split('\n')
   const result: DiffLine[] = []
   for (const line of lines) {

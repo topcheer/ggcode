@@ -65,6 +65,10 @@ type budgetGuardState struct {
 	// Captures tool result bloat — when the agent reads large files repeatedly.
 	stepInputDeltas []int
 
+	// Running sums to avoid O(N²) recomputation in computeAvg
+	totalOutputSum int
+	totalInputSum  int
+
 	// Previous total input tokens (to compute delta on next step)
 	prevInputTokens int
 
@@ -82,6 +86,8 @@ func newBudgetGuardState() *budgetGuardState {
 func (b *budgetGuardState) reset() {
 	b.stepCosts = b.stepCosts[:0]
 	b.stepInputDeltas = b.stepInputDeltas[:0]
+	b.totalOutputSum = 0
+	b.totalInputSum = 0
 	b.prevInputTokens = 0
 	b.totalConsumed = 0
 	b.warningGiven = false
@@ -93,6 +99,7 @@ func (b *budgetGuardState) reset() {
 // inputTokens: total input tokens sent to the model in this iteration.
 func (b *budgetGuardState) recordStep(outputTokens, inputTokens int) {
 	b.stepCosts = append(b.stepCosts, outputTokens)
+	b.totalOutputSum += outputTokens
 	b.totalConsumed += outputTokens
 
 	// Track input delta — how much new content was added to context this step.
@@ -107,41 +114,40 @@ func (b *budgetGuardState) recordStep(outputTokens, inputTokens int) {
 			inputDelta = inputTokens - b.prevInputTokens
 		}
 		b.stepInputDeltas = append(b.stepInputDeltas, inputDelta)
+		b.totalInputSum += inputDelta
 	}
 	b.prevInputTokens = inputTokens
 }
 
 // computeStats returns overall average, recent average, and whether costs are escalating.
-// Checks both output tokens and input delta for escalation.
+// Uses running sums for O(1) overall average instead of O(N) loop.
 func (b *budgetGuardState) computeStats() (overallAvg, recentAvg float64, escalating bool) {
 	n := len(b.stepCosts)
 	if n == 0 {
 		return 0, 0, false
 	}
 
-	// Output token stats
-	overallAvg, recentAvg = computeAvg(b.stepCosts)
+	// Output token stats — O(1) using running sum
+	overallAvg, recentAvg = b.computeAvgFromSum(b.totalOutputSum, b.stepCosts)
 	outputEscalating := overallAvg > 0 && recentAvg > overallAvg*budgetEscalationFactor
 
-	// Input delta stats (tool result bloat signal)
-	inputOverall, inputRecent := computeAvg(b.stepInputDeltas)
+	// Input delta stats (tool result bloat signal) — O(1)
+	inputOverall, inputRecent := b.computeAvgFromSum(b.totalInputSum, b.stepInputDeltas)
 	inputEscalating := inputOverall > 0 && inputRecent > inputOverall*budgetEscalationFactor
 
 	escalating = outputEscalating || inputEscalating
 	return overallAvg, recentAvg, escalating
 }
 
-// computeAvg returns overall and recent (last budgetRecentWindow) averages.
-func computeAvg(costs []int) (overall, recent float64) {
+// computeAvgFromSum computes overall and recent averages in O(recentWindow) time.
+// Uses the pre-computed running sum for overall average instead of looping
+// through the full slice (which was O(N) per call, O(N²) over N iterations).
+func (b *budgetGuardState) computeAvgFromSum(totalSum int, costs []int) (overall, recent float64) {
 	n := len(costs)
 	if n == 0 {
 		return 0, 0
 	}
-	total := 0
-	for _, c := range costs {
-		total += c
-	}
-	overall = float64(total) / float64(n)
+	overall = float64(totalSum) / float64(n)
 
 	recentStart := n - budgetRecentWindow
 	if recentStart < 0 {
@@ -212,7 +218,7 @@ func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
 		float64(escalationPct), overallAvg, recentAvg))
 
 	// Include input delta signal if it's also escalating
-	inputOverall, inputRecent := computeAvg(b.stepInputDeltas)
+	inputOverall, inputRecent := b.computeAvgFromSum(b.totalInputSum, b.stepInputDeltas)
 	if inputOverall > 0 && inputRecent > inputOverall*budgetEscalationFactor {
 		inputPct := int((inputRecent/inputOverall - 1) * 100)
 		reasons = append(reasons, fmt.Sprintf("input context growing %.0f%% faster per step (%.0f → %.0f tokens/step)",
