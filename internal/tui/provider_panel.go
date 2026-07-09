@@ -763,23 +763,35 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		return nil
 	}
 
-	refreshable := false
-	for endpointID, endpoint := range vc.Endpoints {
-		if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
-			continue
-		}
-		if strings.TrimSpace(endpoint.BaseURL) == "" {
-			continue
-		}
-		if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
-			continue
-		}
-		if _, err := m.config.ResolveEndpoint(vendor, endpointID); err == nil {
-			refreshable = true
-			break
+	// Only refresh the currently selected endpoint, not all endpoints.
+	endpointID := ""
+	if m.providerPanel != nil {
+		endpointID = m.providerPanel.selectedEndpoint()
+	}
+	if endpointID == "" {
+		endpointID = m.config.Endpoint
+	}
+	endpoint, ok := vc.Endpoints[endpointID]
+	if !ok {
+		return nil
+	}
+
+	// AI Gateway vendors should not use vendor-level API key — each endpoint
+	// must have its own key.
+	isGateway := vendor == "ai-gateway"
+	if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
+		// For gateway vendors, don't fall back to vendor-level key
+		if isGateway || !providerHasUsableAPIKey(resolveAPIKey(endpoint.APIKey, "")) {
+			return nil
 		}
 	}
-	if !refreshable {
+	if strings.TrimSpace(endpoint.BaseURL) == "" {
+		return nil
+	}
+	if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
+		return nil
+	}
+	if _, err := m.config.ResolveEndpoint(vendor, endpointID); err != nil {
 		return nil
 	}
 
@@ -794,41 +806,25 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		for endpointID, endpoint := range vc.Endpoints {
-			if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) || strings.TrimSpace(endpoint.BaseURL) == "" {
-				result.skipped++
-				continue
-			}
-			if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
-				result.skipped++
-				continue
-			}
-
-			resolved, err := m.config.ResolveEndpoint(vendor, endpointID)
-			if err != nil {
-				result.skipped++
-				if result.discoverErr == nil {
-					result.discoverErr = err
-				}
-				continue
-			}
-
-			models, err := provider.DiscoverModels(ctx, resolved)
-			if err != nil {
-				if result.discoverErr == nil {
-					result.discoverErr = fmt.Errorf("%s: %w", endpointID, err)
-				}
-				continue
-			}
-			if err := m.config.SetEndpointModels(vendor, endpointID, models); err != nil {
-				if result.discoverErr == nil {
-					result.discoverErr = err
-				}
-				continue
-			}
-			result.updated++
-			result.discovered += len(models)
+		resolved, err := m.config.ResolveEndpoint(vendor, endpointID)
+		if err != nil {
+			result.skipped++
+			result.discoverErr = err
+			return result
 		}
+
+		models, err := provider.DiscoverModels(ctx, resolved)
+		if err != nil {
+			result.skipped++
+			result.discoverErr = fmt.Errorf("%s: %w", endpointID, err)
+			return result
+		}
+		if err := m.config.SetEndpointModels(vendor, endpointID, models); err != nil {
+			result.discoverErr = err
+			return result
+		}
+		result.updated++
+		result.discovered += len(models)
 
 		if result.updated > 0 {
 			if err := m.saveConfig(); err != nil {
