@@ -880,18 +880,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         if (cancelled) return
         const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
         if (sid) {
-          // Load history directly
+          // Load history directly — only last 50 messages for performance
           setHistoryLoading(true)
           App.GetSessionHistory().then((history: any[]) => {
             if (cancelled || !history || history.length === 0) { setHistoryLoading(false); return }
             autoScrollByTabRef.current.main = true
-            const loaded = materializeHistory(history, [])
+            // Limit to last 50 messages to prevent UI freeze on large sessions.
+            // Full sessions can have thousands of messages with code blocks,
+            // markdown, and diffs — rendering all at once causes multi-second
+            // freezes on every keystroke and scroll.
+            const MAX_INITIAL = 50
+            const trimmed = history.length > MAX_INITIAL ? history.slice(-MAX_INITIAL) : history
+            const loaded = materializeHistory(trimmed, [])
             messagesRef.current = loaded
             setMessages(loaded)
             setHistoryLoading(false)
-            // For session load: always scroll to bottom, don't restore old position.
-            // The old saved position is from a previous session view and is irrelevant
-            // after a fresh load. Clear any saved scroll to avoid conflicts.
             try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
           }).catch(() => { setHistoryLoading(false) })
         }
@@ -912,7 +915,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         return
       }
       autoScrollByTabRef.current.main = true
-      const loaded = materializeHistory(history, messagesRef.current)
+      const MAX_INITIAL = 50
+      const trimmed = history.length > MAX_INITIAL ? history.slice(-MAX_INITIAL) : history
+      const loaded = materializeHistory(trimmed, messagesRef.current)
       if (cancelled || runActiveRef.current) { setHistoryLoading(false); return }
       messagesRef.current = loaded
       setMessages(loaded)
