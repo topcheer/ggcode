@@ -1001,11 +1001,13 @@ func TestRunStreamInjectsPathScopedProjectMemoryBeforeExecutingNestedTool(t *tes
 	msgs := a.Messages()
 	var found bool
 	for _, msg := range msgs {
-		if msg.Role != "system" || len(msg.Content) == 0 {
-			continue
+		for _, block := range msg.Content {
+			if block.Type == "text" && strings.Contains(block.Text, "nested guidance") {
+				found = true
+				break
+			}
 		}
-		if strings.Contains(msg.Content[0].Text, "nested guidance") {
-			found = true
+		if found {
 			break
 		}
 	}

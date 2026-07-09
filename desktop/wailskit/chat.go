@@ -449,9 +449,28 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	}()
 
 	if b.agent == nil {
+		b.mu.Lock()
+		sesMsgs := 0
+		if b.currentSes != nil {
+			sesMsgs = len(b.currentSes.Messages)
+		}
+		b.mu.Unlock()
+		os.WriteFile("/tmp/ggcode-desktop-debug.log", []byte(fmt.Sprintf("WARN: agent nil in sendMessageData, ses=%d msgs\n", sesMsgs)), 0644)
 		if err := b.InitAgent(ctx); err != nil {
 			return fmt.Errorf("init agent: %w", err)
 		}
+	} else {
+		b.mu.Lock()
+		sesMsgs := 0
+		agMsgs := 0
+		if b.currentSes != nil {
+			sesMsgs = len(b.currentSes.Messages)
+		}
+		if b.agent != nil {
+			agMsgs = len(b.agent.Messages())
+		}
+		b.mu.Unlock()
+		os.WriteFile("/tmp/ggcode-desktop-debug.log", []byte(fmt.Sprintf("sendMessageData: agent OK, ses=%d msgs, agent=%d msgs\n", sesMsgs, agMsgs)), 0644)
 	}
 
 	// Ensure we have a session (mirrors Fyne bridge.ensureSession)
