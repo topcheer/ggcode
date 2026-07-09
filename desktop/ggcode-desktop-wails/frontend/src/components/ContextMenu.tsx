@@ -32,11 +32,15 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   useEffect(() => {
     document.addEventListener('mousedown', handleClickOutside)
     document.addEventListener('keydown', handleEsc)
+    window.addEventListener('scroll', onClose, true) // close on any scroll (capture phase)
+    window.addEventListener('resize', onClose)
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('keydown', handleEsc)
+      window.removeEventListener('scroll', onClose, true)
+      window.removeEventListener('resize', onClose)
     }
-  }, [handleClickOutside, handleEsc])
+  }, [handleClickOutside, handleEsc, onClose])
 
   // Clamp position so the menu doesn't go off-screen
   const menuWidth = 180
