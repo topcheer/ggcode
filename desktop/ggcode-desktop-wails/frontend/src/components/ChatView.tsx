@@ -991,13 +991,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom — only if user is already near bottom
   useEffect(() => {
     if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
     const container = scrollContainerRef.current
     if (container) {
+      // Suppress scroll events from programmatic scroll BEFORE setting it
+      // (scroll event fires synchronously when scrollTop changes)
       suppressNextScrollEventRef.current = true
-      container.scrollTop = container.scrollHeight
+      // Use rAF to wait for browser layout to settle before scrolling
+      requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) return
+        suppressNextScrollEventRef.current = true
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+      })
     } else {
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
     }
@@ -1018,11 +1025,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       const container = scrollContainerRef.current
       if (container) {
         suppressNextScrollEventRef.current = true
-        container.scrollTop = container.scrollHeight
+        requestAnimationFrame(() => {
+          if (!scrollContainerRef.current) return
+          suppressNextScrollEventRef.current = true
+          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+        })
       } else {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
       }
-    }, 500)
+    }, 1000)
     return () => window.clearInterval(id)
   }, [currentTabStreaming, activeTab])
 
