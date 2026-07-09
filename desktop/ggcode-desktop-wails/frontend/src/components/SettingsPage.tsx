@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2 } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2, SunMoon } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale } from '../i18n'
@@ -14,7 +14,7 @@ interface Props {
   showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
-type SettingsTab = 'provider' | 'agent' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp'
+type SettingsTab = 'provider' | 'agent' | 'appearance' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp'
 
 interface ImpersonationPreset {
   id: string
@@ -339,6 +339,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'provider', label: t('settings.title') },
     { id: 'agent', label: 'Agent & Safety' },
+    { id: 'appearance', label: 'Appearance' },
     { id: 'integrations', label: 'Integrations' },
     { id: 'diagnostics', label: 'Diagnostics' },
     { id: 'impersonation', label: t('settings.impersonate') },
@@ -611,6 +612,73 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               style={{ ...primaryBtnStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
               {saved ? <><Check size={14} /> {t('settings.saved')}</> : saving ? t('settings.saving') : 'Save agent settings'}
             </button>
+          </>
+        )}
+
+        {/* Appearance Tab */}
+        {tab === 'appearance' && (
+          <>
+            <h3 style={sectionTitle}>Appearance</h3>
+            <p style={hintStyle}>
+              Customize the visual theme. The app follows your system preference by default.
+            </p>
+            <FieldRow label="Theme">
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  onClick={() => {
+                    document.documentElement.classList.remove('dark')
+                    localStorage.setItem('ggcode-theme', 'light')
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    background: !document.documentElement.classList.contains('dark') ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: !document.documentElement.classList.contains('dark') ? '#fff' : 'var(--text-secondary)',
+                    cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  <SunMoon size={14} /> Light
+                </button>
+                <button
+                  onClick={() => {
+                    document.documentElement.classList.add('dark')
+                    localStorage.setItem('ggcode-theme', 'dark')
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    background: document.documentElement.classList.contains('dark') ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: document.documentElement.classList.contains('dark') ? '#fff' : 'var(--text-secondary)',
+                    cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  <SunMoon size={14} /> Dark
+                </button>
+                <button
+                  onClick={() => {
+                    document.documentElement.classList.remove('dark')
+                    localStorage.removeItem('ggcode-theme')
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                      document.documentElement.classList.add('dark')
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    background: 'var(--color-card)', color: 'var(--text-secondary)',
+                    cursor: 'pointer', fontWeight: 600, fontSize: 13,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  Auto (System)
+                </button>
+              </div>
+              <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
+                Shortcut: Cmd+Shift+T to toggle. "Auto" follows your OS setting.
+              </span>
+            </FieldRow>
           </>
         )}
 
