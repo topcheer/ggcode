@@ -28,8 +28,8 @@ func (a *Agent) maybeInjectProjectMemoryForTool(tc provider.ToolCallDelta, pendi
 		})
 	}
 	a.contextManager.Add(provider.Message{
-		Role:    "user",
-		Content: []provider.ContentBlock{{Type: "text", Text: "[System Note] ## Project Memory\n" + content}},
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
 	})
 	targetLabel := target
 	if targetLabel == "" {

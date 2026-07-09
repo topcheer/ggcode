@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
+import { marked } from 'marked'
 import { LanChatParticipant, LanChatMessage } from '../types'
+
+marked.setOptions({ gfm: true, breaks: true })
+
+export function renderMarkdown(text: string): string {
+  if (!text) return ''
+  try {
+    return marked.parse(text) as string
+  } catch {
+    return text.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+}
 
 interface Props {
   onUnreadChange?: (count: number) => void
@@ -14,22 +26,23 @@ interface ChatRoom {
   unread: number
 }
 
-interface ContactEntry {
+export interface ContactEntry {
   node_id: string
   label: string        // human_nick or agent_nick
   nick: string         // for @mention
   to_role: string      // "human" | "agent"
+  team: string         // team name for grouping
   workspace?: string   // e.g. "/Volumes/new/ggai/mdns"
   project_name?: string // e.g. "mdns"
   languages?: string[]
 }
 
-function roomKeyForDM(nodeID: string, role: string): string {
+export function roomKeyForDM(nodeID: string, role: string): string {
   return `dm:${nodeID}:${role}`
 }
 
 /** Parse a room key into { nodeID, role } or null for broadcast. */
-function parseRoomKey(key: string): { nodeID: string; role: string } | null {
+export function parseRoomKey(key: string): { nodeID: string; role: string } | null {
   if (key === 'broadcast') return null
   const parts = key.split(':') // ["dm", nodeID, role] but nodeID may contain ':'
   if (parts.length < 3) return null
@@ -40,7 +53,7 @@ function parseRoomKey(key: string): { nodeID: string; role: string } | null {
 }
 
 /** Determine which room a message belongs to. */
-function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
+export function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
   // DM to me
   if (msg.to_node_id === selfNodeID && msg.to_node_id !== '') {
     return roomKeyForDM(msg.from_node_id, msg.from_role)
@@ -56,27 +69,28 @@ function roomKeyForMessage(msg: LanChatMessage, selfNodeID: string): string {
 }
 
 /** Build contact entries from participants. */
-function buildContacts(participants: LanChatParticipant[], selfNodeID: string): ContactEntry[] {
+export function buildContacts(participants: LanChatParticipant[], selfNodeID: string): ContactEntry[] {
   const contacts: ContactEntry[] = []
   const seen = new Set<string>() // dedup by `${nick}:${role}`
   for (const p of participants) {
     if (p.node_id === selfNodeID) continue
+    const team = p.team || 'dev-team'
     if (p.human_nick) {
       const key = `${p.human_nick}:human`
       if (!seen.has(key)) {
         seen.add(key)
-        contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human', workspace: p.workspace, project_name: p.project_name, languages: p.languages })
+        contacts.push({ node_id: p.node_id, label: p.human_nick, nick: p.human_nick, to_role: 'human', team, workspace: p.workspace, project_name: p.project_name, languages: p.languages })
       }
     }
     if (p.agent_nick) {
       const key = `${p.agent_nick}:agent`
       if (!seen.has(key)) {
         seen.add(key)
-        contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent', workspace: p.workspace, project_name: p.project_name, languages: p.languages })
+        contacts.push({ node_id: p.node_id, label: `${p.agent_nick}`, nick: p.agent_nick, to_role: 'agent', team, workspace: p.workspace, project_name: p.project_name, languages: p.languages })
       }
     }
     if (!p.human_nick && !p.agent_nick) {
-      contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human', workspace: p.workspace, project_name: p.project_name })
+      contacts.push({ node_id: p.node_id, label: p.node_id.slice(0, 12), nick: '', to_role: 'human', team, workspace: p.workspace, project_name: p.project_name })
     }
   }
   // Sort alphabetically by label
@@ -88,6 +102,8 @@ export function LanChatView({ onUnreadChange }: Props) {
   const [participants, setParticipants] = useState<LanChatParticipant[]>([])
   const [nick, setNick] = useState('')
   const [selfNodeID, setSelfNodeID] = useState('')
+  const [selfTeam, setSelfTeam] = useState('')
+  const [toggledTeams, setToggledTeams] = useState<Set<string>>(new Set())
 
   // Room state: all messages stored per-room
   const [rooms, setRooms] = useState<Map<string, ChatRoom>>(new Map([['broadcast', { messages: [], unread: 0 }]]))
@@ -146,6 +162,7 @@ export function LanChatView({ onUnreadChange }: Props) {
           const myID = s?.node_id || ''
           setSelfNodeID(myID)
           setNick(s?.human_nick || s?.agent_nick || '')
+          setSelfTeam(s?.team || 'dev-team')
 
           // Distribute initial messages into rooms
           const msgArr = (msgs as any) || []
@@ -259,6 +276,7 @@ export function LanChatView({ onUnreadChange }: Props) {
           const id = self?.node_id || ''
           setSelfNodeID(id)
           setNick(self?.human_nick || self?.agent_nick || '')
+          setSelfTeam(self?.team || 'dev-team')
           setParticipants((parts as any) || [])
         }
       } catch {}
@@ -429,38 +447,75 @@ export function LanChatView({ onUnreadChange }: Props) {
             onClick={() => switchRoom('broadcast')}
           />
 
-          {/* Separator */}
-          <div style={{
-            padding: '6px 12px 2px',
-            fontSize: '11px',
-            color: 'var(--text-tertiary)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-          }}>
-            Direct Messages
-          </div>
-
-          {/* Contacts — show human + agent as separate entries */}
+          {/* Direct Messages — grouped by team */}
           {contacts.length === 0 ? (
             <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-tertiary)' }}>
               No contacts online
             </div>
-          ) : (
-            contacts.map(c => {
-              const key = roomKeyForDM(c.node_id, c.to_role)
+          ) : (() => {
+            // Group contacts by team
+            const teamMap = new Map<string, ContactEntry[]>()
+            for (const c of contacts) {
+              const arr = teamMap.get(c.team) || []
+              arr.push(c)
+              teamMap.set(c.team, arr)
+            }
+            // Sort teams: self team first, then alphabetical
+            const teams = Array.from(teamMap.keys()).sort((a, b) => {
+              if (a === selfTeam) return -1
+              if (b === selfTeam) return 1
+              return a.localeCompare(b)
+            })
+            return teams.map(team => {
+              const teamContacts = teamMap.get(team)!
+              const isMyTeam = team === selfTeam
+              const defaultCollapsed = !isMyTeam
+              const effectiveCollapsed = toggledTeams.has(team) ? !defaultCollapsed : defaultCollapsed
               return (
-                <ContactRow
-                  key={key}
-                  label={c.label}
-                  badge={c.to_role === 'agent' ? 'agent' : undefined}
-                  subtitle={c.project_name || (c.workspace ? c.workspace.split('/').pop() : undefined)}
-                  active={activeRoom === key}
-                  unread={rooms.get(key)?.unread || 0}
-                  onClick={() => switchRoom(key)}
-                />
+                <div key={team}>
+                  <div
+                    onClick={() => {
+                      setToggledTeams(prev => {
+                        const next = new Set(prev)
+                        if (next.has(team)) next.delete(team)
+                        else next.add(team)
+                        return next
+                      })
+                    }}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '11px',
+                      color: 'var(--text-tertiary)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <span style={{ fontSize: '9px', opacity: 0.6 }}>{effectiveCollapsed ? '▶' : '▼'}</span>
+                    {team} ({teamContacts.length})
+                  </div>
+                  {!effectiveCollapsed && teamContacts.map(c => {
+                    const key = roomKeyForDM(c.node_id, c.to_role)
+                    return (
+                      <ContactRow
+                        key={key}
+                        label={c.label}
+                        badge={c.to_role === 'agent' ? 'agent' : undefined}
+                        subtitle={c.project_name || (c.workspace ? c.workspace.split('/').pop() : undefined)}
+                        active={activeRoom === key}
+                        unread={rooms.get(key)?.unread || 0}
+                        onClick={() => switchRoom(key)}
+                      />
+                    )
+                  })}
+                </div>
               )
             })
-          )}
+          })()}
         </div>
       </div>
 
@@ -500,21 +555,24 @@ export function LanChatView({ onUnreadChange }: Props) {
                     flexDirection: isSelf ? 'row-reverse' : 'row',
                   }}
                 >
-                  <div style={{
-                    maxWidth: '70%',
-                    padding: '6px 12px',
-                    borderRadius: '8px',
-                    background: isSelf ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                    color: isSelf ? '#fff' : 'var(--text-primary)',
-                    fontSize: '13px',
-                    lineHeight: '1.4',
-                  }}>
+                  <div
+                    className="markdown-body"
+                    style={{
+                      maxWidth: '80%',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      background: isSelf ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                      color: isSelf ? '#fff' : 'var(--text-primary)',
+                      fontSize: '13px',
+                      lineHeight: '1.4',
+                    }}
+                  >
                     {!isSelf && (
                       <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: '2px' }}>
                         {fromNick} {msg.from_role === 'agent' && <span style={{ color: 'var(--color-primary)' }}>agent</span>}
                       </div>
                     )}
-                    {msg.content}
+                    <div dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
                   </div>
                 </div>
               )

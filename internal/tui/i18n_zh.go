@@ -1319,6 +1319,40 @@ func zhCatalog(key string) string {
 		return "显示当前状态"
 	case "slash.update":
 		return "升级 ggcode"
+	case "slash.cron":
+		return "管理定时任务（列表、暂停、恢复、创建）"
+	case "slash.branch":
+		return "从当前会话分叉出新会话（复制对话）"
+	case "slash.chat":
+		return "打开局域网聊天面板"
+	case "slash.edit":
+		return "编辑并重新提交上一条消息"
+	case "slash.inspector":
+		return "切换检查器面板"
+	case "slash.mode":
+		return "查看或切换权限模式"
+	case "slash.nick":
+		return "设置局域网聊天的昵称"
+	case "slash.reflect":
+		return "对当前会话进行自我反思"
+	case "slash.regenerate":
+		return "重新生成上一条 AI 回复（丢弃并重跑）"
+	case "slash.restart":
+		return "重启 ggcode 进程"
+	case "slash.retry":
+		return "重试上一次失败的 agent 运行"
+	case "slash.rules":
+		return "显示已学习的 ratchet 规则"
+	case "slash.share":
+		return "通过隧道分享会话（移动中继）"
+	case "slash.stats":
+		return "显示会话统计（token、迭代、工具）"
+	case "slash.tmux":
+		return "打开 tmux 面板管理菜单"
+	case "slash.tunnel":
+		return "切换移动中继隧道连接"
+	case "slash.unshare":
+		return "停止通过隧道分享会话"
 	case "regenerate.busy":
 		return "Agent 正在运行，无法重新生成。请先按 Ctrl+C 取消。"
 	case "regenerate.no_agent":

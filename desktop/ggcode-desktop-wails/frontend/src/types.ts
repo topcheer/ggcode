@@ -51,6 +51,8 @@ export interface LanChatParticipant {
   agent_nick: string
   mode: string
   endpoint: string
+  role: string
+  team: string
   online: boolean
   last_seen: number
   workspace?: string
@@ -59,6 +61,7 @@ export interface LanChatParticipant {
   frameworks?: string[]
   has_git?: boolean
   has_tests?: boolean
+  agent_busy?: boolean
 }
 
 export interface LanChatMessage {

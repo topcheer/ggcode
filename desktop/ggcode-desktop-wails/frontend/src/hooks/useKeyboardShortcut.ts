@@ -56,7 +56,7 @@ export interface ShortcutOptions {
  * On macOS, Ctrl is often replaced by Cmd (metaKey). If ctrl=true and meta is not set,
  * we accept either ctrlKey or metaKey for cross-platform convenience.
  */
-function matchesShortcut(e: KeyboardEvent, config: ShortcutConfig): boolean {
+export function matchesShortcut(e: KeyboardEvent, config: ShortcutConfig): boolean {
   // Key match (case-insensitive for letters)
   if (e.key.toLowerCase() !== config.key.toLowerCase()) return false
 

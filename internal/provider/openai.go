@@ -551,6 +551,9 @@ func finishReasonError(finishReason string) error {
 }
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
+	// Merge all system messages into one to avoid interspersed system messages
+	// in the OpenAI messages array.
+	messages = MergeSystemMessages(messages)
 	result := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for idx, m := range messages {
 		if debug.IsVerbose("openai") {

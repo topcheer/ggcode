@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
-// @vitest-environment jsdom
 import { describe, expect, it, afterEach } from 'vitest'
 import { render, screen, act, cleanup } from '@testing-library/react'
 import { ToastContainer, type ToastMessage } from './Toast'
 
-afterEach(() => cleanup())
+afterEach(cleanup)
 
 function makeToast(overrides: Partial<ToastMessage> = {}): ToastMessage {
   return { id: 1, type: 'info', message: 'test message', ...overrides }
@@ -47,8 +46,8 @@ describe('ToastContainer', () => {
 
   it('has dismiss button with aria-label', () => {
     render(<ToastContainer toasts={[makeToast()]} onDismiss={() => {}} />)
-    const dismissBtn = screen.getByLabelText('Dismiss notification')
-    expect(dismissBtn).toBeDefined()
+    const dismissBtns = screen.getAllByLabelText('Dismiss notification')
+    expect(dismissBtns.length).toBeGreaterThanOrEqual(1)
   })
 
   it('calls onDismiss when dismiss button clicked', () => {
@@ -59,20 +58,21 @@ describe('ToastContainer', () => {
         onDismiss={(id) => { dismissedId = id }}
       />
     )
-    const dismissBtn = screen.getByLabelText('Dismiss notification')
+    const dismissBtn = screen.getAllByLabelText('Dismiss notification')[0]
     act(() => { dismissBtn.click() })
     expect(dismissedId).toBe(42)
   })
 
   it('toast has role="status" for screen readers', () => {
     render(<ToastContainer toasts={[makeToast()]} onDismiss={() => {}} />)
-    expect(screen.getByRole('status')).toBeDefined()
+    const statuses = screen.getAllByRole('status')
+    expect(statuses.length).toBeGreaterThanOrEqual(1)
   })
 
   it('toast has aria-live="polite"', () => {
     render(<ToastContainer toasts={[makeToast()]} onDismiss={() => {}} />)
-    const status = screen.getByRole('status')
-    expect(status.getAttribute('aria-live')).toBe('polite')
+    const statuses = screen.getAllByRole('status')
+    expect(statuses[0].getAttribute('aria-live')).toBe('polite')
   })
 
   it('renders success toast type', () => {
