@@ -79,7 +79,7 @@ export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) 
             </div>
           </div>
         </div>
-        <button type="button" onClick={onClose} title="Close team board" style={{
+        <button type="button" onClick={onClose} title="Close team board" aria-label="Close team board" style={{
           width: 28,
           height: 28,
           borderRadius: 'var(--radius-md)',
@@ -138,7 +138,7 @@ function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSe
           {(team.teammates || []).length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No teammates yet</div>
           ) : team.teammates.map(tm => (
-            <button key={tm.id} type="button" onClick={() => onSelectTeammate?.(tm.id)} style={{
+            <button key={tm.id} type="button" onClick={() => onSelectTeammate?.(tm.id)} aria-label={`Teammate ${tm.name}: ${tm.status}${tm.currentTask ? ', task: ' + tm.currentTask : ''}`} title={`Teammate ${tm.name}: ${tm.status}`} style={{
               textAlign: 'left',
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-md)',
