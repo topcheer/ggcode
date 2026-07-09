@@ -409,6 +409,17 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
   return next
 }
 
+// Max messages kept in the DOM. When exceeded, oldest are trimmed.
+// Prevents UI degradation in long sessions (10+ hours of continuous use).
+const MAX_RENDERED_MESSAGES = 200
+
+// Helper: append message(s) and trim from top if over limit
+function appendAndTrim(prev: ChatMessage[], ...newMsgs: ChatMessage[]): ChatMessage[] {
+  const combined = [...prev, ...newMsgs]
+  if (combined.length <= MAX_RENDERED_MESSAGES) return combined
+  return combined.slice(-MAX_RENDERED_MESSAGES)
+}
+
 function isNearBottom(el: HTMLElement | null, threshold = 120): boolean {
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
@@ -1138,22 +1149,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (p.name === 'exit_plan_mode') {
             const planArgs = parseJSON<{ plan: string }>(p.arguments || '{}')
             if (planArgs?.plan) {
-              setMessages(prev => [...prev, {
+              setMessages(prev => appendAndTrim(prev, {
                 id: nextID(), role: 'assistant' as const,
                 content: planArgs.plan, streaming: false,
                 timestamp: Date.now(),
-              }])
+              }))
             }
             break
           }
 
           // enter_plan_mode: just show brief indicator, skip tool call UI
           if (p.name === 'enter_plan_mode') {
-            setMessages(prev => [...prev, {
+            setMessages(prev => appendAndTrim(prev, {
               id: nextID(), role: 'assistant' as const,
               content: 'Entering plan mode...', streaming: false,
               timestamp: Date.now(),
-            }])
+            }))
             break
           }
 
@@ -1212,10 +1223,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }
         case 'error': {
           const p = parseJSON<{ message: string }>(raw)
-          setMessages(prev => [...prev, {
+          setMessages(prev => appendAndTrim(prev, {
             id: nextID(), role: 'error' as const,
             content: p?.message || 'Error', timestamp: Date.now(),
-          }])
+          }))
           break
         }
         case 'user_message': {
@@ -1242,11 +1253,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         case 'system': {
           const p = parseJSON<{ text: string }>(raw)
           if (!p?.text) break
-          setMessages(prev => [...prev, {
+          setMessages(prev => appendAndTrim(prev, {
             id: nextID(), role: 'system' as ChatRole,
             content: p.text,
             timestamp: Date.now(),
-          }])
+          }))
           break
         }
         case 'run_done': {
@@ -1263,10 +1274,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const dur = rm.startTime ? Math.max(1, Math.round((Date.now() - rm.startTime) / 1000)) : 0
           if (dur >= 3 || rm.toolCalls > 0 || rm.errors > 0) {
             const totalTokens = rm.inputTokens + rm.outputTokens
-            setMessages(prev => [...prev, {
+            setMessages(prev => appendAndTrim(prev, {
               id: nextID(), role: 'system' as ChatRole, content: '', timestamp: Date.now(),
               runSummary: { durationSec: dur, toolCalls: rm.toolCalls, errors: rm.errors, inputTokens: rm.inputTokens || undefined, outputTokens: rm.outputTokens || undefined, filesEdited: rm.fileEdits || undefined },
-            }])
+            }))
             void totalTokens
           }
           // Clear completed agent panels
@@ -1427,11 +1438,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           if (!p) break
           ensureAgentPanel(p.teammateID, p.teammateName, 'teammate')
           // Also show a system message in main chat
-          setMessages(prev => [...prev, {
+          setMessages(prev => appendAndTrim(prev, {
             id: nextID(), role: 'system' as ChatRole,
             content: `Teammate "${p.teammateName}" spawned`,
             timestamp: Date.now(),
-          }])
+          }))
           break
         }
         case 'swarm_idle': {
@@ -1556,12 +1567,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         setThinking(false)
         setStatusBar(s => ({ ...s, status: 'error' }))
       }
-      setMessages(prev => [...prev, {
+      setMessages(prev => appendAndTrim(prev, {
         id: nextID(),
         role: 'error' as const,
         content: message,
         timestamp: Date.now(),
-      }])
+      }))
     }
   }, [isStreaming, markMessageDelivery, showToast])
 
