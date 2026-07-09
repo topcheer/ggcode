@@ -1000,27 +1000,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const scrollRafRef = useRef<number | null>(null)
 
   const scrollToBottomIfAuto = useCallback(() => {
-    if (scrollRafRef.current !== null) return // already queued
+    if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
       if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-      const container = scrollContainerRef.current
-      if (container) {
-        // Suppress scroll events during the double-rAF window
-        suppressNextScrollEventRef.current = true
-        // Double-rAF: first frame lets the browser finish layout (images,
-        // markdown rendering, code highlighting), second frame scrolls.
-        requestAnimationFrame(() => {
-          if (!scrollContainerRef.current) return
-          if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-          suppressNextScrollEventRef.current = true
-          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-          // Clear suppress after a short delay to let all scroll events settle
-          setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
-        })
-      } else {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
-      }
+      // Use scrollIntoView on the sentinel div — more reliable than
+      // scrollTop = scrollHeight which doesn't account for margins/padding
+      // on the last message, leaving a few pixels cut off.
+      suppressNextScrollEventRef.current = true
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+      setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
     })
   }, [activeTab])
 
@@ -1043,11 +1032,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = null
         if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-        if (scrollContainerRef.current) {
-          suppressNextScrollEventRef.current = true
-          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-          setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
-        }
+        suppressNextScrollEventRef.current = true
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+        setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
       })
     })
     // Observe the scroll content area (first child = messages container)
@@ -2836,7 +2823,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+        <div ref={messagesEndRef} style={{ scrollMarginBottom: '16px', height: 0 }} />
       </div>
 
       {/* Input area */}
