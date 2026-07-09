@@ -187,7 +187,7 @@ export function IMManagement() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{t('im.title')}</h3>
         <div style={{ flex: 1 }} />
-        <button onClick={() => { setShowAdd(true); setError('') }} style={{
+        <button onClick={() => { setShowAdd(true); setError('') }} title="Add IM adapter" aria-label="Add IM adapter" style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 14px', borderRadius: 'var(--radius-md)',
           background: 'var(--color-primary)', color: '#fff',
@@ -443,9 +443,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
       {/* Actions */}
       {/* Enable/Disable button - only for current workspace binding */}
       {isBoundToCurrent && (
-        <button onClick={async () => {
-          try { await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled); onReload() } catch {}
-        }} style={{
+        <button
+          onClick={async () => { try { await App.SetIMAdapterEnabled(adapter.name, !adapter.enabled); onReload() } catch {} }}
+          title={adapter.enabled ? `Disable ${adapter.name}` : `Enable ${adapter.name}`}
+          aria-label={adapter.enabled ? `Disable ${adapter.name}` : `Enable ${adapter.name}`}
+          style={{
           padding: '4px 8px', borderRadius: 'var(--radius-sm)',
           border: 'none', cursor: 'pointer', fontSize: 11,
           background: adapter.enabled ? 'var(--color-warning)' : 'var(--color-success)',
@@ -457,12 +459,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
 
       {/* Mute/Unmute button - only for current workspace binding */}
       {isBoundToCurrent && (
-        <button onClick={async () => {
-          try {
-            await App.MuteIMAdapter(adapter.name, !adapter.muted)
-            onReload()
-          } catch {}
-        }} style={{
+        <button
+          onClick={async () => { try { await App.MuteIMAdapter(adapter.name, !adapter.muted); onReload() } catch {} }}
+          title={adapter.muted ? `Unmute ${adapter.name}` : `Mute ${adapter.name}`}
+          aria-label={adapter.muted ? `Unmute ${adapter.name}` : `Mute ${adapter.name}`}
+          style={{
           padding: '4px 8px', borderRadius: 'var(--radius-sm)',
           border: 'none', cursor: 'pointer', fontSize: 11,
           background: adapter.muted ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
@@ -475,10 +476,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
 
       {/* Unbind button - only for current workspace binding */}
       {isBoundToCurrent && (
-        <button onClick={async () => {
-          if (!confirm(`Unbind adapter "${adapter.name}"?`)) return
-          try { await App.UnbindIMAdapter(adapter.name); onReload() } catch {}
-        }} style={{
+        <button
+          onClick={async () => { if (!confirm(`Unbind adapter "${adapter.name}"?`)) return; try { await App.UnbindIMAdapter(adapter.name); onReload() } catch {} }}
+          title={`Unbind ${adapter.name}`}
+          aria-label={`Unbind ${adapter.name}`}
+          style={{
           padding: '4px 10px', borderRadius: 'var(--radius-sm)',
           border: 'none', cursor: 'pointer',
           background: 'var(--color-error)', color: '#fff', fontSize: 11,
@@ -489,9 +491,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
 
       {/* Bind button - only for unbound adapters */}
       {!isBound && (
-        <button onClick={async () => {
-          try { await App.BindIMAdapter(adapter.name); onReload() } catch {}
-        }} style={{
+        <button
+          onClick={async () => { try { await App.BindIMAdapter(adapter.name); onReload() } catch {} }}
+          title={`Bind ${adapter.name} to this workspace`}
+          aria-label={`Bind ${adapter.name}`}
+          style={{
           padding: '4px 10px', borderRadius: 'var(--radius-sm)',
           border: 'none', cursor: 'pointer',
           background: 'var(--color-success)', color: '#fff', fontSize: 11,
@@ -502,9 +506,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
 
       {/* Rebind button - for adapters bound to other workspaces */}
       {isBound && !isBoundToCurrent && (
-        <button onClick={async () => {
-          try { await App.RebindIMAdapter(adapter.name); onReload() } catch {}
-        }} style={{
+        <button
+          onClick={async () => { try { await App.RebindIMAdapter(adapter.name); onReload() } catch {} }}
+          title={`Rebind ${adapter.name} to this workspace`}
+          aria-label={`Rebind ${adapter.name}`}
+          style={{
           padding: '4px 10px', borderRadius: 'var(--radius-sm)',
           border: 'none', cursor: 'pointer',
           background: 'var(--color-warning)', color: '#fff', fontSize: 11,
@@ -514,11 +520,15 @@ function AdapterRow({ adapter, onReload, onEdit }: {
       )}
 
       {/* Edit button - always available */}
-      <button onClick={() => {
-        const fields: Record<string, string> = {}
-        if (adapter.extra) for (const [k, v] of Object.entries(adapter.extra)) fields[k] = String(v)
-        onEdit(adapter.name, fields)
-      }} style={{
+      <button
+        onClick={() => {
+          const fields: Record<string, string> = {}
+          if (adapter.extra) for (const [k, v] of Object.entries(adapter.extra)) fields[k] = String(v)
+          onEdit(adapter.name, fields)
+        }}
+        title={`Edit ${adapter.name}`}
+        aria-label={`Edit ${adapter.name}`}
+        style={{
         padding: '4px 10px', borderRadius: 'var(--radius-sm)',
         border: '1px solid var(--color-border)', cursor: 'pointer',
         background: 'var(--color-surface)', color: 'var(--text-secondary)', fontSize: 11,
@@ -527,10 +537,11 @@ function AdapterRow({ adapter, onReload, onEdit }: {
       </button>
 
       {/* Delete button - always available */}
-      <button onClick={async () => {
-        if (!confirm(`Remove adapter "${adapter.name}"?`)) return
-        try { await App.RemoveIMAdapter(adapter.name); onReload() } catch {}
-      }} style={{
+      <button
+        onClick={async () => { if (!confirm(`Remove adapter "${adapter.name}"?`)) return; try { await App.RemoveIMAdapter(adapter.name); onReload() } catch {} }}
+        title={`Remove ${adapter.name}`}
+        aria-label={`Remove ${adapter.name}`}
+        style={{
         padding: '4px 6px', borderRadius: 'var(--radius-sm)',
         border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--color-error)',
       }}>
