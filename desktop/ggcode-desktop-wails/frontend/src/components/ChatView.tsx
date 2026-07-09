@@ -411,7 +411,10 @@ function materializeHistory(history: any[], previous: ChatMessage[]): ChatMessag
 
 // Max messages kept in the DOM. When exceeded, oldest are trimmed.
 // Prevents UI degradation in long sessions (10+ hours of continuous use).
-const MAX_RENDERED_MESSAGES = 200
+// 500 balances performance and context visibility — an autopilot agent
+// running hundreds of turns with ~5 messages per turn (text + tool calls
+// + results + reasoning) still shows the last ~100 LLM turns.
+const MAX_RENDERED_MESSAGES = 500
 
 // Helper: append message(s) and trim from top if over limit
 function appendAndTrim(prev: ChatMessage[], ...newMsgs: ChatMessage[]): ChatMessage[] {
