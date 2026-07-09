@@ -1,5 +1,57 @@
 :root {
-  /* Colors */
+  /* Colors — Light theme (default) */
+  --color-bg: #FFFFFF;
+  --color-nav: #F6F8FA;
+  --color-card: #F0F2F5;
+  --color-surface: #E8EAED;
+  --color-border: #D0D7DE;
+  --color-primary: #0969DA;
+  --color-success: #1A7F37;
+  --color-error: #CF222E;
+  --color-warning: #9A6700;
+  --color-info: #0969DA;
+  --color-error-rgb: 207, 34, 46;
+
+  /* Text — Light */
+  --text-primary: #1F2328;
+  --text-secondary: #656D76;
+  --text-tertiary: #8C959F;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Font */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+  /* Font sizes */
+  --font-size-base: 15px;
+  --font-size-small: 13px;
+  --font-size-tiny: 11px;
+  --font-size-code: 13px;
+
+  /* Sizing */
+  --nav-rail-width: 48px;
+  --sidebar-width: 280px;
+  --topbar-height: 48px;
+  --statusbar-height: 28px;
+
+  color-scheme: light;
+}
+
+/* Dark theme — activated by .dark class on <html> */
+.dark {
+  /* Colors — Dark theme */
   --color-bg: #0D1117;
   --color-nav: #010409;
   --color-card: #161B22;
@@ -10,40 +62,14 @@
   --color-error: #F85149;
   --color-warning: #D29922;
   --color-info: #58A6FF;
-  
-  /* Text */
+  --color-error-rgb: 248, 81, 73;
+
+  /* Text — Dark */
   --text-primary: #E6EDF3;
   --text-secondary: #8B949E;
   --text-tertiary: #484F58;
-  
-  /* Spacing */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 12px;
-  --spacing-lg: 16px;
-  --spacing-xl: 24px;
-  
-  /* Radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-  
-  /* Font */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
 
-  /* Font sizes */
-  --font-size-base: 15px;    /* main content / chat messages */
-  --font-size-small: 13px;   /* secondary text, labels */
-  --font-size-tiny: 11px;    /* badges, meta info */
-  --font-size-code: 13px;    /* code blocks */
-  
-  /* Sizing */
-  --nav-rail-width: 48px;
-  --sidebar-width: 280px;
-  --topbar-height: 48px;
-  --statusbar-height: 28px;
+  color-scheme: dark;
 }
 
 * {
@@ -62,12 +88,8 @@ html, body, #root {
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  /* Tell browser to render native UI elements (dropdowns, scrollbars, date pickers)
-     in dark mode — without this, macOS/Windows renders native controls in light theme */
-  color-scheme: dark;
-  /* Optimize text rendering for better kerning and ligatures */
+  color-scheme: light dark;
   text-rendering: optimizeLegibility;
-  /* Prevent layout shift when scrollbars appear/disappear in scrollable containers */
   scrollbar-gutter: stable;
 }
 

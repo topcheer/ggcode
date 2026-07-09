@@ -26,6 +26,27 @@ interface ImpersonationPreset {
 export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, onOpenAbout, showToast }: Props) {
   const { t, locale, setLocale } = useTranslation()
   const [tab, setTab] = useState<SettingsTab>('provider')
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'auto'>(() => {
+    const saved = localStorage.getItem('ggcode-theme')
+    return saved === 'dark' || saved === 'light' ? saved : 'auto'
+  })
+
+  const applyTheme = (mode: 'light' | 'dark' | 'auto') => {
+    setThemeMode(mode)
+    if (mode === 'light') {
+      document.documentElement.classList.remove('dark')
+      localStorage.setItem('ggcode-theme', 'light')
+    } else if (mode === 'dark') {
+      document.documentElement.classList.add('dark')
+      localStorage.setItem('ggcode-theme', 'dark')
+    } else {
+      localStorage.removeItem('ggcode-theme')
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.classList.toggle('dark', prefersDark)
+    }
+  }
+
+  const isDark = themeMode === 'dark' || (themeMode === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [vendors, setVendors] = useState<string[]>([])
   const [endpoints, setEndpoints] = useState<{ key: string; displayName: string }[]>([])
   const [models, setModels] = useState<string[]>([])
@@ -625,15 +646,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             <FieldRow label="Theme">
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <button
-                  onClick={() => {
-                    document.documentElement.classList.remove('dark')
-                    localStorage.setItem('ggcode-theme', 'light')
-                  }}
+                  onClick={() => applyTheme('light')}
                   style={{
                     padding: '8px 16px', borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--color-border)',
-                    background: !document.documentElement.classList.contains('dark') ? 'var(--color-primary)' : 'var(--color-card)',
-                    color: !document.documentElement.classList.contains('dark') ? '#fff' : 'var(--text-secondary)',
+                    background: themeMode === 'light' ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: themeMode === 'light' ? '#fff' : 'var(--text-secondary)',
                     cursor: 'pointer', fontWeight: 600, fontSize: 13,
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
@@ -641,15 +659,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                   <SunMoon size={14} /> Light
                 </button>
                 <button
-                  onClick={() => {
-                    document.documentElement.classList.add('dark')
-                    localStorage.setItem('ggcode-theme', 'dark')
-                  }}
+                  onClick={() => applyTheme('dark')}
                   style={{
                     padding: '8px 16px', borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--color-border)',
-                    background: document.documentElement.classList.contains('dark') ? 'var(--color-primary)' : 'var(--color-card)',
-                    color: document.documentElement.classList.contains('dark') ? '#fff' : 'var(--text-secondary)',
+                    background: themeMode === 'dark' ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: themeMode === 'dark' ? '#fff' : 'var(--text-secondary)',
                     cursor: 'pointer', fontWeight: 600, fontSize: 13,
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
@@ -657,17 +672,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                   <SunMoon size={14} /> Dark
                 </button>
                 <button
-                  onClick={() => {
-                    document.documentElement.classList.remove('dark')
-                    localStorage.removeItem('ggcode-theme')
-                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                      document.documentElement.classList.add('dark')
-                    }
-                  }}
+                  onClick={() => applyTheme('auto')}
                   style={{
                     padding: '8px 16px', borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--color-border)',
-                    background: 'var(--color-card)', color: 'var(--text-secondary)',
+                    background: themeMode === 'auto' ? 'var(--color-primary)' : 'var(--color-card)',
+                    color: themeMode === 'auto' ? '#fff' : 'var(--text-secondary)',
                     cursor: 'pointer', fontWeight: 600, fontSize: 13,
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
@@ -676,7 +686,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 </button>
               </div>
               <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                Shortcut: Cmd+Shift+T to toggle. "Auto" follows your OS setting.
+                Shortcut: Cmd+Shift+T to toggle between light and dark. "Auto" follows your OS setting.
               </span>
             </FieldRow>
           </>
