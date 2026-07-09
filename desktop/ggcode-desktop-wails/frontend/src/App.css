@@ -90,7 +90,6 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
   color-scheme: light dark;
   text-rendering: optimizeLegibility;
-  scrollbar-gutter: stable;
 }
 
 /* Theme-matched caret color for all text inputs */
