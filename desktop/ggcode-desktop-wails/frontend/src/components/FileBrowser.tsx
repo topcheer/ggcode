@@ -686,7 +686,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
                       clearPreview()
                     }
                   }
-                }} style={{
+                }} title={`Close ${tabName}`} aria-label={`Close ${tabName}`} style={{
                   background: 'none', border: 'none', color: 'var(--text-tertiary)',
                   cursor: 'pointer', fontSize: 10, padding: 2, lineHeight: 1,
                 }}>
