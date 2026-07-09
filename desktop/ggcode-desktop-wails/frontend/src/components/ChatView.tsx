@@ -1254,6 +1254,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               timestamp: Date.now(),
               ...(lanchatFrom ? { source: 'lanchat', lanchatFrom } : p.source ? { source: p.source } : {}),
             }))
+            // For non-desktop sources (cron, im, mobile), the backend has
+            // already started the agent run. Activate streaming UI state.
+            if (p.source && p.source !== 'desktop') {
+              runActiveRef.current = true
+              runMetricsRef.current = { startTime: Date.now(), toolCalls: 0, errors: 0, fileEdits: 0, inputTokens: 0, outputTokens: 0 }
+              setIsStreaming(true)
+              setThinking(true)
+              setCurrentActivity(null)
+              setStatusBar(s => ({ ...s, status: 'working' }))
+            }
           }
           break
         }
