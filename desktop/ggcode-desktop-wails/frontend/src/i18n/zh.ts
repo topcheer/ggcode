@@ -263,6 +263,19 @@ const zh: Record<TranslationKey, string> = {
   'debug.allCategories': '全部分类',
   'debug.filterPlaceholder': '过滤...',
   'debug.empty': '点击“开始”捕获调试日志',
+
+  // TeamBoard
+  'team.teams': '个团队',
+  'team.teammates': '个队友',
+  'team.tasks': '个任务',
+  'team.startPrompt': '创建或启动一个团队以查看队友和任务。',
+  'team.noTeammates': '暂无队友',
+  'team.pending': '待处理',
+  'team.inProgress': '进行中',
+  'team.done': '已完成',
+  'team.noPending': '没有待处理任务',
+  'team.noInProgress': '没有被阻塞的任务',
+  'team.noDone': '暂无已完成任务',
 }
 
 export default zh

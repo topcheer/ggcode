@@ -261,6 +261,19 @@ const en = {
   'debug.allCategories': 'All categories',
   'debug.filterPlaceholder': 'Filter...',
   'debug.empty': 'Click "Start" to begin capturing debug logs',
+
+  // TeamBoard
+  'team.teams': 'teams',
+  'team.teammates': 'teammates',
+  'team.tasks': 'tasks',
+  'team.startPrompt': 'Start or spawn a team to see teammates and tasks here.',
+  'team.noTeammates': 'No teammates yet',
+  'team.pending': 'Pending',
+  'team.inProgress': 'In Progress',
+  'team.done': 'Done',
+  'team.noPending': 'No pending tasks',
+  'team.noInProgress': 'Nobody is blocked here',
+  'team.noDone': 'Nothing completed yet',
 } as const
 
 export type TranslationKey = keyof typeof en

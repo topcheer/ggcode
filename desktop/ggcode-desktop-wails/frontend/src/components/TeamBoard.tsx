@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import { CheckCircle2, Circle, Columns3, Users, X } from 'lucide-react'
+import { useTranslation, type TranslationKey } from '../i18n'
 
 export interface TeamBoardTask {
   id: string
@@ -40,13 +41,14 @@ interface TeamBoardProps {
   onSelectTeammate?: (teammateID: string) => void
 }
 
-const columns: Array<{ key: string; title: string; empty: string }> = [
-  { key: 'pending', title: 'Pending', empty: 'No pending tasks' },
-  { key: 'in_progress', title: 'In Progress', empty: 'Nobody is blocked here' },
-  { key: 'completed', title: 'Done', empty: 'Nothing completed yet' },
+const columns: Array<{ key: string; titleKey: TranslationKey; emptyKey: TranslationKey }> = [
+  { key: 'pending', titleKey: 'team.pending', emptyKey: 'team.noPending' },
+  { key: 'in_progress', titleKey: 'team.inProgress', emptyKey: 'team.noInProgress' },
+  { key: 'completed', titleKey: 'team.done', emptyKey: 'team.noDone' },
 ]
 
 export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) {
+  const { t } = useTranslation()
   const totalTeammates = useMemo(() => teams.reduce((sum, t) => sum + (t.teammates?.length || 0), 0), [teams])
   const totalTasks = useMemo(() => teams.reduce((sum, t) => sum + (t.tasks?.length || 0), 0), [teams])
 
@@ -75,7 +77,7 @@ export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) 
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Team Board</div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-              {teams.length} team{teams.length === 1 ? '' : 's'} · {totalTeammates} teammate{totalTeammates === 1 ? '' : 's'} · {totalTasks} task{totalTasks === 1 ? '' : 's'}
+              {teams.length} {t('team.teams')} · {totalTeammates} {t('team.teammates')} · {totalTasks} {t('team.tasks')}
             </div>
           </div>
         </div>
@@ -105,7 +107,7 @@ export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) 
             fontSize: 12,
             textAlign: 'center',
           }}>
-            Start or spawn a team to see teammates and tasks here.
+            {t('team.startPrompt')}
           </div>
         ) : teams.map(team => (
           <TeamSection key={team.id} team={team} onSelectTeammate={onSelectTeammate} />
@@ -116,6 +118,7 @@ export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) 
 }
 
 function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSelectTeammate?: (teammateID: string) => void }) {
+  const { t } = useTranslation()
   const teammateByID = useMemo(() => {
     const map = new Map<string, TeamBoardTeammate>()
     for (const tm of team.teammates || []) map.set(tm.id, tm)
@@ -136,7 +139,7 @@ function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSe
         </div>
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {(team.teammates || []).length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No teammates yet</div>
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{t('team.noTeammates')}</div>
           ) : team.teammates.map(tm => (
             <button key={tm.id} type="button" onClick={() => onSelectTeammate?.(tm.id)} aria-label={`Teammate ${tm.name}: ${tm.status}${tm.currentTask ? ', task: ' + tm.currentTask : ''}`} title={`Teammate ${tm.name}: ${tm.status}`} style={{
               textAlign: 'left',
@@ -162,7 +165,7 @@ function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSe
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {columns.map(col => {
-          const tasks = (team.tasks || []).filter(t => (t.status || 'pending') === col.key)
+          const colTasks = (team.tasks || []).filter(task => (task.status || 'pending') === col.key)
           return (
             <div key={col.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <div style={{
@@ -175,18 +178,18 @@ function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSe
                 letterSpacing: 0.4,
                 color: 'var(--text-tertiary)',
               }}>
-                <span>{col.title}</span>
-                <span>{tasks.length}</span>
+                <span>{t(col.titleKey)}</span>
+                <span>{colTasks.length}</span>
               </div>
-              {tasks.length === 0 ? (
+              {colTasks.length === 0 ? (
                 <div style={{
                   padding: '8px 10px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px dashed var(--color-border)',
                   color: 'var(--text-tertiary)',
                   fontSize: 11,
-                }}>{col.empty}</div>
-              ) : tasks.map(task => (
+                }}>{t(col.emptyKey)}</div>
+              ) : colTasks.map(task => (
                 <TaskCard key={task.id} task={task} teammate={teammateByID.get(task.owner || task.assignee || '')} />
               ))}
             </div>
