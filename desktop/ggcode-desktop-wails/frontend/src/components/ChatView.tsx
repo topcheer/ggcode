@@ -1006,11 +1006,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
-      requestAnimationFrame(() => {
-        if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
-        }
-      })
+      // Use scrollTo with smooth=auto — more stable than scrollIntoView
+      // during streaming because it doesn't fight the browser's layout
+      const c = scrollContainerRef.current
+      if (c) {
+        c.scrollTop = c.scrollHeight
+      }
     })
   }, [])
 
@@ -1018,15 +1019,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // during streaming). The rAF debounce in doScrollToBottom ensures we only
   // scroll once per animation frame even if messages updates fire many times.
   const lastMsgSigRef = useRef('')
+  const lastScrollTimeRef = useRef(0)
   useEffect(() => {
-    // Build a cheap signature: length + last message content length + last id
     const last = messages[messages.length - 1]
     const sig = `${messages.length}:${last?.id ?? ''}:${last?.content?.length ?? 0}`
     const changed = sig !== lastMsgSigRef.current
     lastMsgSigRef.current = sig
 
     if (changed && getTabAutoScroll(autoScrollByTabRef.current, activeTab)) {
-      doScrollToBottom()
+      // Throttle: at most once per 80ms during streaming to prevent jitter
+      const now = Date.now()
+      if (now - lastScrollTimeRef.current >= 80) {
+        lastScrollTimeRef.current = now
+        doScrollToBottom()
+      }
     }
   }, [messages, activeTab, doScrollToBottom])
 
