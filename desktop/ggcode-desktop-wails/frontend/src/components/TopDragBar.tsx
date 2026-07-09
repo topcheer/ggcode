@@ -106,13 +106,13 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
       onMouseLeave={() => setLightsHover(false)}
       onClick={(e) => e.stopPropagation()}
     >
-      <button onClick={handleClose} style={lightBtn('#ff5f57')} title="Close">
+      <button onClick={handleClose} style={lightBtn('#ff5f57')} title="Close" aria-label="Close window">
         {lightsHover ? '\u2715' : ''}
       </button>
-      <button onClick={handleMinimize} style={lightBtn('#febc2e')} title="Minimize">
+      <button onClick={handleMinimize} style={lightBtn('#febc2e')} title="Minimize" aria-label="Minimize window">
         {lightsHover ? '\u2212' : ''}
       </button>
-      <button onClick={handleMaximize} style={lightBtn('#28c840')} title="Maximize">
+      <button onClick={handleMaximize} style={lightBtn('#28c840')} title="Maximize" aria-label={isMaximized ? "Restore window" : "Maximize window"}>
         {lightsHover ? (isMaximized ? '\u2752' : '\u25B3') : ''}
       </button>
     </div>
