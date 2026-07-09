@@ -541,7 +541,7 @@ func (b *ChatBridge) Cancel() {
 // status to mobile, emit run_done to frontend, and notify LAN Chat peers.
 // err is the agent run result (may be nil for success or context.Canceled).
 func (b *ChatBridge) finishRun(err error) {
-	b.saveSession()
+	b.persistRunMessages()
 
 	// Flush tunnel state
 	if broker := b.currentTunnelBroker(); broker != nil {
@@ -784,6 +784,54 @@ func (b *ChatBridge) ensureSession() error {
 }
 
 // saveSession persists the current session (mirrors Fyne bridge).
+// persistRunMessages appends only NEW messages (added during the latest
+// agent run) to the JSONL file, matching TUI's persistFullSessionMessages.
+//
+// CRITICAL: Do NOT use SaveAgentSessionSnapshotWithExtra / SaveSessionMessages
+// here — those do a full file rewrite using agent.Messages() (which may be
+// the compacted version). That would permanently destroy pre-compaction
+// message records from the JSONL file.
+func (b *ChatBridge) persistRunMessages() {
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.sessionStore
+	ag := b.agent
+	b.mu.Unlock()
+
+	if ses == nil || store == nil || ag == nil {
+		return
+	}
+
+	// Get all messages the agent added during this run.
+	runAdded := ag.AddedSinceRunStart()
+
+	// runAdded[0] is the user message — already persisted by startRun()
+	// or drainPendingMsg() before the agent loop started.
+	var newMsgs []provider.Message
+	if len(runAdded) > 0 && runAdded[0].Role == "user" {
+		newMsgs = runAdded[1:]
+	} else {
+		newMsgs = runAdded
+	}
+
+	b.mu.Lock()
+	ses.Messages = append(ses.Messages, newMsgs...)
+	ses.UpdatedAt = time.Now()
+	b.mu.Unlock()
+
+	if len(newMsgs) == 0 {
+		return
+	}
+
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		if err := jsonlStore.AppendMessagesBatchToDisk(ses, newMsgs); err != nil {
+			log.Printf("[chat] persistRunMessages: AppendMessagesBatchToDisk failed: %v", err)
+		}
+	} else {
+		_ = store.Save(ses)
+	}
+}
+
 func (b *ChatBridge) saveSession() {
 	b.mu.Lock()
 	ses := b.currentSes
