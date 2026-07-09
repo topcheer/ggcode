@@ -198,7 +198,7 @@ func (a *whatsappAdapter) sendExtractedImage(ctx context.Context, jid types.JID,
 		if err != nil {
 			return fmt.Errorf("create request for image URL: %w", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := imageDownloadClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("download image: %w", err)
 		}

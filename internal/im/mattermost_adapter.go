@@ -760,7 +760,7 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 		if err != nil {
 			return nil, "", fmt.Errorf("create request: %w", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := imageDownloadClient.Do(req)
 		if err != nil {
 			return nil, "", fmt.Errorf("download image: %w", err)
 		}

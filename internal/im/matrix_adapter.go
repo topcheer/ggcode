@@ -666,7 +666,7 @@ func (a *matrixAdapter) resolveImageToBytes(ctx context.Context, img ExtractedIm
 		if err != nil {
 			return nil, "", fmt.Errorf("create request: %w", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := imageDownloadClient.Do(req)
 		if err != nil {
 			return nil, "", fmt.Errorf("download image: %w", err)
 		}

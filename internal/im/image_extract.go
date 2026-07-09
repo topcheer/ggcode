@@ -1,15 +1,23 @@
 package im
 
 import (
+	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
 	markdownImageRe = regexp.MustCompile(`(?i)!\[([^\]]*)\]\(([^)]+)\)`)
 	bareImageURLRe  = regexp.MustCompile(`(?i)(?:^|[\s(])(https?://[^\s)"'<>]+\.(?:png|jpe?g|gif|webp)(?:\?[^\s"'<>]*)?)`)
 	dataURLRe       = regexp.MustCompile(`(?i)(data:image/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+)`)
+
+	// imageDownloadClient is used by adapters to download images from URLs.
+	// It has an explicit 60s timeout to prevent slow servers from blocking
+	// the send path indefinitely. Context cancellation provides a secondary
+	// timeout via the 30s defaultSendTimeout.
+	imageDownloadClient = &http.Client{Timeout: 60 * time.Second}
 )
 
 // ExtractedImage represents an image found in message text.
