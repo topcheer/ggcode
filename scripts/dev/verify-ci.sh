@@ -83,3 +83,16 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   echo "[verify-ci:desktop] running tests"
   (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=256MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
 fi
+
+# ── Frontend Vitest (no CGO needed) ───────────────────────────────────────
+frontend_dir="${desktop_dir}/frontend"
+if [ -d "${frontend_dir}" ] && [ -f "${frontend_dir}/package.json" ]; then
+  echo ""
+  echo "[verify-ci:frontend] running Vitest tests"
+  (cd "${frontend_dir}" && npx vitest run --reporter=dot 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "[verify-ci:frontend] Vitest tests FAILED"
+    exit 1
+  fi
+  echo "[verify-ci:frontend] Vitest tests passed"
+fi
