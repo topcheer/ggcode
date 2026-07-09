@@ -51,8 +51,8 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     justifyContent: 'space-between',
     paddingLeft: isMac ? 12 : 12,
     paddingRight: isMac ? 12 : 0,
-    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-    background: 'linear-gradient(180deg, rgba(17, 24, 39, 0.92), rgba(13, 17, 23, 0.86))',
+    borderBottom: '1px solid var(--color-border)',
+    background: 'var(--color-nav)',
     '--wails-draggable': 'drag',
   } as React.CSSProperties
 
@@ -69,7 +69,7 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
     height: 12,
     borderRadius: '50%',
     border: 'none',
-    background: lightsHover ? color : 'rgba(255,255,255,0.18)',
+    background: lightsHover ? color : 'var(--color-border)',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
