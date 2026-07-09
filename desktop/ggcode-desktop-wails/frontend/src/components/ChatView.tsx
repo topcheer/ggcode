@@ -879,42 +879,18 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // Do not let an async history response overwrite an active live stream.
   useEffect(() => {
     // If no sessionId from parent, try to fetch it directly from backend.
-    // This handles the race where Layout's mount polling hasn't completed yet
-    // or the session:changed event was missed.
     if (!sessionId) {
-      setMessages([])
-      messagesRef.current = []
-      setThinking(false)
-      setStatusBar({
-        vendor: '', model: '', mode: 'auto', effort: 'auto', contextUsed: 0, contextTotal: 0, usagePercent: 0, remainingPercent: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, cacheHit: 0, status: 'ready',
-      })
-      // Try to fetch session ID directly from backend as fallback
-      let cancelled = false
+      // Don't clear messages when sessionId is undefined — Layout hasn't
+      // fetched the session ID yet. Just try to fetch it.
       App.GetCurrentSessionID().then((id: any) => {
-        if (cancelled) return
-        const sid = typeof id === 'string' ? id : (id as any)?.toString?.() || ''
-        if (sid) {
-          // Load history directly — only last 50 messages for performance
-          setHistoryLoading(true)
-          App.GetSessionHistory().then((history: any[]) => {
-            if (cancelled || !history || history.length === 0) { setHistoryLoading(false); return }
-            autoScrollByTabRef.current.main = true
-            // Limit to last 50 messages to prevent UI freeze on large sessions.
-            // Full sessions can have thousands of messages with code blocks,
-            // markdown, and diffs — rendering all at once causes multi-second
-            // freezes on every keystroke and scroll.
-            const MAX_INITIAL = 50
-            const trimmed = history.length > MAX_INITIAL ? history.slice(-MAX_INITIAL) : history
-            const loaded = materializeHistory(trimmed, [])
-            messagesRef.current = loaded
-            setMessages(loaded)
-            setHistoryLoading(false)
-            try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
-          }).catch(() => { setHistoryLoading(false) })
+        if (typeof id === 'string' && id) {
+          // This will trigger the session:changed event in Layout,
+          // which will set activeSessionId and re-run this effect.
         }
       }).catch(() => {})
-      return () => { cancelled = true }
+      return
     }
+
     // Session changed — clear old messages immediately so stale content
     // from the previous session doesn't linger while loading.
     setMessages([])
