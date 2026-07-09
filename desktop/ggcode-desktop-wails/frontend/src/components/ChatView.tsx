@@ -3296,7 +3296,10 @@ function UserMessage({ msg, onRetry, onEdit }: {
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
   const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
-  const isMarkdown = isLanChat || msg.source === 'im' || msg.source === 'mobile' || msg.source === 'cron'
+  // All user messages render as markdown — users may paste markdown docs,
+  // and non-desktop sources (cron, IM, mobile) frequently contain markdown.
+  // The isLanChat flag is still needed for the "via" label styling.
+  const isMarkdown = true
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
