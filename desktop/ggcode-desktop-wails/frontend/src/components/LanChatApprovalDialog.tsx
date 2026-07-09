@@ -99,6 +99,7 @@ export function LanChatApprovalDialog() {
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 onClick={() => handleApprove(p.message.id)}
+                aria-label={`Approve request from ${p.message.from_nick}`}
                 style={{
                   padding: '6px 16px', fontSize: '13px', fontWeight: 500,
                   border: 'none', borderRadius: '6px',
@@ -109,6 +110,7 @@ export function LanChatApprovalDialog() {
               </button>
               <button
                 onClick={() => handleAlwaysApprove(p.message.from_nick, p.message.id)}
+                aria-label={`Always approve requests from ${p.message.from_nick}`}
                 style={{
                   padding: '6px 16px', fontSize: '13px', fontWeight: 500,
                   border: 'none', borderRadius: '6px',
@@ -119,6 +121,7 @@ export function LanChatApprovalDialog() {
               </button>
               <button
                 onClick={() => handleReject(p.message.id)}
+                aria-label={`Reject request from ${p.message.from_nick}`}
                 style={{
                   padding: '6px 16px', fontSize: '13px', fontWeight: 500,
                   border: '1px solid var(--border-color)', borderRadius: '6px',
