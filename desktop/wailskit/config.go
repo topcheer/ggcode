@@ -211,7 +211,7 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["endpoint"].(string); ok {
 		cfg.Endpoint = v
 	}
-	if v, ok := values["model"].(string); ok {
+	if v, ok := values["model"].(string); ok && v != "" {
 		cfg.Model = v
 	}
 	if v, ok := values["language"].(string); ok {
@@ -764,7 +764,10 @@ func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) er
 	ep.MaxTokens = maxTokens
 	vc.Endpoints[endpoint] = ep
 	globalCfg.Vendors[vendor] = vc
-	return globalCfg.Save()
+	// Use SaveScoped("instance") to avoid triggering full Validate() which
+	// requires a non-empty model. Endpoint limit changes don't affect model
+	// validity, so we skip the model check.
+	return globalCfg.SaveScoped("instance")
 }
 
 // AnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
