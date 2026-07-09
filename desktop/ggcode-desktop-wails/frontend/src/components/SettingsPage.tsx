@@ -118,6 +118,19 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           setModels((ms as string[]) || [])
         }
 
+        // Auto-refresh models from API (online discovery)
+        if (resolved?.vendorId && resolved?.endpointId) {
+          try {
+            const onlineModels = await App.FetchModels(resolved.vendorId, resolved.endpointId, '', '') as string[]
+            if (!cancelled && onlineModels && onlineModels.length > 0) {
+              setModels(onlineModels)
+              setModelsSource('dynamic')
+            }
+          } catch {
+            // Online discovery failed — keep static/resolved list as fallback
+          }
+        }
+
         const ps = await App.GetImpersonationPresets()
         if (cancelled) return
         setPresets(ps as ImpersonationPreset[])
@@ -184,10 +197,22 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     try {
       const ms = await App.GetModels(currentVendor, endpoint) as string[]
       if (ms && ms.length > 0) {
-        setModels(prev => prev.length > 0 ? prev : ms)
+        setModels(ms)
       }
     } catch (e: any) {
       showToast?.('error', `Failed to load static models: ${e?.message || e}`)
+    }
+
+    // Auto-refresh models from API (online discovery)
+    // Only fetch if API key is available; fall back to static list on failure
+    try {
+      const ms = await App.FetchModels(currentVendor, endpoint, '', '') as string[]
+      if (ms && ms.length > 0) {
+        setModels(ms)
+        setModelsSource('dynamic')
+      }
+    } catch {
+      // Online discovery failed — keep static list as fallback
     }
   }, [currentVendor, showToast])
 
