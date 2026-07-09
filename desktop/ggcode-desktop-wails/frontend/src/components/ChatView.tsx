@@ -423,7 +423,7 @@ function appendAndTrim(prev: ChatMessage[], ...newMsgs: ChatMessage[]): ChatMess
   return combined.slice(-MAX_RENDERED_MESSAGES)
 }
 
-function isNearBottom(el: HTMLElement | null, threshold = 120): boolean {
+function isNearBottom(el: HTMLElement | null, threshold = 200): boolean {
   if (!el) return true
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
 }
