@@ -205,7 +205,7 @@ function enhanceDiffBlocks(container: HTMLElement) {
 
 // Render message content: split into markdown + mermaid segments
 function MessageContent({ content }: { content: string }) {
-  const segments = splitContent(content)
+  const segments = useMemo(() => splitContent(content), [content])
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -972,8 +972,6 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [contextBannerDismissed, setContextBannerDismissed] = useState(false)
-  const prevMsgCountRef = useRef(0)
-
   // Track unread messages when scrolled up
   useEffect(() => {
     const delta = messages.length - prevMsgCountRef.current
@@ -993,36 +991,31 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     ? isStreaming
     : (agentPanels.get(activeTab)?.status === 'running')
 
-  // Debounced auto-scroll: one rAF per frame, no suppress flags needed.
-  // The scroll handler's isNearBottom check naturally prevents fighting
-  // user scrolls because once we scroll to bottom, isNearBottom is true
-  // and autoScroll stays true.
+  // === SCROLL LOGIC — minimal, no timers, no suppress flags ===
   const scrollRafRef = useRef<number | null>(null)
 
-  const scrollToBottomIfAuto = useCallback(() => {
+  const doScrollToBottom = useCallback(() => {
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
-      if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-      suppressNextScrollEventRef.current = true
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-      // Second scroll after 100ms — enhanceCodeBlocks runs in a useEffect
-      // after render, changing DOM height. This catches that.
-      setTimeout(() => {
-        if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-        suppressNextScrollEventRef.current = true
+      // Double rAF: first lets layout settle, second scrolls
+      requestAnimationFrame(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-        setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
-      }, 100)
-      setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
+      })
     })
-  }, [activeTab])
+  }, [])
 
-  // Auto-scroll to bottom when messages change — NOT on thinking updates
-  const msgCount = messages.length
+  // Only scroll when message COUNT increases (new message added).
+  // Do NOT scroll on re-renders caused by timers, thinking updates, etc.
+  const prevMsgCountRef = useRef(0)
   useEffect(() => {
-    scrollToBottomIfAuto()
-  }, [msgCount, activeTab, scrollToBottomIfAuto])
+    if (messages.length > prevMsgCountRef.current) {
+      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab)) {
+        doScrollToBottom()
+      }
+    }
+    prevMsgCountRef.current = messages.length
+  }, [messages.length, activeTab, doScrollToBottom])
 
   // Cleanup pending rAF on unmount
   useEffect(() => {
@@ -1046,10 +1039,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (last === 0) return
       if (Date.now() - last < 10_000) return
       autoScrollByTabRef.current[activeTab] = true
-      scrollToBottomIfAuto()
+      doScrollToBottom()
     }, 2000)
     return () => window.clearInterval(id)
-  }, [currentTabStreaming, activeTab, scrollToBottomIfAuto])
+  }, [currentTabStreaming, activeTab, doScrollToBottom])
 
   // Render mermaid diagrams — eagerly try on every message update.
   // Success: replace with SVG, mark data-done (no retry).
@@ -2606,13 +2599,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         aria-live="polite"
         aria-atomic="false"
         onScroll={() => {
-          // Skip scroll events from programmatic scrolling
-          if (suppressNextScrollEventRef.current) {
-            return // don't clear — double-rAF may fire more events
-          }
           const el = scrollContainerRef.current
           if (!el) return
           const nearBottom = isNearBottom(el)
+          // Only update autoScroll on user-initiated scroll AWAY from bottom
           if (!nearBottom) {
             autoScrollByTabRef.current[activeTab] = false
             lastManualScrollAtByTabRef.current[activeTab] = Date.now()
@@ -2625,6 +2615,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         style={{
         flex: 1, overflowY: 'auto',
         padding: 'var(--spacing-lg)',
+        paddingBottom: '60px',
         display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)',
       }}>
         {activeTab === 'main' ? (
