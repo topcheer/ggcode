@@ -1004,11 +1004,16 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
       if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-      // Use scrollIntoView on the sentinel div — more reliable than
-      // scrollTop = scrollHeight which doesn't account for margins/padding
-      // on the last message, leaving a few pixels cut off.
       suppressNextScrollEventRef.current = true
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+      // Second scroll after 100ms — enhanceCodeBlocks runs in a useEffect
+      // after render, changing DOM height. This catches that.
+      setTimeout(() => {
+        if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+        suppressNextScrollEventRef.current = true
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+        setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
+      }, 100)
       setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
     })
   }, [activeTab])
@@ -1017,34 +1022,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   const msgCount = messages.length
   useEffect(() => {
     scrollToBottomIfAuto()
-  }, [msgCount, agentPanels, activeTab, scrollToBottomIfAuto])
-
-  // ResizeObserver: when content height changes (code blocks render, images load,
-  // markdown completes), scroll to bottom if auto-scroll is active.
-  // This handles the case where enhanceCodeBlocks adds DOM elements AFTER the
-  // initial render, changing scrollHeight.
-  useEffect(() => {
-    const container = scrollContainerRef.current
-    if (!container) return
-    let resizeRaf: number | null = null
-    const observer = new ResizeObserver(() => {
-      if (resizeRaf !== null) return
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = null
-        if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
-        suppressNextScrollEventRef.current = true
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-        setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
-      })
-    })
-    // Observe the scroll content area (first child = messages container)
-    const content = container.firstElementChild
-    if (content) observer.observe(content)
-    return () => {
-      observer.disconnect()
-      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
-    }
-  }, [activeTab, msgCount])
+  }, [msgCount, activeTab, scrollToBottomIfAuto])
 
   // Cleanup pending rAF on unmount
   useEffect(() => {
