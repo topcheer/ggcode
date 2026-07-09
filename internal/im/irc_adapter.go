@@ -248,7 +248,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	// scanner.Scan() blocks indefinitely when the server goes silent,
 	// so the timeout must run in a separate goroutine.
 	keepAliveDone := make(chan struct{})
-	go func() {
+	safego.Go("im.irc.keepalive", func() {
 		ticker := time.NewTicker(ircPingInterval)
 		defer ticker.Stop()
 		for {
@@ -264,7 +264,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 				a.sendRaw("PING :ggcode")
 			}
 		}
-	}()
+	})
 	defer close(keepAliveDone)
 
 	for scanner.Scan() {

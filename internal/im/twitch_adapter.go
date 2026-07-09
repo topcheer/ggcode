@@ -210,7 +210,7 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 	// scanner.Scan() blocks indefinitely when the server goes silent,
 	// so the timeout must run in a separate goroutine.
 	keepAliveDone := make(chan struct{})
-	go func() {
+	safego.Go("im.twitch.keepalive", func() {
 		ticker := time.NewTicker(twitchPingInterval)
 		defer ticker.Stop()
 		for {
@@ -226,7 +226,7 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 				a.sendRaw("PING :ggcode")
 			}
 		}
-	}()
+	})
 	defer close(keepAliveDone)
 
 	for scanner.Scan() {
