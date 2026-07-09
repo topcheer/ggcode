@@ -358,7 +358,9 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setSearch('') } }}
           placeholder={t('sidebar.search')}
+          aria-label="Search sessions"
           style={{
             flex: 1, border: 'none', background: 'transparent',
             color: 'var(--text-primary)', outline: 'none',
