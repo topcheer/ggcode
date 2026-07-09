@@ -884,8 +884,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             messagesRef.current = loaded
             setMessages(loaded)
             setHistoryLoading(false)
-            // Restore saved scroll position for this session
-            scrollRestorePendingRef.current = sessionId || null
+            // For session load: always scroll to bottom, don't restore old position.
+            // The old saved position is from a previous session view and is irrelevant
+            // after a fresh load. Clear any saved scroll to avoid conflicts.
+            try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
           }).catch(() => { setHistoryLoading(false) })
         }
       }).catch(() => {})
@@ -910,8 +912,8 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       messagesRef.current = loaded
       setMessages(loaded)
       setHistoryLoading(false)
-      // Restore saved scroll position for this session
-      scrollRestorePendingRef.current = sessionId || null
+      // For session load: always scroll to bottom, don't restore old position.
+      try { sessionStorage.removeItem(`scroll:${sessionId}`) } catch {}
     }).catch(() => { setHistoryLoading(false) })
     return () => { cancelled = true }
   }, [sessionId])
@@ -1023,11 +1025,39 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   }, [activeTab])
 
   // Auto-scroll to bottom when messages change — NOT on thinking updates
-  // (thinking fires hundreds of times per second during streaming)
   const msgCount = messages.length
   useEffect(() => {
     scrollToBottomIfAuto()
   }, [msgCount, agentPanels, activeTab, scrollToBottomIfAuto])
+
+  // ResizeObserver: when content height changes (code blocks render, images load,
+  // markdown completes), scroll to bottom if auto-scroll is active.
+  // This handles the case where enhanceCodeBlocks adds DOM elements AFTER the
+  // initial render, changing scrollHeight.
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    let resizeRaf: number | null = null
+    const observer = new ResizeObserver(() => {
+      if (resizeRaf !== null) return
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null
+        if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+        if (scrollContainerRef.current) {
+          suppressNextScrollEventRef.current = true
+          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+          setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
+        }
+      })
+    })
+    // Observe the scroll content area (first child = messages container)
+    const content = container.firstElementChild
+    if (content) observer.observe(content)
+    return () => {
+      observer.disconnect()
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
+    }
+  }, [activeTab, msgCount])
 
   // Cleanup pending rAF on unmount
   useEffect(() => {
