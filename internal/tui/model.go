@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
@@ -84,6 +85,7 @@ type Model struct {
 	input                           textarea.Model
 	chatList                        *chat.List // virtual-scrolling conversation list
 	chatStyles                      chat.Styles
+	cronScheduler                   *cron.Scheduler
 	shellMode                       bool
 	shellRunning                    bool // true while a $ shell command is executing (independent of agent loading)
 	shellOwnedLoading               bool // true when shell set m.loading (agent wasn't running)
@@ -761,6 +763,10 @@ func (m *Model) startContextProbe() {
 				debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
 			}
 		})
+}
+
+func (m *Model) SetCronScheduler(s *cron.Scheduler) {
+	m.cronScheduler = s
 }
 
 func (m *Model) SetSession(ses *session.Session, store session.Store) {

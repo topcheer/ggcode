@@ -447,6 +447,7 @@ func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
 // SetCronScheduler wires the cron scheduler and registers cron tools.
 func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 	r.cronScheduler = s
+	r.model.SetCronScheduler(s)
 	s.SetEnqueue(func(prompt string, queueIfBusy bool) {
 		if r.program != nil {
 			r.program.Send(cronPromptMsg{Prompt: prompt, QueueIfBusy: queueIfBusy})

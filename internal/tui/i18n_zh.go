@@ -1376,6 +1376,7 @@ func zhCatalog(key string) string {
   /skills            浏览可用 skills
   /memory            显示已加载记忆
   /agents            列出子 Agent
+  /cron <sub>        管理定时任务 (list|get|pause|resume|pauseall|resumeall)
 
 系统：
   /lang [code]       选择或切换界面语言

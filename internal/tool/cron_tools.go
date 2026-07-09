@@ -268,8 +268,31 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	out, _ := json.Marshal(job)
-	return Result{Content: string(out) + "\n"}, nil
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("✓ Job %s updated\n", job.ID))
+	sb.WriteString(fmt.Sprintf("  Schedule: %s\n", job.CronExpr))
+	sb.WriteString(fmt.Sprintf("  Recurring: %v\n", job.Recurring))
+	sb.WriteString(fmt.Sprintf("  Queue if busy: %v\n", job.QueueIfBusy))
+	if job.Paused {
+		sb.WriteString("  Status: paused\n")
+	} else {
+		sb.WriteString("  Status: active\n")
+	}
+	if !job.NextFire.IsZero() {
+		sb.WriteString(fmt.Sprintf("  Next fire: %s\n", job.NextFire.Format("2006-01-02 15:04 MST")))
+	}
+	promptPreview := job.Prompt
+	if len(promptPreview) > 80 {
+		promptPreview = promptPreview[:80] + "..."
+	}
+	for _, line := range strings.Split(promptPreview, "\n") {
+		if strings.TrimSpace(line) != "" {
+			sb.WriteString(fmt.Sprintf("  Prompt: %s\n", strings.TrimSpace(line)))
+			break
+		}
+	}
+	return Result{Content: sb.String()}, nil
 }
 
 // CronPauseTool pauses a scheduled job without deleting it.

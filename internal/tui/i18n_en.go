@@ -1309,6 +1309,40 @@ func enCatalog(key string) string {
 		return "Show current status"
 	case "slash.update":
 		return "Update ggcode"
+	case "slash.cron":
+		return "Manage scheduled cron jobs (list, pause, resume, create)"
+	case "slash.branch":
+		return "Branch current session to a new session (fork conversation)"
+	case "slash.chat":
+		return "Open LAN Chat panel"
+	case "slash.edit":
+		return "Edit and resubmit your last message"
+	case "slash.inspector":
+		return "Toggle the inspector panel"
+	case "slash.mode":
+		return "Show or switch permission mode"
+	case "slash.nick":
+		return "Set your LAN Chat nickname"
+	case "slash.reflect":
+		return "Run self-reflection on the current session"
+	case "slash.regenerate":
+		return "Regenerate last AI response (discard and re-run)"
+	case "slash.restart":
+		return "Restart ggcode process"
+	case "slash.retry":
+		return "Retry the last failed agent run"
+	case "slash.rules":
+		return "Show learned ratchet rules"
+	case "slash.share":
+		return "Share session via tunnel (mobile relay)"
+	case "slash.stats":
+		return "Show session statistics (tokens, iterations, tools)"
+	case "slash.tmux":
+		return "Open tmux pane management menu"
+	case "slash.tunnel":
+		return "Toggle tunnel connection for mobile relay"
+	case "slash.unshare":
+		return "Stop sharing session via tunnel"
 	case "regenerate.busy":
 		return "Cannot regenerate while the agent is running. Press Ctrl+C to cancel first."
 	case "regenerate.no_agent":
@@ -1366,6 +1400,7 @@ Integrations:
   /skills            Browse available skills
   /memory            Show loaded memory files
   /agents            List sub-agents
+  /cron <sub>        Manage scheduled jobs (list|get|pause|resume|pauseall|resumeall)
 
 System:
   /lang [code]       Choose or switch interface language

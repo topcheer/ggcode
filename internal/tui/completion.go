@@ -202,6 +202,7 @@ var SlashCommands = []string{
 	"/retry",
 	"/edit",
 	"/regenerate", "/regen", "/branch", "/fork",
+	"/cron",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -274,6 +275,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/context":     "Show context window usage breakdown",
 	"/regenerate":  "Regenerate last AI response (discard and re-run)",
 	"/regen":       "Regenerate last AI response (discard and re-run)",
+	"/cron":        "Manage scheduled jobs (list, pause, resume)",
 	"/branch":      "Fork current conversation into a new session",
 	"/fork":        "Fork current conversation into a new session",
 	"/mode":        "Set permission mode (supervised|plan|auto|bypass|autopilot)",
@@ -335,6 +337,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/help":        "[command]",
 	"/lark":        "<subcommand>",
 	"/mcp":         "<subcommand>",
+	"/cron":        "<list|get|pause|resume|pauseall|resumeall>",
 	"/pc":          "<subcommand>",
 	"/plugins":     "<subcommand>",
 	"/qq":          "<subcommand>",
