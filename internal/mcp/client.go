@@ -590,15 +590,25 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 		}
 		return resp, nil
 	}
+	// For non-SSE responses, also try the SSE extraction path as a fallback.
+	// Some servers return content-type: application/json but actually send
+	// newline-delimited JSON messages (Notification then Response) in a single
+	// response body. If the first ParseMessage returns a Notification, try
+	// extracting all SSE-style events to find the Response.
 	msg, err := ParseMessage(payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse message: %w", err)
 	}
 	resp, ok := msg.(*Response)
-	if !ok {
-		return nil, fmt.Errorf("expected response, got %T", msg)
+	if ok {
+		return resp, nil
 	}
-	return resp, nil
+	// First message was a Notification — try SSE extraction as fallback.
+	debug.Log("mcp-http", "parseHTTPResponse: first message was %T, trying SSE fallback", msg)
+	if r, err := extractSSEResponse(body); err == nil {
+		return r, nil
+	}
+	return nil, fmt.Errorf("expected response, got %T", msg)
 }
 
 // extractSSEResponse parses ALL SSE events from the body and returns the first
