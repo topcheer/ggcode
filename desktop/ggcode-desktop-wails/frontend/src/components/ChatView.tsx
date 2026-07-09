@@ -1004,19 +1004,30 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
       const container = scrollContainerRef.current
       if (container) {
-        // Suppress the scroll event that fires from this programmatic scroll
+        // Suppress scroll events during the double-rAF window
         suppressNextScrollEventRef.current = true
-        container.scrollTop = container.scrollHeight
+        // Double-rAF: first frame lets the browser finish layout (images,
+        // markdown rendering, code highlighting), second frame scrolls.
+        requestAnimationFrame(() => {
+          if (!scrollContainerRef.current) return
+          if (!getTabAutoScroll(autoScrollByTabRef.current, activeTab)) return
+          suppressNextScrollEventRef.current = true
+          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+          // Clear suppress after a short delay to let all scroll events settle
+          setTimeout(() => { suppressNextScrollEventRef.current = false }, 50)
+        })
       } else {
         messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
       }
     })
   }, [activeTab])
 
-  // Auto-scroll to bottom when messages change (debounced via rAF)
+  // Auto-scroll to bottom when messages change — NOT on thinking updates
+  // (thinking fires hundreds of times per second during streaming)
+  const msgCount = messages.length
   useEffect(() => {
     scrollToBottomIfAuto()
-  }, [messages, agentPanels, thinking, activeTab, scrollToBottomIfAuto])
+  }, [msgCount, agentPanels, activeTab, scrollToBottomIfAuto])
 
   // Cleanup pending rAF on unmount
   useEffect(() => {
@@ -2600,15 +2611,13 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         aria-live="polite"
         aria-atomic="false"
         onScroll={() => {
+          // Skip scroll events from programmatic scrolling
           if (suppressNextScrollEventRef.current) {
-            suppressNextScrollEventRef.current = false
-            return
+            return // don't clear — double-rAF may fire more events
           }
           const el = scrollContainerRef.current
           if (!el) return
           const nearBottom = isNearBottom(el)
-          // Only set autoScroll=false when user scrolls AWAY from bottom.
-          // Don't set it to true here — that's handled by the scrollToBottom logic.
           if (!nearBottom) {
             autoScrollByTabRef.current[activeTab] = false
             lastManualScrollAtByTabRef.current[activeTab] = Date.now()
