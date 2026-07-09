@@ -212,6 +212,8 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       showToast?.('info', 'This session is locked by another instance')
       return
     }
+    // Skip if clicking the already-active session
+    if (s.id === activeSessionId) return
     try {
       await App.LoadSession(s.id)
       onSessionSelect?.(s.id)
