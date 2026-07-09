@@ -1000,16 +1000,17 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
   // === SCROLL LOGIC — minimal, no timers, no suppress flags ===
   const scrollRafRef = useRef<number | null>(null)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const programmaticScrollRef = useRef(false)
   const prevMsgCountRef = useRef(0)
 
   const doScrollToBottom = useCallback(() => {
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
-      // Use scrollTo with smooth=auto — more stable than scrollIntoView
-      // during streaming because it doesn't fight the browser's layout
       const c = scrollContainerRef.current
       if (c) {
+        // Set flag so onScroll handler ignores this programmatic scroll
+        programmaticScrollRef.current = true
         c.scrollTop = c.scrollHeight
       }
     })
@@ -2628,6 +2629,11 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         aria-live="polite"
         aria-atomic="false"
         onScroll={() => {
+          // Skip if this scroll was triggered by our own doScrollToBottom
+          if (programmaticScrollRef.current) {
+            programmaticScrollRef.current = false
+            return
+          }
           const el = scrollContainerRef.current
           if (!el) return
           const nearBottom = isNearBottom(el)
