@@ -998,6 +998,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // === SCROLL LOGIC — minimal, no timers, no suppress flags ===
   const scrollRafRef = useRef<number | null>(null)
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevMsgCountRef = useRef(0)
 
   const doScrollToBottom = useCallback(() => {
@@ -2609,14 +2610,19 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           const el = scrollContainerRef.current
           if (!el) return
           const nearBottom = isNearBottom(el)
-          // Only update autoScroll on user-initiated scroll AWAY from bottom
           if (!nearBottom) {
             autoScrollByTabRef.current[activeTab] = false
             lastManualScrollAtByTabRef.current[activeTab] = Date.now()
           }
           setShowScrollBtn(!nearBottom && messages.length > 3)
-          if (sessionId) {
-            try { sessionStorage.setItem(`scroll:${sessionId}`, String(el.scrollTop)) } catch {}
+          // Throttle sessionStorage write to once per 500ms
+          if (!scrollSaveTimerRef.current) {
+            scrollSaveTimerRef.current = setTimeout(() => {
+              scrollSaveTimerRef.current = null
+              if (sessionId && scrollContainerRef.current) {
+                try { sessionStorage.setItem(`scroll:${sessionId}`, String(scrollContainerRef.current.scrollTop)) } catch {}
+              }
+            }, 500)
           }
         }}
         style={{
@@ -3141,7 +3147,7 @@ function TabButton({ label, active, onClick, color, status, title, onClose }: {
   )
 }
 
-function MessageCard({ msg, onRetry, onEdit }: {
+const MessageCard = React.memo(function MessageCard({ msg, onRetry, onEdit }: {
     msg: ChatMessage;
     onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void;
     onEdit?: (text: string) => void;
@@ -3162,7 +3168,7 @@ function MessageCard({ msg, onRetry, onEdit }: {
     default:
       return null
   }
-}
+})
 
 // ── Reasoning block (collapsible, shown before the message it belongs to) ──
 
