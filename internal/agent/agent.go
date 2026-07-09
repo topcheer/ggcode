@@ -594,7 +594,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	defer func() {
 		runStats.finalize(err)
-		a.maybeReflect(runStats)
+		// Skip reflection, ratchet LLM calls, and playbook recording on
+		// cancellation. These post-run actions can trigger expensive,
+		// un-cancellable LLM calls (ratchet uses context.Background() with
+		// a 30s timeout) and produce noisy insights for aborted work.
+		// The onRunResult callback and todo cleanup still run to ensure
+		// session persistence and state cleanup.
+		isCancelled := errors.Is(err, context.Canceled) ||
+			(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
+		if !isCancelled {
+			a.maybeReflect(runStats)
+		} else {
+			debug.Log("agent", "skipping reflection/ratchet on cancellation")
+		}
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()
@@ -611,7 +623,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Launch async verification — does not block the return.
 		// Runs build/test in background, reports result via callbacks.
-		if asyncVerifyStats != nil && err == nil {
+		// Also skipped on cancellation (err != nil).
+		if asyncVerifyStats != nil && err == nil && !isCancelled {
 			statsCopy := *asyncVerifyStats
 			safego.Go("asyncVerify", func() {
 				a.asyncVerify(a.shutdownCtx, &statsCopy)
@@ -1247,8 +1260,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				targetLabel = "the pending path"
 			}
 			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: "[System Note] ## Project Memory\n" + deferredMemoryContent}},
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
 			})
 			a.contextManager.Add(provider.Message{
 				Role: "user",
