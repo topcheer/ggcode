@@ -1032,17 +1032,21 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
   }, [])
 
-  // Scroll on new messages AND on session change
+  // Scroll to bottom on any messages change (new message OR content update
+  // during streaming). The rAF debounce in doScrollToBottom ensures we only
+  // scroll once per animation frame even if messages updates fire many times.
+  const lastMsgSigRef = useRef('')
   useEffect(() => {
-    const isNewMessage = messages.length > prevMsgCountRef.current
-    const isSessionChange = prevMsgCountRef.current === 0 && messages.length > 0
-    if (isNewMessage || isSessionChange) {
-      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab) || isSessionChange) {
-        doScrollToBottom()
-      }
+    // Build a cheap signature: length + last message content length + last id
+    const last = messages[messages.length - 1]
+    const sig = `${messages.length}:${last?.id ?? ''}:${last?.content?.length ?? 0}`
+    const changed = sig !== lastMsgSigRef.current
+    lastMsgSigRef.current = sig
+
+    if (changed && getTabAutoScroll(autoScrollByTabRef.current, activeTab)) {
+      doScrollToBottom()
     }
-    prevMsgCountRef.current = messages.length
-  }, [messages.length, activeTab, doScrollToBottom])
+  }, [messages, activeTab, doScrollToBottom])
 
   // Cleanup pending rAF on unmount
   useEffect(() => {
