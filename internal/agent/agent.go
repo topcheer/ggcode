@@ -1247,8 +1247,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				targetLabel = "the pending path"
 			}
 			a.contextManager.Add(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: "[System Note] ## Project Memory\n" + deferredMemoryContent}},
 			})
 			a.contextManager.Add(provider.Message{
 				Role: "user",
