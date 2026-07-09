@@ -124,7 +124,7 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 	if r.agent != nil && hub != nil {
 		tools := r.agent.ToolRegistry()
 		if tools != nil {
-			tools.Register(tool.LanChatTool{Hub: hub})
+			tools.Register(tool.NewLanChatTool(hub))
 		}
 		// Inject dynamic lanchat peers info into the system prompt before
 		// each run. Shows all online peers (busy + idle), with same-workspace

@@ -17,7 +17,7 @@ func newTestLanChatTool(t *testing.T) (LanChatTool, *lanchat.Hub) {
 	hub := lanchat.NewHub("node-self", "tui", "http://localhost:1", "", store, lanchat.WorkspaceMeta{
 		Workspace: "/tmp/test-project",
 	})
-	tool := LanChatTool{Hub: hub}
+	tool := LanChatTool{Hub: hub, rateLimiter: newAgentRateLimiter()}
 	return tool, hub
 }
 
