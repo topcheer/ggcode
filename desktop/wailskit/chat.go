@@ -182,6 +182,11 @@ func (b *ChatBridge) SetTunnelHost(th *agentruntime.TunnelHost) {
 	b.tunnelHost = th
 }
 
+// WorkingDir returns the current workspace directory.
+func (b *ChatBridge) WorkingDir() string {
+	return b.workingDir
+}
+
 // GetTunnelHost returns the tunnel host (for StartShare).
 func (b *ChatBridge) GetTunnelHost() *agentruntime.TunnelHost {
 	return b.tunnelHost

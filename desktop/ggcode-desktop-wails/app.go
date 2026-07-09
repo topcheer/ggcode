@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
@@ -199,9 +200,13 @@ func (a *App) initWorkspace(dir string) {
 	// Initialize IM runtime (same as Fyne's initIMRuntime)
 	a.initIMRuntime()
 
-	// Auto-create initial session and start agent so MCP servers
-	// and context window are available immediately on startup
-	chat.EnsureSession()
+	// Try to resume the latest session for this workspace, matching TUI behavior.
+	// If no sessions exist, create a new one.
+	if latestID := a.resumeLatestSession(); latestID != "" {
+		debug.Log("app", "resumed latest session: %s", latestID)
+	} else {
+		chat.EnsureSession()
+	}
 	_ = chat.InitAgent()
 
 	// Start IM adapters AFTER InitAgent so the bridge has the correct chat instance
@@ -865,6 +870,33 @@ func (a *App) NewSession() (string, error) {
 	a.chat.Cancel()
 	a.stopShareForSessionChange()
 	return a.chat.StartNewSession()
+}
+
+// resumeLatestSession loads the most recent session for the current workspace.
+// Returns the session ID if successful, empty string if no sessions exist.
+func (a *App) resumeLatestSession() string {
+	chat := a.chat
+	if chat == nil {
+		return ""
+	}
+	wd := chat.WorkingDir()
+	if wd == "" {
+		return ""
+	}
+	store, err := session.NewJSONLStore(filepath.Join(config.HomeDir(), ".ggcode", "sessions"))
+	if err != nil {
+		debug.Log("app", "resumeLatestSession: failed to open session store: %v", err)
+		return ""
+	}
+	ses, err := store.LatestForWorkspace(wd)
+	if err != nil || ses == nil {
+		return ""
+	}
+	if err := chat.LoadSession(ses.ID); err != nil {
+		debug.Log("app", "resumeLatestSession: LoadSession failed: %v", err)
+		return ""
+	}
+	return ses.ID
 }
 
 // LoadSession loads an existing session by ID.
