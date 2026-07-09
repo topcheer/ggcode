@@ -15,6 +15,19 @@ interface ContextMenuProps {
   onClose: () => void
 }
 
+const MENU_ITEM_HEIGHT = 36
+const MENU_PADDING = 8
+const MENU_MIN_WIDTH = 180
+
+/** Clamp a menu position so it stays on-screen. Pure function for testing. */
+export function clampPosition(x: number, y: number, itemCount: number, viewportW: number, viewportH: number): { left: number; top: number } {
+  const menuHeight = itemCount * MENU_ITEM_HEIGHT + MENU_PADDING
+  return {
+    left: Math.min(x, viewportW - MENU_MIN_WIDTH - MENU_PADDING),
+    top: Math.min(y, viewportH - menuHeight - MENU_PADDING),
+  }
+}
+
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
 
@@ -43,10 +56,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   }, [handleClickOutside, handleEsc, onClose])
 
   // Clamp position so the menu doesn't go off-screen
-  const menuWidth = 180
-  const menuHeight = items.length * 36 + 8
-  const clampedX = Math.min(x, window.innerWidth - menuWidth - 8)
-  const clampedY = Math.min(y, window.innerHeight - menuHeight - 8)
+  const { left: clampedX, top: clampedY } = clampPosition(x, y, items.length, window.innerWidth, window.innerHeight)
 
   return (
     <>
@@ -60,7 +70,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           left: clampedX,
           top: clampedY,
           zIndex: 9999,
-          minWidth: menuWidth,
+          minWidth: MENU_MIN_WIDTH,
           background: 'var(--color-surface)',
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--radius-md)',
