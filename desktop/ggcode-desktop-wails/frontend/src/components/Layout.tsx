@@ -29,6 +29,16 @@ import * as App from '../../wailsjs/go/main/App'
 
 // Inner layout that uses useTranslation (must be inside I18nProvider)
 function LayoutInner() {
+  // ── Theme initialization (auto-detect OS preference, persist user choice) ──
+  useEffect(() => {
+    const saved = localStorage.getItem('ggcode-theme')
+    if (saved === 'dark' || saved === 'light') {
+      document.documentElement.classList.toggle('dark', saved === 'dark')
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.classList.add('dark')
+    }
+  }, [])
+
   const [view, setView] = useState<ViewMode>('chat')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -313,10 +323,11 @@ function LayoutInner() {
         e.preventDefault()
         setShareDialogOpen(true)
       }
-      // ⌘⇧T: Toggle theme
+      // ⌘⇧T: Toggle theme (persisted to localStorage)
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault()
-        document.documentElement.classList.toggle('dark')
+        const isDark = document.documentElement.classList.toggle('dark')
+        localStorage.setItem('ggcode-theme', isDark ? 'dark' : 'light')
       }
       // ⌘⇧F: Focus session search (open sidebar + switch to chat)
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
@@ -368,7 +379,7 @@ function LayoutInner() {
     { nameKey: 'cmd.searchSessions', shortcut: '⌘⇧F', categoryKey: 'cmd.cat.session', icon: Search, action: () => { setView('chat'); setSidebarOpen(true) } },
     { nameKey: 'cmd.shareSession', shortcut: '⌘⇧S', categoryKey: 'cmd.cat.chat', icon: Share2, action: () => setShareDialogOpen(true) },
     { nameKey: 'cmd.toggleContext', shortcut: '⌘.', categoryKey: 'cmd.cat.chat', icon: PanelRight, action: () => setContextPanelOpen(prev => !prev) },
-    { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => { document.documentElement.classList.toggle('dark') } },
+    { nameKey: 'cmd.toggleTheme', shortcut: '⌘⇧T', categoryKey: 'cmd.cat.settings', icon: SunMoon, action: () => { const isDark = document.documentElement.classList.toggle('dark'); localStorage.setItem('ggcode-theme', isDark ? 'dark' : 'light') } },
     { nameKey: 'cmd.openSettings', shortcut: '⌘,', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.switchModel', categoryKey: 'cmd.cat.settings', icon: Settings, action: () => setView('settings') },
     { nameKey: 'cmd.toggleSidebar', shortcut: '⌘B', categoryKey: 'cmd.cat.navigation', icon: PanelLeft, action: () => setSidebarOpen(prev => !prev) },
