@@ -204,8 +204,13 @@ function enhanceDiffBlocks(container: HTMLElement) {
 }
 
 // Render message content: split into markdown + mermaid segments
-function MessageContent({ content }: { content: string }) {
+const MessageContent = React.memo(function MessageContent({ content }: { content: string }) {
   const segments = useMemo(() => splitContent(content), [content])
+  const htmlCache = useMemo(() => segments.map(seg => {
+    if (seg.type === 'markdown') return { type: 'markdown' as const, html: safeMarkdown(seg.text) }
+    if (seg.type === 'svg') return { type: 'svg' as const, html: seg.text }
+    return { type: 'mermaid' as const, text: seg.text }
+  }), [segments])
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -213,16 +218,16 @@ function MessageContent({ content }: { content: string }) {
       enhanceCodeBlocks(containerRef.current)
       enhanceDiffBlocks(containerRef.current)
     }
-  }, [segments])
+  }, [htmlCache])
 
   return (
     <div ref={containerRef}>
-      {segments.map((seg, i) => {
+      {htmlCache.map((seg, i) => {
         if (seg.type === 'markdown') {
-          return <div key={i} className="markdown-body" dangerouslySetInnerHTML={{ __html: safeMarkdown(seg.text) }} />
+          return <div key={i} className="markdown-body" dangerouslySetInnerHTML={{ __html: seg.html }} />
         }
         if (seg.type === 'svg') {
-          return <div key={i} className="svg-rendered" dangerouslySetInnerHTML={{ __html: seg.text }} />
+          return <div key={i} className="svg-rendered" dangerouslySetInnerHTML={{ __html: seg.html }} />
         }
         // Mermaid block — will be rendered by useEffect
         return (
@@ -233,7 +238,7 @@ function MessageContent({ content }: { content: string }) {
       })}
     </div>
   )
-}
+})
 
 // ── Types (mirrors Go ChatMessage from desktop/ggcode-desktop/types.go) ──────
 
@@ -993,24 +998,26 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // === SCROLL LOGIC — minimal, no timers, no suppress flags ===
   const scrollRafRef = useRef<number | null>(null)
+  const prevMsgCountRef = useRef(0)
 
   const doScrollToBottom = useCallback(() => {
     if (scrollRafRef.current !== null) return
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null
-      // Double rAF: first lets layout settle, second scrolls
       requestAnimationFrame(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+        }
       })
     })
   }, [])
 
-  // Only scroll when message COUNT increases (new message added).
-  // Do NOT scroll on re-renders caused by timers, thinking updates, etc.
-  const prevMsgCountRef = useRef(0)
+  // Scroll on new messages AND on session change
   useEffect(() => {
-    if (messages.length > prevMsgCountRef.current) {
-      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab)) {
+    const isNewMessage = messages.length > prevMsgCountRef.current
+    const isSessionChange = prevMsgCountRef.current === 0 && messages.length > 0
+    if (isNewMessage || isSessionChange) {
+      if (getTabAutoScroll(autoScrollByTabRef.current, activeTab) || isSessionChange) {
         doScrollToBottom()
       }
     }
