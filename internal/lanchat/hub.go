@@ -1641,6 +1641,12 @@ func (h *Hub) postToPeerTCPDirect(ctx context.Context, endpoint string, msgType 
 
 // handleReceiveMessageData processes a message from any transport.
 func (h *Hub) handleReceiveMessageData(msg Message, source string) {
+	// Ignore messages from self (loop prevention for UDP multicast path).
+	// HTTP handler already filters this in handlers.go, but UDP multicast
+	// can deliver our own packets back to us.
+	if msg.FromNodeID == h.nodeID {
+		return
+	}
 	// Delegate to the existing handler (extracted from HTTP handler)
 	h.mu.Lock()
 	defer h.mu.Unlock()
