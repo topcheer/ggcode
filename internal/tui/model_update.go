@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tunnel"
@@ -394,6 +395,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleSubAgentFollowRefreshMsg(msg)
 
 	case systemNotifyMsg:
+		if msg.ItemID != "" {
+			if item := m.chatList.FindByID(msg.ItemID); item != nil {
+				if sys, ok := item.(*chat.SystemItem); ok {
+					sys.AppendText(msg.Text)
+					m.chatListScrollToBottom()
+					return m, nil
+				}
+			}
+		}
 		m.chatWriteSystem(nextSystemID(), msg.Text)
 		m.chatListScrollToBottom()
 		return m, nil

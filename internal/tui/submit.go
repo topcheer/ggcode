@@ -233,6 +233,7 @@ const streamBatchInterval = 80 * time.Millisecond
 func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []provider.ContentBlock) (bool, error) {
 	streamErrSent := false
 	writingStatusSent := false
+	retryItemID := "" // reused across multiple StreamEventSystem within one LLM turn
 	round := agentIMRoundState{}
 
 	// Stream batching: accumulate text chunks AND tool events, then flush
@@ -340,13 +341,20 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			}
 
 		case provider.StreamEventSystem:
-			// System notification (retry status, etc.) — render as system message.
+			// System notification (retry status, etc.). All retry messages
+			// within one LLM turn accumulate into a single system item.
 			flushBatch()
-			m.program.Send(systemNotifyMsg{Text: event.Text})
+			if retryItemID == "" {
+				retryItemID = nextSystemID()
+				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID})
+			} else {
+				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID})
+			}
 		case provider.StreamEventToolCallDone:
 			// Flush any pending text before tool events to keep output ordering correct.
 			flushBatch()
 			writingStatusSent = false
+			retryItemID = ""
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if event.Tool.Name == "ask_user" {
 				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))

@@ -179,8 +179,11 @@ type followGraceTickMsg struct{}
 
 // systemNotifyMsg displays a provider system notification (e.g. retry status)
 // as a system message in the chat area.
+// When ItemID is non-empty and a system item with that ID already exists,
+// the text is appended to that item instead of creating a new one.
 type systemNotifyMsg struct {
-	Text string
+	Text   string
+	ItemID string
 }
 
 type skillsChangedMsg struct{}
