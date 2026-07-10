@@ -616,10 +616,12 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 func describeLanchatSendResult(args map[string]any, action, trimmed string, isError bool) (ToolResultPresentation, bool) {
 	message := argStr(args, "message")
 
-	// On error, just pass through the error text — no message to show.
+	// On error, preserve the full error text — do not truncate.
+	// Rate-limit messages contain actionable guidance (cooldown time,
+	// alternative actions, sleep suggestion) that must be visible.
 	if isError {
 		return ToolResultPresentation{
-			Summary:     compactSingleLine(trimmed),
+			Summary:     trimmed,
 			Payload:     trimmed,
 			PayloadMode: "text",
 		}, true
