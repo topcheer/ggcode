@@ -233,7 +233,8 @@ internal/
 
   im/                      # IM gateway runtime
     adapters.go            # Adapter interface and registration
-    runtime.go             # Manager: multi-adapter routing, bindings, mute/unmute
+    runtime.go             # Manager: multi-adapter routing, bindings, mute/unmute, binding hot watcher
+    binding_watcher.go     # Monitors im-bindings.json for LastSessionID changes; auto-mutes adapters when another instance claims ownership
     daemon_bridge.go       # DaemonBridge: agent loop + IM slash commands + ChatBridge impl
     emitter.go             # IMEmitter: outbound event routing
     fanout.go              # Multi-adapter fan-out with per-channel echo suppression

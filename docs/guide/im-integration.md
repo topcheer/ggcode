@@ -100,6 +100,10 @@ Both operations **drop the connection** (cancel adapter context + close sink). T
 
 All status/bindings are workspace-scoped: the tool only shows and operates on adapters bound to the current workspace's session.
 
+### Binding Hot Watcher
+
+The IM runtime includes a **binding hot watcher** (`binding_watcher.go`) that monitors `~/.ggcode/im-bindings.json` for changes by other ggcode instances. The watcher polls every 3 seconds and detects when another instance claims a binding (different `LastSessionID`). When this happens, the watcher auto-mutes the affected adapter to prevent conflicts. This ensures only one instance per session can actively use an IM channel. The watcher stops on `UnbindSession` and restarts on `BindSession` with the new session ID.
+
 ## Runtime Behavior
 
 - IM adapters **auto-start** when the daemon launches.

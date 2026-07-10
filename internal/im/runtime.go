@@ -71,6 +71,12 @@ type Manager struct {
 	// language stores the UI language ("zh-CN" or "en") so adapters can
 	// localize messages. Set via SetLanguage, typically from NewIMEmitter.
 	language string
+
+	// bindingWatcher monitors im-bindings.json for LastSessionID changes
+	// by other ggcode instances. When another instance claims a binding,
+	// this watcher auto-mutes the affected adapter so it doesn't conflict.
+	bindingWatcherCtx    context.Context
+	bindingWatcherCancel context.CancelFunc
 }
 
 type pendingApproval struct {
@@ -419,11 +425,21 @@ func (m *Manager) BindSession(binding SessionBinding) {
 	copy := binding
 	m.session = &copy
 	_ = m.reloadBindingLocked()
+	// Stop any previous watcher and start a new one with the updated session.
+	// This ensures the watcher has the correct sessionID for ownership checks.
+	prevCancel := m.bindingWatcherCancel
+	m.bindingWatcherCancel = nil
+	m.bindingWatcherCtx = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
+	if prevCancel != nil {
+		prevCancel()
+	}
 	if cb != nil {
 		cb(snapshot)
 	}
+	// Start a fresh watcher with the new session ID.
+	m.StartBindingWatcher()
 }
 
 func (m *Manager) UnbindSession() {
@@ -433,8 +449,15 @@ func (m *Manager) UnbindSession() {
 	m.disabledBindings = make(map[string]*ChannelBinding)
 	m.adapterCancels = make(map[string]context.CancelFunc)
 	m.pendingPairing = nil
+	// Stop the binding watcher since we no longer have a session.
+	watcherCancel := m.bindingWatcherCancel
+	m.bindingWatcherCancel = nil
+	m.bindingWatcherCtx = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
+	if watcherCancel != nil {
+		watcherCancel()
+	}
 	if cb != nil {
 		cb(snapshot)
 	}
@@ -739,6 +762,18 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	reply := "请在 ggcode 屏幕上查看 4 位绑定码，并在这里输入完成绑定。"
 	if kind == PairingKindRebind {
 		reply = "该 bot 当前已绑定其他渠道。请在 ggcode 屏幕上查看 4 位绑定码，并在这里输入完成切换。"
+	}
+	// For rebind: also push the pairing code to the old channel so the user
+	// can see it there without having to watch the ggcode screen.
+	if kind == PairingKindRebind && current != nil && strings.TrimSpace(current.ChannelID) != "" {
+		notice := fmt.Sprintf("⚠ 有新渠道正在请求绑定到当前工作空间。配对码：%s\n如非本人操作请忽略，本人操作请在 ggcode 屏幕确认。", code)
+		go func(b ChannelBinding) {
+			defer func() { recover() }()
+			_ = m.SendDirect(context.Background(), b, OutboundEvent{
+				Kind: OutboundEventText,
+				Text: notice,
+			})
+		}(*current)
 	}
 	return PairingResult{
 		Consumed:  true,
