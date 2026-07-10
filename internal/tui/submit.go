@@ -450,6 +450,13 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				IsError:     event.IsError,
 			}})
 			batchMu.Unlock()
+			// Immediately flush tool results so they are delivered to the
+			// TUI before any text from the next LLM turn. Without this,
+			// tool results can be batched together with next-round text,
+			// and buildBatchedStreamMessages puts text before tools —
+			// causing the tool item to render after the wrong assistant
+			// message.
+			flushBatch()
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
 				streamErrSent = true
