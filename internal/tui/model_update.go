@@ -200,18 +200,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleAgentReasoningMsg(msg, spinnerCmd)
 
 	case agentTurnDoneMsg:
-		// LLM turn boundary: collapse reasoning, finalize the assistant item,
-		// and reset stream state so the next LLM turn creates a fresh
-		// assistant item with its own reasoning/text.
+		// LLM turn boundary within a multi-round agent loop.
+		// Collapse reasoning so the block is visually finished, but do NOT
+		// finalize the assistant item or reset streamPrefixWritten — text
+		// from subsequent LLM turns should continue in the same assistant
+		// bubble rather than creating a fragmented sequence of messages.
+		// The assistant item is properly finalized by agentDoneMsg when the
+		// entire agent run completes.
 		m.chatFinishReasoning()
-		m.chatFinishAssistant(m.currentAssistantID())
-		m.streamPrefixWritten = false
 		m.reasoningActive = false
-		// CRITICAL: reset streamBuffer so next turn's text doesn't accumulate
-		// on top of the previous turn's content.
-		if m.streamBuffer != nil {
-			m.streamBuffer.Reset()
-		}
 		return m, spinnerCmd
 
 	case agentInterruptMsg:

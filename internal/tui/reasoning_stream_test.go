@@ -83,22 +83,31 @@ func TestAgentTurnDoneMsgResetsStreamPrefix(t *testing.T) {
 	if !m.streamPrefixWritten {
 		t.Fatal("streamPrefixWritten should be true after reasoning")
 	}
+	if !m.reasoningActive {
+		t.Fatal("reasoningActive should be true during reasoning")
+	}
 	turn1ID := m.currentAssistantID()
 
 	// End of turn 1 (StreamEventDone)
 	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
-	if m.streamPrefixWritten {
-		t.Fatal("streamPrefixWritten should be false after agentTurnDoneMsg (turn boundary)")
+	// streamPrefixWritten should STAY true so text from the next LLM turn
+	// continues in the same assistant item (no message fragmentation).
+	if !m.streamPrefixWritten {
+		t.Fatal("streamPrefixWritten should remain true after agentTurnDoneMsg")
+	}
+	// reasoning should be collapsed at turn boundary
+	if m.reasoningActive {
+		t.Fatal("reasoningActive should be false after agentTurnDoneMsg")
 	}
 
-	// Turn 2: new reasoning arrives — should create a NEW assistant item
+	// Turn 2: new reasoning arrives — should stay on the SAME assistant item
 	next, _ = m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 5, Text: "turn 2 thinking"}, nil)
 	m = next
 	turn2ID := m.currentAssistantID()
 
-	if turn1ID == turn2ID {
-		t.Fatal("turn 2 should get a different assistant ID than turn 1")
+	if turn1ID != turn2ID {
+		t.Fatal("turn 2 should use the same assistant ID as turn 1 (continuous message)")
 	}
 }
