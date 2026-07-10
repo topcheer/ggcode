@@ -92,6 +92,10 @@ type Hub struct {
 	// so the host can inject it into the agent loop.
 	onAutoApprove func(Message)
 
+	// onInboundDM is called when a non-broadcast message arrives,
+	// allowing the rate limiter to reset the DM cooldown for the sender.
+	onInboundDM func(fromNodeID string)
+
 	// HTTP client for peer communication
 	httpClient *http.Client
 
@@ -1449,6 +1453,15 @@ func (h *Hub) SetOnAutoApprove(cb func(Message)) {
 	h.mu.Unlock()
 }
 
+// SetOnInboundDM registers a callback invoked when a non-broadcast message
+// arrives, allowing the rate limiter to reset the DM cooldown for the sender
+// so the local agent can reply immediately.
+func (h *Hub) SetOnInboundDM(cb func(fromNodeID string)) {
+	h.mu.Lock()
+	h.onInboundDM = cb
+	h.mu.Unlock()
+}
+
 // NotifyAgentComplete sends a "completed" receipt to the sender of a manually-approved
 // message after the agent run finishes. For auto-approved messages, the receipt is sent
 // automatically inside the onAutoApprove callback wrapper.
@@ -1639,6 +1652,12 @@ func (h *Hub) handleReceiveMessageData(msg Message, source string) {
 		h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 	}
 	debug.Log("lanchat", "received message from %s via %s: %s", msg.FromNick, source, truncate(msg.Content, 40))
+	// Fire onInboundDM callback for non-broadcast messages so the rate
+	// limiter can reset the DM cooldown for the sender.
+	if !msg.IsBroadcast() && h.onInboundDM != nil {
+		fromID := msg.FromNodeID
+		safego.Go("lanchat.onInboundDM", func() { h.onInboundDM(fromID) })
+	}
 	// Fire onMessage callback outside lock
 	msgCopy := msg
 	if h.onMessage != nil {

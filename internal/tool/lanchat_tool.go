@@ -22,10 +22,19 @@ type LanChatTool struct {
 // The rate limiter prevents LLM-originated message storms that can cause
 // cascading noise across all agents on the LAN.
 func NewLanChatTool(hub *lanchat.Hub) LanChatTool {
-	return LanChatTool{
+	t := LanChatTool{
 		Hub:         hub,
 		rateLimiter: newAgentRateLimiter(),
 	}
+	// Register inbound DM callback so the rate limiter automatically resets
+	// the self→sender DM cooldown when a non-broadcast message arrives.
+	// This allows the local agent to reply immediately without being blocked.
+	if hub != nil {
+		hub.SetOnInboundDM(func(fromNodeID string) {
+			t.OnInboundDM(fromNodeID)
+		})
+	}
+	return t
 }
 
 // agentRateLimiter prevents LLM message storms by rate-limiting agent-originated
@@ -75,10 +84,13 @@ func (r *agentRateLimiter) checkBroadcast() string {
 	}
 	remaining := agentBroadcastCooldown - elapsed
 	return fmt.Sprintf(
-		"Rate limited: you sent a broadcast recently. Please retry in %s. "+
+		"Broadcast rate-limited. Cooldown: %s remaining. "+
 			"Repeated broadcasts create noise cascades across all agents. "+
-			"Consider using a targeted DM (action='send') to the specific person you need instead.",
+			"Instead, use action='send' with to='nodeId1,nodeId2,...' (comma-separated) to send targeted DMs to specific participants — "+
+			"DMs are not subject to the broadcast cooldown and can reach multiple recipients at once. "+
+			"If you must wait, use the sleep tool with seconds=%d to defer your retry.",
 		formatCooldown(remaining),
+		int(remaining.Seconds())+1,
 	)
 }
 
@@ -106,9 +118,10 @@ func (r *agentRateLimiter) checkDM(sender, recipient string) string {
 	}
 	remaining := agentDMCooldown - elapsed
 	return fmt.Sprintf(
-		"Rate limited: %s messaged %s recently. Please wait for them to complete their current task before sending again (%s remaining). "+
-			"If urgent, check their status with action='list'.",
+		"DM rate-limited: %s messaged %s recently (%s remaining). "+
+			"If you must wait, use the sleep tool with seconds=%d to defer your retry.",
 		sender, recipient, formatCooldown(remaining),
+		int(remaining.Seconds())+1,
 	)
 }
 
@@ -118,6 +131,27 @@ func (r *agentRateLimiter) recordDM(sender, recipient string) {
 	defer r.mu.Unlock()
 	key := sender + "\u2192" + recipient
 	r.dmLastSent[key] = time.Now()
+}
+
+// resetDMForPeer clears the DM cooldown for the self→peer direction.
+// Called when a non-broadcast message arrives from peer, allowing
+// the local agent to reply immediately without waiting for cooldown.
+func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := selfID + "\u2192" + peerID
+	delete(r.dmLastSent, key)
+}
+
+// OnInboundDM resets the DM cooldown for the sender when a non-broadcast
+// agent message arrives, so the local agent can reply without being
+// rate-limited. Called from the TUI's lanchat message callback.
+func (t *LanChatTool) OnInboundDM(fromNodeID string) {
+	if t.rateLimiter == nil || t.Hub == nil {
+		return
+	}
+	selfID := t.Hub.NodeID()
+	t.rateLimiter.resetDMForPeer(selfID, fromNodeID)
 }
 
 // formatCooldown formats a duration as a human-readable string.

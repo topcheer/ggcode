@@ -25,11 +25,11 @@ func TestAgentRateLimiter_BroadcastCooldown(t *testing.T) {
 	if msg == "" {
 		t.Fatal("second broadcast within cooldown should be rate-limited")
 	}
-	if !strings.Contains(msg, "Rate limited") {
-		t.Errorf("expected 'Rate limited' in message, got: %s", msg)
+	if !strings.Contains(msg, "rate-limited") {
+		t.Errorf("expected 'rate-limited' in message, got: %s", msg)
 	}
-	if !strings.Contains(msg, "retry in") {
-		t.Errorf("expected 'retry in' in message, got: %s", msg)
+	if !strings.Contains(msg, "Cooldown") {
+		t.Errorf("expected 'Cooldown' in message, got: %s", msg)
 	}
 
 	// Simulate cooldown expiry
@@ -145,8 +145,8 @@ func TestLanChatSendRateLimited(t *testing.T) {
 	if !r2.IsError {
 		t.Fatal("second DM to same recipient should be rate-limited")
 	}
-	if !strings.Contains(r2.Content, "Rate limited") {
-		t.Errorf("expected 'Rate limited' in error, got: %s", r2.Content)
+	if !strings.Contains(r2.Content, "rate-limited") {
+		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)
 	}
 	if !strings.Contains(r2.Content, "node-bob") {
 		t.Errorf("error should mention the recipient, got: %s", r2.Content)
@@ -166,7 +166,7 @@ func TestLanChatSendRateLimited(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// It will fail on network (no transport), but should NOT be a rate-limit error
-	if r3.IsError && strings.Contains(r3.Content, "Rate limited") {
+	if r3.IsError && strings.Contains(r3.Content, "rate-limited") {
 		t.Errorf("DM to different recipient should not be rate-limited: %s", r3.Content)
 	}
 }
@@ -196,7 +196,7 @@ func TestLanChatSendAsHumanNotRateLimited(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error on msg %d: %v", i, err)
 		}
-		if r.IsError && strings.Contains(r.Content, "Rate limited") {
+		if r.IsError && strings.Contains(r.Content, "rate-limited") {
 			t.Errorf("human DM %d should not be rate-limited: %s", i, r.Content)
 		}
 	}
@@ -224,8 +224,8 @@ func TestLanChatBroadcastRateLimited(t *testing.T) {
 	if !r2.IsError {
 		t.Fatal("second broadcast within cooldown should be rate-limited")
 	}
-	if !strings.Contains(r2.Content, "Rate limited") {
-		t.Errorf("expected 'Rate limited' in error, got: %s", r2.Content)
+	if !strings.Contains(r2.Content, "rate-limited") {
+		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)
 	}
 }
 
@@ -341,7 +341,7 @@ func TestLanChatSendTeamRateLimited(t *testing.T) {
 	if !r2.IsError {
 		t.Fatal("send_team should be rate-limited by broadcast cooldown")
 	}
-	if !strings.Contains(r2.Content, "Rate limited") {
-		t.Errorf("expected 'Rate limited' in error, got: %s", r2.Content)
+	if !strings.Contains(r2.Content, "rate-limited") {
+		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)
 	}
 }
