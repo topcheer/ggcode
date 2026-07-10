@@ -119,11 +119,11 @@ func TestToolResultDoesNotResetStreamPrefix(t *testing.T) {
 	}
 }
 
-// TestTextContinuesAcrossTurns verifies that text from consecutive LLM turns
-// accumulates in the SAME assistant item (no message fragmentation).
-// Turn 1 writes "hello", agentTurnDoneMsg fires, turn 2 writes "world".
-// The assistant item should contain "helloworld" — text is continuous.
-func TestTextContinuesAcrossTurns(t *testing.T) {
+// TestTextDoesNotAccumulateAcrossTurns is the PRIMARY regression test for the
+// streamBuffer-not-reset bug. Turn 1 writes "hello", agentTurnDoneMsg fires,
+// turn 2 writes "world". Turn 2's assistant item must contain ONLY "world",
+// not "helloworld".
+func TestTextDoesNotAccumulateAcrossTurns(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 7
@@ -146,20 +146,20 @@ func TestTextContinuesAcrossTurns(t *testing.T) {
 	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
-	// Turn 2: text — must use the SAME assistant item
+	// Turn 2: text
 	next, _ = m.handleAgentStreamMsg(agentStreamMsg{RunID: 7, Text: "world"}, nil)
 	m = next
 	id2 := m.currentAssistantID()
 
-	if id1 != id2 {
-		t.Fatalf("turn 2 should continue same assistant item (id1=%s id2=%s)", id1, id2)
+	if id1 == id2 {
+		t.Fatal("turn 2 should create a new assistant item")
 	}
 
-	// THE KEY ASSERTION: text accumulates across turns (continuous message)
+	// THE KEY ASSERTION: turn 2 text must be "world", NOT "helloworld"
 	if item := m.chatList.FindByID(id2); item != nil {
 		if a, ok := item.(*chat.AssistantItem); ok {
-			if a.Text() != "helloworld" {
-				t.Fatalf("continuous text = %q, want %q", a.Text(), "helloworld")
+			if a.Text() != "world" {
+				t.Fatalf("TEXT ACCUMULATION BUG: turn 2 text = %q, want %q (streamBuffer was not reset at turn boundary)", a.Text(), "world")
 			}
 		}
 	}
@@ -181,9 +181,9 @@ func TestChatFinishReasoningIdempotent(t *testing.T) {
 	}
 }
 
-// TestEachLLMTurnContinuesSameAssistantItem verifies that after agentTurnDoneMsg,
-// the next reasoning/text continues on the SAME assistant item (no fragmentation).
-func TestEachLLMTurnContinuesSameAssistantItem(t *testing.T) {
+// TestEachLLMTurnGetsSeparateAssistantItem verifies that after agentTurnDoneMsg,
+// the next reasoning/text creates a NEW assistant item (one bubble per LLM turn).
+func TestEachLLMTurnGetsSeparateAssistantItem(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.activeAgentRunID = 7
@@ -197,18 +197,20 @@ func TestEachLLMTurnContinuesSameAssistantItem(t *testing.T) {
 	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
-	// streamPrefixWritten should STAY true so text continues in same item
-	if !m.streamPrefixWritten {
-		t.Fatal("streamPrefixWritten should remain true after agentTurnDoneMsg")
+	if m.streamPrefixWritten {
+		t.Fatal("streamPrefixWritten should be false after agentTurnDoneMsg")
+	}
+	if m.streamBuffer != nil && m.streamBuffer.Len() != 0 {
+		t.Fatalf("streamBuffer should be empty after agentTurnDoneMsg, got %d bytes", m.streamBuffer.Len())
 	}
 
-	// Turn 2: new reasoning → must use SAME item
+	// Turn 2: new reasoning → must create new item
 	next, _ = m.handleAgentReasoningMsg(agentReasoningMsg{RunID: 7, Text: "turn 2"}, nil)
 	m = next
 	id2 := m.currentAssistantID()
 
-	if id1 != id2 {
-		t.Fatalf("turn 2 should continue same assistant item (id1=%s id2=%s)", id1, id2)
+	if id1 == id2 {
+		t.Fatalf("turn 2 should create new assistant item (id1=%s id2=%s)", id1, id2)
 	}
 }
 
@@ -226,7 +228,7 @@ func TestAgentDoneFinalizesEverything(t *testing.T) {
 	m = next
 	m.handleAgentStreamMsg(agentStreamMsg{RunID: 7, Text: "result"}, nil)
 
-	// agentTurnDoneMsg fires first (collapses reasoning)
+	// agentTurnDoneMsg fires first (collapses reasoning, resets streamPrefix)
 	updatedModel, _ := m.Update(agentTurnDoneMsg{})
 	m = updatedModel.(Model)
 
