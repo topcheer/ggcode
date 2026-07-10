@@ -1434,6 +1434,9 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				WorkingDir: streamWorkDir,
 				StopReason: "completed",
 			})
+		case provider.StreamEventSystem:
+			// Forward provider-level system messages (retry notifications, etc.)
+			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
 			return nil, assistantTextBuf.String(), nil, fmt.Errorf("chat error: %w", event.Error)
