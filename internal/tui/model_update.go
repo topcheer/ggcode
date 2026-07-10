@@ -403,6 +403,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					return m, nil
 				}
 			}
+			// Item not found yet — create it with the provided ItemID so
+			// subsequent retries with the same ItemID can find and append.
+			m.chatWriteSystem(msg.ItemID, msg.Text)
+			m.chatListScrollToBottom()
+			return m, nil
 		}
 		m.chatWriteSystem(nextSystemID(), msg.Text)
 		m.chatListScrollToBottom()
