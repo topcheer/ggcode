@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
@@ -17,15 +18,19 @@ import (
 type LanChatTool struct {
 	Hub         *lanchat.Hub
 	rateLimiter *agentRateLimiter
+	dmCooldown  time.Duration // per-recipient agent DM cooldown
 }
 
 // NewLanChatTool creates a LanChatTool with an initialized agent rate limiter.
 // The rate limiter prevents LLM-originated message storms that can cause
 // cascading noise across all agents on the LAN.
-func NewLanChatTool(hub *lanchat.Hub) LanChatTool {
+//
+// If cfg provides a non-zero dm_cooldown, that value is used instead of the default.
+func NewLanChatTool(hub *lanchat.Hub, cfg config.LanChatConfig) LanChatTool {
 	t := LanChatTool{
 		Hub:         hub,
 		rateLimiter: newAgentRateLimiter(),
+		dmCooldown:  cfg.EffectiveDMCooldown(),
 	}
 	// Register inbound DM callback so the rate limiter automatically resets
 	// the self→sender DM cooldown when a non-broadcast message arrives.
@@ -43,9 +48,10 @@ func NewLanChatTool(hub *lanchat.Hub) LanChatTool {
 // another agent's LLM inference cycle (expensive, slow, and noisy).
 //
 // Rate limiting is per-recipient for all send paths (send, broadcast,
-// broadcast_all, send_team). Each sender→receiver pair has a 5-minute
-// cooldown, allowing the same agent to message different peers in parallel
-// while preventing repeated spam to the same peer.
+// broadcast_all, send_team). Each sender→receiver pair has a configurable
+// cooldown (default 150s, set via lanchat.dm_cooldown), allowing the same agent
+// to message different peers in parallel while preventing repeated spam to the
+// same peer.
 //
 // Only applies when asAgent=true (agent is the sender). Human-originated
 // messages are never rate-limited.
@@ -54,9 +60,8 @@ type agentRateLimiter struct {
 	dmLastSent map[string]time.Time // key: "sender→receiver"
 }
 
-const (
-	agentDMCooldown = 5 * time.Minute
-)
+// defaultAgentDMCooldown is used when no config is provided (e.g. in tests).
+const defaultAgentDMCooldown = 150 * time.Second
 
 func newAgentRateLimiter() *agentRateLimiter {
 	return &agentRateLimiter{
@@ -66,7 +71,11 @@ func newAgentRateLimiter() *agentRateLimiter {
 
 // checkDM returns empty string if allowed, or an error message if rate-limited.
 // The key is "sender→receiver" so both parties are explicitly recorded.
-func (r *agentRateLimiter) checkDM(sender, recipient string) string {
+// cooldown defaults to defaultAgentDMCooldown when zero.
+func (r *agentRateLimiter) checkDM(sender, recipient string, cooldown time.Duration) string {
+	if cooldown <= 0 {
+		cooldown = defaultAgentDMCooldown
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -76,14 +85,13 @@ func (r *agentRateLimiter) checkDM(sender, recipient string) string {
 		return ""
 	}
 	elapsed := time.Since(last)
-	if elapsed >= agentDMCooldown {
+	if elapsed >= cooldown {
 		return ""
 	}
-	remaining := agentDMCooldown - elapsed
+	remaining := cooldown - elapsed
 	return fmt.Sprintf(
-		"DM rate-limited: %s messaged %s recently (%s remaining). "+
-			"If you must wait, use the sleep tool with seconds=%d to defer your retry.",
-		sender, recipient, formatCooldown(remaining),
+		"rate-limited (%s remaining) — use sleep tool with seconds=%d to defer retry",
+		formatCooldown(remaining),
 		int(remaining.Seconds())+1,
 	)
 }
@@ -168,6 +176,30 @@ func (t *LanChatTool) OnInboundDM(fromNodeID string) {
 	}
 	selfID := t.Hub.NodeID()
 	t.rateLimiter.resetDMForPeer(selfID, fromNodeID)
+}
+
+// displayName returns the best human-readable name for a nodeID.
+// Prefers agent nick, then human nick, then falls back to the nodeID itself.
+func (t *LanChatTool) displayName(nodeID string) string {
+	if t.Hub == nil {
+		return nodeID
+	}
+	for _, p := range t.Hub.Participants() {
+		if p.NodeID == nodeID {
+			if p.AgentNick != "" {
+				return p.AgentNick
+			}
+			if p.HumanNick != "" {
+				return p.HumanNick
+			}
+			break
+		}
+	}
+	// Node not in participants list — show a short prefix instead of the full long ID
+	if len(nodeID) > 16 {
+		return nodeID[:16] + "..."
+	}
+	return nodeID
 }
 
 // formatCooldown formats a duration as a human-readable string.
@@ -597,14 +629,14 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	// Rate-limit check for agent-originated messages (anti-storm protection).
-	// Each sender→recipient pair has an independent 5-minute cooldown.
+	// Each sender→recipient pair has an independent cooldown (default 150s, configurable via lanchat.dm_cooldown).
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		selfID := t.Hub.NodeID()
 		var allowed []string
 		for _, nodeID := range resolved {
-			if msg := t.rateLimiter.checkDM(selfID, nodeID); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", nodeID, msg))
+			if msg := t.rateLimiter.checkDM(selfID, nodeID, t.dmCooldown); msg != "" {
+				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
 			} else {
 				allowed = append(allowed, nodeID)
 			}
@@ -628,7 +660,7 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		} else {
 			sent++
 			// Record rate-limit timestamp for successful sends
@@ -652,9 +684,14 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 		return Result{IsError: true, Content: errMsg}, nil
 	}
 
-	target := toNodeIDs[0]
-	if len(toNodeIDs) > 1 {
-		target = fmt.Sprintf("%s (%d recipients)", strings.Join(toNodeIDs, ", "), len(toNodeIDs))
+	// Build display names for the success message
+	var displayTargets []string
+	for _, id := range toNodeIDs {
+		displayTargets = append(displayTargets, t.displayName(id))
+	}
+	target := displayTargets[0]
+	if len(displayTargets) > 1 {
+		target = fmt.Sprintf("%s (%d recipients)", strings.Join(displayTargets, ", "), len(displayTargets))
 	}
 
 	result := fmt.Sprintf("Message sent to %s as %s", target, role)
@@ -713,8 +750,8 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		for _, nodeID := range allPeers {
-			if msg := t.rateLimiter.checkDM(selfID, nodeID); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", nodeID, msg))
+			if msg := t.rateLimiter.checkDM(selfID, nodeID, t.dmCooldown); msg != "" {
+				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
 			} else {
 				allowed = append(allowed, nodeID)
 			}
@@ -738,7 +775,7 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		} else {
 			sent++
 			if asAgent && t.rateLimiter != nil {
@@ -820,8 +857,8 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
 		for _, nodeID := range members {
-			if msg := t.rateLimiter.checkDM(selfNodeID, nodeID); msg != "" {
-				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", nodeID, msg))
+			if msg := t.rateLimiter.checkDM(selfNodeID, nodeID, t.dmCooldown); msg != "" {
+				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", t.displayName(nodeID), msg))
 			} else {
 				allowed = append(allowed, nodeID)
 			}
@@ -845,7 +882,7 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", t.displayName(nodeID), err))
 		} else {
 			sent++
 			if asAgent && t.rateLimiter != nil {

@@ -16,22 +16,22 @@ func TestAgentRateLimiter_DMCooldownPerRecipient(t *testing.T) {
 	sender := "node-self"
 
 	// DM to recipient A — allowed
-	if msg := rl.checkDM(sender, "node-a"); msg != "" {
+	if msg := rl.checkDM(sender, "node-a", 0); msg != "" {
 		t.Fatalf("first DM to node-a should be allowed, got: %s", msg)
 	}
 	rl.recordDM(sender, "node-a")
 
 	// DM to recipient A again — rate-limited
-	msg := rl.checkDM(sender, "node-a")
+	msg := rl.checkDM(sender, "node-a", 0)
 	if msg == "" {
 		t.Fatal("second DM to node-a within cooldown should be rate-limited")
 	}
-	if !strings.Contains(msg, "node-a") {
-		t.Errorf("error should mention the recipient, got: %s", msg)
+	if !strings.Contains(msg, "rate-limited") {
+		t.Errorf("error should mention rate-limited, got: %s", msg)
 	}
 
 	// DM to recipient B — allowed (independent cooldown)
-	if msg := rl.checkDM(sender, "node-b"); msg != "" {
+	if msg := rl.checkDM(sender, "node-b", 0); msg != "" {
 		t.Fatalf("first DM to node-b should be allowed, got: %s", msg)
 	}
 	rl.recordDM(sender, "node-b")
@@ -39,11 +39,11 @@ func TestAgentRateLimiter_DMCooldownPerRecipient(t *testing.T) {
 	// Simulate cooldown expiry for node-a
 	rl.mu.Lock()
 	key := sender + "\u2192" + "node-a"
-	rl.dmLastSent[key] = time.Now().Add(-(agentDMCooldown + time.Second))
+	rl.dmLastSent[key] = time.Now().Add(-(defaultAgentDMCooldown + time.Second))
 	rl.mu.Unlock()
 
 	// After expiry, DM to node-a should be allowed
-	if msg := rl.checkDM(sender, "node-a"); msg != "" {
+	if msg := rl.checkDM(sender, "node-a", 0); msg != "" {
 		t.Fatalf("DM to node-a after cooldown should be allowed, got: %s", msg)
 	}
 }
@@ -54,19 +54,48 @@ func TestAgentRateLimiter_DifferentSenders(t *testing.T) {
 	rl := newAgentRateLimiter()
 
 	// Sender A messages recipient C — allowed
-	if msg := rl.checkDM("sender-a", "node-c"); msg != "" {
+	if msg := rl.checkDM("sender-a", "node-c", 0); msg != "" {
 		t.Fatalf("sender-a → node-c should be allowed, got: %s", msg)
 	}
 	rl.recordDM("sender-a", "node-c")
 
 	// Sender B messages same recipient C — also allowed (different sender)
-	if msg := rl.checkDM("sender-b", "node-c"); msg != "" {
+	if msg := rl.checkDM("sender-b", "node-c", 0); msg != "" {
 		t.Fatalf("sender-b → node-c should be allowed (different sender), got: %s", msg)
 	}
 
 	// Sender A messages C again — rate-limited
-	if msg := rl.checkDM("sender-a", "node-c"); msg == "" {
+	if msg := rl.checkDM("sender-a", "node-c", 0); msg == "" {
 		t.Fatal("sender-a → node-c should be rate-limited")
+	}
+}
+
+// TestAgentRateLimiter_CustomCooldown verifies that a custom cooldown value
+// is respected when passed to checkDM.
+func TestAgentRateLimiter_CustomCooldown(t *testing.T) {
+	rl := newAgentRateLimiter()
+	sender := "node-self"
+
+	// First DM — allowed
+	if msg := rl.checkDM(sender, "node-x", 0); msg != "" {
+		t.Fatalf("first DM should be allowed, got: %s", msg)
+	}
+	rl.recordDM(sender, "node-x")
+
+	// Second DM with a 10s custom cooldown — should still be rate-limited
+	if msg := rl.checkDM(sender, "node-x", 10*time.Second); msg == "" {
+		t.Fatal("second DM within 10s custom cooldown should be rate-limited")
+	}
+
+	// Simulate 11s passing — now the 10s cooldown should have expired
+	rl.mu.Lock()
+	key := sender + "\u2192" + "node-x"
+	rl.dmLastSent[key] = time.Now().Add(-11 * time.Second)
+	rl.mu.Unlock()
+
+	// Should be allowed now
+	if msg := rl.checkDM(sender, "node-x", 10*time.Second); msg != "" {
+		t.Fatalf("DM after custom cooldown expiry should be allowed, got: %s", msg)
 	}
 }
 
@@ -100,8 +129,8 @@ func TestLanChatSendRateLimited(t *testing.T) {
 	if !strings.Contains(r2.Content, "rate-limited") {
 		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)
 	}
-	if !strings.Contains(r2.Content, "node-bob") {
-		t.Errorf("error should mention the recipient, got: %s", r2.Content)
+	if !strings.Contains(r2.Content, "bob_dev_agent") {
+		t.Errorf("error should mention the recipient nick, got: %s", r2.Content)
 	}
 
 	// DM to a different recipient — should NOT be rate-limited (would fail on network, not rate limit)

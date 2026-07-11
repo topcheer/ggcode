@@ -220,6 +220,7 @@ type Config struct {
 	KnightConfig   KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
 	Swarm          SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
 	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
 	Harness        HarnessConfig              `yaml:"harness,omitempty" json:"harness,omitempty"`
 	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
 	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
@@ -312,6 +313,22 @@ type SwarmConfig struct {
 	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 0 (no timeout, run until task completes)
 	InboxSize           int           `yaml:"inbox_size"`             // default: 32
 	PollInterval        time.Duration `yaml:"poll_interval"`          // default: 1s — how often idle teammates check the task board
+}
+
+// LanChatConfig holds LAN Chat rate-limiting configuration.
+// The DM cooldown prevents agent-originated message storms by enforcing
+// a per-recipient cooldown between messages. Default: 150s.
+// Set via `config set lanchat.dm_cooldown 300s`.
+type LanChatConfig struct {
+	DMCooldown time.Duration `yaml:"dm_cooldown" json:"dm_cooldown"` // default: 150s
+}
+
+// EffectiveDMCooldown returns the configured DM cooldown, or 150s if zero/unset.
+func (c LanChatConfig) EffectiveDMCooldown() time.Duration {
+	if c.DMCooldown <= 0 {
+		return 150 * time.Second
+	}
+	return c.DMCooldown
 }
 
 // DefaultA2AAPIKey is a well-known key baked into every ggcode binary.

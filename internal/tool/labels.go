@@ -441,7 +441,7 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return ToolResultPresentation{}, true
 	}
 	if isError {
-		return ToolResultPresentation{Summary: compactSingleLine(trimmed)}, true
+		return ToolResultPresentation{Summary: compactSingleLine(trimmed), Payload: trimmed, PayloadMode: "text"}, true
 	}
 
 	switch toolName {
@@ -610,22 +610,14 @@ func describeLanchatListResult(trimmed string) (ToolResultPresentation, bool) {
 	}, true
 }
 
+// extractNickFromResult extracts the recipient display name from the result
+// string. For "send" action, the result contains "Message sent to <nick> as <role>".
+// If extraction fails, falls back to the original toField.
 // describeLanchatSendResult enriches the terse send/broadcast confirmation
 // with the message content and recipient list from rawArgs, producing a
 // readable "chat log" style display.
 func describeLanchatSendResult(args map[string]any, action, trimmed string, isError bool) (ToolResultPresentation, bool) {
 	message := argStr(args, "message")
-
-	// On error, preserve the full error text — do not truncate.
-	// Rate-limit messages contain actionable guidance (cooldown time,
-	// alternative actions, sleep suggestion) that must be visible.
-	if isError {
-		return ToolResultPresentation{
-			Summary:     trimmed,
-			Payload:     trimmed,
-			PayloadMode: "text",
-		}, true
-	}
 
 	// Build the recipient line from rawArgs.
 	toField := argStr(args, "to")
@@ -645,6 +637,8 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 	var toLine string
 	switch action {
 	case "send":
+		// Use the recipient directly from args — the LLM passes nick names,
+		// not raw nodeIDs. This avoids fragile string parsing of the result.
 		toLine = toField
 	case "broadcast":
 		toLine = "your team"
@@ -658,6 +652,17 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 		}
 	}
 
+	// Summary is the compact one-liner.
+	summary := fmt.Sprintf("To: %s", toLine)
+
+	if isError {
+		return ToolResultPresentation{
+			Summary:     summary,
+			Payload:     trimmed,
+			PayloadMode: "text",
+		}, true
+	}
+
 	// Extract delivery stats from the result string if available.
 	// Examples: "Sent to 3/3 members of team \"X\"." → "3/3 delivered"
 	deliveryExtra := extractLanchatDeliveryInfo(trimmed)
@@ -669,9 +674,6 @@ func describeLanchatSendResult(args map[string]any, action, trimmed string, isEr
 	}
 	headerParts = append(headerParts, fmt.Sprintf("as %s", identity))
 	header := strings.Join(headerParts, "  ·  ")
-
-	// Summary is the compact one-liner.
-	summary := fmt.Sprintf("To: %s", toLine)
 
 	// If no message content in args (shouldn't happen for successful sends),
 	// fall through to raw result.

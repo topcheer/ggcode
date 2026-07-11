@@ -891,6 +891,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
 				a.autopilotStrategistCount++
 				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d)", i+1, a.autopilotStrategistCount)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount)})
 
 				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
 				if sErr != nil {
