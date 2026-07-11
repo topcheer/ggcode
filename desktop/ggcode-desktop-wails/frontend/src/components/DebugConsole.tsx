@@ -185,7 +185,7 @@ export default function DebugConsole() {
         <div style={{ flex: 1 }} />
 
         {/* Category filter */}
-        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label="Filter by category" title="Filter by category" style={{
+        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label={t('common.filterByCategory')} title={t('common.filterByCategory')} style={{
           padding: '3px 6px', borderRadius: 4, border: '1px solid #30363d',
           background: '#161b22', color: '#c9d1d9', fontSize: 11,
         }}>

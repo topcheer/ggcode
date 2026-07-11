@@ -20,6 +20,7 @@ type Adapter struct {
 	serverName string
 	caller     toolCaller
 	tools      []ToolDefinition
+	readOnly   bool
 	mu         sync.Mutex
 }
 
@@ -32,18 +33,39 @@ func NewAdapter(serverName string, caller toolCaller, tools []ToolDefinition) *A
 	}
 }
 
+// NewReadOnlyAdapter creates an MCP adapter that blocks write-type tools.
+func NewReadOnlyAdapter(serverName string, caller toolCaller, tools []ToolDefinition) *Adapter {
+	return &Adapter{
+		serverName: serverName,
+		caller:     caller,
+		tools:      tools,
+		readOnly:   true,
+	}
+}
+
+// IsReadOnly returns true if this adapter is in read-only mode.
+func (a *Adapter) IsReadOnly() bool { return a.readOnly }
+
 // RegisterTools registers all MCP tools into the registry with "mcp__" prefix.
 func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, td := range a.tools {
 		name := fmt.Sprintf("mcp__%s__%s", a.serverName, td.Name)
+		desc := td.Description
+		blocked := a.readOnly && isWriteToolName(td.Name)
+		if a.readOnly {
+			desc = desc + " (read-only)"
+		}
 		t := &mcpTool{
 			name:     name,
 			caller:   a.caller,
 			toolName: td.Name,
-			desc:     td.Description,
+			desc:     desc,
 			schema:   td.InputSchema,
+			readOnly: a.readOnly,
+			blocked:  blocked,
+			srvName:  a.serverName,
 		}
 		if err := registry.Register(t); err != nil {
 			// Log but continue — name collision is non-fatal
@@ -77,6 +99,9 @@ type mcpTool struct {
 	toolName string
 	desc     string
 	schema   json.RawMessage
+	readOnly bool
+	blocked  bool
+	srvName  string
 }
 
 func (t *mcpTool) Name() string        { return t.name }
@@ -89,6 +114,12 @@ func (t *mcpTool) Parameters() json.RawMessage {
 }
 
 func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	if t.blocked {
+		return tool.Result{
+			Content: fmt.Sprintf("MCP server '%s' is in read-only mode, tool '%s' is not allowed", t.srvName, t.toolName),
+			IsError: true,
+		}, nil
+	}
 	var args map[string]interface{}
 	if input != nil && string(input) != "" {
 		if err := json.Unmarshal(input, &args); err != nil {

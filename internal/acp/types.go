@@ -831,14 +831,15 @@ type AvailableCommand struct {
 
 // MCPServer describes how to connect to an MCP server.
 type MCPServer struct {
-	Meta    json.RawMessage `json:"_meta,omitempty"`
-	Name    string          `json:"name"`
-	Type    string          `json:"type,omitempty"` // "http", "sse", "stdio" (default)
-	Command string          `json:"command,omitempty"`
-	Args    []string        `json:"args,omitempty"`
-	Env     []EnvVariable   `json:"env,omitempty"`
-	URL     string          `json:"url,omitempty"`
-	Headers []HTTPHeader    `json:"headers,omitempty"`
+	Meta     json.RawMessage `json:"_meta,omitempty"`
+	Name     string          `json:"name"`
+	Type     string          `json:"type,omitempty"` // "http", "sse", "stdio" (default)
+	Command  string          `json:"command,omitempty"`
+	Args     []string        `json:"args,omitempty"`
+	Env      []EnvVariable   `json:"env,omitempty"`
+	URL      string          `json:"url,omitempty"`
+	Headers  []HTTPHeader    `json:"headers,omitempty"`
+	ReadOnly bool            `json:"read_only,omitempty"`
 }
 
 type EnvVariable struct {

@@ -22,10 +22,10 @@ interface MCPServerConfig {
   oauthRequired?: boolean
 }
 
-const TRANSPORTS: { value: TransportType; label: string; icon: React.ReactNode; desc: string }[] = [
-  { value: 'stdio', label: 'Stdio', icon: <Terminal size={16} />, desc: 'Local process via stdin/stdout' },
-  { value: 'http', label: 'HTTP / SSE', icon: <Globe size={16} />, desc: 'Remote server via HTTP (Streamable HTTP / SSE)' },
-  { value: 'ws', label: 'WebSocket', icon: <Wifi size={16} />, desc: 'Remote server via WebSocket' },
+const TRANSPORTS: { value: TransportType; labelKey: string; icon: React.ReactNode; descKey: string }[] = [
+  { value: 'stdio', labelKey: 'mcp.transportStdio', icon: <Terminal size={16} />, descKey: 'mcp.descStdio' },
+  { value: 'http', labelKey: 'mcp.transportHttp', icon: <Globe size={16} />, descKey: 'mcp.descHttp' },
+  { value: 'ws', labelKey: 'mcp.transportWs', icon: <Wifi size={16} />, descKey: 'mcp.descWs' },
 ]
 
 function transportIcon(type?: string) {
@@ -179,7 +179,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
 
   const handleOAuthLogin = async (name: string) => {
     setOauthBusy(name)
-    setOauthMessage(prev => ({ ...prev, [name]: 'Opening browser for MCP login...' }))
+    setOauthMessage(prev => ({ ...prev, [name]: tr('mcp.oauthOpening') }))
     try {
       const result = await App.StartMCPOAuth(name)
       if (result?.openError) {
@@ -187,10 +187,10 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
       } else if (result?.deviceUserCode) {
         setOauthMessage(prev => ({ ...prev, [name]: `Enter code ${result.deviceUserCode} in the browser, then return here.` }))
       } else {
-        setOauthMessage(prev => ({ ...prev, [name]: 'Complete login in your browser, then return here.' }))
+        setOauthMessage(prev => ({ ...prev, [name]: tr('mcp.oauthCompleteBrowser') }))
       }
       await App.CompleteMCPOAuth(name)
-      setOauthMessage(prev => ({ ...prev, [name]: 'Login complete. Reconnecting MCP server...' }))
+      setOauthMessage(prev => ({ ...prev, [name]: tr('mcp.oauthReconnecting') }))
       await loadServers()
     } catch (e: any) {
       setOauthMessage(prev => ({ ...prev, [name]: e?.message || 'OAuth login failed' }))
@@ -243,7 +243,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           display: 'flex', flexDirection: 'column', gap: 10,
         }}>
           {/* Transport type selector */}
-          <div style={labelStyle}>Transport</div>
+          <div style={labelStyle}>{tr('mcp.transport')}</div>
           <div style={{ display: 'flex', gap: 6 }}>
             {TRANSPORTS.map(t => (
               <button key={t.value} onClick={() => setAddType(t.value)} style={{
@@ -255,25 +255,25 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {t.icon} {t.label}
+                  {t.icon} {tr(t.labelKey as any)}
                 </div>
-                <span style={{ fontSize: 9, opacity: 0.7 }}>{t.desc}</span>
+                <span style={{ fontSize: 9, opacity: 0.7 }}>{tr(t.descKey as any)}</span>
               </button>
             ))}
           </div>
 
           {/* Name */}
-          <div style={labelStyle}>Name</div>
+          <div style={labelStyle}>{tr('mcp.name')}</div>
           <input placeholder="e.g. github, filesystem" value={addName}
             onChange={e => setAddName(e.target.value)} style={inputStyle} />
 
           {/* Stdio fields */}
           {addType === 'stdio' && (
             <>
-              <div style={labelStyle}>Command</div>
+              <div style={labelStyle}>{tr('mcp.commandLabel')}</div>
               <input placeholder="e.g. npx -y @anthropic-ai/mcp-github" value={addCommand}
                 onChange={e => setAddCommand(e.target.value)} style={inputStyle} />
-              <div style={labelStyle}>Arguments (optional, space-separated)</div>
+              <div style={labelStyle}>{tr('mcp.argsOptional')}</div>
               <input placeholder="e.g. --verbose --port 3000" value={addArgs}
                 onChange={e => setAddArgs(e.target.value)} style={inputStyle} />
             </>
@@ -285,7 +285,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
               <div style={labelStyle}>URL</div>
               <input placeholder={addType === 'ws' ? 'ws://localhost:8080/mcp' : 'http://localhost:3000/mcp'}
                 value={addUrl} onChange={e => setAddUrl(e.target.value)} style={inputStyle} />
-              <div style={labelStyle}>Headers (optional, one per line: Key: Value)</div>
+              <div style={labelStyle}>{tr('mcp.headersOptional')}</div>
               <textarea placeholder={"Authorization: Bearer token123\nX-Custom: value"}
                 value={addHeaders} onChange={e => setAddHeaders(e.target.value)}
                 rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
@@ -293,7 +293,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
           )}
 
           {/* Common: Environment */}
-          <div style={labelStyle}>Environment Variables (optional, one per line: KEY=VALUE)</div>
+          <div style={labelStyle}>{tr('mcp.envVars')}</div>
           <textarea placeholder={"API_KEY=sk-xxx\nDEBUG=true"}
             value={addEnv} onChange={e => setAddEnv(e.target.value)}
             rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
@@ -304,7 +304,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
               padding: '4px 10px', borderRadius: 'var(--radius-sm)',
               background: 'transparent', border: '1px solid var(--color-border)',
               color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12,
-            }}>Cancel</button>
+            }}>{tr('mcp.cancel')}</button>
             <button onClick={handleAdd} style={{
               padding: '4px 10px', borderRadius: 'var(--radius-sm)',
               background: 'var(--color-primary)', border: 'none',
@@ -397,9 +397,9 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                 )}
                 {server.oauthRequired && !server.disabled && (
                   <div style={{ marginTop: 6, padding: 8, borderRadius: 'var(--radius-sm)', background: 'rgba(234,179,8,0.10)', border: '1px solid rgba(234,179,8,0.25)' }}>
-                    <div style={{ fontSize: 11, color: '#facc15', fontWeight: 600 }}>OAuth login required</div>
+                    <div style={{ fontSize: 11, color: '#facc15', fontWeight: 600 }}>{tr('mcp.oauthRequired')}</div>
                     <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>
-                      Sign in with your browser to authorize this MCP server.
+                      {tr('mcp.oauthHint')}
                     </div>
                     {oauthMessage[server.name] && (
                       <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 4, wordBreak: 'break-all' }}>
@@ -414,7 +414,7 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
               </div>
               <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                 {server.oauthRequired && !server.disabled && (
-                  <button onClick={() => handleOAuthLogin(server.name)} disabled={oauthBusy === server.name} title="Login" style={{
+                  <button onClick={() => handleOAuthLogin(server.name)} disabled={oauthBusy === server.name} title={tr('mcp.login')} style={{
                     background: 'rgba(234,179,8,0.14)', border: '1px solid rgba(234,179,8,0.35)', cursor: oauthBusy === server.name ? 'default' : 'pointer',
                     color: '#facc15', padding: '3px 8px', borderRadius: 'var(--radius-sm)', fontSize: 11, fontWeight: 600,
                   }}>{oauthBusy === server.name ? 'Waiting...' : 'Login'}</button>
@@ -423,17 +423,17 @@ export function MCPServers({ onBack }: { onBack: () => void }) {
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: server.disabled ? '#3FB950' : 'var(--text-tertiary)', padding: 4,
                 }}><Power size={14} /></button>
-                <button onClick={() => handleReconnect(server.name)} title="Reconnect" style={{
+                <button onClick={() => handleReconnect(server.name)} title={tr('mcp.reconnect')} style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--text-tertiary)', padding: 4,
                 }}><RefreshCw size={14} /></button>
                 {(server.type === 'http' || server.type === 'ws' || server.url) && (
-                  <button onClick={() => handleForceReauth(server.name)} title="Reset OAuth (switch account)" style={{
+                  <button onClick={() => handleForceReauth(server.name)} title={tr('mcp.resetOAuth')} style={{
                     background: 'none', border: 'none', cursor: 'pointer',
                     color: 'var(--text-tertiary)', padding: 4,
                   }}><KeyRound size={14} /></button>
                 )}
-                <button onClick={() => handleRemove(server.name)} title="Remove" style={{
+                <button onClick={() => handleRemove(server.name)} title={tr('mcp.remove')} style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--text-tertiary)', padding: 4,
                 }}><Trash2 size={14} /></button>

@@ -590,27 +590,27 @@ const SLASH_COMMANDS: SlashCommand[] = [
 // ── Activity label helper ────────────────────────────────────────────────────
 
 /** Maps tool names to human-readable activity labels for the typing indicator. */
-function getActivityLabel(toolName: string): string {
+function getActivityLabel(toolName: string, t: (key: string) => string): string {
   switch (toolName) {
     case 'read_file':
     case 'multi_file_read':
-      return 'Reading files...'
+      return t('chat.activity.reading')
     case 'edit_file':
     case 'multi_edit_file':
     case 'multi_file_edit':
-      return 'Editing code...'
+      return t('chat.activity.editing')
     case 'write_file':
     case 'multi_file_write':
-      return 'Writing files...'
+      return t('chat.activity.writing')
     case 'run_command':
     case 'start_command':
-      return 'Running commands...'
+      return t('chat.activity.running')
     case 'grep':
     case 'search_files':
     case 'glob':
-      return 'Searching...'
+      return t('chat.activity.searching')
     case 'list_directory':
-      return 'Browsing files...'
+      return t('chat.activity.browsing')
     case 'git_status':
     case 'git_diff':
     case 'git_log':
@@ -622,7 +622,7 @@ function getActivityLabel(toolName: string): string {
     case 'git_blame':
     case 'git_stash':
     case 'git_stash_list':
-      return 'Git operations...'
+      return t('chat.activity.git')
     case 'lsp_definition':
     case 'lsp_references':
     case 'lsp_hover':
@@ -635,36 +635,36 @@ function getActivityLabel(toolName: string): string {
     case 'lsp_prepare_call_hierarchy':
     case 'lsp_incoming_calls':
     case 'lsp_outgoing_calls':
-      return 'Analyzing code...'
+      return t('chat.activity.analyzing')
     case 'web_search':
     case 'web_fetch':
-      return 'Searching the web...'
+      return t('chat.activity.searching')
     case 'browser':
-      return 'Browsing...'
+      return t('chat.activity.browsing')
     case 'task_create':
     case 'task_update':
     case 'task_get':
     case 'task_list':
     case 'task_stop':
-      return 'Managing tasks...'
+      return t('chat.activity.managing')
     case 'spawn_agent':
     case 'wait_agent':
     case 'list_agents':
-      return 'Running sub-agent...'
+      return t('chat.activity.subagent')
     case 'enter_plan_mode':
     case 'exit_plan_mode':
-      return 'Planning...'
+      return t('chat.activity.planMode')
     case 'ask_user':
-      return 'Waiting for input...'
+      return t('chat.activity.waiting')
     case 'save_memory':
-      return 'Saving memory...'
+      return t('chat.activity.saving')
     case 'sleep':
-      return 'Waiting...'
+      return t('chat.activity.waiting')
     default:
       // Unknown tools → generic
       if (toolName.startsWith('mcp_'))
-        return 'Running MCP tool...'
-      return 'Working...'
+        return t('chat.activity.running')
+      return t('status.thinking')
   }
 }
 
@@ -1167,7 +1167,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           // Track for run summary
           runMetricsRef.current.toolCalls++
           // Update context-aware activity label
-          setCurrentActivity(getActivityLabel(p.name))
+          setCurrentActivity(getActivityLabel(p.name, t as (key: string) => string))
           if (p.name === 'edit_file' || p.name === 'write_file' || p.name === 'multi_edit_file' || p.name === 'multi_file_write' || p.name === 'multi_file_edit') {
             runMetricsRef.current.fileEdits++
           }
@@ -1594,10 +1594,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const text = lines.join('\n---\n\n')
     navigator.clipboard.writeText(text).then(() => {
       setExported(true)
-      showToast?.('success', `Copied ${lines.length} messages to clipboard`)
+      showToast?.('success', t('toast.copiedMessages', { count: lines.length }))
       setTimeout(() => setExported(false), 2000)
     }).catch(() => {
-      showToast?.('error', 'Failed to copy conversation')
+      showToast?.('error', t('toast.copyConversationFailed'))
     })
   }, [messages, showToast])
 
@@ -1712,7 +1712,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }))).then(images => {
       setPastedImages(prev => [...prev, ...images])
     }).catch(err => {
-      showToast?.('error', err?.message || 'Failed to process attached image')
+      showToast?.('error', err?.message || t('toast.imageProcessFailed'))
     })
   }, [showToast])
 
@@ -1741,7 +1741,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }))).then(images => {
       setPastedImages(prev => [...prev, ...images])
     }).catch(err => {
-      showToast?.('error', err?.message || 'Failed to process dropped image')
+      showToast?.('error', err?.message || t('toast.imageDropFailed'))
     })
   }, [showToast])
 
@@ -1771,7 +1771,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     }))).then(images => {
       setPastedImages(prev => [...prev, ...images])
     }).catch(err => {
-      showToast?.('error', err?.message || 'Failed to paste image')
+      showToast?.('error', err?.message || t('toast.imagePasteFailed'))
     })
       return
     }
@@ -1860,9 +1860,9 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         setInput(prev => prev ? `${prev}${text}` : text)
         return
       }
-      showToast?.('info', 'Clipboard is empty or contains unsupported content')
+      showToast?.('info', t('toast.clipboardEmpty'))
     } catch (err: any) {
-      showToast?.('error', err?.message || 'Failed to paste from clipboard')
+      showToast?.('error', err?.message || t('toast.clipboardPasteFailed'))
     }
   }, [showToast])
 
@@ -1900,10 +1900,10 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
       if (result?.supported) {
         setStatusBar(s => ({ ...s, effort: result.effort ?? 'auto' }))
       } else {
-        showToast?.('info', 'Reasoning effort is not supported by the current model')
+        showToast?.('info', t('toast.reasoningNotSupported'))
       }
     } catch (err: any) {
-      showToast?.('error', err?.message || 'Failed to switch reasoning effort')
+      showToast?.('error', err?.message || t('toast.reasoningSwitchFailed', { error: '' }))
     }
   }, [showToast])
 
@@ -2256,7 +2256,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         {/* Identity pill — click to edit nickname/role/team */}
         <button
           onClick={() => { setEditNick(selfNick); setEditRole(selfRole); setEditTeam(selfTeam); setIdentityOpen(true) }}
-          title="Click to edit your nickname, role, and team"
+          title={t('chat.editNickRoleTeam')}
           style={{
             padding: '2px 8px', borderRadius: 'var(--radius-sm)',
             background: 'var(--color-card)', border: '1px solid var(--color-border)',
@@ -2303,7 +2303,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16, color: 'var(--text-primary)' }}>
                 Your Identity
               </div>
-              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Nickname</label>
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{t('chat.nickname')}</label>
               <input
                 value={editNick} onChange={e => setEditNick(e.target.value)} autoFocus
                 placeholder="alice"
@@ -2312,7 +2312,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                   borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
                   fontFamily: 'var(--font-mono)' }}
               />
-              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Role</label>
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{t('chat.role')}</label>
               <input
                 value={editRole} onChange={e => setEditRole(e.target.value)}
                 placeholder="developer"
@@ -2321,7 +2321,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                   borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none',
                   fontFamily: 'var(--font-mono)' }}
               />
-              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>Team</label>
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{t('chat.team')}</label>
               <input
                 value={editTeam} onChange={e => setEditTeam(e.target.value)}
                 placeholder="fluui"
@@ -2335,7 +2335,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                   padding: '5px 14px', fontSize: 12, border: '1px solid var(--color-border)',
                   borderRadius: 'var(--radius-sm)', background: 'transparent',
                   color: 'var(--text-secondary)', cursor: 'pointer',
-                }}>Cancel</button>
+                }}>{t('chat.cancel')}</button>
                 <button onClick={async () => {
                   const combined = [editNick, editRole, editTeam].map(s => s.trim()).join('@')
                   try {
@@ -2347,7 +2347,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                   padding: '5px 14px', fontSize: 12, border: 'none',
                   borderRadius: 'var(--radius-sm)', background: 'var(--color-primary)',
                   color: '#fff', cursor: 'pointer', fontWeight: 500,
-                }}>Save</button>
+                }}>{t('chat.save')}</button>
               </div>
             </div>
           </div>
@@ -2394,7 +2394,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         </div>
 
         {teamBoard.length > 0 && !teamBoardOpen && (
-          <button onClick={openTeamBoard} title="Open team board" style={{
+          <button onClick={openTeamBoard} title={t('chat.title.teamBoard')} style={{
             padding: '2px 8px', borderRadius: 'var(--radius-sm)',
             background: 'var(--color-card)', border: '1px solid var(--color-border)',
             fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
@@ -2450,7 +2450,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           <>
             <button
               onClick={() => setSearchOpen(prev => !prev)}
-              title="Search in conversation (Cmd+F)"
+              title={t('chat.title.search')}
               style={{
                 width: 28, height: 28, borderRadius: 'var(--radius-sm)',
                 background: searchOpen ? 'color-mix(in srgb, var(--color-primary) 15%, transparent)' : 'var(--color-surface)',
@@ -2463,7 +2463,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             >
               <Search size={14} />
             </button>
-            <button onClick={handleExportConversation} title="Copy conversation to clipboard" style={{
+            <button onClick={handleExportConversation} title={t('chat.title.copyConversation')} style={{
               width: 28, height: 28, borderRadius: 'var(--radius-sm)',
               background: exported ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
               border: '1px solid ' + (exported ? 'var(--color-success)' : 'transparent'),
@@ -2474,7 +2474,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             }}>
               {exported ? <Check size={14} /> : <ClipboardCopy size={14} />}
             </button>
-            <button onClick={handleDownloadConversation} title="Download as markdown file" style={{
+            <button onClick={handleDownloadConversation} title={t('chat.title.download')} style={{
               width: 28, height: 28, borderRadius: 'var(--radius-sm)',
               background: downloaded ? 'rgba(34,197,94,0.15)' : 'var(--color-surface)',
               border: '1px solid ' + (downloaded ? 'var(--color-success)' : 'transparent'),
@@ -2488,7 +2488,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </>
         )}
         {onNewSession && (
-          <button onClick={onNewSession} title="New session" style={{
+          <button onClick={onNewSession} title={t('chat.title.newSession')} style={{
             width: 28, height: 28, borderRadius: 'var(--radius-sm)',
             background: 'var(--color-surface)', border: 'none',
             color: 'var(--text-secondary)', cursor: 'pointer',
@@ -2502,7 +2502,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </button>
         )}
         {onShare && (
-          <button onClick={onShare} title="Share session (Cmd+Shift+S)" style={{
+          <button onClick={onShare} title={t('chat.title.shareSession')} style={{
             width: 28, height: 28, borderRadius: 'var(--radius-sm)',
             background: 'var(--color-surface)', border: 'none',
             color: 'var(--text-secondary)', cursor: 'pointer',
@@ -2577,7 +2577,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? searchPrev() : searchNext() }
               if (e.key === 'Escape') { setSearchOpen(false) }
             }}
-            placeholder="Find in conversation..."
+            placeholder={t('chat.findPlaceholder')}
             style={{
               background: 'none', border: 'none', outline: 'none',
               color: 'var(--text-primary)', fontSize: 13,
@@ -2596,7 +2596,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 : '0/0'}
             </span>
           )}
-          <button onClick={searchPrev} disabled={searchMatches.length === 0} title="Previous (Shift+Enter)" style={{
+          <button onClick={searchPrev} disabled={searchMatches.length === 0} title={t('common.searchPrev')} style={{
             background: 'none', border: 'none', cursor: searchMatches.length ? 'pointer' : 'default',
             color: searchMatches.length ? 'var(--text-secondary)' : 'var(--text-tertiary)',
             padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2604,7 +2604,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }}>
             <ChevronUp size={15} />
           </button>
-          <button onClick={searchNext} disabled={searchMatches.length === 0} title="Next (Enter)" style={{
+          <button onClick={searchNext} disabled={searchMatches.length === 0} title={t('common.searchNext')} style={{
             background: 'none', border: 'none', cursor: searchMatches.length ? 'pointer' : 'default',
             color: searchMatches.length ? 'var(--text-secondary)' : 'var(--text-tertiary)',
             padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2612,7 +2612,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }}>
             <ChevronDown size={15} />
           </button>
-          <button onClick={() => setSearchOpen(false)} title="Close (Esc)" style={{
+          <button onClick={() => setSearchOpen(false)} title={t('common.searchClose')} style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'var(--text-secondary)', padding: '3px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2765,7 +2765,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
               zIndex: 50,
               transition: 'opacity 0.2s, transform 0.2s',
             }}
-            title="Scroll to bottom"
+            title={t('chat.title.scrollBottom')}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
@@ -2848,7 +2848,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
                 width: 72, height: 72, objectFit: 'cover', borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--color-border)', background: 'var(--color-card)',
               }} />
-              <button type="button" onClick={() => setPastedImages(prev => prev.filter(x => x.id !== img.id))} title="Remove image" style={{
+              <button type="button" onClick={() => setPastedImages(prev => prev.filter(x => x.id !== img.id))} title={t('chat.title.removeImage')} style={{
                 position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: 9,
                 border: '1px solid var(--color-border)', background: 'var(--color-card)',
                 color: 'var(--text-primary)', cursor: 'pointer', fontSize: 12, lineHeight: '16px', padding: 0,
@@ -2901,7 +2901,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           style={{ display: 'none' }}
           onChange={handleFilePick}
         />
-        <button type="button" onClick={() => fileInputRef.current?.click()} title="Attach image" style={{
+        <button type="button" onClick={() => fileInputRef.current?.click()} title={t('chat.title.attachImage')} style={{
           width: 36, height: 36, borderRadius: 'var(--radius-lg)',
           background: 'var(--color-surface)',
           border: '1px solid var(--color-border)', cursor: 'pointer',
@@ -2911,7 +2911,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         }}>
           <ImagePlus size={16} />
         </button>
-        <button type="button" onClick={handlePasteButton} title="Paste from clipboard" style={{
+        <button type="button" onClick={handlePasteButton} title={t('chat.title.paste')} style={{
           width: 36, height: 36, borderRadius: 'var(--radius-lg)',
           background: 'var(--color-surface)',
           border: '1px solid var(--color-border)', cursor: 'pointer',
@@ -2946,7 +2946,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           }}
         />
         {isStreaming ? (
-          <button onClick={handleCancel} title="Cancel" style={{
+          <button onClick={handleCancel} title={t('chat.title.cancel')} style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
             background: 'var(--color-error)', border: 'none', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2955,7 +2955,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
             <Square size={16} fill="currentColor" />
           </button>
         ) : null}
-        <button onClick={handleSend} disabled={!input.trim() && pastedImages.length === 0} title="Send message (Enter)" style={{
+        <button onClick={handleSend} disabled={!input.trim() && pastedImages.length === 0} title={t('chat.title.send')} style={{
             width: 36, height: 36, borderRadius: 'var(--radius-lg)',
             background: input.trim() || pastedImages.length > 0 ? 'var(--color-primary)' : 'var(--color-surface)',
             border: 'none', cursor: input.trim() || pastedImages.length > 0 ? 'pointer' : 'default',
@@ -3202,6 +3202,7 @@ const MessageCard = React.memo(function MessageCard({ msg, onRetry, onEdit }: {
 function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', streaming = false, durationSec }: {
   text: string; defaultOpen?: boolean; label?: string; streaming?: boolean; durationSec?: number
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(defaultOpen)
   const [copied, setCopied] = useState(false)
   const wasStreamingRef = useRef(false)
@@ -3243,7 +3244,7 @@ function ReasoningBlock({ text, defaultOpen = false, label = 'Reasoning', stream
           {displayLabel}
         </button>
         {!streaming && text && (
-          <button onClick={handleCopy} title="Copy reasoning" style={{
+          <button onClick={handleCopy} title={t('chat.title.copyReasoning')} style={{
             padding: '2px 8px', background: 'transparent', border: 'none',
             cursor: 'pointer', color: copied ? 'var(--color-success)' : 'var(--text-tertiary)',
             fontSize: 10, display: 'flex', alignItems: 'center', gap: 3,
@@ -3287,6 +3288,7 @@ function UserMessage({ msg, onRetry, onEdit }: {
     onRetry?: (id: string, text: string, images?: PastedImageAttachment[]) => void;
     onEdit?: (text: string) => void;
   }) {
+  const { t } = useTranslation()
   const failed = msg.deliveryStatus === 'failed'
   const pending = msg.deliveryStatus === 'pending'
   const isLanChat = msg.source === 'lanchat' || (typeof msg.content === 'string' && msg.content.includes('[LAN Chat from '))
@@ -3306,8 +3308,8 @@ function UserMessage({ msg, onRetry, onEdit }: {
   }, [msg.content])
 
   const ctxItems: ContextMenuItem[] = useMemo(() => [
-    { label: 'Copy', icon: <Copy size={14} />, onClick: handleCopy },
-    ...(onEdit ? [{ label: 'Edit', icon: <ClipboardPaste size={14} />, onClick: () => onEdit(msg.content) }] : []),
+    { label: t('chat.menuCopy'), icon: <Copy size={14} />, onClick: handleCopy },
+    ...(onEdit ? [{ label: t('chat.menuEdit'), icon: <ClipboardPaste size={14} />, onClick: () => onEdit(msg.content) }] : []),
   ], [handleCopy, onEdit, msg.content])
 
   return (
@@ -3354,7 +3356,7 @@ function UserMessage({ msg, onRetry, onEdit }: {
       </div>
       {(pending || failed) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginRight: 4, fontSize: 11, color: failed ? 'var(--color-error)' : 'var(--text-tertiary)' }}>
-          <span>{pending ? 'Sending...' : 'Failed to send'}</span>
+          <span>{pending ? t('chat.sending') : t('chat.failedToSend')}</span>
           {failed && onRetry && (
             <button
               type="button"
@@ -3384,7 +3386,7 @@ function UserMessage({ msg, onRetry, onEdit }: {
           {msg.content && onEdit && (
             <button
               onClick={() => onEdit(msg.content)}
-              title="Edit & resend"
+              title={t('chat.title.editResend')}
               style={{
                 padding: '1px 6px', borderRadius: 3,
                 background: 'transparent',
@@ -3401,7 +3403,7 @@ function UserMessage({ msg, onRetry, onEdit }: {
           {msg.content && (
             <button
               onClick={handleCopy}
-              title="Copy message"
+              title={t('chat.title.copyMessage')}
               style={{
                 padding: '1px 6px', borderRadius: 3,
                 background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
@@ -3428,6 +3430,7 @@ function formatTimestamp(ts: number): string {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
+  const { t } = useTranslation()
   const isSubAgent = !!msg.agentID
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
@@ -3445,8 +3448,8 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   }, [])
 
   const ctxItems: ContextMenuItem[] = useMemo(() => [
-    { label: 'Copy', icon: <Copy size={14} />, onClick: handleCopy },
-    ...(!msg.streaming ? [{ label: 'Regenerate', icon: <RefreshCw size={14} />, onClick: handleRegenerate }] : []),
+    { label: t('chat.menuCopy'), icon: <Copy size={14} />, onClick: handleCopy },
+    ...(!msg.streaming ? [{ label: t('chat.menuRegenerate'), icon: <RefreshCw size={14} />, onClick: handleRegenerate }] : []),
   ], [handleCopy, handleRegenerate, msg.streaming])
 
   return (
@@ -3475,7 +3478,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, opacity: hovered || copied ? 1 : 0, transition: 'opacity 0.15s ease' }}>
             <button
               onClick={handleRegenerate}
-              title="Regenerate response"
+              title={t('chat.regenerate')}
               style={{
                 padding: '1px 6px', borderRadius: 3,
                 background: 'transparent',
@@ -3488,7 +3491,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
             </button>
             <button
               onClick={handleCopy}
-              title="Copy message"
+              title={t('chat.title.copyMessage')}
               style={{
                 padding: '1px 6px', borderRadius: 3,
                 background: copied ? 'rgba(34,197,94,0.15)' : 'transparent',
@@ -3536,6 +3539,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function ToolMessage({ msg }: { msg: ChatMessage }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(!!msg.isError)
   const [copied, setCopied] = useState(false)
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -3732,7 +3736,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
               {/* Copy button for result */}
               <button
                 onClick={(e) => { e.stopPropagation(); handleCopyResult() }}
-                title="Copy result"
+                title={t('chat.copyResult')}
                 style={{
                   position: 'absolute', top: 4, right: 4,
                   padding: '2px 8px', borderRadius: 3,
@@ -3753,6 +3757,7 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function ErrorMessage({ msg }: { msg: ChatMessage }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(msg.content).then(() => {
@@ -3774,7 +3779,7 @@ function ErrorMessage({ msg }: { msg: ChatMessage }) {
       {msg.content}
       <button
         onClick={handleCopy}
-        title="Copy error"
+        title={t('chat.copyError')}
         style={{
           position: 'absolute', top: 4, right: 4,
           padding: '1px 6px', borderRadius: 3,
@@ -3805,17 +3810,18 @@ function SystemMessage({ msg }: { msg: ChatMessage }) {
 }
 
 function RunSummaryCard({ data }: { data: RunSummaryData }) {
+  const { t } = useTranslation()
   const items: { label: string; value: string; variant?: 'error' }[] = []
   const dur = data.durationSec >= 60
     ? `${Math.floor(data.durationSec / 60)}m ${data.durationSec % 60}s`
     : `${data.durationSec}s`
-  items.push({ label: 'Duration', value: dur })
-  if (data.toolCalls > 0) items.push({ label: 'Tools', value: String(data.toolCalls) })
-  if (data.filesEdited && data.filesEdited > 0) items.push({ label: 'Files', value: String(data.filesEdited) })
-  if (data.errors > 0) items.push({ label: 'Errors', value: String(data.errors), variant: 'error' })
+  items.push({ label: t('chat.runStatDuration'), value: dur })
+  if (data.toolCalls > 0) items.push({ label: t('chat.runStatTools'), value: String(data.toolCalls) })
+  if (data.filesEdited && data.filesEdited > 0) items.push({ label: t('chat.runStatFiles'), value: String(data.filesEdited) })
+  if (data.errors > 0) items.push({ label: t('chat.runStatErrors'), value: String(data.errors), variant: 'error' })
   const totalTokens = (data.inputTokens ?? 0) + (data.outputTokens ?? 0)
   if (totalTokens > 0) {
-    items.push({ label: 'Tokens', value: totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : String(totalTokens) })
+    items.push({ label: t('chat.runStatTokens'), value: totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : String(totalTokens) })
   }
   return (
     <div style={{

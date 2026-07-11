@@ -35,6 +35,14 @@ type Rule struct {
 
 const defaultMaxRules = 60
 
+// Staleness thresholds for ratchet rule lifecycle.
+const (
+	// staleRuleThreshold: rules not hit in this duration are considered stale.
+	staleRuleThreshold = 30 * 24 * time.Hour // 30 days
+	// staleRuleMinHits: rules with HitCount >= this are preserved even if stale.
+	staleRuleMinHits = 3
+)
+
 // RuleStore manages harness rules persisted to .ggcode/agent-rules.json.
 type RuleStore struct {
 	mu       sync.Mutex
@@ -294,15 +302,18 @@ func (rs *RuleStore) Rules() []Rule {
 	return result
 }
 
-// TopRulesForPrompt returns a concise summary of the most frequently-hit
-// rules for proactive injection into the system prompt. Only includes rules
-// that have been hit at least once (HitCount > 0), sorted by hit count
-// descending, limited to maxRules entries.
+// TopRulesForPrompt returns a concise summary of the most relevant rules
+// for proactive injection into the system prompt. Rules are scored by a
+// combined metric of HitCount and recency: recent high-hit rules rank
+// highest, while stale rules (not seen in staleRuleThreshold) are heavily
+// penalized. Only includes rules that have been hit at least once
+// (HitCount > 0), limited to maxRules entries.
 //
 // This implements the "rules as first-class citizens" pattern from the
 // self-improving agent literature: learned rules should be visible to the
 // agent from the start of each run, not just reactively when a tool pattern
-// matches.
+// matches. The recency weighting follows arXiv:2603.07670 which emphasizes
+// that production memory systems must account for staleness.
 func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -312,25 +323,29 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 		return ""
 	}
 
-	// Filter to rules with HitCount > 0, then sort by HitCount descending
-	type ruleHit struct {
-		rule string
-		hint string
-		hits int
+	now := time.Now()
+	type ruleScore struct {
+		rule  string
+		hint  string
+		score float64
 	}
-	var active []ruleHit
+	var active []ruleScore
 	for _, r := range rs.rules {
 		if r.HitCount > 0 {
-			active = append(active, ruleHit{rule: r.Rule, hint: r.FixHint, hits: r.HitCount})
+			active = append(active, ruleScore{
+				rule:  r.Rule,
+				hint:  r.FixHint,
+				score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
+			})
 		}
 	}
 	if len(active) == 0 {
 		return ""
 	}
 
-	// Simple insertion sort by hits descending (small N, no need for sort.Slice)
+	// Sort by combined score descending (small N, insertion sort)
 	for i := 1; i < len(active); i++ {
-		for j := i; j > 0 && active[j].hits > active[j-1].hits; j-- {
+		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
 			active[j], active[j-1] = active[j-1], active[j]
 		}
 	}
@@ -349,6 +364,58 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// recencyWeightedScore computes a combined score from hit count and recency.
+// score = hitCount * recencyWeight, where recencyWeight decays based on
+// days since last seen: weight = 1.0 / (1 + daysSinceLastSeen/7).
+// Rules seen very recently get weight ~1.0; rules seen 7 days ago get ~0.5;
+// rules seen 30+ days ago get < 0.2, effectively deprioritizing stale rules.
+func recencyWeightedScore(hitCount int, lastSeen, now time.Time) float64 {
+	daysSince := now.Sub(lastSeen).Hours() / 24
+	if daysSince < 0 {
+		daysSince = 0
+	}
+	recencyWeight := 1.0 / (1.0 + daysSince/7.0)
+	return float64(hitCount) * recencyWeight
+}
+
+// CleanStale removes rules that are both stale (not hit in staleRuleThreshold)
+// and low-value (HitCount < staleRuleMinHits). High-value rules
+// (HitCount >= staleRuleMinHits) are always preserved even if stale.
+// Returns the number of rules removed.
+func (rs *RuleStore) CleanStale() int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+
+	if len(rs.rules) == 0 {
+		return 0
+	}
+
+	now := time.Now()
+	kept := rs.rules[:0]
+	removed := 0
+	for _, r := range rs.rules {
+		isStale := now.Sub(r.LastSeen) > staleRuleThreshold
+		isLowValue := r.HitCount < staleRuleMinHits
+		if isStale && isLowValue {
+			removed++
+			debug.Log("ratchet", "cleaned stale rule %s (hits=%d, last_seen=%s ago)",
+				r.ID, r.HitCount, r.LastSeen.Format("2006-01-02"))
+			continue
+		}
+		kept = append(kept, r)
+	}
+	rs.rules = kept
+
+	if removed > 0 {
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save after cleaning stale rules: %v", err)
+		}
+		debug.Log("ratchet", "cleaned %d stale rules (%d → %d)", removed, len(rs.rules)+removed, len(rs.rules))
+	}
+	return removed
 }
 
 // MatchingRulesForTool returns rules whose category matches the tool name

@@ -46,7 +46,7 @@ describe('ToastContainer', () => {
 
   it('has dismiss button with aria-label', () => {
     render(<ToastContainer toasts={[makeToast()]} onDismiss={() => {}} />)
-    const dismissBtns = screen.getAllByLabelText('Dismiss notification')
+    const dismissBtns = screen.getAllByLabelText('common.dismiss')
     expect(dismissBtns.length).toBeGreaterThanOrEqual(1)
   })
 
@@ -58,7 +58,7 @@ describe('ToastContainer', () => {
         onDismiss={(id) => { dismissedId = id }}
       />
     )
-    const dismissBtn = screen.getAllByLabelText('Dismiss notification')[0]
+    const dismissBtn = screen.getAllByLabelText('common.dismiss')[0]
     act(() => { dismissBtn.click() })
     expect(dismissedId).toBe(42)
   })

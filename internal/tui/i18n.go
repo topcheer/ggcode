@@ -10,6 +10,14 @@ var (
 	moduleCatalogsMu sync.RWMutex
 	enModuleCatalogs = make(map[string]string)
 	zhModuleCatalogs = make(map[string]string)
+	jaModuleCatalogs = make(map[string]string)
+	koModuleCatalogs = make(map[string]string)
+	esModuleCatalogs = make(map[string]string)
+	frModuleCatalogs = make(map[string]string)
+	deModuleCatalogs = make(map[string]string)
+	ruModuleCatalogs = make(map[string]string)
+	ptModuleCatalogs = make(map[string]string)
+	viModuleCatalogs = make(map[string]string)
 )
 
 // registerCatalog merges a module's key-value pairs into the global extension catalogs.
@@ -32,10 +40,49 @@ func lookupModuleCatalog(lang Language, key string) (string, bool) {
 	case LangZhCN:
 		v, ok := zhModuleCatalogs[key]
 		return v, ok
-	default:
-		v, ok := enModuleCatalogs[key]
-		return v, ok
+	case LangJa:
+		v, ok := jaModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangKo:
+		v, ok := koModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangEs:
+		v, ok := esModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangFr:
+		v, ok := frModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangDe:
+		v, ok := deModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangRu:
+		v, ok := ruModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangPt:
+		v, ok := ptModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
+	case LangVi:
+		v, ok := viModuleCatalogs[key]
+		if ok {
+			return v, true
+		}
 	}
+	v, ok := enModuleCatalogs[key]
+	return v, ok
 }
 
 type Language string
@@ -43,12 +90,36 @@ type Language string
 const (
 	LangEnglish Language = "en"
 	LangZhCN    Language = "zh-CN"
+	LangJa      Language = "ja"
+	LangKo      Language = "ko"
+	LangEs      Language = "es"
+	LangFr      Language = "fr"
+	LangDe      Language = "de"
+	LangRu      Language = "ru"
+	LangPt      Language = "pt"
+	LangVi      Language = "vi"
 )
 
 func normalizeLanguage(s string) Language {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "zh", "zh-cn", "zh_hans", "zh-hans", "cn", "zh-sg":
 		return LangZhCN
+	case "ja", "ja-jp", "japanese", "jp":
+		return LangJa
+	case "ko", "ko-kr", "korean", "kr":
+		return LangKo
+	case "es", "es-es", "spanish":
+		return LangEs
+	case "fr", "fr-fr", "french":
+		return LangFr
+	case "de", "de-de", "german":
+		return LangDe
+	case "ru", "ru-ru", "russian":
+		return LangRu
+	case "pt", "pt-br", "pt-pt", "portuguese":
+		return LangPt
+	case "vi", "vi-vn", "vietnamese":
+		return LangVi
 	default:
 		return LangEnglish
 	}
@@ -107,38 +178,103 @@ func (m Model) languageLabel() string {
 	switch m.currentLanguage() {
 	case LangZhCN:
 		return "简体中文"
+	case LangJa:
+		return "日本語"
+	case LangKo:
+		return "한국어"
+	case LangEs:
+		return "Español"
+	case LangFr:
+		return "Français"
+	case LangDe:
+		return "Deutsch"
+	case LangRu:
+		return "Русский"
+	case LangPt:
+		return "Português"
+	case LangVi:
+		return "Tiếng Việt"
 	default:
 		return "English"
 	}
 }
 
 func supportedLanguageUsage(lang Language) string {
-	if lang == LangZhCN {
-		return "支持: en, zh-CN"
+	switch lang {
+	case LangZhCN:
+		return "支持: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangJa:
+		return "対応: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangKo:
+		return "지원: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangEs:
+		return "Soportados: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangFr:
+		return "Supportés: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangDe:
+		return "Unterstützt: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangRu:
+		return "Поддерживаются: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangPt:
+		return "Suportados: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	case LangVi:
+		return "Hỗ trợ: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+	default:
+		return "Supported: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
 	}
-	return "Supported: en, zh-CN"
 }
 
 func languageSwitchLabel(lang Language) string {
-	if lang == LangZhCN {
+	switch lang {
+	case LangZhCN:
 		return "切换界面语言"
+	case LangJa:
+		return "言語を切り替え"
+	case LangKo:
+		return "언어 전환"
+	case LangEs:
+		return "Cambiar idioma"
+	case LangFr:
+		return "Changer de langue"
+	case LangDe:
+		return "Sprache wechseln"
+	case LangRu:
+		return "Сменить язык"
+	case LangPt:
+		return "Mudar idioma"
+	case LangVi:
+		return "Đổi ngôn ngữ"
+	default:
+		return "Switch interface language"
 	}
-	return "Switch interface language"
 }
 
 func languageOptionsFor(lang Language) []languageOption {
-	switch lang {
-	case LangZhCN:
-		return []languageOption{
-			{label: "简体中文", shortcut: "z", lang: LangZhCN},
-			{label: "English", shortcut: "e", lang: LangEnglish},
-		}
-	default:
-		return []languageOption{
-			{label: "English", shortcut: "e", lang: LangEnglish},
-			{label: "简体中文", shortcut: "z", lang: LangZhCN},
+	all := []languageOption{
+		{label: "English", shortcut: "e", lang: LangEnglish},
+		{label: "简体中文", shortcut: "z", lang: LangZhCN},
+		{label: "日本語", shortcut: "2", lang: LangJa},
+		{label: "한국어", shortcut: "3", lang: LangKo},
+		{label: "Español", shortcut: "4", lang: LangEs},
+		{label: "Français", shortcut: "5", lang: LangFr},
+		{label: "Deutsch", shortcut: "6", lang: LangDe},
+		{label: "Русский", shortcut: "7", lang: LangRu},
+		{label: "Português", shortcut: "8", lang: LangPt},
+		{label: "Tiếng Việt", shortcut: "9", lang: LangVi},
+	}
+	// Move current language to top
+	result := make([]languageOption, 0, len(all))
+	for _, opt := range all {
+		if opt.lang == lang {
+			result = append(result, opt)
 		}
 	}
+	for _, opt := range all {
+		if opt.lang != lang {
+			result = append(result, opt)
+		}
+	}
+	return result
 }
 
 func localizeSlashDescription(lang Language, cmd string) string {
@@ -291,6 +427,22 @@ func tr(lang Language, key string, args ...any) string {
 	switch lang {
 	case LangZhCN:
 		msg = zhCatalog(key)
+	case LangJa:
+		msg = jaCatalog(key)
+	case LangKo:
+		msg = koCatalog(key)
+	case LangEs:
+		msg = esCatalog(key)
+	case LangFr:
+		msg = frCatalog(key)
+	case LangDe:
+		msg = deCatalog(key)
+	case LangRu:
+		msg = ruCatalog(key)
+	case LangPt:
+		msg = ptCatalog(key)
+	case LangVi:
+		msg = viCatalog(key)
 	default:
 		msg = enCatalog(key)
 	}

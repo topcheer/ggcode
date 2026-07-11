@@ -3,6 +3,7 @@ import * as App from '../../wailsjs/go/main/App'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { marked } from 'marked'
 import { LanChatParticipant, LanChatMessage } from '../types'
+import { useTranslation } from '../i18n'
 
 marked.setOptions({ gfm: true, breaks: true })
 
@@ -99,6 +100,7 @@ export function buildContacts(participants: LanChatParticipant[], selfNodeID: st
 }
 
 export function LanChatView({ onUnreadChange }: Props) {
+  const { t } = useTranslation()
   const [participants, setParticipants] = useState<LanChatParticipant[]>([])
   const [nick, setNick] = useState('')
   const [selfNodeID, setSelfNodeID] = useState('')
@@ -391,12 +393,12 @@ export function LanChatView({ onUnreadChange }: Props) {
 
   const activeMessages = rooms.get(activeRoom)?.messages || []
   const activeLabel = activeRoom === 'broadcast'
-    ? 'Group Chat'
+    ? t('lanchat.groupChat')
     : (() => {
         const info = parseRoomKey(activeRoom)
-        if (!info) return 'Chat'
+        if (!info) return t('lanchat.chat')
         const c = contacts.find(c => c.node_id === info!.nodeID && c.to_role === info!.role)
-        return c ? `${c.label}${c.to_role === 'agent' ? ' (agent)' : ''}` : 'Chat'
+        return c ? `${c.label}${c.to_role === 'agent' ? t('lanchat.agentSuffix') : ''}` : t('lanchat.chat')
       })()
 
   return (
@@ -535,12 +537,12 @@ export function LanChatView({ onUnreadChange }: Props) {
         </div>
 
         {/* Messages */}
-        <div role="log" aria-live="polite" aria-label="LAN Chat messages" style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
+        <div role="log" aria-live="polite" aria-label={t('common.lanChatMessages')} style={{ flex: 1, overflowY: 'auto', padding: '8px 16px', minHeight: 0 }}>
           {activeMessages.length === 0 ? (
             <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '40px 0', fontSize: '13px' }}>
               {activeRoom === 'broadcast'
-                ? 'No messages yet. Start a conversation with everyone on your network.'
-                : 'No direct messages yet.'}
+                ? t('lanchat.noMessagesBroadcast')
+                : t('lanchat.noMessagesDM')}
             </div>
           ) : (
             activeMessages.map((msg, i) => {
@@ -594,7 +596,7 @@ export function LanChatView({ onUnreadChange }: Props) {
                 handleSend()
               }
             }}
-            placeholder={activeRoom === 'broadcast' ? 'Broadcast to all...' : `Message ${activeLabel}...`}
+            placeholder={activeRoom === 'broadcast' ? t('lanchat.broadcastPlaceholder') : t('lanchat.dmPlaceholder').replace('{name}', activeLabel)}
             style={{
               flex: 1,
               padding: '6px 10px',

@@ -220,9 +220,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
 		Messages: chatMsgs,
-		StreamOptions: &openai.StreamOptions{
-			IncludeUsage: true,
-		},
 	}
 	hasReasoningEffort := p.applyReasoningEffort(&req)
 	if len(tools) > 0 {

@@ -165,7 +165,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
               {request.title || t('askUser.title')}
             </span>
           </div>
-          <button onClick={handleCancel} aria-label="Close dialog" title="Cancel" style={{
+          <button onClick={handleCancel} aria-label={t('common.closeDialog')} title={t('common.cancelBtn')} style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'var(--text-tertiary)', padding: 4,
           }}><X size={18} /></button>
@@ -249,7 +249,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
                 <textarea
                   value={answers[q.id]?.freeformText || ''}
                   onChange={e => updateAnswer(q.id, { freeformText: e.target.value })}
-                  placeholder={q.kind === 'text' ? 'Type your answer...' : 'Additional notes (optional)'}
+                  placeholder={q.kind === 'text' ? t('askUser.typeAnswer') : t('askUser.notesPlaceholder')}
                   rows={q.kind === 'text' ? 3 : 2}
                   style={{
                     ...inputStyle,
@@ -271,7 +271,7 @@ export function AskUserDialog({ request, onClose }: AskUserDialogProps) {
           <button
             onClick={handleCancel}
             disabled={responding}
-            aria-label="Cancel"
+            aria-label={t('common.cancel')}
             style={{
               padding: '8px 20px', borderRadius: 'var(--radius-md)',
               background: 'var(--color-card)', color: 'var(--text-secondary)',

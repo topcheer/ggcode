@@ -187,7 +187,7 @@ export function IMManagement() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>{t('im.title')}</h3>
         <div style={{ flex: 1 }} />
-        <button onClick={() => { setShowAdd(true); setError('') }} title="Add IM adapter" aria-label="Add IM adapter" style={{
+        <button onClick={() => { setShowAdd(true); setError('') }} title={t('common.addIMAdapter')} aria-label={t('common.addIMAdapter')} style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 14px', borderRadius: 'var(--radius-md)',
           background: 'var(--color-primary)', color: '#fff',
@@ -346,7 +346,7 @@ function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCan
   const { t } = useTranslation()
   return (
     <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
-      <h3 style={{ margin: 0 }}>Edit: {adapter.name}</h3>
+      <h3 style={{ margin: 0 }}>{t('im.editAdapter', { name: adapter.name })}</h3>
       <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
         {platform?.displayName || adapter.platform}
       </div>

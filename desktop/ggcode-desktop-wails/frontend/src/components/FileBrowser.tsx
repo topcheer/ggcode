@@ -199,6 +199,7 @@ let mermaidCounter = 0
 let mermaidInitDone = false
 
 function MermaidBlock({ chart }: { chart: string }) {
+  const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [svg, setSvg] = useState('')
   const [error, setError] = useState('')
@@ -224,7 +225,7 @@ function MermaidBlock({ chart }: { chart: string }) {
   if (error) {
     return <pre style={{ color: '#f87171', fontSize: 12, padding: 12, background: 'rgba(220,38,38,0.1)', borderRadius: 6 }}>{error}</pre>
   }
-  if (!svg) return <div style={{ padding: 12, color: 'var(--text-tertiary)', fontSize: 12 }}>Rendering diagram...</div>
+  if (!svg) return <div style={{ padding: 12, color: 'var(--text-tertiary)', fontSize: 12 }}>{t('files.renderingDiagram')}</div>
   return (
     <div ref={ref} style={{ padding: 12, overflow: 'auto', textAlign: 'center' }}
       dangerouslySetInnerHTML={{ __html: svg }} />
@@ -381,6 +382,7 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
 // ─── HTML Preview ─────────────────────────────────────────
 
 function HTMLPreview({ content }: { content: string }) {
+  const { t } = useTranslation()
   return (
     <iframe
       srcDoc={content}
@@ -389,7 +391,7 @@ function HTMLPreview({ content }: { content: string }) {
         width: '100%', height: '100%', border: 'none',
         background: '#fff',
       }}
-      title="HTML Preview"
+      title={t('files.htmlPreview')}
     />
   )
 }
@@ -583,7 +585,7 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search files..."
+            placeholder={t('files.searchPlaceholder')}
             style={{
               width: '100%', height: 26,
               padding: '0 8px 0 26px',
@@ -766,9 +768,9 @@ export function FileBrowser({ onBack }: { onBack: () => void }) {
               flexDirection: 'column', gap: 8, color: 'var(--text-tertiary)',
             }}>
               <FileText size={32} />
-              <span style={{ fontSize: 13 }}>Office document</span>
+              <span style={{ fontSize: 13 }}>{t('files.officeDocument')}</span>
               <span style={{ fontSize: 11 }}>{activeFile.split('/').pop()}</span>
-              <span style={{ fontSize: 11 }}>Open with external application to view</span>
+              <span style={{ fontSize: 11 }}>{t('files.openExternal')}</span>
             </div>
           )}
 

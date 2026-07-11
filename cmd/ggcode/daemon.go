@@ -476,6 +476,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
 
+	// Wire cascade-cancel so daemon interrupts cascade to sub-agents/delegates
+	// (mirrors TUI cancelActiveRun and desktop ChatBridge.Cancel).
+	bridge.SetCascadeCancel(func() {
+		subMgr.CancelAll()
+	})
+
 	// Create follow display (always, so the pairing watcher can use it)
 	toolLang := im.ToolLangEn
 	if lang == daemon.LangZhCN {

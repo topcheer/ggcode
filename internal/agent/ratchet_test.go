@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -234,5 +235,155 @@ func TestInjectRulesIntoResult(t *testing.T) {
 	}
 	if !contains(result, "Check untracked files") {
 		t.Error("expected backward-compat rule text in injected result")
+	}
+}
+
+// --- Staleness & TTL tests ---
+
+func TestCleanStale_RemovesStaleLowValue(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuleStore(dir)
+
+	// Add a stale, low-value rule (should be removed)
+	rs.AddRule(Rule{
+		Category:     "build",
+		Rule:         "stale low-value rule",
+		MatchPattern: "stale-pattern",
+	})
+	// Manually set LastSeen to 40 days ago and low HitCount
+	rs.mu.Lock()
+	rs.load()
+	rs.rules[0].LastSeen = time.Now().Add(-40 * 24 * time.Hour)
+	rs.rules[0].HitCount = 1
+	rs.mu.Unlock()
+
+	// Add a fresh rule (should be kept)
+	rs.AddRule(Rule{
+		Category:     "test",
+		Rule:         "fresh rule",
+		MatchPattern: "fresh-pattern",
+	})
+
+	removed := rs.CleanStale()
+	if removed != 1 {
+		t.Fatalf("expected 1 stale rule removed, got %d", removed)
+	}
+
+	rules := rs.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule remaining, got %d", len(rules))
+	}
+	if rules[0].Rule != "fresh rule" {
+		t.Errorf("expected fresh rule to survive, got: %s", rules[0].Rule)
+	}
+}
+
+func TestCleanStale_PreservesHighValueStale(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuleStore(dir)
+
+	// Add a stale but high-value rule (HitCount >= 3)
+	rs.AddRule(Rule{
+		Category:     "build",
+		Rule:         "important stale rule",
+		MatchPattern: "important",
+	})
+	rs.mu.Lock()
+	rs.load()
+	rs.rules[0].LastSeen = time.Now().Add(-40 * 24 * time.Hour)
+	rs.rules[0].HitCount = 5 // high value
+	rs.mu.Unlock()
+
+	removed := rs.CleanStale()
+	if removed != 0 {
+		t.Fatalf("expected 0 removals for high-value stale rule, got %d", removed)
+	}
+
+	rules := rs.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule preserved, got %d", len(rules))
+	}
+}
+
+func TestCleanStale_EmptyStore(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuleStore(dir)
+
+	removed := rs.CleanStale()
+	if removed != 0 {
+		t.Errorf("expected 0 removals on empty store, got %d", removed)
+	}
+}
+
+func TestRecencyWeightedScore(t *testing.T) {
+	now := time.Now()
+
+	// Just seen: weight ~1.0
+	score := recencyWeightedScore(5, now, now)
+	if score < 4.9 || score > 5.1 {
+		t.Errorf("expected score ~5.0 for just-seen rule with 5 hits, got %.2f", score)
+	}
+
+	// 7 days ago: weight ~0.5 → score ~2.5
+	score = recencyWeightedScore(5, now.Add(-7*24*time.Hour), now)
+	if score < 2.0 || score > 3.0 {
+		t.Errorf("expected score ~2.5 for 7-day-old rule with 5 hits, got %.2f", score)
+	}
+
+	// 30 days ago: weight ~0.19 → score ~0.95
+	score = recencyWeightedScore(5, now.Add(-30*24*time.Hour), now)
+	if score > 1.5 {
+		t.Errorf("expected low score for 30-day-old rule, got %.2f", score)
+	}
+
+	// Recent low-hit should score lower than stale high-hit
+	recentLow := recencyWeightedScore(1, now, now)
+	staleHigh := recencyWeightedScore(10, now.Add(-14*24*time.Hour), now)
+	if recentLow >= staleHigh {
+		t.Errorf("expected stale high-hit (%.2f) to outrank recent low-hit (%.2f)", staleHigh, recentLow)
+	}
+}
+
+func TestTopRulesForPrompt_RecencyWeighting(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuleStore(dir)
+
+	// Rule A: high hit count but very stale
+	rs.AddRule(Rule{
+		Category:     "build",
+		Rule:         "stale high-hit rule",
+		MatchPattern: "stale",
+	})
+	rs.mu.Lock()
+	rs.load()
+	rs.rules[0].HitCount = 20
+	rs.rules[0].LastSeen = time.Now().Add(-60 * 24 * time.Hour) // 60 days stale
+	rs.mu.Unlock()
+
+	// Rule B: lower hit count but very recent
+	rs.AddRule(Rule{
+		Category:     "test",
+		Rule:         "recent low-hit rule",
+		MatchPattern: "recent",
+	})
+	rs.mu.Lock()
+	rs.load()
+	rs.rules[1].HitCount = 3
+	rs.rules[1].LastSeen = time.Now() // just now
+	rs.mu.Unlock()
+
+	prompt := rs.TopRulesForPrompt(5)
+	if prompt == "" {
+		t.Fatal("expected non-empty prompt")
+	}
+
+	// The recent rule should appear before the stale rule due to recency weighting
+	idxRecent := strings.Index(prompt, "recent low-hit rule")
+	idxStale := strings.Index(prompt, "stale high-hit rule")
+	if idxRecent < 0 || idxStale < 0 {
+		t.Fatalf("both rules should be present in prompt")
+	}
+	if idxRecent > idxStale {
+		t.Errorf("expected recent rule to rank before stale rule in prompt output")
 	}
 }

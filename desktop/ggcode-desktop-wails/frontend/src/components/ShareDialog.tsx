@@ -69,7 +69,7 @@ export default function ShareDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Share session" tabIndex={-1} style={{
+    <div role="dialog" aria-modal="true" aria-label={t('common.shareSession')} tabIndex={-1} style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.5)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',

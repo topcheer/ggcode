@@ -43,6 +43,16 @@ func runTeammateLoop(
 				})
 			}
 		}
+		// Signal that this goroutine has exited.
+		tm.mu.Lock()
+		if tm.done != nil {
+			select {
+			case <-tm.done:
+			default:
+				close(tm.done)
+			}
+		}
+		tm.mu.Unlock()
 	}()
 
 	tm.mu.Lock()

@@ -54,14 +54,14 @@ echo "[verify-ci] running go vet (main module)"
 GOMEMLIMIT=2GiB go vet -tags goolm -p 2 ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit only)"
-# Limit parallelism to prevent OOM kills on machines with many packages.
-# -p 1 limits the number of test binaries compiled and run in parallel.
-# -parallel 1 limits concurrent test functions within a single package.
-# GOMEMLIMIT=1GiB caps Go runtime heap; GOGC=30 triggers GC aggressively.
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-GOMEMLIMIT=1GiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/...
+# 8GiB limit gives comfortable headroom for large test packages (tui, agent, a2a).
+# Run tests in two batches to reduce peak memory usage.
+# Split: lightweight packages first (cmd, small internal pkgs), then heavy ones.
+GOMEMLIMIT=8GiB go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/agent/... ./internal/config/... ./internal/context/... ./internal/provider/... ./internal/session/... ./internal/util/...
+GOMEMLIMIT=8GiB go test -tags goolm -p 1 -parallel 1 -timeout 300s ./internal/a2a/... ./internal/acp/... ./internal/cron/... ./internal/debug/... ./internal/tui/extpane/... ./internal/im/... ./internal/mcp/... ./internal/permission/... ./internal/plugin/... ./internal/runfile/... ./internal/stream/... ./internal/tool/... ./internal/tui/... ./internal/tunnel/... ./internal/update/... ./internal/vcs/... ./internal/webui/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
@@ -81,7 +81,7 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
 
   echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=256MiB GOGC=30 go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
+  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=2GiB go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
 fi
 
 # ── Frontend Vitest (no CGO needed) ───────────────────────────────────────

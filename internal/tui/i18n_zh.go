@@ -331,11 +331,11 @@ func zhCatalog(key string) string {
 	case "harness.message.queued":
 		return "已加入 harness 队列：%s"
 	case "harness.activity.status":
-		return "Harness %s"
+		return "Harness 状态: %s"
 	case "harness.log.phase":
 		return "阶段"
 	case "harness.log.worker":
-		return "Worker"
+		return "工作进程"
 	case "harness.tool.read_file":
 		return "读取文件"
 	case "harness.tool.write_file":
@@ -393,7 +393,7 @@ func zhCatalog(key string) string {
 	case "harness.label.context_title":
 		return "上下文"
 	case "harness.label.owner_title":
-		return "Owner"
+		return "所有者"
 	case "harness.label.id":
 		return "id"
 	case "harness.label.status":
@@ -411,7 +411,7 @@ func zhCatalog(key string) string {
 	case "harness.label.branch":
 		return "分支"
 	case "harness.label.worker":
-		return "worker"
+		return "工作进程"
 	case "harness.label.progress":
 		return "进度"
 	case "harness.label.verification":
@@ -445,15 +445,15 @@ func zhCatalog(key string) string {
 	case "harness.label.description":
 		return "描述"
 	case "harness.label.owner":
-		return "Owner"
+		return "所有者"
 	case "harness.label.commands":
 		return "命令数"
 	case "harness.label.tasks":
 		return "任务"
 	case "harness.label.rollouts":
-		return "rollout"
+		return "滚动发布"
 	case "harness.label.gates":
-		return "gate"
+		return "关卡"
 	case "harness.label.latest":
 		return "最近任务"
 	case "harness.label.repo":
@@ -467,13 +467,13 @@ func zhCatalog(key string) string {
 	case "harness.label.contexts":
 		return "上下文数"
 	case "harness.label.workers":
-		return "worker"
+		return "工作进程"
 	case "harness.label.workflow":
 		return "流程"
 	case "harness.label.quality":
 		return "质量"
 	case "harness.label.worktrees":
-		return "worktree"
+		return "工作树"
 	case "harness.label.snapshot":
 		return "快照"
 	case "harness.label.events":

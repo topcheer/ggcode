@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react'
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
+import { useTranslation } from '../i18n'
 
 export type ToastType = 'success' | 'error' | 'info'
 
@@ -47,6 +48,7 @@ const toastConfig: Record<ToastType, {
 }
 
 function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: number) => void }) {
+  const { t } = useTranslation()
   const duration = toast.type === 'error' ? 6000 : 3500
   const config = toastConfig[toast.type]
 
@@ -83,7 +85,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
       <span style={{ flex: 1 }}>{toast.message}</span>
       <button
         type="button"
-        aria-label="Dismiss notification"
+        aria-label={t('common.dismiss')}
         onClick={() => onDismiss(toast.id)}
         style={{
           width: 22,

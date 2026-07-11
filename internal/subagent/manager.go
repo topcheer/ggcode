@@ -37,6 +37,11 @@ type AgentEvent struct {
 
 const maxAgentEvents = 200
 
+// cancelAllTimeout is the maximum time CancelAll waits for each sub-agent to
+// actually terminate after its context is cancelled. Sub-agents running long
+// LLM streams or external tool calls may not finish instantly.
+const cancelAllTimeout = 5 * time.Second
+
 // Status represents the lifecycle state of a sub-agent.
 type Status string
 
@@ -77,6 +82,7 @@ type SubAgent struct {
 	events          []AgentEvent
 	eventsDropped   int
 	cancel          context.CancelFunc
+	done            chan struct{} // closed when the sub-agent reaches any terminal state
 	mu              sync.Mutex
 }
 
@@ -341,6 +347,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 		CurrentPhase: "pending",
 		CreatedAt:    time.Now(),
 		Mailbox:      make(chan AgentMessage, 16),
+		done:         make(chan struct{}),
 	}
 
 	m.mu.Lock()
@@ -456,12 +463,25 @@ func (m *Manager) Cancel(id string) bool {
 	sa.CurrentPhase = "cancelled"
 	sa.Error = context.Canceled
 	sa.EndedAt = time.Now()
+	sa.closeDone()
 	sa.mu.Unlock()
 	m.notifyUpdate(sa)
 	return true
 }
 
-// CancelAll cancels all pending or running sub-agents. Returns the number cancelled.
+// closeDone closes the done channel if not already closed. Caller must hold sa.mu.
+func (sa *SubAgent) closeDone() {
+	if sa.done != nil {
+		select {
+		case <-sa.done:
+		default:
+			close(sa.done)
+		}
+	}
+}
+
+// CancelAll cancels all pending or running sub-agents, then waits up to
+// cancelAllTimeout for each to actually terminate. Returns the number cancelled.
 func (m *Manager) CancelAll() int {
 	m.mu.Lock()
 	ids := make([]string, 0)
@@ -474,9 +494,29 @@ func (m *Manager) CancelAll() int {
 	m.mu.Unlock()
 
 	cancelled := 0
+	var doneChs []<-chan struct{}
 	for _, id := range ids {
 		if m.Cancel(id) {
 			cancelled++
+		}
+		if sa, ok := m.Get(id); ok && sa.done != nil {
+			doneChs = append(doneChs, sa.done)
+		}
+	}
+
+	// Wait for all cancelled agents to actually terminate (with timeout).
+	if len(doneChs) > 0 {
+		timeout := time.NewTimer(cancelAllTimeout)
+		defer timeout.Stop()
+		for _, ch := range doneChs {
+			select {
+			case <-ch:
+			case <-timeout.C:
+				// Timed out waiting — the sub-agent's goroutine may still be
+				// finishing. We've already set Status=Cancelled and cancelled
+				// its context, so it will terminate eventually.
+				return cancelled
+			}
 		}
 	}
 	return cancelled
@@ -526,6 +566,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	// Terminal state check: don't overwrite cancelled/completed/failed
 	switch sa.Status {
 	case StatusCancelled, StatusCompleted, StatusFailed:
+		sa.closeDone()
 		sa.mu.Unlock()
 		return
 	}
@@ -543,6 +584,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	}
 	sa.Result = result
 	sa.EndedAt = time.Now()
+	sa.closeDone()
 	sa.mu.Unlock()
 
 	if onComplete != nil {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Search, Share2, PanelRight, SunMoon, Settings, MessageSquare, PanelLeft, FolderOpen, Radio, Server, Bug, Terminal } from 'lucide-react'
 import { ViewMode, StatusBarData } from '../types'
-import { I18nProvider, useTranslation, type Locale } from '../i18n'
+import { I18nProvider, useTranslation, detectSystemLocale, type Locale } from '../i18n'
 import { NavRail } from './NavRail'
 import { Sidebar } from './Sidebar'
 import { ChatView } from './ChatView'
@@ -127,8 +127,13 @@ function LayoutInner() {
         // Set needsOnboard immediately — subsequent calls may fail when
         // workspace isn't initialized, and we must not lose this flag.
         setNeedsOnboard(cfg.needsSetup || false)
-        if (cfg.language === 'zh' || cfg.language === 'zh-CN') {
-          setLocale('zh')
+        if (cfg.language) {
+          // Map config language code to supported Locale
+          const langCode = cfg.language.toLowerCase().split('-')[0] as Locale
+          const supportedLocales: Locale[] = ['en', 'zh', 'ja', 'ko', 'es', 'fr', 'de', 'ru', 'pt', 'vi']
+          if (supportedLocales.includes(langCode)) {
+            setLocale(langCode)
+          }
         }
         if (cfg.needsSetup) return // skip further init during onboarding
         const [dir, info] = await Promise.all([App.GetWorkDir(), App.GetModelInfo()])
@@ -490,6 +495,9 @@ function LayoutInner() {
 
 // Top-level Layout wraps everything in I18nProvider
 export function Layout() {
+  // Detect OS language for initial display — config load may override later
+  const initialFromOS = useMemo(() => detectSystemLocale(), [])
+
   const handleLocaleChange = useCallback(async (locale: Locale) => {
     try {
       await App.UpdateConfig({ language: locale })
@@ -499,7 +507,7 @@ export function Layout() {
   }, [])
 
   return (
-    <I18nProvider initialLocale="en" onLocaleChange={handleLocaleChange}>
+    <I18nProvider initialLocale={initialFromOS} onLocaleChange={handleLocaleChange}>
       <LayoutInner />
     </I18nProvider>
   )

@@ -53,7 +53,7 @@ func TestEstimateTokensWithMessageOverhead(t *testing.T) {
 			{Type: "text", Text: pureText},
 		},
 	}
-	got := estimateTokens(msg)
+	got := estimateTokensStandalone(msg)
 	if got < estimatedText {
 		t.Errorf("estimateTokens with overhead (%d) should be >= raw text estimate (%d)", got, estimatedText)
 	}
@@ -71,7 +71,7 @@ func TestEstimateTokensWithToolCall(t *testing.T) {
 			{Type: "tool_use", ToolName: "read_file", Input: []byte(`{"path":"/foo.go"}`)},
 		},
 	}
-	got := estimateTokens(msg)
+	got := estimateTokensStandalone(msg)
 	// Should include text estimate + 4 (message overhead) + 6 (tool call overhead).
 	if got < 10 {
 		t.Errorf("expected significant token estimate for tool call, got %d", got)
@@ -86,7 +86,7 @@ func TestEstimateTokensWithImage(t *testing.T) {
 			{Type: "image", ImageMIME: "image/png", ImageData: "dGVzdA=="},
 		},
 	}
-	got := estimateTokens(msg)
+	got := estimateTokensStandalone(msg)
 	// Should include at least 170 (image) + 4 (message overhead).
 	if got < 170 {
 		t.Errorf("expected at least 174 tokens for image message, got %d", got)
@@ -102,7 +102,7 @@ func TestEstimateTokensMultipleToolCalls(t *testing.T) {
 			{Type: "tool_use", ToolName: "edit_file", Input: []byte(`{"path":"/c.go"}`)},
 		},
 	}
-	got := estimateTokens(msg)
+	got := estimateTokensStandalone(msg)
 	// 3 tool calls × 6 overhead = 18 structural tokens.
 	if got < 18 {
 		t.Errorf("expected at least 18 tokens for 3 tool calls, got %d", got)

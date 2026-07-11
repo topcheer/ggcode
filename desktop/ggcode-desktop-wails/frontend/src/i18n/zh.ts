@@ -72,6 +72,10 @@ const zh: Record<TranslationKey, string> = {
   'cmd.goLanChat': '局域网聊天',
   'cmd.goDebug': '调试控制台',
   'cmd.showShortcuts': '显示快捷键',
+  'cmd.hintNavigate': '导航',
+  'cmd.hintSelect': '选择',
+  'cmd.hintClose': 'esc 关闭',
+  'cmd.results': '{count} 个结果',
 
   // KeyboardShortcuts
   'kb.title': '快捷键',
@@ -161,6 +165,26 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.workDir': '工作目录',
   'onboarding.browse': '浏览',
   'onboarding.workDirHint': '选择要工作的项目目录',
+  'onboarding.welcome': '欢迎使用 GGCode',
+  'onboarding.selectDirHint': '选择一个项目目录开始使用',
+  'onboarding.chooseDir': '选择目录',
+  'onboarding.modeSupervised': '监督模式',
+  'onboarding.modeSupervisedDesc': '执行前审查并批准每个工具调用',
+  'onboarding.modeAuto': '自动模式',
+  'onboarding.modeAutoDesc': '自动批准只读工具，确认危险操作',
+  'onboarding.modeBypass': '绕过模式',
+  'onboarding.modeBypassDesc': '自动批准所有工具，无需确认',
+  'onboarding.modeAutopilot': '自动驾驶',
+  'onboarding.modeAutopilotDesc': '完全自主 — 无需任何确认即可运行',
+  'onboarding.fetchingModels': '获取中...',
+  'onboarding.fetchModels': '获取模型',
+  'onboarding.noModelsFound': '未找到模型。请手动输入模型名称。',
+  'onboarding.fetchModelsFailed': '获取模型失败。你可以手动输入模型名称。',
+  'onboarding.fillAllCustom': '请填写所有自定义服务商字段',
+  'onboarding.fillAllFields': '请填写所有字段',
+  'onboarding.saveConfigFailed': '保存配置失败',
+  'onboarding.modelPlaceholder': 'gpt-4o (手动输入或获取)',
+  'onboarding.configureLLM': '配置 LLM',
 
   // ApprovalDialog
   'approval.title': '需要工具审批',
@@ -278,6 +302,479 @@ const zh: Record<TranslationKey, string> = {
   'team.noPending': '没有待处理任务',
   'team.noInProgress': '没有被阻塞的任务',
   'team.noDone': '暂无已完成任务',
+
+  // --- v1.3.143+ i18n gap fill ---
+
+  // SettingsPage sections
+  'settings.agentSafety': 'Agent 与安全',
+  'settings.workspaceAccess': '工作区与文件访问',
+  'settings.appearance': '外观',
+  'settings.integrations': '集成',
+  'settings.languageServers': '语言服务器',
+  'settings.diagnostics': '诊断',
+  'settings.addCustomEndpoint': '添加自定义端点',
+  'settings.configured': '已配置',
+  'settings.install': '安装:',
+  'settings.saveLimits': '保存限制',
+  'settings.refreshModels': '从 API 刷新模型',
+  'settings.versionPlaceholder': '版本号...',
+  'settings.endpointNamePlaceholder': '我的端点',
+
+  // SettingsPage integrations checkboxes
+  'settings.fileBrowser': '文件浏览器',
+  'settings.contextUsage': '上下文使用量',
+  'settings.mcpServers': 'MCP 服务器',
+  'settings.imAdapters': 'IM 适配器',
+  'settings.mobileShare': '移动端分享',
+  'settings.contextPanel': '上下文面板',
+  'settings.debugConsole': '调试控制台',
+  'settings.aboutUpdates': '关于与更新',
+  'settings.lspServers': '语言服务器',
+  'settings.diagnosticsHint': '用于故障排除和支持的工具。这些会打开现有的桌面面板和对话框。',
+  'settings.openConsole': '打开控制台',
+  'settings.openAbout': '打开关于',
+  'settings.debugConsoleDesc': '查看运行时日志和最近的桌面/后端诊断事件。',
+  'settings.aboutDesc': '检查应用版本、更新状态、发布说明和支持链接。',
+  'settings.anthropicOAuth': 'Anthropic OAuth',
+  'settings.contextWindowMaxTokens': '上下文窗口与最大 Token',
+  'settings.workspaceFileAccess': '工作区与文件访问',
+  'settings.theme': '主题',
+  'settings.themeLight': '浅色',
+  'settings.themeDark': '深色',
+  'settings.themeSystem': '跟随系统',
+  'settings.integrationsHint': '启用集成功能以便快速访问工具。',
+  'settings.lspHint': '语言服务器协议（LSP）为 Agent 提供代码智能功能：转到定义、查找引用、悬停信息、诊断等。',
+  'settings.lspNoServers': '此工作区未检测到语言服务器。',
+  'settings.lspConfigured': '(已配置)',
+  'settings.lspNotAvailable': '未找到',
+  'settings.lspInstall': '安装:',
+  'settings.extraHeaders': '额外请求头',
+  'settings.someProvidersHint': '某些提供商需要特定的请求头。',
+  'settings.saveAgentSettings': '保存 Agent 设置',
+  'settings.name': '名称',
+  'settings.protocol': '协议',
+  'settings.addEndpoint': '添加端点',
+  'settings.testConnection': '测试',
+  'settings.adding': '添加中...',
+  'settings.lspServersShort': '语言服务器',
+
+  // Sidebar aria labels
+  'sidebar.searchAria': '搜索会话',
+  'sidebar.clearAria': '清除',
+  'sidebar.deleteSessionAria': '删除会话',
+
+  // ChatView tooltip extras
+  'chat.editNickRoleTeam': '点击编辑昵称、角色和团队',
+  'chat.regenerate': '重新生成回复',
+  'chat.copyResult': '复制结果',
+  'chat.copyError': '复制错误',
+
+  // Permission mode dropdown options
+  'mode.supervisedDesc': '监督（每个工具需确认）',
+  'mode.autoDesc': '自动（仅安全工具）',
+  'mode.planDesc': '计划（只读）',
+  'mode.bypassDesc': '绕过（自动批准大部分工具）',
+  'mode.autopilotDesc': '自动驾驶（高度自主）',
+
+  // Common dropdown placeholders
+  'common.chooseVendor': '选择服务商...',
+  'common.chooseEndpoint': '选择端点...',
+  'common.chooseModel': '选择模型...',
+  'common.english': '英文',
+
+  // ChatView activity descriptions
+  'chat.activity.reading': '读取文件中...',
+  'chat.activity.editing': '编辑代码中...',
+  'chat.activity.writing': '写入文件中...',
+  'chat.activity.running': '执行命令中...',
+  'chat.activity.browsing': '浏览文件中...',
+  'chat.activity.git': 'Git 操作中...',
+  'chat.activity.analyzing': '分析代码中...',
+  'chat.activity.searching': '搜索网页中...',
+  'chat.activity.managing': '管理任务中...',
+  'chat.activity.subagent': '运行子 Agent...',
+  'chat.activity.waiting': '等待输入...',
+  'chat.activity.saving': '保存记忆中...',
+  'chat.activity.writingResponse': '编写回复中...',
+  'chat.activity.planMode': '进入计划模式...',
+
+  // ChatView UI labels
+  'chat.findPlaceholder': '在对话中查找...',
+  'chat.noModel': '无模型',
+  'chat.selectWorkspace': '选择工作区',
+  'chat.sending': '发送中...',
+  'chat.failedToSend': '发送失败',
+  'chat.nickname': '昵称',
+  'chat.role': '角色',
+  'chat.team': '团队',
+  'chat.cancel': '取消',
+  'chat.save': '保存',
+
+  // ChatView button titles
+  'chat.title.newSession': '新建会话',
+  'chat.title.shareSession': '分享会话 (Cmd+Shift+S)',
+  'chat.title.search': '在对话中搜索 (Cmd+F)',
+  'chat.title.copyConversation': '复制对话到剪贴板',
+  'chat.title.download': '下载为 Markdown 文件',
+  'chat.title.scrollBottom': '滚动到底部',
+  'chat.title.removeImage': '移除图片',
+  'chat.title.attachImage': '附加图片',
+  'chat.title.paste': '从剪贴板粘贴',
+  'chat.title.cancel': '取消',
+  'chat.title.send': '发送消息 (Enter)',
+  'chat.title.copyReasoning': '复制推理过程',
+  'chat.title.editResend': '编辑并重发',
+  'chat.title.copyMessage': '复制消息',
+  'chat.title.regenerate': '重新生成回复',
+  'chat.title.copyResult': '复制结果',
+  'chat.title.copyError': '复制错误',
+  'chat.title.teamBoard': '打开任务面板',
+  'chat.title.editIdentity': '点击编辑昵称、角色和团队',
+
+  // MCPServers
+  'mcp.transport': '传输方式',
+  'mcp.transportStdio': '通过 stdin/stdout 的本地进程',
+  'mcp.transportWs': '通过 WebSocket 的远程服务器',
+  'mcp.commandLabel': '命令',
+  'mcp.argsOptional': '参数（可选，空格分隔）',
+  'mcp.headersOptional': '请求头（可选，每行一个: Key: Value）',
+  'mcp.envVars': '环境变量（可选，每行一个: KEY=VALUE）',
+  'mcp.login': '登录',
+  'mcp.reconnect': '重新连接',
+  'mcp.resetOAuth': '重置 OAuth (切换账号)',
+  'mcp.remove': '移除',
+
+  // Onboarding
+  'onboarding.chooseVendor': '选择服务商...',
+  'onboarding.providerName': '服务商名称',
+  'onboarding.protocol': '协议',
+  'onboarding.providerPlaceholder': '我的服务商...',
+  'onboarding.chooseModel': '选择模型...',
+  'onboarding.chooseEndpoint': '选择端点...',
+
+  // LanChatView
+  'lanchat.groupChat': '群聊',
+  'lanchat.chat': '聊天',
+  'lanchat.agentSuffix': ' (agent)',
+  'lanchat.noMessagesBroadcast': '暂无消息。与局域网上的所有人开始对话吧。',
+  'lanchat.noMessagesDM': '暂无私信。',
+  'lanchat.broadcastPlaceholder': '广播给所有人...',
+  'lanchat.dmPlaceholder': '给 {name} 发消息...',
+  'lanchat.enterNickname': '输入新昵称:',
+
+  // ApprovalDialog hints
+  'approval.denyHint': '拒绝',
+  'approval.allowHint': '允许',
+  'approval.alwaysHint': '始终',
+  'approval.copyToClipboard': '复制到剪贴板',
+  'approval.ariaLabel': '工具审批',
+
+  // AskUserDialog
+  'askUser.typeAnswer': '输入你的回答...',
+  'askUser.additionalNotes': '附加备注（可选）',
+  'askUser.close': '关闭对话框',
+  'askUser.cancel': '取消',
+
+  // IMManagement
+  'im.editAdapter': '编辑: {name}',
+  'im.addTitle': '添加 IM 适配器',
+  'im.adapterNameRequired': '请输入适配器名称',
+
+  // FileBrowser
+  'files.searchPlaceholder': '搜索文件...',
+  'files.officeDocument': 'Office 文档',
+  'files.openExternal': '使用外部应用打开查看',
+  'files.renderingMermaid': '渲染图表中...',
+  'files.htmlPreview': 'HTML 预览',
+
+  // Dialogs / About
+  'about.checkUpdates': '检查更新',
+  'about.checking': '检查中...',
+  'about.newVersion': '发现新版本: v{version}',
+  'about.download': '下载',
+
+  // TopDragBar (window controls)
+  'window.close': '关闭',
+  'window.minimize': '最小化',
+  'window.maximize': '最大化',
+  'window.restore': '恢复窗口',
+
+  // StatusBar
+  'status.toggleContext': '切换上下文面板',
+
+  // TeamBoard
+  'team.boardTitle': '任务面板',
+  'team.closeBoard': '关闭任务面板',
+
+  // Common shared
+  'common.dismiss': '关闭通知',
+  'common.cancel': '取消',
+  'common.copyToClipboard': '复制到剪贴板',
+
+  // FeatureCard descriptions and actions
+  'settings.fileBrowserDesc': '在当前工作区中浏览文件。',
+  'settings.openFiles': '打开文件',
+  'settings.contextUsageDesc': '在运行长任务前检查上下文使用情况和 Token/缓存总量。',
+  'settings.openContext': '打开上下文',
+  'settings.mcpDesc': '配置 Model Context Protocol 服务器和工具。',
+  'settings.manageMCP': '管理 MCP',
+  'settings.imDesc': '连接 Telegram、Slack、飞书、钉钉等聊天适配器。',
+  'settings.manageIM': '管理 IM',
+  'settings.mobileShareDesc': '通过中继共享活跃的桌面会话到移动端。',
+  'settings.openShare': '打开共享',
+  'settings.contextPanelDesc': '检查活跃会话的上下文使用、Token 总量和缓存统计。',
+  'settings.lspDesc': '查看检测到的 Go、Rust、TypeScript、Python 等语言服务器。',
+  'settings.viewStatus': '查看状态',
+  'settings.integrationsDesc': '从一个地方管理现有桌面功能。这些快捷方式会打开当前专用界面，不会更改任何后端配置。',
+  'settings.vendorGemini': 'Google Gemini',
+
+  // Dialog aria labels
+  'common.toolApproval': '工具审批',
+  'common.closeDialog': '关闭对话框',
+  'common.cancelBtn': '取消',
+  'common.searchPrev': '上一个 (Shift+Enter)',
+  'common.searchNext': '下一个 (Enter)',
+  'common.searchClose': '关闭 (Esc)',
+  'common.filterByCategory': '按类别筛选',
+  'common.addIMAdapter': '添加 IM 适配器',
+  'common.lanChatApproval': 'LAN 聊天审批',
+  'common.lanChatMessages': 'LAN 聊天消息',
+  'common.mobilePairing': '移动端配对',
+  'common.shareSession': '共享会话',
+  'sidebar.shareWithMobile': '与移动端共享',
+  'status.mobileConnected': '移动端已连接',
+  'status.mobileConnectedAria': '移动设备已连接',
+  'team.closeBoardAria': '关闭任务面板',
+  'common.closeWindow': '关闭窗口',
+  'common.minimizeWindow': '最小化窗口',
+  'common.maximizeWindow': '最大化窗口',
+  'common.restoreWindow': '恢复窗口',
+
+  // SettingsPage option labels
+  'settings.chooseVendor': '选择供应商...',
+  'settings.chooseEndpoint': '选择端点...',
+  'settings.modeSupervised': '受控模式（逐个确认工具）',
+  'settings.modeAuto': '自动模式（仅安全工具）',
+  'settings.modePlan': '计划模式（只读）',
+  'settings.modeBypass': '绕过模式（自动批准安全工具）',
+  'settings.modeBypassAll': '绕过模式（自动批准大部分工具）',
+  'settings.modeAutopilot': '自动驾驶（批准所有操作）',
+  'settings.modeAutopilotHigh': '自动驾驶（高度自主）',
+  'settings.saveModeHint': '保存以持久化此默认模式。运行时模式更改仍遵循应用程序的正常模式处理。',
+
+  // Dialogs
+  'dialogs.newVersion': '发现新版本：v',
+  'dialogs.download': '下载',
+  'dialogs.upToDate': '已是最新版本 (v',
+  'dialogs.productName': 'GGCode 桌面版',
+
+  // TeamBoard
+  // (team.boardTitle already exists above)
+
+  // FileBrowser
+  'files.renderingDiagram': '正在渲染图表...',
+  // (files.officeDocument, files.openExternal already exist above)
+
+  // ApprovalDialog keyboard hints
+  'approval.always': '始终',
+
+  // IMManagement
+  // (im.editAdapter already exists above)
+
+  // MCPServers
+  'mcp.oauthRequired': '需要 OAuth 登录',
+  'mcp.oauthHint': '使用浏览器登录以授权此 MCP 服务器。',
+
+  // Onboarding
+  'onboarding.customProvider': '+ 自定义供应商',
+
+  // SettingsPage mode descriptions (FeatureCard)
+  'settings.modeDescSupervised': '审查并批准每次工具执行',
+  'settings.modeDescAuto': '自动仅批准安全操作',
+  'settings.modeDescPlan': '探索代码而不做更改',
+  'settings.modeDescBypass': '自动批准大部分操作',
+  'settings.modeDescAutopilot': '完全自主，最少干预',
+  'settings.agentSafetyHint': '查看桌面端 agent 当前的自主权限。此处仅汇总现有行为，不更改高级工具策略。',
+  'settings.workspaceAccessHint': '文件工具在当前工作区和配置的允许目录内操作。高级目录编辑目前不在此处开放，以避免意外更改安全边界。',
+  'settings.appearanceHint': '自定义视觉主题。应用默认跟随系统偏好设置。',
+  'settings.llmProvider': 'LLM 服务商',
+  'settings.themeAuto': '自动（跟随系统）',
+  'settings.themeShortcut': '快捷键 Cmd+Shift+T 可在浅色和深色之间切换。“自动”跟随你的系统设置。',
+  'settings.modeTitlePlan': '只读计划模式',
+  'settings.modeTitleAuto': '自动模式',
+  'settings.modeTitleBypass': '绕过模式',
+  'settings.modeTitleAutopilot': '自动驾驶模式',
+  'settings.modeTitleSupervised': '监督模式',
+  'settings.modeDescFullPlan': 'Agent 可以检查文件和搜索工作区，但写操作和命令被阻止。这是最安全的探索模式。',
+  'settings.modeDescFullAuto': '安全操作自动执行，危险操作根据策略拒绝或升级处理。',
+  'settings.modeDescFullBypass': '大部分操作允许执行，提示更少。仅在信任的工作区中使用此模式。',
+  'settings.modeDescFullAutopilot': 'Agent 拥有高自主性，可自动执行多个步骤。在重要代码上使用前请先查看工作区状态。',
+  'settings.modeDescFullSupervised': 'Agent 在执行未指定的工具操作前会先询问。这是桌面端正常使用的平衡默认值。',
+
+  // Toast messages
+  'toast.settingsSaved': '设置已保存',
+  'toast.settingsLoadFailed': '加载设置失败：{error}',
+  'toast.endpointsLoadFailed': '加载端点失败：{error}',
+  'toast.endpointDetailsLoadFailed': '加载端点详情失败：{error}',
+  'toast.staticModelsLoadFailed': '加载静态模型失败：{error}',
+  'toast.modelsFetchFailed': '获取模型失败：{error}',
+  'toast.settingsSaveFailed': '保存设置失败：{error}',
+  'toast.limitsMustBeNumbers': '上下文窗口和最大令牌数必须是数字',
+  'toast.endpointLimitsSaved': '端点限制已保存',
+  'toast.endpointLimitsSaveFailed': '保存限制失败：{error}',
+  'toast.oauthLoginSuccess': 'Anthropic OAuth 登录成功',
+  'toast.oauthLoginFailed': 'OAuth 登录失败：{error}',
+  'toast.oauthLogoutSuccess': 'Anthropic OAuth 已登出',
+  'toast.oauthLogoutFailed': 'OAuth 登出失败：{error}',
+  'toast.impersonationApplied': '模拟设置已应用',
+  'toast.impersonationFailed': '应用模拟失败：{error}',
+  'toast.endpointTestFailed': '端点测试失败：{error}',
+  'toast.endpointAdded': '端点已添加',
+  'toast.endpointAddFailed': '添加端点失败：{error}',
+  'toast.copyConversationFailed': '复制对话失败',
+  'toast.imageProcessFailed': '处理附加图片失败',
+  'toast.imageDropFailed': '处理拖放图片失败',
+  'toast.imagePasteFailed': '粘贴图片失败',
+  'toast.clipboardEmpty': '剪贴板为空或包含不支持的内容',
+  'toast.clipboardPasteFailed': '从剪贴板粘贴失败',
+  'toast.reasoningNotSupported': '当前模型不支持推理强度设置',
+  'toast.reasoningSwitchFailed': '切换推理强度失败：{error}',
+  'toast.sessionDeleted': '会话已删除',
+  'toast.sessionLocked': '此会话被其他实例锁定',
+  'toast.sessionDeleteFailed': '删除会话失败：{error}',
+  'toast.sessionCreateFailed': '创建会话失败：{error}',
+  'toast.sessionOpenFailed': '打开会话失败：{error}',
+  'toast.copiedMessages': '已复制 {count} 条消息到剪贴板',
+
+  // FileBrowser
+  'files.emptyDirectory': '空目录',
+  'files.noMatchingFiles': '没有匹配的文件',
+  'files.selectToPreview': '选择文件预览',
+
+  // ApprovalDialog risk levels
+  'approval.riskHigh': '高风险',
+  'approval.riskMedium': '中风险',
+  'approval.riskLow': '低风险',
+
+  // DebugConsole
+  'debug.filterLogs': '过滤调试日志',
+
+  // Sidebar context menu
+  'sidebar.ctxOpen': '打开',
+  'sidebar.ctxRename': '重命名',
+  'sidebar.ctxCopyId': '复制 ID',
+  'sidebar.ctxDelete': '删除',
+  'sidebar.ctxPin': '置顶',
+  'sidebar.ctxUnpin': '取消置顶',
+  'sidebar.startConversation': '开始对话',
+  'sidebar.noMatching': '没有匹配"{search}"的会话',
+  'sidebar.clearSearch': '清除搜索',
+  'sidebar.noSessionsYet': '还没有会话',
+
+  // ChatView context menu & run stats
+  'chat.ctxCopy': '复制',
+  'chat.ctxEdit': '编辑',
+  'chat.ctxRegenerate': '重新生成',
+  'chat.runDuration': '耗时',
+  'chat.runTools': '工具',
+  'chat.runFiles': '文件',
+  'chat.runErrors': '错误',
+  'chat.runTokens': '令牌',
+  'chat.dropImages': '拖放图片以附加',
+  'chat.slashHelp': '显示可用命令',
+  'chat.slashModel': '切换或查看 AI 模型',
+  'chat.slashMode': '更改权限模式（auto/supervised/plan/bypass）',
+  'chat.slashClear': '清空聊天历史',
+  'chat.slashCompact': '压缩上下文窗口',
+  'chat.slashContext': '显示上下文使用详情',
+  'chat.slashCost': '显示令牌用量和费用',
+  'chat.slashCopy': '复制对话到剪贴板',
+  'chat.slashExport': '下载对话为 Markdown 文件',
+  'chat.slashSessions': '浏览并切换会话',
+  'chat.slashConfig': '查看或编辑配置',
+  'chat.slashStatus': '显示运行状态',
+  'chat.slashSkills': '浏览可用技能',
+  'chat.slashMcp': '管理 MCP 服务器',
+  'chat.slashReview': '审查代码变更（git diff）',
+  'chat.slashDiff': '显示工作树差异',
+  'chat.slashReflect': '触发自我反思',
+  'chat.slashUndo': '撤销上次文件编辑',
+  'chat.slashRegenerate': '重新生成上次回复',
+  'chat.slashTodo': '任务管理',
+  'chat.slashInit': '初始化项目记忆文件',
+  'chat.slashLang': '更改界面语言',
+  'chat.slashBug': '报告 Bug',
+
+  // Dialogs links
+  'dialogs.linkGitHub': 'GitHub',
+  'dialogs.linkReleases': '版本发布',
+  'dialogs.linkIssues': '问题反馈',
+  'dialogs.linkDiscord': 'Discord',
+
+  // MCPServers transports
+  'mcp.transportHttp': 'HTTP / SSE',
+  'mcp.descStdio': '通过 stdin/stdout 的本地进程',
+  'mcp.descHttp': '通过 HTTP 的远程服务器（Streamable HTTP / SSE）',
+  'mcp.descWs': '通过 WebSocket 的远程服务器',
+
+  // IMManagement
+  'im.qrAuthHint': '此平台使用二维码认证。保存以启动配对流程。',
+  'im.noConfigurableFields': '此适配器无可配置字段。',
+
+  // PairingCodeDialog
+  'pairing.enterCode': '在你的 IM 频道中输入此代码：',
+
+  // LanChatView
+  'lanchat.noContactsOnline': '没有联系人在线',
+
+  // ContextPanel
+  'context.noImAdapters': '没有绑定的 IM 适配器',
+
+  // SettingsPage
+  'settings.maxTokensHint': '设为 0 或留空以从模型规格自动检测。',
+  'settings.oauthConnected': '已连接',
+  'settings.oauthNotConnected': '未连接',
+  'settings.oauthLoggingIn': '正在登录...',
+  'settings.login': '登录',
+  'settings.failedFetchModels': '获取模型失败',
+
+  // Sidebar context menu
+  'sidebar.menuOpen': '打开',
+  'sidebar.menuRename': '重命名',
+  'sidebar.menuPin': '置顶',
+  'sidebar.menuUnpin': '取消置顶',
+  'sidebar.menuCopyId': '复制 ID',
+  'sidebar.deleteConfirm': '删除此会话？此操作不可撤销。',
+  'sidebar.renamedToast': '会话已重命名',
+  'sidebar.copyFailedToast': '复制失败',
+
+  // ChatView context menu
+  'chat.menuCopy': '复制',
+  'chat.menuEdit': '编辑',
+  'chat.menuRegenerate': '重新生成',
+
+  // ChatView run stats
+  'chat.runStatDuration': '耗时',
+  'chat.runStatTools': '工具',
+  'chat.runStatFiles': '文件',
+  'chat.runStatErrors': '错误',
+  'chat.runStatTokens': '令牌',
+
+  // Dialogs links
+  'dialogs.github': 'GitHub',
+  'dialogs.releases': '发布',
+  'dialogs.issues': '问题',
+  'dialogs.discord': 'Discord',
+  'dialogs.checkUpdate': '检查更新',
+  'dialogs.checking': '检查中...',
+
+  // MCPServers oauth
+  'mcp.oauthOpening': '正在打开浏览器进行 MCP 登录...',
+  'mcp.oauthCompleteBrowser': '在浏览器中完成登录后返回此处。',
+  'mcp.oauthReconnecting': '登录完成。正在重新连接 MCP 服务器...',
+
+  // AskUser
+  'askUser.notesPlaceholder': '附加备注（可选）',
 }
 
 export default zh

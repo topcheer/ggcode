@@ -79,6 +79,7 @@ type Teammate struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	done   chan struct{} // closed when the idle-runner goroutine exits
 	mu     sync.Mutex
 }
 

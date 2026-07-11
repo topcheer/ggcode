@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Eye, EyeOff, Plus, Zap, RefreshCw, Check, Server, Radio, PanelRight, Terminal, Share2, Info, Shield, FolderOpen, Code2, SunMoon } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
-import { useTranslation, type Locale } from '../i18n'
+import { useTranslation, type Locale, LOCALE_LABELS } from '../i18n'
 import { ViewMode } from '../types'
 
 interface Props {
@@ -115,7 +115,13 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         // Load general config for language, mode, impersonation
         const cfg = await App.GetConfig() as any
         if (cancelled) return
-        setLanguage((cfg.language === 'zh' || cfg.language === 'zh-CN') ? 'zh' : 'en')
+        // Map config language to supported locale, default to 'en'
+        const cfgLang = cfg.language || 'en'
+        const supported = ['en','zh','ja','ko','es','fr','de','ru','pt','vi']
+        const mapped = supported.includes(cfgLang)
+          ? cfgLang
+          : Object.keys(LOCALE_LABELS).find(l => cfgLang.startsWith(l)) || 'en'
+        setLanguage(mapped as Locale)
         setDefaultMode(cfg.defaultMode || 'supervised')
         setSelectedPreset(cfg.impersonatePreset || 'none')
         setImpVersion(cfg.impersonateCustomVersion || '')
@@ -156,7 +162,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         if (cancelled) return
         setPresets(ps as ImpersonationPreset[])
       } catch (e: any) {
-        showToast?.('error', `Failed to load settings: ${e?.message || e}`)
+        showToast?.('error', t('toast.settingsLoadFailed', { error: e?.message || String(e) }))
       }
     }
     load()
@@ -176,7 +182,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       const eps = await App.GetEndpoints(vendor) as any[]
       setEndpoints(eps || [])
     } catch (e: any) {
-      showToast?.('error', `Failed to load endpoints: ${e?.message || e}`)
+      showToast?.('error', t('toast.endpointsLoadFailed', { error: e?.message || String(e) }))
     }
   }, [showToast])
 
@@ -201,7 +207,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         }
       }
     } catch (e: any) {
-      showToast?.('error', `Failed to load endpoint details: ${e?.message || e}`)
+      showToast?.('error', t('toast.endpointDetailsLoadFailed', { error: e?.message || String(e) }))
     }
 
     // Load OAuth status if this is an Anthropic OAuth endpoint
@@ -221,7 +227,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setModels(ms)
       }
     } catch (e: any) {
-      showToast?.('error', `Failed to load static models: ${e?.message || e}`)
+      showToast?.('error', t('toast.staticModelsLoadFailed', { error: e?.message || String(e) }))
     }
 
     // Auto-refresh models from API (online discovery)
@@ -252,9 +258,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setModelsError('No models found')
       }
     } catch (e: any) {
-      const message = e?.message || 'Failed to fetch models'
+      const message = e?.message || t('settings.failedFetchModels')
       setModelsError(message)
-      showToast?.('error', `Failed to fetch models: ${message}`)
+      showToast?.('error', t('toast.modelsFetchFailed', { error: message }))
     } finally {
       setModelsLoading(false)
     }
@@ -279,11 +285,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       }
       setSaved(true)
       setLocale(language)
-      showToast?.('success', 'Settings saved')
+      showToast?.('success', t('toast.settingsSaved'))
       EventsEmit('config:updated')
       setTimeout(() => setSaved(false), 2000)
     } catch (e: any) {
-      showToast?.('error', `Failed to save settings: ${e?.message || e}`)
+      showToast?.('error', t('toast.settingsSaveFailed', { error: e?.message || String(e) }))
       console.error('Save failed:', e)
     } finally {
       setSaving(false)
@@ -296,15 +302,15 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     const cw = contextWindow ? parseInt(contextWindow, 10) : 0
     const mt = maxTokens ? parseInt(maxTokens, 10) : 0
     if (Number.isNaN(cw) || Number.isNaN(mt)) {
-      showToast?.('error', 'Context window and max tokens must be numbers')
+      showToast?.('error', t('toast.limitsMustBeNumbers'))
       return
     }
     try {
       await App.SetEndpointLimits(currentVendor, currentEndpoint, cw, mt)
-      showToast?.('success', 'Endpoint limits saved')
+      showToast?.('success', t('toast.endpointLimitsSaved'))
       EventsEmit('config:updated')
     } catch (e: any) {
-      showToast?.('error', `Failed to save limits: ${e?.message || e}`)
+      showToast?.('error', t('toast.endpointLimitsSaveFailed', { error: e?.message || String(e) }))
     }
   }, [currentVendor, currentEndpoint, contextWindow, maxTokens, showToast])
 
@@ -316,10 +322,10 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
       // Now wait for the callback in background
       await App.CompleteAnthropicOAuth()
       setOauthConnected(true)
-      showToast?.('success', 'Anthropic OAuth login successful')
+      showToast?.('success', t('toast.oauthLoginSuccess'))
       EventsEmit('config:updated')
     } catch (e: any) {
-      showToast?.('error', `OAuth login failed: ${e?.message || e}`)
+      showToast?.('error', t('toast.oauthLoginFailed', { error: e?.message || String(e) }))
     } finally {
       setOauthBusy(false)
     }
@@ -330,10 +336,10 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     try {
       await App.LogoutAnthropicOAuth()
       setOauthConnected(false)
-      showToast?.('success', 'Anthropic OAuth logged out')
+      showToast?.('success', t('toast.oauthLogoutSuccess'))
       EventsEmit('config:updated')
     } catch (e: any) {
-      showToast?.('error', `OAuth logout failed: ${e?.message || e}`)
+      showToast?.('error', t('toast.oauthLogoutFailed', { error: e?.message || String(e) }))
     }
   }, [showToast])
 
@@ -341,10 +347,10 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     setSaving(true)
     try {
       await App.ApplyImpersonation(selectedPreset, impVersion, {} as Record<string, string>)
-      showToast?.('success', 'Impersonation settings applied')
+      showToast?.('success', t('toast.impersonationApplied'))
       EventsEmit('config:updated')
     } catch (e: any) {
-      showToast?.('error', `Failed to apply impersonation: ${e?.message || e}`)
+      showToast?.('error', t('toast.impersonationFailed', { error: e?.message || String(e) }))
       console.error('Apply failed:', e)
     } finally {
       setSaving(false)
@@ -359,12 +365,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'provider', label: t('settings.title') },
-    { id: 'agent', label: 'Agent & Safety' },
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'integrations', label: 'Integrations' },
-    { id: 'diagnostics', label: 'Diagnostics' },
+    { id: 'agent', label: t('settings.agentSafety') },
+    { id: 'appearance', label: t('settings.appearance') },
+    { id: 'integrations', label: t('settings.integrations') },
+    { id: 'diagnostics', label: t('settings.diagnostics') },
     { id: 'impersonation', label: t('settings.impersonate') },
-    { id: 'addEndpoint', label: '+ Endpoint' },
+    { id: 'addEndpoint', label: '+ ' + t('settings.endpoint') },
   ]
 
   return (
@@ -398,18 +404,18 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         {/* Provider Tab */}
         {tab === 'provider' && (
           <>
-            <h3 style={sectionTitle}>LLM {t('settings.title')}</h3>
+            <h3 style={sectionTitle}>{t('settings.llmProvider')}</h3>
 
             <FieldRow label={t('settings.vendor')}>
               <select value={currentVendor} onChange={e => handleVendorChange(e.target.value)} style={selectStyle}>
-                <option value="">Choose vendor...</option>
+                <option value="">{t('settings.chooseVendor')}</option>
                 {vendors.map(v => <option key={v} value={v}>{v}</option>)}
               </select>
             </FieldRow>
 
             <FieldRow label={t('settings.endpoint')}>
               <select value={currentEndpoint} onChange={e => handleEndpointChange(e.target.value)} style={selectStyle}>
-                <option value="">Choose endpoint...</option>
+                <option value="">{t('settings.chooseEndpoint')}</option>
                 {endpoints.map(ep => <option key={ep.key} value={ep.key}>{ep.displayName || ep.key}</option>)}
               </select>
             </FieldRow>
@@ -449,7 +455,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                       width: 8, height: 8, borderRadius: 4, background: 'var(--color-success)',
                       display: 'inline-block',
                     }} />
-                    <span>Configured: {apiKeyMasked}</span>
+                    <span>{t('settings.configured')} {apiKeyMasked}</span>
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 4 }}>
@@ -466,7 +472,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
 
             {/* Anthropic OAuth: login/logout when vendor=anthropic and endpoint=oauth */}
             {currentVendor === 'anthropic' && currentEndpoint === 'oauth' && (
-              <FieldRow label="Anthropic OAuth">
+              <FieldRow label={t('settings.anthropicOAuth')}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <span style={{
                     fontSize: 12,
@@ -478,12 +484,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                       background: oauthConnected ? 'var(--color-success)' : 'var(--text-tertiary)',
                       display: 'inline-block',
                     }} />
-                    {oauthConnected ? 'Connected' : 'Not connected'}
+                    {oauthConnected ? t('settings.oauthConnected') : t('settings.oauthNotConnected')}
                   </span>
                   {!oauthConnected ? (
                     <button onClick={handleOAuthLogin} disabled={oauthBusy}
                       style={{ ...primaryBtnStyle, padding: '4px 12px', fontSize: 12 }}>
-                      {oauthBusy ? 'Logging in...' : 'Login'}
+                      {oauthBusy ? t('settings.oauthLoggingIn') : t('settings.login')}
                     </button>
                   ) : (
                     <button onClick={handleOAuthLogout}
@@ -496,7 +502,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             )}
 
             {/* Context Window & Max Tokens */}
-            <FieldRow label="Context Window & Max Tokens">
+            <FieldRow label={t('settings.contextWindowMaxTokens')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
                   type="number"
@@ -516,7 +522,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 />
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>max out</span>
                 <button onClick={saveEndpointLimits} disabled={!currentVendor || !currentEndpoint}
-                  title="Save limits" style={iconBtnStyle}>
+                  title={t('settings.saveLimits')} style={iconBtnStyle}>
                   <Check size={14} />
                 </button>
               </div>
@@ -530,11 +536,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <select value={currentModel} onChange={e => setCurrentModel(e.target.value)}
                   style={{ ...selectStyle, flex: 1 }}>
-                  <option value="">Choose model...</option>
+                  <option value="">{t('common.chooseModel')}</option>
                   {models.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
                 <button onClick={handleRefreshModels} disabled={modelsLoading || !currentVendor || !currentEndpoint}
-                  title="Refresh models from API" style={iconBtnStyle}>
+                  title={t('settings.refreshModels')} style={iconBtnStyle}>
                   <RefreshCw size={14} className={modelsLoading ? 'spin' : ''} />
                 </button>
               </div>
@@ -551,9 +557,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             <h3 style={{ ...sectionTitle, marginTop: 24 }}>{t('settings.permissionMode')}</h3>
             <FieldRow label={t('settings.permissionMode')}>
               <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
-                <option value="supervised">Supervised (confirm each tool)</option>
-                <option value="bypass">Bypass (auto-approve safe tools)</option>
-                <option value="autopilot">Autopilot (approve everything)</option>
+                <option value="supervised">{t('settings.modeSupervised')}</option>
+                <option value="bypass">{t('settings.modeBypass')}</option>
+                <option value="autopilot">{t('settings.modeAutopilot')}</option>
               </select>
             </FieldRow>
             <FieldRow label={t('settings.language')}>
@@ -562,8 +568,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                 setLanguage(newLang)
                 setLocale(newLang) // Immediate UI switch
               }} style={selectStyle}>
-                <option value="en">English</option>
-                <option value="zh">中文</option>
+                {Object.entries(LOCALE_LABELS).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
               </select>
             </FieldRow>
 
@@ -577,9 +584,9 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         {/* Agent & Safety Tab */}
         {tab === 'agent' && (
           <>
-            <h3 style={sectionTitle}>Agent & Safety</h3>
+            <h3 style={sectionTitle}>{t('settings.agentSafety')}</h3>
             <p style={hintStyle}>
-              Review how much autonomy the desktop agent currently has. This summarizes existing behavior without changing advanced tool policies.
+              {t('settings.agentSafetyHint')}
             </p>
 
             <div style={{ ...summaryCardStyle, borderColor: modeInfo.border, background: modeInfo.background }}>
@@ -588,50 +595,50 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                   <Shield size={18} />
                 </span>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{modeInfo.title}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{t(modeInfo.titleKey as any)}</div>
                   <div style={{ fontSize: 12, color: modeInfo.color }}>{defaultMode || 'supervised'}</div>
                 </div>
               </div>
-              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{modeInfo.description}</p>
+              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{t(modeInfo.descKey as any)}</p>
             </div>
 
-            <FieldRow label="Permission mode">
+            <FieldRow label={t('settings.permissionMode')}>
               <select value={defaultMode} onChange={e => setDefaultMode(e.target.value)} style={selectStyle}>
-                <option value="supervised">Supervised (confirm each tool)</option>
-                <option value="auto">Auto (safe tools only)</option>
-                <option value="plan">Plan (read-only)</option>
-                <option value="bypass">Bypass (auto-approve most tools)</option>
-                <option value="autopilot">Autopilot (high autonomy)</option>
+                <option value="supervised">{t('settings.modeSupervised')}</option>
+                <option value="auto">{t('settings.modeAuto')}</option>
+                <option value="plan">{t('settings.modePlan')}</option>
+                <option value="bypass">{t('settings.modeBypassAll')}</option>
+                <option value="autopilot">{t('settings.modeAutopilotHigh')}</option>
               </select>
               <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                Save to persist this default mode. Runtime mode changes still follow the app's normal mode handling.
+                {t('settings.saveModeHint')}
               </span>
             </FieldRow>
 
-            <h3 style={{ ...sectionTitle, marginTop: 24 }}>Workspace & file access</h3>
+            <h3 style={{ ...sectionTitle, marginTop: 24 }}>{t('settings.workspaceFileAccess')}</h3>
             <p style={hintStyle}>
-              File tools operate within the current workspace and configured allowed directories. Advanced allowed-directory editing is intentionally not exposed here yet to avoid changing safety boundaries accidentally.
+              {t('settings.workspaceAccessHint')}
             </p>
             <FeatureGrid>
               <FeatureCard
                 icon={<FolderOpen size={18} />}
-                title="File Browser"
-                description="Browse files in the current workspace using the existing desktop file browser."
-                action="Open Files"
+                title={t('settings.fileBrowser')}
+                description={t('settings.fileBrowserDesc')}
+                action={t('settings.openFiles')}
                 onClick={() => openView('files')}
               />
               <FeatureCard
                 icon={<PanelRight size={18} />}
-                title="Context Usage"
-                description="Inspect active context usage and token/cache totals before running long tasks."
-                action="Open Context"
+                title={t('settings.contextUsage')}
+                description={t('settings.contextUsageDesc')}
+                action={t('settings.openContext')}
                 onClick={onOpenContext}
               />
             </FeatureGrid>
 
             <button onClick={save} disabled={saving || !currentVendor || !currentEndpoint}
               style={{ ...primaryBtnStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
-              {saved ? <><Check size={14} /> {t('settings.saved')}</> : saving ? t('settings.saving') : 'Save agent settings'}
+              {saved ? <><Check size={14} /> {t('settings.saved')}</> : saving ? t('settings.saving') : t('settings.saveAgentSettings')}
             </button>
           </>
         )}
@@ -639,11 +646,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         {/* Appearance Tab */}
         {tab === 'appearance' && (
           <>
-            <h3 style={sectionTitle}>Appearance</h3>
+            <h3 style={sectionTitle}>{t('settings.appearance')}</h3>
             <p style={hintStyle}>
-              Customize the visual theme. The app follows your system preference by default.
+              {t('settings.appearanceHint')}
             </p>
-            <FieldRow label="Theme">
+            <FieldRow label={t('settings.theme')}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <button
                   onClick={() => applyTheme('light')}
@@ -656,7 +663,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
                 >
-                  <SunMoon size={14} /> Light
+                  <SunMoon size={14} /> {t('settings.themeLight')}
                 </button>
                 <button
                   onClick={() => applyTheme('dark')}
@@ -669,7 +676,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
                 >
-                  <SunMoon size={14} /> Dark
+                  <SunMoon size={14} /> {t('settings.themeDark')}
                 </button>
                 <button
                   onClick={() => applyTheme('auto')}
@@ -682,11 +689,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                     display: 'flex', alignItems: 'center', gap: 6,
                   }}
                 >
-                  Auto (System)
+                  {t('settings.themeAuto')}
                 </button>
               </div>
               <span style={{ display: 'block', marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>
-                Shortcut: Cmd+Shift+T to toggle between light and dark. "Auto" follows your OS setting.
+                {t('settings.themeShortcut')}
               </span>
             </FieldRow>
           </>
@@ -695,44 +702,44 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         {/* Integrations Tab */}
         {tab === 'integrations' && (
           <>
-            <h3 style={sectionTitle}>Integrations</h3>
+            <h3 style={sectionTitle}>{t('settings.integrations')}</h3>
             <p style={hintStyle}>
-              Manage existing desktop features from one place. These shortcuts open the current dedicated screens without changing any backend configuration semantics.
+              {t('settings.integrationsDesc')}
             </p>
             <FeatureGrid>
               <FeatureCard
                 icon={<Server size={18} />}
-                title="MCP Servers"
-                description="Configure Model Context Protocol servers and tools."
-                action="Manage MCP"
+                title={t('settings.mcpServers')}
+                description={t('settings.mcpDesc')}
+                action={t('settings.manageMCP')}
                 onClick={() => openView('mcp')}
               />
               <FeatureCard
                 icon={<Radio size={18} />}
-                title="IM Adapters"
-                description="Connect Telegram, Slack, Feishu, DingTalk and other chat adapters."
-                action="Manage IM"
+                title={t('settings.imAdapters')}
+                description={t('settings.imDesc')}
+                action={t('settings.manageIM')}
                 onClick={() => openView('im')}
               />
               <FeatureCard
                 icon={<Share2 size={18} />}
-                title="Mobile Share"
-                description="Share the active desktop session with mobile clients through the relay."
-                action="Open Share"
+                title={t('settings.mobileShare')}
+                description={t('settings.mobileShareDesc')}
+                action={t('settings.openShare')}
                 onClick={onOpenShare}
               />
               <FeatureCard
                 icon={<PanelRight size={18} />}
-                title="Context Panel"
-                description="Inspect context usage, token totals, and cache statistics for the active session."
-                action="Open Context"
+                title={t('settings.contextPanel')}
+                description={t('settings.contextPanelDesc')}
+                action={t('settings.openContext')}
                 onClick={onOpenContext}
               />
               <FeatureCard
                 icon={<Code2 size={18} />}
-                title="Language Servers"
-                description="View detected LSP servers for Go, Rust, TypeScript, Python and more."
-                action="View Status"
+                title={t('settings.lspServersShort')}
+                description={t('settings.lspDesc')}
+                action={t('settings.viewStatus')}
                 onClick={() => {
                   App.GetLSPStatus().then((res: any) => {
                     setLspStatus(res.languages || [])
@@ -749,20 +756,17 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <button onClick={() => setTab('integrations')} style={backBtnStyle}>
-                <ArrowLeft size={14} /> Integrations
+                <ArrowLeft size={14} /> {t('settings.integrations')}
               </button>
             </div>
-            <h3 style={sectionTitle}>Language Servers</h3>
+            <h3 style={sectionTitle}>{t('settings.lspServers')}</h3>
             <p style={hintStyle}>
-              Language Server Protocol (LSP) servers provide the agent with code intelligence:
-              go-to-definition, find references, hover info, diagnostics, and more. Servers are
-              auto-detected from your PATH and workspace files. You can override binary paths in
-              the config file under <code style={{ fontSize: 11, fontFamily: 'var(--font-mono)' }}>lsp_servers</code>.
+              {t('settings.lspHint')}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
               {lspStatus.length === 0 && (
                 <div style={{ ...cardStyleObj, padding: 24, textAlign: 'center', color: 'var(--text-tertiary)' }}>
-                  No language servers detected in this workspace.
+                  {t('settings.lspNoServers')}
                 </div>
               )}
               {lspStatus.map((lang) => (
@@ -782,12 +786,12 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                           {lang.display_name}
                           {lang.override && (
                             <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--color-primary)', fontWeight: 400 }}>
-                              (configured)
+                              {t('settings.lspConfigured')}
                             </span>
                           )}
                         </div>
                         <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
-                          {lang.available ? lang.binary : 'Not found'}
+                          {lang.available ? lang.binary : t('settings.lspNotAvailable')}
                         </div>
                       </div>
                     </div>
@@ -798,7 +802,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
                   {/* Install buttons for unavailable servers */}
                   {!lang.available && lang.can_install && lang.install_options && lang.install_options.length > 0 && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Install:</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{t('settings.lspInstall')}</span>
                       {lang.install_options.map((opt) => {
                         const scopeColors: Record<string, string> = {
                           user: 'var(--color-success)',
@@ -884,23 +888,23 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         {/* Diagnostics Tab */}
         {tab === 'diagnostics' && (
           <>
-            <h3 style={sectionTitle}>Diagnostics</h3>
+            <h3 style={sectionTitle}>{t('settings.diagnostics')}</h3>
             <p style={hintStyle}>
-              Tools for troubleshooting and support. These open existing desktop panels and dialogs.
+              {t('settings.diagnosticsHint')}
             </p>
             <FeatureGrid>
               <FeatureCard
                 icon={<Terminal size={18} />}
-                title="Debug Console"
-                description="View runtime logs and recent desktop/backend diagnostic events."
-                action="Open Console"
+                title={t('settings.debugConsole')}
+                description={t('settings.debugConsoleDesc')}
+                action={t('settings.openConsole')}
                 onClick={() => openView('debug')}
               />
               <FeatureCard
                 icon={<Info size={18} />}
-                title="About & Updates"
-                description="Check the app version, update status, release notes, and support links."
-                action="Open About"
+                title={t('settings.aboutUpdates')}
+                description={t('settings.aboutDesc')}
+                action={t('settings.openAbout')}
                 onClick={onOpenAbout}
               />
             </FeatureGrid>
@@ -912,7 +916,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
           <>
             <h3 style={sectionTitle}>{t('settings.impersonate')}</h3>
             <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: '0 0 16px' }}>
-              {t('settings.impersonateHint')} — some providers require specific headers.
+              {t('settings.impersonateHint')} {t('settings.someProvidersHint')}
             </p>
             <FieldRow label={t('settings.identity')}>
               <select value={selectedPreset} onChange={e => {
@@ -928,13 +932,13 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             </FieldRow>
             <FieldRow label={t('settings.impersonateVersion')}>
               <input value={impVersion} onChange={e => setImpVersion(e.target.value)}
-                placeholder="Version string..." style={inputStyle} />
+                placeholder={t('settings.versionPlaceholder')} style={inputStyle} />
             </FieldRow>
             {selectedPreset !== 'none' && (() => {
               const p = presets.find(p => p.id === selectedPreset)
               if (!p?.extraHeaders || Object.keys(p.extraHeaders).length === 0) return null
               return (
-                <FieldRow label="Extra Headers">
+                <FieldRow label={t('settings.extraHeaders')}>
                   <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-tertiary)' }}>
                     {Object.entries(p.extraHeaders).map(([k, v]) => (
                       <div key={k}>{k}: {v}</div>
@@ -971,6 +975,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
 function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
   vendors: string[], currentVendor: string, onDone: () => void, showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }) {
+  const { t } = useTranslation()
   const [vendor, setVendor] = useState(currentVendor)
   const [name, setName] = useState('')
   const [protocol, setProtocol] = useState('openai')
@@ -988,7 +993,7 @@ function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
     } catch (e: any) {
       const message = e.message || e
       setStatus('Failed: ' + message)
-      showToast?.('error', `Endpoint test failed: ${message}`)
+      showToast?.('error', t('toast.endpointTestFailed', { error: message }))
     }
   }, [protocol, baseURL, epApiKey, showToast])
 
@@ -997,12 +1002,12 @@ function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
     setSaving(true)
     try {
       await App.AddCustomEndpoint(vendor, name, protocol, baseURL, epApiKey)
-      showToast?.('success', 'Endpoint added')
+      showToast?.('success', t('toast.endpointAdded'))
       onDone()
     } catch (e: any) {
       const message = e.message || e
       setStatus('Error: ' + message)
-      showToast?.('error', `Failed to add endpoint: ${message}`)
+      showToast?.('error', t('toast.endpointAddFailed', { error: message }))
     } finally {
       setSaving(false)
     }
@@ -1010,40 +1015,40 @@ function AddEndpointForm({ vendors, currentVendor, onDone, showToast }: {
 
   return (
     <>
-      <h3 style={sectionTitle}>Add Custom Endpoint</h3>
-      <FieldRow label="Vendor">
+      <h3 style={sectionTitle}>{t('settings.addCustomEndpoint')}</h3>
+      <FieldRow label={t('settings.vendor')}>
         <select value={vendor} onChange={e => setVendor(e.target.value)} style={selectStyle}>
           {vendors.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
       </FieldRow>
-      <FieldRow label="Name">
+      <FieldRow label={t('settings.name')}>
         <input value={name} onChange={e => setName(e.target.value)}
-          placeholder="My Endpoint" style={inputStyle} />
+          placeholder={t('settings.endpointNamePlaceholder')} style={inputStyle} />
       </FieldRow>
-      <FieldRow label="Protocol">
+      <FieldRow label={t('settings.protocol')}>
         <select value={protocol} onChange={e => setProtocol(e.target.value)} style={selectStyle}>
           <option value="openai">OpenAI</option>
           <option value="anthropic">Anthropic</option>
-          <option value="gemini">Google Gemini</option>
+          <option value="gemini">{t('settings.vendorGemini')}</option>
           <option value="copilot">GitHub Copilot</option>
         </select>
       </FieldRow>
-      <FieldRow label="Base URL">
+      <FieldRow label={t('settings.baseUrl')}>
         <input value={baseURL} onChange={e => setBaseURL(e.target.value)}
           placeholder="https://api.example.com/v1" style={inputStyle} />
       </FieldRow>
-      <FieldRow label="API Key">
+      <FieldRow label={t('settings.apiKey')}>
         <input type="password" value={epApiKey} onChange={e => setEpApiKey(e.target.value)}
           placeholder="sk-..." style={inputStyle} />
       </FieldRow>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 156 }}>
         <button onClick={testConnection} style={secondaryBtnStyle}>
-          <Zap size={12} /> Test
+          <Zap size={12} /> {t('settings.testConnection')}
         </button>
         {status && <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{status}</span>}
       </div>
       <button onClick={save} disabled={saving || !name || !baseURL} style={{ ...primaryBtnStyle, marginTop: 16 }}>
-        {saving ? 'Adding...' : 'Add Endpoint'}
+        {saving ? t('settings.adding') : t('settings.addEndpoint')}
       </button>
     </>
   )
@@ -1144,8 +1149,8 @@ function getModeInfo(mode: string) {
   switch (mode) {
     case 'plan':
       return {
-        title: 'Read-only planning mode',
-        description: 'The agent can inspect files and search the workspace, but write actions and commands are blocked. This is the safest mode for exploration.',
+        titleKey: 'settings.modeTitlePlan',
+        descKey: 'settings.modeDescFullPlan',
         color: 'var(--color-primary)',
         border: 'rgba(59, 130, 246, 0.35)',
         background: 'rgba(59, 130, 246, 0.08)',
@@ -1153,8 +1158,8 @@ function getModeInfo(mode: string) {
       }
     case 'auto':
       return {
-        title: 'Auto mode',
-        description: 'Safe operations can proceed automatically while dangerous actions are denied or require escalation according to policy.',
+        titleKey: 'settings.modeTitleAuto',
+        descKey: 'settings.modeDescFullAuto',
         color: 'var(--color-success)',
         border: 'rgba(34, 197, 94, 0.35)',
         background: 'rgba(34, 197, 94, 0.08)',
@@ -1162,8 +1167,8 @@ function getModeInfo(mode: string) {
       }
     case 'bypass':
       return {
-        title: 'Bypass mode',
-        description: 'Most operations are allowed with fewer prompts. Use this only in trusted workspaces where you are comfortable with faster execution.',
+        titleKey: 'settings.modeTitleBypass',
+        descKey: 'settings.modeDescFullBypass',
         color: 'var(--color-warning)',
         border: 'rgba(245, 158, 11, 0.38)',
         background: 'rgba(245, 158, 11, 0.09)',
@@ -1171,8 +1176,8 @@ function getModeInfo(mode: string) {
       }
     case 'autopilot':
       return {
-        title: 'Autopilot mode',
-        description: 'The agent has high autonomy and can continue through many steps automatically. Review workspace state before using it on important code.',
+        titleKey: 'settings.modeTitleAutopilot',
+        descKey: 'settings.modeDescFullAutopilot',
         color: 'var(--color-error)',
         border: 'rgba(239, 68, 68, 0.38)',
         background: 'rgba(239, 68, 68, 0.1)',
@@ -1180,8 +1185,8 @@ function getModeInfo(mode: string) {
       }
     default:
       return {
-        title: 'Supervised mode',
-        description: 'The agent asks before unspecified tool actions. This is a balanced default for normal desktop use.',
+        titleKey: 'settings.modeTitleSupervised',
+        descKey: 'settings.modeDescFullSupervised',
         color: 'var(--text-secondary)',
         border: 'var(--color-border)',
         background: 'var(--color-card)',

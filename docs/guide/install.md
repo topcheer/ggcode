@@ -11,7 +11,7 @@ All install scripts default to a **non-privileged user install** (no `sudo` or a
 ### Homebrew
 
 ```bash
-brew install topcheer/tap/ggcode
+brew tap topcheer/ggcode && brew trust topcheer/ggcode && brew install ggcode
 ```
 
 ### Direct Download

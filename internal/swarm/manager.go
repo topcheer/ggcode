@@ -37,6 +37,10 @@ type ToolBuilder func(allowedTools []string) interface{}
 // Bubble Tea Update(), compounding with sub-agent flooding.
 const swarmStreamBatchInterval = 80 * time.Millisecond
 
+// swarmCancelTimeout is the max time CancelAll waits for each teammate's
+// idle-runner goroutine to exit after cancelling its context.
+const swarmCancelTimeout = 5 * time.Second
+
 type Manager struct {
 	teams    map[string]*Team
 	provider provider.Provider
@@ -342,6 +346,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 		CreatedAt: time.Now(),
 		ctx:       ctx,
 		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 
 	team.Teammates[tmID] = tm
@@ -433,6 +438,7 @@ func (m *Manager) CancelAll() {
 	}
 	m.mu.Unlock()
 
+	var doneChs []<-chan struct{}
 	for _, team := range teams {
 		team.mu.Lock()
 		for _, tm := range team.Teammates {
@@ -444,9 +450,25 @@ func (m *Manager) CancelAll() {
 				tm.Status = TeammateShuttingDown
 				tm.EndedAt = time.Now()
 			}
+			if tm.done != nil {
+				doneChs = append(doneChs, tm.done)
+			}
 			tm.mu.Unlock()
 		}
 		team.mu.Unlock()
+	}
+
+	// Wait for all teammates' idle-runner goroutines to actually exit (with timeout).
+	if len(doneChs) > 0 {
+		timeout := time.NewTimer(swarmCancelTimeout)
+		defer timeout.Stop()
+		for _, ch := range doneChs {
+			select {
+			case <-ch:
+			case <-timeout.C:
+				return
+			}
+		}
 	}
 }
 

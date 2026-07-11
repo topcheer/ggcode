@@ -1,10 +1,35 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import en, { TranslationKey } from './en'
 import zh from './zh'
+import ja from './ja'
+import ko from './ko'
+import es from './es'
+import fr from './fr'
+import de from './de'
+import ru from './ru'
+import pt from './pt'
+import vi from './vi'
+import tr from './tr'
+import id from './id'
 
-export type Locale = 'en' | 'zh'
+export type Locale = 'en' | 'zh' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'ru' | 'pt' | 'vi' | 'tr' | 'id'
 
-const translations: Record<Locale, Record<TranslationKey, string>> = { en, zh }
+export const LOCALE_LABELS: Record<Locale, string> = {
+  en: 'English',
+  zh: '中文',
+  ja: '日本語',
+  ko: '한국어',
+  es: 'Español',
+  fr: 'Français',
+  de: 'Deutsch',
+  ru: 'Русский',
+  pt: 'Português',
+  vi: 'Tiếng Việt',
+  tr: 'Türkçe',
+  id: 'Bahasa Indonesia',
+}
+
+const translations: Record<Locale, Partial<Record<TranslationKey, string>>> = { en, zh, ja, ko, es, fr, de, ru, pt, vi, tr, id }
 
 interface I18nContextValue {
   locale: Locale
@@ -63,6 +88,21 @@ export function I18nProvider({
       {children}
     </I18nContext.Provider>
   )
+}
+
+/** Detect the best matching locale from the browser/OS language setting. */
+export function detectSystemLocale(): Locale {
+  const langs = navigator.languages || [navigator.language || 'en']
+  for (const lang of langs) {
+    const lower = lang.toLowerCase()
+    // Exact match (e.g. "zh", "ja", "ko")
+    const exact = lower.split('-')[0] as Locale
+    if (exact in LOCALE_LABELS) return exact
+    // Region match (e.g. "zh-CN" → "zh", "pt-BR" → "pt")
+    const region = lower.split('-')[0]
+    if (region in LOCALE_LABELS) return region as Locale
+  }
+  return 'en'
 }
 
 export function useTranslation() {

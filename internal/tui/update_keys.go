@@ -246,6 +246,22 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, m.applyLanguageSelection(LangEnglish)
 		case "z", "Z":
 			return m, m.applyLanguageSelection(LangZhCN)
+		case "2":
+			return m, m.applyLanguageSelection(LangJa)
+		case "3":
+			return m, m.applyLanguageSelection(LangKo)
+		case "4":
+			return m, m.applyLanguageSelection(LangEs)
+		case "5":
+			return m, m.applyLanguageSelection(LangFr)
+		case "6":
+			return m, m.applyLanguageSelection(LangDe)
+		case "7":
+			return m, m.applyLanguageSelection(LangRu)
+		case "8":
+			return m, m.applyLanguageSelection(LangPt)
+		case "9":
+			return m, m.applyLanguageSelection(LangVi)
 		case "esc":
 			if m.languagePromptRequired {
 				return m, nil

@@ -162,6 +162,7 @@ export function CommandPalette({ onClose, actions }: Props) {
             background: 'var(--color-surface)', border: 'none', borderRadius: 'var(--radius-sm)',
             padding: '2px 6px', color: 'var(--text-tertiary)', fontSize: 11, cursor: 'pointer',
           }}>ESC</button>
+          {/* ESC is a keyboard key name, not translated */}
         </div>
 
         {/* Commands */}
@@ -275,11 +276,11 @@ export function CommandPalette({ onClose, actions }: Props) {
           display: 'flex', gap: 12, alignItems: 'center',
           fontSize: 11, color: 'var(--text-tertiary)',
         }}>
-          <span>↑↓ navigate</span>
-          <span>↵ select</span>
-          <span>esc close</span>
+          <span>↑↓ {t('cmd.hintNavigate')}</span>
+          <span>↵ {t('cmd.hintSelect')}</span>
+          <span>{t('cmd.hintClose')}</span>
           <div style={{ flex: 1 }} />
-          <span>{filtered.length} results</span>
+          <span>{t('cmd.results', { count: filtered.length })}</span>
         </div>
       </div>
     </>

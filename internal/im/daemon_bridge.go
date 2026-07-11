@@ -68,6 +68,7 @@ type DaemonBridge struct {
 	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
 	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
+	cascadeCancel        func() // called to cascade-cancel sub-agents/delegates on interrupt
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -231,12 +232,26 @@ func (b *DaemonBridge) HasActiveRun() bool {
 func (b *DaemonBridge) InterruptActiveRun() bool {
 	b.mu.Lock()
 	cancel := b.cancelFunc
+	cascade := b.cascadeCancel
 	b.mu.Unlock()
 	if cancel == nil {
 		return false
 	}
 	cancel()
+	// Cascade-cancel sub-agents and delegates (daemon mode has no swarm).
+	if cascade != nil {
+		cascade()
+	}
 	return true
+}
+
+// SetCascadeCancel registers a callback invoked when a run is interrupted,
+// so the daemon can cascade-cancel sub-agents and delegates (mirroring TUI's
+// cancelActiveRun which calls subAgentMgr.CancelAll() + swarmMgr.CancelAll()).
+func (b *DaemonBridge) SetCascadeCancel(fn func()) {
+	b.mu.Lock()
+	b.cascadeCancel = fn
+	b.mu.Unlock()
 }
 
 func (b *DaemonBridge) notifyRunStateChange(busy bool) {

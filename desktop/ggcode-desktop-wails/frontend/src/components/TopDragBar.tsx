@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '../../wailsjs/runtime/runtime'
+import { useTranslation } from '../i18n'
 
 // TopDragBar — fully custom-drawn title bar for ALL platforms.
 // macOS: traffic-light circles on the left (red/yellow/green).
@@ -14,6 +15,7 @@ interface TopDragBarProps {
 }
 
 export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarProps) {
+  const { t } = useTranslation()
   const [isMaximized, setIsMaximized] = useState(false)
   const [lightsHover, setLightsHover] = useState(false)
 
@@ -106,13 +108,13 @@ export function TopDragBar({ title = 'GGCode Desktop', subtitle }: TopDragBarPro
       onMouseLeave={() => setLightsHover(false)}
       onClick={(e) => e.stopPropagation()}
     >
-      <button onClick={handleClose} style={lightBtn('#ff5f57')} title="Close" aria-label="Close window">
+      <button onClick={handleClose} style={lightBtn('#ff5f57')} title={t('common.closeWindow')} aria-label={t('common.closeWindow')}>
         {lightsHover ? '\u2715' : ''}
       </button>
-      <button onClick={handleMinimize} style={lightBtn('#febc2e')} title="Minimize" aria-label="Minimize window">
+      <button onClick={handleMinimize} style={lightBtn('#febc2e')} title={t('common.minimizeWindow')} aria-label={t('common.minimizeWindow')}>
         {lightsHover ? '\u2212' : ''}
       </button>
-      <button onClick={handleMaximize} style={lightBtn('#28c840')} title="Maximize" aria-label={isMaximized ? "Restore window" : "Maximize window"}>
+      <button onClick={handleMaximize} style={lightBtn('#28c840')} title={t('common.maximizeWindow')} aria-label={isMaximized ? t('common.restoreWindow') : t('common.maximizeWindow')}>
         {lightsHover ? (isMaximized ? '\u2752' : '\u25B3') : ''}
       </button>
     </div>

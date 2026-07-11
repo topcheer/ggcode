@@ -107,6 +107,7 @@ type MCPServerConfig struct {
 	Headers           map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
+	ReadOnly          bool              `yaml:"read_only,omitempty" json:"read_only,omitempty"`
 	Source            string            `yaml:"-" json:"-"`
 	OriginPath        string            `yaml:"-" json:"-"`
 	Migrated          bool              `yaml:"-" json:"-"`

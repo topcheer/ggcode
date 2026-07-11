@@ -8,10 +8,10 @@ interface Props {
 }
 
 const MODES = [
-  { id: 'supervised', label: 'Supervised', desc: 'Review and approve every tool call before execution', color: '#eab308' },
-  { id: 'auto', label: 'Auto', desc: 'Auto-approve read-only tools, confirm destructive operations', color: '#22c55e' },
-  { id: 'bypass', label: 'Bypass', desc: 'Auto-approve all tools, no confirmation needed', color: '#ef4444' },
-  { id: 'autopilot', label: 'Autopilot', desc: 'Fully autonomous — agent runs without any confirmation', color: '#a855f7' },
+  { id: 'supervised', labelKey: 'onboarding.modeSupervised', descKey: 'onboarding.modeSupervisedDesc', color: '#eab308' },
+  { id: 'auto', labelKey: 'onboarding.modeAuto', descKey: 'onboarding.modeAutoDesc', color: '#22c55e' },
+  { id: 'bypass', labelKey: 'onboarding.modeBypass', descKey: 'onboarding.modeBypassDesc', color: '#ef4444' },
+  { id: 'autopilot', labelKey: 'onboarding.modeAutopilot', descKey: 'onboarding.modeAutopilotDesc', color: '#a855f7' },
 ]
 
 interface VendorPreset {
@@ -92,10 +92,10 @@ export function Onboarding({ onComplete }: Props) {
       const models = await App.FetchModels(sanitizeVendorID(customName), 'default', apiKey, customBaseURL)
       setCustomModels((models as string[]) || [])
       if (!models || models.length === 0) {
-        setError('No models found. Enter a model name manually.')
+        setError(t('onboarding.noModelsFound'))
       }
     } catch (e: any) {
-      setError(e?.message || 'Failed to fetch models. You can enter the model name manually.')
+      setError(e?.message || t('onboarding.fetchModelsFailed'))
     } finally {
       setFetchingModels(false)
     }
@@ -109,7 +109,7 @@ export function Onboarding({ onComplete }: Props) {
         const vendorID = sanitizeVendorID(customName)
         const model = selectedModel || customModels[0] || ''
         if (!customName.trim() || !customBaseURL.trim() || !apiKey.trim() || !model) {
-          setError('Please fill in all custom provider fields')
+          setError(t('onboarding.fillAllCustom'))
           setSaving(false)
           return
         }
@@ -117,7 +117,7 @@ export function Onboarding({ onComplete }: Props) {
         await App.CompleteOnboard(vendorID, 'default', model, apiKey)
       } else {
         if (!selectedVendor || !selectedEndpoint || !apiKey || !selectedModel) {
-          setError('Please fill in all fields')
+          setError(t('onboarding.fillAllFields'))
           setSaving(false)
           return
         }
@@ -127,7 +127,7 @@ export function Onboarding({ onComplete }: Props) {
       try { await App.SaveDefaultMode(selectedMode) } catch {}
       onComplete()
     } catch (e: any) {
-      setError(e?.message || 'Failed to save config')
+      setError(e?.message || t('onboarding.saveConfigFailed'))
     } finally {
       setSaving(false)
     }
@@ -141,10 +141,10 @@ export function Onboarding({ onComplete }: Props) {
         alignItems: 'center', justifyContent: 'center', gap: 24,
       }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-          Welcome to GGCode
+          {t('onboarding.welcome')}
         </h1>
         <p style={{ fontSize: 15, color: 'var(--text-secondary)', margin: 0 }}>
-          Select a project directory to get started
+          {t('onboarding.selectDirHint')}
         </p>
         <button
           onClick={handleSelectDir}
@@ -156,7 +156,7 @@ export function Onboarding({ onComplete }: Props) {
           }}
         >
           <FolderOpen size={18} />
-          Choose Directory
+          {t('onboarding.chooseDir')}
         </button>
       </div>
     )
@@ -192,8 +192,8 @@ export function Onboarding({ onComplete }: Props) {
                 outlineOffset: 2,
               }} />
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{m.label}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{m.desc}</div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{t(m.labelKey as any)}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{t(m.descKey as any)}</div>
               </div>
             </button>
           ))}
@@ -230,7 +230,7 @@ export function Onboarding({ onComplete }: Props) {
         border: '1px solid var(--color-border)',
       }}>
         <h2 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>
-          Configure LLM {t('settings.title')}
+          {t('onboarding.configureLLM')} {t('settings.title')}
         </h2>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 24px' }}>
           {t('onboarding.vendorHint')}
@@ -246,9 +246,9 @@ export function Onboarding({ onComplete }: Props) {
             setApiKey('')
             setCustomModels([])
           }} style={selectStyle}>
-            <option value="">Choose vendor...</option>
+            <option value="">{t('onboarding.chooseVendor')}</option>
             {presets.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
-            <option value={CUSTOM_ID} style={{ fontWeight: 600 }}>+ Custom Provider</option>
+            <option value={CUSTOM_ID} style={{ fontWeight: 600 }}>{t('onboarding.customProvider')}</option>
           </select>
         </label>
 
@@ -256,18 +256,18 @@ export function Onboarding({ onComplete }: Props) {
           <>
             {/* Custom Provider Name */}
             <label style={{ display: 'block', marginBottom: 16 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Provider Name</span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('onboarding.providerName')}</span>
               <input
                 value={customName}
                 onChange={e => setCustomName(e.target.value)}
-                placeholder="My Provider..."
+                placeholder={t('onboarding.providerPlaceholder')}
                 style={inputStyle}
               />
             </label>
 
             {/* Protocol */}
             <label style={{ display: 'block', marginBottom: 16 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Protocol</span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('onboarding.protocol')}</span>
               <select value={customProtocol} onChange={e => setCustomProtocol(e.target.value)} style={selectStyle}>
                 {CUSTOM_PROTOCOLS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
@@ -275,7 +275,7 @@ export function Onboarding({ onComplete }: Props) {
 
             {/* Base URL */}
             <label style={{ display: 'block', marginBottom: 16 }}>
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>Base URL</span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.baseUrl')}</span>
               <input
                 value={customBaseURL}
                 onChange={e => setCustomBaseURL(e.target.value)}
@@ -307,18 +307,18 @@ export function Onboarding({ onComplete }: Props) {
                   color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer',
                   whiteSpace: 'nowrap', flexShrink: 0,
                 }}
-              >{fetchingModels ? 'Fetching...' : 'Fetch Models'}</button>
+              >{fetchingModels ? t('onboarding.fetchingModels') : t('onboarding.fetchModels')}</button>
               <div style={{ flex: 1 }}>
                 {customModels.length > 0 ? (
                   <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
-                    <option value="">Choose model...</option>
+                    <option value="">{t('onboarding.chooseModel')}</option>
                     {customModels.map(m => <option key={m} value={m}>{m}</option>)}
                   </select>
                 ) : (
                   <input
                     value={selectedModel}
                     onChange={e => setSelectedModel(e.target.value)}
-                    placeholder="gpt-4o (enter manually or fetch)"
+                    placeholder={t('onboarding.modelPlaceholder')}
                     style={inputStyle}
                   />
                 )}
@@ -335,7 +335,7 @@ export function Onboarding({ onComplete }: Props) {
                   setSelectedEndpoint(e.target.value)
                   setSelectedModel('')
                 }} style={selectStyle}>
-                  <option value="">Choose endpoint...</option>
+                  <option value="">{t('onboarding.chooseEndpoint')}</option>
                   {currentPreset.endpoints.map(ep => (
                     <option key={ep.id} value={ep.id}>{ep.displayName || ep.id}</option>
                   ))}
@@ -362,7 +362,7 @@ export function Onboarding({ onComplete }: Props) {
               <label style={{ display: 'block', marginBottom: 16 }}>
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.model')}</span>
                 <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
-                  <option value="">Choose model...</option>
+                  <option value="">{t('onboarding.chooseModel')}</option>
                   {models.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
               </label>

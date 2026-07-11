@@ -107,11 +107,15 @@ type Manager struct {
 	provider          provider.Provider
 	todoPath          string
 	onUsage           func(provider.TokenUsage)
+	calibrator        *TokenCalibrator
 }
 
 // NewManager creates a ContextManager with the given context window limit.
 func NewManager(contextWindow int) *Manager {
-	return &Manager{contextWindow: contextWindow}
+	return &Manager{
+		contextWindow: contextWindow,
+		calibrator:    NewTokenCalibrator(),
+	}
 }
 
 func (m *Manager) SetTodoFilePath(path string) {
@@ -657,6 +661,8 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	m.baselineTokens = usage.InputTokens
 	m.baselineDelta = 0
 	m.baselineAvailable = true
+	// Feed calibration sample: compare our estimate with actual API tokens
+	m.calibrator.RecordSample(m.tokens, usage.InputTokens)
 	debug.Log("ctx", "RecordUsage: input=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
 		usage.InputTokens, usage.OutputTokens, oldBaseline, usage.InputTokens, m.tokens, usage.InputTokens-m.tokens)
 }
@@ -1471,11 +1477,18 @@ func (m *Manager) countTokens(msg provider.Message) int {
 			return n
 		}
 	}
-	n := estimateTokens(msg)
+	n := m.estimateTokens(msg)
 	return n
 }
 
-func estimateTokens(msg provider.Message) int {
+// estimateTokensStandalone provides estimation with default (uncalibrated) ratios.
+// Used by tests and as a fallback when no Manager/calibrator is available.
+func estimateTokensStandalone(msg provider.Message) int {
+	m := &Manager{calibrator: NewTokenCalibrator()}
+	return m.estimateTokens(msg)
+}
+
+func (m *Manager) estimateTokens(msg provider.Message) int {
 	var sb strings.Builder
 	var hasImage bool
 	var toolCallCount int
@@ -1491,7 +1504,7 @@ func estimateTokens(msg provider.Message) int {
 			toolCallCount++
 		}
 	}
-	n := EstimateTokens(sb.String())
+	n := EstimateTokensCalibrated(sb.String(), m.calibrator)
 	// Each message has ~4 tokens of structural overhead (role, separators).
 	n += 4
 	// Tool calls carry JSON structure overhead beyond their input text:

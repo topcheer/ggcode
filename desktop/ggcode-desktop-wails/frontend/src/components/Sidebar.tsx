@@ -177,13 +177,13 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    if (!window.confirm('Delete this session? This cannot be undone.')) return
+    if (!window.confirm(t('sidebar.deleteConfirm'))) return
     try {
       await App.DeleteSession(id)
       setSessions(prev => prev.filter(s => s.id !== id))
-      showToast?.('success', 'Session deleted')
+      showToast?.('success', t('toast.sessionDeleted'))
     } catch (e) {
-      showToast?.('error', `Failed to delete session: ${e instanceof Error ? e.message : String(e)}`)
+      showToast?.('error', t('toast.sessionDeleteFailed', { error: e instanceof Error ? e.message : String(e) }))
     }
   }
 
@@ -203,13 +203,13 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       })))
       onSessionSelect?.(id || '')
     } catch (e) {
-      showToast?.('error', `Failed to create session: ${e instanceof Error ? e.message : String(e)}`)
+      showToast?.('error', t('toast.sessionCreateFailed', { error: e instanceof Error ? e.message : String(e) }))
     }
   }
 
   const handleSelect = async (s: SessionItem) => {
     if (s.locked) {
-      showToast?.('info', 'This session is locked by another instance')
+      showToast?.('info', t('toast.sessionLocked'))
       return
     }
     // Skip if clicking the already-active session
@@ -218,7 +218,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       await App.LoadSession(s.id)
       onSessionSelect?.(s.id)
     } catch (e) {
-      showToast?.('error', `Failed to open session: ${e instanceof Error ? e.message : String(e)}`)
+      showToast?.('error', t('toast.sessionOpenFailed', { error: e instanceof Error ? e.message : String(e) }))
     }
   }
 
@@ -233,7 +233,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       await navigator.clipboard.writeText(s.id)
       showToast?.('success', 'Session ID copied')
     } catch {
-      showToast?.('error', 'Failed to copy')
+      showToast?.('error', t('sidebar.copyFailedToast'))
     }
   }
 
@@ -254,7 +254,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
     try {
       await App.RenameSession(renamingId, newTitle)
       setSessions(prev => prev.map(s => s.id === renamingId ? { ...s, title: newTitle } : s))
-      showToast?.('success', 'Session renamed')
+      showToast?.('success', t('sidebar.renamedToast'))
     } catch (e) {
       showToast?.('error', `Rename failed: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -362,7 +362,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           onChange={e => setSearch(e.target.value)}
           onKeyDown={e => { if (e.key === 'Escape') { e.preventDefault(); setSearch('') } }}
           placeholder={t('sidebar.search')}
-          aria-label="Search sessions"
+          aria-label={t('sidebar.searchAria')}
           style={{
             flex: 1, border: 'none', background: 'transparent',
             color: 'var(--text-primary)', outline: 'none',
@@ -372,7 +372,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
         {search && (
           <button
             onClick={() => setSearch('')}
-            title="Clear"
+            title={t('sidebar.clearAria')}
             style={{
               flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer',
               padding: 2, display: 'flex', alignItems: 'center',
@@ -548,8 +548,8 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
                       flexShrink: 0,
                       padding: 4,
                     }}
-                    aria-label="Delete session"
-                    title="Delete session"
+                    aria-label={t('sidebar.deleteSessionAria')}
+                    title={t('sidebar.deleteSessionAria')}
                     onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--color-error)' }}
                     onMouseLeave={e => { e.currentTarget.style.opacity = hoveredSessionId === s.id || s.id === activeSessionId ? '0.7' : '0.28'; e.currentTarget.style.color = 'var(--text-tertiary)' }}
                   >
@@ -609,7 +609,7 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
       }}>
         <div style={{ flex: 1 }} />
         {onShare && (
-          <button onClick={onShare} title="Share with mobile" style={{
+          <button onClick={onShare} title={t('sidebar.shareWithMobile')} style={{
             padding: '4px 8px', borderRadius: 'var(--radius-sm)',
             background: 'transparent', color: 'var(--text-secondary)',
             border: 'none', cursor: 'pointer',
@@ -626,29 +626,29 @@ export function Sidebar({ onClose, onSessionSelect, onShare, activeSessionId, wo
           onClose={() => setCtxMenu(null)}
           items={[
             {
-              label: 'Open',
+              label: t('sidebar.menuOpen'),
               icon: <FolderOpen size={14} />,
               onClick: () => handleSelect(ctxMenu.session),
               disabled: ctxMenu.session.locked,
             },
             {
-              label: 'Rename',
+              label: t('sidebar.menuRename'),
               icon: <Pencil size={14} />,
               onClick: () => handleRename(ctxMenu.session),
               disabled: ctxMenu.session.locked,
             },
             {
-              label: pinnedIds.has(ctxMenu.session.id) ? 'Unpin' : 'Pin',
+              label: pinnedIds.has(ctxMenu.session.id) ? t('sidebar.menuUnpin') : t('sidebar.menuPin'),
               icon: <Pin size={14} />,
               onClick: () => handleTogglePin(ctxMenu.session),
             },
             {
-              label: 'Copy ID',
+              label: t('sidebar.menuCopyId'),
               icon: <Copy size={14} />,
               onClick: () => handleCopyId(ctxMenu.session),
             },
             {
-              label: 'Delete',
+              label: t('sidebar.delete'),
               icon: <Trash2 size={14} />,
               onClick: () => handleDelete({ stopPropagation: () => {} } as React.MouseEvent, ctxMenu.session.id),
               danger: true,

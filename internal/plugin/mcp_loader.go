@@ -130,7 +130,11 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 		return m.adapter, nil
 	}
 	m.client = client
-	m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
+	if m.cfg.ReadOnly {
+		m.adapter = mcp.NewReadOnlyAdapter(m.cfg.Name, client, tools)
+	} else {
+		m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
+	}
 	m.connected = true
 	m.awaitingOAuth = false
 	m.status = MCPStatusConnected

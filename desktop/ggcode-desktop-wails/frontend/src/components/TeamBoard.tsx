@@ -75,13 +75,13 @@ export function TeamBoard({ teams, onClose, onSelectTeammate }: TeamBoardProps) 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Columns3 size={16} style={{ color: 'var(--color-primary)' }} />
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>Team Board</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{t('team.boardTitle')}</div>
             <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
               {teams.length} {t('team.teams')} · {totalTeammates} {t('team.teammates')} · {totalTasks} {t('team.tasks')}
             </div>
           </div>
         </div>
-        <button type="button" onClick={onClose} title="Close team board" aria-label="Close team board" style={{
+        <button type="button" onClick={onClose} title={t('team.closeBoardAria')} aria-label={t('team.closeBoardAria')} style={{
           width: 28,
           height: 28,
           borderRadius: 'var(--radius-md)',

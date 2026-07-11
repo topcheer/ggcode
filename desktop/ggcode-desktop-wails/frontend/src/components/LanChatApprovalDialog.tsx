@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import * as App from '../../wailsjs/go/main/App'
 import type { LanChatPendingApproval } from '../types'
+import { useTranslation } from '../i18n'
 
 function safeMarkdown(text: string): string {
   // Minimal markdown safety — reuses the same marked() pipeline as ChatView
@@ -14,6 +15,7 @@ function safeMarkdown(text: string): string {
 }
 
 export function LanChatApprovalDialog() {
+  const { t } = useTranslation()
   const [approvals, setApprovals] = useState<LanChatPendingApproval[]>([])
 
   useEffect(() => {
@@ -56,7 +58,7 @@ export function LanChatApprovalDialog() {
   }
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="LAN Chat approval" tabIndex={-1} style={{
+    <div role="dialog" aria-modal="true" aria-label={t('common.lanChatApproval')} tabIndex={-1} style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
       background: 'rgba(0,0,0,0.4)', zIndex: 9998,
       display: 'flex', alignItems: 'center', justifyContent: 'center',

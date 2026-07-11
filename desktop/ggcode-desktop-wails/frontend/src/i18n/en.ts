@@ -70,6 +70,10 @@ const en = {
   'cmd.goLanChat': 'Go to LAN Chat',
   'cmd.goDebug': 'Go to Debug Console',
   'cmd.showShortcuts': 'Show Keyboard Shortcuts',
+  'cmd.hintNavigate': 'navigate',
+  'cmd.hintSelect': 'select',
+  'cmd.hintClose': 'esc close',
+  'cmd.results': '{count} results',
 
   // KeyboardShortcuts
   'kb.title': 'Keyboard Shortcuts',
@@ -159,6 +163,26 @@ const en = {
   'onboarding.workDir': 'Working Directory',
   'onboarding.browse': 'Browse',
   'onboarding.workDirHint': 'Select the project directory to work in',
+  'onboarding.welcome': 'Welcome to GGCode',
+  'onboarding.selectDirHint': 'Select a project directory to get started',
+  'onboarding.chooseDir': 'Choose Directory',
+  'onboarding.modeSupervised': 'Supervised',
+  'onboarding.modeSupervisedDesc': 'Review and approve every tool call before execution',
+  'onboarding.modeAuto': 'Auto',
+  'onboarding.modeAutoDesc': 'Auto-approve read-only tools, confirm destructive operations',
+  'onboarding.modeBypass': 'Bypass',
+  'onboarding.modeBypassDesc': 'Auto-approve all tools, no confirmation needed',
+  'onboarding.modeAutopilot': 'Autopilot',
+  'onboarding.modeAutopilotDesc': 'Fully autonomous — agent runs without any confirmation',
+  'onboarding.fetchingModels': 'Fetching...',
+  'onboarding.fetchModels': 'Fetch Models',
+  'onboarding.noModelsFound': 'No models found. Enter a model name manually.',
+  'onboarding.fetchModelsFailed': 'Failed to fetch models. You can enter the model name manually.',
+  'onboarding.fillAllCustom': 'Please fill in all custom provider fields',
+  'onboarding.fillAllFields': 'Please fill in all fields',
+  'onboarding.saveConfigFailed': 'Failed to save config',
+  'onboarding.modelPlaceholder': 'gpt-4o (enter manually or fetch)',
+  'onboarding.configureLLM': 'Configure LLM',
 
   // ApprovalDialog
   'approval.title': 'Tool Approval Required',
@@ -276,6 +300,479 @@ const en = {
   'team.noPending': 'No pending tasks',
   'team.noInProgress': 'Nobody is blocked here',
   'team.noDone': 'Nothing completed yet',
+
+  // --- v1.3.143+ i18n gap fill ---
+
+  // SettingsPage sections
+  'settings.agentSafety': 'Agent & Safety',
+  'settings.workspaceAccess': 'Workspace & file access',
+  'settings.appearance': 'Appearance',
+  'settings.integrations': 'Integrations',
+  'settings.languageServers': 'Language Servers',
+  'settings.diagnostics': 'Diagnostics',
+  'settings.addCustomEndpoint': 'Add Custom Endpoint',
+  'settings.configured': 'Configured',
+  'settings.install': 'Install:',
+  'settings.saveLimits': 'Save limits',
+  'settings.refreshModels': 'Refresh models from API',
+  'settings.versionPlaceholder': 'Version string...',
+  'settings.endpointNamePlaceholder': 'My Endpoint',
+
+  // SettingsPage integrations checkboxes
+  'settings.fileBrowser': 'File Browser',
+  'settings.contextUsage': 'Context Usage',
+  'settings.mcpServers': 'MCP Servers',
+  'settings.imAdapters': 'IM Adapters',
+  'settings.mobileShare': 'Mobile Share',
+  'settings.contextPanel': 'Context Panel',
+  'settings.debugConsole': 'Debug Console',
+  'settings.aboutUpdates': 'About & Updates',
+  'settings.lspServers': 'Language Servers',
+  'settings.diagnosticsHint': 'Tools for troubleshooting and support. These open existing desktop panels and dialogs.',
+  'settings.openConsole': 'Open Console',
+  'settings.openAbout': 'Open About',
+  'settings.debugConsoleDesc': 'View runtime logs and recent desktop/backend diagnostic events.',
+  'settings.aboutDesc': 'Check the app version, update status, release notes, and support links.',
+  'settings.anthropicOAuth': 'Anthropic OAuth',
+  'settings.contextWindowMaxTokens': 'Context Window & Max Tokens',
+  'settings.workspaceFileAccess': 'Workspace & file access',
+  'settings.theme': 'Theme',
+  'settings.themeLight': 'Light',
+  'settings.themeDark': 'Dark',
+  'settings.themeSystem': 'System',
+  'settings.integrationsHint': 'Enable integration features for quick access to tools.',
+  'settings.lspHint': 'Language Server Protocol (LSP) servers provide the agent with code intelligence: go-to-definition, find references, hover info, diagnostics, and more.',
+  'settings.lspNoServers': 'No language servers detected in this workspace.',
+  'settings.lspConfigured': '(configured)',
+  'settings.lspNotAvailable': 'Not found',
+  'settings.lspInstall': 'Install:',
+  'settings.extraHeaders': 'Extra Headers',
+  'settings.someProvidersHint': 'some providers require specific headers.',
+  'settings.saveAgentSettings': 'Save agent settings',
+  'settings.name': 'Name',
+  'settings.protocol': 'Protocol',
+  'settings.addEndpoint': 'Add Endpoint',
+  'settings.testConnection': 'Test',
+  'settings.adding': 'Adding...',
+  'settings.lspServersShort': 'Language Servers',
+
+  // Sidebar aria labels
+  'sidebar.searchAria': 'Search sessions',
+  'sidebar.clearAria': 'Clear',
+  'sidebar.deleteSessionAria': 'Delete session',
+
+  // ChatView tooltip extras
+  'chat.editNickRoleTeam': 'Click to edit your nickname, role, and team',
+  'chat.regenerate': 'Regenerate response',
+  'chat.copyResult': 'Copy result',
+  'chat.copyError': 'Copy error',
+
+  // Permission mode dropdown options
+  'mode.supervisedDesc': 'Supervised (confirm each tool)',
+  'mode.autoDesc': 'Auto (safe tools only)',
+  'mode.planDesc': 'Plan (read-only)',
+  'mode.bypassDesc': 'Bypass (auto-approve most tools)',
+  'mode.autopilotDesc': 'Autopilot (high autonomy)',
+
+  // Common dropdown placeholders
+  'common.chooseVendor': 'Choose vendor...',
+  'common.chooseEndpoint': 'Choose endpoint...',
+  'common.chooseModel': 'Choose model...',
+  'common.english': 'English',
+
+  // ChatView activity descriptions
+  'chat.activity.reading': 'Reading files...',
+  'chat.activity.editing': 'Editing code...',
+  'chat.activity.writing': 'Writing files...',
+  'chat.activity.running': 'Running commands...',
+  'chat.activity.browsing': 'Browsing files...',
+  'chat.activity.git': 'Git operations...',
+  'chat.activity.analyzing': 'Analyzing code...',
+  'chat.activity.searching': 'Searching the web...',
+  'chat.activity.managing': 'Managing tasks...',
+  'chat.activity.subagent': 'Running sub-agent...',
+  'chat.activity.waiting': 'Waiting for input...',
+  'chat.activity.saving': 'Saving memory...',
+  'chat.activity.writingResponse': 'Writing response...',
+  'chat.activity.planMode': 'Entering plan mode...',
+
+  // ChatView UI labels
+  'chat.findPlaceholder': 'Find in conversation...',
+  'chat.noModel': 'No model',
+  'chat.selectWorkspace': 'Select workspace',
+  'chat.sending': 'Sending...',
+  'chat.failedToSend': 'Failed to send',
+  'chat.nickname': 'Nickname',
+  'chat.role': 'Role',
+  'chat.team': 'Team',
+  'chat.cancel': 'Cancel',
+  'chat.save': 'Save',
+
+  // ChatView button titles
+  'chat.title.newSession': 'New session',
+  'chat.title.shareSession': 'Share session (Cmd+Shift+S)',
+  'chat.title.search': 'Search in conversation (Cmd+F)',
+  'chat.title.copyConversation': 'Copy conversation to clipboard',
+  'chat.title.download': 'Download as markdown file',
+  'chat.title.scrollBottom': 'Scroll to bottom',
+  'chat.title.removeImage': 'Remove image',
+  'chat.title.attachImage': 'Attach image',
+  'chat.title.paste': 'Paste from clipboard',
+  'chat.title.cancel': 'Cancel',
+  'chat.title.send': 'Send message (Enter)',
+  'chat.title.copyReasoning': 'Copy reasoning',
+  'chat.title.editResend': 'Edit & resend',
+  'chat.title.copyMessage': 'Copy message',
+  'chat.title.regenerate': 'Regenerate response',
+  'chat.title.copyResult': 'Copy result',
+  'chat.title.copyError': 'Copy error',
+  'chat.title.teamBoard': 'Open team board',
+  'chat.title.editIdentity': 'Click to edit your nickname, role, and team',
+
+  // MCPServers
+  'mcp.transport': 'Transport',
+  'mcp.transportStdio': 'Local process via stdin/stdout',
+  'mcp.transportWs': 'Remote server via WebSocket',
+  'mcp.commandLabel': 'Command',
+  'mcp.argsOptional': 'Arguments (optional, space-separated)',
+  'mcp.headersOptional': 'Headers (optional, one per line: Key: Value)',
+  'mcp.envVars': 'Environment Variables (optional, one per line: KEY=VALUE)',
+  'mcp.login': 'Login',
+  'mcp.reconnect': 'Reconnect',
+  'mcp.resetOAuth': 'Reset OAuth (switch account)',
+  'mcp.remove': 'Remove',
+
+  // Onboarding
+  'onboarding.chooseVendor': 'Choose vendor...',
+  'onboarding.providerName': 'Provider Name',
+  'onboarding.protocol': 'Protocol',
+  'onboarding.providerPlaceholder': 'My Provider...',
+  'onboarding.chooseModel': 'Choose model...',
+  'onboarding.chooseEndpoint': 'Choose endpoint...',
+
+  // LanChatView
+  'lanchat.groupChat': 'Group Chat',
+  'lanchat.chat': 'Chat',
+  'lanchat.agentSuffix': ' (agent)',
+  'lanchat.noMessagesBroadcast': 'No messages yet. Start a conversation with everyone on your network.',
+  'lanchat.noMessagesDM': 'No direct messages yet.',
+  'lanchat.broadcastPlaceholder': 'Broadcast to all...',
+  'lanchat.dmPlaceholder': 'Message {name}...',
+  'lanchat.enterNickname': 'Enter new nickname:',
+
+  // ApprovalDialog hints
+  'approval.denyHint': 'Deny',
+  'approval.allowHint': 'Allow',
+  'approval.alwaysHint': 'Always',
+  'approval.copyToClipboard': 'Copy to clipboard',
+  'approval.ariaLabel': 'Tool approval',
+
+  // AskUserDialog
+  'askUser.typeAnswer': 'Type your answer...',
+  'askUser.additionalNotes': 'Additional notes (optional)',
+  'askUser.close': 'Close dialog',
+  'askUser.cancel': 'Cancel',
+
+  // IMManagement
+  'im.editAdapter': 'Edit: {name}',
+  'im.addTitle': 'Add IM adapter',
+  'im.adapterNameRequired': 'Enter an adapter name',
+
+  // FileBrowser
+  'files.searchPlaceholder': 'Search files...',
+  'files.officeDocument': 'Office document',
+  'files.openExternal': 'Open with external application to view',
+  'files.renderingMermaid': 'Rendering diagram...',
+  'files.htmlPreview': 'HTML Preview',
+
+  // Dialogs / About
+  'about.checkUpdates': 'Check for Updates',
+  'about.checking': 'Checking...',
+  'about.newVersion': 'New version available: v{version}',
+  'about.download': 'Download',
+
+  // TopDragBar (window controls)
+  'window.close': 'Close',
+  'window.minimize': 'Minimize',
+  'window.maximize': 'Maximize',
+  'window.restore': 'Restore window',
+
+  // StatusBar
+  'status.toggleContext': 'Toggle context panel',
+
+  // TeamBoard
+  'team.boardTitle': 'Team Board',
+  'team.closeBoard': 'Close team board',
+
+  // Common shared
+  'common.dismiss': 'Dismiss notification',
+  'common.cancel': 'Cancel',
+  'common.copyToClipboard': 'Copy to clipboard',
+
+  // FeatureCard descriptions and actions
+  'settings.fileBrowserDesc': 'Browse files in the current workspace using the existing desktop file browser.',
+  'settings.openFiles': 'Open Files',
+  'settings.contextUsageDesc': 'Inspect active context usage and token/cache totals before running long tasks.',
+  'settings.openContext': 'Open Context',
+  'settings.mcpDesc': 'Configure Model Context Protocol servers and tools.',
+  'settings.manageMCP': 'Manage MCP',
+  'settings.imDesc': 'Connect Telegram, Slack, Feishu, DingTalk and other chat adapters.',
+  'settings.manageIM': 'Manage IM',
+  'settings.mobileShareDesc': 'Share the active desktop session with mobile clients through the relay.',
+  'settings.openShare': 'Open Share',
+  'settings.contextPanelDesc': 'Inspect context usage, token totals, and cache statistics for the active session.',
+  'settings.lspDesc': 'View detected LSP servers for Go, Rust, TypeScript, Python and more.',
+  'settings.viewStatus': 'View Status',
+  'settings.integrationsDesc': 'Manage existing desktop features from one place. These shortcuts open the current dedicated screens without changing any backend configuration semantics.',
+  'settings.vendorGemini': 'Google Gemini',
+
+  // Dialog aria labels
+  'common.toolApproval': 'Tool approval',
+  'common.closeDialog': 'Close dialog',
+  'common.cancelBtn': 'Cancel',
+  'common.searchPrev': 'Previous (Shift+Enter)',
+  'common.searchNext': 'Next (Enter)',
+  'common.searchClose': 'Close (Esc)',
+  'common.filterByCategory': 'Filter by category',
+  'common.addIMAdapter': 'Add IM adapter',
+  'common.lanChatApproval': 'LAN Chat approval',
+  'common.lanChatMessages': 'LAN Chat messages',
+  'common.mobilePairing': 'Mobile pairing',
+  'common.shareSession': 'Share session',
+  'sidebar.shareWithMobile': 'Share with mobile',
+  'status.mobileConnected': 'Mobile connected',
+  'status.mobileConnectedAria': 'Mobile device connected',
+  'team.closeBoardAria': 'Close team board',
+  'common.closeWindow': 'Close window',
+  'common.minimizeWindow': 'Minimize window',
+  'common.maximizeWindow': 'Maximize window',
+  'common.restoreWindow': 'Restore window',
+
+  // SettingsPage option labels
+  'settings.chooseVendor': 'Choose vendor...',
+  'settings.chooseEndpoint': 'Choose endpoint...',
+  'settings.modeSupervised': 'Supervised (confirm each tool)',
+  'settings.modeAuto': 'Auto (safe tools only)',
+  'settings.modePlan': 'Plan (read-only)',
+  'settings.modeBypass': 'Bypass (auto-approve safe tools)',
+  'settings.modeBypassAll': 'Bypass (auto-approve most tools)',
+  'settings.modeAutopilot': 'Autopilot (approve everything)',
+  'settings.modeAutopilotHigh': 'Autopilot (high autonomy)',
+  'settings.saveModeHint': 'Save to persist this default mode. Runtime mode changes still follow the app\'s normal mode handling.',
+
+  // Dialogs
+  'dialogs.newVersion': 'New version available: v',
+  'dialogs.download': 'Download',
+  'dialogs.upToDate': 'You\'re up to date (v',
+  'dialogs.productName': 'GGCode Desktop',
+
+  // TeamBoard
+  // (team.boardTitle already exists above)
+
+  // FileBrowser
+  'files.renderingDiagram': 'Rendering diagram...',
+  // (files.officeDocument, files.openExternal already exist above)
+
+  // ApprovalDialog keyboard hints
+  'approval.always': 'Always',
+
+  // IMManagement
+  // (im.editAdapter already exists above)
+
+  // MCPServers
+  'mcp.oauthRequired': 'OAuth login required',
+  'mcp.oauthHint': 'Sign in with your browser to authorize this MCP server.',
+
+  // Onboarding
+  'onboarding.customProvider': '+ Custom Provider',
+
+  // SettingsPage mode descriptions (FeatureCard)
+  'settings.modeDescSupervised': 'Review and approve each tool execution',
+  'settings.modeDescAuto': 'Automatically approve safe operations only',
+  'settings.modeDescPlan': 'Explore code without making changes',
+  'settings.modeDescBypass': 'Automatically approve most operations',
+  'settings.modeDescAutopilot': 'Full autonomy with minimal interruptions',
+  'settings.agentSafetyHint': 'Review how much autonomy the desktop agent currently has. This summarizes existing behavior without changing advanced tool policies.',
+  'settings.workspaceAccessHint': 'File tools operate within the current workspace and configured allowed directories. Advanced allowed-directory editing is intentionally not exposed here yet to avoid changing safety boundaries accidentally.',
+  'settings.appearanceHint': 'Customize the visual theme. The app follows your system preference by default.',
+  'settings.llmProvider': 'LLM Provider',
+  'settings.themeAuto': 'Auto (System)',
+  'settings.themeShortcut': 'Shortcut: Cmd+Shift+T to toggle between light and dark. "Auto" follows your OS setting.',
+  'settings.modeTitlePlan': 'Read-only planning mode',
+  'settings.modeTitleAuto': 'Auto mode',
+  'settings.modeTitleBypass': 'Bypass mode',
+  'settings.modeTitleAutopilot': 'Autopilot mode',
+  'settings.modeTitleSupervised': 'Supervised mode',
+  'settings.modeDescFullPlan': 'The agent can inspect files and search the workspace, but write actions and commands are blocked. This is the safest mode for exploration.',
+  'settings.modeDescFullAuto': 'Safe operations can proceed automatically while dangerous actions are denied or require escalation according to policy.',
+  'settings.modeDescFullBypass': 'Most operations are allowed with fewer prompts. Use this only in trusted workspaces where you are comfortable with faster execution.',
+  'settings.modeDescFullAutopilot': 'The agent has high autonomy and can continue through many steps automatically. Review workspace state before using it on important code.',
+  'settings.modeDescFullSupervised': 'The agent asks before unspecified tool actions. This is a balanced default for normal desktop use.',
+
+  // Toast messages
+  'toast.settingsSaved': 'Settings saved',
+  'toast.settingsLoadFailed': 'Failed to load settings: {error}',
+  'toast.endpointsLoadFailed': 'Failed to load endpoints: {error}',
+  'toast.endpointDetailsLoadFailed': 'Failed to load endpoint details: {error}',
+  'toast.staticModelsLoadFailed': 'Failed to load static models: {error}',
+  'toast.modelsFetchFailed': 'Failed to fetch models: {error}',
+  'toast.settingsSaveFailed': 'Failed to save settings: {error}',
+  'toast.limitsMustBeNumbers': 'Context window and max tokens must be numbers',
+  'toast.endpointLimitsSaved': 'Endpoint limits saved',
+  'toast.endpointLimitsSaveFailed': 'Failed to save limits: {error}',
+  'toast.oauthLoginSuccess': 'Anthropic OAuth login successful',
+  'toast.oauthLoginFailed': 'OAuth login failed: {error}',
+  'toast.oauthLogoutSuccess': 'Anthropic OAuth logged out',
+  'toast.oauthLogoutFailed': 'OAuth logout failed: {error}',
+  'toast.impersonationApplied': 'Impersonation settings applied',
+  'toast.impersonationFailed': 'Failed to apply impersonation: {error}',
+  'toast.endpointTestFailed': 'Endpoint test failed: {error}',
+  'toast.endpointAdded': 'Endpoint added',
+  'toast.endpointAddFailed': 'Failed to add endpoint: {error}',
+  'toast.copyConversationFailed': 'Failed to copy conversation',
+  'toast.imageProcessFailed': 'Failed to process attached image',
+  'toast.imageDropFailed': 'Failed to process dropped image',
+  'toast.imagePasteFailed': 'Failed to paste image',
+  'toast.clipboardEmpty': 'Clipboard is empty or contains unsupported content',
+  'toast.clipboardPasteFailed': 'Failed to paste from clipboard',
+  'toast.reasoningNotSupported': 'Reasoning effort is not supported by the current model',
+  'toast.reasoningSwitchFailed': 'Failed to switch reasoning effort: {error}',
+  'toast.sessionDeleted': 'Session deleted',
+  'toast.sessionLocked': 'This session is locked by another instance',
+  'toast.sessionDeleteFailed': 'Failed to delete session: {error}',
+  'toast.sessionCreateFailed': 'Failed to create session: {error}',
+  'toast.sessionOpenFailed': 'Failed to open session: {error}',
+  'toast.copiedMessages': 'Copied {count} messages to clipboard',
+
+  // FileBrowser
+  'files.emptyDirectory': 'Empty directory',
+  'files.noMatchingFiles': 'No matching files',
+  'files.selectToPreview': 'Select a file to preview',
+
+  // ApprovalDialog risk levels
+  'approval.riskHigh': 'High Risk',
+  'approval.riskMedium': 'Medium Risk',
+  'approval.riskLow': 'Low Risk',
+
+  // DebugConsole
+  'debug.filterLogs': 'Filter debug logs',
+
+  // Sidebar context menu
+  'sidebar.ctxOpen': 'Open',
+  'sidebar.ctxRename': 'Rename',
+  'sidebar.ctxCopyId': 'Copy ID',
+  'sidebar.ctxDelete': 'Delete',
+  'sidebar.ctxPin': 'Pin',
+  'sidebar.ctxUnpin': 'Unpin',
+  'sidebar.startConversation': 'Start a conversation',
+  'sidebar.noMatching': 'No sessions matching "{search}"',
+  'sidebar.clearSearch': 'Clear search',
+  'sidebar.noSessionsYet': 'No sessions yet',
+
+  // ChatView context menu & run stats
+  'chat.ctxCopy': 'Copy',
+  'chat.ctxEdit': 'Edit',
+  'chat.ctxRegenerate': 'Regenerate',
+  'chat.runDuration': 'Duration',
+  'chat.runTools': 'Tools',
+  'chat.runFiles': 'Files',
+  'chat.runErrors': 'Errors',
+  'chat.runTokens': 'Tokens',
+  'chat.dropImages': 'Drop images to attach',
+  'chat.slashHelp': 'Show available commands',
+  'chat.slashModel': 'Switch or view AI model',
+  'chat.slashMode': 'Change permission mode (auto/supervised/plan/bypass)',
+  'chat.slashClear': 'Clear chat history',
+  'chat.slashCompact': 'Compact context window',
+  'chat.slashContext': 'Show context usage details',
+  'chat.slashCost': 'Show token usage and cost',
+  'chat.slashCopy': 'Copy conversation to clipboard',
+  'chat.slashExport': 'Download conversation as markdown file',
+  'chat.slashSessions': 'Browse and switch sessions',
+  'chat.slashConfig': 'View or edit configuration',
+  'chat.slashStatus': 'Show runtime status',
+  'chat.slashSkills': 'Browse available skills',
+  'chat.slashMcp': 'Manage MCP servers',
+  'chat.slashReview': 'Review code changes (git diff)',
+  'chat.slashDiff': 'Show working tree diff',
+  'chat.slashReflect': 'Trigger self-reflection',
+  'chat.slashUndo': 'Undo last file edit',
+  'chat.slashRegenerate': 'Regenerate last response',
+  'chat.slashTodo': 'Task management',
+  'chat.slashInit': 'Initialize project memory files',
+  'chat.slashLang': 'Change interface language',
+  'chat.slashBug': 'Report a bug',
+
+  // Dialogs links
+  'dialogs.linkGitHub': 'GitHub',
+  'dialogs.linkReleases': 'Releases',
+  'dialogs.linkIssues': 'Issues',
+  'dialogs.linkDiscord': 'Discord',
+
+  // MCPServers transports
+  'mcp.transportHttp': 'HTTP / SSE',
+  'mcp.descStdio': 'Local process via stdin/stdout',
+  'mcp.descHttp': 'Remote server via HTTP (Streamable HTTP / SSE)',
+  'mcp.descWs': 'Remote server via WebSocket',
+
+  // IMManagement
+  'im.qrAuthHint': 'This platform uses QR code authentication. Save to start the pairing process.',
+  'im.noConfigurableFields': 'No configurable fields for this adapter.',
+
+  // PairingCodeDialog
+  'pairing.enterCode': 'Enter this code in your IM channel:',
+
+  // LanChatView
+  'lanchat.noContactsOnline': 'No contacts online',
+
+  // ContextPanel
+  'context.noImAdapters': 'No bound IM adapters',
+
+  // SettingsPage
+  'settings.maxTokensHint': 'Set to 0 or leave empty for auto-detection from model specs.',
+  'settings.oauthConnected': 'Connected',
+  'settings.oauthNotConnected': 'Not connected',
+  'settings.oauthLoggingIn': 'Logging in...',
+  'settings.login': 'Login',
+  'settings.failedFetchModels': 'Failed to fetch models',
+
+  // Sidebar context menu
+  'sidebar.menuOpen': 'Open',
+  'sidebar.menuRename': 'Rename',
+  'sidebar.menuPin': 'Pin',
+  'sidebar.menuUnpin': 'Unpin',
+  'sidebar.menuCopyId': 'Copy ID',
+  'sidebar.deleteConfirm': 'Delete this session? This cannot be undone.',
+  'sidebar.renamedToast': 'Session renamed',
+  'sidebar.copyFailedToast': 'Failed to copy',
+
+  // ChatView context menu
+  'chat.menuCopy': 'Copy',
+  'chat.menuEdit': 'Edit',
+  'chat.menuRegenerate': 'Regenerate',
+
+  // ChatView run stats
+  'chat.runStatDuration': 'Duration',
+  'chat.runStatTools': 'Tools',
+  'chat.runStatFiles': 'Files',
+  'chat.runStatErrors': 'Errors',
+  'chat.runStatTokens': 'Tokens',
+
+  // Dialogs links
+  'dialogs.github': 'GitHub',
+  'dialogs.releases': 'Releases',
+  'dialogs.issues': 'Issues',
+  'dialogs.discord': 'Discord',
+  'dialogs.checkUpdate': 'Check for Updates',
+  'dialogs.checking': 'Checking...',
+
+  // MCPServers oauth
+  'mcp.oauthOpening': 'Opening browser for MCP login...',
+  'mcp.oauthCompleteBrowser': 'Complete login in your browser, then return here.',
+  'mcp.oauthReconnecting': 'Login complete. Reconnecting MCP server...',
+
+  // AskUser
+  'askUser.notesPlaceholder': 'Additional notes (optional)',
 } as const
 
 export type TranslationKey = keyof typeof en

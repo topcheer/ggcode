@@ -240,10 +240,11 @@ function getDiffStats(toolName: string, input: string): DiffStats | null {
 }
 
 function RiskBadge({ level }: { level: RiskLevel }) {
+  const { t } = useTranslation()
   const config = {
-    high: { color: '#f87171', bg: 'rgba(220,38,38,0.15)', icon: Zap, label: 'High Risk' },
-    medium: { color: '#fbbf24', bg: 'rgba(251,191,36,0.15)', icon: AlertTriangle, label: 'Medium Risk' },
-    low: { color: '#4ade80', bg: 'rgba(34,197,94,0.15)', icon: Eye, label: 'Low Risk' },
+    high: { color: '#f87171', bg: 'rgba(220,38,38,0.15)', icon: Zap, label: t('approval.riskHigh') },
+    medium: { color: '#fbbf24', bg: 'rgba(251,191,36,0.15)', icon: AlertTriangle, label: t('approval.riskMedium') },
+    low: { color: '#4ade80', bg: 'rgba(34,197,94,0.15)', icon: Eye, label: t('approval.riskLow') },
   }[level]
   const Icon = config.icon
   return (
@@ -260,6 +261,7 @@ function RiskBadge({ level }: { level: RiskLevel }) {
 }
 
 function CopyButton({ getText }: { getText: () => string }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(getText()).then(() => {
@@ -270,7 +272,7 @@ function CopyButton({ getText }: { getText: () => string }) {
   return (
     <button
       onClick={handleCopy}
-      title="Copy to clipboard"
+      title={t('common.copyToClipboard')}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         padding: '3px 8px', borderRadius: 'var(--radius-sm)',
@@ -541,7 +543,7 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
   const diffStats = useMemo(() => getDiffStats(request.toolName, request.input), [request.toolName, request.input])
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Tool approval" tabIndex={-1} style={{
+    <div role="dialog" aria-modal="true" aria-label={t('common.toolApproval')} tabIndex={-1} style={{
       position: 'fixed', inset: 0,
       background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -621,9 +623,9 @@ export function ApprovalDialog({ request, onClose }: ApprovalDialogProps) {
             fontSize: 11, color: 'var(--text-tertiary)',
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
-            <span><kbd style={kbdStyle}>Esc</kbd> Deny</span>
-            <span><kbd style={kbdStyle}>Enter</kbd> Allow</span>
-            <span><kbd style={kbdStyle}>Shift+Enter</kbd> Always</span>
+            <span><kbd style={kbdStyle}>Esc</kbd> {t('approval.deny')}</span>
+            <span><kbd style={kbdStyle}>Enter</kbd> {t('approval.allow')}</span>
+            <span><kbd style={kbdStyle}>Shift+Enter</kbd> {t('approval.always')}</span>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button

@@ -29,8 +29,33 @@ func EstimateTokens(text string) int {
 	return ascii/4 + cjk*2/3 + 1
 }
 
-// stringsHasNonASCII checks if the string contains any byte >= 128.
-// Scans raw bytes rather than decoding runes, which is faster for the
+// EstimateTokensCalibrated uses calibrator ratios if available for a more
+// accurate estimate. Falls back to default ratios when calibrator is nil.
+func EstimateTokensCalibrated(text string, c *TokenCalibrator) int {
+	if c == nil {
+		return EstimateTokens(text)
+	}
+	asciiRatio := c.ASCIICharsPerToken()
+	cjkRatio := c.CJKCharsPerToken()
+
+	// Fast path: pure ASCII
+	if !stringsHasNonASCII(text) {
+		return int(float64(len(text))/asciiRatio) + 1
+	}
+	// Slow path: mixed ASCII/CJK
+	ascii := 0
+	cjk := 0
+	for _, r := range text {
+		if r > 127 {
+			cjk++
+		} else {
+			ascii++
+		}
+	}
+	return int(float64(ascii)/asciiRatio) + int(float64(cjk)/cjkRatio) + 1
+}
+
+// stringsHasNonASCII scans raw bytes rather than decoding runes, which is faster for the
 // common case where the text is pure ASCII and returns false immediately.
 func stringsHasNonASCII(s string) bool {
 	for i := 0; i < len(s); i++ {

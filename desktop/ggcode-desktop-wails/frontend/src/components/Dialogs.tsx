@@ -88,7 +88,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           />
 
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>GGCode Desktop</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>{t('dialogs.productName')}</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
               {version !== 'dev' ? `v${version}` : 'dev'}
             </div>
@@ -101,10 +101,10 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
           {/* Links */}
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
             {[
-              { label: 'GitHub', url: 'https://github.com/topcheer/ggcode' },
-              { label: 'Releases', url: 'https://github.com/topcheer/ggcode/releases' },
-              { label: 'Issues', url: 'https://github.com/topcheer/ggcode/issues' },
-              { label: 'Discord', url: 'https://discord.gg/F2v4mJmfG' },
+              { label: t('dialogs.github'), url: 'https://github.com/topcheer/ggcode' },
+              { label: t('dialogs.releases'), url: 'https://github.com/topcheer/ggcode/releases' },
+              { label: t('dialogs.issues'), url: 'https://github.com/topcheer/ggcode/issues' },
+              { label: t('dialogs.discord'), url: 'https://discord.gg/F2v4mJmfG' },
             ].map(link => (
               <button key={link.label} onClick={() => openLink(link.url)} style={{
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -131,8 +131,8 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
                 color: updateResult.hasUpdate ? 'var(--color-success)' : 'var(--text-secondary)',
               }}>
                 {updateResult.hasUpdate
-                  ? <>New version available: v{updateResult.latestVersion} <button onClick={() => openLink('https://github.com/topcheer/ggcode/releases')} style={{ background: 'none', border: 'none', color: 'var(--color-info)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}><Download size={11} /> Download</button></>
-                  : <><Check size={13} style={{ verticalAlign: 'middle' }} /> You're up to date (v{version})</>
+                  ? <>{t('dialogs.newVersion')}{updateResult.latestVersion} <button onClick={() => openLink('https://github.com/topcheer/ggcode/releases')} style={{ background: 'none', border: 'none', color: 'var(--color-info)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}><Download size={11} /> {t('dialogs.download')}</button></>
+                  : <><Check size={13} style={{ verticalAlign: 'middle' }} /> {t('dialogs.upToDate')}{version})</>
                 }
               </div>
             )}
@@ -151,7 +151,7 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
               display: 'flex', alignItems: 'center', gap: 6,
             }}>
               <RefreshCw size={13} style={{ animation: checking ? 'spin 1s linear infinite' : 'none' }} />
-              {checking ? 'Checking...' : 'Check for Updates'}
+              {checking ? t('dialogs.checking') : t('dialogs.checkUpdate')}
             </button>
           </div>
 

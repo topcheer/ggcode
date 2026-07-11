@@ -199,7 +199,7 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       )}
       {/* Mobile tunnel connected */}
       {mobileConnected && (
-        <span title="Mobile connected" aria-label="Mobile device connected" style={{
+        <span title={t('status.mobileConnected')} aria-label={t('status.mobileConnectedAria')} style={{
           display: 'flex', alignItems: 'center',
         }}>
           <Smartphone size={11} style={{ color: 'var(--color-primary)' }} />
@@ -207,8 +207,8 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
       )}
       <button
         onClick={onContextToggle}
-        title="Toggle context panel (⌘.)"
-        aria-label="Toggle context panel"
+        title={t('status.toggleContext')}
+        aria-label={t('status.toggleContext')}
         style={{
           background: 'none', border: 'none',
           color: 'var(--text-secondary)', cursor: 'pointer',

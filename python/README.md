@@ -59,6 +59,7 @@ GGCODE_INSTALL_VERSION=X.Y.Z ggcode
 
 ```bash
 brew tap topcheer/ggcode
+brew trust topcheer/ggcode
 brew install ggcode              # CLI
 brew install ggcode-desktop      # Desktop (Linux)
 brew install --cask ggcode-desktop  # Desktop (macOS DMG)

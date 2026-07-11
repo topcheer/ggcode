@@ -97,17 +97,27 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		} else {
 			transport = &http.Transport{}
 		}
-		origDial := transport.DialContext
-		transport.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, fmt.Errorf("invalid address: %w", err)
+
+		// When a proxy is configured (HTTP_PROXY/HTTPS_PROXY), the custom
+		// DialContext receives the proxy address (often localhost/internal)
+		// rather than the target host. Skip the DialContext override in that
+		// case so the proxy connection succeeds. SSRF protection is still
+		// enforced at URL level (line ~81) and redirect level (below).
+		proxyInUse := isProxyConfigured(transport, u)
+
+		if !proxyInUse {
+			origDial := transport.DialContext
+			transport.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, fmt.Errorf("invalid address: %w", err)
+				}
+				dialAddr, err := resolvePublicDialAddress(dialCtx, host, port, net.DefaultResolver.LookupIPAddr)
+				if err != nil {
+					return nil, err
+				}
+				return origDial(dialCtx, network, dialAddr)
 			}
-			dialAddr, err := resolvePublicDialAddress(dialCtx, host, port, net.DefaultResolver.LookupIPAddr)
-			if err != nil {
-				return nil, err
-			}
-			return origDial(dialCtx, network, dialAddr)
 		}
 		client.Transport = util.WrapTransport(transport)
 	} else {
@@ -205,6 +215,17 @@ func isPrivateIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// isProxyConfigured checks whether the transport's Proxy function (typically
+// http.ProxyFromEnvironment) would route the given URL through a proxy.
+func isProxyConfigured(transport *http.Transport, u *url.URL) bool {
+	if transport.Proxy == nil {
+		return false
+	}
+	proxyReq := &http.Request{URL: u, Header: make(http.Header)}
+	pURL, err := transport.Proxy(proxyReq)
+	return pURL != nil && err == nil
 }
 
 func resolvePublicDialAddress(ctx context.Context, host, port string, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {

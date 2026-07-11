@@ -61,7 +61,12 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 		// Continue — server may not support tools
 	} else {
 		// Register tools via adapter
-		adapter := mcp.NewAdapter(srv.Name, client, tools)
+		var adapter *mcp.Adapter
+		if srv.ReadOnly {
+			adapter = mcp.NewReadOnlyAdapter(srv.Name, client, tools)
+		} else {
+			adapter = mcp.NewAdapter(srv.Name, client, tools)
+		}
 		if err := adapter.RegisterTools(m.registry); err != nil {
 			debug.Log("acp", "failed to register tools from %q: %v", srv.Name, err)
 		}
