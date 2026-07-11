@@ -94,6 +94,10 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 		a.SetMetricHandler(r.metricCollector.Emit)
 		r.model.metricCollectorFlush = r.metricCollector.Flush
 	}
+	// Register callbacks so /clear and /sessions can release the old session
+	// lock, acquire a new one, and rebind the cron scheduler.
+	r.model.sessionLockSwitch = r.switchSessionLock
+	r.model.sessionCronSwitch = r.switchSessionCron
 	return r
 }
 
@@ -185,6 +189,37 @@ func (r *REPL) SetResumeID(id string) {
 // The REPL will release it on shutdown or restart.
 func (r *REPL) SetSessionLock(lock *session.SessionLock) {
 	r.sessionLock = lock
+}
+
+// switchSessionLock releases the current session lock and acquires a new one
+// for the given session ID. Called by Model.handleClearChat via callback.
+func (r *REPL) switchSessionLock(newSessionID string) {
+	// Acquire the new lock BEFORE releasing the old one. If acquisition fails
+	// (session locked by another instance), we keep the old lock rather than
+	// ending up with no lock at all.
+	var newLock *session.SessionLock
+	if storeDir, dirErr := session.DefaultDir(); dirErr == nil {
+		if lock, lockErr := session.TryAcquireSessionLock(storeDir, newSessionID); lockErr == nil && lock != nil && lock.Acquired() {
+			newLock = lock
+		} else {
+			debug.Log("repl", "switchSessionLock: could not acquire lock on session %s: %v", newSessionID, lockErr)
+		}
+	}
+	if newLock != nil {
+		if r.sessionLock != nil {
+			r.sessionLock.Release()
+		}
+		r.sessionLock = newLock
+		debug.Log("repl", "switchSessionLock: acquired lock on new session %s", newSessionID)
+	}
+}
+
+func (r *REPL) switchSessionCron(newSessionID string) {
+	if r.cronScheduler != nil {
+		sessionPath, legacyPath := agentruntime.CronStorePaths(newSessionID)
+		r.cronScheduler.SetSession(sessionPath, legacyPath, r.workingDir)
+		debug.Log("repl", "switchSessionCron: rebound cron scheduler to session %s", newSessionID)
+	}
 }
 
 // SetPreExecCleanup registers a cleanup function called before syscall.Exec

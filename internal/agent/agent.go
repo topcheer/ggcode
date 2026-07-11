@@ -42,48 +42,48 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider                     provider.Provider
-	tools                        *tool.Registry
-	contextManager               ctxpkg.ContextManager
-	maxIter                      int
-	policy                       permission.PermissionPolicy
-	onApproval                   ApprovalFunc
-	onUsage                      func(usage provider.TokenUsage)
-	onMetric                     func(metrics.MetricEvent)
-	onCheckpoint                 func(messages []provider.Message, tokenCount int)
-	onRunResult                  runResultHandler
-	hookConfig                   hooks.HookConfig
-	workingDir                   string
-	sessionID                    string // current session ID; determines todo file path
-	checkpoints                  *checkpoint.Manager
-	diffConfirm                  DiffConfirmFunc
-	onInterrupt                  interruptionHandler
-	projectMemory                map[string]struct{}
-	supportsVision               bool
-	precompact                   *precompactState
-	precompactCooldownUntil      time.Time // earliest next precompact; guarded by mu
-	shutdownCtx                  context.Context
-	shutdownCancel               context.CancelFunc  // cancels on Close()
-	probeKey                     string              // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal                string              // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked           bool                // true after the goal-collection instruction has been injected
-	autopilotGoalSet             bool                // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotGoalCheckedThisTurn bool                // prevents infinite goal-check loops within a single idle turn
-	reflectionFunc               ReflectionFunc      // called after each run with accumulated stats
-	loopDetector                 loopDetector        // tracks consecutive identical tool calls to detect stuck loops
-	errorClassifier              *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
-	overseer                     *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
-	repetition                   *repetitionTracker  // semantic-level repetition detection for failed edit clusters
-	speculator                   *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
-	toolMemo                     *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
-	confidence                   *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
-	budgetGuard                  *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
-	postEditVerify               postEditVerifyState // tracks source-code edits to inject periodic verification hints
-	systemPromptInjector         func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt             string              // the fully built static system prompt; used as reset base for dynamic injection
-	onVerifyProgress             func(text string)   // called during async verification (status updates)
-	onVerifyResult               func(VerifyResult)  // called when async verification completes
-	mu                           sync.RWMutex
+	provider                 provider.Provider
+	tools                    *tool.Registry
+	contextManager           ctxpkg.ContextManager
+	maxIter                  int
+	policy                   permission.PermissionPolicy
+	onApproval               ApprovalFunc
+	onUsage                  func(usage provider.TokenUsage)
+	onMetric                 func(metrics.MetricEvent)
+	onCheckpoint             func(messages []provider.Message, tokenCount int)
+	onRunResult              runResultHandler
+	hookConfig               hooks.HookConfig
+	workingDir               string
+	sessionID                string // current session ID; determines todo file path
+	checkpoints              *checkpoint.Manager
+	diffConfirm              DiffConfirmFunc
+	onInterrupt              interruptionHandler
+	projectMemory            map[string]struct{}
+	supportsVision           bool
+	precompact               *precompactState
+	precompactCooldownUntil  time.Time // earliest next precompact; guarded by mu
+	shutdownCtx              context.Context
+	shutdownCancel           context.CancelFunc  // cancels on Close()
+	probeKey                 string              // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal            string              // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked       bool                // true after the goal-collection instruction has been injected
+	autopilotGoalSet         bool                // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotStrategistCount int                 // number of strategist calls this run (safety valve)
+	reflectionFunc           ReflectionFunc      // called after each run with accumulated stats
+	loopDetector             loopDetector        // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier          *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	overseer                 *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition               *repetitionTracker  // semantic-level repetition detection for failed edit clusters
+	speculator               *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                 *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
+	confidence               *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
+	budgetGuard              *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
+	postEditVerify           postEditVerifyState // tracks source-code edits to inject periodic verification hints
+	systemPromptInjector     func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt         string              // the fully built static system prompt; used as reset base for dynamic injection
+	onVerifyProgress         func(text string)   // called during async verification (status updates)
+	onVerifyResult           func(VerifyResult)  // called when async verification completes
+	mu                       sync.RWMutex
 }
 
 type providerAwareContextManager interface {
@@ -708,11 +708,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	reactiveCompactRetries := 0
-	idleAutopilotContinuations := 0
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
 	contextWarningInjected := false
 	todoCheckCount := 0
+
+	a.autopilotStrategistCount = 0
 
 	// Reset monitoring systems once at run start, NOT inside the iteration
 	// loop. These systems accumulate state across iterations within a run.
@@ -802,13 +803,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
-				idleAutopilotContinuations = 0
 				reactiveCompactRetries = 0
 				continue
 			}
 			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
 				runStats.recordCompaction()
-				idleAutopilotContinuations = 0
 				continue
 			}
 			// User cancellation: return the original error (which wraps
@@ -874,8 +873,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.contextManager.Add(resp.Message)
 
 			// Autopilot Goal achievement check: if the LLM declares the goal
-			// complete, clear the goal and stop. This runs before other
-			// autopilot heuristics so that GOAL_COMPLETE always wins.
+			// complete, clear the goal and stop.
 			if a.isAutopilotGoalComplete(textBuf) {
 				debug.Log("agent", "Iteration %d: autopilot goal declared complete", i+1)
 				a.clearAutopilotGoal()
@@ -883,64 +881,38 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 
 			if a.injectPendingInterruptions() {
-				idleAutopilotContinuations = 0
 				continue
 			}
-			if a.shouldAutopilotAskUser(textBuf) {
-				idleAutopilotContinuations++
-				if shouldTriggerAutopilotLoopGuard(textBuf, idleAutopilotContinuations) {
-					if err := a.forceCompactAndPause(ctx, onEvent); err != nil {
-						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("autopilot loop guard failed: %w", err)})
-						return err
-					}
+
+			// Autopilot strategist: when in autopilot mode with a confirmed
+			// goal, call an independent LLM to analyze the full conversation
+			// context and decide what the agent should do next. This replaces
+			// the old deterministic text-pattern-matching autopilot logic.
+			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
+				a.autopilotStrategistCount++
+				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d)", i+1, a.autopilotStrategistCount)
+
+				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
+				if sErr != nil {
+					debug.Log("agent", "autopilot strategist failed: %v", sErr)
+					// Fall through to normal return — can't drive autonomously.
+				} else if result.Complete {
+					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
+					a.clearAutopilotGoal()
 					return nil
+				} else if result.Guidance != "" {
+					debug.Log("agent", "Iteration %d: strategist injecting guidance (%d chars)", i+1, len(result.Guidance))
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: result.Guidance,
+						}},
+					})
+					continue
 				}
-				debug.Log("agent", "Iteration %d: autopilot escalating external blocker to ask_user", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: autopilotAskUserInstruction(textBuf, a.getAutopilotGoal()),
-					}},
-				})
-				continue
 			}
-			if a.shouldAutopilotContinue(textBuf) {
-				idleAutopilotContinuations++
-				if shouldTriggerAutopilotLoopGuard(textBuf, idleAutopilotContinuations) {
-					if err := a.forceCompactAndPause(ctx, onEvent); err != nil {
-						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("autopilot loop guard failed: %w", err)})
-						return err
-					}
-					return nil
-				}
-				debug.Log("agent", "Iteration %d: autopilot continuing after assistant asked for input", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: autopilotContinueInstruction(textBuf, a.getAutopilotGoal()),
-					}},
-				})
-				continue
-			}
-			// If we are in autopilot mode and have a goal but the LLM stopped
-			// without tool calls and without explicit completion language,
-			// inject a goal check prompt to nudge it to either continue or
-			// declare done.
-			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.autopilotGoalCheckedThisTurn {
-				a.autopilotGoalCheckedThisTurn = true
-				debug.Log("agent", "Iteration %d: autopilot injecting goal check", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: autopilotGoalCheckInstruction(a.getAutopilotGoal(), textBuf),
-					}},
-				})
-				continue
-			}
-			idleAutopilotContinuations = 0
+
 			// Check for incomplete todos before finishing. If the agent
 			// created todos but didn't complete them, inject a reminder
 			// instead of silently finishing. Max 2 reminders to avoid loops.
@@ -963,10 +935,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
-		idleAutopilotContinuations = 0
-		// Reset the per-turn goal check flag when tool calls are present
-		// (the LLM is actively working, no need for a goal check nudge).
-		a.autopilotGoalCheckedThisTurn = false
 
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 

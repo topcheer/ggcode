@@ -81,5 +81,10 @@
   "approval.allow": "Allow",
   "approval.always_allow": "Always Allow",
   "common.cancel": "Cancel",
-  "common.clear": "Clear"
+  "common.clear": "Clear",
+  "connect.button_connect": "Connect",
+  "connect.live_badge": "LIVE",
+  "chat.live": "LIVE",
+  "chat.gallery": "Gallery",
+  "chat.camera": "Camera"
 }

@@ -891,6 +891,8 @@ func enCatalog(key string) string {
 		return "Resumed session: %s — %s (%d messages)\n\n"
 	case "session.resume_failed":
 		return "Failed to resume session %s: %v\n\n"
+	case "session.switch_blocked_running":
+		return "Cannot switch sessions while agent is running. Wait for the current run to finish or cancel it first.\n\n"
 	case "session.resume_fallback":
 		return "Starting new session instead.\n\n"
 	case "session.export_failed":

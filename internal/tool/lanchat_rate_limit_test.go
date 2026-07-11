@@ -9,54 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
 
-// TestAgentRateLimiter_BroadcastCooldown verifies that a second broadcast
-// within the cooldown window is rejected, and allowed after expiry.
-func TestAgentRateLimiter_BroadcastCooldown(t *testing.T) {
-	rl := newAgentRateLimiter()
-
-	// First broadcast should be allowed
-	if msg := rl.checkBroadcast(); msg != "" {
-		t.Fatalf("first broadcast should be allowed, got: %s", msg)
-	}
-	rl.recordBroadcast()
-
-	// Second broadcast immediately should be rate-limited
-	msg := rl.checkBroadcast()
-	if msg == "" {
-		t.Fatal("second broadcast within cooldown should be rate-limited")
-	}
-	if !strings.Contains(msg, "rate-limited") {
-		t.Errorf("expected 'rate-limited' in message, got: %s", msg)
-	}
-	if !strings.Contains(msg, "Cooldown") {
-		t.Errorf("expected 'Cooldown' in message, got: %s", msg)
-	}
-
-	// Simulate cooldown expiry
-	rl.mu.Lock()
-	rl.broadcastLastSent = time.Now().Add(-(agentBroadcastCooldown + time.Second))
-	rl.mu.Unlock()
-
-	// After expiry, should be allowed
-	if msg := rl.checkBroadcast(); msg != "" {
-		t.Fatalf("broadcast after cooldown should be allowed, got: %s", msg)
-	}
-}
-
-// TestAgentRateLimiter_DifferentBroadcastTypesShareSlot verifies that
-// broadcast, broadcast_all, and send_team all share the same cooldown slot.
-func TestAgentRateLimiter_DifferentBroadcastTypesShareSlot(t *testing.T) {
-	rl := newAgentRateLimiter()
-
-	// Record a broadcast (simulating doBroadcastAll calling recordBroadcast)
-	rl.recordBroadcast()
-
-	// Any subsequent broadcast check should be rate-limited
-	if msg := rl.checkBroadcast(); msg == "" {
-		t.Fatal("broadcast cooldown should be shared across all broadcast types")
-	}
-}
-
 // TestAgentRateLimiter_DMCooldownPerRecipient verifies that DMs to different
 // recipients are independent, but multiple DMs to the same recipient are limited.
 func TestAgentRateLimiter_DMCooldownPerRecipient(t *testing.T) {
@@ -202,27 +154,32 @@ func TestLanChatSendAsHumanNotRateLimited(t *testing.T) {
 	}
 }
 
-// TestLanChatBroadcastRateLimited verifies that broadcast_all rate limiting works.
+// TestLanChatBroadcastRateLimited verifies that broadcast_all uses per-peer
+// DM rate limiting: after DM'ing a peer, a broadcast to that peer is rate-limited.
 func TestLanChatBroadcastRateLimited(t *testing.T) {
-	tool, _ := newTestLanChatTool(t)
+	tool, hub := newTestLanChatTool(t)
 	ctx := context.Background()
 
-	// First broadcast as agent — should succeed
-	r1, err := tool.doBroadcastAll(ctx, "announcement", true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if r1.IsError {
-		t.Fatalf("first broadcast should succeed, got: %s", r1.Content)
-	}
+	// Add an online participant
+	hub.HandlePresence(lanchat.Participant{
+		NodeID:    "node-bob",
+		HumanNick: "bob_dev",
+		AgentNick: "bob_dev_agent",
+		Endpoint:  "http://localhost:2",
+		Role:      "dev",
+		Online:    true,
+	})
 
-	// Second broadcast — should be rate-limited
-	r2, err := tool.doBroadcastAll(ctx, "another announcement", true)
+	// Pre-populate: simulate that we already DM'd node-bob recently
+	tool.rateLimiter.recordDM(hub.NodeID(), "node-bob")
+
+	// Broadcast should be rate-limited (per-peer DM cooldown for node-bob)
+	r2, err := tool.doBroadcastAll(ctx, "announcement", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !r2.IsError {
-		t.Fatal("second broadcast within cooldown should be rate-limited")
+		t.Fatal("broadcast within DM cooldown should be rate-limited")
 	}
 	if !strings.Contains(r2.Content, "rate-limited") {
 		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)
@@ -232,15 +189,26 @@ func TestLanChatBroadcastRateLimited(t *testing.T) {
 // TestLanChatBroadcastAsHumanNotRateLimited verifies that human broadcasts
 // are never rate-limited.
 func TestLanChatBroadcastAsHumanNotRateLimited(t *testing.T) {
-	tool, _ := newTestLanChatTool(t)
+	tool, hub := newTestLanChatTool(t)
 	ctx := context.Background()
+
+	// Add an online participant so broadcast has a target
+	hub.HandlePresence(lanchat.Participant{
+		NodeID:    "node-bob",
+		HumanNick: "bob_dev",
+		AgentNick: "bob_dev_agent",
+		Endpoint:  "http://localhost:2",
+		Online:    true,
+	})
 
 	for i := 0; i < 3; i++ {
 		r, err := tool.doBroadcastAll(ctx, "msg", false)
 		if err != nil {
 			t.Fatalf("unexpected error on msg %d: %v", i, err)
 		}
-		if r.IsError {
+		// Transport failures are expected (no real network in test),
+		// but rate-limiting must never apply to human broadcasts
+		if r.IsError && strings.Contains(r.Content, "rate-limited") {
 			t.Errorf("human broadcast %d should not be rate-limited: %s", i, r.Content)
 		}
 	}
@@ -313,7 +281,8 @@ func TestLanChatSendPartialRateLimited(t *testing.T) {
 	}
 }
 
-// TestLanChatSendTeamRateLimited verifies that send_team shares the broadcast cooldown.
+// TestLanChatSendTeamRateLimited verifies that send_team uses per-peer DM
+// rate limiting (not a shared broadcast cooldown).
 func TestLanChatSendTeamRateLimited(t *testing.T) {
 	tool, hub := newTestLanChatTool(t)
 	ctx := context.Background()
@@ -330,16 +299,16 @@ func TestLanChatSendTeamRateLimited(t *testing.T) {
 		Online:    true,
 	})
 
-	// Pre-populate: simulate that we already broadcast recently
-	tool.rateLimiter.recordBroadcast()
+	// Pre-populate: simulate that we already DM'd node-bob recently
+	tool.rateLimiter.recordDM(hub.NodeID(), "node-bob")
 
-	// send_team should be rate-limited (shared broadcast cooldown)
+	// send_team should be rate-limited (per-peer DM cooldown for node-bob)
 	r2, err := tool.doSendTeam(ctx, "team msg 2", "myteam", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !r2.IsError {
-		t.Fatal("send_team should be rate-limited by broadcast cooldown")
+		t.Fatal("send_team should be rate-limited by per-peer DM cooldown")
 	}
 	if !strings.Contains(r2.Content, "rate-limited") {
 		t.Errorf("expected 'rate-limited' in error, got: %s", r2.Content)

@@ -343,7 +343,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text('Connect'),
+                      : Text(t('connect.button_connect')),
                 ),
               ),
 
@@ -538,7 +538,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                                             BorderRadius.circular(4),
                                       ),
                                       child: Text(
-                                        'LIVE',
+                                        t('connect.live_badge'),
                                         style: TextStyle(
                                           color: AppColors.success,
                                           fontSize: 10,

@@ -1,14 +1,61 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ─── Language Provider ───────────────────────────────
 
 const defaultLanguage = 'en';
-const supportedLanguages = ['en', 'zh-CN'];
+const languagePreferenceKey = 'language_preference';
+const supportedLanguages = [
+  'en',
+  'zh-CN',
+  'zh-TW',
+  'ja',
+  'ko',
+  'es',
+  'fr',
+  'de',
+  'ru',
+  'pt',
+];
 
-String normalizeLanguage(String lang) =>
-    supportedLanguages.contains(lang) ? lang : defaultLanguage;
+/// Map a raw locale string (e.g. "zh_CN", "pt-BR", "ja") to a supported language.
+/// Falls back to [defaultLanguage] if no match.
+String normalizeLanguage(String lang) {
+  if (supportedLanguages.contains(lang)) return lang;
+  // Convert underscores to hyphens ("zh_CN" → "zh-CN")
+  final normalized = lang.replaceAll('_', '-');
+  if (supportedLanguages.contains(normalized)) return normalized;
+  // Try base language (e.g. "zh" → "zh-CN", "pt-BR" → "pt")
+  if (normalized.contains('-')) {
+    final base = normalized.split('-')[0];
+    // Special handling for Chinese variants
+    if (base == 'zh') {
+      final region = normalized.split('-').last.toLowerCase();
+      if (['tw', 'hk', 'mo', 'hant'].contains(region)) return 'zh-TW';
+      return 'zh-CN';
+    }
+    for (final l in supportedLanguages) {
+      if (l == base) return l;
+    }
+  } else if (normalized.length == 2) {
+    for (final l in supportedLanguages) {
+      if (l.startsWith('$normalized-')) return l;
+    }
+  }
+  return defaultLanguage;
+}
+
+/// Detect system locale and normalize to a supported language.
+String detectSystemLanguage() {
+  try {
+    return normalizeLanguage(Platform.localeName);
+  } catch (_) {
+    return defaultLanguage;
+  }
+}
 
 class _LanguageNotifier extends Notifier<String> {
   @override
@@ -56,4 +103,35 @@ String t(String key, {Map<String, String>? args}) {
     });
   }
   return value;
+}
+
+// ─── Language Persistence ────────────────────────────
+
+/// On startup, load saved language preference.
+/// If none saved (or 'auto'), detect from OS locale.
+/// Desktop sync always overrides via [applyLanguageFromDesktop].
+Future<String> loadLanguagePreference(WidgetRef ref) async {
+  final prefs = await SharedPreferences.getInstance();
+  final stored = prefs.getString(languagePreferenceKey);
+
+  String lang;
+  if (stored != null && stored.isNotEmpty && stored != 'auto') {
+    lang = stored;
+  } else {
+    lang = detectSystemLanguage();
+  }
+
+  final normalized = normalizeLanguage(lang);
+  ref.read(languageProvider.notifier).setLanguage(normalized);
+  await loadTranslations(normalized);
+  return normalized;
+}
+
+/// User manually picked a language — persist and apply.
+Future<void> persistLanguageChoice(WidgetRef ref, String lang) async {
+  final normalized = normalizeLanguage(lang);
+  ref.read(languageProvider.notifier).setLanguage(normalized);
+  await loadTranslations(normalized);
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(languagePreferenceKey, normalized);
 }

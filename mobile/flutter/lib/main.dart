@@ -15,6 +15,7 @@ const bool _demoMode = bool.fromEnvironment('DEMO', defaultValue: false);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // OS locale detection happens after runApp via loadLanguagePreference
   await loadTranslations(defaultLanguage);
   runApp(const ProviderScope(child: GGCodeApp()));
 }
@@ -58,6 +59,8 @@ class _AppShellState extends ConsumerState<AppShell>
         () => ref.read(workspaceCacheProvider.notifier).initialize());
     Future.microtask(
         () => ref.read(themeProvider.notifier).loadThemePreference());
+    Future.microtask(
+        () => loadLanguagePreference(ref));
 
     // Demo mode: inject sample messages for screenshots
     if (_demoMode) {

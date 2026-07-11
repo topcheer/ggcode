@@ -1077,31 +1077,24 @@ func TestRunStreamCancellationStopsRemainingToolCalls(t *testing.T) {
 }
 
 func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
+	// With the strategist-based autopilot, agent needs a confirmed goal.
+	// Flow: stream→question | Chat strategist→guidance | stream→fixed | Chat strategist→GOAL_ACHIEVED
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("Should I inspect the tests first or jump straight into the implementation?")},
-				},
-			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and fixed the root cause.")},
-				},
-			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("Completed the implementation after inspecting the tests first.")},
-				},
-			},
+			// [0] ChatStream call 1: agent asks a question (no tool calls)
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Should I inspect the tests first or jump straight into the implementation?")}}},
+			// [1] Chat call 1 (strategist): tells agent to inspect tests
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Start by inspecting the tests, then fix the root cause.")}}},
+			// [2] ChatStream call 2: agent reports completion
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and fixed the root cause.")}}},
+			// [3] Chat call 2 (strategist): goal achieved
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nThe agent fixed the root cause.")}}},
 		},
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 3)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("debug this issue")
 
 	var events []provider.StreamEvent
 	if err := a.RunStream(context.Background(), "debug this", func(event provider.StreamEvent) {
@@ -1110,18 +1103,11 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.streamCalls != 3 {
-		t.Fatalf("expected autopilot to continue until an explicit completion turn, got %d", mp.streamCalls)
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected 2 stream calls (question + completion), got %d", mp.streamCalls)
 	}
-	if got := a.Messages(); len(got) < 5 {
-		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
-	}
-	lastUser := a.Messages()[3]
-	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot:") {
-		t.Fatalf("expected synthetic autopilot continuation message, got %#v", lastUser)
-	}
-	if len(events) < 5 || events[len(events)-2].Type != provider.StreamEventText || events[len(events)-2].Text != "Completed the implementation after inspecting the tests first." {
-		t.Fatalf("expected explicit completion text after autopilot continuation, got %#v", events)
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected 2 strategist Chat calls, got %d", mp.chatCalls)
 	}
 }
 
@@ -1241,36 +1227,33 @@ func TestRunStreamInterruptsStreamingTurnForReplan(t *testing.T) {
 }
 
 func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
+	// Strategist-based autopilot: agent needs goal, strategist drives continuation.
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("I fixed the obvious lint issue and identified two more hotspots to optimize next.")},
-				},
-			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("Completed the optimization pass and updated the related code paths.")},
-				},
-			},
+			// [0] stream 1: partial progress
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I fixed the obvious lint issue and identified two more hotspots to optimize next.")}}},
+			// [1] Chat strategist: continue
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Continue optimizing the remaining hotspots.")}}},
+			// [2] stream 2: completion
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the optimization pass and updated the related code paths.")}}},
+			// [3] Chat strategist: goal achieved
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nOptimization complete.")}}},
 		},
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 3)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("optimize the project")
 
 	if err := a.RunStream(context.Background(), "optimize the project", func(event provider.StreamEvent) {}); err != nil {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
 	if mp.streamCalls != 2 {
-		t.Fatalf("expected autopilot to continue after partial progress update, got %d stream calls", mp.streamCalls)
+		t.Fatalf("expected 2 stream calls, got %d", mp.streamCalls)
 	}
-	lastUser := a.Messages()[3]
-	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "continue working") {
-		t.Fatalf("expected autopilot continuation message, got %#v", lastUser)
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected 2 strategist Chat calls, got %d", mp.chatCalls)
 	}
 }
 
@@ -1305,6 +1288,9 @@ func TestRunStreamAutopilotStopsOnExplicitCompletion(t *testing.T) {
 }
 
 func TestRunStreamAutopilotEscalatesExternalBlockerToAskUser(t *testing.T) {
+	// The deterministic blocker escalation is replaced by the strategist.
+	// Skip: strategist-based escalation depends on LLM reasoning, not deterministic patterns.
+	t.Skip("blocker escalation now handled by strategist LLM, not deterministic text matching")
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
 			{
@@ -1547,6 +1533,8 @@ func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
 }
 
 func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
+	// The loop guard mechanism is removed — replaced by the strategist.
+	t.Skip("loop guard removed, strategist replaces deterministic autopilot loop detection")
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
 			Message: provider.Message{
@@ -1663,25 +1651,23 @@ func TestRunStreamAutoModeNeverUsesAutopilotContinuation(t *testing.T) {
 }
 
 func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
+	// With strategist-based autopilot, zero max iterations still allows continuation.
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("I fixed one part and still need to update the remaining UI pieces.")},
-				},
-			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock("Completed the requested UI updates.")},
-				},
-			},
+			// [0] stream 1
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("I fixed one part and still need to update the remaining UI pieces.")}}},
+			// [1] Chat strategist: continue
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Continue updating the remaining UI pieces.")}}},
+			// [2] stream 2
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("Completed the requested UI updates.")}}},
+			// [3] Chat strategist: goal achieved
+			{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("GOAL_ACHIEVED\nUI updates complete.")}}},
 		},
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 0)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.SetAutopilotGoal("refactor the UI")
 
 	if err := a.RunStream(context.Background(), "refactor the UI", func(event provider.StreamEvent) {}); err != nil {
 		t.Fatalf("RunStream failed: %v", err)

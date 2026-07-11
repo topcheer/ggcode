@@ -263,7 +263,7 @@ class _InputBarState extends ConsumerState<InputBar>
           children: [
             ListTile(
               leading: Icon(Icons.photo_library, color: AppColors.accent),
-              title: Text('Gallery'),
+              title: Text(t('chat.gallery')),
               onTap: () {
                 Navigator.pop(context);
                 _pickImage(ImageSource.gallery);
@@ -271,7 +271,7 @@ class _InputBarState extends ConsumerState<InputBar>
             ),
             ListTile(
               leading: Icon(Icons.camera_alt, color: AppColors.accent),
-              title: Text('Camera'),
+              title: Text(t('chat.camera')),
               onTap: () {
                 Navigator.pop(context);
                 _pickImage(ImageSource.camera);

@@ -899,6 +899,8 @@ func zhCatalog(key string) string {
 		return "已恢复会话：%s — %s（%d 条消息）\n\n"
 	case "session.resume_failed":
 		return "恢复会话 %s 失败：%v\n\n"
+	case "session.switch_blocked_running":
+		return "无法在 agent 运行时切换会话。请等待当前运行完成或先取消。\n\n"
 	case "session.resume_fallback":
 		return "将改为创建新会话。\n\n"
 	case "session.export_failed":

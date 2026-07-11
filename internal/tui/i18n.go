@@ -80,6 +80,11 @@ func lookupModuleCatalog(lang Language, key string) (string, bool) {
 		if ok {
 			return v, true
 		}
+	case LangZhTW:
+		v, ok := zhModuleCatalogs[key] // reuse zh-CN module catalogs
+		if ok {
+			return v, true
+		}
 	}
 	v, ok := enModuleCatalogs[key]
 	return v, ok
@@ -98,6 +103,7 @@ const (
 	LangRu      Language = "ru"
 	LangPt      Language = "pt"
 	LangVi      Language = "vi"
+	LangZhTW    Language = "zh-TW"
 )
 
 func normalizeLanguage(s string) Language {
@@ -120,6 +126,8 @@ func normalizeLanguage(s string) Language {
 		return LangPt
 	case "vi", "vi-vn", "vietnamese":
 		return LangVi
+	case "zh-tw", "zh-hant", "zh_hant", "zh-hk", "zh-mo", "tw":
+		return LangZhTW
 	default:
 		return LangEnglish
 	}
@@ -194,6 +202,8 @@ func (m Model) languageLabel() string {
 		return "Português"
 	case LangVi:
 		return "Tiếng Việt"
+	case LangZhTW:
+		return "繁體中文"
 	default:
 		return "English"
 	}
@@ -202,25 +212,27 @@ func (m Model) languageLabel() string {
 func supportedLanguageUsage(lang Language) string {
 	switch lang {
 	case LangZhCN:
-		return "支持: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "支持: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangJa:
-		return "対応: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "対応: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangKo:
-		return "지원: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "지원: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangEs:
-		return "Soportados: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Soportados: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangFr:
-		return "Supportés: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Supportés: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangDe:
-		return "Unterstützt: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Unterstützt: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangRu:
-		return "Поддерживаются: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Поддерживаются: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangPt:
-		return "Suportados: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Suportados: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	case LangVi:
-		return "Hỗ trợ: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Hỗ trợ: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
+	case LangZhTW:
+		return "支援: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	default:
-		return "Supported: en, zh-CN, ja, ko, es, fr, de, ru, pt, vi"
+		return "Supported: en, zh-CN, zh-TW, ja, ko, es, fr, de, ru, pt, vi"
 	}
 }
 
@@ -244,6 +256,8 @@ func languageSwitchLabel(lang Language) string {
 		return "Mudar idioma"
 	case LangVi:
 		return "Đổi ngôn ngữ"
+	case LangZhTW:
+		return "切換介面語言"
 	default:
 		return "Switch interface language"
 	}
@@ -261,6 +275,7 @@ func languageOptionsFor(lang Language) []languageOption {
 		{label: "Русский", shortcut: "7", lang: LangRu},
 		{label: "Português", shortcut: "8", lang: LangPt},
 		{label: "Tiếng Việt", shortcut: "9", lang: LangVi},
+		{label: "繁體中文", shortcut: "t", lang: LangZhTW},
 	}
 	// Move current language to top
 	result := make([]languageOption, 0, len(all))
@@ -443,6 +458,8 @@ func tr(lang Language, key string, args ...any) string {
 		msg = ptCatalog(key)
 	case LangVi:
 		msg = viCatalog(key)
+	case LangZhTW:
+		msg = zhCatalog(key) // reuse zh-CN translations
 	default:
 		msg = enCatalog(key)
 	}

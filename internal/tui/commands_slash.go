@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -40,20 +41,87 @@ func (m *Model) handleClearChat() {
 	if m.sessionStore != nil {
 		m.sessionStore.Save(ses)
 	}
-	m.SetSession(ses, m.sessionStore)
 
-	// Clear agent conversation state.
-	if m.agent != nil {
-		m.agent.Clear()
-	}
-
-	// Clear local view.
-	m.resetConversationView()
-
-	// Notify mobile client.
-	m.publishTunnelSnapshotForCurrentSession(true)
+	// Switch agent, view, lock, cron, and tunnel to the new session.
+	m.switchToSession(ses, true)
 
 	m.chatWriteSystem(nextSystemID(), m.t("session.new", ses.ID))
+}
+
+// switchToSession is the shared helper for all session-switching paths
+// (/clear, /sessions resume, /branch). It handles:
+//   - Resetting view state (streaming buffers, autocomplete, spinner)
+//   - Clearing and restoring agent context (via RestoreSessionIntoAgent)
+//   - Updating session store and persisted message count
+//   - Releasing old session lock and acquiring new one
+//   - Rebinding cron scheduler to the new session
+//   - Restoring session-scoped permission mode
+//   - Restoring session-scoped sidebar visibility
+//   - Notifying connected mobile clients
+//
+// For new sessions (isNew=true), permission mode is set to the global default
+// instead of restored from session metadata.
+func (m *Model) switchToSession(ses *session.Session, isNew bool) {
+	if ses == nil {
+		return
+	}
+
+	// Reset view state so stale streaming/autocomplete state doesn't leak.
+	m.resetConversationView()
+
+	// Clear and restore agent context.
+	if m.agent != nil {
+		m.agent.Clear()
+		agentruntime.RestoreSessionIntoAgent(m.agent, ses)
+	}
+
+	m.SetSession(ses, m.sessionStore)
+
+	// Release old session lock and acquire new one.
+	if m.sessionLockSwitch != nil {
+		m.sessionLockSwitch(ses.ID)
+	}
+	// Rebind cron scheduler to the new session's store path.
+	if m.sessionCronSwitch != nil {
+		m.sessionCronSwitch(ses.ID)
+	}
+
+	// Restore session-scoped state.
+	if isNew {
+		// New session inherits global default permission mode.
+		if m.config != nil {
+			globalMode := permission.ParsePermissionMode(m.config.DefaultMode)
+			m.mode = globalMode
+		}
+	} else {
+		// Resumed session restores its saved permission mode.
+		if ses.PermissionMode != "" {
+			sessionMode := permission.ParsePermissionMode(ses.PermissionMode)
+			if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
+				cp.SetMode(sessionMode)
+			}
+			m.mode = sessionMode
+		}
+		// Restore session-scoped sidebar visibility (if set).
+		if ses.SidebarVisible != nil {
+			m.sidebarVisible = *ses.SidebarVisible
+		}
+	}
+
+	m.rebuildConversationFromMessages(ses.Messages)
+
+	// Refresh cached git branch — sessions from other workspaces may have
+	// different active branches.
+	m.refreshCachedGitBranch()
+
+	if !isNew {
+		// Only restore input history for resumed sessions (new sessions
+		// start with empty history so applyAutoComplete can add commands).
+		m.restoreHistoryFromMessages(ses.Messages)
+	}
+
+	// Notify mobile client of session switch.
+	m.publishTunnelSnapshotForCurrentSession(true)
 }
 
 // handleUnshare stops the active tunnel/sharing session.

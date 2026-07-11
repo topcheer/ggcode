@@ -3,6 +3,7 @@
 // TODO: implement with @ohos.scankit when native plugin is available.
 
 import 'package:flutter/material.dart';
+import 'l10n/app_localizations.dart';
 
 /// Builds a manual URL input instead of a QR scanner on ohos.
 Widget buildQrScanner({
@@ -36,7 +37,7 @@ Widget buildQrScanner({
             final value = controller.text.trim();
             if (value.isNotEmpty) onDetect(value);
           },
-          child: const Text('Connect'),
+          child: Text(t('connect.button_connect')),
         ),
       ],
     ),

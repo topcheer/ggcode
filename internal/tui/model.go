@@ -283,6 +283,15 @@ type Model struct {
 	activeAgentRunID      int
 	activeShellRunID      int
 	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd
+	// sessionLockSwitch is called when /clear or /sessions switches sessions.
+	// The REPL registers this callback to release the old session lock and
+	// acquire a new one, preventing lock leakage and enabling concurrent
+	// instance auto-load to work correctly.
+	sessionLockSwitch func(newSessionID string)
+	// sessionCronSwitch is called when /clear or /sessions switches sessions.
+	// The REPL registers this callback to rebind the cron scheduler to the
+	// new session's store path, so cron jobs persist to the correct session.
+	sessionCronSwitch     func(newSessionID string)
 	harnessRunProject     *harness.Project
 	harnessRunGoal        string
 	harnessRunTaskID      string
@@ -816,6 +825,10 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	if m.sessionStore != nil {
 		_ = m.sessionStore.AppendMetaToDisk(m.session)
 	}
+	// Probe context window for the restored model/endpoint. Different sessions
+	// may use different models with different context window sizes.
+	m.startContextProbe()
+
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()

@@ -401,8 +401,8 @@ func TestLangCommandWithoutArgsOpensSelector(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected /lang to open selector synchronously")
 	}
-	if len(m.langOptions) != 10 {
-		t.Fatalf("expected 10 language options, got %d", len(m.langOptions))
+	if len(m.langOptions) != 11 {
+		t.Fatalf("expected 11 language options, got %d", len(m.langOptions))
 	}
 	if m.langOptions[m.langCursor].lang != LangEnglish {
 		t.Fatalf("expected current language to be preselected, got %s", m.langOptions[m.langCursor].lang)
@@ -497,7 +497,7 @@ func TestSetConfigFirstRunOpensLanguageSelector(t *testing.T) {
 	if !m.languagePromptRequired {
 		t.Fatal("expected first-run language prompt to be required")
 	}
-	if len(m.langOptions) != 10 {
+	if len(m.langOptions) != 11 {
 		t.Fatalf("expected first-run language selector to open, got %d options", len(m.langOptions))
 	}
 	panel := m.renderContextPanel()

@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/util"
 	"github.com/topcheer/ggcode/internal/version"
@@ -64,15 +65,24 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 	if ses == nil {
 		return
 	}
-	if m.agent != nil {
-		m.agent.Clear()
-		for _, msg := range ses.Messages {
-			m.agent.AddMessage(msg)
-		}
+
+	// Guard: don't switch sessions while agent is running. Clearing the agent
+	// context mid-run would cause undefined behavior.
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("session.switch_blocked_running"))
+		return
 	}
-	m.SetSession(ses, m.sessionStore)
-	m.rebuildConversationFromMessages(ses.Messages)
-	m.restoreHistoryFromMessages(ses.Messages)
+
+	// Save the session we are leaving (if different from target) so unsaved
+	// usage/metrics messages are not lost.
+	if m.session != nil && m.session.ID != ses.ID && m.sessionStore != nil {
+		oldSes := m.session
+		oldStore := m.sessionStore
+		safego.Go("tui.applyResumedSession.saveOld", func() { _ = oldStore.Save(oldSes) })
+	}
+
+	// Delegate to the shared session-switching helper (isNew=false for resumed sessions).
+	m.switchToSession(ses, false)
 }
 
 func publishCurrentSessionCmd(reset bool) tea.Cmd {

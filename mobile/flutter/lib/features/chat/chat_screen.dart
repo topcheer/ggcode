@@ -251,8 +251,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               tooltip: t('settings.language'),
               onPressed: () {
                 final newLang = lang == 'zh-CN' ? 'en' : 'zh-CN';
-                ref.read(languageProvider.notifier).setLanguage(newLang);
-                loadTranslations(newLang);
+                persistLanguageChoice(ref, newLang);
                 // Notify desktop
                 ref
                     .read(connectionProvider.notifier)
@@ -1731,7 +1730,7 @@ class _WorkspaceGroupState extends State<_WorkspaceGroup> {
                       style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                     ),
                     trailing: session.sessionId == widget.liveSessionId
-                        ? Text('LIVE',
+                        ? Text(t('chat.live'),
                             style: TextStyle(
                               color: Colors.greenAccent,
                               fontSize: 10,

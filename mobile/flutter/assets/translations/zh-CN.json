@@ -81,5 +81,10 @@
   "approval.title": "需要审批",
   "approval.deny": "拒绝",
   "approval.allow": "允许",
-  "approval.always_allow": "总是允许"
+  "approval.always_allow": "总是允许",
+  "connect.button_connect": "连接",
+  "connect.live_badge": "实时",
+  "chat.live": "实时",
+  "chat.gallery": "相册",
+  "chat.camera": "相机"
 }

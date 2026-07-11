@@ -566,6 +566,13 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 // so the user sees what the agent received and can follow the conversation.
 // The agent's response (text + tool calls) renders naturally below.
 func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
+	// If the agent is already running, queue the message instead of
+	// starting a competing run. This mirrors the behavior of local
+	// user input (update_keys.go) and IM remote inbound (update_remote.go).
+	if m.loading {
+		m.queuePendingSubmission(text)
+		return nil
+	}
 	// Render as a user markdown message (not a gray system note)
 	m.chatWriteUserMarkdown(nextSystemID(), text)
 	m.chatListScrollToBottom()

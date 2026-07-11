@@ -70,19 +70,25 @@ func TestLanChatListIncludesTeam(t *testing.T) {
 }
 
 func TestLanChatSendStarTriggersBroadcast(t *testing.T) {
-	tool, _ := newTestLanChatTool(t)
+	tool, hub := newTestLanChatTool(t)
 
-	// With no peers, broadcast should succeed (no-op, no HTTP)
+	// Add an online participant so broadcast has a target
+	hub.HandlePresence(lanchat.Participant{
+		NodeID:    "node-bob",
+		HumanNick: "bob_dev",
+		AgentNick: "bob_dev_agent",
+		Endpoint:  "http://localhost:2",
+		Online:    true,
+	})
+
+	// broadcast should not be rate-limited for human (transport fails in test,
+	// but that's expected — we only verify no rate-limit error)
 	result, err := tool.doSend(context.Background(), "hello", []string{"*"}, false, "")
 	if err != nil {
 		t.Fatalf("doSend with '*' returned error: %v", err)
 	}
-	if result.IsError {
-		t.Errorf("doSend with '*' should succeed, got error: %s", result.Content)
-	}
-	// Verify it says "broadcast" in the result
-	if !strings.Contains(strings.ToLower(result.Content), "broadcast") {
-		t.Errorf("result should mention broadcast, got: %s", result.Content)
+	if result.IsError && strings.Contains(result.Content, "rate-limited") {
+		t.Errorf("doSend with '*' should not be rate-limited for human: %s", result.Content)
 	}
 }
 

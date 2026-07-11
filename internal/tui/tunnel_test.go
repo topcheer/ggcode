@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strconv"
@@ -2324,5 +2325,266 @@ func TestMessageDataImagesRoundTrip(t *testing.T) {
 	}
 	if decoded.Images[0].Data != tinyValidPNG {
 		t.Error("image data mismatch after JSON round-trip")
+	}
+}
+
+// ─── Session switching tests ───
+
+// TestSwitchToSessionResetsView verifies that switchToSession clears stale
+// streaming state, preventing leakage between sessions.
+func TestSwitchToSessionResetsView(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+
+	// Simulate active streaming state.
+	m.streamBuffer = bytes.NewBufferString("stale streaming text")
+	m.streamPrefixWritten = true
+	m.autoCompleteActive = true
+	m.autoCompleteItems = []string{"stale", "completion"}
+	m.statusToolName = "stale_tool"
+	m.statusToolCount = 5
+
+	ses := &session.Session{
+		ID: "sess-reset-view",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hello")}},
+		},
+	}
+
+	m.switchToSession(ses, false)
+
+	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+		t.Errorf("expected streamBuffer cleared, got %d bytes", m.streamBuffer.Len())
+	}
+	if m.streamPrefixWritten {
+		t.Error("expected streamPrefixWritten reset to false")
+	}
+	if m.autoCompleteActive {
+		t.Error("expected autoCompleteActive reset to false")
+	}
+	if m.autoCompleteItems != nil {
+		t.Error("expected autoCompleteItems cleared")
+	}
+	if m.statusToolName != "" {
+		t.Errorf("expected statusToolName cleared, got %q", m.statusToolName)
+	}
+	if m.statusToolCount != 0 {
+		t.Errorf("expected statusToolCount cleared, got %d", m.statusToolCount)
+	}
+}
+
+// TestSwitchToSessionNewInheritsGlobalMode verifies that a new session
+// (isNew=true) uses the global default permission mode.
+func TestSwitchToSessionNewInheritsGlobalMode(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.config = &config.Config{DefaultMode: "auto"}
+	m.mode = permission.PlanMode // current mode is different from default
+
+	ses := session.NewSession("test", "test", "test")
+
+	m.switchToSession(ses, true)
+
+	if m.mode != permission.AutoMode {
+		t.Errorf("expected new session to inherit global default mode (auto), got %s", m.mode)
+	}
+}
+
+// TestSwitchToSessionResumedRestoresSessionMode verifies that resuming a
+// session restores its saved permission mode.
+func TestSwitchToSessionResumedRestoresSessionMode(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.config = &config.Config{DefaultMode: "supervised"}
+	m.mode = permission.SupervisedMode
+
+	ses := &session.Session{
+		ID:             "sess-mode-restore",
+		PermissionMode: "plan",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hello")}},
+		},
+	}
+
+	m.switchToSession(ses, false)
+
+	if m.mode != permission.PlanMode {
+		t.Errorf("expected resumed session to restore mode (plan), got %s", m.mode)
+	}
+}
+
+// TestSwitchToSessionLockCallback verifies that the lock switch callback
+// is invoked with the new session ID.
+func TestSwitchToSessionLockCallback(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+
+	var calledWith string
+	m.sessionLockSwitch = func(newID string) {
+		calledWith = newID
+	}
+
+	ses := &session.Session{
+		ID: "sess-lock-cb",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hi")}},
+		},
+	}
+
+	m.switchToSession(ses, false)
+
+	if calledWith != "sess-lock-cb" {
+		t.Errorf("expected lock callback with sess-lock-cb, got %q", calledWith)
+	}
+}
+
+// TestSwitchToSessionCronCallback verifies that the cron switch callback
+// is invoked with the new session ID.
+func TestSwitchToSessionCronCallback(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+
+	var calledWith string
+	m.sessionCronSwitch = func(newID string) {
+		calledWith = newID
+	}
+
+	ses := &session.Session{
+		ID: "sess-cron-cb",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hi")}},
+		},
+	}
+
+	m.switchToSession(ses, false)
+
+	if calledWith != "sess-cron-cb" {
+		t.Errorf("expected cron callback with sess-cron-cb, got %q", calledWith)
+	}
+}
+
+// TestApplyResumedSessionSavesOldSession verifies that switching sessions
+// saves the current session first (so unsaved messages are not lost).
+func TestApplyResumedSessionSavesOldSession(t *testing.T) {
+	storeDir := t.TempDir()
+	store, err := session.NewJSONLStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.sessionStore = store
+
+	// Set up current session with messages.
+	oldSes := &session.Session{
+		ID:        "sess-old",
+		Title:     "Old session",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("old message")}},
+		},
+	}
+	if err := store.Save(oldSes); err != nil {
+		t.Fatalf("save old: %v", err)
+	}
+	m.session = oldSes
+	m.persistedMsgCount = len(oldSes.Messages)
+
+	// Switch to a new session.
+	newSes := &session.Session{
+		ID: "sess-new",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("new message")}},
+		},
+	}
+
+	m.applyResumedSession(newSes)
+
+	// Give the async save a moment to complete.
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify old session is still on disk.
+	loaded, err := store.Load("sess-old")
+	if err != nil {
+		t.Fatalf("load old session: %v", err)
+	}
+	if loaded.ID != "sess-old" {
+		t.Errorf("expected old session preserved on disk, got %s", loaded.ID)
+	}
+}
+
+// TestHandleClearChatSwitchesLock verifies that /clear invokes the lock
+// switch callback for the new session.
+func TestHandleClearChatSwitchesLock(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.config = &config.Config{Vendor: "test", Endpoint: "test", Model: "test"}
+
+	storeDir := t.TempDir()
+	store, err := session.NewJSONLStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	m.sessionStore = store
+	m.session = &session.Session{
+		ID:        "sess-pre-clear",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	var lockSwitched, cronSwitched string
+	m.sessionLockSwitch = func(id string) { lockSwitched = id }
+	m.sessionCronSwitch = func(id string) { cronSwitched = id }
+
+	m.handleClearChat()
+
+	// New session should have a different ID from the old one.
+	if m.session == nil || m.session.ID == "sess-pre-clear" {
+		t.Error("expected new session after /clear")
+	}
+
+	if lockSwitched != m.session.ID {
+		t.Errorf("expected lock switch to new session %s, got %q", m.session.ID, lockSwitched)
+	}
+	if cronSwitched != m.session.ID {
+		t.Errorf("expected cron switch to new session %s, got %q", m.session.ID, cronSwitched)
+	}
+}
+
+// TestHandleClearChatResetsView verifies that /clear resets streaming/view state.
+func TestHandleClearChatResetsView(t *testing.T) {
+	m := newTestModel()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.config = &config.Config{Vendor: "test", Endpoint: "test", Model: "test"}
+
+	storeDir := t.TempDir()
+	store, err := session.NewJSONLStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	m.sessionStore = store
+	m.session = &session.Session{
+		ID:        "sess-pre-clear-2",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Simulate active streaming state.
+	m.streamBuffer = bytes.NewBufferString("stale streaming")
+	m.statusToolName = "stale_tool"
+	m.statusToolCount = 99
+
+	m.handleClearChat()
+
+	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+		t.Errorf("expected streamBuffer cleared after /clear, got %d bytes", m.streamBuffer.Len())
+	}
+	if m.statusToolName != "" {
+		t.Errorf("expected statusToolName cleared, got %q", m.statusToolName)
+	}
+	if m.statusToolCount != 0 {
+		t.Errorf("expected statusToolCount cleared, got %d", m.statusToolCount)
 	}
 }

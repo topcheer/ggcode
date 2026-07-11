@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,64 +42,26 @@ func NewLanChatTool(hub *lanchat.Hub) LanChatTool {
 // lanchat messages. This is critical because each agent message may trigger
 // another agent's LLM inference cycle (expensive, slow, and noisy).
 //
-// Rules:
-//   - Broadcast-type actions (broadcast, broadcast_all, send_team):
-//     per-sender 20-minute cooldown. Each agent can broadcast once every
-//     20 minutes. All broadcast types share one slot because they all reach
-//     multiple agents and have the same storm potential.
-//   - Direct messages (send): per sender→receiver pair, 5-minute cooldown.
-//     The key is "sender→receiver" so both parties are explicitly recorded.
-//     This allows the same agent to message different peers in parallel,
-//     while preventing repeated spam to the same peer.
+// Rate limiting is per-recipient for all send paths (send, broadcast,
+// broadcast_all, send_team). Each sender→receiver pair has a 5-minute
+// cooldown, allowing the same agent to message different peers in parallel
+// while preventing repeated spam to the same peer.
 //
 // Only applies when asAgent=true (agent is the sender). Human-originated
 // messages are never rate-limited.
 type agentRateLimiter struct {
-	mu                sync.Mutex
-	broadcastLastSent time.Time            // per-sender: when this agent last broadcast
-	dmLastSent        map[string]time.Time // key: "sender→receiver"
+	mu         sync.Mutex
+	dmLastSent map[string]time.Time // key: "sender→receiver"
 }
 
 const (
-	agentBroadcastCooldown = 20 * time.Minute
-	agentDMCooldown        = 5 * time.Minute
+	agentDMCooldown = 5 * time.Minute
 )
 
 func newAgentRateLimiter() *agentRateLimiter {
 	return &agentRateLimiter{
 		dmLastSent: make(map[string]time.Time),
 	}
-}
-
-// checkBroadcast returns empty string if allowed, or an error message if rate-limited.
-func (r *agentRateLimiter) checkBroadcast() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.broadcastLastSent.IsZero() {
-		return ""
-	}
-	elapsed := time.Since(r.broadcastLastSent)
-	if elapsed >= agentBroadcastCooldown {
-		return ""
-	}
-	remaining := agentBroadcastCooldown - elapsed
-	return fmt.Sprintf(
-		"Broadcast rate-limited. Cooldown: %s remaining. "+
-			"Repeated broadcasts create noise cascades across all agents. "+
-			"Instead, use action='send' with to='nodeId1,nodeId2,...' (comma-separated) to send targeted DMs to specific participants — "+
-			"DMs are not subject to the broadcast cooldown and can reach multiple recipients at once. "+
-			"If you must wait, use the sleep tool with seconds=%d to defer your retry.",
-		formatCooldown(remaining),
-		int(remaining.Seconds())+1,
-	)
-}
-
-// recordBroadcast marks a broadcast as sent at the current time.
-func (r *agentRateLimiter) recordBroadcast() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.broadcastLastSent = time.Now()
 }
 
 // checkDM returns empty string if allowed, or an error message if rate-limited.
@@ -141,6 +104,59 @@ func (r *agentRateLimiter) resetDMForPeer(selfID, peerID string) {
 	defer r.mu.Unlock()
 	key := selfID + "\u2192" + peerID
 	delete(r.dmLastSent, key)
+}
+
+// sharedWorkspaceHint returns a concise collaboration warning string when any
+// of the given recipient node IDs share the same workspace path as this node.
+// This is injected into lanchat tool results so the LLM knows to include
+// workspace-safety instructions when delegating work to same-workspace peers.
+//
+// Returns "" when no recipient shares the workspace (cross-workspace DMs,
+// or recipients whose workspace is unknown).
+func (t *LanChatTool) sharedWorkspaceHint(recipientNodeIDs []string) string {
+	if t.Hub == nil {
+		return ""
+	}
+	selfWS := t.Hub.SelfParticipant().Workspace
+	if selfWS == "" {
+		return ""
+	}
+
+	participants := t.Hub.Participants()
+	recipientSet := make(map[string]bool, len(recipientNodeIDs))
+	for _, id := range recipientNodeIDs {
+		recipientSet[id] = true
+	}
+
+	var sameWSNames []string
+	for _, p := range participants {
+		if !recipientSet[p.NodeID] {
+			continue
+		}
+		if p.Workspace == selfWS {
+			name := p.AgentNick
+			if name == "" {
+				name = p.HumanNick
+			}
+			if name == "" {
+				name = p.NodeID
+			}
+			sameWSNames = append(sameWSNames, name)
+		}
+	}
+
+	if len(sameWSNames) == 0 {
+		return ""
+	}
+
+	sort.Strings(sameWSNames)
+	return fmt.Sprintf(
+		"\n⚠ Shared workspace: %s work in %s too. When instructing them: "+
+			"(1) no git stash/checkout/reset (clobbers others' changes), "+
+			"(2) only stage your own files, "+
+			"(3) don't fix other agents' code — DM the owner, "+
+			"(4) use worktree for isolated changes.",
+		strings.Join(sameWSNames, ", "), selfWS)
 }
 
 // OnInboundDM resets the DM cooldown for the sender when a non-broadcast
@@ -629,7 +645,11 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 
 	if sent == 0 {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to send to any recipient: %s", strings.Join(errors, "; "))}, nil
+		errMsg := fmt.Sprintf("failed to send to any recipient: %s", strings.Join(errors, "; "))
+		if asAgent {
+			errMsg += t.sharedWorkspaceHint(resolved)
+		}
+		return Result{IsError: true, Content: errMsg}, nil
 	}
 
 	target := toNodeIDs[0]
@@ -643,6 +663,9 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 	}
 	if len(rateLimited) > 0 {
 		result += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
+	}
+	if asAgent {
+		result += t.sharedWorkspaceHint(resolved)
 	}
 	return Result{Content: result + ".\n"}, nil
 }
@@ -663,35 +686,91 @@ func (t LanChatTool) doBroadcastTeam(ctx context.Context, content string, asAgen
 }
 
 // doBroadcastAll sends to every participant on the LAN, regardless of team.
+// Uses per-peer DM cooldowns (not a single broadcast cooldown) so that peers
+// who recently messaged us (cooldown reset) can still receive the broadcast.
 func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent bool) (Result, error) {
 	if content == "" {
 		return Result{IsError: true, Content: "message content is required for broadcast_all"}, nil
 	}
 
-	// Rate-limit agent-originated broadcasts (anti-storm)
-	if asAgent && t.rateLimiter != nil {
-		if msg := t.rateLimiter.checkBroadcast(); msg != "" {
-			return Result{IsError: true, Content: msg}, nil
+	// Collect all non-self participant node IDs
+	selfID := t.Hub.NodeID()
+	var allPeers []string
+	for _, p := range t.Hub.Participants() {
+		if p.NodeID != selfID && p.Online {
+			allPeers = append(allPeers, p.NodeID)
 		}
 	}
 
-	var err error
-	if asAgent {
-		err = t.Hub.BroadcastAsAgent(ctx, content)
-	} else {
-		err = t.Hub.SendBroadcast(ctx, content, nil)
+	if len(allPeers) == 0 {
+		return Result{IsError: true, Content: "no online participants to broadcast to"}, nil
 	}
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to broadcast: %v", err)}, nil
-	}
+
+	toRole := lanchat.RoleAgent
+
+	// Per-peer rate-limit check for agent-originated messages
+	var allowed []string
+	var rateLimited []string
 	if asAgent && t.rateLimiter != nil {
-		t.rateLimiter.recordBroadcast()
+		for _, nodeID := range allPeers {
+			if msg := t.rateLimiter.checkDM(selfID, nodeID); msg != "" {
+				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", nodeID, msg))
+			} else {
+				allowed = append(allowed, nodeID)
+			}
+		}
+		if len(allowed) == 0 {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"All broadcast recipients are rate-limited:\n%s", strings.Join(rateLimited, "\n"))}, nil
+		}
+	} else {
+		allowed = allPeers
 	}
+
+	// Send to each allowed recipient individually
+	var errors []string
+	sent := 0
+	for _, nodeID := range allowed {
+		var err error
+		if asAgent {
+			err = t.Hub.SendAsAgent(ctx, nodeID, toRole, content)
+		} else {
+			err = t.Hub.SendDirect(ctx, nodeID, toRole, content, nil)
+		}
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
+		} else {
+			sent++
+			if asAgent && t.rateLimiter != nil {
+				t.rateLimiter.recordDM(selfID, nodeID)
+			}
+		}
+	}
+
 	role := "human"
 	if asAgent {
 		role = "agent"
 	}
-	return Result{Content: fmt.Sprintf("Broadcast sent to ALL participants on the LAN as %s.\n", role)}, nil
+	if sent == 0 {
+		errMsg := fmt.Sprintf("Failed to broadcast to any recipient: %s", strings.Join(errors, "; "))
+		if asAgent {
+			errMsg += t.sharedWorkspaceHint(allowed)
+		}
+		return Result{IsError: true, Content: errMsg}, nil
+	}
+
+	result := fmt.Sprintf("Broadcast sent to %d/%d participants as %s.", sent, len(allPeers), role)
+	if len(rateLimited) > 0 {
+		result += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
+	}
+	if len(errors) > 0 {
+		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
+	}
+	result += "\n"
+	if asAgent {
+		result += t.sharedWorkspaceHint(allowed)
+	}
+	return Result{Content: result}, nil
 }
 
 // doSendTeam sends a message to all participants belonging to a specific team.
@@ -703,13 +782,6 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	}
 	if team == "" {
 		return Result{IsError: true, Content: "team is required for send_team (use action='list' to see valid teams)"}, nil
-	}
-
-	// Rate-limit agent-originated team broadcasts (anti-storm)
-	if asAgent && t.rateLimiter != nil {
-		if msg := t.rateLimiter.checkBroadcast(); msg != "" {
-			return Result{IsError: true, Content: msg}, nil
-		}
 	}
 
 	participants := t.Hub.Participants()
@@ -743,6 +815,24 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 		)}, nil
 	}
 
+	// Per-peer rate-limit check for agent-originated team sends (anti-storm)
+	var allowed []string
+	var rateLimited []string
+	if asAgent && t.rateLimiter != nil {
+		for _, nodeID := range members {
+			if msg := t.rateLimiter.checkDM(selfNodeID, nodeID); msg != "" {
+				rateLimited = append(rateLimited, fmt.Sprintf("%s: %s", nodeID, msg))
+			} else {
+				allowed = append(allowed, nodeID)
+			}
+		}
+		if len(allowed) == 0 {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"All team members are rate-limited:\n%s", strings.Join(rateLimited, "\n"))}, nil
+		}
+		members = allowed
+	}
+
 	// Send to each team member
 	toRole := lanchat.RoleAgent // default: reach their agent for team coordination
 	var errors []string
@@ -758,24 +848,32 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 			errors = append(errors, fmt.Sprintf("%s: %v", nodeID, err))
 		} else {
 			sent++
+			if asAgent && t.rateLimiter != nil {
+				t.rateLimiter.recordDM(selfNodeID, nodeID)
+			}
 		}
 	}
 
 	if sent == 0 {
-		return Result{IsError: true, Content: fmt.Sprintf(
+		errMsg := fmt.Sprintf(
 			"Failed to send to any member of team %q: %s",
 			team, strings.Join(errors, "; "),
-		)}, nil
-	}
-
-	// Record broadcast rate-limit timestamp for successful agent sends
-	if asAgent && t.rateLimiter != nil {
-		t.rateLimiter.recordBroadcast()
+		)
+		if asAgent {
+			errMsg += t.sharedWorkspaceHint(members)
+		}
+		return Result{IsError: true, Content: errMsg}, nil
 	}
 
 	result := fmt.Sprintf("Sent to %d/%d members of team %q", sent, len(members), team)
+	if len(rateLimited) > 0 {
+		result += fmt.Sprintf("\nRate-limited members skipped:\n%s", strings.Join(rateLimited, "\n"))
+	}
 	if len(errors) > 0 {
 		result += fmt.Sprintf(" (errors: %s)", strings.Join(errors, "; "))
+	}
+	if asAgent {
+		result += t.sharedWorkspaceHint(members)
 	}
 	return Result{Content: result + ".\n"}, nil
 }

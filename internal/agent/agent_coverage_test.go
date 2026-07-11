@@ -991,52 +991,9 @@ func TestCompactErrorReason(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// agent_autopilot.go — shouldAutopilotKeepGoing, shouldTriggerAutopilotLoopGuard
+// agent_autopilot.go — deterministic functions removed; replaced by strategist LLM call.
+// Tests for shouldAutopilotKeepGoing / shouldTriggerAutopilotLoopGuard removed.
 // ---------------------------------------------------------------------------
-
-func TestShouldAutopilotKeepGoing(t *testing.T) {
-	tests := []struct {
-		text string
-		want bool
-	}{
-		{"", true}, // empty text → keep going
-		{"All set, nothing else to do.", false},
-		{"I'll investigate the root cause next.", true},
-		{"I fixed the issue and identified another problem.", true},
-		{"Should I continue with option A or B?", true},
-		{"Waiting for your next request.", false},
-		{"接下来我会修复这个问题", true},
-		{"任务已完成", false},
-		{"Random text that doesn't match any pattern", false},
-	}
-	for _, tt := range tests {
-		got := shouldAutopilotKeepGoing(tt.text)
-		if got != tt.want {
-			t.Errorf("shouldAutopilotKeepGoing(%q) = %v, want %v", tt.text, got, tt.want)
-		}
-	}
-}
-
-func TestShouldTriggerAutopilotLoopGuard(t *testing.T) {
-	tests := []struct {
-		text   string
-		streak int
-		want   bool
-	}{
-		{"Waiting for your next request.", 1, false}, // below threshold
-		{"Waiting for your next request.", 2, true},  // at threshold + completion
-		{"", 2, true},                         // empty + at threshold
-		{"I need to do more work.", 2, false}, // not a recognized stall pattern
-		{"请确认是否继续", 3, true},                  // Chinese question + above threshold
-		{"需要用户重启服务", 2, true},                 // external blocker + at threshold
-	}
-	for _, tt := range tests {
-		got := shouldTriggerAutopilotLoopGuard(tt.text, tt.streak)
-		if got != tt.want {
-			t.Errorf("shouldTriggerAutopilotLoopGuard(%q, %d) = %v, want %v", tt.text, tt.streak, got, tt.want)
-		}
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Helper types for tests

@@ -11,8 +11,9 @@ import pt from './pt'
 import vi from './vi'
 import tr from './tr'
 import id from './id'
+import zhTW from './zh-TW'
 
-export type Locale = 'en' | 'zh' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'ru' | 'pt' | 'vi' | 'tr' | 'id'
+export type Locale = 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'ru' | 'pt' | 'vi' | 'tr' | 'id'
 
 export const LOCALE_LABELS: Record<Locale, string> = {
   en: 'English',
@@ -27,9 +28,10 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   vi: 'Tiếng Việt',
   tr: 'Türkçe',
   id: 'Bahasa Indonesia',
+  'zh-TW': '繁體中文',
 }
 
-const translations: Record<Locale, Partial<Record<TranslationKey, string>>> = { en, zh, ja, ko, es, fr, de, ru, pt, vi, tr, id }
+const translations: Record<Locale, Partial<Record<TranslationKey, string>>> = { en, zh, 'zh-TW': zhTW, ja, ko, es, fr, de, ru, pt, vi, tr, id }
 
 interface I18nContextValue {
   locale: Locale
@@ -95,6 +97,13 @@ export function detectSystemLocale(): Locale {
   const langs = navigator.languages || [navigator.language || 'en']
   for (const lang of langs) {
     const lower = lang.toLowerCase()
+    // Chinese variant detection
+    if (lower.startsWith('zh')) {
+      if (['zh-tw', 'zh-hant', 'zh-hk', 'zh-mo'].some(r => lower.startsWith(r))) {
+        return 'zh-TW' as Locale
+      }
+      return 'zh' as Locale
+    }
     // Exact match (e.g. "zh", "ja", "ko")
     const exact = lower.split('-')[0] as Locale
     if (exact in LOCALE_LABELS) return exact
