@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ カスタムプロバイダー',
+  'onboarding.a2a': 'A2A サービス',
+  'onboarding.a2aDesc': 'エージェント間通信を有効化（推奨）',
+  'onboarding.languageTitle': '言語を選択',
+  'onboarding.languageHint': '後で設定で変更できます',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': '各ツール実行を確認・承認',

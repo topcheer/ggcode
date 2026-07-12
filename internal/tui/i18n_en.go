@@ -736,9 +736,45 @@ func enCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter save • Esc cancel"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • e add endpoint • Esc close"
+		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • e add endpoint • n new vendor • Esc close"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l login • x logout • b edit enterprise domain"
+	case "panel.provider.hint.protocol_select":
+		return "j/k select • Enter confirm"
+	case "panel.provider.new_vendor.title":
+		return "New Vendor"
+	case "panel.provider.new_vendor.vendor":
+		return "Vendor"
+	case "panel.provider.new_vendor.endpoint":
+		return "Endpoint"
+	case "panel.provider.new_vendor.protocol":
+		return "Protocol"
+	case "panel.provider.new_vendor.base_url":
+		return "Base URL"
+	case "panel.provider.new_vendor.step_vendor":
+		return "Enter vendor name (e.g. openai, anthropic, or custom):"
+	case "panel.provider.new_vendor.step_endpoint":
+		return "Enter endpoint name (e.g. default, eu, fast):"
+	case "panel.provider.new_vendor.step_protocol":
+		return "Select protocol:"
+	case "panel.provider.new_vendor.step_base_url":
+		return "Enter base URL (e.g. https://api.openai.com/v1):"
+	case "panel.provider.new_vendor.step_api_key":
+		return "Enter API key (leave empty to skip):"
+	case "panel.provider.new_vendor.created":
+		return "Created vendor %q with endpoint %q."
+	case "panel.provider.new_vendor.error.name_empty":
+		return "Vendor name cannot be empty."
+	case "panel.provider.new_vendor.error.vendor_exists":
+		return "Vendor already exists."
+	case "panel.provider.new_vendor.error.endpoint_empty":
+		return "Endpoint name cannot be empty."
+	case "panel.provider.new_endpoint.title":
+		return "New Endpoint"
+	case "panel.provider.new_endpoint.created":
+		return "Endpoint %q created."
+	case "panel.provider.new_endpoint.error.endpoint_exists":
+		return "Endpoint already exists."
 	case "panel.provider.saved":
 		return "Saved."
 	case "panel.provider.saved_activated":

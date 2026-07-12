@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ Proveedor personalizado',
+  'onboarding.a2a': 'Servicio A2A',
+  'onboarding.a2aDesc': 'Habilitar comunicación entre agentes (recomendado)',
+  'onboarding.languageTitle': 'Elija su idioma',
+  'onboarding.languageHint': 'Puede cambiarlo más tarde en Configuración',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Revisar y aprobar cada ejecución de herramienta',

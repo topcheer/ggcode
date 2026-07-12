@@ -64,8 +64,7 @@ func (m *onboardModel) viewLanguage() string {
 		if i == m.langCursor {
 			cursor = "> "
 		}
-		name := m.tr("lang_" + lang.code)
-		b.WriteString(fmt.Sprintf("  %s%s\n", cursor, name))
+		b.WriteString(fmt.Sprintf("  %s%s\n", cursor, lang.name))
 	}
 	return b.String()
 }
@@ -142,8 +141,13 @@ func (m *onboardModel) viewEndpoint() string {
 
 func (m *onboardModel) viewModel() string {
 	var b strings.Builder
-	ep := m.selectedVendor.Endpoints[m.endpointCursor]
-	b.WriteString(m.trf("step_model", ep.DisplayName) + ":\n\n")
+	// For custom providers, use the custom name instead of endpoint display name
+	if m.selectedVendor.ID == "" && m.customResolved != nil {
+		b.WriteString(m.trf("step_model", m.customResolved.EndpointName) + ":\n\n")
+	} else {
+		ep := m.selectedVendor.Endpoints[m.endpointCursor]
+		b.WriteString(m.trf("step_model", ep.DisplayName) + ":\n\n")
+	}
 
 	if m.modelLoading {
 		b.WriteString("  " + m.tr("loading_models") + "\n\n")

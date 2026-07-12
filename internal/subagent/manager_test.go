@@ -9,7 +9,11 @@ import (
 )
 
 func newTestManager() *Manager {
-	return NewManager(config.SubAgentConfig{})
+	m := NewManager(config.SubAgentConfig{})
+	// Use a short timeout in tests so CancelAll doesn't block 5s on
+	// agents that have no goroutine (test-only SetCancel without Run).
+	m.cancelAllTimeout = 50 * time.Millisecond
+	return m
 }
 
 func TestManager_List(t *testing.T) {
@@ -246,6 +250,63 @@ func TestManager_CancelAll_Empty(t *testing.T) {
 	cancelled := m.CancelAll()
 	if cancelled != 0 {
 		t.Errorf("expected 0 cancelled for empty manager, got %d", cancelled)
+	}
+}
+
+// TestManager_CancelAll_WaitsForGoroutine verifies that CancelAll actually
+// waits for a Running sub-agent's goroutine to terminate, not just for the
+// status to be set. This is a regression test for the bug where Cancel()
+// prematurely closed the done channel, making CancelAll's wait a no-op.
+func TestManager_CancelAll_WaitsForGoroutine(t *testing.T) {
+	// Use a dedicated manager with a longer timeout for this test.
+	m := NewManager(config.SubAgentConfig{})
+	m.cancelAllTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id := m.Spawn("slow-agent", "test", "do something", nil, ctx)
+	m.SetCancel(id, cancel)
+
+	// Simulate what Run() does: mark that a real goroutine is running.
+	sa, _ := m.Get(id)
+	if sa == nil {
+		t.Fatal("sub-agent not found after Spawn")
+	}
+	sa.mu.Lock()
+	sa.goroutineStarted = true
+	sa.mu.Unlock()
+
+	// Simulate a goroutine that takes 200ms to terminate after context cancel.
+	terminated := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		time.Sleep(200 * time.Millisecond)
+		m.Complete(id, "done after cancel", nil)
+		close(terminated)
+	}()
+
+	start := time.Now()
+	cancelled := m.CancelAll()
+	elapsed := time.Since(start)
+
+	if cancelled != 1 {
+		t.Fatalf("expected 1 cancelled, got %d", cancelled)
+	}
+
+	// CancelAll should have waited for the goroutine to call Complete(),
+	// which takes ~200ms. If it returned immediately (< 100ms), the fix
+	// is not working — done was closed prematurely by Cancel().
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("CancelAll returned too quickly (%v) — expected to wait for goroutine termination", elapsed)
+	}
+
+	// Verify the goroutine actually terminated.
+	select {
+	case <-terminated:
+		// Good — goroutine finished.
+	case <-time.After(2 * time.Second):
+		t.Error("goroutine did not terminate within 2s")
 	}
 }
 

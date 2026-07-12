@@ -54,11 +54,28 @@ func ringAppend(category, msg string) {
 
 // RingHistory returns the last n entries from the ring buffer, optionally
 // filtered by category substring. If n <= 0 or n > maxRingReturn, it is
-// clamped to maxRingReturn.
+// clamped to maxRingReturn. For larger queries (e.g. export), use RingHistoryMax.
 func RingHistory(n int, categoryFilter string) []RingEntry {
 	if n <= 0 || n > maxRingReturn {
 		n = maxRingReturn
 	}
+	return ringHistoryImpl(n, categoryFilter)
+}
+
+// RingHistoryMax returns up to n entries (max 2000) from the ring buffer,
+// optionally filtered by category substring. Use this for export use cases
+// where more than 200 entries are needed.
+func RingHistoryMax(n int, categoryFilter string) []RingEntry {
+	if n <= 0 {
+		n = maxRingReturn
+	}
+	if n > 2000 {
+		n = 2000
+	}
+	return ringHistoryImpl(n, categoryFilter)
+}
+
+func ringHistoryImpl(n int, categoryFilter string) []RingEntry {
 	ringMu.Lock()
 	if ringCount == 0 {
 		ringMu.Unlock()

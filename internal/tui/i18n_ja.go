@@ -736,9 +736,45 @@ func jaCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter 保存 • Esc キャンセル"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab フォーカス切替 • j/k 移動 • / フィルター • Enter/s 適用 • a ベンダーキー • u エンドポイントキー • b ベースURL • m カスタムモデル • e エンドポイント追加 • Esc 閉じる"
+		return "Tab/Shift+Tab フォーカス切替 • j/k 移動 • / フィルター • Enter/s 適用 • a ベンダーキー • u エンドポイントキー • b ベースURL • m カスタムモデル • e エンドポイント追加 • n ベンダー追加 • Esc 閉じる"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l ログイン • x ログアウト • b エンタープライズドメイン編集"
+	case "panel.provider.hint.protocol_select":
+		return "j/k 選択 • Enter 確認"
+	case "panel.provider.new_vendor.title":
+		return "新規ベンダー"
+	case "panel.provider.new_vendor.vendor":
+		return "ベンダー"
+	case "panel.provider.new_vendor.endpoint":
+		return "エンドポイント"
+	case "panel.provider.new_vendor.protocol":
+		return "プロトコル"
+	case "panel.provider.new_vendor.base_url":
+		return "ベースURL"
+	case "panel.provider.new_vendor.step_vendor":
+		return "ベンダー名を入力（例: openai, anthropic, カスタム）:"
+	case "panel.provider.new_vendor.step_endpoint":
+		return "エンドポイント名を入力（例: default, eu, fast）:"
+	case "panel.provider.new_vendor.step_protocol":
+		return "プロトコルを選択:"
+	case "panel.provider.new_vendor.step_base_url":
+		return "ベースURLを入力（例: https://api.openai.com/v1）:"
+	case "panel.provider.new_vendor.step_api_key":
+		return "APIキーを入力（空でスキップ）:"
+	case "panel.provider.new_vendor.created":
+		return "ベンダー %q とエンドポイント %q を作成しました。"
+	case "panel.provider.new_vendor.error.name_empty":
+		return "ベンダー名は空にできません。"
+	case "panel.provider.new_vendor.error.vendor_exists":
+		return "ベンダーは既に存在します。"
+	case "panel.provider.new_vendor.error.endpoint_empty":
+		return "エンドポイント名は空にできません。"
+	case "panel.provider.new_endpoint.title":
+		return "新規エンドポイント"
+	case "panel.provider.new_endpoint.created":
+		return "エンドポイント %q を作成しました。"
+	case "panel.provider.new_endpoint.error.endpoint_exists":
+		return "エンドポイントは既に存在します。"
 	case "panel.provider.saved":
 		return "保存しました。"
 	case "panel.provider.saved_activated":

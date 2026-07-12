@@ -587,6 +587,10 @@ const zh: Record<TranslationKey, string> = {
 
   // Onboarding
   'onboarding.customProvider': '+ 自定义供应商',
+  'onboarding.a2a': 'A2A 服务',
+  'onboarding.a2aDesc': '启用代理间通信（推荐）',
+  'onboarding.languageTitle': '选择您的语言',
+  'onboarding.languageHint': '稍后可以在设置中更改',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': '审查并批准每次工具执行',

@@ -578,6 +578,10 @@ const id = {
 
   // Onboarding
   'onboarding.customProvider': '+ Provider Kustom',
+  'onboarding.a2a': 'Layanan A2A',
+  'onboarding.a2aDesc': 'Aktifkan komunikasi antar-agen (disarankan)',
+  'onboarding.languageTitle': 'Pilih bahasa Anda',
+  'onboarding.languageHint': 'Anda dapat mengubahnya nanti di Pengaturan',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Tinjau dan setujui setiap eksekusi tool',

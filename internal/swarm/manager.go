@@ -35,7 +35,7 @@ type ToolBuilder func(allowedTools []string) interface{}
 // events are flushed to the TUI. Without batching, each LLM streaming token
 // (~50-100/s per teammate) triggers a separate callback → program.Send →
 // Bubble Tea Update(), compounding with sub-agent flooding.
-const swarmStreamBatchInterval = 80 * time.Millisecond
+const swarmStreamBatchInterval = 500 * time.Millisecond
 
 // swarmCancelTimeout is the max time CancelAll waits for each teammate's
 // idle-runner goroutine to exit after cancelling its context.

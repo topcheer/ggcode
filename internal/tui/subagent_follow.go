@@ -44,7 +44,8 @@ type followViewEntry struct {
 // stripRefreshInterval is the minimum time between follow-strip refreshes.
 // This prevents high-frequency teammate_text events from triggering expensive
 // refreshSlots/refreshSwarmSlots calls on every streaming token.
-const stripRefreshInterval = 500 * time.Millisecond
+// LLM responses typically take seconds, so 2s is sufficient for status updates.
+const stripRefreshInterval = 2 * time.Second
 
 // subAgentFollowState tracks the TUI follow-mode for sub-agents AND swarm teammates.
 // Ctrl+N cycles through all slots regardless of kind.
@@ -509,7 +510,7 @@ func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
 	if !ok {
 		return true
 	}
-	return time.Since(last) >= 100*time.Millisecond
+	return time.Since(last) >= time.Second
 }
 
 // markRebuilt clears the dirty flag and records the rebuild time.

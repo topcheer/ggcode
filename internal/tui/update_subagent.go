@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 )
@@ -155,6 +156,13 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	}
 
 	if !m.loading {
+		// If sub-agents are still being cancelled (async CancelAll in progress),
+		// don't start a new agent run. A sub-agent that completed just before
+		// CancelAll() reached it would otherwise trigger an unwanted new run.
+		if m.subAgentsCanceling {
+			debug.Log("cancel", "handleSubAgentDoneMsg: suppressing new agent run (subAgentsCanceling=true) agent=%s", msg.AgentID)
+			return m, graceCmd
+		}
 		// Agent is idle — start a new loop to process the notification.
 		return m, tea.Batch(graceCmd, m.submitText(agentHint, true))
 	}

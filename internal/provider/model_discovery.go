@@ -50,7 +50,7 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 	if resolved == nil {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
-	if !hasUsableAPIKey(resolved.APIKey) {
+	if !hasUsableAPIKey(resolved.APIKey) && !isLocalBaseURL(resolved.BaseURL) {
 		return nil, fmt.Errorf("endpoint %q has no API key configured", resolved.EndpointID)
 	}
 	if strings.TrimSpace(resolved.BaseURL) == "" {
@@ -109,7 +109,9 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
 		req.Header.Set("User-Agent", "ggcode")
 	default:
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
+		if hasUsableAPIKey(resolved.APIKey) {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
+		}
 	}
 	for key, values := range vendorSpecificAuthHeaders(resolved.BaseURL, resolved.APIKey) {
 		for _, value := range values {
@@ -214,6 +216,22 @@ func hasUsableAPIKey(value string) bool {
 		return false
 	}
 	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
+}
+
+// isLocalBaseURL returns true for localhost/127.0.0.1 base URLs that don't
+// require an API key (e.g., Ollama, LM Studio, vLLM local deployments).
+func isLocalBaseURL(baseURL string) bool {
+	u := strings.TrimSpace(baseURL)
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "https://")
+	host := u
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		host = u[:i]
+	}
+	if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
 }
 
 func modelDiscoveryCacheKey(resolved *config.ResolvedEndpoint) string {

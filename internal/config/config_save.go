@@ -244,6 +244,23 @@ func (c *Config) SaveKnightEnabled(enabled bool) error {
 	return nil
 }
 
+// SaveA2AEnabled persists the a2a.disabled setting to the config file.
+// A2A is enabled by default; setting enabled=false writes disabled=true.
+func (c *Config) SaveA2AEnabled(enabled bool) error {
+	if err := c.patchConfigFile(func(raw map[string]interface{}) {
+		a2aMap, _ := raw["a2a"].(map[string]interface{})
+		if a2aMap == nil {
+			a2aMap = map[string]interface{}{}
+		}
+		a2aMap["disabled"] = !enabled
+		raw["a2a"] = a2aMap
+	}); err != nil {
+		return err
+	}
+	c.A2A.Disabled = !enabled
+	return nil
+}
+
 func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")

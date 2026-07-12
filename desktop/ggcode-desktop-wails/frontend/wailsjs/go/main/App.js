@@ -274,6 +274,10 @@ export function RespondAskUser(arg1, arg2) {
   return window['go']['main']['App']['RespondAskUser'](arg1, arg2);
 }
 
+export function SaveA2AEnabled(arg1) {
+  return window['go']['main']['App']['SaveA2AEnabled'](arg1);
+}
+
 export function SaveAPIKey(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAPIKey'](arg1, arg2, arg3);
 }

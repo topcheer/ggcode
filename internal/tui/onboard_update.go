@@ -191,6 +191,34 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 	m.modelCursor = 0
 	m.modelLoading = true
 
+	// For custom providers, build resolved from custom fields
+	if m.selectedVendor.ID == "" {
+		m.customResolved = m.buildCustomResolved()
+		if m.customResolved != nil {
+			manualModel := m.customResolved.Model
+			if manualModel != "" {
+				m.allModels = []string{manualModel}
+				m.models = []string{manualModel}
+			} else {
+				m.allModels = []string{"default"}
+				m.models = []string{"default"}
+			}
+			m.applyModelFilter()
+
+			resolved := m.customResolved
+			return func() tea.Msg {
+				models, err := provider.DiscoverModels(context.Background(), resolved)
+				if err != nil || len(models) == 0 {
+					return discoverResultMsg{models: nil}
+				}
+				return discoverResultMsg{models: models}
+			}
+		}
+		m.modelLoading = false
+		return nil
+	}
+
+	// Standard vendor path
 	ep := m.selectedVendor.Endpoints[m.endpointCursor]
 	if len(ep.Models) > 0 {
 		m.allModels = ep.Models
@@ -203,10 +231,10 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 		m.models = []string{"default"}
 	}
 
+	// Show first 20 for display, but keep allModels as the full list
 	if len(m.models) > 20 {
 		m.models = m.models[:20]
 	}
-	m.allModels = m.models
 	m.applyModelFilter()
 
 	for i, idx := range m.modelFiltered {
@@ -215,18 +243,19 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 			break
 		}
 	}
-	m.modelLoading = false
+	// Keep modelLoading=true until async discovery completes
 
 	resolved := m.buildResolved()
 	if resolved != nil {
 		return func() tea.Msg {
 			models, err := provider.DiscoverModels(context.Background(), resolved)
 			if err != nil || len(models) == 0 {
-				return nil
+				return discoverResultMsg{models: nil}
 			}
 			return discoverResultMsg{models: models}
 		}
 	}
+	m.modelLoading = false
 	return nil
 }
 
@@ -248,6 +277,10 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				if len(m.modelFiltered) > 0 {
+					// Update custom provider model field if user came via custom path
+					if m.selectedVendor.ID == "" && m.customResolved != nil {
+						m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])
+					}
 					m.step = onboardStepOptional
 					m.modelFilter.Blur()
 				}
@@ -283,6 +316,10 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if len(m.modelFiltered) > 0 {
+			// Update custom provider model field if user came via custom path
+			if m.selectedVendor.ID == "" && m.customResolved != nil {
+				m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])
+			}
 			m.step = onboardStepOptional
 		}
 	case "/":
@@ -536,7 +573,6 @@ func (m *onboardModel) updateCustom(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *onboardModel) submitCustom() tea.Cmd {
 	name := strings.TrimSpace(m.customFields[0].Value())
 	url := strings.TrimSpace(m.customFields[1].Value())
-	model := strings.TrimSpace(m.customFields[3].Value())
 	m.err = ""
 	if name == "" {
 		m.err = m.tr("custom_err_name")
@@ -550,12 +586,7 @@ func (m *onboardModel) submitCustom() tea.Cmd {
 		m.customFields[1].Focus()
 		return textinput.Blink
 	}
-	if model == "" {
-		m.err = m.tr("custom_err_model")
-		m.customCursor = 4
-		m.customFields[3].Focus()
-		return textinput.Blink
-	}
-	m.step = onboardStepOptional
-	return nil
+	// Model is now optional — we'll try to discover models from the endpoint
+	// If discovery fails and no model was entered, show error
+	return m.startModelSelection()
 }

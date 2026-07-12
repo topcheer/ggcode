@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -78,8 +79,10 @@ func (m *Model) pendingSubmissionSnapshot() []string {
 func (m *Model) cancelActiveRun() {
 	m.resetCancelConfirm()
 	if m.runCanceled {
+		debug.Log("cancel", "cancelActiveRun: already cancelled, skipping")
 		return
 	}
+	debug.Log("cancel", "cancelActiveRun: START")
 	m.runCanceled = true
 	cancelledTools := m.chatCancelAllRunningTools()
 	for _, tool := range cancelledTools {
@@ -93,12 +96,31 @@ func (m *Model) cancelActiveRun() {
 		m.cancelFunc()
 	}
 
-	// Cancel all running sub-agents and swarm teammates
-	if m.subAgentMgr != nil {
-		m.subAgentMgr.CancelAll()
-	}
-	if m.swarmMgr != nil {
-		m.swarmMgr.CancelAll()
+	// Cancel all running sub-agents and swarm teammates asynchronously.
+	// CancelAll() waits for each sub-agent goroutine to terminate (up to 5s each),
+	// which would freeze the TUI if called synchronously. The cancelFunc() above
+	// already cancelled the parent agent's context, so the agent goroutine will
+	// exit and send agentDoneMsg. Sub-agent cleanup happens in background.
+	if m.subAgentMgr != nil || m.swarmMgr != nil {
+		subMgr := m.subAgentMgr
+		swarmMgr := m.swarmMgr
+		prog := m.program
+		m.subAgentsCanceling = true
+		debug.Log("cancel", "cancelActiveRun: setting subAgentsCanceling=true, starting async CancelAll")
+		safego.Go("tui.cancelSubAgents", func() {
+			if subMgr != nil {
+				cancelled := subMgr.CancelAll()
+				debug.Log("cancel", "async CancelAll: subagents cancelled=%d", cancelled)
+			}
+			if swarmMgr != nil {
+				swarmMgr.CancelAll()
+				debug.Log("cancel", "async CancelAll: swarm teammates cancelled")
+			}
+			debug.Log("cancel", "cancelActiveRun: async CancelAll complete, clearing subAgentsCanceling")
+			if prog != nil {
+				prog.Send(subAgentsCancelDoneMsg{})
+			}
+		})
 	}
 
 	m.spinner.Stop()

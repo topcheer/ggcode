@@ -177,6 +177,12 @@ type subAgentDoneMsg struct {
 type subAgentFollowRefreshMsg struct{}
 type followGraceTickMsg struct{}
 
+// subAgentsCancelDoneMsg is sent when the async CancelAll() for sub-agents
+// and swarm teammates has completed. Until this arrives, handleSubAgentDoneMsg
+// suppresses starting a new agent run to avoid a race where a sub-agent
+// completes between the parent agent being cancelled and CancelAll() reaching it.
+type subAgentsCancelDoneMsg struct{}
+
 // systemNotifyMsg displays a provider system notification (e.g. retry status)
 // as a system message in the chat area.
 // When ItemID is non-empty and a system item with that ID already exists,

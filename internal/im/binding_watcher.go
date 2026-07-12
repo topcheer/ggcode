@@ -10,7 +10,8 @@ import (
 )
 
 // bindingWatcherInterval is how often the watcher polls the bindings file.
-const bindingWatcherInterval = 3 * time.Second
+// It's a var (not const) so tests can override it for faster execution.
+var bindingWatcherInterval = 3 * time.Second
 
 // StartBindingWatcher starts a background goroutine that monitors the
 // im-bindings.json file for LastSessionID changes by other ggcode instances.

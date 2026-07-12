@@ -281,6 +281,7 @@ type Model struct {
 	projectMemoryLoading  bool
 	runCanceled           bool
 	runFailed             bool
+	subAgentsCanceling    bool   // true while async CancelAll() is in progress after user cancel
 	lastUserSubmission    string // last non-slash user prompt, for /retry
 	activeAgentRunID      int
 	activeShellRunID      int

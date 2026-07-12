@@ -32,7 +32,35 @@ type providerPanelState struct {
 	refreshVendor string
 	authBusy      bool
 	enterpriseURL string
+
+	// New vendor creation wizard
+	newVendorStep     int // 0=inactive, 1=vendor name, 2=endpoint name, 3=protocol, 4=base url, 5=api key
+	newVendorInput    textinput.Model
+	newVendorData     newVendorFormData
+	newVendorProtoIdx int
+
+	// New endpoint creation wizard (adds endpoint to existing vendor)
+	// Steps: 1=endpoint name, 2=protocol, 3=base url, 4=api key
+	newEndpointStep int
+	newEndpointData newEndpointFormData
 }
+
+type newVendorFormData struct {
+	vendorName   string
+	endpointName string
+	protocol     string
+	baseURL      string
+	apiKey       string
+}
+
+type newEndpointFormData struct {
+	endpointName string
+	protocol     string
+	baseURL      string
+	apiKey       string
+}
+
+var newVendorProtocols = []string{"openai", "anthropic", "gemini", "copilot"}
 
 type providerModelsRefreshResultMsg struct {
 	vendor      string
@@ -64,6 +92,21 @@ const (
 	providerPanelFocusVendor = iota
 	providerPanelFocusEndpoint
 	providerPanelFocusModel
+)
+
+const (
+	newVendorStepVendorName = iota + 1
+	newVendorStepEndpointName
+	newVendorStepProtocol
+	newVendorStepBaseURL
+	newVendorStepAPIKey
+)
+
+const (
+	newEndpointStepEndpointName = iota + 1
+	newEndpointStepProtocol
+	newEndpointStepBaseURL
+	newEndpointStepAPIKey
 )
 
 func newProviderPanelFromConfig(cfg *ConfigView) *providerPanelState {
@@ -280,7 +323,11 @@ func (m *Model) renderProviderPanel() string {
 	modelFilterEnabled := providerPanelModelFilterEnabled(panel.models)
 	modelHeight := providerPanelModelHeight(modelFilterEnabled)
 	envVar := providerPanelAPIKeyEnvVar(panel.selectedVendor(), panel.selectedEndpoint(), vc, ep)
+	wizardActive := panel.newVendorStep > 0 || panel.newEndpointStep > 0
 	footerHeight := providerPanelFooterHeight(envVar != "")
+	if wizardActive {
+		footerHeight = 12 // give wizard enough room without info lines
+	}
 
 	leftColumn := renderProviderPanelSection(
 		m.t("panel.provider.vendors"),
@@ -315,20 +362,23 @@ func (m *Model) renderProviderPanel() string {
 		lipgloss.JoinVertical(lipgloss.Left, rightTop, verticalSectionGap(), rightBottom),
 	)
 
-	footer := []string{
-		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), util.FirstNonEmpty(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
-	}
-	if envVar != "" {
-		footer = append(footer, fmt.Sprintf(" %s: %s", m.t("panel.provider.env_var"), envVar))
-	}
-	footer = append(footer,
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
-	)
-	if panel.refreshing {
-		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" "+m.t("panel.provider.refreshing_vendor", panel.refreshVendor)))
+	var footer []string
+	if !wizardActive {
+		footer = []string{
+			fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), util.FirstNonEmpty(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
+		}
+		if envVar != "" {
+			footer = append(footer, fmt.Sprintf(" %s: %s", m.t("panel.provider.env_var"), envVar))
+		}
+		footer = append(footer,
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
+		)
+		if panel.refreshing {
+			footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" "+m.t("panel.provider.refreshing_vendor", panel.refreshVendor)))
+		}
 	}
 	if panel.editingField != "" {
 		footer = append(footer,
@@ -337,6 +387,10 @@ func (m *Model) renderProviderPanel() string {
 			renderPasteShortcutHint(m.currentLanguage()),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
 		)
+	} else if panel.newVendorStep > 0 {
+		footer = append(footer, m.renderNewVendorWizard()...)
+	} else if panel.newEndpointStep > 0 {
+		footer = append(footer, m.renderNewEndpointWizard()...)
 	} else {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")))
 	}
@@ -502,6 +556,64 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if panel == nil {
 		return *m, nil
 	}
+	// Handle new endpoint wizard input
+	if panel.newEndpointStep > 0 {
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			panel.newEndpointStep = 0
+			panel.message = ""
+			return *m, nil
+		case "up":
+			if panel.newEndpointStep == newEndpointStepProtocol && len(newVendorProtocols) > 0 {
+				panel.newVendorProtoIdx = (panel.newVendorProtoIdx - 1 + len(newVendorProtocols)) % len(newVendorProtocols)
+			}
+			return *m, nil
+		case "down":
+			if panel.newEndpointStep == newEndpointStepProtocol && len(newVendorProtocols) > 0 {
+				panel.newVendorProtoIdx = (panel.newVendorProtoIdx + 1) % len(newVendorProtocols)
+			}
+			return *m, nil
+		case "enter":
+			return m.handleNewEndpointStep()
+		default:
+			if panel.newEndpointStep != newEndpointStepProtocol {
+				var cmd tea.Cmd
+				panel.newVendorInput, cmd = panel.newVendorInput.Update(msg)
+				return *m, cmd
+			}
+			return *m, nil
+		}
+	}
+
+	// Handle new vendor wizard input
+	if panel.newVendorStep > 0 {
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			panel.newVendorStep = 0
+			panel.message = ""
+			return *m, nil
+		case "up":
+			if panel.newVendorStep == newVendorStepProtocol && len(newVendorProtocols) > 0 {
+				panel.newVendorProtoIdx = (panel.newVendorProtoIdx - 1 + len(newVendorProtocols)) % len(newVendorProtocols)
+			}
+			return *m, nil
+		case "down":
+			if panel.newVendorStep == newVendorStepProtocol && len(newVendorProtocols) > 0 {
+				panel.newVendorProtoIdx = (panel.newVendorProtoIdx + 1) % len(newVendorProtocols)
+			}
+			return *m, nil
+		case "enter":
+			return m.handleNewVendorStep()
+		default:
+			// Route text input to the wizard's textinput field
+			if panel.newVendorStep != newVendorStepProtocol {
+				var cmd tea.Cmd
+				panel.newVendorInput, cmd = panel.newVendorInput.Update(msg)
+				return *m, cmd
+			}
+			return *m, nil
+		}
+	}
 	if panel.editingField != "" {
 		switch msg.String() {
 		case "esc", "ctrl+c":
@@ -643,6 +755,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.endpointIndex = (panel.endpointIndex - 1 + len(panel.endpointIDs)) % len(panel.endpointIDs)
 				panel.modelIndex = 0
 				panel.syncLists(cfgView)
+				return *m, m.refreshProviderModelsForVendor(panel.selectedVendor())
 			}
 		case providerPanelFocusModel:
 			if len(panel.models) > 0 {
@@ -668,6 +781,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.endpointIndex = (panel.endpointIndex + 1) % len(panel.endpointIDs)
 				panel.modelIndex = 0
 				panel.syncLists(cfgView)
+				return *m, m.refreshProviderModelsForVendor(panel.selectedVendor())
 			}
 		case providerPanelFocusModel:
 			if len(panel.models) > 0 {
@@ -697,7 +811,15 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.startEditing("endpoint base url", ep.BaseURL)
 		return *m, nil
 	case "e":
-		panel.startEditing("new endpoint name", "")
+		// Start new endpoint creation wizard for the current vendor
+		panel.newEndpointStep = newEndpointStepEndpointName
+		panel.newEndpointData = newEndpointFormData{}
+		panel.newVendorProtoIdx = 0
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
 		return *m, nil
 	case "m":
 		panel.startEditing("custom model", panel.selectedModel())
@@ -738,7 +860,22 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		return *m, nil
+	case "n":
+		// Start new vendor creation wizard
+		panel.newVendorStep = newVendorStepVendorName
+		panel.newVendorData = newVendorFormData{}
+		panel.newVendorProtoIdx = 0
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
 	case "enter", "s":
+		// If new vendor wizard is active, handle step progression
+		if panel.newVendorStep > 0 {
+			return m.handleNewVendorStep()
+		}
 		if err := m.config.SetActiveSelection(panel.selectedVendor(), panel.selectedEndpoint(), panel.selectedModel()); err != nil {
 			panel.message = err.Error()
 			return *m, nil
@@ -751,6 +888,178 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.message = m.t("panel.provider.saved_activated")
 		return *m, nil
 	}
+	return *m, nil
+}
+
+// handleNewVendorStep processes the current wizard step on Enter.
+func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
+	panel := m.providerPanel
+	value := strings.TrimSpace(panel.newVendorInput.Value())
+	step := panel.newVendorStep
+
+	switch step {
+	case newVendorStepVendorName:
+		if value == "" {
+			panel.message = m.t("panel.provider.new_vendor.error.name_empty")
+			return *m, nil
+		}
+		if _, exists := m.config.Vendors[value]; exists {
+			panel.message = m.t("panel.provider.new_vendor.error.vendor_exists")
+			return *m, nil
+		}
+		panel.newVendorData.vendorName = value
+		panel.newVendorStep = newVendorStepEndpointName
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
+
+	case newVendorStepEndpointName:
+		if value == "" {
+			panel.message = m.t("panel.provider.new_vendor.error.endpoint_empty")
+			return *m, nil
+		}
+		panel.newVendorData.endpointName = value
+		panel.newVendorStep = newVendorStepProtocol
+		panel.message = ""
+		return *m, nil
+
+	case newVendorStepProtocol:
+		panel.newVendorData.protocol = newVendorProtocols[panel.newVendorProtoIdx]
+		panel.newVendorStep = newVendorStepBaseURL
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
+
+	case newVendorStepBaseURL:
+		panel.newVendorData.baseURL = value
+		panel.newVendorStep = newVendorStepAPIKey
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
+
+	case newVendorStepAPIKey:
+		panel.newVendorData.apiKey = value
+		// Create the vendor and endpoint
+		d := panel.newVendorData
+		if err := m.config.AddVendor(d.vendorName, "", ""); err != nil {
+			panel.message = err.Error()
+			panel.newVendorStep = 0
+			return *m, nil
+		}
+		if err := m.config.AddEndpoint(d.vendorName, d.endpointName, d.protocol, d.baseURL, d.apiKey); err != nil {
+			panel.message = err.Error()
+			panel.newVendorStep = 0
+			return *m, nil
+		}
+		if err := m.saveConfig(); err != nil {
+			panel.message = err.Error()
+			panel.newVendorStep = 0
+			return *m, nil
+		}
+		// Select the new vendor+endpoint
+		panel.vendorIDs = m.config.VendorNames()
+		panel.vendorIndex = indexOf(panel.vendorIDs, d.vendorName)
+		if panel.vendorIndex < 0 {
+			panel.vendorIndex = 0
+		}
+		panel.endpointIDs = m.config.EndpointNames(d.vendorName)
+		panel.endpointIndex = indexOf(panel.endpointIDs, d.endpointName)
+		if panel.endpointIndex < 0 {
+			panel.endpointIndex = 0
+		}
+		panel.models = nil
+		panel.modelIndex = 0
+		panel.newVendorStep = 0
+		panel.message = m.t("panel.provider.new_vendor.created", d.vendorName, d.endpointName)
+		// Auto-discover models if base URL is present (API key optional for local endpoints like Ollama)
+		if d.baseURL != "" {
+			return *m, m.refreshProviderModelsForVendor(d.vendorName)
+		}
+		return *m, nil
+	}
+	panel.newVendorStep = 0
+	return *m, nil
+}
+
+// handleNewEndpointStep processes the current new-endpoint wizard step on Enter.
+func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
+	panel := m.providerPanel
+	value := strings.TrimSpace(panel.newVendorInput.Value())
+	step := panel.newEndpointStep
+
+	switch step {
+	case newEndpointStepEndpointName:
+		if value == "" {
+			panel.message = m.t("panel.provider.new_vendor.error.endpoint_empty")
+			return *m, nil
+		}
+		vc := m.config.Vendors[panel.selectedVendor()]
+		if _, exists := vc.Endpoints[value]; exists {
+			panel.message = m.t("panel.provider.new_endpoint.error.endpoint_exists")
+			return *m, nil
+		}
+		panel.newEndpointData.endpointName = value
+		panel.newEndpointStep = newEndpointStepProtocol
+		panel.message = ""
+		return *m, nil
+
+	case newEndpointStepProtocol:
+		panel.newEndpointData.protocol = newVendorProtocols[panel.newVendorProtoIdx]
+		panel.newEndpointStep = newEndpointStepBaseURL
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
+
+	case newEndpointStepBaseURL:
+		panel.newEndpointData.baseURL = value
+		panel.newEndpointStep = newEndpointStepAPIKey
+		ti := textinput.New()
+		ti.Prompt = "❯ "
+		ti.Focus()
+		panel.newVendorInput = ti
+		panel.message = ""
+		return *m, nil
+
+	case newEndpointStepAPIKey:
+		panel.newEndpointData.apiKey = value
+		d := panel.newEndpointData
+		if err := m.config.AddEndpoint(panel.selectedVendor(), d.endpointName, d.protocol, d.baseURL, d.apiKey); err != nil {
+			panel.message = err.Error()
+			panel.newEndpointStep = 0
+			return *m, nil
+		}
+		if err := m.saveConfig(); err != nil {
+			panel.message = err.Error()
+			panel.newEndpointStep = 0
+			return *m, nil
+		}
+		panel.endpointIDs = m.config.EndpointNames(panel.selectedVendor())
+		panel.endpointIndex = indexOf(panel.endpointIDs, d.endpointName)
+		if panel.endpointIndex < 0 {
+			panel.endpointIndex = 0
+		}
+		panel.models = nil
+		panel.modelIndex = 0
+		panel.newEndpointStep = 0
+		panel.message = m.t("panel.provider.new_endpoint.created", d.endpointName)
+		if d.baseURL != "" {
+			return *m, m.refreshProviderModelsForVendor(panel.selectedVendor())
+		}
+		return *m, nil
+	}
+	panel.newEndpointStep = 0
 	return *m, nil
 }
 
@@ -776,13 +1085,17 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		return nil
 	}
 
-	// AI Gateway vendors should not use vendor-level API key — each endpoint
-	// must have its own key.
-	isGateway := vendor == "ai-gateway"
-	if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
-		// For gateway vendors, don't fall back to vendor-level key
-		if isGateway || !providerHasUsableAPIKey(resolveAPIKey(endpoint.APIKey, "")) {
-			return nil
+	// Skip API key requirement for local endpoints (e.g., Ollama on localhost)
+	isLocal := isLocalBaseURL(endpoint.BaseURL)
+	if !isLocal {
+		// AI Gateway vendors should not use vendor-level API key — each endpoint
+		// must have its own key.
+		isGateway := vendor == "ai-gateway"
+		if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
+			// For gateway vendors, don't fall back to vendor-level key
+			if isGateway || !providerHasUsableAPIKey(resolveAPIKey(endpoint.APIKey, "")) {
+				return nil
+			}
 		}
 	}
 	if strings.TrimSpace(endpoint.BaseURL) == "" {
@@ -791,9 +1104,10 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 	if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
 		return nil
 	}
-	if _, err := m.config.ResolveEndpoint(vendor, endpointID); err != nil {
-		return nil
-	}
+	// Note: we intentionally do NOT call ResolveEndpoint here because it
+	// requires a model to be set, and we're discovering models precisely
+	// because there may not be one yet. The checks above (vendor/endpoint
+	// existence, API key, baseURL, protocol) are sufficient.
 
 	if m.providerPanel != nil {
 		m.providerPanel.refreshing = true
@@ -806,11 +1120,17 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
+		// Try ResolveEndpoint first; if it fails (e.g. no model set yet),
+		// construct ResolvedEndpoint manually from config for discovery.
 		resolved, err := m.config.ResolveEndpoint(vendor, endpointID)
 		if err != nil {
-			result.skipped++
-			result.discoverErr = err
-			return result
+			resolved = &config.ResolvedEndpoint{
+				VendorID:   vendor,
+				EndpointID: endpointID,
+				Protocol:   endpoint.Protocol,
+				BaseURL:    endpoint.BaseURL,
+				APIKey:     resolveAPIKey(endpoint.APIKey, vc.APIKey),
+			}
 		}
 
 		models, err := provider.DiscoverModels(ctx, resolved)
@@ -923,6 +1243,22 @@ func providerHasUsableAPIKey(value string) bool {
 	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
 }
 
+// isLocalBaseURL returns true for localhost/127.0.0.1 base URLs that don't
+// require an API key (e.g., Ollama, LM Studio, vLLM local deployments).
+func isLocalBaseURL(baseURL string) bool {
+	u := strings.TrimSpace(baseURL)
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "https://")
+	host := u
+	if i := strings.IndexByte(u, ':'); i >= 0 {
+		host = u[:i]
+	}
+	if i := strings.IndexByte(u, '/'); i >= 0 && i < len(host) {
+		host = host[:i]
+	}
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+}
+
 func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) bool {
 	if vendor == auth.ProviderAnthropic && endpoint == "oauth" {
 		info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
@@ -1013,4 +1349,135 @@ func providerEditFieldLabel(lang Language, field string) string {
 	default:
 		return field
 	}
+}
+
+// renderNewVendorWizard renders the multi-step new vendor creation wizard footer.
+func (m *Model) renderNewVendorWizard() []string {
+	panel := m.providerPanel
+	lang := m.currentLanguage()
+	var lines []string
+
+	switch panel.newVendorStep {
+	case newVendorStepVendorName:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_vendor.title")),
+			m.t("panel.provider.new_vendor.step_vendor"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	case newVendorStepEndpointName:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_vendor.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.newVendorData.vendorName),
+			m.t("panel.provider.new_vendor.step_endpoint"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	case newVendorStepProtocol:
+		protoLines := make([]string, 0, len(newVendorProtocols))
+		for i, p := range newVendorProtocols {
+			prefix := "  "
+			style := lipgloss.NewStyle()
+			if i == panel.newVendorProtoIdx {
+				prefix = "❯ "
+				style = style.Foreground(lipgloss.Color("226")).Background(lipgloss.Color("236"))
+			}
+			protoLines = append(protoLines, style.Render(prefix+p))
+		}
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_vendor.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.newVendorData.vendorName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newVendorData.endpointName),
+			m.t("panel.provider.new_vendor.step_protocol"),
+			strings.Join(protoLines, "\n"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+tr(lang, "panel.provider.hint.protocol_select")),
+		)
+	case newVendorStepBaseURL:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_vendor.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.newVendorData.vendorName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newVendorData.endpointName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.protocol"), panel.newVendorData.protocol),
+			m.t("panel.provider.new_vendor.step_base_url"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	case newVendorStepAPIKey:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_vendor.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.newVendorData.vendorName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newVendorData.endpointName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.protocol"), panel.newVendorData.protocol),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.base_url"), panel.newVendorData.baseURL),
+			m.t("panel.provider.new_vendor.step_api_key"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	}
+	if panel.message != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
+	}
+	return lines
+}
+
+// renderNewEndpointWizard renders the multi-step new endpoint creation wizard footer.
+func (m *Model) renderNewEndpointWizard() []string {
+	panel := m.providerPanel
+	lang := m.currentLanguage()
+	var lines []string
+
+	switch panel.newEndpointStep {
+	case newEndpointStepEndpointName:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_endpoint.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.selectedVendor()),
+			m.t("panel.provider.new_vendor.step_endpoint"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	case newEndpointStepProtocol:
+		protoLines := make([]string, 0, len(newVendorProtocols))
+		for i, p := range newVendorProtocols {
+			prefix := "  "
+			style := lipgloss.NewStyle()
+			if i == panel.newVendorProtoIdx {
+				prefix = "❯ "
+				style = style.Foreground(lipgloss.Color("226")).Background(lipgloss.Color("236"))
+			}
+			protoLines = append(protoLines, style.Render(prefix+p))
+		}
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_endpoint.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.selectedVendor()),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newEndpointData.endpointName),
+			m.t("panel.provider.new_vendor.step_protocol"),
+			strings.Join(protoLines, "\n"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+tr(lang, "panel.provider.hint.protocol_select")),
+		)
+	case newEndpointStepBaseURL:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_endpoint.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.selectedVendor()),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newEndpointData.endpointName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.protocol"), panel.newEndpointData.protocol),
+			m.t("panel.provider.new_vendor.step_base_url"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	case newEndpointStepAPIKey:
+		lines = append(lines,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.new_endpoint.title")),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.vendor"), panel.selectedVendor()),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.endpoint"), panel.newEndpointData.endpointName),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.protocol"), panel.newEndpointData.protocol),
+			fmt.Sprintf(" %s: %s", m.t("panel.provider.new_vendor.base_url"), panel.newEndpointData.baseURL),
+			m.t("panel.provider.new_vendor.step_api_key"),
+			panel.newVendorInput.View(),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
+		)
+	}
+	if panel.message != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
+	}
+	return lines
 }

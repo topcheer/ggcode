@@ -888,6 +888,17 @@ func (a *qqAdapter) apiRequestWithRetry(ctx context.Context, method, path string
 	return resp, nil
 }
 
+// tokenRetryDelay returns the delay before retrying token refresh.
+// It uses exponential backoff: 0s, 2s, 4s for attempts 0, 1, 2.
+// Tests can override tokenRetryDelayFn to eliminate the delay.
+var tokenRetryDelayFn = func(attempt int) time.Duration {
+	return time.Duration(attempt) * 2 * time.Second
+}
+
+func tokenRetryDelay(attempt int) time.Duration {
+	return tokenRetryDelayFn(attempt)
+}
+
 func (a *qqAdapter) ensureToken(ctx context.Context) (string, error) {
 	a.mu.RLock()
 	token := a.token
@@ -905,7 +916,7 @@ func (a *qqAdapter) ensureToken(ctx context.Context) (string, error) {
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			case <-time.After(tokenRetryDelay(attempt)):
 			}
 		}
 		tok, err := a.refreshTokenOnce(ctx)

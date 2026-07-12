@@ -11,6 +11,10 @@ import (
 // TestBindingWatcher_AutoMutesStaleOwnership verifies that when another instance
 // changes the LastSessionID on a binding, the watcher auto-mutes the adapter.
 func TestBindingWatcher_AutoMutesStaleOwnership(t *testing.T) {
+	origInterval := bindingWatcherInterval
+	bindingWatcherInterval = 100 * time.Millisecond
+	t.Cleanup(func() { bindingWatcherInterval = origInterval })
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bindings.json")
 	store, err := NewJSONFileBindingStore(path)
@@ -93,6 +97,10 @@ func TestBindingWatcher_NoMuteWhenSameSession(t *testing.T) {
 	binding.LastSessionID = "session-A"
 	mgr.BindChannel(binding)
 
+	origInterval := bindingWatcherInterval
+	bindingWatcherInterval = 100 * time.Millisecond
+	t.Cleanup(func() { bindingWatcherInterval = origInterval })
+
 	mgr.StartBindingWatcher()
 	defer mgr.StopBindingWatcher()
 
@@ -100,7 +108,7 @@ func TestBindingWatcher_NoMuteWhenSameSession(t *testing.T) {
 	// re-write by our own UnmuteBinding).
 	store.Save(binding)
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	if mgr.IsMuted("test-adapter") {
 		t.Fatal("binding should NOT be muted when session ID matches")
@@ -134,13 +142,17 @@ func TestBindingWatcher_SkipsAlreadyMuted(t *testing.T) {
 	// Mute it manually first.
 	mgr.MuteBinding("test-adapter")
 
+	origInterval := bindingWatcherInterval
+	bindingWatcherInterval = 100 * time.Millisecond
+	t.Cleanup(func() { bindingWatcherInterval = origInterval })
+
 	mgr.StartBindingWatcher()
 	defer mgr.StopBindingWatcher()
 
 	// Change session ID externally.
 	store.UpdateSessionID("/ws1", "test-adapter", "session-B")
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	// Should still be muted (no error, no panic).
 	if !mgr.IsMuted("test-adapter") {

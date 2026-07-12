@@ -316,6 +316,16 @@ func SaveDefaultMode(mode string) error {
 	return cfg.SaveDefaultModePreference(mode)
 }
 
+func SaveA2AEnabled(enabled bool) error {
+	globalMu.RLock()
+	cfg := globalCfg
+	globalMu.RUnlock()
+	if cfg == nil {
+		return nil
+	}
+	return cfg.SaveA2AEnabled(enabled)
+}
+
 // ─── Vendor/Endpoint/Model Helpers ────────────────────────
 
 // VendorPresets returns vendor preset info for onboarding.

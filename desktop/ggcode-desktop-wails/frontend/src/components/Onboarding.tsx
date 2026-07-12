@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ChevronRight, FolderOpen } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
-import { useTranslation } from '../i18n'
+import { useTranslation, LOCALE_LABELS, type Locale } from '../i18n'
 
 interface Props {
   onComplete: () => void
@@ -31,8 +31,8 @@ const CUSTOM_ID = '__custom__'
 const CUSTOM_PROTOCOLS = ['openai', 'anthropic', 'ollama']
 
 export function Onboarding({ onComplete }: Props) {
-  const { t } = useTranslation()
-  const [step, setStep] = useState<'workspace' | 'setup' | 'mode'>('workspace')
+  const { t, locale, setLocale } = useTranslation()
+  const [step, setStep] = useState<'language' | 'workspace' | 'setup' | 'mode'>('language')
   const [workDir, setWorkDir] = useState('')
 
   // Onboard form state
@@ -41,7 +41,7 @@ export function Onboarding({ onComplete }: Props) {
   const [selectedEndpoint, setSelectedEndpoint] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
-  const [selectedMode, setSelectedMode] = useState('supervised')
+  const [selectedMode, setSelectedMode] = useState('bypass')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -52,11 +52,19 @@ export function Onboarding({ onComplete }: Props) {
   const [customModels, setCustomModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
 
+  // A2A enabled by default (aligned with TUI)
+  const [a2aEnabled, setA2aEnabled] = useState(true)
+  // Auto-fetched models for standard vendor endpoints
+  const [fetchedModels, setFetchedModels] = useState<string[]>([])
+  const [autoFetching, setAutoFetching] = useState(false)
+
   const isCustom = selectedVendor === CUSTOM_ID
 
   const currentPreset = presets.find(p => p.id === selectedVendor)
   const currentEndpoint = currentPreset?.endpoints.find(e => e.id === selectedEndpoint)
-  const models = currentEndpoint?.models || []
+  const presetModels = currentEndpoint?.models || []
+  // Use fetched models if available, otherwise fall back to preset models
+  const models = fetchedModels.length > 0 ? fetchedModels : presetModels
   const showModels = apiKey !== '' && models.length > 0
 
   useEffect(() => {
@@ -64,6 +72,27 @@ export function Onboarding({ onComplete }: Props) {
       setPresets((p as any[]) || [])
     }).catch(() => {})
   }, [])
+
+  // Auto-fetch models when standard vendor endpoint + API key are set
+  useEffect(() => {
+    if (isCustom || !selectedVendor || !selectedEndpoint || !apiKey.trim()) {
+      setFetchedModels([])
+      return
+    }
+    let cancelled = false
+    setAutoFetching(true)
+    App.FetchModels(selectedVendor, selectedEndpoint, apiKey, '').then(models => {
+      if (!cancelled) {
+        const m = (models as string[]) || []
+        setFetchedModels(m)
+      }
+    }).catch(() => {
+      if (!cancelled) setFetchedModels([])
+    }).finally(() => {
+      if (!cancelled) setAutoFetching(false)
+    })
+    return () => { cancelled = true }
+  }, [selectedVendor, selectedEndpoint, apiKey, isCustom])
 
   const handleSelectDir = async () => {
     try {
@@ -125,12 +154,65 @@ export function Onboarding({ onComplete }: Props) {
       }
       // Save permission mode
       try { await App.SaveDefaultMode(selectedMode) } catch {}
+      // Save A2A setting
+      try { await App.SaveA2AEnabled(a2aEnabled) } catch {}
       onComplete()
     } catch (e: any) {
       setError(e?.message || t('onboarding.saveConfigFailed'))
     } finally {
       setSaving(false)
     }
+  }
+
+  // ─── Step 0: Language Selection ───
+  if (step === 'language') {
+    const locales = Object.entries(LOCALE_LABELS) as [Locale, string][]
+    return (
+      <div style={{
+        flex: 1, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 24,
+      }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+          {t('onboarding.languageTitle')}
+        </h1>
+        <p style={{ fontSize: 15, color: 'var(--text-secondary)', margin: 0 }}>
+          {t('onboarding.languageHint')}
+        </p>
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 10, maxWidth: 480, width: '100%',
+        }}>
+          {locales.map(([code, label]) => (
+            <button
+              key={code}
+              onClick={() => setLocale(code)}
+              style={{
+                padding: '14px 12px', borderRadius: 'var(--radius-md)',
+                border: `2px solid ${locale === code ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                background: locale === code ? 'var(--color-primary)' : 'var(--color-card)',
+                color: locale === code ? '#fff' : 'var(--text-primary)',
+                cursor: 'pointer', fontSize: 14, fontWeight: 500,
+                textAlign: 'center',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setStep('workspace')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '12px 32px', borderRadius: 'var(--radius-lg)',
+            background: 'var(--color-primary)', color: '#fff',
+            border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 500,
+          }}
+        >
+          {t('onboarding.next')}
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    )
   }
 
   // ─── Step 1: Workspace Selection ───
@@ -198,6 +280,26 @@ export function Onboarding({ onComplete }: Props) {
             </button>
           ))}
         </div>
+
+        {/* A2A Toggle */}
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--color-border)', background: 'var(--color-card)',
+          cursor: 'pointer', width: 420,
+        }}>
+          <input
+            type="checkbox"
+            checked={a2aEnabled}
+            onChange={e => setA2aEnabled(e.target.checked)}
+            style={{ width: 16, height: 16, cursor: 'pointer' }}
+          />
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text-primary)' }}>{t('onboarding.a2a')}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('onboarding.a2aDesc')}</div>
+          </div>
+        </label>
+
         <div style={{ display: 'flex', gap: 12, width: 420 }}>
           <button onClick={() => setStep('setup')} style={{
             flex: 1, height: 40, borderRadius: 'var(--radius-md)',
@@ -245,6 +347,7 @@ export function Onboarding({ onComplete }: Props) {
             setSelectedModel('')
             setApiKey('')
             setCustomModels([])
+            setFetchedModels([])
           }} style={selectStyle}>
             <option value="">{t('onboarding.chooseVendor')}</option>
             {presets.map(p => <option key={p.id} value={p.id}>{p.displayName}</option>)}
@@ -334,6 +437,7 @@ export function Onboarding({ onComplete }: Props) {
                 <select value={selectedEndpoint} onChange={e => {
                   setSelectedEndpoint(e.target.value)
                   setSelectedModel('')
+                  setFetchedModels([])
                 }} style={selectStyle}>
                   <option value="">{t('onboarding.chooseEndpoint')}</option>
                   {currentPreset.endpoints.map(ep => (
@@ -360,7 +464,9 @@ export function Onboarding({ onComplete }: Props) {
             {/* Model */}
             {showModels && (
               <label style={{ display: 'block', marginBottom: 16 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>{t('settings.model')}</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>
+                  {t('settings.model')}{autoFetching ? ' (...)' : ''}
+                </span>
                 <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={selectStyle}>
                   <option value="">{t('onboarding.chooseModel')}</option>
                   {models.map(m => <option key={m} value={m}>{m}</option>)}

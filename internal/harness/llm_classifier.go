@@ -67,8 +67,12 @@ func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) 
 
 	userPrompt := fmt.Sprintf("User input: %q", input)
 
-	// 8-second timeout (CN proxy endpoints can be slow)
-	classifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	// 8-second timeout (CN proxy endpoints can be slow); overridable for tests
+	timeout := classifyTimeout
+	if timeout == 0 {
+		timeout = 8 * time.Second
+	}
+	classifyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	resp, err := prov.Chat(classifyCtx, []provider.Message{
@@ -124,6 +128,9 @@ func truncateText(s string, n int) string {
 
 // jsonBlockRegex matches JSON objects in text (may be wrapped in markdown code blocks).
 var jsonBlockRegex = regexp.MustCompile(`(?s)\{[^{}]*"classification"[^{}]*\}`)
+
+// classifyTimeout is 0 by default (uses 8s). Tests can set this to a short value.
+var classifyTimeout time.Duration
 
 // parseClassifierResponse parses the LLM's JSON response.
 func parseClassifierResponse(text string) (*LLMClassifierResult, error) {

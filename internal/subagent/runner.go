@@ -80,6 +80,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		sa.setStatus(StatusRunning)
 		sa.setActivity("thinking", "", "")
 		sa.setStartedAt(time.Now())
+		// Mark that a real goroutine is running this agent.
+		// CancelAll() uses this to decide whether to wait on done.
+		sa.mu.Lock()
+		sa.goroutineStarted = true
+		sa.mu.Unlock()
+		debug.Log("cancel", "Run: goroutine started id=%s", cfg.SubAgentID)
 	}
 
 	// Build tool subset for this sub-agent
@@ -251,11 +257,13 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		if subCtx.Err() == context.DeadlineExceeded {
 			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("sub-agent timed out after %v", timeout))
 		} else if subCtx.Err() == context.Canceled {
+			debug.Log("cancel", "Run: context cancelled, calling Complete id=%s", cfg.SubAgentID)
 			cfg.Manager.Complete(cfg.SubAgentID, result, fmt.Errorf("sub-agent cancelled"))
 		} else {
 			cfg.Manager.Complete(cfg.SubAgentID, result, err)
 		}
 	} else {
+		debug.Log("cancel", "Run: completed successfully, calling Complete id=%s", cfg.SubAgentID)
 		cfg.Manager.Complete(cfg.SubAgentID, result, nil)
 	}
 }

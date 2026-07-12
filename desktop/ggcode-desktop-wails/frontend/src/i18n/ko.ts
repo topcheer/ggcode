@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ 커스텀 제공자',
+  'onboarding.a2a': 'A2A 서비스',
+  'onboarding.a2aDesc': '에이전트 간 통신 활성화(권장)',
+  'onboarding.languageTitle': '언어 선택',
+  'onboarding.languageHint': '나중에 설정에서 변경할 수 있습니다',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': '각 도구 실행을 검토하고 승인',

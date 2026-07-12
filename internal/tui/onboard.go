@@ -123,8 +123,9 @@ type onboardModel struct {
 
 	// Custom provider
 	customProtocolIdx int
-	customFields      [4]textinput.Model // 0=name, 1=url, 2=apikey, 3=model
-	customCursor      int                // 0=protocol, 1-4=fields, 5=submit
+	customFields      [4]textinput.Model       // 0=name, 1=url, 2=apikey, 3=model
+	customCursor      int                      // 0=protocol, 1-4=fields, 5=submit
+	customResolved    *config.ResolvedEndpoint // built when custom provider submits, used for model discovery
 }
 
 func (m *onboardModel) currentLanguage() Language {
@@ -164,7 +165,16 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		name string
 	}{
 		{"en", "English"},
-		{"zh-CN", "中文"},
+		{"zh-CN", "简体中文"},
+		{"zh-TW", "繁體中文"},
+		{"ja", "日本語"},
+		{"ko", "한국어"},
+		{"es", "Español"},
+		{"fr", "Français"},
+		{"de", "Deutsch"},
+		{"ru", "Русский"},
+		{"pt", "Português"},
+		{"vi", "Tiếng Việt"},
 	}
 
 	vf := textinput.New()
@@ -213,6 +223,8 @@ func RunOnboard(cfg *config.Config) (*OnboardResult, error) {
 		imFocused:      -1,
 		customFields:   customFields,
 		customCursor:   0,
+		optMode:        2, // bypass
+		optA2A:         true,
 	}
 	m.refreshInputPlaceholders()
 
@@ -303,11 +315,13 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case discoverResultMsg:
-		if m.step == onboardStepModel && len(msg.models) > 0 {
-			m.allModels = msg.models
-			m.models = msg.models
-			m.applyModelFilter()
+		if m.step == onboardStepModel {
 			m.modelLoading = false
+			if len(msg.models) > 0 {
+				m.allModels = msg.models
+				m.models = msg.models
+				m.applyModelFilter()
+			}
 		}
 		return m, nil
 
@@ -360,6 +374,13 @@ func (m *onboardModel) prevStep() onboardStep {
 	case onboardStepEndpoint:
 		// Endpoint is always reached from Vendor, never from Custom.
 		return onboardStepVendor
+	case onboardStepModel:
+		// If the user came via Custom path (selectedVendor not set),
+		// go back to Custom, not Endpoint.
+		if m.selectedVendor.ID == "" {
+			return onboardStepCustom
+		}
+		return onboardStepEndpoint
 	case onboardStepOptional:
 		// If the user came via Custom path (selectedVendor not set),
 		// go back to Custom, not Model.
@@ -397,6 +418,10 @@ func (m *onboardModel) restoreFocus() {
 }
 
 func (m *onboardModel) buildResolved() *config.ResolvedEndpoint {
+	// Custom provider path: use the resolved endpoint built from custom fields
+	if m.selectedVendor.ID == "" && m.customResolved != nil {
+		return m.customResolved
+	}
 	if len(m.selectedVendor.Endpoints) == 0 {
 		return nil
 	}
@@ -412,5 +437,28 @@ func (m *onboardModel) buildResolved() *config.ResolvedEndpoint {
 		BaseURL:      ep.BaseURL,
 		APIKey:       apiKey,
 		Model:        ep.DefaultModel,
+	}
+}
+
+// buildCustomResolved creates a ResolvedEndpoint from custom provider form fields.
+func (m *onboardModel) buildCustomResolved() *config.ResolvedEndpoint {
+	protocol := customProtocols[m.customProtocolIdx]
+	name := strings.TrimSpace(m.customFields[0].Value())
+	url := strings.TrimSpace(m.customFields[1].Value())
+	apiKey := strings.TrimSpace(m.customFields[2].Value())
+	model := strings.TrimSpace(m.customFields[3].Value())
+	if url == "" {
+		return nil
+	}
+	return &config.ResolvedEndpoint{
+		VendorID:     "custom",
+		VendorName:   name,
+		EndpointID:   "default",
+		EndpointName: name,
+		Protocol:     protocol,
+		AuthType:     "api_key",
+		BaseURL:      url,
+		APIKey:       apiKey,
+		Model:        model,
 	}
 }

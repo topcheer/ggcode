@@ -744,9 +744,45 @@ func zhCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter 保存 • Esc 取消"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • e 新增端点 • Esc 关闭"
+		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • e 新增端点 • n 新增供应商 • Esc 关闭"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot：l 登录 • x 登出 • b 编辑企业域名"
+	case "panel.provider.hint.protocol_select":
+		return "j/k 选择 • Enter 确认"
+	case "panel.provider.new_vendor.title":
+		return "新增供应商"
+	case "panel.provider.new_vendor.vendor":
+		return "供应商"
+	case "panel.provider.new_vendor.endpoint":
+		return "端点"
+	case "panel.provider.new_vendor.protocol":
+		return "协议"
+	case "panel.provider.new_vendor.base_url":
+		return "Base URL"
+	case "panel.provider.new_vendor.step_vendor":
+		return "输入供应商名称（如 openai、anthropic 或自定义）："
+	case "panel.provider.new_vendor.step_endpoint":
+		return "输入端点名称（如 default、eu、fast）："
+	case "panel.provider.new_vendor.step_protocol":
+		return "选择协议："
+	case "panel.provider.new_vendor.step_base_url":
+		return "输入 Base URL（如 https://api.openai.com/v1）："
+	case "panel.provider.new_vendor.step_api_key":
+		return "输入 API Key（留空跳过）："
+	case "panel.provider.new_vendor.created":
+		return "已创建供应商 %q 及端点 %q。"
+	case "panel.provider.new_vendor.error.name_empty":
+		return "供应商名称不能为空。"
+	case "panel.provider.new_vendor.error.vendor_exists":
+		return "供应商已存在。"
+	case "panel.provider.new_vendor.error.endpoint_empty":
+		return "端点名称不能为空。"
+	case "panel.provider.new_endpoint.title":
+		return "新增端点"
+	case "panel.provider.new_endpoint.created":
+		return "已创建端点 %q。"
+	case "panel.provider.new_endpoint.error.endpoint_exists":
+		return "端点已存在。"
 	case "panel.provider.saved":
 		return "已保存。"
 	case "panel.provider.saved_activated":

@@ -585,6 +585,10 @@ const tr = {
 
   // Onboarding
   'onboarding.customProvider': '+ Özel Sağlayıcı',
+  'onboarding.a2a': 'A2A Servisi',
+  'onboarding.a2aDesc': 'Ajanlar arası iletişimi etkinleştir (önerilir)',
+  'onboarding.languageTitle': 'Dilinizi seçin',
+  'onboarding.languageHint': "Bunu daha sonra Ayarlar'da değiştirebilirsiniz",
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Her araç yürütmeyi gözden geçirin ve onaylayın',

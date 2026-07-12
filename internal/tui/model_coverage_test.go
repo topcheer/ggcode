@@ -832,6 +832,16 @@ func TestCancelActiveRun_CancelsSubAgents(t *testing.T) {
 
 	m.cancelActiveRun()
 
+	// CancelAll runs asynchronously in a goroutine. Poll until the sub-agent
+	// is cancelled or timeout.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		sa, _ := m.subAgentMgr.Get("sa-1")
+		if sa.Status == subagent.StatusCancelled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	sa, _ := m.subAgentMgr.Get("sa-1")
 	if sa.Status != subagent.StatusCancelled {
 		t.Errorf("expected sub-agent cancelled after cancelActiveRun, got %s", sa.Status)

@@ -423,6 +423,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case subAgentDoneMsg:
 		return m.handleSubAgentDoneMsg(msg)
 
+	case subAgentsCancelDoneMsg:
+		debug.Log("cancel", "subAgentsCancelDoneMsg received: clearing subAgentsCanceling=false")
+		m.subAgentsCanceling = false
+		return m, nil
+
 	case modeChangeMsg:
 		m.mode = msg.Mode
 		return m, nil

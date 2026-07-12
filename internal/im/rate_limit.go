@@ -97,15 +97,21 @@ func capDuration(d time.Duration) time.Duration {
 	return d
 }
 
-// sleepRetry sleeps for the given duration, respecting context cancellation.
-// Returns ctx.Err() if the context is cancelled during the sleep.
-func sleepRetry(ctx context.Context, d time.Duration) error {
+// sleepRetryFn is the underlying sleep function. Tests can override this
+// to avoid real sleeping. Production code uses the default implementation.
+var sleepRetryFn = func(ctx context.Context, d time.Duration) error {
 	select {
 	case <-time.After(d):
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// sleepRetry sleeps for the given duration, respecting context cancellation.
+// Returns ctx.Err() if the context is cancelled during the sleep.
+func sleepRetry(ctx context.Context, d time.Duration) error {
+	return sleepRetryFn(ctx, d)
 }
 
 // jitterDuration applies ±25% random jitter to a duration to prevent the

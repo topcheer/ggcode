@@ -141,6 +141,8 @@ export function RespondApproval(arg1:string,arg2:string):Promise<void>;
 
 export function RespondAskUser(arg1:string,arg2:string):Promise<void>;
 
+export function SaveA2AEnabled(arg1:boolean):Promise<void>;
+
 export function SaveAPIKey(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveDefaultMode(arg1:string):Promise<void>;

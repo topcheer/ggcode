@@ -47,6 +47,11 @@ func TestEnsureTokenAcceptsStringExpiresIn(t *testing.T) {
 }
 
 func TestAPIRequestDoesNotSwallowTokenErrors(t *testing.T) {
+	// Override retry delay to 0 so the 3 retry attempts don't sleep 6s
+	origDelay := tokenRetryDelayFn
+	tokenRetryDelayFn = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { tokenRetryDelayFn = origDelay })
+
 	var gatewayCalls int
 	adapter := &qqAdapter{
 		appID:     "123",

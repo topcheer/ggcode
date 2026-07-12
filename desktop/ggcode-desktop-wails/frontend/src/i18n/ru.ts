@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ Пользовательский провайдер',
+  'onboarding.a2a': 'Сервис A2A',
+  'onboarding.a2aDesc': 'Включить обмен данными между агентами (рекомендуется)',
+  'onboarding.languageTitle': 'Выберите язык',
+  'onboarding.languageHint': 'Вы можете изменить это позже в Настройках',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Проверять и одобрять каждое выполнение инструмента',

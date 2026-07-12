@@ -183,9 +183,12 @@ func TestClassifyWithLLM_ProviderError(t *testing.T) {
 }
 
 func TestClassifyWithLLM_Timeout(t *testing.T) {
+	// Use a short timeout to keep the test fast (<1s instead of 8s)
+	classifyTimeout = 200 * time.Millisecond
+	defer func() { classifyTimeout = 0 }()
 	prov := &mockClassifierProvider{
 		response: `{"classification": "code_change", "confidence": 0.9, "reason": "test"}`,
-		delay:    15 * time.Second, // longer than 8s timeout
+		delay:    2 * time.Second, // longer than 200ms timeout
 	}
 	result, err := ClassifyWithLLM(context.Background(), prov, "this is a long enough input for the classifier to process")
 	if err == nil {

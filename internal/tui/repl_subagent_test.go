@@ -20,11 +20,11 @@ func TestSubAgentCancelAllDoesNotBlockOnProgramSend(t *testing.T) {
 	defer mgr.Shutdown()
 	repl.SetSubAgentManager(mgr, prov, tool.NewRegistry())
 
+	// Spawn creates a Pending sub-agent (no runner started — that happens
+	// via SpawnAgentTool.Execute, which we don't call here). This tests
+	// that CancelAll on a Pending agent calls notifyUpdate (which triggers
+	// programSend) and returns without blocking.
 	id := mgr.Spawn("worker", "task", "task", nil, context.Background())
-	if ok := mgr.SetCancel(id, func() {}); !ok {
-		t.Fatal("SetCancel returned false")
-	}
-	time.Sleep(120 * time.Millisecond)
 
 	// Simulate a realistic program.Send: buffered channel send that never
 	// blocks (just like real Bubble Tea program.Send).
@@ -55,4 +55,5 @@ func TestSubAgentCancelAllDoesNotBlockOnProgramSend(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected cancel callback to attempt a program send")
 	}
+	_ = id // suppress unused variable
 }

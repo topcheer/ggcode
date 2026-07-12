@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ Custom Provider',
+  'onboarding.a2a': 'A2A Service',
+  'onboarding.a2aDesc': 'Enable agent-to-agent communication (recommended)',
+  'onboarding.languageTitle': 'Choose Your Language',
+  'onboarding.languageHint': 'You can change this later in Settings',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Review and approve each tool execution',

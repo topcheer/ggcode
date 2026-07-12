@@ -204,10 +204,12 @@ func (a *App) initWorkspace(dir string) {
 	// If no sessions exist, create a new one.
 	if latestID := a.resumeLatestSession(); latestID != "" {
 		debug.Log("app", "resumed latest session: %s", latestID)
+		// InitAgent is already called inside LoadSession→resumeLatestSession,
+		// so we skip it here to avoid starting a duplicate A2A server.
 	} else {
 		chat.EnsureSession()
+		_ = chat.InitAgent()
 	}
-	_ = chat.InitAgent()
 
 	// Start IM adapters AFTER InitAgent so the bridge has the correct chat instance
 	a.startIMAdapters()
@@ -927,6 +929,10 @@ func (a *App) GetWorkDir() string {
 // SaveDefaultMode saves the default permission mode.
 func (a *App) SaveDefaultMode(mode string) error {
 	return wailskit.SaveDefaultMode(mode)
+}
+
+func (a *App) SaveA2AEnabled(enabled bool) error {
+	return wailskit.SaveA2AEnabled(enabled)
 }
 
 // SelectDirectory opens a native directory picker.

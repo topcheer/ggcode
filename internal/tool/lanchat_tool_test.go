@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/lanchat"
 )
@@ -17,6 +18,13 @@ func newTestLanChatTool(t *testing.T) (LanChatTool, *lanchat.Hub) {
 	hub := lanchat.NewHub("node-self", "tui", "http://localhost:1", "", store, lanchat.WorkspaceMeta{
 		Workspace: "/tmp/test-project",
 	})
+	// Use a very short HTTP timeout so tests that try to send to non-existent
+	// endpoints (localhost:2, etc.) fail fast instead of waiting 2s each.
+	hub.SetHTTPTimeout(50 * time.Millisecond)
+	// Eliminate retry delays so postToPeerWithRetry doesn't sleep 1s between attempts
+	origRetryDelay := lanchat.PeerRetryDelayFn
+	lanchat.PeerRetryDelayFn = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { lanchat.PeerRetryDelayFn = origRetryDelay })
 	tool := LanChatTool{Hub: hub, rateLimiter: newAgentRateLimiter(), dmCooldown: defaultAgentDMCooldown}
 	return tool, hub
 }

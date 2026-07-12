@@ -174,6 +174,15 @@ func (h *Hub) SetAttachments(am *AttachmentManager) {
 // This loads the nick from <baseDir>/sessions/<sessionID>/lanchat-nick
 // if it exists, overriding the global nick. Subsequent SetNick calls persist
 // to this session-scoped path. If sessionID is empty, the global path is used.
+// SetHTTPTimeout overrides the HTTP client timeout. Tests use this to
+// set a very short timeout so network calls to non-existent endpoints
+// fail fast instead of waiting the full default timeout.
+func (h *Hub) SetHTTPTimeout(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.httpClient = &http.Client{Timeout: d}
+}
+
 func (h *Hub) SetSessionID(baseDir, sessionID string) {
 	if sessionID == "" || baseDir == "" {
 		return
@@ -998,6 +1007,12 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 // postToPeerWithRetry sends a message to a peer, retrying up to maxRetries
 // times on transient failures. Uses smart transport selection: skips TCP
 // when peerHealthMap indicates TCP is down for this peer.
+// PeerRetryDelayFn returns the delay before retrying a peer message.
+// Tests override this to eliminate real sleeping.
+var PeerRetryDelayFn = func(attempt int) time.Duration {
+	return time.Duration(attempt) * time.Second
+}
+
 func (h *Hub) postToPeerWithRetry(ctx context.Context, nodeID, endpoint string, msg Message, maxRetries int) error {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -1005,7 +1020,7 @@ func (h *Hub) postToPeerWithRetry(ctx context.Context, nodeID, endpoint string, 
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * time.Second):
+			case <-time.After(PeerRetryDelayFn(attempt)):
 			}
 		}
 		if err := h.sendToPeerSmart(ctx, nodeID, endpoint, msg); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -62,28 +63,29 @@ type AgentMessage struct {
 
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
-	ID              string
-	Name            string // short, meaningful label (required)
-	Task            string
-	DisplayTask     string
-	Tools           []string
-	ToolCallCount   int
-	Status          Status
-	CurrentPhase    string
-	CurrentTool     string
-	CurrentArgs     string
-	ProgressSummary string
-	Result          string
-	Error           error
-	CreatedAt       time.Time
-	StartedAt       time.Time
-	EndedAt         time.Time
-	Mailbox         chan AgentMessage
-	events          []AgentEvent
-	eventsDropped   int
-	cancel          context.CancelFunc
-	done            chan struct{} // closed when the sub-agent reaches any terminal state
-	mu              sync.Mutex
+	ID               string
+	Name             string // short, meaningful label (required)
+	Task             string
+	DisplayTask      string
+	Tools            []string
+	ToolCallCount    int
+	Status           Status
+	CurrentPhase     string
+	CurrentTool      string
+	CurrentArgs      string
+	ProgressSummary  string
+	Result           string
+	Error            error
+	CreatedAt        time.Time
+	StartedAt        time.Time
+	EndedAt          time.Time
+	Mailbox          chan AgentMessage
+	events           []AgentEvent
+	eventsDropped    int
+	cancel           context.CancelFunc
+	done             chan struct{} // closed when the sub-agent reaches any terminal state
+	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
+	mu               sync.Mutex
 }
 
 type Snapshot struct {
@@ -250,7 +252,7 @@ func (s *SubAgent) statusInfo() StatusInfo {
 // and reasoning chunks are flushed to the TUI. Without batching, each LLM
 // token (~50-100/s per agent) triggers a separate program.Send → Bubble Tea
 // Update(), flooding the event loop and causing severe TUI stuttering.
-const streamBatchInterval = 80 * time.Millisecond
+const streamBatchInterval = 500 * time.Millisecond
 
 type Manager struct {
 	agents       map[string]*SubAgent
@@ -266,6 +268,10 @@ type Manager struct {
 	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
 	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
 	nextID       int
+	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
+	// goroutine to actually terminate after context cancellation. Default: 5s.
+	// Overridable for tests.
+	cancelAllTimeout time.Duration
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
 	// per-call/per-submit ctx so that sub-agents survive the parent agent
 	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
@@ -447,11 +453,13 @@ func (m *Manager) Cancel(id string) bool {
 	sa, ok := m.agents[id]
 	m.mu.Unlock()
 	if !ok {
+		debug.Log("cancel", "Cancel: agent not found id=%s", id)
 		return false
 	}
 	sa.mu.Lock()
 	switch sa.Status {
 	case StatusCompleted, StatusFailed, StatusCancelled:
+		debug.Log("cancel", "Cancel: agent already terminal id=%s status=%s", id, sa.Status)
 		sa.mu.Unlock()
 		return false
 	}
@@ -463,7 +471,12 @@ func (m *Manager) Cancel(id string) bool {
 	sa.CurrentPhase = "cancelled"
 	sa.Error = context.Canceled
 	sa.EndedAt = time.Now()
-	sa.closeDone()
+	debug.Log("cancel", "Cancel: set Status=Cancelled id=%s goroutineStarted=%v", id, sa.goroutineStarted)
+	// Do NOT close done here — let the goroutine's Complete() call close it
+	// when it actually terminates. This allows CancelAll()'s wait loop to
+	// genuinely wait for goroutine termination (with timeout fallback).
+	// Complete() calls closeDone() in all paths, including when Status is
+	// already Cancelled (terminal state check).
 	sa.mu.Unlock()
 	m.notifyUpdate(sa)
 	return true
@@ -481,44 +494,66 @@ func (sa *SubAgent) closeDone() {
 }
 
 // CancelAll cancels all pending or running sub-agents, then waits up to
-// cancelAllTimeout for each to actually terminate. Returns the number cancelled.
+// cancelAllTimeout for each Running sub-agent's goroutine to actually
+// terminate. Returns the number cancelled.
+//
+// Only Running agents (which have an active goroutine) are waited on.
+// Pending agents (no goroutine started yet) are cancelled but not waited
+// on, since there is nothing to wait for.
 func (m *Manager) CancelAll() int {
+	timeout := m.cancelAllTimeout
+	if timeout == 0 {
+		timeout = cancelAllTimeout
+	}
+	debug.Log("cancel", "CancelAll: START timeout=%v", timeout)
+
 	m.mu.Lock()
 	ids := make([]string, 0)
+	// Collect done channels for Running agents BEFORE calling Cancel().
+	// Cancel() no longer closes done (it lets Complete() do that when the
+	// goroutine actually exits), so we must grab the channels while we can
+	// still distinguish Running (has goroutine) from Pending (no goroutine).
+	var doneChs []<-chan struct{}
 	for id, sa := range m.agents {
 		status := sa.getStatus()
 		if status == StatusPending || status == StatusRunning {
 			ids = append(ids, id)
+			// Only wait on agents whose goroutine was actually started by Run().
+			// SetCancel() transitions Pending→Running but doesn't start a goroutine;
+			// only Run() sets goroutineStarted=true.
+			if sa.goroutineStarted && sa.done != nil {
+				doneChs = append(doneChs, sa.done)
+			}
 		}
 	}
 	m.mu.Unlock()
 
 	cancelled := 0
-	var doneChs []<-chan struct{}
 	for _, id := range ids {
 		if m.Cancel(id) {
 			cancelled++
 		}
-		if sa, ok := m.Get(id); ok && sa.done != nil {
-			doneChs = append(doneChs, sa.done)
-		}
 	}
+	debug.Log("cancel", "CancelAll: cancelled %d agents, waiting on %d goroutines", cancelled, len(doneChs))
 
-	// Wait for all cancelled agents to actually terminate (with timeout).
+	// Wait for Running agents' goroutines to actually terminate (with timeout).
 	if len(doneChs) > 0 {
-		timeout := time.NewTimer(cancelAllTimeout)
-		defer timeout.Stop()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
 		for _, ch := range doneChs {
 			select {
 			case <-ch:
-			case <-timeout.C:
+				debug.Log("cancel", "CancelAll: goroutine terminated normally")
+			case <-timer.C:
 				// Timed out waiting — the sub-agent's goroutine may still be
 				// finishing. We've already set Status=Cancelled and cancelled
 				// its context, so it will terminate eventually.
+				debug.Log("cancel", "CancelAll: TIMEOUT waiting for goroutine termination")
 				return cancelled
 			}
 		}
 	}
+	debug.Log("cancel", "CancelAll: DONE all goroutines terminated, cancelled=%d", cancelled)
 	return cancelled
 }
 

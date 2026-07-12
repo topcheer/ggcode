@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ Benutzerdefinierter Anbieter',
+  'onboarding.a2a': 'A2A-Dienst',
+  'onboarding.a2aDesc': 'Agent-zu-Agent-Kommunikation aktivieren (empfohlen)',
+  'onboarding.languageTitle': 'Wählen Sie Ihre Sprache',
+  'onboarding.languageHint': 'Sie können dies später in den Einstellungen ändern',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Jede Werkzeugausführung prüfen und genehmigen',

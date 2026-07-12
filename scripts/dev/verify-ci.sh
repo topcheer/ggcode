@@ -33,8 +33,7 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-# Limit parallelism and heap to prevent OOM kills on memory-constrained CI runners.
-GOMEMLIMIT=2GiB go build -tags goolm -p 2 -o /tmp/ggcode ./cmd/ggcode
+GOMEMLIMIT=4GiB go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] cross-platform compile check (linux + windows)"
 # Catch errors in platform-specific files (*_darwin.go, *_linux.go, *_windows.go)
@@ -42,7 +41,7 @@ echo "[verify-ci] cross-platform compile check (linux + windows)"
 for target in "linux/amd64" "windows/amd64"; do
   os="${target%%/*}"
   arch="${target##*/}"
-  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT=1GiB go build -tags goolm -p 2 ./cmd/ggcode 2>/tmp/cross-build.err; then
+  if ! CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOMEMLIMIT=2GiB go build -tags goolm ./cmd/ggcode 2>/tmp/cross-build.err; then
     echo "[verify-ci] cross-compile FAILED for ${os}/${arch}:"
     cat /tmp/cross-build.err
     exit 1
@@ -51,17 +50,14 @@ done
 echo "[verify-ci] cross-platform compile check passed"
 
 echo "[verify-ci] running go vet (main module)"
-GOMEMLIMIT=2GiB go vet -tags goolm -p 2 ./cmd/... ./internal/...
+GOMEMLIMIT=4GiB go vet -tags goolm ./cmd/... ./internal/...
 
 echo "[verify-ci] running tests (main module, unit only)"
 # NOTE: do NOT use the "integration" tag here — integration tests (e.g. browser
 # tests that spawn Chrome) are too heavy for CI and will OOM. Run them
 # separately via: go test -tags "goolm,integration" ./internal/tool/ -run TestBrowserIntegration
-# 8GiB limit gives comfortable headroom for large test packages (tui, agent, a2a).
-# Run tests in two batches to reduce peak memory usage.
-# Split: lightweight packages first (cmd, small internal pkgs), then heavy ones.
-GOMEMLIMIT=8GiB go test -tags goolm -p 1 -parallel 1 -timeout 300s ./cmd/... ./internal/agent/... ./internal/config/... ./internal/context/... ./internal/provider/... ./internal/session/... ./internal/util/...
-GOMEMLIMIT=8GiB go test -tags goolm -p 1 -parallel 1 -timeout 300s ./internal/a2a/... ./internal/acp/... ./internal/cron/... ./internal/debug/... ./internal/tui/extpane/... ./internal/im/... ./internal/mcp/... ./internal/permission/... ./internal/plugin/... ./internal/runfile/... ./internal/stream/... ./internal/tool/... ./internal/tui/... ./internal/tunnel/... ./internal/update/... ./internal/vcs/... ./internal/webui/...
+# 16GiB limit + default parallelism on 64GB machines.
+GOMEMLIMIT=16GiB go test -tags goolm -timeout 600s ./cmd/... ./internal/...
 
 # ── Desktop module (CGO required, macOS only) ────────────────────────────
 desktop_dir="${repo_root}/desktop/ggcode-desktop-wails"
@@ -81,7 +77,7 @@ if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
   (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
 
   echo "[verify-ci:desktop] running tests"
-  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=2GiB go test -tags goolm -p 1 -parallel 1 -count=1 -timeout 120s ./...)
+  (cd "${desktop_dir}" && CGO_ENABLED=1 GOMEMLIMIT=4GiB go test -tags goolm -count=1 -timeout 120s ./...)
 fi
 
 # ── Frontend Vitest (no CGO needed) ───────────────────────────────────────

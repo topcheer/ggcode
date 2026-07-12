@@ -11,6 +11,15 @@ func (m *onboardModel) lang() string {
 }
 
 var onboardTexts = map[string]map[string]string{
+	"zh-TW": zhTWOnboardTexts(),
+	"ja":    jaOnboardTexts(),
+	"ko":    koOnboardTexts(),
+	"es":    esOnboardTexts(),
+	"fr":    frOnboardTexts(),
+	"de":    deOnboardTexts(),
+	"ru":    ruOnboardTexts(),
+	"pt":    ptOnboardTexts(),
+	"vi":    viOnboardTexts(),
 	"en": {
 		"title":            "🚀 ggcode setup",
 		"step_language":    "Select your language",
@@ -29,12 +38,12 @@ var onboardTexts = map[string]map[string]string{
 		"custom_name":      "Display Name:",
 		"custom_url":       "Base URL:",
 		"custom_apikey":    "API Key (optional):",
-		"custom_model":     "Model:",
+		"custom_model":     "Model (optional, auto-detected):",
 		"custom_submit":    "✓ Continue to optional settings",
 		"custom_hint":      "Tab/↑↓ to navigate · ←→ to change protocol · Enter to submit",
 		"custom_err_name":  "Display name is required",
 		"custom_err_url":   "Base URL is required",
-		"custom_err_model": "Model name is required",
+		"custom_err_model": "Model name is required (or ensure your endpoint supports model discovery)",
 		"custom_vendor":    "Custom provider...",
 		"permission_mode":  "Permission mode:",
 		"mode_supervised":  "confirm before executing",
@@ -79,12 +88,12 @@ var onboardTexts = map[string]map[string]string{
 		"custom_name":      "显示名称：",
 		"custom_url":       "基础 URL：",
 		"custom_apikey":    "API 密钥（可选）：",
-		"custom_model":     "模型：",
+		"custom_model":     "模型（可选，自动发现）：",
 		"custom_submit":    "✓ 继续到可选设置",
 		"custom_hint":      "Tab/↑↓ 导航 · ←→ 切换协议 · Enter 提交",
 		"custom_err_name":  "显示名称不能为空",
 		"custom_err_url":   "基础 URL 不能为空",
-		"custom_err_model": "模型名称不能为空",
+		"custom_err_model": "模型名称不能为空（或确保端点支持模型发现）",
 		"custom_vendor":    "自定义供应商...",
 		"permission_mode":  "权限模式：",
 		"mode_supervised":  "执行前确认",
@@ -119,6 +128,14 @@ func (m *onboardModel) tr(key string) string {
 	if texts, ok := onboardTexts[lang]; ok {
 		if v, ok := texts[key]; ok {
 			return v
+		}
+	}
+	// zh-TW falls back to zh-CN
+	if lang == "zh-TW" {
+		if texts, ok := onboardTexts["zh-CN"]; ok {
+			if v, ok := texts[key]; ok {
+				return v
+			}
 		}
 	}
 	if texts, ok := onboardTexts["en"]; ok {

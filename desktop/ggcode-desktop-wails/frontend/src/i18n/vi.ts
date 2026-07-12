@@ -585,6 +585,10 @@ const en = {
 
   // Onboarding
   'onboarding.customProvider': '+ Nhà cung cấp tùy chỉnh',
+  'onboarding.a2a': 'Dịch vụ A2A',
+  'onboarding.a2aDesc': 'Bật giao tiếp giữa các agent (khuyên dùng)',
+  'onboarding.languageTitle': 'Chọn ngôn ngữ',
+  'onboarding.languageHint': 'Bạn có thể thay đổi sau trong Cài đặt',
 
   // SettingsPage mode descriptions (FeatureCard)
   'settings.modeDescSupervised': 'Xem xét và phê duyệt từng lần thực thi công cụ',
