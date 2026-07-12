@@ -219,21 +219,44 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	return result
 }
 
-// safeExecute calls t.Execute with panic recovery. If the tool panics
-// (e.g. nil pointer dereference from an unset dependency), it returns
+// safeExecute calls t.Execute with panic recovery and context-aware cancellation.
+// If the tool panics (e.g. nil pointer dereference from an unset dependency), it returns
 // an error result instead of crashing the entire application.
+//
+// The tool runs in a goroutine. If ctx is cancelled (e.g. user pressed Esc/Ctrl+C),
+// safeExecute returns immediately with a cancellation result instead of blocking
+// forever on a tool that ignores its context parameter. The goroutine may continue
+// running in the background (we can't kill it), but the agent loop is unblocked.
 func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			debug.Log("agent", "PANIC recovered in tool %s: %v\n%s", t.Name(), r, runtimedebug.Stack())
-			result = tool.Result{
-				Content: fmt.Sprintf("tool %s panicked: %v — this is a bug, please report it", t.Name(), r),
-				IsError: true,
+	type execResult struct {
+		result tool.Result
+		err    error
+	}
+	ch := make(chan execResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				debug.Log("agent", "PANIC recovered in tool %s: %v\n%s", t.Name(), r, runtimedebug.Stack())
+				ch <- execResult{tool.Result{
+					Content: fmt.Sprintf("tool %s panicked: %v — this is a bug, please report it", t.Name(), r),
+					IsError: true,
+				}, nil}
 			}
-			err = nil
-		}
+		}()
+		r, e := t.Execute(ctx, args)
+		ch <- execResult{r, e}
 	}()
-	return t.Execute(ctx, args)
+
+	select {
+	case r := <-ch:
+		return r.result, r.err
+	case <-ctx.Done():
+		debug.Log("agent", "tool %s cancelled via context (Execute did not honor cancellation, goroutine leaked)", t.Name())
+		return tool.Result{
+			Content: fmt.Sprintf("tool %s was cancelled (it did not respond to cancellation and may still be finishing in the background)", t.Name()),
+			IsError: true,
+		}, nil
+	}
 }
 
 // executeFileTool handles edit_file and write_file with diff preview and checkpointing.

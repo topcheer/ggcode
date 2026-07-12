@@ -71,7 +71,6 @@ type multiFileWriteArgs struct {
 }
 
 func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
-	_ = ctx
 	var args multiFileWriteArgs
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -157,6 +156,17 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	failed := 0
 
 	for _, f := range args.Files {
+		// Check for cancellation before each file write.
+		if ctx.Err() != nil {
+			failed++
+			results = append(results, writeResult{
+				Path:   f.Path,
+				Status: "error",
+				Error:  "cancelled",
+			})
+			continue
+		}
+
 		// Sandbox check for partial_success mode (per-file).
 		if t.SandboxCheck != nil && !t.SandboxCheck(f.Path) {
 			failed++

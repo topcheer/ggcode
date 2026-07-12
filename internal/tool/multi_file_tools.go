@@ -239,7 +239,6 @@ func (t MultiFileEdit) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit,
 }
 
 func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
-	_ = ctx
 	mode, entries, errRes := t.parseInput(input)
 	if errRes != nil {
 		return *errRes, nil
@@ -275,7 +274,7 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if mode == "atomic" {
-		if failedPath, writeErr := applyAtomicPlans(plans); writeErr != nil {
+		if failedPath, writeErr := applyAtomicPlans(ctx, plans); writeErr != nil {
 			for _, plan := range plans {
 				idx := byPath[plan.Path]
 				if plan.Path == failedPath {
@@ -318,6 +317,13 @@ func (t MultiFileEdit) Execute(ctx context.Context, input json.RawMessage) (Resu
 		planByPath[plan.Path] = plan
 	}
 	for _, plan := range plans {
+		if ctx.Err() != nil {
+			idx := byPath[plan.Path]
+			out.Results[idx].Status = "error"
+			out.Results[idx].Error = "cancelled"
+			out.FailedPaths = append(out.FailedPaths, plan.Path)
+			continue
+		}
 		if err := atomicWriteFile(plan.Path, []byte(plan.NewContent), 0644); err != nil {
 			idx := byPath[plan.Path]
 			out.Results[idx].Status = "error"
@@ -467,9 +473,15 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 	return plans, results, hasFailures
 }
 
-func applyAtomicPlans(plans []PlannedFileEdit) (string, error) {
+func applyAtomicPlans(ctx context.Context, plans []PlannedFileEdit) (string, error) {
 	written := make([]PlannedFileEdit, 0, len(plans))
 	for _, plan := range plans {
+		if ctx.Err() != nil {
+			for i := len(written) - 1; i >= 0; i-- {
+				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)
+			}
+			return plan.Path, fmt.Errorf("cancelled")
+		}
 		if err := atomicWriteFile(plan.Path, []byte(plan.NewContent), 0644); err != nil {
 			for i := len(written) - 1; i >= 0; i-- {
 				_ = atomicWriteFile(written[i].Path, []byte(written[i].OldContent), 0644)

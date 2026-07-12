@@ -398,7 +398,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if msg.ItemID != "" {
 			if item := m.chatList.FindByID(msg.ItemID); item != nil {
 				if sys, ok := item.(*chat.SystemItem); ok {
-					sys.AppendText(msg.Text)
+					if msg.Replace {
+						sys.SetText(msg.Text)
+					} else {
+						sys.AppendText(msg.Text)
+					}
 					m.chatListScrollToBottom()
 					return m, nil
 				}

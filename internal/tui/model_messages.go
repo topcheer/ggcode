@@ -182,8 +182,9 @@ type followGraceTickMsg struct{}
 // When ItemID is non-empty and a system item with that ID already exists,
 // the text is appended to that item instead of creating a new one.
 type systemNotifyMsg struct {
-	Text   string
-	ItemID string
+	Text    string
+	ItemID  string
+	Replace bool // if true, replace existing item text instead of appending (used by retry status)
 }
 
 type skillsChangedMsg struct{}

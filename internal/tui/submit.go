@@ -346,9 +346,9 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			flushBatch()
 			if retryItemID == "" {
 				retryItemID = nextSystemID()
-				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID})
+				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID, Replace: true})
 			} else {
-				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID})
+				m.program.Send(systemNotifyMsg{Text: event.Text, ItemID: retryItemID, Replace: true})
 			}
 		case provider.StreamEventToolCallDone:
 			// Flush any pending text before tool events to keep output ordering correct.
