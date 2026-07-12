@@ -422,8 +422,39 @@ func (m *Manager) BindSession(binding SessionBinding) {
 	if binding.BoundAt.IsZero() {
 		binding.BoundAt = time.Now()
 	}
+
+	// Detect session ID change within the same workspace (e.g. /clear, /branch).
+	// When the session ID changes, we must migrate ownership of bindings from
+	// the old session to the new one. Without this, reloadBindingLocked sees
+	// the old LastSessionID as "foreign" and mutes everything, and the binding
+	// watcher keeps re-muting every 3 seconds.
+	var migrateOldSessionID, migrateWorkspace string
+	if m.session != nil && m.session.Workspace == binding.Workspace && m.session.SessionID != binding.SessionID {
+		migrateOldSessionID = m.session.SessionID
+		migrateWorkspace = m.session.Workspace
+	}
+
 	copy := binding
 	m.session = &copy
+
+	// If the session ID changed, transfer persisted ownership from old→new.
+	// This must happen BEFORE reloadBindingLocked so that the reload sees the
+	// correct LastSessionID and doesn't mark our own bindings as foreign.
+	if migrateOldSessionID != "" && m.bindingStore != nil {
+		m.mu.Unlock() // unlock during disk I/O
+		persisted, _ := m.bindingStore.ListByWorkspace(migrateWorkspace)
+		m.mu.Lock()
+		for _, b := range persisted {
+			if b.LastSessionID == migrateOldSessionID {
+				if err := m.bindingStore.UpdateSessionID(migrateWorkspace, b.Adapter, binding.SessionID); err != nil {
+					debug.Log("im", "BindSession: migrate ownership %s: %s→%s error: %v", b.Adapter, migrateOldSessionID, binding.SessionID, err)
+				} else {
+					debug.Log("im", "BindSession: migrated ownership %s: %s→%s", b.Adapter, migrateOldSessionID, binding.SessionID)
+				}
+			}
+		}
+	}
+
 	_ = m.reloadBindingLocked()
 	// Stop any previous watcher and start a new one with the updated session.
 	// This ensures the watcher has the correct sessionID for ownership checks.

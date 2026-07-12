@@ -834,11 +834,14 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
-	// Register this instance for multi-instance detection and auto-mute
-	// if another instance is already running in the same workspace.
-	// This must happen here (not just in SetIMManager) because the session
-	// workspace is needed for the instance directory path.
-	m.detectAndAutoMute()
+	// If detectAndAutoMute was skipped during SetIMManager (because session
+	// was nil at that point), call it now that we have a session. This happens
+	// in the normal startup sequence: InitRuntime → SetIMManager (session nil)
+	// → SetSession. For session switches (/clear, /branch), the instance is
+	// already registered so detectAndAutoMute returns early.
+	if m.instanceDetect == nil {
+		m.detectAndAutoMute()
+	}
 }
 
 func (m *Model) Session() *session.Session {
