@@ -57,6 +57,26 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.toggleFileBrowser()
 		return m, nil
 	}
+	// Iteration 1: Ctrl+\ toggles compact mode (hide/show sidebar)
+	if msg.String() == "ctrl+\\" {
+		m.compactMode = !m.compactMode
+		m.sidebarVisible = !m.compactMode
+		m.persistSidebarPreference()
+		m.relayoutAfterSidebarChange()
+		return m, nil
+	}
+	// Iteration 2: Alt+Up/Down to cycle sessions quickly
+	if msg.String() == "alt+up" || msg.String() == "alt+k" {
+		return m, m.cycleSession(-1)
+	}
+	if msg.String() == "alt+down" || msg.String() == "alt+j" {
+		return m, m.cycleSession(1)
+	}
+	// Iteration 3: Ctrl+Shift+C copies last assistant response to clipboard
+	if msg.String() == "ctrl+shift+c" {
+		m.copyLastAssistantResponse()
+		return m, nil
+	}
 	// Ctrl+L clears the screen (starts a new session), matching universal
 	// terminal convention. Equivalent to /clear.
 	if msg.String() == "ctrl+l" {
@@ -543,6 +563,27 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m, nil
 		}
 	case "esc":
+		// Esc+Esc rewind: if two Esc presses within 500ms and no pending prompts,
+		// trigger /undo (checkpoint rollback). This matches Claude Code's signature shortcut.
+		now := time.Now()
+		if !m.exitConfirmPending && !m.cancelConfirmPending &&
+			m.pendingAutoRun == nil && m.pendingHarnessReview == nil &&
+			m.pendingHarnessPromote == nil && !m.autoCompleteActive &&
+			!m.subAgentFollow.isActive() && !m.loading && !m.shellMode && !m.chatMode {
+			if !m.lastEscPress.IsZero() && now.Sub(m.lastEscPress) < 500*time.Millisecond {
+				m.lastEscPress = time.Time{} // reset
+				m.chatWriteSystem(nextSystemID(), m.t("rewind.activated"))
+				m.chatListScrollToBottom()
+				return m, m.handleUndoCommand()
+			}
+			m.lastEscPress = now
+			// Clear input on first Esc (like vim normal mode entry)
+			if strings.TrimSpace(m.input.Value()) != "" {
+				m.input.Reset()
+				return m, nil
+			}
+			return m, nil
+		}
 		// Dismiss exit confirmation prompt first (highest priority).
 		if m.exitConfirmPending {
 			m.resetExitConfirm()

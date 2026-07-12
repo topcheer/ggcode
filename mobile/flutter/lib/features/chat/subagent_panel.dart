@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/theme/app_theme.dart';
 
 /// Sub-agent live activity cards.
 /// Shows floating cards at the bottom of the chat screen, like iOS Live Activities.
@@ -56,12 +57,12 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E2E),
+          color: AppColors.backgroundElevated,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: color.withValues(alpha: 0.3)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.3),
+              color: AppColors.surfaceMuted,
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -110,7 +111,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                       child: Text(
                         agent.task,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.6),
+                          color: AppColors.textSecondary,
                           fontSize: 12,
                         ),
                         maxLines: 1,
@@ -120,7 +121,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                     // Expand icon
                     Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
-                      color: Colors.white54,
+                      color: AppColors.textMuted,
                       size: 20,
                     ),
                   ],
@@ -134,7 +135,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Divider(color: Colors.white12, height: 1),
+                      Divider(color: AppColors.border, height: 1),
                       const SizedBox(height: 8),
                       // Streaming text or summary
                       Consumer(builder: (context, ref, _) {
@@ -146,8 +147,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                         if (agentMessages.isEmpty && agent.summary != null) {
                           return Text(
                             agent.summary!,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13),
+                            style: TextStyle(
+                                color: AppColors.textSecondary, fontSize: 13),
                           );
                         }
 
@@ -174,7 +175,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                                     child: Text(
                                       msg.text,
                                       style: TextStyle(
-                                        color: Colors.white
+                                        color: AppColors.textPrimary
                                             .withValues(alpha: 0.85),
                                         fontSize: 13,
                                         fontFamily: 'monospace',

@@ -86,5 +86,10 @@
   "connect.live_badge": "LIVE",
   "chat.live": "LIVE",
   "chat.gallery": "Gallery",
-  "chat.camera": "Camera"
+  "chat.camera": "Camera",
+  "chat.copy_text": "Copy Text",
+  "chat.copied": "Copied",
+  "chat.select_all": "Select All",
+  "codeblock.show_more": "Show more ({count} lines)",
+  "codeblock.show_less": "Show less"
 }

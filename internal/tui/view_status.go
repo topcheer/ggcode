@@ -147,6 +147,12 @@ func (m Model) renderComposerPanel() string {
 		hints = append(hints, ctxLabel)
 	}
 	hints = append(hints, m.t("hint.help"))
+	// Iteration 6: Word count for current input
+	if text := strings.TrimSpace(m.input.Value()); text != "" {
+		if wc := len(strings.Fields(text)); wc > 0 {
+			hints = append(hints, fmt.Sprintf("%d words", wc))
+		}
+	}
 	if m.sidebarAvailableByWidth() && !m.sidebarEnabled() {
 		hints = append(hints, m.t("hint.ctrlr_sidebar"))
 	}

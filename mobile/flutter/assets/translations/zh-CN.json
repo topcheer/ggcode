@@ -86,5 +86,10 @@
   "connect.live_badge": "实时",
   "chat.live": "实时",
   "chat.gallery": "相册",
-  "chat.camera": "相机"
+  "chat.camera": "相机",
+  "chat.copy_text": "复制文本",
+  "chat.copied": "已复制",
+  "chat.select_all": "全选",
+  "codeblock.show_more": "展开（剩余 {count} 行）",
+  "codeblock.show_less": "收起"
 }

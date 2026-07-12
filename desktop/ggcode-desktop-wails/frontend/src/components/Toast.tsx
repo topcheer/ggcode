@@ -95,7 +95,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
           justifyContent: 'center',
           border: 'none',
           borderRadius: '50%',
-          background: 'rgba(255, 255, 255, 0.08)',
+          background: 'var(--color-hover)',
           color: 'var(--text-tertiary)',
           cursor: 'pointer',
           flexShrink: 0,

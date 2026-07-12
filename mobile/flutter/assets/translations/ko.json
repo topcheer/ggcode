@@ -86,5 +86,10 @@
   "approval.title": "승인 필요",
   "approval.deny": "거부",
   "approval.allow": "허용",
-  "approval.always_allow": "항상 허용"
+  "approval.always_allow": "항상 허용",
+  "chat.copy_text": "텍스트 복사",
+  "chat.copied": "복사됨",
+  "chat.select_all": "모두 선택",
+  "codeblock.show_more": "더 보기 (남은 {count}줄)",
+  "codeblock.show_less": "접기"
 }

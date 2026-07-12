@@ -86,5 +86,10 @@
   "approval.title": "Approbation requise",
   "approval.deny": "Refuser",
   "approval.allow": "Autoriser",
-  "approval.always_allow": "Toujours autoriser"
+  "approval.always_allow": "Toujours autoriser",
+  "chat.copy_text": "Copier le texte",
+  "chat.copied": "Copié",
+  "chat.select_all": "Tout sélectionner",
+  "codeblock.show_more": "Afficher plus ({count} lignes)",
+  "codeblock.show_less": "Afficher moins"
 }

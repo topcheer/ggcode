@@ -92,22 +92,29 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 	// Deduplicate paths: last write wins (same semantics as calling write_file twice).
 	// This is more forgiving than rejecting duplicates — the LLM may logically
 	// group writes but accidentally repeat a path.
-	deduped := make(map[string]int) // path → index into dedupedFiles
-	for i, f := range args.Files {
+	// Build a new slice to avoid mutating the slice we are iterating over.
+	seen := make(map[string]int) // cleaned path → index in deduped slice
+	dedupedFiles := make([]struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}, 0, len(args.Files))
+	for _, f := range args.Files {
 		path, err := cleanAbsolutePath(f.Path)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid path %q: %v", f.Path, err)}, nil
 		}
-		args.Files[i].Path = path
-		if idx, ok := deduped[path]; ok {
+		if idx, ok := seen[path]; ok {
 			// Overwrite existing entry (last wins).
-			args.Files[idx] = args.Files[i]
-			// Remove the duplicate by swapping with last and shortening.
-			args.Files = append(args.Files[:i], args.Files[i+1:]...)
+			dedupedFiles[idx].Content = f.Content
 		} else {
-			deduped[path] = i
+			seen[path] = len(dedupedFiles)
+			dedupedFiles = append(dedupedFiles, struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}{Path: path, Content: f.Content})
 		}
 	}
+	args.Files = dedupedFiles
 
 	// Sandbox validation — check all paths first.
 	for _, f := range args.Files {

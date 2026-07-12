@@ -903,6 +903,8 @@ func enCatalog(key string) string {
 		return "Exported session %s to %s\n\n"
 	case "checkpoint.disabled":
 		return "Checkpointing not enabled.\n\n"
+	case "rewind.activated":
+		return "Rewinding last change (Esc+Esc)...\n\n"
 	case "checkpoint.undo_failed":
 		return "Undo failed: %v\n\n"
 	case "checkpoint.undid":

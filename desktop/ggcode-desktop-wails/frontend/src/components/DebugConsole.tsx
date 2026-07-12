@@ -155,9 +155,9 @@ export default function DebugConsole() {
   const categories = [...new Set(lines.map(l => l.category))].sort()
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0d1117', color: '#c9d1d9', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+    <div className="dbg-console" style={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
       {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--color-border)', flexShrink: 0 }}>
         <Terminal size={16} style={{ color: '#58a6ff' }} />
         <span style={{ fontWeight: 600, color: '#58a6ff', fontSize: 13 }}>{t('debug.title')}</span>
 
@@ -170,14 +170,14 @@ export default function DebugConsole() {
         </button>
 
         <button onClick={clear} title={t('debug.clear')} aria-label={t('debug.clear')} style={{
-          padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', cursor: 'pointer',
-          background: 'transparent', color: '#8b949e', fontSize: 11,
+          padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)', cursor: 'pointer',
+          background: 'transparent', color: 'var(--text-secondary)', fontSize: 11,
           display: 'flex', alignItems: 'center', gap: 4,
         }}>
           <Trash2 size={12} /> {t('debug.clear')}
         </button>
 
-        <span style={{ marginLeft: 8, color: '#8b949e', fontSize: 11 }}>
+        <span style={{ marginLeft: 8, color: 'var(--text-secondary)', fontSize: 11 }}>
           {filtered.length} / {lines.length} {t('debug.lines')}
           {enabled && <span style={{ color: '#3fb950', marginLeft: 6 }}>{t('debug.live')}</span>}
         </span>
@@ -186,8 +186,8 @@ export default function DebugConsole() {
 
         {/* Category filter */}
         <select value={catFilter} onChange={e => setCatFilter(e.target.value)} aria-label={t('common.filterByCategory')} title={t('common.filterByCategory')} style={{
-          padding: '3px 6px', borderRadius: 4, border: '1px solid #30363d',
-          background: '#161b22', color: '#c9d1d9', fontSize: 11,
+          padding: '3px 6px', borderRadius: 4, border: '1px solid var(--color-border)',
+          background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 11,
         }}>
           <option value="">{t('debug.allCategories')}</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -195,10 +195,10 @@ export default function DebugConsole() {
 
         {/* Search */}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-          <Search size={12} style={{ position: 'absolute', left: 6, color: '#484f58' }} />
+          <Search size={12} style={{ position: 'absolute', left: 6, color: 'var(--text-tertiary)' }} />
           <input value={filter} onChange={e => setFilter(e.target.value)} placeholder={t('debug.filterPlaceholder')} aria-label="Filter debug logs" title="Filter debug logs" style={{
-            padding: '3px 6px 3px 22px', borderRadius: 4, border: '1px solid #30363d',
-            background: '#161b22', color: '#c9d1d9', fontSize: 11, width: 140,
+            padding: '3px 6px 3px 22px', borderRadius: 4, border: '1px solid var(--color-border)',
+            background: 'var(--color-surface)', color: 'var(--text-primary)', fontSize: 11, width: 140,
             outline: 'none',
           }} />
         </div>
@@ -208,13 +208,13 @@ export default function DebugConsole() {
       <div ref={containerRef} onScroll={handleScroll} style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
         {filtered.map(l => (
           <div key={l.seq} style={{ padding: '1px 12px', display: 'flex', gap: 8, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            <span style={{ color: '#484f58', flexShrink: 0 }}>{l.time}</span>
-            <span style={{ color: catColors[l.category] || '#8b949e', flexShrink: 0, minWidth: 60 }}>{l.category || '—'}</span>
-            <span style={{ color: '#c9d1d9' }}>{l.message}</span>
+            <span style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}>{l.time}</span>
+            <span style={{ color: catColors[l.category] || 'var(--text-secondary)', flexShrink: 0, minWidth: 60 }}>{l.category || '—'}</span>
+            <span style={{ color: 'var(--text-primary)' }}>{l.message}</span>
           </div>
         ))}
         {!enabled && lines.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: '#484f58' }}>
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-tertiary)' }}>
             {t('debug.empty')}
           </div>
         )}

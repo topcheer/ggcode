@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
+import '../../core/theme/app_theme.dart';
 
 class ApprovalSheet extends ConsumerWidget {
   final ApprovalInfo approval;
@@ -14,7 +15,7 @@ class ApprovalSheet extends ConsumerWidget {
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E2E),
+        color: AppColors.backgroundElevated,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
       ),
@@ -39,23 +40,23 @@ class ApprovalSheet extends ConsumerWidget {
           const SizedBox(height: 8),
           Text(
             approval.toolName,
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                color: AppColors.textPrimary, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.3),
+              color: AppColors.surfaceMuted,
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               approval.input.length > 300
                   ? '${approval.input.substring(0, 300)}...'
                   : approval.input,
-              style: const TextStyle(
-                  color: Colors.white70, fontSize: 12, fontFamily: 'monospace'),
+              style: TextStyle(
+                  color: AppColors.textSecondary, fontSize: 12, fontFamily: 'monospace'),
             ),
           ),
           const SizedBox(height: 12),
@@ -81,7 +82,7 @@ class ApprovalSheet extends ConsumerWidget {
               FilledButton(
                 onPressed: () => _respond(ref, 'always_allow'),
                 style:
-                    FilledButton.styleFrom(backgroundColor: Colors.blueAccent),
+                    FilledButton.styleFrom(backgroundColor: AppColors.accent),
                 child: Text(t('approval.always_allow')),
               ),
             ],

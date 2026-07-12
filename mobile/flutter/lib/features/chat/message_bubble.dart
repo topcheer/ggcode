@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import '../../../core/l10n/app_localizations.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/theme/app_theme.dart';
@@ -27,10 +29,49 @@ class MessageBubble extends StatelessWidget {
     if (_isShellCommandMessage) {
       return _buildShellCommandBubble(context);
     }
+    // Iteration 16: Long-press to copy message text
     if (message.isUser) {
-      return _buildUserBubble(context);
+      return GestureDetector(
+        onLongPress: () => _showCopyMenu(context, message.text),
+        child: _buildUserBubble(context),
+      );
     }
-    return _buildAgentBubble(context);
+    return GestureDetector(
+      onLongPress: () => _showCopyMenu(context, message.text),
+      child: _buildAgentBubble(context),
+    );
+  }
+
+  // Iteration 16: Long-press copy menu
+  void _showCopyMenu(BuildContext context, String text) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: Text(t('chat.copy_text')),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: text));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(t('chat.copied')), duration: Duration(seconds: 1)),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.select_all),
+              title: Text(t('chat.select_all')),
+              onTap: () {
+                Navigator.pop(ctx);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   bool get _isShellCommandMessage =>
@@ -85,7 +126,7 @@ class MessageBubble extends StatelessWidget {
             if (message.text.isNotEmpty)
               SelectableText(
                 message.text,
-                style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
+                style: TextStyle(color: AppColors.textPrimary, fontSize: 14, height: 1.4),
               ),
           ],
         ),
@@ -107,9 +148,9 @@ class MessageBubble extends StatelessWidget {
           maxWidth: MediaQuery.of(context).size.width * 0.82,
         ),
         decoration: BoxDecoration(
-          color: const Color(0xFF111827),
+          color: AppColors.surfaceElevated,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFF374151)),
+          border: Border.all(color: AppColors.border),
           boxShadow: AppShadows.panel,
         ),
         child: Row(
@@ -119,14 +160,14 @@ class MessageBubble extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFF1F2937),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: const Color(0xFF4B5563)),
+                border: Border.all(color: AppColors.borderStrong),
               ),
               child: Text(
                 prefix,
-                style: const TextStyle(
-                  color: Color(0xFF60A5FA),
+                style: TextStyle(
+                  color: AppColors.accent,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                   fontFamily: 'monospace',
@@ -137,8 +178,8 @@ class MessageBubble extends StatelessWidget {
             Flexible(
               child: SelectableText(
                 command,
-                style: const TextStyle(
-                  color: Color(0xFFF9FAFB),
+                style: TextStyle(
+                  color: AppColors.textPrimary,
                   fontSize: 13,
                   height: 1.45,
                   fontFamily: 'monospace',
@@ -201,6 +242,9 @@ class MessageBubble extends StatelessWidget {
               if (seg.isMermaid) {
                 return _buildMermaidDiagram(seg.content);
               }
+              if (seg.isCodeBlock) {
+                return _CodeBlockWidget(code: seg.content, language: seg.language);
+              }
               if (seg.content.trim().isEmpty) return const SizedBox.shrink();
               return MarkdownBody(
                 data: seg.content,
@@ -247,18 +291,18 @@ class MessageBubble extends StatelessWidget {
           maxWidth: MediaQuery.of(context).size.width * 0.88,
         ),
         decoration: BoxDecoration(
-          color: const Color(0xFF111827),
+          color: AppColors.surfaceElevated,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFF374151)),
+          border: Border.all(color: AppColors.border),
           boxShadow: AppShadows.panel,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Terminal',
               style: TextStyle(
-                color: Color(0xFF9CA3AF),
+                color: AppColors.textSecondary,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
               ),
@@ -267,8 +311,8 @@ class MessageBubble extends StatelessWidget {
             SelectableText.rich(
               _buildAnsiText(message.text),
               key: Key('shellOutputText-${message.id}'),
-              style: const TextStyle(
-                color: Color(0xFFE5E7EB),
+              style: TextStyle(
+                color: AppColors.textPrimary,
                 fontSize: 13,
                 height: 1.45,
                 fontFamily: 'monospace',
@@ -279,8 +323,8 @@ class MessageBubble extends StatelessWidget {
                 margin: const EdgeInsets.only(top: 8),
                 width: 6,
                 height: 6,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF60A5FA),
+                decoration: BoxDecoration(
+                  color: AppColors.accent,
                   shape: BoxShape.circle,
                 ),
               ),
@@ -335,11 +379,10 @@ class MessageBubble extends StatelessWidget {
         backgroundColor: AppColors.backgroundElevated,
       ),
       codeblockDecoration: BoxDecoration(
-        color: AppColors.backgroundElevated,
+        color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(AppRadii.sm),
-        border: Border.all(color: AppColors.border),
       ),
-      codeblockPadding: const EdgeInsets.all(8),
+      codeblockPadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       listBullet: TextStyle(color: AppColors.textPrimary, fontSize: 14),
       h2: TextStyle(
           color: AppColors.textPrimary,
@@ -364,7 +407,7 @@ class MessageBubble extends StatelessWidget {
 
   List<_TextSegment> _parseSegments(String text) {
     final segments = <_TextSegment>[];
-    final regex = RegExp(r'```mermaid\s*\n([\s\S]*?)```', multiLine: true);
+    final regex = RegExp(r'```([a-zA-Z0-9]*)\s*\n([\s\S]*?)```', multiLine: true);
 
     int lastEnd = 0;
     for (final match in regex.allMatches(text)) {
@@ -374,10 +417,17 @@ class MessageBubble extends StatelessWidget {
           segments.add(_TextSegment(content: before));
         }
       }
-      segments.add(_TextSegment(
-        content: match.group(1)?.trim() ?? '',
-        isMermaid: true,
-      ));
+      final lang = match.group(1)?.toLowerCase() ?? '';
+      final code = match.group(2)?.trim() ?? '';
+      if (lang == 'mermaid') {
+        segments.add(_TextSegment(content: code, isMermaid: true));
+      } else {
+        segments.add(_TextSegment(
+          content: code,
+          isCodeBlock: true,
+          language: lang.isNotEmpty ? lang : null,
+        ));
+      }
       lastEnd = match.end;
     }
 
@@ -504,8 +554,8 @@ class _ReasoningBubbleState extends State<_ReasoningBubble> {
                     const SizedBox(width: 6),
                     Text(
                       widget.message.sourceName != null
-                          ? '${widget.message.sourceName} thinking'
-                          : 'Thinking',
+                          ? '${widget.message.sourceName} ${t('status.thinking')}'
+                          : t('status.thinking'),
                       style: TextStyle(
                         color: AppColors.accent,
                         fontSize: 12,
@@ -560,11 +610,10 @@ class _ReasoningBubbleState extends State<_ReasoningBubble> {
                         backgroundColor: AppColors.surface,
                       ),
                       codeblockDecoration: BoxDecoration(
-                        color: AppColors.surface,
+                        color: AppColors.surfaceElevated,
                         borderRadius: BorderRadius.circular(AppRadii.sm),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      codeblockPadding: const EdgeInsets.all(8),
+      ),
+                      codeblockPadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     ),
                   ),
               ],
@@ -579,8 +628,137 @@ class _ReasoningBubbleState extends State<_ReasoningBubble> {
 class _TextSegment {
   final String content;
   final bool isMermaid;
+  final bool isCodeBlock;
+  final String? language;
 
-  _TextSegment({required this.content, this.isMermaid = false});
+  _TextSegment({
+    required this.content,
+    this.isMermaid = false,
+    this.isCodeBlock = false,
+    this.language,
+  });
+}
+
+/// Code block widget with dark background, accent left border,
+/// copy button, and auto-collapse for long code blocks.
+class _CodeBlockWidget extends StatefulWidget {
+  final String code;
+  final String? language;
+
+  const _CodeBlockWidget({required this.code, this.language});
+
+  @override
+  State<_CodeBlockWidget> createState() => _CodeBlockWidgetState();
+}
+
+class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
+  static const _collapseThreshold = 15;
+  static const _previewLines = 5;
+
+  late bool _collapsed;
+  bool _copied = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _collapsed = widget.code.split('\n').length > _collapseThreshold;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = widget.code.split('\n');
+    final canCollapse = lines.length > _collapseThreshold;
+
+    final displayCode = _collapsed && canCollapse
+        ? lines.take(_previewLines).join('\n')
+        : widget.code;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        border: Border(
+          left: BorderSide(color: AppColors.accent, width: 3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: language label + copy button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 4, 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  widget.language ?? '',
+                  style: TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                InkWell(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: widget.code));
+                    setState(() => _copied = true);
+                    Future.delayed(const Duration(seconds: 2), () {
+                      if (mounted) setState(() => _copied = false);
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      _copied ? Icons.check : Icons.copy,
+                      size: 16,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Code content
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: SelectableText(
+              displayCode,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 13,
+                height: 1.45,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+          // Show more / Show less button
+          if (canCollapse) ...[
+            Divider(color: AppColors.border, height: 1),
+            InkWell(
+              onTap: () => setState(() => _collapsed = !_collapsed),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                alignment: Alignment.center,
+                child: Text(
+                  _collapsed
+                      ? t('codeblock.show_more', args: {'count': '${lines.length - _previewLines}'})
+                      : t('codeblock.show_less'),
+                  style: TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _ShellCommandData {

@@ -86,5 +86,10 @@
   "approval.title": "Genehmigung erforderlich",
   "approval.deny": "Ablehnen",
   "approval.allow": "Erlauben",
-  "approval.always_allow": "Immer erlauben"
+  "approval.always_allow": "Immer erlauben",
+  "chat.copy_text": "Text kopieren",
+  "chat.copied": "Kopiert",
+  "chat.select_all": "Alle auswählen",
+  "codeblock.show_more": "Mehr anzeigen ({count} Zeilen)",
+  "codeblock.show_less": "Weniger anzeigen"
 }

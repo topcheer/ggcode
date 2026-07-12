@@ -2029,12 +2029,32 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   // Global Cmd+F / Ctrl+F to open search, Esc to close
   // Cmd+Shift+Down/Up to scroll to bottom/top of conversation
+  // Cmd+= / Cmd+- for font size adjustment (Iteration 9)
+  const [fontSize, setFontSize] = useState(() => {
+    const saved = localStorage.getItem('ggcode-font-size')
+    return saved ? parseInt(saved) : 15
+  })
+  useEffect(() => {
+    localStorage.setItem('ggcode-font-size', String(fontSize))
+    document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`)
+  }, [fontSize])
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         e.stopPropagation()
         setSearchOpen(prev => !prev)
+        return
+      }
+      // Iteration 9: Cmd+= / Cmd+- font size
+      if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault()
+        setFontSize(prev => Math.min(24, prev + 1))
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '-') {
+        e.preventDefault()
+        setFontSize(prev => Math.max(11, prev - 1))
         return
       }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'ArrowDown') {
@@ -2975,7 +2995,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         {t('chat.inputHint')}
         {input.length > 0 && (
           <span style={{ marginLeft: 8, color: input.length > 4000 ? 'var(--color-error)' : input.length > 2000 ? 'var(--color-warning)' : 'var(--text-tertiary)' }}>
-            {input.length > 1000 ? `~${Math.ceil(input.length / 4)} tok · ` : ''}{input.length} chars
+            {input.length > 1000 ? `~${Math.ceil(input.length / 4)} tok · ` : ''}{input.length} chars · {input.trim().split(/\s+/).filter(Boolean).length} words
           </span>
         )}
       </div>
@@ -3691,17 +3711,14 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
         <>
           {/* Command code block (for command tools) */}
           {showCommandBlock && (
-            <div style={{
+            <div className="tool-cmd-block" style={{
               marginTop: 4,
               borderRadius: 'var(--radius-md)',
-              background: '#1e1e2e',
               overflow: 'hidden',
             }}>
-              <div style={{
+              <div className="tool-cmd-header" style={{
                 padding: '4px 10px',
-                background: 'rgba(255,255,255,0.05)',
                 fontSize: 10,
-                color: 'rgba(255,255,255,0.5)',
                 fontFamily: 'var(--font-mono)',
               }}>
                 {prettifiedName}
@@ -3709,7 +3726,6 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
               <pre style={{
                 margin: 0, padding: '8px 10px',
                 fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: '#cdd6f4',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
               }}>
                 {commandContent}
@@ -3720,14 +3736,11 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
           {/* Result (terminal style) */}
           {msg.content && (
             <div style={{ marginTop: 4, position: 'relative' }}>
-              <div style={{
+              <div className={`tool-result-block ${msg.isError ? 'tool-result-error' : ''}`} style={{
                 padding: '8px 10px',
                 borderRadius: 'var(--radius-md)',
-                background: msg.isError ? '#2d1b1b' : '#0d1117',
-                border: `1px solid ${msg.isError ? 'rgba(220, 38, 38, 0.3)' : 'rgba(255,255,255,0.1)'}`,
                 maxHeight: 300, overflowY: 'auto',
                 fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: msg.isError ? '#f87171' : '#8b949e',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5,
                 textAlign: 'left',
               }}>
@@ -3740,9 +3753,9 @@ function ToolMessage({ msg }: { msg: ChatMessage }) {
                 style={{
                   position: 'absolute', top: 4, right: 4,
                   padding: '2px 8px', borderRadius: 3,
-                  background: copied ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  color: copied ? 'var(--color-success)' : 'rgba(255,255,255,0.6)',
+                  background: copied ? 'rgba(34,197,94,0.15)' : 'var(--color-hover)',
+                  border: '1px solid var(--color-border)',
+                  color: copied ? 'var(--color-success)' : 'var(--text-secondary)',
                   cursor: 'pointer', fontSize: 10, fontFamily: 'var(--font-mono)',
                 }}
               >

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/protocol.dart' as proto;
 import '../../core/providers/session_provider.dart';
+import '../../core/theme/app_theme.dart';
 
 /// Full-screen questionnaire page for ask_user requests.
 class AskUserScreen extends ConsumerStatefulWidget {
@@ -49,8 +50,8 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFF0D0D14),
+          decoration: BoxDecoration(
+            color: AppColors.backgroundElevated,
             borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: SafeArea(
@@ -64,7 +65,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.white24,
+                    color: AppColors.border,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -73,27 +74,27 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Row(
                     children: [
-                      const Icon(Icons.help_outline,
-                          color: Colors.blueAccent, size: 20),
+                      Icon(Icons.help_outline,
+                          color: AppColors.accent, size: 20),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           askUser.title,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
                             fontSize: 17,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white54),
+                        icon: Icon(Icons.close, color: AppColors.textSecondary),
                         onPressed: () => _cancel(askUser.id),
                       ),
                     ],
                   ),
                 ),
-                const Divider(color: Colors.white12, height: 1),
+                Divider(color: AppColors.border, height: 1),
                 // Questions
                 Flexible(
                   child: ListView.builder(
@@ -105,7 +106,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                     },
                   ),
                 ),
-                const Divider(color: Colors.white12, height: 1),
+                Divider(color: AppColors.border, height: 1),
                 // Submit button
                 Padding(
                   padding: const EdgeInsets.all(16),
@@ -114,16 +115,16 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                     height: 48,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueAccent,
+                        backgroundColor: AppColors.accent,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
                       onPressed: () => _submit(askUser),
-                      child: const Text(
+                      child: Text(
                         'Submit',
                         style: TextStyle(
-                            color: Colors.white,
+                            color: AppColors.textPrimary,
                             fontSize: 16,
                             fontWeight: FontWeight.w600),
                       ),
@@ -150,13 +151,13 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             children: [
               Text(
                 '${index + 1}. ',
-                style: const TextStyle(
-                    color: Colors.blueAccent, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                    color: AppColors.accent, fontWeight: FontWeight.w600),
               ),
               Expanded(
                 child: Text(
                   question.prompt,
-                  style: const TextStyle(color: Colors.white, fontSize: 15),
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 15),
                 ),
               ),
             ],
@@ -191,15 +192,15 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             TextField(
               controller: _freeformControllers.putIfAbsent(
                   question.id, () => TextEditingController()),
-              style: const TextStyle(color: Colors.white, fontSize: 14),
+              style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
               decoration: InputDecoration(
                 hintText: question.placeholder.isNotEmpty
                     ? question.placeholder
                     : 'Type your answer...',
                 hintStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                    TextStyle(color: AppColors.textMuted),
                 filled: true,
-                fillColor: const Color(0xFF1A1A2E),
+                fillColor: AppColors.surfaceElevated,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide.none,
@@ -244,7 +245,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   : (isSelected
                       ? Icons.radio_button_checked
                       : Icons.radio_button_unchecked),
-              color: isSelected ? Colors.blueAccent : Colors.white38,
+              color: isSelected ? AppColors.accent : AppColors.textMuted,
               size: 20,
             ),
             const SizedBox(width: 8),
@@ -252,7 +253,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
               child: Text(
                 choice.label,
                 style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.white70,
+                  color: isSelected ? AppColors.textPrimary : AppColors.textSecondary,
                   fontSize: 14,
                 ),
               ),

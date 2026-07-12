@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/lanchat"
@@ -915,6 +916,17 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	return Result{Content: result + ".\n"}, nil
 }
 
+// summarizeContent truncates a message body to a single-line summary.
+func summarizeContent(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) > 120 {
+		runes := []rune(s)
+		return string(runes[:117]) + "..."
+	}
+	return s
+}
+
 func (t LanChatTool) doHistory(limit int) Result {
 	if limit <= 0 {
 		limit = 20
@@ -932,35 +944,19 @@ func (t LanChatTool) doHistory(limit int) Result {
 	}
 	recent := messages[start:]
 
-	type msgInfo struct {
-		From   string `json:"from"`
-		Role   string `json:"role"`
-		To     string `json:"to"`
-		Body   string `json:"content"`
-		Time   string `json:"time"`
-		Direct bool   `json:"direct"`
-	}
-
-	var msgs []msgInfo
+	var lines []string
 	for _, m := range recent {
-		target := "all"
-		direct := false
+		ts := time.UnixMilli(m.Timestamp).Format("15:04:05")
+		from := m.FromNick // FromNick already includes role suffix (e.g. "CleverOtter_developer_agent")
+		body := summarizeContent(m.Content)
 		if m.ToNodeID != "" {
-			target = m.ToNodeID
-			direct = true
+			lines = append(lines, fmt.Sprintf("  [%s] %s → (DM) %s", ts, from, body))
+		} else {
+			lines = append(lines, fmt.Sprintf("  [%s] %s → (team) %s", ts, from, body))
 		}
-		msgs = append(msgs, msgInfo{
-			From:   m.FromNick,
-			Role:   m.FromRole,
-			To:     target,
-			Body:   m.Content,
-			Time:   time.UnixMilli(m.Timestamp).Format("15:04:05"),
-			Direct: direct,
-		})
 	}
 
-	out, _ := json.MarshalIndent(msgs, "", "  ")
-	return Result{Content: fmt.Sprintf("History (%d messages):\n%s\n", len(msgs), string(out))}
+	return Result{Content: fmt.Sprintf("History (%d messages):\n%s\n", len(recent), strings.Join(lines, "\n"))}
 }
 
 func (t LanChatTool) doPending() Result {
@@ -969,27 +965,14 @@ func (t LanChatTool) doPending() Result {
 		return Result{Content: "No pending @agent approvals.\n"}
 	}
 
-	type pendingInfo struct {
-		ID       string `json:"message_id"`
-		From     string `json:"from"`
-		FromRole string `json:"from_role"`
-		Content  string `json:"content"`
-		Received string `json:"received"`
-	}
-
-	var items []pendingInfo
+	var lines []string
 	for _, p := range pending {
-		items = append(items, pendingInfo{
-			ID:       p.Message.ID,
-			From:     p.Message.FromNick,
-			FromRole: p.Message.FromRole,
-			Content:  p.Message.Content,
-			Received: time.Since(p.Received).Round(time.Second).String() + " ago",
-		})
+		from := p.Message.FromNick // already includes role suffix
+		age := time.Since(p.Received).Round(time.Second).String() + " ago"
+		lines = append(lines, fmt.Sprintf("  • [%s] from %s (%s): %s", p.Message.ID, from, age, summarizeContent(p.Message.Content)))
 	}
 
-	out, _ := json.MarshalIndent(items, "", "  ")
-	return Result{Content: fmt.Sprintf("Pending approvals (%d):\n%s\n", len(items), string(out))}
+	return Result{Content: fmt.Sprintf("Pending approvals (%d):\n%s\n", len(pending), strings.Join(lines, "\n"))}
 }
 
 func (t LanChatTool) doApprove(ctx context.Context, messageID string) (Result, error) {

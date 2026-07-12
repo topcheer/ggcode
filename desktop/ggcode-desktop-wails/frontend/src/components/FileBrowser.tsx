@@ -12,8 +12,9 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 // mermaid imported dynamically to enable code-splitting (see MermaidBlock)
 
-// highlight.js dark theme CSS
-import 'highlight.js/styles/github-dark-dimmed.css'
+// highlight.js themes — light is default, dark via .dark class override below
+import 'highlight.js/styles/github.css'
+import '../hljs-dark-override.css'
 
 interface FileNode {
   name: string
@@ -254,14 +255,14 @@ function CodePreview({ code, fileName }: { code: string; fileName: string }) {
   const highlightedLines = highlighted ? highlighted.split('\n') : lines
 
   return (
-    <div style={{
+    <div className="fb-code-preview" style={{
       padding: '12px 0',
       fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7,
     }}>
       {highlightedLines.map((line, i) => (
-        <div key={i} style={{ display: 'flex' }}
-          onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        <div key={i} className="fb-code-line" style={{ display: 'flex' }}
+          onMouseEnter={e => e.currentTarget.classList.add('fb-code-hover')}
+          onMouseLeave={e => e.currentTarget.classList.remove('fb-code-hover')}
         >
           <span style={{
             width: 48, textAlign: 'right', color: 'var(--text-tertiary)',
@@ -324,8 +325,8 @@ function MarkdownPreview({ content, workDir }: { content: string; workDir: strin
               try { html = hljs.highlight(text, { language: lang }).value } catch {}
             }
             return (
-              <pre style={{
-                background: '#161b22', padding: 16, borderRadius: 8,
+              <pre className="fb-md-pre" style={{
+                padding: 16, borderRadius: 8,
                 overflow: 'auto', margin: '12px 0',
               }}>
                 <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}

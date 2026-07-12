@@ -911,6 +911,8 @@ func zhCatalog(key string) string {
 		return "已导出会话 %s 到 %s\n\n"
 	case "checkpoint.disabled":
 		return "未启用检查点。\n\n"
+	case "rewind.activated":
+		return "正在撤销最近一次修改（Esc+Esc）...\n\n"
 	case "checkpoint.undo_failed":
 		return "撤销失败：%v\n\n"
 	case "checkpoint.undid":

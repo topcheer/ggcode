@@ -145,7 +145,7 @@ function TeamSection({ team, onSelectTeammate }: { team: TeamBoardSnapshot; onSe
               textAlign: 'left',
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-md)',
-              background: 'rgba(255,255,255,0.02)',
+              background: 'var(--color-hover)',
               padding: '7px 8px',
               color: 'var(--text-secondary)',
               cursor: onSelectTeammate ? 'pointer' : 'default',
@@ -235,7 +235,7 @@ function StatusPill({ status }: { status: string }) {
       borderRadius: 999,
       border: '1px solid var(--color-border)',
       color: statusColor(status),
-      background: 'rgba(255,255,255,0.03)',
+      background: 'var(--color-hover)',
       whiteSpace: 'nowrap',
     }}>{formatStatus(status)}</span>
   )

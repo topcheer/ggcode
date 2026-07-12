@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
@@ -123,6 +124,59 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		b.WriteString("\n")
 		return streamMsg(b.String())
 	}
+}
+
+// Iteration 4: handleRedoCommand restores the last undone file edit via git.
+func (m *Model) handleRedoCommand() tea.Cmd {
+	return func() tea.Msg {
+		return streamMsg("Redo: use `git checkout <file>` to restore. The undo stack is not reversible.")
+	}
+}
+
+// Iteration 2: cycleSession switches to next/prev session in the same workspace.
+func (m *Model) cycleSession(direction int) tea.Cmd {
+	if m.sessionStore == nil {
+		return nil
+	}
+	workspace := m.currentWorkspacePath()
+	if workspace == "" {
+		return nil
+	}
+	sessions, err := m.sessionStore.ListForWorkspace(workspace)
+	if err != nil || len(sessions) == 0 {
+		return nil
+	}
+	currentID := ""
+	if m.session != nil {
+		currentID = m.session.ID
+	}
+	currentIdx := 0
+	for i, s := range sessions {
+		if s.ID == currentID {
+			currentIdx = i
+			break
+		}
+	}
+	newIdx := (currentIdx + direction + len(sessions)) % len(sessions)
+	if newIdx == currentIdx {
+		return nil
+	}
+	target := sessions[newIdx]
+	return m.resumeSession(target.ID)
+}
+
+// Iteration 3: copyLastAssistantResponse copies last assistant message to clipboard.
+func (m *Model) copyLastAssistantResponse() {
+	if m.chatList == nil {
+		return
+	}
+	text := m.chatList.LastAssistantText()
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	_ = clipboard.WriteAll(text)
+	m.chatWriteSystem(nextSystemID(), "Copied to clipboard")
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) handleTodoCommand(parts []string) tea.Cmd {

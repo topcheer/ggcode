@@ -86,5 +86,10 @@
   "approval.title": "Требуется одобрение",
   "approval.deny": "Отклонить",
   "approval.allow": "Разрешить",
-  "approval.always_allow": "Всегда разрешать"
+  "approval.always_allow": "Всегда разрешать",
+  "chat.copy_text": "Копировать текст",
+  "chat.copied": "Скопировано",
+  "chat.select_all": "Выбрать всё",
+  "codeblock.show_more": "Показать ещё ({count} строк)",
+  "codeblock.show_less": "Свернуть"
 }

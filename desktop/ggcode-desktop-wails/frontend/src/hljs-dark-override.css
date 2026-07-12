@@ -1,0 +1,204 @@
+/**
+ * hljs-dark-override.css
+ *
+ * highlight.js github.css (light theme) is imported as the default.
+ * When html.dark is active, we override the hljs colors with a dark palette
+ * that matches the previous github-dark-dimmed look.
+ */
+
+/* ── Dark mode: override hljs light theme with dark colors ─────────────── */
+
+.dark .hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal,
+.dark .hljs-type,
+.dark .hljs-addition {
+  color: #ff7b72;
+}
+
+.dark .hljs-string,
+.dark .hljs-meta .hljs-string,
+.dark .hljs-doctag,
+.dark .hljs-regexp {
+  color: #a5d6ff;
+}
+
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-name,
+.dark .hljs-selector-id,
+.dark .hljs-selector-class {
+  color: #d2a8ff;
+}
+
+.dark .hljs-attribute,
+.dark .hljs-attr,
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-class .hljs-title,
+.dark .hljs-function .hljs-title {
+  color: #79c0ff;
+}
+
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-subst,
+.dark .hljs-meta,
+.dark .hljs-meta .hljs-keyword,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo,
+.dark .hljs-link {
+  color: #ffa657;
+}
+
+.dark .hljs-built_in,
+.dark .hljs-title.class_,
+.dark .hljs-class .hljs-title {
+  color: #ffa657;
+}
+
+.dark .hljs-emphasis {
+  font-style: italic;
+}
+
+.dark .hljs-strong {
+  font-weight: bold;
+}
+
+.dark .hljs-deletion {
+  color: #ffa198;
+  background: #490202;
+}
+
+/* ── Dark mode: code block background ──────────────────────────────────── */
+.dark .markdown-body pre {
+  background: rgba(0, 0, 0, 0.35) !important;
+}
+
+.dark .markdown-body pre code {
+  color: #c9d1d9;
+}
+
+/* ── Light mode: ensure code blocks have light bg + dark text ──────────── */
+.markdown-body pre {
+  background: #f6f8fa !important;
+  border-left: 3px solid #d0d7de;
+}
+
+.markdown-body pre code {
+  color: #1f2328;
+}
+
+/* Light mode inline code */
+.markdown-body code:not(pre code) {
+  background: rgba(175, 184, 193, 0.2);
+  color: #1f2328;
+}
+
+/* Dark mode inline code */
+.dark .markdown-body code:not(pre code) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #58a6ff;
+}
+
+/* ── FileBrowser: CodePreview source code ──────────────────────────────── */
+.fb-code-preview {
+  background: #f6f8fa;
+}
+
+.dark .fb-code-preview {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.fb-code-hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.dark .fb-code-hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ── FileBrowser: MarkdownPreview fenced code ──────────────────────────── */
+.fb-md-pre {
+  background: #f6f8fa !important;
+}
+
+.dark .fb-md-pre {
+  background: #161b22 !important;
+}
+
+.dark .fb-md-pre code {
+  color: #c9d1d9;
+}
+
+/* ── DebugConsole ──────────────────────────────────────────────────────── */
+.dbg-console {
+  background: #f6f8fa;
+  color: #1f2328;
+}
+
+.dark .dbg-console {
+  background: #0d1117;
+  color: #c9d1d9;
+}
+
+/* ── ChatView: Tool command block ──────────────────────────────────────── */
+.tool-cmd-block {
+  background: #f0f1f4;
+}
+
+.dark .tool-cmd-block {
+  background: #1e1e2e;
+}
+
+.tool-cmd-header {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-secondary);
+}
+
+.dark .tool-cmd-header {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.tool-cmd-block pre {
+  color: #1f2328;
+}
+
+.dark .tool-cmd-block pre {
+  color: #cdd6f4;
+}
+
+/* ── ChatView: Tool result block ───────────────────────────────────────── */
+.tool-result-block {
+  background: #f6f8fa;
+  border: 1px solid var(--color-border);
+  color: var(--text-secondary);
+}
+
+.dark .tool-result-block {
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tool-result-error {
+  background: #fef2f2;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  color: #dc2626;
+}
+
+.dark .tool-result-error {
+  background: #2d1b1b;
+  color: #f87171;
+}

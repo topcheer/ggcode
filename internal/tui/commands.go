@@ -491,6 +491,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleCostCommand()
 		case "/copy":
 			return m.handleCopyCommand()
+		case "/redo":
+			return m.handleRedoCommand()
 		case "/context":
 			return m.handleContextCommand()
 		case "/regenerate", "/regen":

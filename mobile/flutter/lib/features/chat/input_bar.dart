@@ -1,6 +1,6 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Iteration 17: HapticFeedback
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -288,6 +288,7 @@ class _InputBarState extends ConsumerState<InputBar>
     final text = widget.controller.text.trim();
     final hasImages = _pendingImages.isNotEmpty;
     if (text.isEmpty && !hasImages) return;
+    HapticFeedback.lightImpact(); // Iteration 17: haptic feedback on send
     widget.controller.clear();
 
     // Convert pending images to proto format

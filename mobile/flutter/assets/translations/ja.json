@@ -86,5 +86,10 @@
   "approval.title": "承認が必要",
   "approval.deny": "拒否",
   "approval.allow": "許可",
-  "approval.always_allow": "常に許可"
+  "approval.always_allow": "常に許可",
+  "chat.copy_text": "テキストをコピー",
+  "chat.copied": "コピーしました",
+  "chat.select_all": "すべて選択",
+  "codeblock.show_more": "もっと表示（残り {count} 行）",
+  "codeblock.show_less": "折りたたむ"
 }

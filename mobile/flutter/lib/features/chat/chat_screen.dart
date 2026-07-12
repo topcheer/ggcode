@@ -239,26 +239,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           ],
         ),
         actions: [
-          // Language toggle
+          // Language selector
           Consumer(builder: (context, ref, _) {
             final lang = ref.watch(languageProvider);
-            return IconButton(
-              icon: Text(
-                lang == 'zh-CN' ? 'EN' : '中',
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-              ),
+            return PopupMenuButton<String>(
+              icon: const Icon(Icons.language, size: 20),
               tooltip: t('settings.language'),
-              onPressed: () {
-                final newLang = lang == 'zh-CN' ? 'en' : 'zh-CN';
+              onSelected: (newLang) {
                 persistLanguageChoice(ref, newLang);
-                // Notify desktop
                 ref
                     .read(connectionProvider.notifier)
                     .service
                     ?.sendLanguageChange(newLang);
                 setState(() {});
               },
+              itemBuilder: (_) => supportedLanguages.map((code) {
+                final labels = {
+                  'en': 'English',
+                  'zh-CN': '简体中文',
+                  'zh-TW': '繁體中文',
+                  'ja': '日本語',
+                  'ko': '한국어',
+                  'es': 'Español',
+                  'fr': 'Français',
+                  'de': 'Deutsch',
+                  'ru': 'Русский',
+                  'pt': 'Português',
+                };
+                return PopupMenuItem(
+                  value: code,
+                  child: Row(children: [
+                    if (code == lang)
+                      const Icon(Icons.check, size: 16,
+                          color: Colors.blue)
+                    else
+                      const SizedBox(width: 16),
+                    const SizedBox(width: 8),
+                    Text(labels[code] ?? code),
+                  ]),
+                );
+              }).toList(),
             );
           }),
           // Theme toggle
@@ -495,7 +515,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final liveSessionId = connNotifier.currentSessionId;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF141421),
+      backgroundColor: AppColors.backgroundElevated,
       showDragHandle: true,
       builder: (ctx) {
         return StatefulBuilder(
@@ -592,7 +612,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         final confirmed = await showDialog<bool>(
                           context: context,
                           builder: (dctx) => AlertDialog(
-                            backgroundColor: const Color(0xFF1A1A2E),
+                            backgroundColor: AppColors.backgroundElevated,
                             title: Text(
                               t('workspace.clear_cache_confirm_title'),
                               style: TextStyle(color: AppColors.textPrimary),
