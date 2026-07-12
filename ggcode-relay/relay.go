@@ -98,10 +98,16 @@ func newRoom(token string) *room {
 }
 
 // appendEvent stores an event in room history with idempotent dedup.
-// Returns true if the event is new, false if it was a duplicate (updated in-place).
+// Returns true if the event should be forwarded to clients, false if it
+// was a duplicate (updated in-place) and should be skipped.
+//
+// Events without an eventID are not stored in history (not replayable)
+// but ARE forwarded to connected clients — they are transient control
+// messages (status, activity, etc.) that must reach live clients but
+// don't need persistence.
 func (r *room) appendEvent(ev roomEvent) bool {
 	if ev.eventID == "" {
-		return false
+		return true // forward to live clients, don't store in history
 	}
 	// Deduplicate the tail (idempotent upsert for retries).
 	for i := len(r.history) - 1; i >= 0 && i >= len(r.history)-50; i-- {
@@ -557,8 +563,10 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 
 	p.hub.trace("server_broadcast", p.room.token, msg)
 
-	// Persist async.
-	if p.hub.store != nil && msg.SessionID != "" {
+	// Persist async — only for events with an eventID (durable, replayable).
+	// Transient events (no eventID) are forwarded to live clients but not
+	// persisted, since they can't be dedup'd on replay.
+	if p.hub.store != nil && msg.SessionID != "" && msg.EventID != "" {
 		token := p.room.token
 		s := p.hub.store
 		safego.Go("relay.persist-event", func() {

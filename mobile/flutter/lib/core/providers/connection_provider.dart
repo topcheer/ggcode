@@ -1426,12 +1426,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // snapshot's lastEventId (ACK latency).  Skip + ACK so relay advances.
     // Exception: when awaiting a snapshot projection (after snapshot_reset),
     // the host is sending a complete fresh view — accept all events regardless
-    // of ordinal to avoid dropping replayCanonicalEvents data that arrives
-    // before (or interleaved with) the snapshot_reset message.
-    // Suppress ordinal checks during authoritative snapshot replay and
-    // while replay events are in flight (pendingReplayCount > 0).
-    // The host controls the event stream during these phases.
-    if (!_awaitingSnapshotProjection && _pendingReplayCount == 0) {
+    // of ordinal.
+    if (!_awaitingSnapshotProjection) {
       final ord = _parseEventOrdinal(eventId);
       final last = _parseEventOrdinal(_lastAppliedEventId);
       if (ord != null && last != null && ord <= last) {
