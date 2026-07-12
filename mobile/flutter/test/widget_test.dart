@@ -99,6 +99,22 @@ class _SelectedSessionWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
   Future<void> initialize() async {}
 }
 
+/// Empty workspace cache — initialized but no sessions/workspaces.
+/// Used by tests that need AppShell to show ConnectScreen without
+/// triggering real SharedPreferences/SQLite initialization.
+class _EmptyWorkspaceCacheNotifier extends WorkspaceCacheNotifier {
+  @override
+  WorkspaceCacheState build() => const WorkspaceCacheState(
+        initialized: true,
+        workspaces: {},
+        sessions: {},
+        snapshots: {},
+      );
+
+  @override
+  Future<void> initialize() async {}
+}
+
 void main() {
   late Directory cacheDir;
   setUp(() {
@@ -170,11 +186,14 @@ void main() {
       ProviderScope(
         overrides: [
           connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_EmptyWorkspaceCacheNotifier.new),
         ],
         child: const GGCodeApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
 
@@ -204,11 +223,14 @@ void main() {
       ProviderScope(
         overrides: [
           connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_EmptyWorkspaceCacheNotifier.new),
         ],
         child: const GGCodeApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
 
@@ -237,11 +259,14 @@ void main() {
       ProviderScope(
         overrides: [
           connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_EmptyWorkspaceCacheNotifier.new),
         ],
         child: const GGCodeApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     final context = tester.element(find.byType(GGCodeApp));
     final container = ProviderScope.containerOf(context, listen: false);
@@ -329,11 +354,14 @@ void main() {
       ProviderScope(
         overrides: [
           connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+          workspaceCacheProvider
+              .overrideWith(_EmptyWorkspaceCacheNotifier.new),
         ],
         child: const GGCodeApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     final context = tester.element(find.byType(GGCodeApp));
     final container = ProviderScope.containerOf(context, listen: false);
