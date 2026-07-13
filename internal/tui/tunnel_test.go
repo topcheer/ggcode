@@ -513,13 +513,9 @@ func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedger(t *testi
 		t.Fatal("expected downgraded session to fall back to snapshot replay")
 	}
 
-	loaded, err := store.Load(ses.ID)
-	if err != nil {
-		t.Fatalf("reload session: %v", err)
-	}
-	if loaded.TunnelEventsComplete {
-		t.Fatal("expected downgraded replay flag to persist")
-	}
+	// Note: TunnelEventsComplete is no longer persisted by prepareCurrentSessionTunnelLedger
+	// (tunnel events live in projection store, not session JSONL). The flag is
+	// only updated in memory; projection store authority is cut instead.
 }
 
 func TestApplyResumedSessionClearsAgentContext(t *testing.T) {
@@ -622,8 +618,14 @@ func TestPrepareCurrentSessionTunnelLedgerMarksFreshSessionComplete(t *testing.T
 
 	m.prepareCurrentSessionTunnelLedger()
 
-	if !m.session.TunnelEventsComplete {
-		t.Fatal("expected fresh tunnel session to arm canonical replay")
+	// Tunnel events are no longer persisted to session JSONL.
+	// prepareCurrentSessionTunnelLedger now clears in-memory events and cuts
+	// projection store authority. TunnelEventsComplete is always cleared.
+	if m.session.TunnelEventsComplete {
+		t.Fatal("expected TunnelEventsComplete to be cleared (projection store is sole source)")
+	}
+	if len(m.session.TunnelEvents) != 0 {
+		t.Fatal("expected tunnel events to be cleared from memory")
 	}
 }
 

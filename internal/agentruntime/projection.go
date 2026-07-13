@@ -76,45 +76,11 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 	return state, nil
 }
 
+// HydrateProjectionReplayFromSessionLedger is deprecated.
+// Tunnel events are no longer stored in session JSONL — the projection store
+// is the sole source. This function is now a no-op, retained for API compatibility.
 func HydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, ses *session.Session, replay []tunnel.GatewayMessage) ([]tunnel.GatewayMessage, error) {
-	if store == nil || ses == nil || !ses.TunnelEventsComplete || len(ses.TunnelEvents) == 0 {
-		return replay, nil
-	}
-	sessionID := strings.TrimSpace(ses.ID)
-	if sessionID == "" {
-		return replay, nil
-	}
-
-	seen := make(map[string]struct{}, len(replay))
-	for _, msg := range replay {
-		if msg.EventID != "" {
-			seen[msg.EventID] = struct{}{}
-		}
-	}
-
-	appended := false
-	for _, ev := range ses.TunnelEvents {
-		if ev.EventID != "" {
-			if _, ok := seen[ev.EventID]; ok {
-				continue
-			}
-			seen[ev.EventID] = struct{}{}
-		}
-		if err := store.Append(tunnel.GatewayMessage{
-			SessionID: sessionID,
-			EventID:   ev.EventID,
-			StreamID:  ev.StreamID,
-			Type:      ev.Type,
-			Data:      append([]byte(nil), ev.Data...),
-		}); err != nil {
-			return replay, err
-		}
-		appended = true
-	}
-	if !appended {
-		return replay, nil
-	}
-	return store.ReplayEvents(sessionID)
+	return replay, nil
 }
 
 func AppendProjectionEvent(store *tunnel.ProjectionStore, msg tunnel.GatewayMessage) error {

@@ -853,8 +853,13 @@ func (b *ChatBridge) saveSession() {
 		return
 	}
 
-	// Normal save — no compaction, safe to do full snapshot.
-	_ = agentruntime.SaveAgentSessionSnapshotWithExtra(store, ses, agent, digests)
+	// With per-message persistence (SetPersistHandler), all agent messages
+	// are already written to JSONL incrementally. Only append extra digests
+	// that the agent didn't add itself (e.g. turn summaries).
+	for _, dg := range digests {
+		ses.Messages = append(ses.Messages, dg)
+		// Disk persistence handled by onPersist (SetPersistHandler).
+	}
 }
 
 func (b *ChatBridge) StartNewSession() (string, error) {
@@ -2487,11 +2492,8 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 			msg := provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(pending.Text)}}
 			b.currentSes.Messages = append(b.currentSes.Messages, msg)
 			b.currentSes.UpdatedAt = time.Now()
-			if b.sessionStore != nil {
-				ses := b.currentSes
-				store := b.sessionStore
-				safego.Go("desktop.drainPending.sessionSave", func() { _ = store.Save(ses) })
-			}
+			// Disk persistence handled by onPersist (SetPersistHandler)
+			// when the agent run adds this message via Add().
 		}
 		b.mu.Unlock()
 	}
@@ -3244,11 +3246,8 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		msg := provider.Message{Role: "user", Content: content}
 		b.currentSes.Messages = append(b.currentSes.Messages, msg)
 		b.currentSes.UpdatedAt = time.Now()
-		if b.sessionStore != nil {
-			ses := b.currentSes
-			store := b.sessionStore
-			safego.Go("desktop.startRun.sessionSave", func() { _ = store.Save(ses) })
-		}
+		// Disk persistence handled by onPersist (SetPersistHandler)
+		// when the agent run adds this message via Add().
 	}
 
 	err := b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {

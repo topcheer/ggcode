@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -568,13 +567,12 @@ func (h *TunnelHost) rollover(broker *tunnel.Broker, startNew bool) {
 }
 
 // recordEvent is called by the projection broker's event recorder.
-// It persists the event to the session and forwards to the online broker.
+// It persists the event to the projection store and forwards to the online broker.
 func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 	// Persist to projection store
 	h.mu.Lock()
 	projStore := h.projStore
 	ses := h.session
-	store := h.sessionStore
 	h.mu.Unlock()
 
 	if ev.EventID == "" || ev.Type == tunnel.EventSnapshotReset {
@@ -590,31 +588,20 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 		}
 	}
 
-	// Persist to session
-	if ses == nil || store == nil {
-		return
-	}
-
-	record := session.TunnelEvent{
-		EventID:  ev.EventID,
-		StreamID: ev.StreamID,
-		Type:     ev.Type,
-		Data:     append([]byte(nil), ev.Data...),
-	}
-	ses.TunnelEvents = append(ses.TunnelEvents, record)
-	// Prune old tunnel events to bound memory and future Save() output.
-	if len(ses.TunnelEvents) > session.MaxTunnelEvents {
-		pruneIdx := len(ses.TunnelEvents) - session.MaxTunnelEvents
-		ses.TunnelEvents = ses.TunnelEvents[pruneIdx:]
-	}
-
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		if err := jsonlStore.AppendTunnelEventToDisk(ses, record); err != nil {
-			debug.Log("tunnel", "TunnelHost: failed to persist tunnel event to session %s: %v", ses.ID, err)
+	// Keep in-memory TunnelEvents for compatibility (desktop CurrentSessionTunnelEvents, etc).
+	// Tunnel events are NO LONGER persisted to the session JSONL — the projection
+	// store (~/.ggcode/mobile-projection/<sessionID>.json) is the sole durable copy.
+	if ses != nil {
+		record := session.TunnelEvent{
+			EventID:  ev.EventID,
+			StreamID: ev.StreamID,
+			Type:     ev.Type,
+			Data:     append([]byte(nil), ev.Data...),
 		}
-	} else {
-		if err := store.Save(ses); err != nil {
-			debug.Log("tunnel", "TunnelHost: failed to save session %s after tunnel event: %v", ses.ID, err)
+		ses.TunnelEvents = append(ses.TunnelEvents, record)
+		if len(ses.TunnelEvents) > session.MaxTunnelEvents {
+			pruneIdx := len(ses.TunnelEvents) - session.MaxTunnelEvents
+			ses.TunnelEvents = ses.TunnelEvents[pruneIdx:]
 		}
 	}
 

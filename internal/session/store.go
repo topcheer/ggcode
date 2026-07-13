@@ -513,15 +513,9 @@ func (s *JSONLStore) Save(ses *Session) error {
 		}
 	}
 
-	for i := range ses.TunnelEvents {
-		ev := ses.TunnelEvents[i]
-		rec := jsonlRecord{Type: "tunnel_event", SessionID: ses.ID, TunnelEvent: &ev}
-		if err := enc.Encode(rec); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("encoding tunnel event %d: %w", i, err)
-		}
-	}
+	// Tunnel events are NO LONGER persisted to session JSONL.
+	// They are stored in the projection store (~/.ggcode/mobile-projection/).
+	// Old JSONL files may contain tunnel_event lines — loadSession skips them.
 
 	// Cost record (if present)
 	if len(ses.CostJSON) > 0 {
@@ -636,7 +630,6 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		lastCpTokens       int
 		allMessages        []jsonlRecord      // ALL message records (never discarded by checkpoint)
 		postCPEntries      []lightweightEntry // cost entries after last checkpoint
-		postCPTunnelEvs    []jsonlRecord      // tunnel events after last checkpoint (bounded)
 		allUsage           []jsonlRecord      // ALL usage records (never cleared by checkpoint)
 		allMetrics         []jsonlRecord      // ALL metric records (never cleared by checkpoint)
 		haveCheckpoint     bool
@@ -671,7 +664,6 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				lastCpLastMsgID = "" // legacy checkpoints don't have last_msg_id
 				lastCpTokens = rec.CheckpointTokens
 				postCPEntries = nil
-				postCPTunnelEvs = nil
 				haveCheckpoint = true
 			}
 		case "usage":
@@ -688,7 +680,9 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "cost":
 			postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
 		case "tunnel_event":
-			postCPTunnelEvs = append(postCPTunnelEvs, rec)
+			// Tunnel events are no longer stored in session JSONL.
+			// Old files may still contain these lines — skip them silently.
+			// The projection store is the sole source of tunnel event history.
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -890,15 +884,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			s.backfillIDs(ses.ID, updates)
 		}
 
-		// Apply tunnel events with a cap to bound memory and file size.
-	}
-	if len(postCPTunnelEvs) > MaxTunnelEvents {
-		postCPTunnelEvs = postCPTunnelEvs[len(postCPTunnelEvs)-MaxTunnelEvents:]
-	}
-	for _, rec := range postCPTunnelEvs {
-		if rec.TunnelEvent != nil {
-			ses.TunnelEvents = append(ses.TunnelEvents, *rec.TunnelEvent)
-		}
+		// Tunnel events are no longer loaded from session JSONL.
 	}
 
 	// Apply ALL usage records (preserved across checkpoints)

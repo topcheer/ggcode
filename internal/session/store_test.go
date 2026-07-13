@@ -169,14 +169,10 @@ func TestSaveLoadTunnelEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.TunnelEvents) != 2 {
-		t.Fatalf("expected 2 tunnel events, got %d", len(loaded.TunnelEvents))
-	}
-	if loaded.TunnelEvents[0].EventID != "ev-000000001" || loaded.TunnelEvents[1].StreamID != "msg-1" {
-		t.Fatalf("unexpected tunnel events: %+v", loaded.TunnelEvents)
-	}
-	if !loaded.TunnelEventsComplete {
-		t.Fatal("expected tunnel event completeness flag to survive load")
+	// Tunnel events are no longer persisted to session JSONL — they live in the
+	// projection store. Save() should not write them, Load() should not read them.
+	if len(loaded.TunnelEvents) != 0 {
+		t.Fatalf("expected 0 tunnel events (not persisted to JSONL), got %d", len(loaded.TunnelEvents))
 	}
 }
 

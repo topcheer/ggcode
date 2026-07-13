@@ -1945,41 +1945,21 @@ func mergeTunnelHistory(base, tail []tunnel.HistoryEntry) []tunnel.HistoryEntry 
 }
 
 func (m *Model) prepareCurrentSessionTunnelLedger() {
-	snapshotHistory := m.currentTunnelHistory()
-
 	m.sessionMutex().Lock()
-	if m.session == nil || m.sessionStore == nil {
+	if m.session == nil {
 		m.sessionMutex().Unlock()
 		return
 	}
-	needsSave := false
-	switch {
-	case m.session.TunnelEventsComplete:
-		if tunnelHistoryMatches(tunnelEventsToHistory(m.session.TunnelEvents), snapshotHistory) {
-			m.sessionMutex().Unlock()
-			return
-		}
-		m.session.TunnelEvents = nil
-		m.session.TunnelEventsComplete = false
-		needsSave = true
-	case len(snapshotHistory) == 0:
-		m.session.TunnelEvents = nil
-		m.session.TunnelEventsComplete = true
-		needsSave = true
-	case len(m.session.TunnelEvents) > 0:
-		m.session.TunnelEvents = nil
-		needsSave = true
-	}
-	if !needsSave {
-		m.sessionMutex().Unlock()
-		return
-	}
+	// Clear in-memory tunnel events — the projection store is the sole
+	// persistent copy. CutAuthority resets the projection ledger.
+	m.session.TunnelEvents = nil
+	m.session.TunnelEventsComplete = false
 	ses := m.session
-	store := m.sessionStore
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
-	_ = store.Save(ses)
+	// Tunnel events are no longer persisted to session JSONL.
+	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
 			if m.tunnelEventBroker() != nil {
@@ -2001,11 +1981,11 @@ func (m *Model) resetCurrentSessionTunnelLedger() {
 	m.session.TunnelEvents = nil
 	m.session.TunnelEventsComplete = false
 	ses := m.session
-	store := m.sessionStore
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
-	_ = store.Save(ses)
+	// Tunnel events are no longer persisted to session JSONL.
+	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
 			if m.tunnelEventBroker() != nil {
