@@ -1307,10 +1307,12 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// All messages should have IDs
-	for i, msg := range loaded.Messages {
+	// Post-checkpoint messages should have IDs (needed for restore).
+	// Pre-checkpoint messages may NOT have IDs (not needed for restore).
+	postCpMsgs := loaded.Messages[3:] // messages after checkpoint
+	for i, msg := range postCpMsgs {
 		if msg.ID == "" {
-			t.Fatalf("message %d has empty ID after migration", i)
+			t.Fatalf("post-checkpoint message %d has empty ID after migration", i)
 		}
 	}
 
@@ -1325,7 +1327,7 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 		t.Fatalf("expected first context message to be system role, got %s", firstMsg.Role)
 	}
 	if !strings.Contains(firstMsg.Content[0].Text, "[Previous conversation summary]") {
-		t.Fatalf("expected first context message to be summary, got: %s", firstMsg.Content[0].Text[:min(80, len(firstMsg.Content[0].Text))])
+		t.Fatalf("expected first context message to be summary")
 	}
 
 	// Verify the file on disk has new checkpoint format

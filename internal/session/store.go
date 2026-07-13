@@ -1556,164 +1556,193 @@ func newSessionMessageID() string {
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// migrateMessageIDs scans a session JSONL file and performs two migrations:
-//  1. Backfill missing message IDs (Message.ID == "") for records created
-//     before the msgID feature existed.
-//  2. Convert old checkpoint format (checkpoint_messages []Message) to new
-//     format (checkpoint_summary_msg_id string). If the old checkpoint
-//     contains a summary message, it is written as a new type:"message"
-//     record with a generated ID. If no summary is found, the checkpoint
-//     is discarded.
+// migrateMessageIDs migrates legacy session JSONL to the new checkpoint format.
 //
-// This is a one-time migration: once all messages have IDs and all
-// checkpoints use the new format, subsequent loads skip the rewrite.
+// Old format: checkpoint records embed checkpoint_messages []Message.
+// New format: checkpoint records store checkpoint_summary_msg_id +
+// checkpoint_last_msg_id, pointing to message records in the JSONL.
+//
+// Migration strategy (minimal, targeted):
+//  1. Find the LAST old-format checkpoint (with checkpoint_messages).
+//  2. Extract summary message + last message from it.
+//  3. Append summary message to end of file with a generated ID.
+//  4. Scan backwards from file end to find a message matching the checkpoint's
+//     last message content — that's the last_msg_id. Generate ID for it.
+//  5. Rewrite the checkpoint record to new format.
+//  6. Backfill IDs only for messages AFTER the last_msg_id position (these
+//     are the "extra" messages that restore needs to find by ID).
+//
+// Messages before the checkpoint are never loaded by restore, so they don't
+// need IDs. This keeps migration fast even for very large session files.
 //
 // Must be called while holding the store mutex (same as loadSession).
 func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	path := s.sessionPath(id)
 
-	// Phase 1: quick scan to check if migration is needed.
+	// Phase 1: read all lines, find last old-format checkpoint.
 	srcF, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
 	sc := bufio.NewScanner(srcF)
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	needsMigration := false
+
+	var lines []string        // all lines (trimmed)
+	var lastOldCpIdx int = -1 // index in lines
+	var lastOldCpSummary *provider.Message
+	var lastOldCpLastMsg *provider.Message
+
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
+		lines = append(lines, line)
+
 		var rec jsonlRecord
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
-			needsMigration = true
-			break
-		}
-		// Old checkpoint format with checkpoint_messages also triggers migration.
 		if rec.Type == "checkpoint" && len(rec.CheckpointMessages) > 0 {
-			needsMigration = true
-			break
+			// Find summary and last message in this checkpoint.
+			var summary *provider.Message
+			for i := range rec.CheckpointMessages {
+				msg := &rec.CheckpointMessages[i]
+				if summary == nil && msg.Role == "system" && len(msg.Content) > 0 {
+					for _, blk := range msg.Content {
+						if blk.Type == "text" && strings.HasPrefix(blk.Text, "[Previous conversation summary]") {
+							summary = msg
+							break
+						}
+					}
+				}
+			}
+			if summary != nil {
+				lastOldCpIdx = len(lines) - 1
+				lastOldCpSummary = summary
+				lastOldCpLastMsg = &rec.CheckpointMessages[len(rec.CheckpointMessages)-1]
+			}
 		}
 	}
 	srcF.Close()
 	if sc.Err() != nil {
 		return 0, fmt.Errorf("migration scan: %w", sc.Err())
 	}
-	if !needsMigration {
-		return 0, nil
+
+	if lastOldCpIdx < 0 {
+		// No old-format checkpoint found. Check if any messages need IDs
+		// (new sessions created after the msgID feature but before onPersist).
+		needsID := false
+		for _, line := range lines {
+			var rec jsonlRecord
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
+				needsID = true
+				break
+			}
+		}
+		if !needsID {
+			return 0, nil
+		}
+		// Fall through to simple ID backfill for all messages.
+		return s.simpleBackfillIDs(path, lines)
 	}
 
-	// Phase 2: rewrite file with backfilled IDs and converted checkpoints.
-	srcF, err = os.Open(path)
-	if err != nil {
-		return 0, err
+	// Phase 2: find last_msg_id — scan backwards from file end to find a
+	// message matching the checkpoint's last message content.
+	lastMsgFingerprint := messageFingerprint(lastOldCpLastMsg)
+	lastMsgLineIdx := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(lines[i]), &rec) != nil {
+			continue
+		}
+		if rec.Type == "message" && rec.Message != nil {
+			if messageFingerprint(rec.Message) == lastMsgFingerprint {
+				lastMsgLineIdx = i
+				break
+			}
+		}
 	}
-	defer srcF.Close()
 
+	// Phase 3: generate IDs and rewrite file.
+	summaryID := newSessionMessageID()
+	if lastOldCpSummary.ID == "" {
+		lastOldCpSummary.ID = summaryID
+	}
+	lastMsgID := ""
+	if lastMsgLineIdx >= 0 {
+		// Generate ID for the matched message if it doesn't have one.
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(lines[lastMsgLineIdx]), &rec) == nil && rec.Message != nil {
+			if rec.Message.ID == "" {
+				rec.Message.ID = newSessionMessageID()
+			}
+			lastMsgID = rec.Message.ID
+			// Re-serialize the line with the new ID.
+			if data, err := json.Marshal(rec); err == nil {
+				lines[lastMsgLineIdx] = string(data)
+			}
+		}
+	}
+
+	// Phase 4: backfill IDs for messages AFTER lastMsgLineIdx (extra messages).
+	// If lastMsgLineIdx is -1 (no match found), backfill all messages after
+	// the checkpoint record instead.
+	migrated := 0
+	backfillFrom := lastMsgLineIdx + 1
+	if backfillFrom <= 0 {
+		backfillFrom = lastOldCpIdx + 1 // after checkpoint record
+	}
+	for i := backfillFrom; i < len(lines); i++ {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(lines[i]), &rec) != nil {
+			continue
+		}
+		if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
+			rec.Message.ID = newSessionMessageID()
+			migrated++
+			if data, err := json.Marshal(rec); err == nil {
+				lines[i] = string(data)
+			}
+		}
+	}
+
+	// Phase 5: rewrite the checkpoint record to new format.
+	if lastOldCpIdx >= 0 {
+		var cpRec jsonlRecord
+		if json.Unmarshal([]byte(lines[lastOldCpIdx]), &cpRec) == nil {
+			cpRec.CheckpointSummaryMsgID = lastOldCpSummary.ID
+			cpRec.CheckpointLastMsgID = lastMsgID
+			cpRec.CheckpointMessages = nil
+			if data, err := json.Marshal(cpRec); err == nil {
+				lines[lastOldCpIdx] = string(data)
+			}
+		}
+	}
+
+	// Phase 6: write file — original lines (modified in-place) with summary
+	// message inserted right after the checkpoint record.
 	tmp := path + ".migrate.tmp"
 	dstF, err := os.Create(tmp)
 	if err != nil {
 		return 0, fmt.Errorf("creating migration temp file: %w", err)
 	}
-
-	sc = bufio.NewScanner(srcF)
-	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	enc := json.NewEncoder(dstF)
-	enc.SetEscapeHTML(false)
-	migrated := 0
-
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var rec jsonlRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// Preserve malformed lines as-is.
-			dstF.WriteString(line + "\n")
-			continue
-		}
-
-		// Migration 1: backfill missing message IDs.
-		if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
-			rec.Message.ID = newSessionMessageID()
-			migrated++
-		}
-
-		// Migration 2: convert old checkpoint format to new.
-		if rec.Type == "checkpoint" && len(rec.CheckpointMessages) > 0 {
-			// Backfill IDs in checkpoint_messages first.
-			for i := range rec.CheckpointMessages {
-				if rec.CheckpointMessages[i].ID == "" {
-					rec.CheckpointMessages[i].ID = newSessionMessageID()
-					migrated++
-				}
+	for i, line := range lines {
+		dstF.WriteString(line + "\n")
+		// Insert summary message right after the checkpoint record.
+		if i == lastOldCpIdx {
+			summaryRec := jsonlRecord{
+				Type:    "message",
+				Message: lastOldCpSummary,
 			}
-			// Find the summary message in checkpoint_messages.
-			// Summary messages are system-role messages with text content
-			// that starts with the summary prefix.
-			var summaryMsg *provider.Message
-			for i := range rec.CheckpointMessages {
-				msg := &rec.CheckpointMessages[i]
-				if msg.Role == "system" && len(msg.Content) > 0 {
-					for _, blk := range msg.Content {
-						if blk.Type == "text" && strings.HasPrefix(blk.Text, "[Previous conversation summary]") {
-							summaryMsg = msg
-							break
-						}
-					}
-				}
-				if summaryMsg != nil {
-					break
-				}
+			if data, err := json.Marshal(summaryRec); err == nil {
+				dstF.WriteString(string(data) + "\n")
+				migrated++
 			}
-
-			if summaryMsg != nil {
-				// Write summary as a new message record with generated ID.
-				if summaryMsg.ID == "" {
-					summaryMsg.ID = newSessionMessageID()
-					migrated++
-				}
-				msgRec := jsonlRecord{
-					Type:      "message",
-					Message:   summaryMsg,
-					SessionID: rec.SessionID,
-				}
-				if err := enc.Encode(msgRec); err != nil {
-					dstF.WriteString(line + "\n")
-					continue
-				}
-				// Convert checkpoint to new format.
-				rec.CheckpointSummaryMsgID = summaryMsg.ID
-				// last_msg_id left empty for migrated checkpoints — the
-				// checkpoint_messages were embedded, not in JSONL as message
-				// records. Restore will load only the summary + post-migration
-				// messages. This is acceptable since migrated checkpoints are
-				// best-effort.
-				rec.CheckpointMessages = nil
-				if err := enc.Encode(rec); err != nil {
-					dstF.WriteString(line + "\n")
-				}
-			} else {
-				// No summary found — discard this checkpoint (per design decision).
-				debug.Log("session", "migrateMessageIDs: discarding old checkpoint without summary in session %s", id)
-			}
-			continue
 		}
-
-		if err := enc.Encode(rec); err != nil {
-			// Fallback to original line if re-encoding fails.
-			dstF.WriteString(line + "\n")
-		}
-	}
-	if err := sc.Err(); err != nil {
-		dstF.Close()
-		os.Remove(tmp)
-		return 0, fmt.Errorf("migration read: %w", err)
 	}
 	if err := dstF.Sync(); err != nil {
 		dstF.Close()
@@ -1727,7 +1756,51 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		return 0, fmt.Errorf("migration rename: %w", err)
 	}
 
-	debug.Log("session", "migrateMessageIDs: backfilled %d message IDs in session %s", migrated, id)
+	debug.Log("session", "migrateMessageIDs: migrated session %s: summary_msg_id=%s last_msg_id=%s backfilled=%d",
+		id, lastOldCpSummary.ID, lastMsgID, migrated)
+	return migrated, nil
+}
+
+// simpleBackfillIDs backfills missing message IDs for all message records
+// in a session file. Used when there are no old-format checkpoints to migrate
+// but some messages are missing IDs (created before onPersist was wired).
+func (s *JSONLStore) simpleBackfillIDs(path string, lines []string) (int, error) {
+	migrated := 0
+	for i, line := range lines {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
+			rec.Message.ID = newSessionMessageID()
+			migrated++
+			if data, err := json.Marshal(rec); err == nil {
+				lines[i] = string(data)
+			}
+		}
+	}
+	if migrated == 0 {
+		return 0, nil
+	}
+	tmp := path + ".migrate.tmp"
+	dstF, err := os.Create(tmp)
+	if err != nil {
+		return 0, fmt.Errorf("creating migration temp file: %w", err)
+	}
+	for _, line := range lines {
+		dstF.WriteString(line + "\n")
+	}
+	if err := dstF.Sync(); err != nil {
+		dstF.Close()
+		os.Remove(tmp)
+		return 0, fmt.Errorf("migration sync: %w", err)
+	}
+	dstF.Close()
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return 0, fmt.Errorf("migration rename: %w", err)
+	}
+	debug.Log("session", "simpleBackfillIDs: backfilled %d message IDs", migrated)
 	return migrated, nil
 }
 
