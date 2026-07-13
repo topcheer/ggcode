@@ -15,6 +15,38 @@ import (
 
 const maxReactiveCompactRetries = 3
 
+// fallbackCheckpointThreshold is the message count at which we force a
+// checkpoint even if compaction never succeeded. This prevents unbounded
+// context growth when the summarization LLM call keeps failing (e.g., model
+// doesn't support it, rate limits, network issues). The agent keeps running
+// in autopilot mode, accumulating messages without any checkpoint, which
+// leads to multi-million-token sessions that take minutes to restore.
+const fallbackCheckpointThreshold = 500
+
+// maybeFallbackCheckpoint saves a checkpoint when the message count exceeds
+// fallbackCheckpointThreshold, even if no compaction occurred. This is a
+// safety net for sessions where compaction keeps failing.
+func (a *Agent) maybeFallbackCheckpoint() {
+	a.mu.RLock()
+	fn := a.onCheckpoint
+	a.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	msgs := a.contextManager.Messages()
+	if len(msgs) < fallbackCheckpointThreshold {
+		return
+	}
+	// Only save if we haven't saved a checkpoint recently (avoid spamming).
+	if a.lastCheckpointMessageCount == len(msgs) {
+		return
+	}
+	a.lastCheckpointMessageCount = len(msgs)
+	tokenCount := a.contextManager.TokenCount()
+	debug.Log("agent", "fallback checkpoint: %d messages, %d tokens (compaction may have failed)", len(msgs), tokenCount)
+	fn(msgs, tokenCount)
+}
+
 // MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
 // Microcompact was removed — precompact at 97.5% + reactive compact on PTL
 // now handle all compaction needs without corrupting tool_result data.
@@ -85,11 +117,15 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	debug.Log("agent", "reactive compact: compacting conversation")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
+	changed := false
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if compactErr != nil {
-		return false
+		debug.Log("agent", "reactive compact: summarization failed (%v), falling back to truncation", compactErr)
 	}
 
+	// Always try truncation as a fallback, even if summarization failed.
+	// This prevents the context from growing unbounded when the summarization
+	// LLM call keeps failing (e.g., model doesn't support it, rate limits).
 	if cm, ok := a.contextManager.(interface{ TruncateOldestGroupForRetry() bool }); ok {
 		if cm.TruncateOldestGroupForRetry() {
 			changed = true

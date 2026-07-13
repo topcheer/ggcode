@@ -169,6 +169,16 @@ const sessionMaintenanceInterval = 30 * time.Second
 // (a long session can accumulate 200K+ events = 100MB+).
 const MaxTunnelEvents = 2000
 
+// MaxContextMessages caps the number of messages loaded into the agent's LLM
+// context when a session has no checkpoint (compaction summary). Without this
+// cap, a long session with 10K+ messages and no compaction would load all of
+// them into context on restore, potentially consuming 2M+ tokens and exceeding
+// any model's context window. The full message history is preserved in
+// ses.Messages for TUI rendering; only ContextMessages (what the agent sees)
+// is truncated. When the cap is applied, a synthetic system note is prepended
+// to inform the agent that earlier context was truncated.
+const MaxContextMessages = 200
+
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
 func NewJSONLStore(dir string) (*JSONLStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -721,8 +731,26 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 	// If no checkpoint, ContextMessages = Messages (all messages go to agent).
+	// Cap at MaxContextMessages to prevent loading tens of thousands of messages
+	// (which can be 2M+ tokens) into the LLM context on restore. The full message
+	// history remains in ses.Messages for TUI rendering; only the agent context
+	// is truncated to the most recent messages.
 	if len(ses.ContextMessages) == 0 {
-		ses.ContextMessages = ses.Messages
+		if len(ses.Messages) > MaxContextMessages {
+			omitted := len(ses.Messages) - MaxContextMessages
+			ses.ContextMessages = ses.Messages[len(ses.Messages)-MaxContextMessages:]
+			// Prepend a system note so the agent knows earlier context was truncated,
+			// rather than silently losing the conversation beginning.
+			ses.ContextMessages = append([]provider.Message{{
+				Role: "system",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf("[Note: %d earlier messages were truncated to fit the context window. The conversation starts mid-way. Re-read relevant files if you need earlier context.]", omitted),
+				}},
+			}}, ses.ContextMessages...)
+		} else {
+			ses.ContextMessages = ses.Messages
+		}
 	}
 
 	// Apply tunnel events with a cap to bound memory and file size.

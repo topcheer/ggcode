@@ -65,6 +65,19 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 			debug.Log("im", "StartCurrentBindingAdapter: skipping muted adapter %q", binding.Adapter)
 			continue
 		}
+		// Skip bindings owned by another session. If the binding has a
+		// persisted LastSessionID that doesn't match our session, another
+		// instance owns it — only the matching session should activate it.
+		// Bindings with empty LastSessionID use the old logic (first process
+		// claims all) and are started here.
+		if binding.LastSessionID != "" {
+			sessionID := mgr.CurrentSessionID()
+			if sessionID == "" || binding.LastSessionID != sessionID {
+				debug.Log("im", "StartCurrentBindingAdapter: skipping adapter %q — owned by session %s, ours=%s",
+					binding.Adapter, binding.LastSessionID, sessionID)
+				continue
+			}
+		}
 		// Built-in PC adapter — only start when binding explicitly targets it
 		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
 			startPCAdapter(ctx, cfg, mgr)

@@ -249,8 +249,18 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 func (m *Manager) StartUnstartedOwnedAdapters() {
 	m.mu.Lock()
 	var toStart []string
+	sessionID := ""
+	if m.session != nil {
+		sessionID = m.session.SessionID
+	}
 	for name, binding := range m.currentBindings {
 		if binding.Muted || strings.TrimSpace(name) == "" {
+			continue
+		}
+		// Skip bindings owned by another session. Only start adapters
+		// whose LastSessionID is empty (old logic: first process claims)
+		// or matches our session.
+		if binding.LastSessionID != "" && sessionID != "" && binding.LastSessionID != sessionID {
 			continue
 		}
 		if _, hasSink := m.adapterCancels[name]; hasSink {
@@ -502,6 +512,17 @@ func (m *Manager) ActiveSession() *SessionBinding {
 	}
 	copy := *m.session
 	return &copy
+}
+
+// CurrentSessionID returns the session ID of the active session, or "" if no
+// session is bound. Used by StartCurrentBindingAdapter to check binding ownership.
+func (m *Manager) CurrentSessionID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.session == nil {
+		return ""
+	}
+	return m.session.SessionID
 }
 
 func (m *Manager) CurrentBinding() *ChannelBinding {

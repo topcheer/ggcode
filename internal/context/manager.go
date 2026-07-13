@@ -670,6 +670,8 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	oldTokens := m.tokenCountLocked()
+	oldMsgCount := len(m.messages)
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
 		sys := m.messages[0]
 		m.messages = []provider.Message{sys}
@@ -681,6 +683,8 @@ func (m *Manager) Clear() {
 		m.tokens = 0
 	}
 	m.invalidateUsageBaselineLocked()
+	debug.Log("ctx", "Clear: msgs %d→%d, tokens %d→%d (estimated), baseline invalidated",
+		oldMsgCount, len(m.messages), oldTokens, m.tokenCountLocked())
 }
 
 func (m *Manager) UsageRatio() float64 {

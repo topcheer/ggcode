@@ -42,48 +42,49 @@ var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider                 provider.Provider
-	tools                    *tool.Registry
-	contextManager           ctxpkg.ContextManager
-	maxIter                  int
-	policy                   permission.PermissionPolicy
-	onApproval               ApprovalFunc
-	onUsage                  func(usage provider.TokenUsage)
-	onMetric                 func(metrics.MetricEvent)
-	onCheckpoint             func(messages []provider.Message, tokenCount int)
-	onRunResult              runResultHandler
-	hookConfig               hooks.HookConfig
-	workingDir               string
-	sessionID                string // current session ID; determines todo file path
-	checkpoints              *checkpoint.Manager
-	diffConfirm              DiffConfirmFunc
-	onInterrupt              interruptionHandler
-	projectMemory            map[string]struct{}
-	supportsVision           bool
-	precompact               *precompactState
-	precompactCooldownUntil  time.Time // earliest next precompact; guarded by mu
-	shutdownCtx              context.Context
-	shutdownCancel           context.CancelFunc  // cancels on Close()
-	probeKey                 string              // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal            string              // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked       bool                // true after the goal-collection instruction has been injected
-	autopilotGoalSet         bool                // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotStrategistCount int                 // number of strategist calls this run (safety valve)
-	reflectionFunc           ReflectionFunc      // called after each run with accumulated stats
-	loopDetector             loopDetector        // tracks consecutive identical tool calls to detect stuck loops
-	errorClassifier          *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
-	overseer                 *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
-	repetition               *repetitionTracker  // semantic-level repetition detection for failed edit clusters
-	speculator               *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
-	toolMemo                 *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
-	confidence               *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
-	budgetGuard              *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
-	postEditVerify           postEditVerifyState // tracks source-code edits to inject periodic verification hints
-	systemPromptInjector     func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt         string              // the fully built static system prompt; used as reset base for dynamic injection
-	onVerifyProgress         func(text string)   // called during async verification (status updates)
-	onVerifyResult           func(VerifyResult)  // called when async verification completes
-	mu                       sync.RWMutex
+	provider                   provider.Provider
+	tools                      *tool.Registry
+	contextManager             ctxpkg.ContextManager
+	maxIter                    int
+	policy                     permission.PermissionPolicy
+	onApproval                 ApprovalFunc
+	onUsage                    func(usage provider.TokenUsage)
+	onMetric                   func(metrics.MetricEvent)
+	onCheckpoint               func(messages []provider.Message, tokenCount int)
+	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
+	onRunResult                runResultHandler
+	hookConfig                 hooks.HookConfig
+	workingDir                 string
+	sessionID                  string // current session ID; determines todo file path
+	checkpoints                *checkpoint.Manager
+	diffConfirm                DiffConfirmFunc
+	onInterrupt                interruptionHandler
+	projectMemory              map[string]struct{}
+	supportsVision             bool
+	precompact                 *precompactState
+	precompactCooldownUntil    time.Time // earliest next precompact; guarded by mu
+	shutdownCtx                context.Context
+	shutdownCancel             context.CancelFunc  // cancels on Close()
+	probeKey                   string              // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal              string              // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked         bool                // true after the goal-collection instruction has been injected
+	autopilotGoalSet           bool                // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotStrategistCount   int                 // number of strategist calls this run (safety valve)
+	reflectionFunc             ReflectionFunc      // called after each run with accumulated stats
+	loopDetector               loopDetector        // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier            *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	overseer                   *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition                 *repetitionTracker  // semantic-level repetition detection for failed edit clusters
+	speculator                 *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                   *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
+	confidence                 *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
+	budgetGuard                *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
+	postEditVerify             postEditVerifyState // tracks source-code edits to inject periodic verification hints
+	systemPromptInjector       func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt           string              // the fully built static system prompt; used as reset base for dynamic injection
+	onVerifyProgress           func(text string)   // called during async verification (status updates)
+	onVerifyResult             func(VerifyResult)  // called when async verification completes
+	mu                         sync.RWMutex
 }
 
 type providerAwareContextManager interface {
@@ -630,6 +631,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.asyncVerify(a.shutdownCtx, &statsCopy)
 			})
 		}
+		// Fallback checkpoint: if the session has accumulated a large number
+		// of messages without compaction succeeding, force-save a checkpoint.
+		// This prevents unbounded context growth in autopilot sessions where
+		// the summarization LLM call keeps failing.
+		a.maybeFallbackCheckpoint()
 	}()
 
 	a.contextManager.Add(provider.Message{
