@@ -92,13 +92,18 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 				return compactResultMsg{err: m.t("compact.unavailable")}
 			}
 			tokens := cm.TokenCount()
+			// Capture last message ID BEFORE compaction for checkpoint.
+			var lastMsgID string
+			if msgs := cm.Messages(); len(msgs) > 0 {
+				lastMsgID = msgs[len(msgs)-1].ID
+			}
 			if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
 				return compactResultMsg{err: fmt.Sprintf(m.t("compact.failed"), err)}
 			}
 			newTokens := cm.TokenCount()
 			// Persist the compacted context as a checkpoint so --resume
 			// restores the compacted state instead of the full history.
-			m.agent.SaveCheckpoint()
+			m.agent.SaveCheckpointWithLastMsgID(lastMsgID)
 			return compactResultMsg{text: fmt.Sprintf(m.t("compact.done_with_stats"), tokens, newTokens)}
 		},
 	)

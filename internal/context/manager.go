@@ -598,7 +598,6 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Find the last message from the snapshot in live messages using its ID.
 	// Everything after that message is "extra" (arrived during compaction)
@@ -686,9 +685,10 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.version++
 	m.recalcTokens()
 
-	// The compaction summary message must be persisted to JSONL so that
-	// checkpoint restore can find it by ID.  Add it to runAdded so that
-	// persistFullSessionMessages writes it to disk at run end.
+	// The compaction summary message must be persisted to JSONL immediately
+	// so that checkpoint restore can find it by ID even if the run is
+	// interrupted. We add it to runAdded AND trigger onPersist directly.
+	var persistedSummary *provider.Message
 	for i := range result.Messages {
 		sm := result.Messages[i]
 		if sm.Role == "system" && len(sm.Content) > 0 && sm.Content[0].Type == "text" &&
@@ -703,12 +703,20 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 				m.runAddedIDs[sm.ID] = true
 				m.runAdded = append(m.runAdded, sm)
 			}
+			persistedSummary = &sm
 			break // only one summary per compaction
 		}
 	}
 
 	debug.Log("ctx", "ApplyCompactResult: applied snapshot msgs=%d compacted=%d extra=%d tokens=%d",
 		snapshot.OrigLen, len(result.Messages), len(extra), m.tokenCountLocked())
+
+	// Trigger onPersist outside the lock for the summary message.
+	persistFn := m.onPersist
+	m.mu.Unlock()
+	if persistFn != nil && persistedSummary != nil {
+		persistFn(*persistedSummary)
+	}
 	return true, m.tokenCountLocked()
 }
 

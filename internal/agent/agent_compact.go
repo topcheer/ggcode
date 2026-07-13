@@ -324,6 +324,12 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 	debug.Log("agent", "autopilot loop guard triggered; compacting and pausing")
 	tokens := a.contextManager.TokenCount()
 
+	// Capture last message ID BEFORE compaction for checkpoint.
+	var lastMsgID string
+	if msgs := a.contextManager.Messages(); len(msgs) > 0 {
+		lastMsgID = msgs[len(msgs)-1].ID
+	}
+
 	compacted, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if err != nil {
 		return err
@@ -338,7 +344,7 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 	debug.Log("agent", "autopilot loop guard: compact completed (%d → %d tokens)", tokens, newTokens)
 	// Always save checkpoint for forced compaction — it's initiator-driven
 	// and represents a deliberate state transition.
-	a.maybeSaveCheckpoint()
+	a.maybeSaveCheckpoint(lastMsgID)
 	return nil
 }
 
@@ -379,4 +385,11 @@ func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 // externally (e.g. by slash /compact) after synchronous compaction.
 func (a *Agent) SaveCheckpoint() {
 	a.maybeSaveCheckpoint()
+}
+
+// SaveCheckpointWithLastMsgID persists a checkpoint with an explicit lastMsgID.
+// Use this when the caller knows the last message ID before compaction
+// (e.g. slash /compact captures it before calling Summarize).
+func (a *Agent) SaveCheckpointWithLastMsgID(lastMsgID string) {
+	a.maybeSaveCheckpoint(lastMsgID)
 }
