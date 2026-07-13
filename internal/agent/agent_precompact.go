@@ -326,7 +326,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			}
 			return false
 		}
-		a.maybeSaveCheckpoint()
+		a.maybeSaveCheckpoint(pc.snapshot.LastMsgID)
 		if onEvent != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
 		}

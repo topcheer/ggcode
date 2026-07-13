@@ -50,7 +50,7 @@ func (a *Agent) maybeFallbackCheckpoint() {
 		fallbackID = msgs[0].ID
 	}
 	if fallbackID != "" {
-		fn(fallbackID, tokenCount)
+		fn(fallbackID, "", tokenCount)
 	}
 }
 
@@ -344,7 +344,7 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 
 // maybeSaveCheckpoint triggers the checkpoint callback if one is registered.
 // This persists the compacted message state so --resume can skip re-compacting.
-func (a *Agent) maybeSaveCheckpoint() {
+func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
 	a.mu.RLock()
 	fn := a.onCheckpoint
 	a.mu.RUnlock()
@@ -359,7 +359,20 @@ func (a *Agent) maybeSaveCheckpoint() {
 		debug.Log("checkpoint", "maybeSaveCheckpoint: no summary message found, skipping")
 		return
 	}
-	fn(summaryMsgID, tokens)
+	// lastMsgID from snapshot (pre-compact). For synchronous compaction
+	// (slash /compact), it's the last message ID before compaction.
+	lmid := ""
+	if len(lastMsgID) > 0 {
+		lmid = lastMsgID[0]
+	}
+	if lmid == "" {
+		// Fallback: use last message in context
+		msgs := a.contextManager.Messages()
+		if len(msgs) > 0 {
+			lmid = msgs[len(msgs)-1].ID
+		}
+	}
+	fn(summaryMsgID, lmid, tokens)
 }
 
 // SaveCheckpoint persists the current context as a checkpoint.  Called

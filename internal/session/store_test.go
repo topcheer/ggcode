@@ -258,7 +258,7 @@ func TestAppendCheckpoint(t *testing.T) {
 	// Write summary to JSONL first so restore can find it by ID
 	store.AppendMessageToDisk(ses, compacted[0])
 	store.AppendMessageToDisk(ses, compacted[1])
-	err := store.AppendCheckpoint(ses, compacted[0].ID, 50)
+	err := store.AppendCheckpoint(ses, compacted[0].ID, "", 50)
 	if err != nil {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 	// First checkpoint: write summary to JSONL, then checkpoint with ID
 	cp1Summary := provider.Message{ID: "msg_cp1_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}}
 	store.AppendMessageToDisk(ses, cp1Summary)
-	store.AppendCheckpoint(ses, cp1Summary.ID, 100)
+	store.AppendCheckpoint(ses, cp1Summary.ID, "", 100)
 
 	// Messages after first checkpoint
 	store.AppendMessage(ses, provider.Message{ID: "msg_after_cp1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg after cp1"}}})
@@ -348,7 +348,7 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 	cp2Retained := provider.Message{ID: "msg_cp2_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained context"}}}
 	store.AppendMessageToDisk(ses, cp2Summary)
 	store.AppendMessageToDisk(ses, cp2Retained)
-	store.AppendCheckpoint(ses, cp2Summary.ID, 80)
+	store.AppendCheckpoint(ses, cp2Summary.ID, "", 80)
 
 	// Messages after second checkpoint
 	store.AppendMessage(ses, provider.Message{ID: "msg_final", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "final response"}}})
@@ -390,7 +390,7 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 
 	// Append checkpoint with empty summary_msg_id — simulates a checkpoint
 	// with no summary (e.g. truncation-only). Should be treated as no checkpoint.
-	err := store.AppendCheckpoint(ses, "", 0)
+	err := store.AppendCheckpoint(ses, "", "", 0)
 	if err != nil {
 		t.Fatalf("AppendCheckpoint with empty summary_msg_id failed: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	retainedMsg := provider.Message{ID: "msg_cp_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained user context"}}}
 	store.AppendMessageToDisk(ses, summaryMsg)
 	store.AppendMessageToDisk(ses, retainedMsg)
-	store.AppendCheckpoint(ses, summaryMsg.ID, 10)
+	store.AppendCheckpoint(ses, summaryMsg.ID, "", 10)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
@@ -506,7 +506,7 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 	}
 	store.AppendMessageToDisk(ses, compacted[0])
 	store.AppendMessageToDisk(ses, compacted[1])
-	if err := store.AppendCheckpoint(ses, compacted[0].ID, 10); err != nil {
+	if err := store.AppendCheckpoint(ses, compacted[0].ID, "", 10); err != nil {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
 
@@ -557,7 +557,7 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 		{ID: "msg_sum_6", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "from scratch"}}},
 	}
 	store.AppendMessageToDisk(ses, compacted[0])
-	if err := store.AppendCheckpoint(ses, compacted[0].ID, 5); err != nil {
+	if err := store.AppendCheckpoint(ses, compacted[0].ID, "", 5); err != nil {
 		t.Fatalf("AppendCheckpoint on non-existent file should succeed, got: %v", err)
 	}
 
@@ -882,7 +882,7 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 	}
 	store.AppendMessageToDisk(ses, checkpointMsgs[0])
 	store.AppendMessageToDisk(ses, checkpointMsgs[1])
-	if err := store.AppendCheckpoint(ses, checkpointMsgs[0].ID, 50); err != nil {
+	if err := store.AppendCheckpoint(ses, checkpointMsgs[0].ID, "", 50); err != nil {
 		t.Fatal(err)
 	}
 

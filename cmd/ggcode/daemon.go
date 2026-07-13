@@ -424,11 +424,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 
 	// Wire checkpoint handler — persist compacted state after summarize
-	ag.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
-		if err := store.AppendCheckpoint(ses, summaryMsgID, tokenCount); err != nil {
+	ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
+		if err := store.AppendCheckpoint(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 			debug.Log("daemon", "checkpoint save failed: %v", err)
 		} else {
-			debug.Log("daemon", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
+			debug.Log("daemon", "checkpoint saved: summary_msg_id=%s last_msg_id=%s tokens=%d", summaryMsgID, lastMsgID, tokenCount)
+		}
+	})
+
+	// Per-message persistence: every Add() triggers async JSONL append.
+	ag.SetPersistHandler(func(msg provider.Message) {
+		if err := store.AppendMessageToDisk(ses, msg); err != nil {
+			debug.Log("daemon", "persist handler: AppendMessageToDisk failed: %v", err)
 		}
 	})
 

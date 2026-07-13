@@ -976,7 +976,7 @@ func (r *REPL) Run() error {
 	// AppendCheckpoint (which mutates ses.UpdatedAt and rewrites the index)
 	// because the TUI thread also mutates the same session under that mutex
 	// (see appendUserMessage in submit.go).
-	r.agent.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
+	r.agent.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 		if r.store == nil {
 			return
 		}
@@ -994,22 +994,42 @@ func (r *REPL) Run() error {
 
 		// Persist to disk outside sessionMutex.
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			if err := jsonlStore.AppendCheckpointToDisk(ses, summaryMsgID, tokenCount); err != nil {
+			if err := jsonlStore.AppendCheckpointToDisk(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 				debug.Log("repl", "checkpoint save failed: %v", err)
 			} else {
-				debug.Log("repl", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
+				debug.Log("repl", "checkpoint saved: summary_msg_id=%s last_msg_id=%s tokens=%d", summaryMsgID, lastMsgID, tokenCount)
 			}
 		} else {
 			mu.Lock()
-			if err := store.AppendCheckpoint(ses, summaryMsgID, tokenCount); err != nil {
+			if err := store.AppendCheckpoint(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 				debug.Log("repl", "checkpoint save failed: %v", err)
 			} else {
-				debug.Log("repl", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
+				debug.Log("repl", "checkpoint saved: summary_msg_id=%s last_msg_id=%s tokens=%d", summaryMsgID, lastMsgID, tokenCount)
 			}
 			mu.Unlock()
 		}
 	})
 	traceMark("wire checkpoint handler")
+
+	// Per-message persistence: every Add() triggers an async JSONL append.
+	// This replaces the batch persistFullSessionMessages at run end.
+	r.agent.SetPersistHandler(func(msg provider.Message) {
+		if r.store == nil {
+			return
+		}
+		mu := r.model.sessionMutex()
+		mu.Lock()
+		ses := r.model.Session()
+		mu.Unlock()
+		if ses == nil {
+			return
+		}
+		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
+			if err := jsonlStore.AppendMessageToDisk(ses, msg); err != nil {
+				debug.Log("tui", "persist handler: AppendMessageToDisk failed: %v", err)
+			}
+		}
+	})
 
 	// NewProgram copies the model, so SetProgram on r.model is useless.
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and

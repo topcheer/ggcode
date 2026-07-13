@@ -131,7 +131,9 @@ type Store interface {
 	// AppendCheckpoint persists a checkpoint after compaction.
 	// summaryMsgID is the ID of the summary message in JSONL — restore
 	// scans from this message forward to rebuild context.
-	AppendCheckpoint(s *Session, summaryMsgID string, tokenCount int) error
+	// lastMsgID is the ID of the last message in the snapshot before compaction —
+	// restore uses this to find "extra" messages (post-compaction additions).
+	AppendCheckpoint(s *Session, summaryMsgID, lastMsgID string, tokenCount int) error
 
 	// AppendMetaToDisk appends a single meta record to the session's JSONL file
 	// without rewriting the entire file. Use this for lightweight metadata updates
@@ -409,6 +411,7 @@ type jsonlRecord struct {
 	// The summary message itself is written to JSONL as a type:"message" record.
 	// Restore scans from summary_msg_id forward to rebuild context.
 	CheckpointSummaryMsgID string `json:"checkpoint_summary_msg_id,omitempty"`
+	CheckpointLastMsgID    string `json:"checkpoint_last_msg_id,omitempty"`
 	CheckpointTokens       int    `json:"checkpoint_tokens,omitempty"`
 	// Legacy field — kept for migration only. New code uses CheckpointSummaryMsgID.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
@@ -629,6 +632,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		metaRecords        []jsonlRecord // always accumulate meta for metadata
 		lastCpMessages     []provider.Message
 		lastCpSummaryMsgID string
+		lastCpLastMsgID    string
 		lastCpTokens       int
 		allMessages        []jsonlRecord      // ALL message records (never discarded by checkpoint)
 		postCPEntries      []lightweightEntry // cost entries after last checkpoint
@@ -656,6 +660,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			// Old format: checkpoint_messages contains full message snapshot.
 			if rec.CheckpointSummaryMsgID != "" {
 				lastCpSummaryMsgID = rec.CheckpointSummaryMsgID
+				lastCpLastMsgID = rec.CheckpointLastMsgID
 				lastCpTokens = rec.CheckpointTokens
 				haveCheckpoint = true
 				// postCPEntries are NOT cleared — we'll filter by ID later.
@@ -663,6 +668,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				// Legacy checkpoint: migrate — find summary message, write to JSONL.
 				// For now, use the old format directly during migration period.
 				lastCpMessages = rec.CheckpointMessages
+				lastCpLastMsgID = "" // legacy checkpoints don't have last_msg_id
 				lastCpTokens = rec.CheckpointTokens
 				postCPEntries = nil
 				postCPTunnelEvs = nil
@@ -763,18 +769,43 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// 2. Legacy checkpoint: use lastCpMessages + postCPEntries
 	// 3. No checkpoint: last MaxContextMessages from allMessages
 	if lastCpSummaryMsgID != "" {
-		// New format: scan allMessages for summary_msg_id position
-		startIdx := -1
+		// New format: ContextMessages = [summary message] + [all messages after last_msg_id]
+		// The summary message may appear anywhere in JSONL (async pre-compact timing).
+		// The extra messages (post-compaction) are identified by lastCpLastMsgID:
+		// everything AFTER that ID in the file is an "extra" message.
+		summaryIdx := -1
 		for i, mr := range allMessages {
 			if mr.Message != nil && mr.Message.ID == lastCpSummaryMsgID {
-				startIdx = i
+				summaryIdx = i
 				break
 			}
 		}
-		if startIdx >= 0 {
-			for _, mr := range allMessages[startIdx:] {
-				if mr.Message != nil {
-					ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+		if summaryIdx >= 0 {
+			// Start with the summary message itself.
+			ses.ContextMessages = append(ses.ContextMessages, *allMessages[summaryIdx].Message)
+			if lastCpLastMsgID != "" {
+				// Find extra messages: everything after lastCpLastMsgID.
+				extraStart := -1
+				for i, mr := range allMessages {
+					if mr.Message != nil && mr.Message.ID == lastCpLastMsgID {
+						extraStart = i + 1 // start AFTER last_msg_id
+						break
+					}
+				}
+				if extraStart >= 0 {
+					for _, mr := range allMessages[extraStart:] {
+						if mr.Message != nil && mr.Message.ID != lastCpSummaryMsgID {
+							ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+						}
+					}
+				}
+			} else {
+				// No last_msg_id (migrated checkpoint): load all messages
+				// after the summary as extra messages.
+				for _, mr := range allMessages[summaryIdx+1:] {
+					if mr.Message != nil {
+						ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+					}
 				}
 			}
 			ses.CheckpointTokens = lastCpTokens
@@ -1615,6 +1646,13 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 
 		// Migration 2: convert old checkpoint format to new.
 		if rec.Type == "checkpoint" && len(rec.CheckpointMessages) > 0 {
+			// Backfill IDs in checkpoint_messages first.
+			for i := range rec.CheckpointMessages {
+				if rec.CheckpointMessages[i].ID == "" {
+					rec.CheckpointMessages[i].ID = newSessionMessageID()
+					migrated++
+				}
+			}
 			// Find the summary message in checkpoint_messages.
 			// Summary messages are system-role messages with text content
 			// that starts with the summary prefix.
@@ -1651,6 +1689,11 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 				}
 				// Convert checkpoint to new format.
 				rec.CheckpointSummaryMsgID = summaryMsg.ID
+				// last_msg_id left empty for migrated checkpoints — the
+				// checkpoint_messages were embedded, not in JSONL as message
+				// records. Restore will load only the summary + post-migration
+				// messages. This is acceptable since migrated checkpoints are
+				// best-effort.
 				rec.CheckpointMessages = nil
 				if err := enc.Encode(rec); err != nil {
 					dstF.WriteString(line + "\n")
@@ -1711,7 +1754,7 @@ func (s *JSONLStore) Dir() string {
 // AppendCheckpoint persists a checkpoint (compaction snapshot) to the session's
 // JSONL file and updates the Session object in place. The caller must ensure
 // no concurrent access to the Session object.
-func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID string, tokenCount int) error {
+func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID, lastMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
@@ -1720,6 +1763,7 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID string, tokenCo
 		Type:                   "checkpoint",
 		SessionID:              ses.ID,
 		CheckpointSummaryMsgID: summaryMsgID,
+		CheckpointLastMsgID:    lastMsgID,
 		CheckpointTokens:       tokenCount,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
@@ -1734,7 +1778,7 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID string, tokenCo
 // updates the index, but does NOT modify the Session object. Use this when the
 // caller manages Session mutations under its own lock and only needs the disk
 // write to happen outside that lock.
-func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID string, tokenCount int) error {
+func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID, lastMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
@@ -1743,6 +1787,7 @@ func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID string, t
 		Type:                   "checkpoint",
 		SessionID:              ses.ID,
 		CheckpointSummaryMsgID: summaryMsgID,
+		CheckpointLastMsgID:    lastMsgID,
 		CheckpointTokens:       tokenCount,
 	}
 	if err := appendRecordLine(path, rec); err != nil {

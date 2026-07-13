@@ -118,6 +118,7 @@ type Manager struct {
 	todoPath          string
 	onUsage           func(provider.TokenUsage)
 	calibrator        *TokenCalibrator
+	onPersist         func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -126,6 +127,15 @@ func NewManager(contextWindow int) *Manager {
 		contextWindow: contextWindow,
 		calibrator:    NewTokenCalibrator(),
 	}
+}
+
+// SetPersistHandler sets a callback invoked on every Add() for real-time
+// JSONL persistence. The callback receives the message that was just added.
+// This enables per-message append writes instead of batch writes at run end.
+func (m *Manager) SetPersistHandler(fn func(msg provider.Message)) {
+	m.mu.Lock()
+	m.onPersist = fn
+	m.mu.Unlock()
 }
 
 func (m *Manager) SetTodoFilePath(path string) {
@@ -149,7 +159,6 @@ func (m *Manager) SetProvider(p provider.Provider) {
 
 func (m *Manager) Add(msg provider.Message) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if msg.ID == "" {
 		msg.ID = newMessageID()
 	}
@@ -172,8 +181,14 @@ func (m *Manager) Add(msg provider.Message) {
 	if m.contextWindow > 0 {
 		ratio = float64(m.tokenCountLocked()) / float64(m.contextWindow)
 	}
+	persistFn := m.onPersist
 	debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t",
 		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.contextWindow, ratio, m.baselineAvailable)
+	m.mu.Unlock()
+	// Trigger real-time persistence callback outside the lock.
+	if persistFn != nil {
+		persistFn(msg)
+	}
 }
 
 // ReconcileToolCalls checks whether any assistant message in the conversation

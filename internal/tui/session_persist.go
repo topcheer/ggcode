@@ -3,31 +3,15 @@ package tui
 import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/session"
 )
 
-// persistFullSessionMessages appends only NEW messages (since the last
-// persist) to the JSONL file using AppendMessageToDisk().
+// persistFullSessionMessages updates in-memory session state after an agent run.
 //
-// ⚠️ CRITICAL: This function must NEVER call Save() or
-// SaveAgentSessionSnapshot(). Those methods do a full file rewrite using
-// agent.Messages() (which is the COMPACTED version). That would permanently
-// destroy pre-compaction message records from the JSONL file.
+// With per-message persistence (SetPersistHandler), each message is already
+// written to JSONL via AppendMessageToDisk at Add() time. This function only
+// needs to update ses.Messages for in-memory rendering and track the count.
 //
-// APPROACH: All entry points (keyboard, lanchat, custom commands, webui,
-// tunnel, harness, autopilot) now call appendUserMessage() before starting
-// the agent. appendUserMessage writes the user message to disk immediately
-// and appends it to ses.Messages.
-//
-// RunStreamWithContent calls StartRunTracking() (clearing runAdded), then
-// adds the user message via contextManager.Add() as runAdded[0]. Everything
-// after runAdded[0] (assistant responses, tool results, interrupt injections,
-// autopilot synthetic messages, etc.) needs to be persisted here.
-//
-// So we simply skip runAdded[0] (already on disk) and persist [1:].
-//
-// Compaction safety: ApplyCompactResult replaces m.messages directly
-// (bypassing Add), so it does NOT pollute runAdded.
+// The batch AppendMessagesBatchToDisk path is no longer needed.
 func (m *Model) persistFullSessionMessages() {
 	if m == nil || m.agent == nil || m.session == nil || m.sessionStore == nil {
 		debug.Log("tui", "persistFullSessionMessages: skip (nil agent/session/store)")
@@ -36,7 +20,6 @@ func (m *Model) persistFullSessionMessages() {
 	m.sessionMutex().Lock()
 
 	ses := m.session
-	store := m.sessionStore
 
 	// Get all messages the agent added during this run.
 	runAdded := m.agent.AddedSinceRunStart()
@@ -44,14 +27,6 @@ func (m *Model) persistFullSessionMessages() {
 	// runAdded[0] is always the user submission, added by
 	// RunStreamWithContent before the loop. It was already persisted by
 	// appendUserMessage() before the agent run started.
-	//
-	// Everything else (runAdded[1:]) needs to be persisted:
-	//   - assistant messages (LLM responses with text and/or tool_use)
-	//   - tool_result messages (role:user with tool_result content blocks)
-	//   - interrupt injections (role:user with "New user guidance..." text)
-	//   - autopilot synthetic messages (continue, ask_user, goal_check)
-	//   - empty-response nudges ("The previous response was empty...")
-	//   - deferred project memory system messages
 	var newMsgs []provider.Message
 	if len(runAdded) > 0 && runAdded[0].Role == "user" {
 		newMsgs = runAdded[1:]
@@ -63,22 +38,4 @@ func (m *Model) persistFullSessionMessages() {
 	ses.Messages = append(ses.Messages, newMsgs...)
 	m.persistedMsgCount = len(ses.Messages)
 	m.sessionMutex().Unlock()
-
-	if len(newMsgs) == 0 {
-		return
-	}
-
-	// Append only the new messages to disk (batch write for performance).
-	// Using AppendMessagesBatchToDisk instead of a loop of AppendMessageToDisk
-	// reduces N file opens to 1 and N index read-writes to 1.
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		if err := jsonlStore.AppendMessagesBatchToDisk(ses, newMsgs); err != nil {
-			debug.Log("tui", "persistFullSessionMessages: AppendMessagesBatchToDisk failed: %v", err)
-		}
-	} else {
-		// Fallback for non-JSONL stores: full save.
-		m.sessionMutex().Lock()
-		_ = store.Save(ses)
-		m.sessionMutex().Unlock()
-	}
 }

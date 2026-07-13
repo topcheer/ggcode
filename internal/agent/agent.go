@@ -50,7 +50,7 @@ type Agent struct {
 	onApproval                 ApprovalFunc
 	onUsage                    func(usage provider.TokenUsage)
 	onMetric                   func(metrics.MetricEvent)
-	onCheckpoint               func(summaryMsgID string, tokenCount int)
+	onCheckpoint               func(summaryMsgID, lastMsgID string, tokenCount int)
 	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
 	onRunResult                runResultHandler
 	hookConfig                 hooks.HookConfig
@@ -507,10 +507,21 @@ func (a *Agent) GetHookConfig() hooks.HookConfig {
 
 // SetCheckpointHandler sets a callback invoked after summarize compaction
 // to persist the compacted message state.
-func (a *Agent) SetCheckpointHandler(fn func(summaryMsgID string, tokenCount int)) {
+// summaryMsgID is the ID of the summary message (already in JSONL via runAdded).
+// lastMsgID is the ID of the last message in the snapshot before compaction.
+func (a *Agent) SetCheckpointHandler(fn func(summaryMsgID, lastMsgID string, tokenCount int)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onCheckpoint = fn
+}
+
+// SetPersistHandler sets a per-message persistence callback. When set,
+// every Add() call triggers this callback so messages are written to
+// JSONL immediately, rather than batched at run end.
+func (a *Agent) SetPersistHandler(fn func(msg provider.Message)) {
+	if m, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		m.SetPersistHandler(fn)
+	}
 }
 
 // SetWorkingDir sets the working directory for hooks.

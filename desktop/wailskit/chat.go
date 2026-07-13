@@ -788,30 +788,21 @@ func (b *ChatBridge) ensureSession() error {
 	return nil
 }
 
-// saveSession persists the current session (mirrors Fyne bridge).
-// persistRunMessages appends only NEW messages (added during the latest
-// agent run) to the JSONL file, matching TUI's persistFullSessionMessages.
-//
-// CRITICAL: Do NOT use SaveAgentSessionSnapshotWithExtra / SaveSessionMessages
-// here — those do a full file rewrite using agent.Messages() (which may be
-// the compacted version). That would permanently destroy pre-compaction
-// message records from the JSONL file.
+// persistRunMessages updates in-memory session state after an agent run.
+// With per-message persistence (SetPersistHandler), each message is already
+// written to JSONL at Add() time. This only updates ses.Messages for rendering.
 func (b *ChatBridge) persistRunMessages() {
 	b.mu.Lock()
 	ses := b.currentSes
-	store := b.sessionStore
 	ag := b.agent
 	b.mu.Unlock()
 
-	if ses == nil || store == nil || ag == nil {
+	if ses == nil || ag == nil {
 		return
 	}
 
-	// Get all messages the agent added during this run.
 	runAdded := ag.AddedSinceRunStart()
 
-	// runAdded[0] is the user message — already persisted by startRun()
-	// or drainPendingMsg() before the agent loop started.
 	var newMsgs []provider.Message
 	if len(runAdded) > 0 && runAdded[0].Role == "user" {
 		newMsgs = runAdded[1:]
@@ -823,18 +814,6 @@ func (b *ChatBridge) persistRunMessages() {
 	ses.Messages = append(ses.Messages, newMsgs...)
 	ses.UpdatedAt = time.Now()
 	b.mu.Unlock()
-
-	if len(newMsgs) == 0 {
-		return
-	}
-
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		if err := jsonlStore.AppendMessagesBatchToDisk(ses, newMsgs); err != nil {
-			log.Printf("[chat] persistRunMessages: AppendMessagesBatchToDisk failed: %v", err)
-		}
-	} else {
-		_ = store.Save(ses)
-	}
 }
 
 func (b *ChatBridge) saveSession() {
@@ -1375,17 +1354,32 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	store := b.sessionStore
 	b.mu.Unlock()
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		ag.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
+		ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 			b.mu.Lock()
 			currentSes := b.currentSes
 			b.mu.Unlock()
 			if currentSes == nil {
 				return
 			}
-			if err := jsonlStore.AppendCheckpointToDisk(currentSes, summaryMsgID, tokenCount); err != nil {
+			if err := jsonlStore.AppendCheckpointToDisk(currentSes, summaryMsgID, lastMsgID, tokenCount); err != nil {
 				log.Printf("[chat] checkpoint save failed: %v", err)
 			} else {
-				log.Printf("[chat] checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
+				log.Printf("[chat] checkpoint saved: summary_msg_id=%s last_msg_id=%s tokens=%d", summaryMsgID, lastMsgID, tokenCount)
+			}
+		})
+
+		// Per-message persistence: every Add() triggers async JSONL append.
+		ag.SetPersistHandler(func(msg provider.Message) {
+			b.mu.Lock()
+			ses := b.currentSes
+			b.mu.Unlock()
+			if ses == nil {
+				return
+			}
+			if jsonlStore, ok := store.(*session.JSONLStore); ok {
+				if err := jsonlStore.AppendMessageToDisk(ses, msg); err != nil {
+					log.Printf("[chat] persist handler: AppendMessageToDisk failed: %v", err)
+				}
 			}
 		})
 	}
@@ -3051,6 +3045,8 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 // RefreshEndpointLimits re-resolves the active endpoint and updates the
 // running agent's ContextManager so that context_window / max_tokens
 // changes take effect immediately without requiring a session restart.
+// Session-level overrides (from SetSessionLimits) take priority over
+// endpoint/per-model config.
 func (b *ChatBridge) RefreshEndpointLimits() {
 	if b.cfg == nil {
 		return
@@ -3062,14 +3058,28 @@ func (b *ChatBridge) RefreshEndpointLimits() {
 	b.mu.Lock()
 	b.resolved = resolved
 	agent := b.agent
+	ses := b.currentSes
 	b.mu.Unlock()
 
 	if agent != nil {
-		if resolved.ContextWindow > 0 {
-			agent.ContextManager().SetContextWindow(resolved.ContextWindow)
+		// Priority: session > per-model > endpoint > auto-probe
+		ctxWin := 0
+		maxTok := 0
+		if ses != nil {
+			ctxWin = ses.ContextWindow
+			maxTok = ses.MaxTokens
 		}
-		if resolved.MaxTokens > 0 {
-			agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		if ctxWin == 0 {
+			ctxWin = resolved.ContextWindow
+		}
+		if maxTok == 0 {
+			maxTok = resolved.MaxTokens
+		}
+		if ctxWin > 0 {
+			agent.ContextManager().SetContextWindow(ctxWin)
+		}
+		if maxTok > 0 {
+			agent.ContextManager().SetOutputReserve(maxTok)
 		}
 	}
 
@@ -3077,6 +3087,82 @@ func (b *ChatBridge) RefreshEndpointLimits() {
 	if b.EmitEvent != nil {
 		b.EmitEvent("config:updated", nil)
 	}
+}
+
+// GetModelLimits returns all per-model limit overrides for the active endpoint.
+func (b *ChatBridge) GetModelLimits() []ModelLimitInfo {
+	if b.cfg == nil {
+		return nil
+	}
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return nil
+	}
+	return GetModelLimits(resolved.VendorID, resolved.EndpointName)
+}
+
+// SessionLimitInfo represents the current session's context_window and max_tokens.
+type SessionLimitInfo struct {
+	ContextWindow int `json:"contextWindow"`
+	MaxTokens     int `json:"maxTokens"`
+}
+
+// GetSessionLimits returns the current session's context_window and max_tokens.
+// Returns zeros if no session is active or no session-level overrides are set.
+func (b *ChatBridge) GetSessionLimits() SessionLimitInfo {
+	b.mu.Lock()
+	ses := b.currentSes
+	b.mu.Unlock()
+	if ses == nil {
+		return SessionLimitInfo{}
+	}
+	return SessionLimitInfo{
+		ContextWindow: ses.ContextWindow,
+		MaxTokens:     ses.MaxTokens,
+	}
+}
+
+// SetSessionLimits updates the current session's context_window and max_tokens.
+// These take priority over endpoint/per-model config.
+// A value of 0 means "auto" (falls back to endpoint/per-model config).
+// Changes are persisted to the session JSONL and applied to the running agent immediately.
+func (b *ChatBridge) SetSessionLimits(contextWindow, maxTokens int) error {
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.sessionStore
+	agent := b.agent
+	b.mu.Unlock()
+
+	if ses == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	ses.ContextWindow = contextWindow
+	ses.MaxTokens = maxTokens
+
+	// Persist to session JSONL
+	if store != nil {
+		if err := store.AppendMetaToDisk(ses); err != nil {
+			return fmt.Errorf("failed to persist session limits: %w", err)
+		}
+	}
+
+	// Apply to running agent immediately
+	if agent != nil {
+		if contextWindow > 0 {
+			agent.ContextManager().SetContextWindow(contextWindow)
+		}
+		if maxTokens > 0 {
+			agent.ContextManager().SetOutputReserve(maxTokens)
+		}
+	}
+
+	// Notify frontend
+	if b.EmitEvent != nil {
+		b.EmitEvent("config:updated", nil)
+	}
+
+	return nil
 }
 
 // PushErrorToMobile pushes an error message to mobile via tunnel.
