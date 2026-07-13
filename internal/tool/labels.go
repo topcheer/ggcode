@@ -489,14 +489,6 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 	}, true
 }
 
-// DescribeTaskToolResult returns shared summary/payload semantics for task_* tools.
-func DescribeTaskToolResult(toolName, rawArgs, result string, isError bool) (ToolResultPresentation, bool) {
-	if !isTaskTool(toolName) {
-		return ToolResultPresentation{}, false
-	}
-	return DescribeToolResult(toolName, rawArgs, result, isError)
-}
-
 // describeLanchatResult formats the lanchat tool result into a human-readable
 // presentation. The "list" action returns JSON that needs full formatting;
 // the send/broadcast actions return a terse confirmation — we enrich it with
@@ -1348,12 +1340,6 @@ func askUserTarget(args map[string]any) string {
 		}
 	}
 	return ""
-}
-
-// RelativizePath is kept for API compatibility but no longer performs
-// path replacement. Absolute paths are shown as-is.
-func RelativizePath(path, _ string) string {
-	return path
 }
 
 // ghosttyLabel produces a display label for ghostty tool calls.

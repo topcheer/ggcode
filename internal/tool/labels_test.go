@@ -454,45 +454,6 @@ func TestDescribeTool(t *testing.T) {
 	}
 }
 
-func TestDescribeTaskToolResult(t *testing.T) {
-	present, ok := DescribeTaskToolResult(
-		"task_update",
-		`{"taskId":"task-1","status":"in_progress","owner":"agent-1"}`,
-		`{"id":"task-1","subject":"Fix mobile parity","status":"in_progress","owner":"agent-1"}`,
-		false,
-	)
-	if !ok {
-		t.Fatal("expected task result presentation")
-	}
-	if present.Summary != "Updated Fix mobile parity [in progress] — task-1 (status, owner)" {
-		t.Fatalf("unexpected summary: %q", present.Summary)
-	}
-	if present.PayloadMode != "task_fields" {
-		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
-	}
-	if want := "Task ID: task-1"; !strings.Contains(present.Payload, want) {
-		t.Fatalf("payload %q missing %q", present.Payload, want)
-	}
-}
-
-func TestDescribeTaskListResult(t *testing.T) {
-	present, ok := DescribeTaskToolResult(
-		"task_list",
-		`{}`,
-		"- task-1 [pending] one\n- task-2 [in_progress] two\n",
-		false,
-	)
-	if !ok {
-		t.Fatal("expected task list presentation")
-	}
-	if present.Summary != "2 tasks" {
-		t.Fatalf("unexpected summary: %q", present.Summary)
-	}
-	if present.PayloadMode != "task_list" {
-		t.Fatalf("unexpected payload mode: %q", present.PayloadMode)
-	}
-}
-
 func TestDescribeToolResultCronCreate(t *testing.T) {
 	present, ok := DescribeToolResult(
 		"cron_create",
@@ -708,24 +669,6 @@ func TestShortenID(t *testing.T) {
 	}
 	if got := shortenID("short"); got != "short" {
 		t.Errorf("got %q", got)
-	}
-}
-
-func TestRelativizePath(t *testing.T) {
-	// RelativizePath is now a pass-through — path is returned as-is.
-	tests := []struct {
-		path, workDir, want string
-	}{
-		{"/tmp/project/main.go", "/tmp/project", "/tmp/project/main.go"},
-		{"/tmp/project/sub/test.go", "/tmp/project", "/tmp/project/sub/test.go"},
-		{"/other/path/test.go", "/tmp/project", "/other/path/test.go"},
-		{"/tmp/test.go", "", "/tmp/test.go"},
-	}
-	for _, tt := range tests {
-		got := RelativizePath(tt.path, tt.workDir)
-		if got != tt.want {
-			t.Errorf("RelativizePath(%q, %q) = %q, want %q", tt.path, tt.workDir, got, tt.want)
-		}
 	}
 }
 

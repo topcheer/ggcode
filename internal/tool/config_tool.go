@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -134,22 +133,4 @@ func configSetDisplayValue(setting, value string) string {
 		return "(secret stored securely)"
 	}
 	return value
-}
-
-// FormatSortedMap formats a map as sorted key=value lines under a header.
-func FormatSortedMap(header string, m map[string]string) string {
-	if len(m) == 0 {
-		return header + "(none)\n"
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	sb.WriteString(header)
-	for _, k := range keys {
-		fmt.Fprintf(&sb, "  %s: %s\n", k, m[k])
-	}
-	return sb.String()
 }
