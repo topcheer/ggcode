@@ -365,11 +365,7 @@ func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldConte
 
 // replaceFirst replaces the first occurrence of old in s with new.
 func replaceFirst(s, old, new string) string {
-	idx := indexOf(s, old)
-	if idx < 0 {
-		return s
-	}
-	return s[:idx] + new + s[idx+len(old):]
+	return strings.Replace(s, old, new, 1)
 }
 
 func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
@@ -392,13 +388,9 @@ func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
 }
 
 // indexOf returns the index of the first occurrence of substr in s, or -1.
+// Delegates to strings.Index which uses optimized search algorithms.
 func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
+	return strings.Index(s, substr)
 }
 
 // toolWorkingDirMu is a safety-net mutex for syncToolWorkingDir. With Registry.Clone(),
@@ -434,9 +426,18 @@ func syncToolWorkingDir(t tool.Tool, dir string) {
 	}
 }
 
+// truncateString truncates s to at most maxLen runes, appending "..." if truncated.
+// Uses rune-based truncation to avoid breaking multi-byte UTF-8 characters.
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen < 0 {
 		return s
 	}
-	return s[:maxLen] + "..."
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
 }
