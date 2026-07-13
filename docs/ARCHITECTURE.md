@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-07-14
+> Last updated: 2026-06-21
 
 ## Overview
 
@@ -682,45 +682,6 @@ All provider adapters detect output truncation and policy errors:
 - **Gemini**: `FinishReason=MAX_TOKENS`, `SAFETY`, `RECITATION`, etc. returns error
 
 Default `max_output_tokens` is 16384 (configurable per endpoint). Adaptive cap (`adaptive_cap.go`) adjusts based on model-specific limits.
-
-## Agent Optimization Stack
-
-The agent loop (`internal/agent/`) includes multiple research-inspired optimization layers that reduce token waste, detect pathological patterns, and improve task success rates. All are deterministic (no LLM cost) and run in-process.
-
-| Layer | File | Inspired By | Purpose |
-|-------|------|-------------|---------|
-| Speculative execution | `speculate.go` | PASTE (arXiv:2603.18897) | Pre-execute likely next read-only tools during LLM generation |
-| Tool memoization | `memoize.go` | ToolCaching (arXiv:2601.15335) | Cache read-only tool results with mtime/TTL invalidation |
-| Parallel execution | `parallel_tools.go` | LLMCompiler (ICML 2024) | Concurrent read-only tools per LLM batch (max 3) |
-| Tool-result clearing | `agent_precompact.go` | Anthropic context engineering | Replace old tool_result outputs with placeholders |
-| Tool-use input clearing | `agent_precompact.go` | Anthropic context engineering | Truncate old edit/write Input args after result cleared |
-| Superseded reads | `manager.go` (context) | Headroom | Compact stale re-reads of same file |
-| Tool output guard | `tool_output_guard.go` | Chroma context fill study | Progressive truncation by context fill % |
-| Budget guard | `budget_guard.go` | BAGEN (arXiv:2606.00198) | Per-step token cost trend monitoring |
-| Circuit breaker | `circuit_breaker.go` | Cordum pattern | Hard stop after 3 consecutive tool failures |
-| Dead letter queue | `dead_letter.go` | Enterprise pattern | Capture failed tool calls for end-of-run review |
-| Error classifier | `error_classifier.go` | AgentDebug (arXiv:2509.25370) | 10-category error-specific guidance on first error |
-| Confidence scorer | `confidence.go` | HTC (arXiv:2601.15778) | Holistic 6-signal trajectory quality metric |
-| Error streak | `loop_detect.go` | SICA (arXiv:2504.15228) | Progressive guidance at 4/7/10 consecutive errors |
-| Drift detection | `overseer.go` | SICA | Progressive drift at 20/40/60 iterations |
-| Repetition tracker | `repetition_tracker.go` | SICA | Detect failed-edit clusters on same file |
-| Ratchet rules | `ratchet.go`, `ratchet_reactive.go` | SICA | Learn error patterns from failures, inject preventively |
-| Strategy playbook | `playbook.go` | ACE (ICLR 2026) | Learn successful tool patterns, inject as hints |
-| Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Post-edit build reminders with smart reset |
-| Constraint pinning | `manager.go` (context) | Governance Decay (arXiv:2606.22528) | Preserve user constraints across compaction |
-| Reasoning block compaction | `manager.go` (context) | Anthropic thinking API docs | Clear old reasoning blocks (keep N=3) |
-| Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
-
-### Context Window Management Pipeline
-
-When context approaches the compaction threshold, a multi-stage pipeline activates:
-
-1. **Superseded reads compaction** — replace stale re-reads of same file (safest, mechanical)
-2. **Tool-result clearing tiers** — at 50%/65%/75% of threshold, replace old tool_result outputs
-3. **Tool-use input clearing** — truncate old edit/write Input args matching cleared results
-4. **Reasoning block compaction** — clear old thinking/reasoning_content from assistant turns
-5. **Precompact (background)** — LLM-based summarization in background goroutine
-6. **Reactive compact (synchronous)** — if precompact fails, truncation as fallback
 
 ## WebUI Architecture
 
