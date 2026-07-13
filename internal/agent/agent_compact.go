@@ -124,6 +124,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	debug.Log("agent", "reactive compact: compacting conversation")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
+	// Capture last message ID BEFORE compaction for checkpoint.
+	var lastMsgID string
+	if msgs := a.contextManager.Messages(); len(msgs) > 0 {
+		lastMsgID = msgs[len(msgs)-1].ID
+	}
 	changed := false
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if compactErr != nil {
@@ -147,7 +152,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	// Always save checkpoint after reactive compact — the live context was
 	// modified and must be persisted so --resume can restore the compacted
 	// state instead of re-loading the full pre-compaction message history.
-	a.maybeSaveCheckpoint()
+	a.maybeSaveCheckpoint(lastMsgID)
 	if retries != nil {
 		*retries = *retries + 1
 		debug.Log("agent", "reactive compact retry=%d", *retries)
