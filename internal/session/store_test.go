@@ -1222,20 +1222,21 @@ func TestMigrateMessageIDs(t *testing.T) {
 	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}}})
 	f.Close()
 
-	// Load — triggers migration
+	// Messages without IDs and no checkpoint — migration is a no-op.
+	// ContextMessages for sessions without checkpoint is built from the
+	// last MaxContextMessages of ses.Messages, which doesn't require IDs.
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// All messages should now have IDs
-	for i, msg := range loaded.Messages {
-		if msg.ID == "" {
-			t.Fatalf("message %d has empty ID after migration", i)
-		}
-		if !strings.HasPrefix(msg.ID, "msg_") {
-			t.Fatalf("message %d ID doesn't have msg_ prefix: %s", i, msg.ID)
-		}
+	// Messages should be loaded correctly (for rendering)
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(loaded.Messages))
+	}
+	// ContextMessages should equal Messages (no checkpoint to compact)
+	if len(loaded.ContextMessages) != 2 {
+		t.Fatalf("expected 2 context messages, got %d", len(loaded.ContextMessages))
 	}
 
 	// Load again — should NOT trigger migration (no .migrate.tmp file)

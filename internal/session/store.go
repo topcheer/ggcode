@@ -1630,24 +1630,11 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	}
 
 	if lastOldCpIdx < 0 {
-		// No old-format checkpoint found. Check if any messages need IDs
-		// (new sessions created after the msgID feature but before onPersist).
-		needsID := false
-		for _, line := range lines {
-			var rec jsonlRecord
-			if json.Unmarshal([]byte(line), &rec) != nil {
-				continue
-			}
-			if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
-				needsID = true
-				break
-			}
-		}
-		if !needsID {
-			return 0, nil
-		}
-		// Fall through to simple ID backfill for all messages.
-		return s.simpleBackfillIDs(path, lines)
+		// No old-format checkpoint found. ContextMessages for sessions without
+		// a checkpoint is built by taking the last MaxContextMessages from
+		// ses.Messages — this doesn't require message IDs. So no migration
+		// is needed.
+		return 0, nil
 	}
 
 	// Phase 2: find last_msg_id — scan backwards from file end to find a
@@ -1758,49 +1745,6 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 
 	debug.Log("session", "migrateMessageIDs: migrated session %s: summary_msg_id=%s last_msg_id=%s backfilled=%d",
 		id, lastOldCpSummary.ID, lastMsgID, migrated)
-	return migrated, nil
-}
-
-// simpleBackfillIDs backfills missing message IDs for all message records
-// in a session file. Used when there are no old-format checkpoints to migrate
-// but some messages are missing IDs (created before onPersist was wired).
-func (s *JSONLStore) simpleBackfillIDs(path string, lines []string) (int, error) {
-	migrated := 0
-	for i, line := range lines {
-		var rec jsonlRecord
-		if json.Unmarshal([]byte(line), &rec) != nil {
-			continue
-		}
-		if rec.Type == "message" && rec.Message != nil && rec.Message.ID == "" {
-			rec.Message.ID = newSessionMessageID()
-			migrated++
-			if data, err := json.Marshal(rec); err == nil {
-				lines[i] = string(data)
-			}
-		}
-	}
-	if migrated == 0 {
-		return 0, nil
-	}
-	tmp := path + ".migrate.tmp"
-	dstF, err := os.Create(tmp)
-	if err != nil {
-		return 0, fmt.Errorf("creating migration temp file: %w", err)
-	}
-	for _, line := range lines {
-		dstF.WriteString(line + "\n")
-	}
-	if err := dstF.Sync(); err != nil {
-		dstF.Close()
-		os.Remove(tmp)
-		return 0, fmt.Errorf("migration sync: %w", err)
-	}
-	dstF.Close()
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return 0, fmt.Errorf("migration rename: %w", err)
-	}
-	debug.Log("session", "simpleBackfillIDs: backfilled %d message IDs", migrated)
 	return migrated, nil
 }
 
