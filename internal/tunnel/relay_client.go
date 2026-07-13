@@ -305,23 +305,39 @@ func (rc *RelayClient) writePump(conn *websocket.Conn, done func()) {
 	}
 }
 
+// pendingFrontMax caps the reconnection retry queue to prevent unbounded
+// memory growth when the relay is persistently unreachable. At 256 entries
+// (matching sendCh capacity), excess messages are dropped with a debug log.
+const pendingFrontMax = 256
+
 func (rc *RelayClient) pushPendingFront(msg []byte) {
 	if len(msg) == 0 {
 		return
 	}
 	rc.pendingMu.Lock()
 	defer rc.pendingMu.Unlock()
-	rc.pendingFront = append([][]byte{append([]byte(nil), msg...)}, rc.pendingFront...)
+	if len(rc.pendingFront) >= pendingFrontMax {
+		debug.Log("tunnel", "relay-client: pendingFront full (%d), dropping message", pendingFrontMax)
+		return
+	}
+	// Append to end — O(1). The pop also takes from the end, making this
+	// a LIFO retry queue (most recent failure retried first). This is
+	// equivalent to the previous prepend semantics but avoids O(n) copies
+	// and slice header leaks.
+	rc.pendingFront = append(rc.pendingFront, append([]byte(nil), msg...))
 }
 
 func (rc *RelayClient) popPendingFront() ([]byte, bool) {
 	rc.pendingMu.Lock()
 	defer rc.pendingMu.Unlock()
-	if len(rc.pendingFront) == 0 {
+	n := len(rc.pendingFront)
+	if n == 0 {
 		return nil, false
 	}
-	msg := rc.pendingFront[0]
-	rc.pendingFront = rc.pendingFront[1:]
+	// Pop from end — O(1), no slice leak (nil the slot for GC).
+	msg := rc.pendingFront[n-1]
+	rc.pendingFront[n-1] = nil
+	rc.pendingFront = rc.pendingFront[:n-1]
 	return msg, true
 }
 
