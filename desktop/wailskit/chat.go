@@ -3048,6 +3048,37 @@ func (b *ChatBridge) OnConfigProviderChanged() {
 	}
 }
 
+// RefreshEndpointLimits re-resolves the active endpoint and updates the
+// running agent's ContextManager so that context_window / max_tokens
+// changes take effect immediately without requiring a session restart.
+func (b *ChatBridge) RefreshEndpointLimits() {
+	if b.cfg == nil {
+		return
+	}
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return
+	}
+	b.mu.Lock()
+	b.resolved = resolved
+	agent := b.agent
+	b.mu.Unlock()
+
+	if agent != nil {
+		if resolved.ContextWindow > 0 {
+			agent.ContextManager().SetContextWindow(resolved.ContextWindow)
+		}
+		if resolved.MaxTokens > 0 {
+			agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		}
+	}
+
+	// Notify frontend to refresh status bar / context pill
+	if b.EmitEvent != nil {
+		b.EmitEvent("config:updated", nil)
+	}
+}
+
 // PushErrorToMobile pushes an error message to mobile via tunnel.
 func (b *ChatBridge) PushErrorToMobile(msg string) {
 	if broker := b.currentTunnelBroker(); broker != nil {

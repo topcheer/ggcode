@@ -805,7 +805,15 @@ func (a *App) AddCustomEndpoint(vendor, name, protocol, baseURL, apiKey string) 
 // SetEndpointLimits updates context_window and max_tokens for a vendor/endpoint.
 // A value of 0 means "auto" (clears the override).
 func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
-	return wailskit.SetEndpointLimits(vendor, endpoint, contextWindow, maxTokens)
+	if err := wailskit.SetEndpointLimits(vendor, endpoint, contextWindow, maxTokens); err != nil {
+		return err
+	}
+	// Refresh the running agent's ContextManager so changes take effect
+	// immediately without requiring a session restart.
+	if a.chat != nil {
+		a.chat.RefreshEndpointLimits()
+	}
+	return nil
 }
 
 // GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
