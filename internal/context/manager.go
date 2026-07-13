@@ -670,6 +670,28 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.messages = newMsgs
 	m.version++
 	m.recalcTokens()
+
+	// The compaction summary message must be persisted to JSONL so that
+	// checkpoint restore can find it by ID.  Add it to runAdded so that
+	// persistFullSessionMessages writes it to disk at run end.
+	for i := range result.Messages {
+		sm := result.Messages[i]
+		if sm.Role == "system" && len(sm.Content) > 0 && sm.Content[0].Type == "text" &&
+			strings.Contains(sm.Content[0].Text, "[Previous conversation summary]") {
+			if sm.ID == "" {
+				sm.ID = newMessageID()
+			}
+			if m.runAddedIDs == nil {
+				m.runAddedIDs = make(map[string]bool)
+			}
+			if !m.runAddedIDs[sm.ID] {
+				m.runAddedIDs[sm.ID] = true
+				m.runAdded = append(m.runAdded, sm)
+			}
+			break // only one summary per compaction
+		}
+	}
+
 	debug.Log("ctx", "ApplyCompactResult: applied snapshot msgs=%d compacted=%d extra=%d tokens=%d",
 		snapshot.OrigLen, len(result.Messages), len(extra), m.tokenCountLocked())
 	return true, m.tokenCountLocked()
