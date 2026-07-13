@@ -107,6 +107,7 @@ type Manager struct {
 	messages          []provider.Message
 	version           int64              // incremented on every mutation, enables cheap change detection
 	runAdded          []provider.Message // messages added via Add() since last StartRunTracking()
+	runAddedIDs       map[string]bool    // IDs of messages in runAdded, for dedup
 	tokens            int
 	contextWindow     int
 	outputReserve     int
@@ -154,7 +155,14 @@ func (m *Manager) Add(msg provider.Message) {
 	}
 	msgTokens := m.countTokens(msg)
 	m.messages = append(m.messages, msg)
-	m.runAdded = append(m.runAdded, msg)
+	// Track for run persistence — dedup by ID.
+	if m.runAddedIDs == nil {
+		m.runAddedIDs = make(map[string]bool)
+	}
+	if !m.runAddedIDs[msg.ID] {
+		m.runAddedIDs[msg.ID] = true
+		m.runAdded = append(m.runAdded, msg)
+	}
 	m.version++
 	m.tokens += msgTokens
 	if m.baselineAvailable {
@@ -457,6 +465,7 @@ func (m *Manager) StartRunTracking() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runAdded = nil
+	m.runAddedIDs = nil
 }
 
 // AddedSinceRunStart returns messages added via Add() since the last

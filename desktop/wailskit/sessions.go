@@ -203,6 +203,7 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 					continue
 				}
 				result = append(result, SessionMessage{
+					ID:      m.ID,
 					Role:    m.Role,
 					Content: block.Text,
 				})
@@ -231,6 +232,7 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 					}
 					if json.Unmarshal([]byte(argsStr), &args) == nil && args.Plan != "" {
 						result = append(result, SessionMessage{
+							ID:      m.ID,
 							Role:    "assistant",
 							Content: args.Plan,
 						})
@@ -240,6 +242,7 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 
 				pres := tool.DescribeTool(toolName, argsStr)
 				result = append(result, SessionMessage{
+					ID:          m.ID,
 					Role:        "tool",
 					ToolName:    toolName,
 					ToolID:      block.ToolID,
