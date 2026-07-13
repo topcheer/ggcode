@@ -1952,13 +1952,20 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	}
 	// Clear in-memory tunnel events — the projection store is the sole
 	// persistent copy. CutAuthority resets the projection ledger.
+	hadTunnelEvents := len(m.session.TunnelEvents) > 0 || m.session.TunnelEventsComplete
 	m.session.TunnelEvents = nil
 	m.session.TunnelEventsComplete = false
 	ses := m.session
+	store := m.sessionStore
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
-	// Tunnel events are no longer persisted to session JSONL.
+	// Persist cleared state to JSONL so old tunnel events don't
+	// accumulate on disk across restarts.
+	if hadTunnelEvents && store != nil {
+		_ = store.Save(ses)
+	}
+
 	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
@@ -1978,13 +1985,20 @@ func (m *Model) resetCurrentSessionTunnelLedger() {
 		m.sessionMutex().Unlock()
 		return
 	}
+	hadTunnelEvents := len(m.session.TunnelEvents) > 0 || m.session.TunnelEventsComplete
 	m.session.TunnelEvents = nil
 	m.session.TunnelEventsComplete = false
 	ses := m.session
+	store := m.sessionStore
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
 
-	// Tunnel events are no longer persisted to session JSONL.
+	// Persist cleared state to JSONL so old tunnel events don't
+	// accumulate on disk across restarts.
+	if hadTunnelEvents && store != nil {
+		_ = store.Save(ses)
+	}
+
 	// Only cut authority in the projection store to reset the ledger.
 	if projectionStore != nil {
 		if epoch, err := projectionStore.CutAuthority(ses.ID); err == nil {
