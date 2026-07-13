@@ -848,18 +848,14 @@ func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 			b.sess.Title = text
 		}
 	}
-	if s, ok := b.store.(*session.JSONLStore); ok {
-		_ = s.AppendMessage(b.sess, msg)
-	} else {
-		b.sess.Messages = append(b.sess.Messages, msg)
-	}
+	// User messages are persisted via onPersist (SetPersistHandler).
+	// Only update in-memory state here.
+	b.sess.Messages = append(b.sess.Messages, msg)
 }
 
-// appendAssistantMessages saves new agent messages to the session JSONL.
-// Only appends new messages via AppendMessage — NEVER overwrites
-// b.sess.Messages with agent.Messages() (compacted). Overwriting would
-// lose pre-compaction history. Instead, append only what's new beyond
-// what ses.Messages already holds.
+// appendAssistantMessages updates in-memory session state after agent run.
+// Per-message persistence is handled by onPersist (SetPersistHandler),
+// so this function only syncs ses.Messages for rendering.
 func (b *DaemonBridge) appendAssistantMessages() {
 	if b.store == nil || b.sess == nil || b.agent == nil {
 		return
@@ -870,14 +866,10 @@ func (b *DaemonBridge) appendAssistantMessages() {
 	// In that case, the compacted messages are already covered by the
 	// checkpoint record on disk. Only append truly new messages.
 	if len(messages) <= sessLen {
-		// Agent compacted or no new messages — nothing to append.
 		return
 	}
-	// Append only new messages beyond what ses.Messages already has.
+	// Sync new messages to in-memory session (disk already written by onPersist).
 	for i := sessLen; i < len(messages); i++ {
-		if s, ok := b.store.(*session.JSONLStore); ok {
-			_ = s.AppendMessage(b.sess, messages[i])
-		}
 		b.sess.Messages = append(b.sess.Messages, messages[i])
 	}
 }

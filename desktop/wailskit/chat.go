@@ -840,7 +840,7 @@ func (b *ChatBridge) saveSession() {
 	// happened. The checkpoint handler already appended a checkpoint record
 	// to disk. Do NOT do a full rewrite — that would destroy pre-compaction
 	// history from the JSONL file.
-	if jsonlStore, ok := store.(*session.JSONLStore); ok && len(agentMsgs) < len(ses.Messages) {
+	if _, ok := store.(*session.JSONLStore); ok && len(agentMsgs) < len(ses.Messages) {
 		log.Printf("[chat] compaction detected: agent=%d msgs vs session=%d msgs, skipping full rewrite",
 			len(agentMsgs), len(ses.Messages))
 		// Do NOT overwrite ses.Messages — that would destroy pre-compaction
@@ -848,7 +848,7 @@ func (b *ChatBridge) saveSession() {
 		// compacted state to disk. Just append new digests.
 		for _, dg := range digests {
 			ses.Messages = append(ses.Messages, dg)
-			_ = jsonlStore.AppendMessageToDisk(ses, dg)
+			// Disk persistence handled by onPersist (SetPersistHandler).
 		}
 		return
 	}

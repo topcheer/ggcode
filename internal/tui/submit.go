@@ -45,20 +45,17 @@ func (m *Model) appendUserMessage(text string) {
 	if m.session.Title == "" || m.session.Title == "New session" {
 		m.session.Title = util.Truncate(text, 60)
 	}
-	ses := m.session
 	store := m.sessionStore
 	m.sessionMutex().Unlock()
 
 	// Echo to mobile tunnel client.
 	m.pushTunnelUserMessage(text)
 
-	// Persist to disk outside the lock.
-	// JSONLStore.AppendMessageToDisk only writes the JSONL file + updates
-	// the index (both protected by the store's own mu). It does NOT modify
-	// the Session object, so no race with the TUI thread.
-	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendMessageToDisk(ses, msg)
-	} else {
+	// Persist to disk is handled by onPersist (SetPersistHandler) when
+	// the agent run adds the user message to contextManager via Add().
+	// No need to write here — it would be a duplicate.
+	if _, ok := store.(*session.JSONLStore); !ok {
+		// Non-JSONLStore: fallback to Save
 		m.sessionMutex().Lock()
 		_ = store.Save(m.session)
 		m.sessionMutex().Unlock()
