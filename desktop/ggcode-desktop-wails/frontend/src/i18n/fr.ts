@@ -335,6 +335,14 @@ const fr = {
   'settings.aboutDesc': 'Vérifier la version de l\'application, le statut des mises à jour, les notes de version et les liens de support.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Fenêtre de contexte et tokens maximum',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Espace de travail et accès aux fichiers',
   'settings.theme': 'Thème',
   'settings.themeLight': 'Clair',
@@ -507,6 +515,7 @@ const fr = {
   // Common shared
   'common.dismiss': 'Ignorer la notification',
   'common.cancel': 'Annuler',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Copier dans le presse-papiers',
 
   // FeatureCard descriptions and actions
@@ -723,6 +732,7 @@ const fr = {
   'toast.impersonationApplied': "Paramètres d'usurpation appliqués",
   'toast.impersonationFailed': "Échec de l'application de l'usurpation : {error}",
   'toast.limitsMustBeNumbers': "La fenêtre de contexte et les jetons maximum doivent être des nombres",
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.modelsFetchFailed': 'Échec de la récupération des modèles : {error}',
   'toast.oauthLoginFailed': 'Échec de la connexion OAuth : {error}',
   'toast.oauthLoginSuccess': 'Connexion OAuth Anthropic réussie',

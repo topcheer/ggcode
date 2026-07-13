@@ -760,6 +760,22 @@ export namespace wailskit {
 	        this.oauthRequired = source["oauthRequired"];
 	    }
 	}
+	export class ModelLimitInfo {
+	    model: string;
+	    contextWindow: number;
+	    maxTokens: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelLimitInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.contextWindow = source["contextWindow"];
+	        this.maxTokens = source["maxTokens"];
+	    }
+	}
 	export class ResolvedEndpointInfo {
 	    vendorId: string;
 	    vendorName: string;
@@ -820,6 +836,20 @@ export namespace wailskit {
 	        this.updatedAt = source["updatedAt"];
 	        this.locked = source["locked"];
 	        this.lastMessage = source["lastMessage"];
+	    }
+	}
+	export class SessionLimitInfo {
+	    contextWindow: number;
+	    maxTokens: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionLimitInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.contextWindow = source["contextWindow"];
+	        this.maxTokens = source["maxTokens"];
 	    }
 	}
 	export class SessionMessage {

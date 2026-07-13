@@ -280,16 +280,22 @@ func (m *Manager) StartUnstartedOwnedAdapters() {
 	}
 }
 
-// muteNonOwnedBindings mutes all current bindings whose LastSessionID does not
-// match the given sessionID. Returns the number muted.
+// muteNonOwnedBindings mutes current bindings that have no session owner
+// (empty LastSessionID) when other instances are running in the same workspace.
+//
+// Bindings that already have a LastSessionID (owned by any session) are
+// completely ignored here — their muted state is already correctly set by
+// reloadBindingLocked (isForeign → muted, isOwned → not muted) and monitored
+// by the binding watcher. This function only handles the legacy case of
+// unclaimed bindings when multiple instances are running.
 func (m *Manager) muteNonOwnedBindings(sessionID string) int {
 	m.mu.Lock()
 	count := 0
 	for name, binding := range m.currentBindings {
-		// When sessionID is non-empty, skip bindings owned by this session.
-		// When sessionID is empty (no session claiming), mute everything.
-		if sessionID != "" && binding.LastSessionID == sessionID {
-			continue // belongs to us
+		// Skip bindings that already have a session owner — they are handled
+		// by reloadBindingLocked and the binding watcher, not by PID detection.
+		if binding.LastSessionID != "" {
+			continue
 		}
 		if binding.Muted {
 			continue

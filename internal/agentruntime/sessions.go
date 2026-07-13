@@ -271,10 +271,8 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		}
 	}
 
-	agentInst.ReconcileToolCalls()
-	compacted, beforeTokens, afterTokens = agentInst.MicrocompactIfOverThreshold()
-
-	// Apply session-level ContextWindow/MaxTokens if set. These take priority
+	// Apply session-level ContextWindow/MaxTokens BEFORE microcompact so the
+	// threshold check uses the correct context window. These take priority
 	// over endpoint/per-model config when restoring a session.
 	if ses.ContextWindow > 0 {
 		agentInst.ContextManager().SetContextWindow(ses.ContextWindow)
@@ -282,6 +280,9 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 	if ses.MaxTokens > 0 {
 		agentInst.ContextManager().SetOutputReserve(ses.MaxTokens)
 	}
+
+	agentInst.ReconcileToolCalls()
+	compacted, beforeTokens, afterTokens = agentInst.MicrocompactIfOverThreshold()
 
 	// Clear runAdded: AddMessage() during restore populated it, but these
 	// messages already exist in the JSONL file. Without this, the next

@@ -335,6 +335,14 @@ const en = {
   'settings.aboutDesc': 'アプリのバージョン、アップデート状況、リリースノート、サポートリンクを確認します。',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'コンテキストウィンドウ & 最大トークン数',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'ワークスペース & ファイルアクセス',
   'settings.theme': 'テーマ',
   'settings.themeLight': 'ライト',
@@ -507,6 +515,7 @@ const en = {
   // Common shared
   'common.dismiss': '通知を閉じる',
   'common.cancel': 'キャンセル',
+  'common.save': 'Save',
   'common.copyToClipboard': 'クリップボードにコピー',
 
   // FeatureCard descriptions and actions
@@ -723,6 +732,7 @@ const en = {
   'toast.impersonationApplied': '偽装設定を適用しました',
   'toast.impersonationFailed': '偽装設定の適用に失敗しました: {error}',
   'toast.limitsMustBeNumbers': 'コンテキストウィンドウと最大トークンは数値でなければなりません',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.modelsFetchFailed': 'モデルの取得に失敗しました: {error}',
   'toast.oauthLoginFailed': 'OAuthログインに失敗しました: {error}',
   'toast.oauthLoginSuccess': 'Anthropic OAuthログインに成功しました',

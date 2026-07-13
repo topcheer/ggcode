@@ -1612,6 +1612,7 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	var lastOldCpIdx int = -1 // index in lines
 	var lastOldCpSummary *provider.Message
 	var lastOldCpLastMsg *provider.Message
+	var lastCpIsNewFormat bool // true if the last checkpoint has summary_msg_id
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -1624,30 +1625,41 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		if json.Unmarshal([]byte(line), &rec) != nil {
 			continue
 		}
-		if rec.Type == "checkpoint" && len(rec.CheckpointMessages) > 0 {
-			// Find summary and last message in this checkpoint.
-			var summary *provider.Message
-			for i := range rec.CheckpointMessages {
-				msg := &rec.CheckpointMessages[i]
-				if summary == nil && msg.Role == "system" && len(msg.Content) > 0 {
-					for _, blk := range msg.Content {
-						if blk.Type == "text" && strings.HasPrefix(blk.Text, "[Previous conversation summary]") {
-							summary = msg
-							break
+		if rec.Type == "checkpoint" {
+			if rec.CheckpointSummaryMsgID != "" {
+				// New format checkpoint — restore will use this one.
+				lastCpIsNewFormat = true
+			} else if len(rec.CheckpointMessages) > 0 {
+				// Find summary and last message in this checkpoint.
+				var summary *provider.Message
+				for i := range rec.CheckpointMessages {
+					msg := &rec.CheckpointMessages[i]
+					if summary == nil && msg.Role == "system" && len(msg.Content) > 0 {
+						for _, blk := range msg.Content {
+							if blk.Type == "text" && strings.HasPrefix(blk.Text, "[Previous conversation summary]") {
+								summary = msg
+								break
+							}
 						}
 					}
 				}
-			}
-			if summary != nil {
-				lastOldCpIdx = len(lines) - 1
-				lastOldCpSummary = summary
-				lastOldCpLastMsg = &rec.CheckpointMessages[len(rec.CheckpointMessages)-1]
+				if summary != nil {
+					lastOldCpIdx = len(lines) - 1
+					lastOldCpSummary = summary
+					lastOldCpLastMsg = &rec.CheckpointMessages[len(rec.CheckpointMessages)-1]
+				}
 			}
 		}
 	}
 	srcF.Close()
 	if sc.Err() != nil {
 		return 0, fmt.Errorf("migration scan: %w", sc.Err())
+	}
+
+	if lastCpIsNewFormat {
+		// The last checkpoint is already in new format (summary_msg_id).
+		// Restore will use it, not any older checkpoint. No migration needed.
+		return 0, nil
 	}
 
 	if lastOldCpIdx < 0 {

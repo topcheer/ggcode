@@ -335,6 +335,14 @@ const en = {
   'settings.aboutDesc': 'Kiểm tra phiên bản ứng dụng, trạng thái cập nhật, ghi chú phát hành và liên kết hỗ trợ.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Cửa sổ ngữ cảnh & Token tối đa',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Không gian làm việc & truy cập tệp',
   'settings.theme': 'Giao diện',
   'settings.themeLight': 'Sáng',
@@ -507,6 +515,7 @@ const en = {
   // Common shared
   'common.dismiss': 'Bỏ thông báo',
   'common.cancel': 'Hủy',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Sao chép vào clipboard',
 
   // FeatureCard descriptions and actions
@@ -723,6 +732,7 @@ const en = {
   'toast.impersonationApplied': 'Đã áp dụng cài đặt mạo danh',
   'toast.impersonationFailed': 'Không thể áp dụng mạo danh: {error}',
   'toast.limitsMustBeNumbers': 'Cửa sổ ngữ cảnh và token tối đa phải là số',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.modelsFetchFailed': 'Không thể tải danh sách mô hình: {error}',
   'toast.oauthLoginFailed': 'Đăng nhập OAuth thất bại: {error}',
   'toast.oauthLoginSuccess': 'Đăng nhập OAuth Anthropic thành công',

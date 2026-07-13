@@ -335,6 +335,14 @@ const id = {
   'settings.aboutDesc': 'Periksa versi aplikasi, status pembaruan, catatan rilis, dan tautan dukungan.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Jendela Konteks & Token Maks',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Workspace & akses file',
   'settings.theme': 'Tema',
   'settings.themeLight': 'Terang',
@@ -507,6 +515,7 @@ const id = {
   // Common shared
   'common.dismiss': 'Tutup notifikasi',
   'common.cancel': 'Batal',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Salin ke clipboard',
 
   // FeatureCard descriptions and actions
@@ -615,6 +624,7 @@ const id = {
   'toast.modelsFetchFailed': 'Gagal mengambil model: {error}',
   'toast.settingsSaveFailed': 'Gagal menyimpan pengaturan: {error}',
   'toast.limitsMustBeNumbers': 'Jendela konteks dan token maks harus berupa angka',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.endpointLimitsSaved': 'Batas endpoint tersimpan',
   'toast.endpointLimitsSaveFailed': 'Gagal menyimpan batas: {error}',
   'toast.oauthLoginSuccess': 'Login Anthropic OAuth berhasil',

@@ -335,6 +335,14 @@ const en = {
   'settings.aboutDesc': '앱 버전, 업데이트 상태, 릴리스 노트 및 지원 링크를 확인합니다.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': '컨텍스트 창 및 최대 토큰',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': '작업공간 및 파일 접근',
   'settings.theme': '테마',
   'settings.themeLight': '밝게',
@@ -507,6 +515,7 @@ const en = {
   // Common shared
   'common.dismiss': '알림 닫기',
   'common.cancel': '취소',
+  'common.save': 'Save',
   'common.copyToClipboard': '클립보드에 복사',
 
   // FeatureCard descriptions and actions
@@ -723,6 +732,7 @@ const en = {
   'toast.impersonationApplied': '가장 설정이 적용되었습니다',
   'toast.impersonationFailed': '가장 설정 적용 실패: {error}',
   'toast.limitsMustBeNumbers': '컨텍스트 창과 최대 토큰은 숫자여야 합니다',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.modelsFetchFailed': '모델 가져오기 실패: {error}',
   'toast.oauthLoginFailed': 'OAuth 로그인 실패: {error}',
   'toast.oauthLoginSuccess': 'Anthropic OAuth 로그인 성공',

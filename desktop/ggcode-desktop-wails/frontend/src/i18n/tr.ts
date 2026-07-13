@@ -335,6 +335,14 @@ const tr = {
   'settings.aboutDesc': 'Uygulama sürümünü, güncelleme durumunu, sürüm notlarını ve destek bağlantılarını kontrol edin.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Bağlam Penceresi ve Maksimum Token',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Çalışma Alanı ve dosya erişimi',
   'settings.theme': 'Tema',
   'settings.themeLight': 'Açık',
@@ -507,6 +515,7 @@ const tr = {
   // Common shared
   'common.dismiss': 'Bildirimi kapat',
   'common.cancel': 'İptal',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Panoya kopyala',
 
   // FeatureCard descriptions and actions
@@ -622,6 +631,7 @@ const tr = {
   'toast.modelsFetchFailed': 'Modeller getirilemedi: {error}',
   'toast.settingsSaveFailed': 'Ayarlar kaydedilemedi: {error}',
   'toast.limitsMustBeNumbers': 'Bağlam penceresi ve maksimum token sayı olmalıdır',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.endpointLimitsSaved': 'Uç nokta limitleri kaydedildi',
   'toast.endpointLimitsSaveFailed': 'Limitler kaydedilemedi: {error}',
   'toast.oauthLoginSuccess': 'Anthropic OAuth girişi başarılı',

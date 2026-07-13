@@ -57,6 +57,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case imRuntimeUpdatedMsg:
 		return m, nil
 
+	case inspectorItemsLoadedMsg:
+		// Async-loaded session items for inspector panel — cache them
+		if m.inspectorPanel != nil && m.inspectorPanel.kind == msg.kind {
+			m.inspectorPanel.cachedItems = msg.items
+			m.inspectorPanel.itemsLoaded = true
+			m.inspectorPanel.loading = false
+		}
+		return m, nil
+
 	case tmuxStartupSetupMsg:
 		if m.tmuxAvailable() {
 			m.setupTmuxLayout(msg.Layout)

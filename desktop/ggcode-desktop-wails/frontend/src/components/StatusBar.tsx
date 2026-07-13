@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react'
-import { Radio, Smartphone } from 'lucide-react'
+import React, { useState, useEffect, useRef } from 'react'
+import { Radio, Smartphone, Settings2 } from 'lucide-react'
 import * as App from '../../wailsjs/go/main/App'
 import type { StatusBarData } from '../types'
 import { useTranslation } from '../i18n'
+import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
 
 interface StatusBarProps {
   onContextToggle?: () => void
@@ -95,6 +96,63 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
     return String(n)
   }
 
+  // --- Session limits popover ---
+  const [showLimitsPopover, setShowLimitsPopover] = useState(false)
+  const [sessionCtx, setSessionCtx] = useState(0)
+  const [sessionMax, setSessionMax] = useState(0)
+  const [editCtx, setEditCtx] = useState('')
+  const [editMax, setEditMax] = useState('')
+  const [savingLimits, setSavingLimits] = useState(false)
+  const [limitsError, setLimitsError] = useState('')
+  const limitsRef = useRef<HTMLDivElement>(null)
+
+  const loadSessionLimits = async () => {
+    try {
+      const limits = await App.GetSessionLimits()
+      setSessionCtx(limits?.contextWindow || 0)
+      setSessionMax(limits?.maxTokens || 0)
+      setEditCtx(formatTokenValue(limits?.contextWindow || 0))
+      setEditMax(formatTokenValue(limits?.maxTokens || 0))
+      setLimitsError('')
+    } catch { /* ignore */ }
+  }
+
+  const handleContextPillClick = async () => {
+    await loadSessionLimits()
+    setShowLimitsPopover(true)
+  }
+
+  const saveSessionLimits = async () => {
+    if (!isValidTokenValue(editCtx) || !isValidTokenValue(editMax)) {
+      setLimitsError(t('settings.invalidTokenFormat'))
+      return
+    }
+    setSavingLimits(true)
+    try {
+      const ctx = parseTokenValue(editCtx)
+      const max = parseTokenValue(editMax)
+      await App.SetSessionLimits(ctx, max)
+      setSessionCtx(ctx)
+      setSessionMax(max)
+      setShowLimitsPopover(false)
+    } catch (e) {
+      console.error('Failed to save session limits:', e)
+    } finally {
+      setSavingLimits(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!showLimitsPopover) return
+    const handler = (e: MouseEvent) => {
+      if (limitsRef.current && !limitsRef.current.contains(e.target as Node)) {
+        setShowLimitsPopover(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showLimitsPopover])
+
   const modelLabel = info.vendor && info.model
     ? `${info.vendor}/${info.model}`
     : '...'
@@ -122,11 +180,12 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
         const bgColor = pct >= 85 ? 'rgba(239,68,68,0.15)' : pct >= 65 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.12)'
         return (
           <div
-            title={`Context: ${formatTokens(info.contextUsed)} / ${formatTokens(info.contextTotal)} (${Math.round(pct)}%)`}
+            title={`Context: ${formatTokens(info.contextUsed)} / ${formatTokens(info.contextTotal)} (${Math.round(pct)}%) — ${t('settings.clickToEdit')}`}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
-              cursor: 'default',
+              cursor: 'pointer', position: 'relative',
             }}
+            onClick={handleContextPillClick}
           >
             <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>ctx</span>
             <div style={{
@@ -146,6 +205,80 @@ export function StatusBar({ onContextToggle, data }: StatusBarProps) {
           </div>
         )
       })()}
+      {showLimitsPopover && (
+        <div ref={limitsRef} style={{
+          position: 'absolute', bottom: 'calc(var(--statusbar-height) + 4px)', left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'var(--color-card)', border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-md)', padding: 'var(--spacing-md)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.2)', zIndex: 1000,
+          display: 'flex', flexDirection: 'column', gap: 'var(--spacing-sm)',
+          minWidth: 280, fontSize: 12,
+        }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+            {t('settings.sessionLimits')}
+          </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginBottom: 4 }}>
+            {t('settings.sessionLimitsHint')}
+          </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>{t('settings.contextWindow')}</span>
+            <input
+              type="text" value={editCtx} placeholder={`${t('settings.auto')} (e.g. 256k, 1m, 200000)`}
+              onChange={e => { setEditCtx(e.target.value); setLimitsError('') }}
+              style={{
+                padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--color-border)', background: 'var(--color-surface)',
+                color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-mono)',
+              }}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ color: 'var(--text-secondary)' }}>{t('settings.maxTokens')}</span>
+            <input
+              type="text" value={editMax} placeholder={`${t('settings.auto')} (e.g. 8k, 32k, 8192)`}
+              onChange={e => { setEditMax(e.target.value); setLimitsError('') }}
+              style={{
+                padding: '4px 8px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--color-border)', background: 'var(--color-surface)',
+                color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-mono)',
+              }}
+            />
+          </label>
+          {limitsError && (
+            <div style={{ color: 'var(--color-error, #ef4444)', fontSize: 11 }}>
+              {limitsError}
+            </div>
+          )}
+          {sessionCtx > 0 || sessionMax > 0 ? (
+            <div style={{ color: 'var(--color-info)', fontSize: 11 }}>
+              {t('settings.sessionLimitsActive')}
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', gap: 'var(--spacing-sm)', justifyContent: 'flex-end', marginTop: 4 }}>
+            <button
+              onClick={() => setShowLimitsPopover(false)}
+              style={{
+                padding: '4px 12px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--color-border)', background: 'transparent',
+                color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12,
+              }}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              onClick={saveSessionLimits} disabled={savingLimits}
+              style={{
+                padding: '4px 12px', borderRadius: 'var(--radius-sm)',
+                border: 'none', background: 'var(--color-primary)', color: '#fff',
+                cursor: savingLimits ? 'wait' : 'pointer', fontSize: 12,
+              }}
+            >
+              {savingLimits ? '...' : t('common.save')}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Permission mode indicator */}
       {(() => {
         const modeColors: Record<string, string> = {

@@ -1357,6 +1357,117 @@ func TestMigrateOldCheckpoint(t *testing.T) {
 	}
 }
 
+// TestMigrateSkipWhenLastCheckpointIsNewFormat tests that migration is skipped
+// entirely when the last checkpoint in the file is already in new format,
+// even if there are old-format checkpoints earlier in the file.
+func TestMigrateSkipWhenLastCheckpointIsNewFormat(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_skip_migrate_*")
+	defer os.RemoveAll(dir)
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "ep", "model")
+	ses.Title = "Skip Migration"
+	ses.Workspace = "/test"
+
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	f, _ := os.Create(path)
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+
+	// Meta
+	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
+	// Old message without ID (before old checkpoint)
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old msg"}}}})
+	// Old-format checkpoint
+	summaryMsg := provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "[Previous conversation summary]\nOld summary.",
+		}},
+	}
+	enc.Encode(jsonlRecord{
+		Type:               "checkpoint",
+		CheckpointMessages: []provider.Message{summaryMsg},
+		CheckpointTokens:   1000,
+	})
+	// Post-old-checkpoint message
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_after_old_cp", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "after old cp"}}}})
+	// Summary message record that the new checkpoint will reference
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_new_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nNew summary."}}}})
+	// New-format checkpoint (this is the LAST checkpoint — restore will use this)
+	enc.Encode(jsonlRecord{
+		Type:                   "checkpoint",
+		CheckpointSummaryMsgID: "msg_new_summary",
+		CheckpointLastMsgID:    "msg_after_old_cp",
+		CheckpointTokens:       5000,
+	})
+	// Post-new-checkpoint message with ID
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{ID: "msg_post_new", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "after new cp"}}}})
+	f.Close()
+
+	// Load — should skip migration since last checkpoint is new format
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify old checkpoint is still in old format on disk (not migrated)
+	diskF, _ := os.Open(path)
+	sc := bufio.NewScanner(diskF)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	oldCpCount := 0
+	newCpCount := 0
+	oldCpHasMessages := false
+	for sc.Scan() {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(sc.Text()), &rec) != nil {
+			continue
+		}
+		if rec.Type == "checkpoint" {
+			if rec.CheckpointSummaryMsgID != "" {
+				newCpCount++
+			}
+			if len(rec.CheckpointMessages) > 0 {
+				oldCpCount++
+				oldCpHasMessages = true
+			}
+		}
+	}
+	diskF.Close()
+
+	// Old checkpoint should still be in old format (not converted to new format)
+	if oldCpCount != 1 {
+		t.Fatalf("expected 1 old-format checkpoint on disk, got %d", oldCpCount)
+	}
+	if !oldCpHasMessages {
+		t.Fatal("old checkpoint should still have checkpoint_messages (migration should have been skipped)")
+	}
+	// New checkpoint should still be there
+	if newCpCount != 1 {
+		t.Fatalf("expected 1 new-format checkpoint on disk, got %d", newCpCount)
+	}
+
+	// ContextMessages should be built from the new checkpoint: [summary] + [messages after last_msg_id]
+	// summary = msg_new_summary, last_msg_id = msg_after_old_cp
+	// So ContextMessages = [new summary] + [msg_post_new]
+	if len(loaded.ContextMessages) != 2 {
+		t.Fatalf("expected 2 context messages (summary + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
+	}
+	// First context message should be the new summary
+	if loaded.ContextMessages[0].ID != "msg_new_summary" {
+		t.Fatalf("expected first context message to be msg_new_summary, got %s", loaded.ContextMessages[0].ID)
+	}
+	// Second should be the post-new-checkpoint message
+	if loaded.ContextMessages[1].ID != "msg_post_new" {
+		t.Fatalf("expected second context message to be msg_post_new, got %s", loaded.ContextMessages[1].ID)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

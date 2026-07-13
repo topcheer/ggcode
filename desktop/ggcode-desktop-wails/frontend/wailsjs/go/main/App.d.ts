@@ -55,6 +55,8 @@ export function GetLSPStatus():Promise<wailskit.LSPStatusResponse>;
 
 export function GetModelInfo():Promise<Record<string, any>>;
 
+export function GetModelLimits():Promise<Array<wailskit.ModelLimitInfo>>;
+
 export function GetModels(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function GetPlatform():Promise<string>;
@@ -62,6 +64,8 @@ export function GetPlatform():Promise<string>;
 export function GetResolvedEndpoint():Promise<wailskit.ResolvedEndpointInfo>;
 
 export function GetSessionHistory():Promise<Array<wailskit.SessionMessage>>;
+
+export function GetSessionLimits():Promise<wailskit.SessionLimitInfo>;
 
 export function GetTeamBoard():Promise<Array<swarm.TeamBoardSnapshot>>;
 
@@ -163,7 +167,11 @@ export function SetIMAdapterEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetMCPServerEnabled(arg1:string,arg2:boolean):Promise<boolean>;
 
+export function SetModelLimits(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<void>;
+
 export function SetPermissionMode(arg1:string):Promise<void>;
+
+export function SetSessionLimits(arg1:number,arg2:number):Promise<void>;
 
 export function StartAnthropicOAuth():Promise<string>;
 

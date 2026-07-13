@@ -335,6 +335,14 @@ const en = {
   'settings.aboutDesc': 'Check the app version, update status, release notes, and support links.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Context Window & Max Tokens',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Workspace & file access',
   'settings.theme': 'Theme',
   'settings.themeLight': 'Light',
@@ -507,6 +515,7 @@ const en = {
   // Common shared
   'common.dismiss': 'Dismiss notification',
   'common.cancel': 'Cancel',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Copy to clipboard',
 
   // FeatureCard descriptions and actions
@@ -622,6 +631,7 @@ const en = {
   'toast.modelsFetchFailed': 'Failed to fetch models: {error}',
   'toast.settingsSaveFailed': 'Failed to save settings: {error}',
   'toast.limitsMustBeNumbers': 'Context window and max tokens must be numbers',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.endpointLimitsSaved': 'Endpoint limits saved',
   'toast.endpointLimitsSaveFailed': 'Failed to save limits: {error}',
   'toast.oauthLoginSuccess': 'Anthropic OAuth login successful',

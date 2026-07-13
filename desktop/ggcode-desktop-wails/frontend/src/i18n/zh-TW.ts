@@ -337,6 +337,14 @@ const zh: Record<TranslationKey, string> = {
   'settings.aboutDesc': '檢查應用版本、更新狀態、發布說明和支持鏈接。',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': '上下文窗口與最大 Token',
+  'settings.contextWindow': '上下文窗口',
+  'settings.maxTokens': '最大輸出 Token',
+  'settings.auto': '自動',
+  'settings.sessionLimits': '會話級限制',
+  'settings.sessionLimitsHint': '僅對當前會話生效。0 = 自動（使用端點/模型配置）。',
+  'settings.sessionLimitsActive': '會話級覆蓋已生效',
+  'settings.clickToEdit': '點擊編輯會話限制',
+  'settings.invalidTokenFormat': '格式無效。請使用數字如 256000、256k 或 1m。',
   'settings.workspaceFileAccess': '工作區與文件访問',
   'settings.theme': '主題',
   'settings.themeLight': '浅色',
@@ -509,6 +517,7 @@ const zh: Record<TranslationKey, string> = {
   // Common shared
   'common.dismiss': '關閉通知',
   'common.cancel': '取消',
+  'common.save': '保存',
   'common.copyToClipboard': '復制到剪貼板',
 
   // FeatureCard descriptions and actions
@@ -624,6 +633,7 @@ const zh: Record<TranslationKey, string> = {
   'toast.modelsFetchFailed': '獲取模型失敗：{error}',
   'toast.settingsSaveFailed': '保存設置失敗：{error}',
   'toast.limitsMustBeNumbers': '上下文窗口和最大令牌數必须是數字',
+  'toast.invalidTokenFormat': '格式無效。請使用數字如 256000、256k 或 1m。',
   'toast.endpointLimitsSaved': '端點限制已保存',
   'toast.endpointLimitsSaveFailed': '保存限制失敗：{error}',
   'toast.oauthLoginSuccess': 'Anthropic OAuth 登錄成功',

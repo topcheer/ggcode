@@ -756,9 +756,23 @@ func (m *Model) startContextProbe() {
 		debug.Log("probe", "startContextProbe skipped: no model selected")
 		return
 	}
-	if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.ContextWindow > 0 {
-		debug.Log("probe", "startContextProbe skipped: explicit context_window=%d configured", ep.ContextWindow)
+	// Skip probe if any explicit context_window override exists:
+	// 1. Session-level (restored from JSONL)
+	// 2. Per-model override (ModelLimits)
+	// 3. Endpoint-level
+	if m.session != nil && m.session.ContextWindow > 0 {
+		debug.Log("probe", "startContextProbe skipped: session-level context_window=%d", m.session.ContextWindow)
 		return
+	}
+	if ep := m.config.ActiveEndpointConfig(); ep != nil {
+		if ep.ContextWindow > 0 {
+			debug.Log("probe", "startContextProbe skipped: endpoint-level context_window=%d", ep.ContextWindow)
+			return
+		}
+		if ml, ok := ep.ModelLimits[resolved.Model]; ok && ml.ContextWindow > 0 {
+			debug.Log("probe", "startContextProbe skipped: per-model context_window=%d for %s", ml.ContextWindow, resolved.Model)
+			return
+		}
 	}
 
 	debug.Log("probe", "startContextProbe: vendor=%s model=%s baseURL=%s",
@@ -771,6 +785,14 @@ func (m *Model) startContextProbe() {
 				debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
 					r.ContextWindow, r.FromCache)
 				m.agent.ContextManager().SetContextWindow(r.ContextWindow)
+				// Persist probed context_window to session so it survives
+				// restarts without re-probing.
+				if m.session != nil && m.session.ContextWindow == 0 {
+					m.session.ContextWindow = r.ContextWindow
+					if m.sessionStore != nil {
+						_ = m.sessionStore.AppendMetaToDisk(m.session)
+					}
+				}
 			} else {
 				debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
 			}

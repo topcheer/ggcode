@@ -335,6 +335,14 @@ const en = {
   'settings.aboutDesc': 'Verificar a versão do aplicativo, status de atualização, notas de lançamento e links de suporte.',
   'settings.anthropicOAuth': 'Anthropic OAuth',
   'settings.contextWindowMaxTokens': 'Janela de Contexto e Tokens Máximos',
+  'settings.contextWindow': 'Context Window',
+  'settings.maxTokens': 'Max Output Tokens',
+  'settings.auto': 'auto',
+  'settings.sessionLimits': 'Session Limits',
+  'settings.sessionLimitsHint': 'Override for this session only. 0 = auto (use endpoint/model config).',
+  'settings.sessionLimitsActive': 'Session-level overrides active',
+  'settings.clickToEdit': 'Click to edit session limits',
+  'settings.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'settings.workspaceFileAccess': 'Workspace e acesso a arquivos',
   'settings.theme': 'Tema',
   'settings.themeLight': 'Claro',
@@ -507,6 +515,7 @@ const en = {
   // Common shared
   'common.dismiss': 'Dispensar notificação',
   'common.cancel': 'Cancelar',
+  'common.save': 'Save',
   'common.copyToClipboard': 'Copiar para a área de transferência',
 
   // FeatureCard descriptions and actions
@@ -723,6 +732,7 @@ const en = {
   'toast.impersonationApplied': 'Configurações de personificação aplicadas',
   'toast.impersonationFailed': 'Falha ao aplicar personificação: {error}',
   'toast.limitsMustBeNumbers': 'Janela de contexto e tokens máximos devem ser números',
+  'toast.invalidTokenFormat': 'Invalid format. Use numbers like 256000, 256k, or 1m.',
   'toast.modelsFetchFailed': 'Falha ao buscar modelos: {error}',
   'toast.oauthLoginFailed': 'Falha no login OAuth: {error}',
   'toast.oauthLoginSuccess': 'Login OAuth do Anthropic bem-sucedido',

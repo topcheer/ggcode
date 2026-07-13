@@ -102,6 +102,10 @@ export function GetModelInfo() {
   return window['go']['main']['App']['GetModelInfo']();
 }
 
+export function GetModelLimits() {
+  return window['go']['main']['App']['GetModelLimits']();
+}
+
 export function GetModels(arg1, arg2) {
   return window['go']['main']['App']['GetModels'](arg1, arg2);
 }
@@ -116,6 +120,10 @@ export function GetResolvedEndpoint() {
 
 export function GetSessionHistory() {
   return window['go']['main']['App']['GetSessionHistory']();
+}
+
+export function GetSessionLimits() {
+  return window['go']['main']['App']['GetSessionLimits']();
 }
 
 export function GetTeamBoard() {
@@ -318,8 +326,16 @@ export function SetMCPServerEnabled(arg1, arg2) {
   return window['go']['main']['App']['SetMCPServerEnabled'](arg1, arg2);
 }
 
+export function SetModelLimits(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SetModelLimits'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function SetPermissionMode(arg1) {
   return window['go']['main']['App']['SetPermissionMode'](arg1);
+}
+
+export function SetSessionLimits(arg1, arg2) {
+  return window['go']['main']['App']['SetSessionLimits'](arg1, arg2);
 }
 
 export function StartAnthropicOAuth() {

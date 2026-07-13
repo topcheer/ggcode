@@ -813,7 +813,39 @@ func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int
 	return globalCfg.SaveScoped("instance")
 }
 
-// AnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
+// ModelLimitInfo represents per-model limit overrides for the frontend.
+type ModelLimitInfo struct {
+	Model         string `json:"model"`
+	ContextWindow int    `json:"contextWindow"`
+	MaxTokens     int    `json:"maxTokens"`
+}
+
+// GetModelLimits returns all per-model limit overrides for a vendor/endpoint.
+func GetModelLimits(vendor, endpoint string) []ModelLimitInfo {
+	globalMu.RLock()
+	defer globalMu.RUnlock()
+	if globalCfg == nil {
+		return nil
+	}
+	vc, ok := globalCfg.Vendors[vendor]
+	if !ok {
+		return nil
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok || ep.ModelLimits == nil {
+		return nil
+	}
+	var result []ModelLimitInfo
+	for model, ml := range ep.ModelLimits {
+		result = append(result, ModelLimitInfo{
+			Model:         model,
+			ContextWindow: ml.ContextWindow,
+			MaxTokens:     ml.MaxTokens,
+		})
+	}
+	return result
+}
+
 func AnthropicOAuthStatus() bool {
 	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
 	if err != nil || info == nil {

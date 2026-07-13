@@ -39,6 +39,9 @@ type inspectorPanelState struct {
 	lspLanguageID     string
 	lspLanguageName   string
 	lspInstallOptions []lsp.InstallOption
+	cachedItems       []inspectorPanelItem // cached items to avoid sync loading on every render
+	itemsLoaded       bool                 // true once items have been loaded (or async load started)
+	loading           bool                 // true while async loading is in progress
 }
 
 type inspectorPanelItem struct {
@@ -51,6 +54,44 @@ type inspectorPanelItem struct {
 
 func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 	m.inspectorPanel = &inspectorPanelState{kind: kind}
+	// For sessions panel, load items asynchronously to avoid blocking the UI.
+	// Set itemsLoaded=true immediately so inspectorPanelItems() never falls through
+	// to the synchronous inspectorSessionItems() path.
+	if kind == inspectorPanelSessions && m.sessionStore != nil {
+		store := m.sessionStore
+		lang := m.currentLanguage()
+		storeDir := ""
+		if js, ok := store.(*session.JSONLStore); ok {
+			storeDir = js.Dir()
+		} else {
+			storeDir, _ = session.DefaultDir()
+		}
+		// When we have a program, load asynchronously to avoid blocking the UI.
+		// When program is nil (tests), load synchronously since there's no event loop.
+		if m.program != nil {
+			m.inspectorPanel.itemsLoaded = true
+			m.inspectorPanel.loading = true
+			go func() {
+				sessions, err := store.List()
+				if err != nil {
+					m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: nil, loadErr: err})
+					return
+				}
+				items := buildSessionInspectorItems(sessions, lang, storeDir)
+				m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: items})
+			}()
+		} else {
+			// Synchronous fallback for headless/test mode
+			sessions, err := store.List()
+			if err != nil {
+				m.inspectorPanel.cachedItems = []inspectorPanelItem{{Title: inspectorText(lang, "sessions_error"), Detail: err.Error(), Disabled: true}}
+				m.inspectorPanel.itemsLoaded = true
+				return
+			}
+			m.inspectorPanel.cachedItems = buildSessionInspectorItems(sessions, lang, storeDir)
+			m.inspectorPanel.itemsLoaded = true
+		}
+	}
 }
 
 func (m *Model) closeInspectorPanel() {
@@ -64,11 +105,37 @@ func (m *Model) setInspectorMessage(message string) {
 	m.inspectorPanel.message = message
 }
 
+// inspectorItemsLoadedMsg is sent asynchronously when session items are loaded.
+type inspectorItemsLoadedMsg struct {
+	kind    inspectorPanelKind
+	items   []inspectorPanelItem
+	loadErr error
+}
+
 func (m Model) renderInspectorPanel() string {
 	if m.inspectorPanel == nil {
 		return ""
 	}
 	title := m.inspectorPanelTitle(m.inspectorPanel.kind)
+	// Show loading placeholder while async session loading is in progress
+	if m.inspectorPanel.loading {
+		items := []inspectorPanelItem{{Title: inspectorText(m.currentLanguage(), "sessions_loading"), Disabled: true}}
+		width := m.boxInnerWidth(m.mainColumnWidth())
+		leftWidth := inspectorPanelLeftWidth(width)
+		rightWidth := max(28, width-leftWidth-2)
+		if leftWidth+2+rightWidth > width {
+			leftWidth = max(18, width-rightWidth-2)
+		}
+		height := 18
+		leftLines := m.renderInspectorPanelListLines(items, 0, leftWidth, height)
+		rightLines := m.renderInspectorPanelDetailLines(items, 0, rightWidth, height)
+		body := joinHarnessPanelColumns(leftLines, rightLines, leftWidth, rightWidth, height)
+		footer := m.renderInspectorPanelFooter(width)
+		if footer != "" {
+			body += "\n\n" + footer
+		}
+		return m.renderContextBox(title, body, lipgloss.Color("12"))
+	}
 	items := m.inspectorPanelItems(m.inspectorPanel.kind)
 	cursor := clampInspectorCursor(m.inspectorPanel.cursor, len(items))
 	width := m.boxInnerWidth(m.mainColumnWidth())
@@ -156,6 +223,14 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.inspectorPanel == nil {
 		return *m, nil
 	}
+	// While loading, only allow closing the panel
+	if m.inspectorPanel.loading {
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			m.closeInspectorPanel()
+		}
+		return *m, nil
+	}
 	items := m.inspectorPanelItems(m.inspectorPanel.kind)
 	m.inspectorPanel.cursor = clampInspectorCursor(m.inspectorPanel.cursor, len(items))
 	switch msg.String() {
@@ -204,6 +279,10 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 	switch m.inspectorPanel.kind {
 	case inspectorPanelSessions:
 		if item.ID == "" {
+			return *m, nil
+		}
+		if item.Disabled {
+			m.setInspectorMessage(inspectorText(m.currentLanguage(), "session_locked"))
 			return *m, nil
 		}
 		m.closeInspectorPanel()
@@ -335,6 +414,10 @@ func (m *Model) handleInspectorTodoClear() (Model, tea.Cmd) {
 }
 
 func (m Model) inspectorPanelItems(kind inspectorPanelKind) []inspectorPanelItem {
+	// Return cached items if available (avoids sync List() on every render/keypress)
+	if m.inspectorPanel != nil && m.inspectorPanel.itemsLoaded {
+		return m.inspectorPanel.cachedItems
+	}
 	switch kind {
 	case inspectorPanelSessions:
 		return m.inspectorSessionItems()
@@ -365,6 +448,19 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 	if err != nil {
 		return []inspectorPanelItem{{Title: inspectorText(m.currentLanguage(), "sessions_error"), Detail: err.Error(), Disabled: true}}
 	}
+	storeDir := ""
+	if js, ok := m.sessionStore.(*session.JSONLStore); ok {
+		storeDir = js.Dir()
+	} else {
+		storeDir, _ = session.DefaultDir()
+	}
+	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir)
+}
+
+// buildSessionInspectorItems converts session list to inspector items.
+// Extracted so it can be called from a goroutine without holding the Model.
+// storeDir is used to check session locks.
+func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string) []inspectorPanelItem {
 	currentWD, _ := os.Getwd()
 	currentWS := session.NormalizeWorkspacePath(currentWD)
 	slices.SortStableFunc(sessions, func(a, b *session.Session) int {
@@ -398,7 +494,7 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 		}
 		title := strings.TrimSpace(ses.Title)
 		if title == "" {
-			title = inspectorText(m.currentLanguage(), "untitled_session")
+			title = inspectorText(lang, "untitled_session")
 		}
 		workspace := compactWorkspaceLabelForTUI(ses.Workspace)
 		summaryParts := []string{ses.ID}
@@ -408,26 +504,31 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 		if workspace != "" && session.NormalizeWorkspacePath(ses.Workspace) != currentWS {
 			summaryParts = append(summaryParts, workspace)
 		} else if workspace != "" {
-			summaryParts = append(summaryParts, inspectorText(m.currentLanguage(), "current_workspace"))
+			summaryParts = append(summaryParts, inspectorText(lang, "current_workspace"))
 		}
 		detail := []string{
 			title,
 			"",
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "session_id"), ses.ID),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "updated"), formatInspectorTime(ses.UpdatedAt)),
-			fmt.Sprintf("%s: %d", inspectorText(m.currentLanguage(), "messages"), len(ses.Messages)),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "vendor"), util.FirstNonEmpty(ses.Vendor, "-")),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "endpoint"), util.FirstNonEmpty(ses.Endpoint, "-")),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "model"), util.FirstNonEmpty(ses.Model, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "session_id"), ses.ID),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "updated"), formatInspectorTime(ses.UpdatedAt)),
+			fmt.Sprintf("%s: %d", inspectorText(lang, "messages"), len(ses.Messages)),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "vendor"), util.FirstNonEmpty(ses.Vendor, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "endpoint"), util.FirstNonEmpty(ses.Endpoint, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(lang, "model"), util.FirstNonEmpty(ses.Model, "-")),
 		}
 		if workspace != "" {
-			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "workspace"), workspace))
+			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(lang, "workspace"), workspace))
+		}
+		locked := storeDir != "" && session.IsSessionLocked(storeDir, ses.ID)
+		if locked {
+			title = "\u26d4 " + title
 		}
 		items = append(items, inspectorPanelItem{
-			ID:      ses.ID,
-			Title:   title,
-			Summary: strings.Join(summaryParts, " • "),
-			Detail:  strings.Join(detail, "\n"),
+			ID:       ses.ID,
+			Title:    title,
+			Summary:  strings.Join(summaryParts, " • "),
+			Detail:   strings.Join(detail, "\n"),
+			Disabled: locked,
 		})
 	}
 	return items
@@ -971,6 +1072,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ 选择 • Enter 执行安装 • Esc 返回 /status"
 		case "sessions_empty":
 			msg = "暂无会话。"
+		case "sessions_loading":
+			msg = "正在加载会话..."
+		case "session_locked":
+			msg = "该会话已被其他实例锁定"
 		case "agents_empty":
 			msg = "暂无子 Agent。"
 		case "checkpoints_empty":
@@ -1130,6 +1235,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ select • Enter run installer • Esc back to /status"
 		case "sessions_empty":
 			msg = "No sessions saved."
+		case "sessions_loading":
+			msg = "Loading sessions..."
+		case "session_locked":
+			msg = "This session is locked by another instance"
 		case "agents_empty":
 			msg = "No sub-agents recorded."
 		case "checkpoints_empty":

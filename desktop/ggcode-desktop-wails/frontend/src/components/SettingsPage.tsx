@@ -4,6 +4,7 @@ import * as App from '../../wailsjs/go/main/App'
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale, LOCALE_LABELS } from '../i18n'
 import { ViewMode } from '../types'
+import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
 
 interface Props {
   onBack: () => void
@@ -200,8 +201,17 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
         setResolvedProtocol(details.protocol || '')
         setApiKeySet(details.apiKeySet || false)
         setApiKeyMasked(details.apiKeyMasked || '')
-        setContextWindow(details.contextWindow ? String(details.contextWindow) : '')
-        setMaxTokens(details.maxTokens ? String(details.maxTokens) : '')
+        // Load endpoint-level defaults for display
+        setContextWindow(details.contextWindow ? formatTokenValue(details.contextWindow) : '')
+        setMaxTokens(details.maxTokens ? formatTokenValue(details.maxTokens) : '')
+        // If session has overrides, show those instead (they take priority at runtime)
+        try {
+          const sl = await App.GetSessionLimits() as any
+          if (sl) {
+            if (sl.contextWindow) setContextWindow(formatTokenValue(sl.contextWindow))
+            if (sl.maxTokens) setMaxTokens(formatTokenValue(sl.maxTokens))
+          }
+        } catch { /* session limits not available */ }
         if (details.models && details.models.length > 0) {
           setModels(details.models)
         }
@@ -299,14 +309,20 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
   // Save endpoint limits
   const saveEndpointLimits = useCallback(async () => {
     if (!currentVendor || !currentEndpoint) return
-    const cw = contextWindow ? parseInt(contextWindow, 10) : 0
-    const mt = maxTokens ? parseInt(maxTokens, 10) : 0
-    if (Number.isNaN(cw) || Number.isNaN(mt)) {
+    if (!isValidTokenValue(contextWindow) || !isValidTokenValue(maxTokens)) {
+      showToast?.('error', t('toast.invalidTokenFormat'))
+      return
+    }
+    const cw = parseTokenValue(contextWindow)
+    const mt = parseTokenValue(maxTokens)
+    if ((contextWindow.trim() && cw === 0) || (maxTokens.trim() && mt === 0)) {
       showToast?.('error', t('toast.limitsMustBeNumbers'))
       return
     }
     try {
       await App.SetEndpointLimits(currentVendor, currentEndpoint, cw, mt)
+      // Also persist to session level so it takes effect immediately
+      await App.SetSessionLimits(cw, mt)
       showToast?.('success', t('toast.endpointLimitsSaved'))
       EventsEmit('config:updated')
     } catch (e: any) {
@@ -505,19 +521,19 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
             <FieldRow label={t('settings.contextWindowMaxTokens')}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
-                  type="number"
+                  type="text"
                   value={contextWindow}
                   onChange={e => setContextWindow(e.target.value)}
-                  placeholder="auto"
+                  placeholder={`${t('settings.auto')} (e.g. 256k, 1m)`}
                   style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
                 />
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>tokens</span>
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '0 4px' }}>/</span>
                 <input
-                  type="number"
+                  type="text"
                   value={maxTokens}
                   onChange={e => setMaxTokens(e.target.value)}
-                  placeholder="auto"
+                  placeholder={`${t('settings.auto')} (e.g. 8k, 32k)`}
                   style={{ ...inputStyle, flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
                 />
                 <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>max out</span>
