@@ -43,6 +43,14 @@ func lockConfigFile(path string) func() {
 	return mu.Unlock
 }
 
+// ModelLimitConfig holds per-model context window and max output token overrides.
+// When present for a given model, these values take priority over the endpoint-level
+// ContextWindow/MaxTokens fields.
+type ModelLimitConfig struct {
+	ContextWindow int `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens     int `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+}
+
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
 	DisplayName     string   `yaml:"display_name" json:"display_name"`
@@ -58,6 +66,10 @@ type EndpointConfig struct {
 	SelectedModel   string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
 	Models          []string `yaml:"models,omitempty" json:"models,omitempty"`
 	Tags            []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
+	// When a model is resolved, per-model limits are checked first; if absent,
+	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
+	ModelLimits map[string]ModelLimitConfig `yaml:"model_limits,omitempty" json:"model_limits,omitempty"`
 }
 
 // VendorConfig holds a real supplier plus its available endpoints.

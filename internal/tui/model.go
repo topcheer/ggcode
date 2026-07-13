@@ -817,6 +817,16 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 			debug.Log("repl", "SetSession: activate provider failed: %v", err)
 		}
 	}
+	// Apply session-level ContextWindow/MaxTokens if set. These override
+	// the endpoint/per-model config, matching the PermissionMode pattern.
+	if m.agent != nil {
+		if ses.ContextWindow > 0 {
+			m.agent.ContextManager().SetContextWindow(ses.ContextWindow)
+		}
+		if ses.MaxTokens > 0 {
+			m.agent.ContextManager().SetOutputReserve(ses.MaxTokens)
+		}
+	}
 	// Rebuild endpoint-level stats from UsageHistory to populate
 	// EndpointUsage (not directly stored in JSONL). This ensures
 	// sidebarSessionUsage returns correct values after session load.
@@ -830,7 +840,11 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	}
 	// Probe context window for the restored model/endpoint. Different sessions
 	// may use different models with different context window sizes.
-	m.startContextProbe()
+	// Skip probing when the session already has an explicit ContextWindow
+	// (restored from session-level persistence above).
+	if ses.ContextWindow <= 0 {
+		m.startContextProbe()
+	}
 
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()

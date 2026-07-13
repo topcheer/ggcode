@@ -71,6 +71,12 @@ type Session struct {
 	// It is never written to the config file — only persisted with the session.
 	// Uses *bool to distinguish "never set" (nil) from "explicitly hidden" (false).
 	SidebarVisible *bool `json:"sidebar_visible,omitempty"`
+	// ContextWindow stores the session-scoped context window size.
+	// When > 0, this overrides the endpoint/per-model config on session resume.
+	ContextWindow int `json:"context_window,omitempty"`
+	// MaxTokens stores the session-scoped max output token limit.
+	// When > 0, this overrides the endpoint/per-model config on session resume.
+	MaxTokens int `json:"max_tokens,omitempty"`
 	// endpointStatsMu is nested inside higher-level session/bridge locks and only
 	// guards the per-endpoint aggregate maps used by live readers/writers.
 	endpointStatsMu sync.RWMutex
@@ -396,6 +402,8 @@ type jsonlRecord struct {
 	// Session-scoped preferences.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	SidebarVisible *bool  `json:"sidebar_visible,omitempty"`
+	ContextWindow  int    `json:"context_window,omitempty"`
+	MaxTokens      int    `json:"max_tokens,omitempty"`
 	// Checkpoint fields: compacted messages snapshot after summarize.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
 	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
@@ -477,6 +485,8 @@ func (s *JSONLStore) Save(ses *Session) error {
 		TunnelEventsComplete: ses.TunnelEventsComplete,
 		PermissionMode:       ses.PermissionMode,
 		SidebarVisible:       ses.SidebarVisible,
+		ContextWindow:        ses.ContextWindow,
+		MaxTokens:            ses.MaxTokens,
 	}
 	if err := enc.Encode(meta); err != nil {
 		f.Close()
@@ -675,6 +685,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 		if rec.SidebarVisible != nil {
 			ses.SidebarVisible = rec.SidebarVisible
+		}
+		if rec.ContextWindow > 0 {
+			ses.ContextWindow = rec.ContextWindow
+		}
+		if rec.MaxTokens > 0 {
+			ses.MaxTokens = rec.MaxTokens
 		}
 	}
 
@@ -1294,6 +1310,8 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		TunnelEventsComplete: ses.TunnelEventsComplete,
 		PermissionMode:       ses.PermissionMode,
 		SidebarVisible:       ses.SidebarVisible,
+		ContextWindow:        ses.ContextWindow,
+		MaxTokens:            ses.MaxTokens,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
@@ -1373,6 +1391,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		TunnelEventsComplete: ses.TunnelEventsComplete,
 		PermissionMode:       ses.PermissionMode,
 		SidebarVisible:       ses.SidebarVisible,
+		ContextWindow:        ses.ContextWindow,
+		MaxTokens:            ses.MaxTokens,
 	}
 	if err := enc.Encode(meta); err != nil {
 		os.Remove(path)

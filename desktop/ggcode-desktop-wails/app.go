@@ -816,6 +816,19 @@ func (a *App) SetEndpointLimits(vendor, endpoint string, contextWindow, maxToken
 	return nil
 }
 
+// SetModelLimits updates per-model context_window and max_tokens overrides
+// for a vendor/endpoint/model combination. A value of 0 means "auto" (clears
+// the override, falling back to endpoint-level or inference).
+func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int) error {
+	if err := wailskit.SetModelLimits(vendor, endpoint, model, contextWindow, maxTokens); err != nil {
+		return err
+	}
+	if a.chat != nil {
+		a.chat.RefreshEndpointLimits()
+	}
+	return nil
+}
+
 // GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
 func (a *App) GetAnthropicOAuthStatus() bool {
 	return wailskit.AnthropicOAuthStatus()

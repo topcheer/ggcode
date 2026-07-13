@@ -780,6 +780,39 @@ func SetEndpointLimits(vendor, endpoint string, contextWindow, maxTokens int) er
 	return globalCfg.SaveScoped("instance")
 }
 
+// SetModelLimits updates per-model context_window and max_tokens overrides
+// for a vendor/endpoint/model combination. A value of 0 means "auto" (clears
+// the override for that field, falling back to endpoint-level or inference).
+func SetModelLimits(vendor, endpoint, model string, contextWindow, maxTokens int) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if globalCfg == nil {
+		return fmt.Errorf("config not initialized")
+	}
+	vc, ok := globalCfg.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q not found", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q not found in vendor %q", endpoint, vendor)
+	}
+	if ep.ModelLimits == nil {
+		ep.ModelLimits = make(map[string]config.ModelLimitConfig)
+	}
+	ml := ep.ModelLimits[model]
+	ml.ContextWindow = contextWindow
+	ml.MaxTokens = maxTokens
+	if contextWindow == 0 && maxTokens == 0 {
+		delete(ep.ModelLimits, model)
+	} else {
+		ep.ModelLimits[model] = ml
+	}
+	vc.Endpoints[endpoint] = ep
+	globalCfg.Vendors[vendor] = vc
+	return globalCfg.SaveScoped("instance")
+}
+
 // AnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
 func AnthropicOAuthStatus() bool {
 	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)

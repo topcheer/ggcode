@@ -95,11 +95,22 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if baseURL == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
-	maxTokens := ep.MaxTokens
+	// Resolution priority for limits: per-model override -> endpoint-level -> inference.
+	maxTokens := 0
+	contextWindow := 0
+	if ml, ok := ep.ModelLimits[model]; ok {
+		maxTokens = ml.MaxTokens
+		contextWindow = ml.ContextWindow
+	}
+	if maxTokens == 0 {
+		maxTokens = ep.MaxTokens
+	}
 	if maxTokens == 0 {
 		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
 	}
-	contextWindow := ep.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = ep.ContextWindow
+	}
 	if contextWindow <= 0 {
 		contextWindow = inferContextWindow(model, ep.Protocol)
 	}
