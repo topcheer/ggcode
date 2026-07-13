@@ -845,6 +845,8 @@ func zhCatalog(key string) string {
 		return "编辑"
 	case "panel.model.saved_runtime_inactive":
 		return "配置已保存，但当前运行时仍未激活：%s"
+	case "panel.model.no_session":
+		return "无活跃会话 — 无法保存参数"
 	case "panel.model.context_applied":
 		return "已设置 context_window=%d, max_tokens=%d (已保存)"
 	case "panel.model.context_cleared":

@@ -837,6 +837,8 @@ func enCatalog(key string) string {
 		return "Edit"
 	case "panel.model.saved_runtime_inactive":
 		return "Saved config, but current runtime is still inactive: %s"
+	case "panel.model.no_session":
+		return "No active session — cannot persist limits"
 	case "panel.model.context_applied":
 		return "Applied context_window=%d, max_tokens=%d (saved)"
 	case "panel.model.context_cleared":

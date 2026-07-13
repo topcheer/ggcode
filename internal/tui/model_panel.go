@@ -86,15 +86,18 @@ func (m Model) renderModelPanel() string {
 		source = m.t("panel.model.source.builtin")
 	}
 
-	// Resolve current context_window and max_tokens for display
+	// Resolve current context_window and max_tokens for display.
+	// Priority: session-level override → endpoint-level → auto
 	cw, mt := "auto", "auto"
-	if ep := m.config.ActiveEndpointConfig(); ep != nil {
-		if ep.ContextWindow > 0 {
-			cw = fmt.Sprintf("%d", ep.ContextWindow)
-		}
-		if ep.MaxTokens > 0 {
-			mt = fmt.Sprintf("%d", ep.MaxTokens)
-		}
+	if m.session != nil && m.session.ContextWindow > 0 {
+		cw = fmt.Sprintf("%d", m.session.ContextWindow)
+	} else if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.ContextWindow > 0 {
+		cw = fmt.Sprintf("%d", ep.ContextWindow)
+	}
+	if m.session != nil && m.session.MaxTokens > 0 {
+		mt = fmt.Sprintf("%d", m.session.MaxTokens)
+	} else if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.MaxTokens > 0 {
+		mt = fmt.Sprintf("%d", ep.MaxTokens)
 	}
 
 	window := buildModelListWindow(panel.models, panel.selected, panel.filter)
@@ -178,17 +181,19 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, nil
 	case "w":
-		ep := m.config.ActiveEndpointConfig()
 		val := ""
-		if ep != nil && ep.ContextWindow > 0 {
+		if m.session != nil && m.session.ContextWindow > 0 {
+			val = fmt.Sprintf("%d", m.session.ContextWindow)
+		} else if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.ContextWindow > 0 {
 			val = fmt.Sprintf("%d", ep.ContextWindow)
 		}
 		panel.startEditing("context_window", val)
 		return *m, nil
 	case "o":
-		ep := m.config.ActiveEndpointConfig()
 		val := ""
-		if ep != nil && ep.MaxTokens > 0 {
+		if m.session != nil && m.session.MaxTokens > 0 {
+			val = fmt.Sprintf("%d", m.session.MaxTokens)
+		} else if ep := m.config.ActiveEndpointConfig(); ep != nil && ep.MaxTokens > 0 {
 			val = fmt.Sprintf("%d", ep.MaxTokens)
 		}
 		panel.startEditing("max_tokens", val)
@@ -320,33 +325,63 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
-		switch field {
-		case "context_window":
-			ep.ContextWindow = n
-		case "max_tokens":
-			ep.MaxTokens = n
-		}
-		vc.Endpoints[endpoint] = ep
-		m.config.Vendors[vendor] = vc
-
-		if err := m.saveConfig(); err != nil {
-			panel.message = fmt.Sprintf("save failed: %v", err)
+		// Persist to session-level (not endpoint config) so different
+		// sessions can have different context_window/max_tokens.
+		if m.session == nil {
+			panel.message = m.t("panel.model.no_session")
 			return *m, nil
 		}
 
+		switch field {
+		case "context_window":
+			m.session.ContextWindow = n
+		case "max_tokens":
+			m.session.MaxTokens = n
+		}
+		if m.sessionStore != nil {
+			if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+				panel.message = fmt.Sprintf("save failed: %v", err)
+				return *m, nil
+			}
+		}
+
 		// Apply to running agent immediately
-		if m.agent != nil {
-			if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
-				agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+		if m.agent != nil && m.agent.ContextManager() != nil {
+			switch field {
+			case "context_window":
+				if n > 0 {
+					m.agent.ContextManager().SetContextWindow(n)
+				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
+					agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+				}
+			case "max_tokens":
+				if n > 0 {
+					m.agent.ContextManager().SetOutputReserve(n)
+				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
+					agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+				}
+			}
+		}
+
+		// Display the effective values: session-level if set, otherwise endpoint-level
+		displayCW := n
+		displayMT := n
+		if field == "context_window" {
+			displayMT = m.session.MaxTokens
+			if displayMT == 0 {
+				displayMT = ep.MaxTokens
+			}
+		} else {
+			displayCW = m.session.ContextWindow
+			if displayCW == 0 {
+				displayCW = ep.ContextWindow
 			}
 		}
 
 		if val == "" || n == 0 {
 			panel.message = m.t("panel.model.context_cleared")
-		} else if field == "context_window" {
-			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), n, ep.MaxTokens)
 		} else {
-			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), ep.ContextWindow, n)
+			panel.message = fmt.Sprintf(m.t("panel.model.context_applied"), displayCW, displayMT)
 		}
 		return *m, nil
 	default:
