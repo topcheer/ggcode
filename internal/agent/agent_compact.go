@@ -137,10 +137,10 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, a.contextManager.TokenCount())})
-	newTokens := a.contextManager.TokenCount()
-	if newTokens < tokens*7/10 {
-		a.maybeSaveCheckpoint()
-	}
+	// Always save checkpoint after reactive compact — the live context was
+	// modified and must be persisted so --resume can restore the compacted
+	// state instead of re-loading the full pre-compaction message history.
+	a.maybeSaveCheckpoint()
 	if retries != nil {
 		*retries = *retries + 1
 		debug.Log("agent", "reactive compact retry=%d", *retries)
@@ -348,4 +348,10 @@ func (a *Agent) maybeSaveCheckpoint() {
 
 	msgs, tokenCount := a.contextManager.MessagesAndTokenCount()
 	fn(msgs, tokenCount)
+}
+
+// SaveCheckpoint persists the current context as a checkpoint.  Called
+// externally (e.g. by slash /compact) after synchronous compaction.
+func (a *Agent) SaveCheckpoint() {
+	a.maybeSaveCheckpoint()
 }

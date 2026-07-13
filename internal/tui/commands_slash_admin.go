@@ -96,6 +96,9 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 				return compactResultMsg{err: fmt.Sprintf(m.t("compact.failed"), err)}
 			}
 			newTokens := cm.TokenCount()
+			// Persist the compacted context as a checkpoint so --resume
+			// restores the compacted state instead of the full history.
+			m.agent.SaveCheckpoint()
 			return compactResultMsg{text: fmt.Sprintf(m.t("compact.done_with_stats"), tokens, newTokens)}
 		},
 	)

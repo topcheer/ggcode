@@ -50,6 +50,21 @@ type CompactSnapshot struct {
 	Version       int64
 }
 
+// compactionMarkerSentinel is a unique text placed in a system-role message
+// inserted into m.messages to mark the boundary between the snapshot region
+// and messages that arrive during background compaction.  It is never sent
+// to the LLM (filtered by isCompactionMarker / Messages and friends).
+const compactionMarkerSentinel = "\x00\x00COMPACTION_MARKER\x00\x00"
+
+// isCompactionMarker reports whether a message is the compaction boundary
+// marker inserted by StartPreCompact.
+func isCompactionMarker(msg provider.Message) bool {
+	if msg.Role != "system" || len(msg.Content) != 1 {
+		return false
+	}
+	return msg.Content[0].Type == "text" && msg.Content[0].Text == compactionMarkerSentinel
+}
+
 // CompactResult is the output of compacting a CompactSnapshot.
 type CompactResult struct {
 	Messages   []provider.Message
@@ -461,26 +476,72 @@ func (m *Manager) AddedSinceRunStart() []provider.Message {
 func (m *Manager) Messages() []provider.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]provider.Message, len(m.messages))
-	copy(out, m.messages)
+	out := make([]provider.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		if !isCompactionMarker(msg) {
+			out = append(out, msg)
+		}
+	}
 	return out
 }
 
 func (m *Manager) MessagesAndTokenCount() ([]provider.Message, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]provider.Message, len(m.messages))
-	copy(out, m.messages)
+	out := make([]provider.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		if !isCompactionMarker(msg) {
+			out = append(out, msg)
+		}
+	}
 	return out, m.tokenCountLocked()
+}
+
+// InsertCompactionMarker appends a compaction boundary marker to m.messages.
+// Called by StartPreCompact right before taking a snapshot.  The marker is
+// never sent to the LLM (filtered by Messages / MessagesAndTokenCount).
+func (m *Manager) InsertCompactionMarker() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: compactionMarkerSentinel,
+		}},
+	})
+	m.version++
+}
+
+// RemoveCompactionMarker finds and removes the compaction marker from
+// m.messages if present.  Called after ApplyCompactResult (marker is already
+// gone) or by CancelPreCompact (marker still in live messages).
+func (m *Manager) RemoveCompactionMarker() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, msg := range m.messages {
+		if isCompactionMarker(msg) {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			m.version++
+			return
+		}
+	}
 }
 
 func (m *Manager) CompactSnapshot() CompactSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	msgs := make([]provider.Message, len(m.messages))
-	for i, msg := range m.messages {
-		msgs[i] = msg
-		msgs[i].Content = append([]provider.ContentBlock(nil), msg.Content...)
+	// Exclude the compaction marker from the snapshot — it is a boundary
+	// marker, not conversation content.  The marker (if present) is the
+	// last element of m.messages at this point.
+	msgs := make([]provider.Message, 0, len(m.messages))
+	for _, msg := range m.messages {
+		if !isCompactionMarker(msg) {
+			msgs = append(msgs, msg)
+		}
+	}
+	for i := range msgs {
+		msgs[i].Content = append([]provider.ContentBlock(nil), msgs[i].Content...)
 	}
 	return CompactSnapshot{
 		Messages:      msgs,
@@ -542,10 +603,35 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
-		// Live has fewer messages than snapshot — messages were removed
-		// (e.g. session cleared).  Stale, cannot apply.
-		return false, m.tokenCountLocked()
+
+	// Find the compaction marker in live messages.  The marker was inserted
+	// by StartPreCompact right before the snapshot was taken.  Everything
+	// after the marker is "extra" (arrived during compaction) and must be
+	// preserved.  Everything before the marker is the snapshot region and
+	// gets replaced by the summary.
+	markerIdx := -1
+	for i, msg := range m.messages {
+		if isCompactionMarker(msg) {
+			markerIdx = i
+			break
+		}
+	}
+
+	// extraStart is the index of the first message to preserve as "extra"
+	// (arrived after the snapshot was taken).
+	var extraStart int
+	if markerIdx >= 0 {
+		// Marker found — extra is everything after the marker.
+		extraStart = markerIdx + 1
+	} else {
+		// No marker — fall back to OrigLen-based logic for backward compat.
+		if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
+			return false, m.tokenCountLocked()
+		}
+		extraStart = snapshot.OrigLen
+	}
+	if extraStart > len(m.messages) {
+		extraStart = len(m.messages)
 	}
 
 	// Detect (but do NOT reject) messages that changed within the snapshot
@@ -585,12 +671,9 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		hasLiveSystem = true
 	}
 
-	// Messages appended after the snapshot are preserved as-is.
-	origEnd := snapshot.OrigLen
-	if origEnd > len(m.messages) {
-		origEnd = len(m.messages)
-	}
-	extra := append([]provider.Message(nil), m.messages[origEnd:]...)
+	// Messages appended after the marker (or after OrigLen in fallback) are
+	// preserved as-is.
+	extra := append([]provider.Message(nil), m.messages[extraStart:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
 
