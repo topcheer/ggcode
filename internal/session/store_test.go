@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1187,4 +1189,178 @@ func TestAppendMessagesBatchToDiskMixedWithSingle(t *testing.T) {
 			t.Errorf("message %d: expected %q, got %q", i, w, reloaded.Messages[i].Content[0].Text)
 		}
 	}
+}
+
+// TestMigrateMessageIDs tests that loading a JSONL file with missing message
+// IDs backfills them correctly, and that subsequent loads skip migration.
+func TestMigrateMessageIDs(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_migrate_*")
+	defer os.RemoveAll(dir)
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "ep", "model")
+	ses.Title = "Migration Test"
+	ses.Workspace = "/test"
+
+	// Write messages WITHOUT IDs directly to JSONL (simulating pre-migration file).
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+
+	// Meta record
+	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
+	// Messages without IDs
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}})
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}}})
+	f.Close()
+
+	// Load — triggers migration
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// All messages should now have IDs
+	for i, msg := range loaded.Messages {
+		if msg.ID == "" {
+			t.Fatalf("message %d has empty ID after migration", i)
+		}
+		if !strings.HasPrefix(msg.ID, "msg_") {
+			t.Fatalf("message %d ID doesn't have msg_ prefix: %s", i, msg.ID)
+		}
+	}
+
+	// Load again — should NOT trigger migration (no .migrate.tmp file)
+	loaded2, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded2.Messages) != len(loaded.Messages) {
+		t.Fatalf("second load: message count mismatch %d vs %d", len(loaded2.Messages), len(loaded.Messages))
+	}
+	// IDs should be stable across loads
+	for i := range loaded.Messages {
+		if loaded.Messages[i].ID != loaded2.Messages[i].ID {
+			t.Fatalf("message %d ID changed across loads: %s vs %s", i, loaded.Messages[i].ID, loaded2.Messages[i].ID)
+		}
+	}
+
+	// Verify no temp file left behind
+	if _, err := os.Stat(path + ".migrate.tmp"); !os.IsNotExist(err) {
+		t.Fatal("migration temp file left behind")
+	}
+}
+
+// TestMigrateOldCheckpoint tests that old checkpoint format (checkpoint_messages)
+// is converted to new format (checkpoint_summary_msg_id) during migration.
+func TestMigrateOldCheckpoint(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_cp_migrate_*")
+	defer os.RemoveAll(dir)
+
+	store, err := NewJSONLStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ses := NewSession("zai", "ep", "model")
+	ses.Title = "Checkpoint Migration"
+	ses.Workspace = "/test"
+
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	f, _ := os.Create(path)
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+
+	// Meta
+	enc.Encode(jsonlRecord{Type: "meta", SessionID: ses.ID, Title: ses.Title, Workspace: ses.Workspace})
+	// Some messages without IDs
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "old msg 1"}}}})
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "old msg 2"}}}})
+	// Old-format checkpoint WITH summary message
+	summaryMsg := provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "[Previous conversation summary]\nWe discussed testing.",
+		}},
+	}
+	enc.Encode(jsonlRecord{
+		Type:               "checkpoint",
+		CheckpointMessages: []provider.Message{summaryMsg},
+		CheckpointTokens:   5000,
+	})
+	// Post-checkpoint message without ID
+	enc.Encode(jsonlRecord{Type: "message", Message: &provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post checkpoint"}}}})
+	f.Close()
+
+	// Load — triggers migration
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// All messages should have IDs
+	for i, msg := range loaded.Messages {
+		if msg.ID == "" {
+			t.Fatalf("message %d has empty ID after migration", i)
+		}
+	}
+
+	// ContextMessages should contain the summary + post-checkpoint message
+	if len(loaded.ContextMessages) < 2 {
+		t.Fatalf("expected at least 2 context messages, got %d", len(loaded.ContextMessages))
+	}
+
+	// First context message should be the summary
+	firstMsg := loaded.ContextMessages[0]
+	if firstMsg.Role != "system" {
+		t.Fatalf("expected first context message to be system role, got %s", firstMsg.Role)
+	}
+	if !strings.Contains(firstMsg.Content[0].Text, "[Previous conversation summary]") {
+		t.Fatalf("expected first context message to be summary, got: %s", firstMsg.Content[0].Text[:min(80, len(firstMsg.Content[0].Text))])
+	}
+
+	// Verify the file on disk has new checkpoint format
+	diskF, _ := os.Open(path)
+	sc := bufio.NewScanner(diskF)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	foundNewCheckpoint := false
+	foundOldCheckpoint := false
+	for sc.Scan() {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(sc.Text()), &rec) != nil {
+			continue
+		}
+		if rec.Type == "checkpoint" {
+			if rec.CheckpointSummaryMsgID != "" {
+				foundNewCheckpoint = true
+			}
+			if len(rec.CheckpointMessages) > 0 {
+				foundOldCheckpoint = true
+			}
+		}
+	}
+	diskF.Close()
+
+	if !foundNewCheckpoint {
+		t.Fatal("new checkpoint format (checkpoint_summary_msg_id) not found after migration")
+	}
+	if foundOldCheckpoint {
+		t.Fatal("old checkpoint format (checkpoint_messages) still present after migration")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
