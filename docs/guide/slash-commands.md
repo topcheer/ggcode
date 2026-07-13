@@ -11,7 +11,11 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/resume` | Resume a specific session |
 | `/compact` | Compact conversation to save context |
 | `/clear` | Clear conversation |
+| `/context` | Show context window usage and details |
+| `/copy` | Copy conversation to clipboard |
+| `/export [path]` | Export session to file |
 | `/stats` | Open session statistics panel |
+| `/cost` | Show session token usage and estimated cost |
 | `/exit` | Exit ggcode |
 | `/restart` | Restart ggcode (preserves current session) |
 | `/update` | Check and install updates |
@@ -25,6 +29,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/impersonate [provider/model]` | Impersonate a provider/model for testing |
 | `/lang [en\|zh-CN]` | Switch interface language |
 | `/stream` | Toggle stream mode |
+| `/pc` | Open provider config panel |
 
 ## Permission & Configuration
 
@@ -32,10 +37,15 @@ Slash commands are typed directly in the chat input within the TUI.
 |---------|-------------|
 | `/mode [supervised\|plan\|auto\|bypass\|autopilot]` | Switch permission mode |
 | `/config` | Configuration management |
+| `/allow [tool]` | Permanently allow a tool (override permission policy) |
 | `/init` | Create `GGCODE.md` project memory file |
 | `/memory` | Manage project memory |
+| `/rules` | Manage ratchet rules (learned error patterns) |
 | `/undo` | Undo last file changes |
+| `/redo` | Redo previously undone file changes |
 | `/checkpoints` | Show available checkpoints |
+| `/hooks` | View configured lifecycle hooks and validation status |
+| `/cron [subcommand]` | Manage scheduled cron jobs (list, create, delete, pause, resume) |
 
 ## Tools & Integrations
 
@@ -48,6 +58,12 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/image` | Image handling |
 | `/todo` | View/manage todo list |
 | `/status` | Show current status |
+| `/files` | Open file browser |
+| `/inspector [filter]` | Open inspector panel (view tool calls, results, logs) |
+| `/diff [file]` | Show git diff in chat |
+| `/edit` | Edit last user message and resubmit |
+| `/retry` | Retry last agent turn |
+| `/regenerate` | Regenerate last response |
 
 ## LAN Chat
 
@@ -69,7 +85,7 @@ Slash commands are typed directly in the chat input within the TUI.
 
 | Command | Description |
 |---------|-------------|
-| `/share` / `/tunnel` | Start sharing session via tunnel |
+| `/tunnel` | Start sharing session via mobile relay tunnel |
 | `/unshare` | Stop sharing |
 
 ## Advanced
@@ -80,6 +96,10 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/knight` | Knight auto-evolution |
 | `/tmux` | Manage tmux session |
 | `/bug` | Report a bug |
+| `/review [file]` | Review code changes (harness review) |
+| `/reflect` | Trigger agent self-reflection on recent runs |
+| `/branch` / `/fork` | Branch/fork current session |
+| `/pc` | Open provider configuration panel |
 
 ## IM-Specific Commands
 
