@@ -464,6 +464,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
+	// Wire runtime tool to daemon's runtime status
+	if rt, ok := registry.Get("runtime"); ok {
+		if rTool, ok := rt.(tool.RuntimeTool); ok {
+			rTool.Provider = &daemonRuntimeProvider{
+				ses:    ses,
+				cfg:    cfg,
+				imMgr:  imMgr,
+				bridge: bridge,
+			}
+			registry.Unregister("runtime")
+			registry.Register(rTool)
+		}
+	}
+
 	// Cron tools — enqueue fires the prompt as a user message via the
 	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
 	// skip the firing instead of interrupting.
@@ -2031,4 +2045,84 @@ func (s *daemonModeSwitcher) RememberMode(mode permission.PermissionMode) permis
 
 func (s *daemonModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
 	return fallback
+}
+
+// daemonRuntimeProvider implements tool.RuntimeStatusProvider for daemon mode.
+type daemonRuntimeProvider struct {
+	ses    *session.Session
+	cfg    *config.Config
+	imMgr  *im.Manager
+	bridge *im.DaemonBridge
+}
+
+func (p *daemonRuntimeProvider) RuntimeSessionID() string {
+	if p.ses != nil {
+		return p.ses.ID
+	}
+	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimePermissionMode() string {
+	if p.ses != nil && p.ses.PermissionMode != "" {
+		return p.ses.PermissionMode
+	}
+	return p.cfg.DefaultMode
+}
+
+func (p *daemonRuntimeProvider) RuntimeVendor() string {
+	if p.cfg != nil {
+		return p.cfg.Vendor
+	}
+	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimeEndpoint() string {
+	if p.cfg != nil {
+		return p.cfg.Endpoint
+	}
+	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimeModel() string {
+	if p.cfg != nil {
+		return p.cfg.Model
+	}
+	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimeLanguage() string {
+	if p.cfg != nil {
+		return p.cfg.Language
+	}
+	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
+	if p.imMgr == nil {
+		return nil
+	}
+	snap := p.imMgr.Snapshot()
+	channels := make(map[string]string)
+	for _, b := range snap.CurrentBindings {
+		channels[b.Adapter] = b.ChannelID
+	}
+	var result []tool.RuntimeIMAdapterInfo
+	for _, a := range snap.Adapters {
+		result = append(result, tool.RuntimeIMAdapterInfo{
+			Name:     a.Name,
+			Platform: string(a.Platform),
+			Online:   a.Healthy,
+			Muted:    a.Status == "muted",
+			Channel:  channels[a.Name],
+		})
+	}
+	return result
+}
+
+func (p *daemonRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
+	if p.bridge == nil {
+		return tool.RuntimeMobileInfo{}
+	}
+	// Daemon doesn't have a mobile tunnel — return empty.
+	return tool.RuntimeMobileInfo{}
 }

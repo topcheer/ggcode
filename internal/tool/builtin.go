@@ -92,6 +92,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// IM (manager injected post-registration via SetManager)
 		IMTool{},
 
+		// Runtime status (provider injected post-registration via SetRuntimeStatusProvider)
+		RuntimeTool{},
+
 		// Screenshot
 		ScreenshotTool{},
 	)

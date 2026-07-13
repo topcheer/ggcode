@@ -829,6 +829,31 @@ func (a *App) SetModelLimits(vendor, endpoint, model string, contextWindow, maxT
 	return nil
 }
 
+// GetModelLimits returns all per-model limit overrides for the active endpoint.
+func (a *App) GetModelLimits() []wailskit.ModelLimitInfo {
+	if a.chat == nil {
+		return nil
+	}
+	return a.chat.GetModelLimits()
+}
+
+// GetSessionLimits returns the current session's context_window and max_tokens.
+func (a *App) GetSessionLimits() wailskit.SessionLimitInfo {
+	if a.chat == nil {
+		return wailskit.SessionLimitInfo{}
+	}
+	return a.chat.GetSessionLimits()
+}
+
+// SetSessionLimits updates the current session's context_window and max_tokens.
+// A value of 0 means "auto" (falls back to endpoint/per-model config).
+func (a *App) SetSessionLimits(contextWindow, maxTokens int) error {
+	if a.chat == nil {
+		return fmt.Errorf("chat bridge not initialized")
+	}
+	return a.chat.SetSessionLimits(contextWindow, maxTokens)
+}
+
 // GetAnthropicOAuthStatus returns whether the user is logged in via Anthropic OAuth.
 func (a *App) GetAnthropicOAuthStatus() bool {
 	return wailskit.AnthropicOAuthStatus()
@@ -1265,6 +1290,7 @@ func (a *App) startIMAdapters() {
 		// Wire IM tool to the runtime manager
 		a.chat.SetIMManager(im.NewToolManagerAdapter(a.imManager))
 	}
+	a.chat.SetRuntimeStatusProvider()
 
 	a.imManager.SetBridge(&im.InteractiveTextBridge{
 		Submit: func(_ context.Context, text string, adapterName string) error {

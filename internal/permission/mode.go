@@ -102,7 +102,7 @@ func IsReadOnlyTool(name string) bool {
 		"web_fetch", "web_search", "browser", "mobile_device",
 		"task_list", "task_get", "plan_status",
 		"cron_list", "cron_get", "list_commands", "read_command_output",
-		"wait_command", "get_config":
+		"wait_command", "get_config", "runtime":
 		return true
 	}
 	// All MCP tools are allowed in plan mode (they have their own access control)
@@ -118,7 +118,7 @@ func IsReadOnlyTool(name string) bool {
 // external services (LAN Chat, IM) or are purely informational.
 func IsAlwaysAllowedTool(name string) bool {
 	switch name {
-	case "lanchat", "switch_mode", "im":
+	case "lanchat", "switch_mode", "im", "runtime":
 		return true
 	}
 	return false

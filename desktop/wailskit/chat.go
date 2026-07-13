@@ -1408,6 +1408,112 @@ func (b *ChatBridge) SetIMManager(mgr tool.IMManager) {
 	}
 }
 
+// SetRuntimeStatusProvider injects the runtime status provider into the
+// runtime tool so the LLM can query session ID, IM adapters, mobile status.
+func (b *ChatBridge) SetRuntimeStatusProvider() {
+	if rt, ok := b.registry.Get("runtime"); ok {
+		if rTool, ok := rt.(tool.RuntimeTool); ok {
+			rTool.Provider = &desktopRuntimeProvider{bridge: b}
+			b.registry.Unregister("runtime")
+			b.registry.Register(rTool)
+		}
+	}
+}
+
+// desktopRuntimeProvider implements tool.RuntimeStatusProvider for desktop.
+type desktopRuntimeProvider struct {
+	bridge *ChatBridge
+}
+
+func (p *desktopRuntimeProvider) RuntimeSessionID() string {
+	p.bridge.mu.Lock()
+	defer p.bridge.mu.Unlock()
+	if p.bridge.currentSes != nil {
+		return p.bridge.currentSes.ID
+	}
+	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimePermissionMode() string {
+	p.bridge.mu.Lock()
+	defer p.bridge.mu.Unlock()
+	if p.bridge.currentSes != nil && p.bridge.currentSes.PermissionMode != "" {
+		return p.bridge.currentSes.PermissionMode
+	}
+	return "supervised"
+}
+
+func (p *desktopRuntimeProvider) RuntimeVendor() string {
+	if p.bridge.cfg != nil {
+		return p.bridge.cfg.Vendor
+	}
+	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimeEndpoint() string {
+	if p.bridge.cfg != nil {
+		return p.bridge.cfg.Endpoint
+	}
+	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimeModel() string {
+	if p.bridge.cfg != nil {
+		return p.bridge.cfg.Model
+	}
+	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimeLanguage() string {
+	if p.bridge.cfg != nil {
+		return p.bridge.cfg.Language
+	}
+	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
+	// IM manager is injected via SetIMManager as tool.IMManager interface.
+	// We can access it through the tool registry's im tool.
+	if rt, ok := p.bridge.registry.Get("im"); ok {
+		if imTool, ok := rt.(tool.IMTool); ok && imTool.Manager != nil {
+			snap := imTool.Manager.Snapshot()
+			channels := make(map[string]string)
+			for _, b := range snap.CurrentBindings {
+				channels[b.Adapter] = b.ChannelID
+			}
+			var result []tool.RuntimeIMAdapterInfo
+			for _, a := range snap.Adapters {
+				result = append(result, tool.RuntimeIMAdapterInfo{
+					Name:     a.Name,
+					Platform: string(a.Platform),
+					Online:   a.Healthy,
+					Muted:    a.Status == "muted",
+					Channel:  channels[a.Name],
+				})
+			}
+			return result
+		}
+	}
+	return nil
+}
+
+func (p *desktopRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
+	p.bridge.mu.Lock()
+	defer p.bridge.mu.Unlock()
+	var info tool.RuntimeMobileInfo
+	if p.bridge.tunnelHost != nil {
+		if broker := p.bridge.tunnelHost.OnlineBroker(); broker != nil {
+			info.Connected = broker.SessionID() != ""
+			info.SessionID = broker.SessionID()
+		}
+		if shareInfo := p.bridge.tunnelHost.GetShareInfo(); shareInfo != nil {
+			info.RelayURL = shareInfo.ConnectURL
+			info.ConnectCode = shareInfo.RoomID
+		}
+	}
+	return info
+}
+
 func (b *ChatBridge) StartMCPOAuth(ctx context.Context, serverName string, openURL func(string) error) (*MCPOAuthStartResult, error) {
 	if b == nil || b.mcpManager == nil {
 		return nil, fmt.Errorf("MCP manager not initialized")

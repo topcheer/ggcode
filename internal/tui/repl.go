@@ -284,6 +284,104 @@ func (r *REPL) SetSkillsChangedHook(hook func()) {
 	r.skillsChangedHook = hook
 }
 
+// SetRuntimeStatusProvider injects the runtime status provider into the
+// runtime tool so the LLM can query session ID, IM adapters, mobile status, etc.
+func (r *REPL) SetRuntimeStatusProvider() {
+	if r.agent != nil {
+		if tools := r.agent.ToolRegistry(); tools != nil {
+			if t, ok := tools.Get("runtime"); ok {
+				if rt, ok := t.(tool.RuntimeTool); ok {
+					rt.Provider = &tuiRuntimeProvider{repl: r}
+					tools.Unregister("runtime")
+					tools.Register(rt)
+				}
+			}
+		}
+	}
+}
+
+// tuiRuntimeProvider implements tool.RuntimeStatusProvider for the TUI.
+type tuiRuntimeProvider struct {
+	repl *REPL
+}
+
+func (p *tuiRuntimeProvider) RuntimeSessionID() string {
+	if p.repl.model.session != nil {
+		return p.repl.model.session.ID
+	}
+	return ""
+}
+
+func (p *tuiRuntimeProvider) RuntimePermissionMode() string {
+	return p.repl.model.mode.String()
+}
+
+func (p *tuiRuntimeProvider) RuntimeVendor() string {
+	if p.repl.cfg != nil {
+		return p.repl.cfg.Vendor
+	}
+	return ""
+}
+
+func (p *tuiRuntimeProvider) RuntimeEndpoint() string {
+	if p.repl.cfg != nil {
+		return p.repl.cfg.Endpoint
+	}
+	return ""
+}
+
+func (p *tuiRuntimeProvider) RuntimeModel() string {
+	if p.repl.cfg != nil {
+		return p.repl.cfg.Model
+	}
+	return ""
+}
+
+func (p *tuiRuntimeProvider) RuntimeLanguage() string {
+	if p.repl.cfg != nil {
+		return p.repl.cfg.Language
+	}
+	return ""
+}
+
+func (p *tuiRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
+	if p.repl.model.imManager == nil {
+		return nil
+	}
+	snap := p.repl.model.imManager.Snapshot()
+	// Build adapter name → channel map from bindings
+	channels := make(map[string]string)
+	for _, b := range snap.CurrentBindings {
+		channels[b.Adapter] = b.ChannelID
+	}
+	var result []tool.RuntimeIMAdapterInfo
+	for _, a := range snap.Adapters {
+		result = append(result, tool.RuntimeIMAdapterInfo{
+			Name:     a.Name,
+			Platform: string(a.Platform),
+			Online:   a.Healthy,
+			Muted:    a.Status == "muted",
+			Channel:  channels[a.Name],
+		})
+	}
+	return result
+}
+
+func (p *tuiRuntimeProvider) RuntimeMobile() tool.RuntimeMobileInfo {
+	var info tool.RuntimeMobileInfo
+	if p.repl.model.tunnelSession != nil {
+		info.Connected = p.repl.model.tunnelBroker != nil && p.repl.model.tunnelBroker.SessionID() != ""
+		if ti := p.repl.model.tunnelSession.Info(); ti != nil {
+			info.RelayURL = ti.ConnectURL
+			info.ConnectCode = ti.RoomID
+		}
+		if p.repl.model.tunnelBroker != nil {
+			info.SessionID = p.repl.model.tunnelBroker.SessionID()
+		}
+	}
+	return info
+}
+
 func (r *REPL) SetIMManager(mgr *im.Manager) {
 	r.imManager = mgr
 	r.model.SetIMManager(mgr)

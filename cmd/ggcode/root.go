@@ -816,6 +816,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		repl.SetIMManager(imMgr)
 	}
+	repl.SetRuntimeStatusProvider()
 	trace.Mark("setup im")
 
 	if execPath, err := os.Executable(); err == nil {
