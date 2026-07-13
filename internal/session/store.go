@@ -856,7 +856,42 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 	}
 
-	// Apply tunnel events with a cap to bound memory and file size.
+	// Backfill missing IDs for ContextMessages and persist to JSONL.
+	// This ensures checkpoint restore can find messages by ID even for
+	// sessions that were created before the msgID feature.
+	if len(ses.ContextMessages) > 0 {
+		needsID := false
+		for i := range ses.ContextMessages {
+			if ses.ContextMessages[i].ID == "" {
+				needsID = true
+				break
+			}
+		}
+		if needsID {
+			// Build a set of IDs to update in JSONL.
+			updates := make(map[string]provider.Message) // fingerprint -> msg with ID
+			for i := range ses.ContextMessages {
+				if ses.ContextMessages[i].ID == "" {
+					ses.ContextMessages[i].ID = newSessionMessageID()
+					fp := messageFingerprint(&ses.ContextMessages[i])
+					updates[fp] = ses.ContextMessages[i]
+				}
+			}
+			// Also update ses.Messages so rendering shows the same IDs.
+			for i := range ses.Messages {
+				if ses.Messages[i].ID == "" {
+					fp := messageFingerprint(&ses.Messages[i])
+					if updated, ok := updates[fp]; ok {
+						ses.Messages[i].ID = updated.ID
+					}
+				}
+			}
+			// Rewrite JSONL with backfilled IDs for matching messages.
+			s.backfillIDs(ses.ID, updates)
+		}
+
+		// Apply tunnel events with a cap to bound memory and file size.
+	}
 	if len(postCPTunnelEvs) > MaxTunnelEvents {
 		postCPTunnelEvs = postCPTunnelEvs[len(postCPTunnelEvs)-MaxTunnelEvents:]
 	}
@@ -1885,6 +1920,71 @@ func messageFingerprint(msg *provider.Message) string {
 		sb.WriteByte(';')
 	}
 	return sb.String()
+}
+
+// backfillIDs rewrites the JSONL file, adding IDs to message records
+// whose fingerprint matches entries in the updates map.
+func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.Message) {
+	path := s.sessionPath(sessionID)
+
+	f, err := os.Open(path)
+	if err != nil {
+		debug.Log("session", "backfillIDsAsync: open failed: %v", err)
+		return
+	}
+
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	f.Close()
+	if err := sc.Err(); err != nil {
+		debug.Log("session", "backfillIDsAsync: scan failed: %v", err)
+		return
+	}
+
+	changed := false
+	for i, line := range lines {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type != "message" || rec.Message == nil || rec.Message.ID != "" {
+			continue
+		}
+		fp := messageFingerprint(rec.Message)
+		if updated, ok := updates[fp]; ok {
+			rec.Message.ID = updated.ID
+			if data, err := json.Marshal(rec); err == nil {
+				lines[i] = string(data)
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return
+	}
+
+	tmp := path + ".backfill.tmp"
+	dstF, err := os.Create(tmp)
+	if err != nil {
+		debug.Log("session", "backfillIDsAsync: create temp failed: %v", err)
+		return
+	}
+	for _, line := range lines {
+		dstF.WriteString(line + "\n")
+	}
+	dstF.Close()
+
+	if err := os.Rename(tmp, path); err != nil {
+		debug.Log("session", "backfillIDsAsync: rename failed: %v", err)
+		os.Remove(tmp)
+		return
+	}
+	debug.Log("session", "backfillIDsAsync: backfilled IDs in session %s", sessionID)
 }
 
 // dedupMessageRecords removes duplicate message records, keeping only the
