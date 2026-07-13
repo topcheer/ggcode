@@ -1375,17 +1375,17 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	store := b.sessionStore
 	b.mu.Unlock()
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		ag.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+		ag.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
 			b.mu.Lock()
 			currentSes := b.currentSes
 			b.mu.Unlock()
 			if currentSes == nil {
 				return
 			}
-			if err := jsonlStore.AppendCheckpointToDisk(currentSes, messages, tokenCount); err != nil {
+			if err := jsonlStore.AppendCheckpointToDisk(currentSes, summaryMsgID, tokenCount); err != nil {
 				log.Printf("[chat] checkpoint save failed: %v", err)
 			} else {
-				log.Printf("[chat] checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+				log.Printf("[chat] checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
 			}
 		})
 	}

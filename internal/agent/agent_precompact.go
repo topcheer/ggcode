@@ -116,8 +116,6 @@ func isRetryableCompactError(err error) bool {
 type snapshotCompactManager interface {
 	CompactSnapshot() ctxpkg.CompactSnapshot
 	ApplyCompactResult(ctxpkg.CompactSnapshot, ctxpkg.CompactResult) (bool, int)
-	InsertCompactionMarker()
-	RemoveCompactionMarker()
 }
 
 // PreCompactStatus is a UI-friendly snapshot of any in-flight pre-compact.
@@ -216,7 +214,6 @@ func (a *Agent) StartPreCompact() {
 	// survives any message additions/removals during the background
 	// compaction goroutine and allows ApplyCompactResult to precisely
 	// identify which messages are "extra" (arrived during compaction).
-	snapshotMgr.InsertCompactionMarker()
 	snapshot := snapshotMgr.CompactSnapshot()
 
 	// Use the agent's shutdown context as base so precompact is cancelled
@@ -324,7 +321,6 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			}
 			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
 			// Remove the compaction marker — compaction failed, marker is stale.
-			snapshotMgr.RemoveCompactionMarker()
 			if onEvent != nil {
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... result discarded (messages changed)]"})
 			}
@@ -360,9 +356,6 @@ func (a *Agent) CancelPreCompact() {
 	}
 	// Remove the compaction marker from live messages — the compaction
 	// is cancelled, so the marker is no longer needed.
-	if snapshotMgr, ok := a.contextManager.(snapshotCompactManager); ok {
-		snapshotMgr.RemoveCompactionMarker()
-	}
 	debug.Log("precompact", "CANCELLED externally")
 }
 

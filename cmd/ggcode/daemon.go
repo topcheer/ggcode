@@ -424,11 +424,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 
 	// Wire checkpoint handler — persist compacted state after summarize
-	ag.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
-		if err := store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
+	ag.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
+		if err := store.AppendCheckpoint(ses, summaryMsgID, tokenCount); err != nil {
 			debug.Log("daemon", "checkpoint save failed: %v", err)
 		} else {
-			debug.Log("daemon", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+			debug.Log("daemon", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
 		}
 	})
 

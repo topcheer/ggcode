@@ -9,9 +9,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
+
+// newMessageID generates a unique message identifier: "msg_" + UUID.
+func newMessageID() string {
+	return "msg_" + uuid.New().String()
+}
 
 // ContextManager manages conversation history, tracking tokens and auto-summarizing.
 //
@@ -24,6 +30,8 @@ type ContextManager interface {
 	// MessagesAndTokenCount returns both values under a single lock,
 	// guaranteeing a consistent snapshot.
 	MessagesAndTokenCount() ([]provider.Message, int)
+	// SummaryMsgID returns the ID of the most recent summary message, or "".
+	SummaryMsgID() string
 	ContextWindow() int
 	SetContextWindow(n int)
 	SetOutputReserve(n int)
@@ -44,25 +52,11 @@ type ContextManager interface {
 type CompactSnapshot struct {
 	Messages      []provider.Message
 	OrigLen       int
+	LastMsgID     string // ID of the last message in Messages, for ApplyCompactResult positioning
 	ContextWindow int
 	OutputReserve int
 	TodoPath      string
 	Version       int64
-}
-
-// compactionMarkerSentinel is a unique text placed in a system-role message
-// inserted into m.messages to mark the boundary between the snapshot region
-// and messages that arrive during background compaction.  It is never sent
-// to the LLM (filtered by isCompactionMarker / Messages and friends).
-const compactionMarkerSentinel = "\x00\x00COMPACTION_MARKER\x00\x00"
-
-// isCompactionMarker reports whether a message is the compaction boundary
-// marker inserted by StartPreCompact.
-func isCompactionMarker(msg provider.Message) bool {
-	if msg.Role != "system" || len(msg.Content) != 1 {
-		return false
-	}
-	return msg.Content[0].Type == "text" && msg.Content[0].Text == compactionMarkerSentinel
 }
 
 // CompactResult is the output of compacting a CompactSnapshot.
@@ -155,6 +149,9 @@ func (m *Manager) SetProvider(p provider.Provider) {
 func (m *Manager) Add(msg provider.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if msg.ID == "" {
+		msg.ID = newMessageID()
+	}
 	msgTokens := m.countTokens(msg)
 	m.messages = append(m.messages, msg)
 	m.runAdded = append(m.runAdded, msg)
@@ -476,76 +473,51 @@ func (m *Manager) AddedSinceRunStart() []provider.Message {
 func (m *Manager) Messages() []provider.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]provider.Message, 0, len(m.messages))
+	out := make([]provider.Message, len(m.messages))
+	copy(out, m.messages)
+	return out
+}
+
+// SummaryMsgID returns the ID of the most recent summary message in context,
+// or empty string if no summary exists. Used by checkpoint to record which
+// message to start restoring from.
+func (m *Manager) SummaryMsgID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, msg := range m.messages {
-		if !isCompactionMarker(msg) {
-			out = append(out, msg)
+		if msg.Role == "system" && len(msg.Content) > 0 && msg.Content[0].Type == "text" {
+			if strings.Contains(msg.Content[0].Text, "[Previous conversation summary]") {
+				return msg.ID
+			}
 		}
 	}
-	return out
+	return ""
 }
 
 func (m *Manager) MessagesAndTokenCount() ([]provider.Message, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]provider.Message, 0, len(m.messages))
-	for _, msg := range m.messages {
-		if !isCompactionMarker(msg) {
-			out = append(out, msg)
-		}
-	}
+	out := make([]provider.Message, len(m.messages))
+	copy(out, m.messages)
 	return out, m.tokenCountLocked()
-}
-
-// InsertCompactionMarker appends a compaction boundary marker to m.messages.
-// Called by StartPreCompact right before taking a snapshot.  The marker is
-// never sent to the LLM (filtered by Messages / MessagesAndTokenCount).
-func (m *Manager) InsertCompactionMarker() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.messages = append(m.messages, provider.Message{
-		Role: "system",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: compactionMarkerSentinel,
-		}},
-	})
-	m.version++
-}
-
-// RemoveCompactionMarker finds and removes the compaction marker from
-// m.messages if present.  Called after ApplyCompactResult (marker is already
-// gone) or by CancelPreCompact (marker still in live messages).
-func (m *Manager) RemoveCompactionMarker() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i, msg := range m.messages {
-		if isCompactionMarker(msg) {
-			m.messages = append(m.messages[:i], m.messages[i+1:]...)
-			m.version++
-			return
-		}
-	}
 }
 
 func (m *Manager) CompactSnapshot() CompactSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Exclude the compaction marker from the snapshot — it is a boundary
-	// marker, not conversation content.  The marker (if present) is the
-	// last element of m.messages at this point.
-	msgs := make([]provider.Message, 0, len(m.messages))
-	for _, msg := range m.messages {
-		if !isCompactionMarker(msg) {
-			msgs = append(msgs, msg)
-		}
+	msgs := make([]provider.Message, len(m.messages))
+	for i, msg := range m.messages {
+		msgs[i] = msg
+		msgs[i].Content = append([]provider.ContentBlock(nil), msg.Content...)
 	}
-	for i := range msgs {
-		msgs[i].Content = append([]provider.ContentBlock(nil), msgs[i].Content...)
+	lastID := ""
+	if len(msgs) > 0 {
+		lastID = msgs[len(msgs)-1].ID
 	}
 	return CompactSnapshot{
 		Messages:      msgs,
 		OrigLen:       len(msgs),
+		LastMsgID:     lastID,
 		ContextWindow: m.contextWindow,
 		OutputReserve: m.outputReserve,
 		TodoPath:      m.todoPath,
@@ -604,31 +576,36 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Find the compaction marker in live messages.  The marker was inserted
-	// by StartPreCompact right before the snapshot was taken.  Everything
-	// after the marker is "extra" (arrived during compaction) and must be
-	// preserved.  Everything before the marker is the snapshot region and
-	// gets replaced by the summary.
-	markerIdx := -1
-	for i, msg := range m.messages {
-		if isCompactionMarker(msg) {
-			markerIdx = i
-			break
+	// Find the last message from the snapshot in live messages using its ID.
+	// Everything after that message is "extra" (arrived during compaction)
+	// and must be preserved. Everything before gets replaced by the summary.
+	extraStart := 0
+	if snapshot.LastMsgID != "" {
+		// Scan for the last snapshot message by ID.
+		foundIdx := -1
+		for i, msg := range m.messages {
+			if msg.ID == snapshot.LastMsgID {
+				foundIdx = i
+			}
 		}
-	}
-
-	// extraStart is the index of the first message to preserve as "extra"
-	// (arrived after the snapshot was taken).
-	var extraStart int
-	if markerIdx >= 0 {
-		// Marker found — extra is everything after the marker.
-		extraStart = markerIdx + 1
+		if foundIdx >= 0 {
+			extraStart = foundIdx + 1
+		} else {
+			// LastMsgID not found — messages were removed during compaction.
+			// Use OrigLen as fallback (best effort).
+			if snapshot.OrigLen >= 0 && snapshot.OrigLen <= len(m.messages) {
+				extraStart = snapshot.OrigLen
+			} else {
+				extraStart = len(m.messages)
+			}
+		}
 	} else {
-		// No marker — fall back to OrigLen-based logic for backward compat.
-		if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
-			return false, m.tokenCountLocked()
+		// No LastMsgID (old snapshot) — fall back to OrigLen.
+		if snapshot.OrigLen >= 0 && snapshot.OrigLen <= len(m.messages) {
+			extraStart = snapshot.OrigLen
+		} else {
+			extraStart = len(m.messages)
 		}
-		extraStart = snapshot.OrigLen
 	}
 	if extraStart > len(m.messages) {
 		extraStart = len(m.messages)
@@ -826,21 +803,27 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	if plan.hasSystem {
 		newMsgs = append(newMsgs, plan.systemMsg)
 	}
-	newMsgs = append(newMsgs, provider.Message{
+	// Summary message gets a unique ID so checkpoint can reference it.
+	// It will be persisted to JSONL by the caller via AppendMessageToDisk.
+	summaryMsg := provider.Message{
+		ID:   newMessageID(),
 		Role: "system",
 		Content: []provider.ContentBlock{{
 			Type: "text",
 			Text: fmt.Sprintf("[Previous conversation summary]\n%s", summaryText),
 		}},
-	})
+	}
+	newMsgs = append(newMsgs, summaryMsg)
 	if stateText != "" {
-		newMsgs = append(newMsgs, provider.Message{
+		stateMsg := provider.Message{
+			ID:   newMessageID(),
 			Role: "system",
 			Content: []provider.ContentBlock{{
 				Type: "text",
 				Text: stateText,
 			}},
-		})
+		}
+		newMsgs = append(newMsgs, stateMsg)
 	}
 	newMsgs = append(newMsgs, extraMsgs...)
 

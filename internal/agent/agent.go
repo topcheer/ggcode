@@ -50,7 +50,7 @@ type Agent struct {
 	onApproval                 ApprovalFunc
 	onUsage                    func(usage provider.TokenUsage)
 	onMetric                   func(metrics.MetricEvent)
-	onCheckpoint               func(messages []provider.Message, tokenCount int)
+	onCheckpoint               func(summaryMsgID string, tokenCount int)
 	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
 	onRunResult                runResultHandler
 	hookConfig                 hooks.HookConfig
@@ -507,7 +507,7 @@ func (a *Agent) GetHookConfig() hooks.HookConfig {
 
 // SetCheckpointHandler sets a callback invoked after summarize compaction
 // to persist the compacted message state.
-func (a *Agent) SetCheckpointHandler(fn func(messages []provider.Message, tokenCount int)) {
+func (a *Agent) SetCheckpointHandler(fn func(summaryMsgID string, tokenCount int)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onCheckpoint = fn

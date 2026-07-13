@@ -44,7 +44,14 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	a.lastCheckpointMessageCount = len(msgs)
 	tokenCount := a.contextManager.TokenCount()
 	debug.Log("agent", "fallback checkpoint: %d messages, %d tokens (compaction may have failed)", len(msgs), tokenCount)
-	fn(msgs, tokenCount)
+	// Use first message ID as summary_msg_id for fallback (best effort).
+	fallbackID := ""
+	if len(msgs) > 0 {
+		fallbackID = msgs[0].ID
+	}
+	if fallbackID != "" {
+		fn(fallbackID, tokenCount)
+	}
 }
 
 // MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
@@ -346,8 +353,13 @@ func (a *Agent) maybeSaveCheckpoint() {
 		return
 	}
 
-	msgs, tokenCount := a.contextManager.MessagesAndTokenCount()
-	fn(msgs, tokenCount)
+	summaryMsgID := a.contextManager.SummaryMsgID()
+	tokens := a.contextManager.TokenCount()
+	if summaryMsgID == "" {
+		debug.Log("checkpoint", "maybeSaveCheckpoint: no summary message found, skipping")
+		return
+	}
+	fn(summaryMsgID, tokens)
 }
 
 // SaveCheckpoint persists the current context as a checkpoint.  Called

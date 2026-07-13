@@ -155,8 +155,11 @@ func NewAgentLoop(
 	})
 
 	// --- Checkpoint handler: persist compacted context to session ---
-	a.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
-		acpMsgs := providerToACPMessage(messages)
+	a.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
+		// ACP uses its own session storage, not JSONL checkpoints.
+		// Save full message list to the ACP session.
+		msgs, _ := a.ContextManager().MessagesAndTokenCount()
+		acpMsgs := providerToACPMessage(msgs)
 		al.session.ReplaceConversation(acpMsgs)
 		if err := al.session.Save(al.session.SaveDir()); err != nil {
 			debug.Log("acp", "checkpoint save failed: %v", err)

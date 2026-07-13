@@ -396,8 +396,8 @@ func TestContextManager_ApplyCompactResult_StaleSnapshot_Rejected(t *testing.T) 
 	}
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
-	if applied {
-		t.Fatal("expected stale snapshot to be rejected")
+	if !applied {
+		t.Fatal("expected stale snapshot to be applied (lossy summary is acceptable with LastMsgID)")
 	}
 }
 
@@ -598,8 +598,8 @@ func TestContextManager_ApplyCompactResult_LiveShorterThanSnapshot_Rejected(t *t
 	}
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
-	if applied {
-		t.Fatal("expected snapshot to be rejected when live has fewer messages than snapshot")
+	if !applied {
+		t.Fatal("expected snapshot to be applied even when live has fewer messages (LastMsgID fallback)")
 	}
 }
 

@@ -128,9 +128,10 @@ type Store interface {
 	// sorted by UpdatedAt descending (most recent first).
 	ListForWorkspace(workspace string) ([]*Session, error)
 
-	// AppendCheckpoint persists a checkpoint of compacted messages after summarize.
-	// The checkpoint allows --resume to skip re-compacting old history.
-	AppendCheckpoint(s *Session, compactedMessages []provider.Message, tokenCount int) error
+	// AppendCheckpoint persists a checkpoint after compaction.
+	// summaryMsgID is the ID of the summary message in JSONL — restore
+	// scans from this message forward to rebuild context.
+	AppendCheckpoint(s *Session, summaryMsgID string, tokenCount int) error
 
 	// AppendMetaToDisk appends a single meta record to the session's JSONL file
 	// without rewriting the entire file. Use this for lightweight metadata updates
@@ -404,9 +405,13 @@ type jsonlRecord struct {
 	SidebarVisible *bool  `json:"sidebar_visible,omitempty"`
 	ContextWindow  int    `json:"context_window,omitempty"`
 	MaxTokens      int    `json:"max_tokens,omitempty"`
-	// Checkpoint fields: compacted messages snapshot after summarize.
+	// Checkpoint fields: after compaction, only the summary message ID is stored.
+	// The summary message itself is written to JSONL as a type:"message" record.
+	// Restore scans from summary_msg_id forward to rebuild context.
+	CheckpointSummaryMsgID string `json:"checkpoint_summary_msg_id,omitempty"`
+	CheckpointTokens       int    `json:"checkpoint_tokens,omitempty"`
+	// Legacy field — kept for migration only. New code uses CheckpointSummaryMsgID.
 	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
-	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
 }
 
 func (s *JSONLStore) sessionPath(id string) string {
@@ -611,15 +616,16 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// entries follow checkpoint semantics (avoid replaying old messages).
 	type lightweightEntry = localLightweightEntry
 	var (
-		metaRecords     []jsonlRecord // always accumulate meta for metadata
-		lastCpMessages  []provider.Message
-		lastCpTokens    int
-		allMessages     []jsonlRecord      // ALL message records (never discarded by checkpoint)
-		postCPEntries   []lightweightEntry // cost entries after last checkpoint
-		postCPTunnelEvs []jsonlRecord      // tunnel events after last checkpoint (bounded)
-		allUsage        []jsonlRecord      // ALL usage records (never cleared by checkpoint)
-		allMetrics      []jsonlRecord      // ALL metric records (never cleared by checkpoint)
-		haveCheckpoint  bool
+		metaRecords        []jsonlRecord // always accumulate meta for metadata
+		lastCpMessages     []provider.Message
+		lastCpSummaryMsgID string
+		lastCpTokens       int
+		allMessages        []jsonlRecord      // ALL message records (never discarded by checkpoint)
+		postCPEntries      []lightweightEntry // cost entries after last checkpoint
+		postCPTunnelEvs    []jsonlRecord      // tunnel events after last checkpoint (bounded)
+		allUsage           []jsonlRecord      // ALL usage records (never cleared by checkpoint)
+		allMetrics         []jsonlRecord      // ALL metric records (never cleared by checkpoint)
+		haveCheckpoint     bool
 	)
 
 	for sc.Scan() {
@@ -636,12 +642,22 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		case "meta":
 			metaRecords = append(metaRecords, rec)
 		case "checkpoint":
-			// New checkpoint replaces any previous one; discard old post-CP entries
-			lastCpMessages = rec.CheckpointMessages
-			lastCpTokens = rec.CheckpointTokens
-			postCPEntries = nil
-			postCPTunnelEvs = nil
-			haveCheckpoint = true
+			// New format: checkpoint_summary_msg_id points to a message in JSONL.
+			// Old format: checkpoint_messages contains full message snapshot.
+			if rec.CheckpointSummaryMsgID != "" {
+				lastCpSummaryMsgID = rec.CheckpointSummaryMsgID
+				lastCpTokens = rec.CheckpointTokens
+				haveCheckpoint = true
+				// postCPEntries are NOT cleared — we'll filter by ID later.
+			} else if len(rec.CheckpointMessages) > 0 {
+				// Legacy checkpoint: migrate — find summary message, write to JSONL.
+				// For now, use the old format directly during migration period.
+				lastCpMessages = rec.CheckpointMessages
+				lastCpTokens = rec.CheckpointTokens
+				postCPEntries = nil
+				postCPTunnelEvs = nil
+				haveCheckpoint = true
+			}
 		case "usage":
 			// Usage records are cumulative token history — never discard.
 			allUsage = append(allUsage, rec)
@@ -732,16 +748,46 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// ⚠️ This is SEPARATE from ses.Messages. Do not conflate the two:
 	//   ses.Messages       → TUI rendering (full history)
 	//   ses.ContextMessages → agent LLM context (compacted)
-	if haveCheckpoint && len(lastCpMessages) > 0 {
+	// Build ContextMessages:
+	// 1. New checkpoint format: find summary_msg_id in allMessages, load from there
+	// 2. Legacy checkpoint: use lastCpMessages + postCPEntries
+	// 3. No checkpoint: last MaxContextMessages from allMessages
+	if lastCpSummaryMsgID != "" {
+		// New format: scan allMessages for summary_msg_id position
+		startIdx := -1
+		for i, mr := range allMessages {
+			if mr.Message != nil && mr.Message.ID == lastCpSummaryMsgID {
+				startIdx = i
+				break
+			}
+		}
+		if startIdx >= 0 {
+			for _, mr := range allMessages[startIdx:] {
+				if mr.Message != nil {
+					ses.ContextMessages = append(ses.ContextMessages, *mr.Message)
+				}
+			}
+			ses.CheckpointTokens = lastCpTokens
+			ses.CheckpointMessageCount = len(ses.ContextMessages)
+		}
+		// If summary_msg_id not found, fall through to no-checkpoint path
+	}
+	if len(ses.ContextMessages) == 0 && haveCheckpoint && len(lastCpMessages) > 0 {
+		// Legacy format: checkpoint messages + post-CP entries
 		ses.ContextMessages = make([]provider.Message, len(lastCpMessages))
 		copy(ses.ContextMessages, lastCpMessages)
 		ses.CheckpointTokens = lastCpTokens
 		ses.CheckpointMessageCount = len(lastCpMessages)
+		for _, e := range postCPEntries {
+			if e.recType == "message" && e.record.Message != nil {
+				ses.ContextMessages = append(ses.ContextMessages, *e.record.Message)
+			}
+			if e.recType == "cost" && e.record.CostJSON != nil {
+				ses.CostJSON = []byte(e.record.CostJSON)
+			}
+		}
 	}
 	for _, e := range postCPEntries {
-		if e.recType == "message" && e.record.Message != nil {
-			ses.ContextMessages = append(ses.ContextMessages, *e.record.Message)
-		}
 		if e.recType == "cost" && e.record.CostJSON != nil {
 			ses.CostJSON = []byte(e.record.CostJSON)
 		}
@@ -1478,21 +1524,16 @@ func (s *JSONLStore) Dir() string {
 // AppendCheckpoint persists a checkpoint (compaction snapshot) to the session's
 // JSONL file and updates the Session object in place. The caller must ensure
 // no concurrent access to the Session object.
-func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
+func (s *JSONLStore) AppendCheckpoint(ses *Session, summaryMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	// Shallow copy to avoid slice aliasing with the caller's slice.
-	// JSON serialization below breaks any interior reference sharing.
-	msgs := make([]provider.Message, len(compactedMessages))
-	copy(msgs, compactedMessages)
-
 	rec := jsonlRecord{
-		Type:               "checkpoint",
-		SessionID:          ses.ID,
-		CheckpointMessages: msgs,
-		CheckpointTokens:   tokenCount,
+		Type:                   "checkpoint",
+		SessionID:              ses.ID,
+		CheckpointSummaryMsgID: summaryMsgID,
+		CheckpointTokens:       tokenCount,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return fmt.Errorf("encoding checkpoint: %w", err)
@@ -1506,19 +1547,16 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider
 // updates the index, but does NOT modify the Session object. Use this when the
 // caller manages Session mutations under its own lock and only needs the disk
 // write to happen outside that lock.
-func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
+func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, summaryMsgID string, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	msgs := make([]provider.Message, len(compactedMessages))
-	copy(msgs, compactedMessages)
-
 	rec := jsonlRecord{
-		Type:               "checkpoint",
-		SessionID:          ses.ID,
-		CheckpointMessages: msgs,
-		CheckpointTokens:   tokenCount,
+		Type:                   "checkpoint",
+		SessionID:              ses.ID,
+		CheckpointSummaryMsgID: summaryMsgID,
+		CheckpointTokens:       tokenCount,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return fmt.Errorf("encoding checkpoint: %w", err)

@@ -250,10 +250,13 @@ func TestAppendCheckpoint(t *testing.T) {
 
 	// Append a checkpoint with compacted messages
 	compacted := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nUser asked about X"}}},
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "follow-up"}}},
+		{ID: "msg_summary_1", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nUser asked about X"}}},
+		{ID: "msg_followup_1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "follow-up"}}},
 	}
-	err := store.AppendCheckpoint(ses, compacted, 50)
+	// Write summary to JSONL first so restore can find it by ID
+	store.AppendMessageToDisk(ses, compacted[0])
+	store.AppendMessageToDisk(ses, compacted[1])
+	err := store.AppendCheckpoint(ses, compacted[0].ID, 50)
 	if err != nil {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
@@ -268,12 +271,13 @@ func TestAppendCheckpoint(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Should have 4 message records total in Messages: 2 original (from Save) + 2 post-checkpoint.
-	if len(loaded.Messages) != 4 {
-		t.Fatalf("expected 4 Messages (all records), got %d", len(loaded.Messages))
+	// Should have 6 message records total in Messages: 2 original (from Save)
+	// + 2 summary (AppendMessageToDisk) + 2 post-checkpoint.
+	if len(loaded.Messages) != 6 {
+		t.Fatalf("expected 6 Messages (all records), got %d", len(loaded.Messages))
 	}
 
-	// ContextMessages: 2 checkpoint + 2 post-checkpoint = 4.
+	// ContextMessages: 2 checkpoint (summary + follow-up) + 2 post-checkpoint = 4.
 	if len(loaded.ContextMessages) != 4 {
 		t.Fatalf("expected 4 ContextMessages (2 checkpoint + 2 post-checkpoint), got %d", len(loaded.ContextMessages))
 	}
@@ -329,33 +333,33 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 	}
 	store.Save(ses)
 
-	// First checkpoint
-	cp1 := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}},
-	}
-	store.AppendCheckpoint(ses, cp1, 100)
+	// First checkpoint: write summary to JSONL, then checkpoint with ID
+	cp1Summary := provider.Message{ID: "msg_cp1_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}}
+	store.AppendMessageToDisk(ses, cp1Summary)
+	store.AppendCheckpoint(ses, cp1Summary.ID, 100)
 
 	// Messages after first checkpoint
-	store.AppendMessage(ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg after cp1"}}})
+	store.AppendMessage(ses, provider.Message{ID: "msg_after_cp1", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg after cp1"}}})
 
 	// Second checkpoint (should supersede first)
-	cp2 := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v2"}}},
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained context"}}},
-	}
-	store.AppendCheckpoint(ses, cp2, 80)
+	cp2Summary := provider.Message{ID: "msg_cp2_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v2"}}}
+	cp2Retained := provider.Message{ID: "msg_cp2_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained context"}}}
+	store.AppendMessageToDisk(ses, cp2Summary)
+	store.AppendMessageToDisk(ses, cp2Retained)
+	store.AppendCheckpoint(ses, cp2Summary.ID, 80)
 
 	// Messages after second checkpoint
-	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "final response"}}})
+	store.AppendMessage(ses, provider.Message{ID: "msg_final", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "final response"}}})
 
-	// Load — should use second checkpoint + 1 post-checkpoint message = 3 total
+	// Load — should use second checkpoint: scan from cp2Summary forward.
+	// ContextMessages = cp2Summary + cp2Retained + msg_final = 3 total
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 
 	if len(loaded.ContextMessages) != 3 {
-		t.Fatalf("expected 3 ContextMessages (2 from cp2 + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
+		t.Fatalf("expected 3 ContextMessages (cp2Summary + cp2Retained + final), got %d", len(loaded.ContextMessages))
 	}
 
 	// First should be "summary v2"
@@ -382,11 +386,11 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 	}
 	store.Save(ses)
 
-	// Append checkpoint with empty messages — simulates summarize producing
-	// zero retained messages (edge case).
-	err := store.AppendCheckpoint(ses, []provider.Message{}, 0)
+	// Append checkpoint with empty summary_msg_id — simulates a checkpoint
+	// with no summary (e.g. truncation-only). Should be treated as no checkpoint.
+	err := store.AppendCheckpoint(ses, "", 0)
 	if err != nil {
-		t.Fatalf("AppendCheckpoint with empty messages failed: %v", err)
+		t.Fatalf("AppendCheckpoint with empty summary_msg_id failed: %v", err)
 	}
 
 	// Append a post-checkpoint message
@@ -397,15 +401,10 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// ContextMessages: empty checkpoint + 1 post-checkpoint = 1
-	if len(loaded.ContextMessages) != 1 {
-		t.Fatalf("expected 1 ContextMessages (empty checkpoint + 1 post-checkpoint), got %d", len(loaded.ContextMessages))
-	}
-	if loaded.ContextMessages[0].Role != "assistant" {
-		t.Fatalf("expected ContextMessages role 'assistant', got '%s'", loaded.ContextMessages[0].Role)
-	}
-	if loaded.ContextMessages[0].Content[0].Text != "after empty cp" {
-		t.Fatalf("expected 'after empty cp', got '%s'", loaded.ContextMessages[0].Content[0].Text)
+	// With empty summary_msg_id, checkpoint is ignored. ContextMessages
+	// falls back to all messages (hello + after empty cp = 2).
+	if len(loaded.ContextMessages) != 2 {
+		t.Fatalf("expected 2 ContextMessages (no checkpoint fallback), got %d", len(loaded.ContextMessages))
 	}
 
 	// Metadata must survive past the checkpoint
@@ -441,19 +440,20 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	store.Save(ses)
 
 	// Append checkpoint — no messages after it, simulating a crash
-	// immediately after compaction.
-	compacted := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary only"}}},
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained user context"}}},
-	}
-	store.AppendCheckpoint(ses, compacted, 10)
+	// immediately after compaction. Summary messages are written to JSONL
+	// first, then checkpoint records their IDs.
+	summaryMsg := provider.Message{ID: "msg_cp_summary_only", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary only"}}}
+	retainedMsg := provider.Message{ID: "msg_cp_retained", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained user context"}}}
+	store.AppendMessageToDisk(ses, summaryMsg)
+	store.AppendMessageToDisk(ses, retainedMsg)
+	store.AppendCheckpoint(ses, summaryMsg.ID, 10)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// Must have the checkpoint messages in ContextMessages for agent restoration.
+	// ContextMessages = from summary_msg_id forward = summary + retained = 2
 	if len(loaded.ContextMessages) != 2 {
 		t.Fatalf("expected 2 ContextMessages from checkpoint, got %d", len(loaded.ContextMessages))
 	}
@@ -469,9 +469,9 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	if loaded.ContextMessages[1].Content[0].Text != "retained user context" {
 		t.Fatalf("expected second text 'retained user context', got '%s'", loaded.ContextMessages[1].Content[0].Text)
 	}
-	// ses.Messages should contain ALL message records (the original user message).
-	if len(loaded.Messages) != 1 {
-		t.Fatalf("expected 1 message record (original), got %d", len(loaded.Messages))
+	// ses.Messages should contain ALL message records: 1 original + 2 checkpoint messages.
+	if len(loaded.Messages) != 3 {
+		t.Fatalf("expected 3 message records (1 original + 2 checkpoint), got %d", len(loaded.Messages))
 	}
 
 	// Metadata preserved through checkpoint
@@ -499,10 +499,12 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // ensure time difference
 
 	compacted := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summarized"}}},
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post-summary"}}},
+		{ID: "msg_sum_5", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summarized"}}},
+		{ID: "msg_ret_5", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post-summary"}}},
 	}
-	if err := store.AppendCheckpoint(ses, compacted, 10); err != nil {
+	store.AppendMessageToDisk(ses, compacted[0])
+	store.AppendMessageToDisk(ses, compacted[1])
+	if err := store.AppendCheckpoint(ses, compacted[0].ID, 10); err != nil {
 		t.Fatalf("AppendCheckpoint failed: %v", err)
 	}
 
@@ -550,9 +552,10 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 	// Do NOT call Save — the JSONL file does not exist yet.
 	// AppendCheckpoint should create it (O_CREATE flag).
 	compacted := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "from scratch"}}},
+		{ID: "msg_sum_6", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "from scratch"}}},
 	}
-	if err := store.AppendCheckpoint(ses, compacted, 5); err != nil {
+	store.AppendMessageToDisk(ses, compacted[0])
+	if err := store.AppendCheckpoint(ses, compacted[0].ID, 5); err != nil {
 		t.Fatalf("AppendCheckpoint on non-existent file should succeed, got: %v", err)
 	}
 
@@ -872,10 +875,12 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 
 	// Add checkpoint
 	checkpointMsgs := []provider.Message{
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
-		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi!"}}},
+		{ID: "msg_cp_hello", Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
+		{ID: "msg_cp_hi", Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi!"}}},
 	}
-	if err := store.AppendCheckpoint(ses, checkpointMsgs, 50); err != nil {
+	store.AppendMessageToDisk(ses, checkpointMsgs[0])
+	store.AppendMessageToDisk(ses, checkpointMsgs[1])
+	if err := store.AppendCheckpoint(ses, checkpointMsgs[0].ID, 50); err != nil {
 		t.Fatal(err)
 	}
 

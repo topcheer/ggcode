@@ -976,7 +976,7 @@ func (r *REPL) Run() error {
 	// AppendCheckpoint (which mutates ses.UpdatedAt and rewrites the index)
 	// because the TUI thread also mutates the same session under that mutex
 	// (see appendUserMessage in submit.go).
-	r.agent.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+	r.agent.SetCheckpointHandler(func(summaryMsgID string, tokenCount int) {
 		if r.store == nil {
 			return
 		}
@@ -993,20 +993,18 @@ func (r *REPL) Run() error {
 		mu.Unlock()
 
 		// Persist to disk outside sessionMutex.
-		// AppendCheckpointToDisk only does JSONL write + index update
-		// (both protected by the store's own mu), no Session mutation.
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			if err := jsonlStore.AppendCheckpointToDisk(ses, messages, tokenCount); err != nil {
+			if err := jsonlStore.AppendCheckpointToDisk(ses, summaryMsgID, tokenCount); err != nil {
 				debug.Log("repl", "checkpoint save failed: %v", err)
 			} else {
-				debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+				debug.Log("repl", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
 			}
 		} else {
 			mu.Lock()
-			if err := store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
+			if err := store.AppendCheckpoint(ses, summaryMsgID, tokenCount); err != nil {
 				debug.Log("repl", "checkpoint save failed: %v", err)
 			} else {
-				debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+				debug.Log("repl", "checkpoint saved: summary_msg_id=%s tokens=%d", summaryMsgID, tokenCount)
 			}
 			mu.Unlock()
 		}
