@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.145`](docs/releases/v1.3.145.md) |
+| Latest documented release | [`v1.3.150`](docs/releases/v1.3.150.md) |
 
 ## Build & Validation
 
@@ -256,7 +256,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
 **Productivity** (3, in `builtin.go`): `ask_user`, `todo_write`, `switch_mode` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
-**Swarm** (10, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
+**Swarm** (11, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `teammate_results`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
 **Cron** (7, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`, `cron_update`, `cron_pause`, `cron_resume`, `cron_get`
 **Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
@@ -265,6 +265,11 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Screenshot** (1, in `builtin.go`): `screenshot` — capture full screen, specific display, window (by title/app name), or screen region. Supports cursor inclusion, delay, PNG/JPEG format, auto-resize. Actions: `capture` (default), `list_displays`, `list_windows`. Platform implementations in `internal/image/screenshot_{platform}.go`.
 **Mobile Device** (1, in `builtin.go`): `mobile_device` — Control native mobile apps on iOS Simulator or Android Emulator/Device. Actions: devices (list), boot, install, launch, snapshot (UI tree), screenshot, tap, type, swipe, press (hardware keys), logs, close, list_apps.
 **Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
+**Task** (6, in `cmd/ggcode/root.go`): `task_create`, `task_get`, `task_list`, `task_update`, `task_stop`, `task_output` — structured task tracking within a session
+**Config** (1, in `builtin.go`): `config` — read, write, list, or delete configuration settings with dot-notation keys
+**Debug** (1, in `builtin.go`): `debug_log` — read recent debug log entries or export to file
+**Delegate** (1, in `builtin.go`): `delegate` — delegate tasks to external AI coding agents (Claude, Codex, Copilot, Cursor, Gemini, etc.)
+**Terminal** (5, in `builtin.go`): `tmux`, `ghostty`, `warp`, `kitty`, `iterm2` — manage terminal panes, tabs, and windows for supported terminal emulators
 
 ### Slash Commands
 
