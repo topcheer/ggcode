@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetHooks, SaveHooks } from '../../wailsjs/go/main/App'
-import { hooks } from '../../wailsjs/go/models'
+import { useTranslation } from '../i18n'
 
 interface HookData {
   match?: string
@@ -11,15 +11,16 @@ interface HookData {
   inject_output?: boolean
 }
 
-const EVENT_DEFS = [
-  { key: 'on_user_message', label: 'On User Message' },
-  { key: 'pre_tool_use', label: 'Pre Tool Use' },
-  { key: 'post_tool_use', label: 'Post Tool Use' },
-  { key: 'on_agent_stop', label: 'On Agent Stop' },
-  { key: 'on_stream_stop', label: 'On Stream Stop' },
+const EVENT_KEYS = [
+  { key: 'on_user_message', labelKey: 'settings.hooksOnUserMessage' },
+  { key: 'pre_tool_use', labelKey: 'settings.hooksPreToolUse' },
+  { key: 'post_tool_use', labelKey: 'settings.hooksPostToolUse' },
+  { key: 'on_agent_stop', labelKey: 'settings.hooksOnAgentStop' },
+  { key: 'on_stream_stop', labelKey: 'settings.hooksOnStreamStop' },
 ] as const
 
 export function HooksSettings() {
+  const { t } = useTranslation()
   const [config, setConfig] = useState<Record<string, HookData[]>>({})
   const [editingEvent, setEditingEvent] = useState<string | null>(null)
   const [editingIdx, setEditingIdx] = useState<number>(-1)
@@ -31,9 +32,9 @@ export function HooksSettings() {
       const cfg = await GetHooks()
       setConfig(cfg as any || {})
     } catch (e) {
-      setMessage(`Error loading hooks: ${e}`)
+      setMessage(t('settings.hooksErrorLoad', { 0: String(e) }))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => { loadHooks() }, [loadHooks])
 
@@ -41,9 +42,9 @@ export function HooksSettings() {
     try {
       await SaveHooks(newConfig as any)
       setConfig(newConfig)
-      setMessage('Hooks saved')
+      setMessage(t('settings.hooksSaved'))
     } catch (e) {
-      setMessage(`Error saving: ${e}`)
+      setMessage(t('settings.hooksErrorSave', { 0: String(e) }))
     }
   }
 
@@ -93,15 +94,19 @@ export function HooksSettings() {
     setHooks(eventKey, hooks)
   }
 
+  const eventLabels = EVENT_KEYS.map(e => ({ ...e, label: t(e.labelKey as any) }))
+
   if (editingEvent) {
+    const evLabel = eventLabels.find(e => e.key === editingEvent)?.label || editingEvent
+    const isEdit = editingIdx >= 0
     return (
       <div style={{ padding: '16px', maxWidth: '600px' }}>
         <h3 style={{ marginBottom: '16px' }}>
-          {editingIdx >= 0 ? 'Edit' : 'Add'} Hook — {EVENT_DEFS.find(e => e.key === editingEvent)?.label}
+          {t('settings.hooksEditTitle', { 0: isEdit ? t('settings.hooksEditBtn' as any) : t('settings.hooksAddBtn' as any), 1: evLabel })}
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Match (* for all)</span>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksMatch')}</span>
             <input
               value={editForm.match || ''}
               onChange={e => setEditForm({ ...editForm, match: e.target.value })}
@@ -110,20 +115,20 @@ export function HooksSettings() {
             />
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Type</span>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksType')}</span>
             <select
               value={editForm.type || 'command'}
               onChange={e => setEditForm({ ...editForm, type: e.target.value })}
               style={inputStyle}
             >
-              <option value="command">command (shell)</option>
-              <option value="http">http (webhook)</option>
+              <option value="command">command</option>
+              <option value="http">http</option>
             </select>
           </label>
           {editForm.type === 'http' ? (
             <>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>URL</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksURL')}</span>
                 <input
                   value={editForm.url || ''}
                   onChange={e => setEditForm({ ...editForm, url: e.target.value })}
@@ -132,7 +137,7 @@ export function HooksSettings() {
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Secret (HMAC-SHA256)</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksSecret')}</span>
                 <input
                   value={editForm.secret || ''}
                   onChange={e => setEditForm({ ...editForm, secret: e.target.value })}
@@ -143,7 +148,7 @@ export function HooksSettings() {
             </>
           ) : (
             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Command</span>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksCommand')}</span>
               <input
                 value={editForm.command || ''}
                 onChange={e => setEditForm({ ...editForm, command: e.target.value })}
@@ -159,13 +164,13 @@ export function HooksSettings() {
                 checked={editForm.inject_output || false}
                 onChange={e => setEditForm({ ...editForm, inject_output: e.target.checked })}
               />
-              <span style={{ fontSize: '13px' }}>Inject output into tool result</span>
+              <span style={{ fontSize: '13px' }}>{t('settings.hooksInjectLabel')}</span>
             </label>
           )}
         </div>
         <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-          <button style={btnPrimary} onClick={saveHook}>Save</button>
-          <button style={btnSecondary} onClick={() => setEditingEvent(null)}>Cancel</button>
+          <button style={btnPrimary} onClick={saveHook}>{t('settings.hooksSaveBtn')}</button>
+          <button style={btnSecondary} onClick={() => setEditingEvent(null)}>{t('settings.hooksCancelBtn')}</button>
         </div>
       </div>
     )
@@ -173,9 +178,9 @@ export function HooksSettings() {
 
   return (
     <div style={{ padding: '16px' }}>
-      <h3 style={{ marginBottom: '16px' }}>Lifecycle Hooks</h3>
+      <h3 style={{ marginBottom: '16px' }}>{t('settings.hooksTitle')}</h3>
       {message && <div style={{ marginBottom: '12px', color: 'var(--text-secondary)', fontSize: '13px' }}>{message}</div>}
-      {EVENT_DEFS.map(event => {
+      {eventLabels.map(event => {
         const hooks = getHooks(event.key)
         return (
           <div key={event.key} style={{ marginBottom: '16px' }}>
@@ -183,10 +188,10 @@ export function HooksSettings() {
               <span style={{ fontWeight: 600, fontSize: '14px' }}>
                 {event.label} ({hooks.length})
               </span>
-              <button style={btnSmall} onClick={() => startAdd(event.key)}>+ Add</button>
+              <button style={btnSmall} onClick={() => startAdd(event.key)}>{t('settings.hooksAdd')}</button>
             </div>
             {hooks.length === 0 ? (
-              <div style={{ fontSize: '13px', color: 'var(--text-tertiary)', paddingLeft: '8px' }}>(none)</div>
+              <div style={{ fontSize: '13px', color: 'var(--text-tertiary)', paddingLeft: '8px' }}>{t('settings.hooksNone')}</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {hooks.map((h, i) => (
@@ -204,10 +209,10 @@ export function HooksSettings() {
                     </div>
                     <div style={{ display: 'flex', gap: '4px' }}>
                       {event.key === 'post_tool_use' && (
-                        <button style={btnTiny} onClick={() => toggleInject(event.key, i)}>inject</button>
+                        <button style={btnTiny} onClick={() => toggleInject(event.key, i)}>{t('settings.hooksInject')}</button>
                       )}
-                      <button style={btnTiny} onClick={() => startEdit(event.key, i)}>edit</button>
-                      <button style={btnTinyDanger} onClick={() => deleteHook(event.key, i)}>del</button>
+                      <button style={btnTiny} onClick={() => startEdit(event.key, i)}>{t('settings.hooksEdit')}</button>
+                      <button style={btnTinyDanger} onClick={() => deleteHook(event.key, i)}>{t('settings.hooksDelete')}</button>
                     </div>
                   </div>
                 ))}
@@ -252,6 +257,6 @@ const btnTiny: React.CSSProperties = {
 
 const btnTinyDanger: React.CSSProperties = {
   padding: '1px 6px', borderRadius: 'var(--radius-sm)',
-  background: 'transparent', color: 'var(--color-danger, #e57373)',
+  background: 'transparent', color: 'var(--color-danger)',
   border: '1px solid var(--color-border)', cursor: 'pointer', fontSize: '11px',
 }
