@@ -1432,6 +1432,14 @@ func (r *REPL) loadSession(id string) {
 
 	r.model.rebuildConversationFromMessages(ses.Messages)
 	r.model.restoreHistoryFromMessages(ses.Messages)
+
+	// Refresh cached git branch — sessions from other workspaces may have
+	// different active branches.
+	r.model.refreshCachedGitBranch()
+
+	// Notify mobile client of session switch.
+	r.model.publishTunnelSnapshotForCurrentSession(true)
+
 	title := ses.Title
 	if title == "" {
 		title = r.model.t("session.untitled")

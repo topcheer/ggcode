@@ -758,6 +758,18 @@ func (b *ChatBridge) LoadSession(id string) error {
 		}
 	}
 
+	// Restore session-scoped ContextWindow/MaxTokens (if set).
+	if b.agent != nil && b.agent.ContextManager() != nil {
+		if state.Session.ContextWindow > 0 {
+			b.agent.ContextManager().SetContextWindow(state.Session.ContextWindow)
+			debug.Log("chat", "LoadSession: restored context_window=%d from session", state.Session.ContextWindow)
+		}
+		if state.Session.MaxTokens > 0 {
+			b.agent.ContextManager().SetOutputReserve(state.Session.MaxTokens)
+			debug.Log("chat", "LoadSession: restored max_tokens=%d from session", state.Session.MaxTokens)
+		}
+	}
+
 	return nil
 }
 
