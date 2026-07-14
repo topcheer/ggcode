@@ -665,7 +665,7 @@ func (b *ChatBridge) bindSessionIntegrations(ses *session.Session) {
 	}
 	if b.cronScheduler != nil && ses != nil {
 		sessionPath, legacyPath := agentruntime.CronStorePaths(ses.ID)
-		b.cronScheduler.SetSession(sessionPath, legacyPath, b.workingDir)
+		b.cronScheduler.SwitchSession(sessionPath, legacyPath, b.workingDir)
 	}
 	if onSessionChanged != nil {
 		onSessionChanged()

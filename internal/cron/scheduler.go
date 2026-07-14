@@ -539,6 +539,39 @@ func (s *Scheduler) SetSession(storePath, oldStorePath, workspaceDir string) {
 	s.Load()
 }
 
+// SwitchSession rebinds the scheduler to a new session. Unlike SetSession
+// (which is one-time only), SwitchSession stops all existing timers, clears
+// all current jobs, and loads jobs from the new session's store file.
+//
+// storePath is the per-session JSON file path.
+// oldStorePath is the legacy cron-jobs.json path (empty to skip migration).
+// workspaceDir is the working directory key for migration (empty to skip).
+func (s *Scheduler) SwitchSession(storePath, oldStorePath, workspaceDir string) {
+	if storePath == "" {
+		return
+	}
+
+	// Stop all existing timers and clear all jobs from the old session.
+	s.mu.Lock()
+	for id, timer := range s.timers {
+		timer.Stop()
+		delete(s.timers, id)
+	}
+	for id := range s.jobs {
+		delete(s.jobs, id)
+	}
+	s.nextID = 0
+	s.storePath = storePath
+	s.mu.Unlock()
+
+	debug.Log("cron", "SwitchSession: cleared old jobs, rebinding to %s", storePath)
+
+	// Migrate from old workspace-scoped store if present.
+	MigrateWorkspaceJobs(oldStorePath, storePath, workspaceDir)
+
+	s.Load()
+}
+
 // Shutdown stops all timers and clears all jobs. The scheduler cannot be
 // reused after shutdown.
 func (s *Scheduler) Shutdown() {

@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -77,11 +78,21 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 
 	m.SetSession(ses, m.sessionStore)
 
+	// Switch CWD if the session belongs to a different workspace.
+	if ses.Workspace != "" && m.session != nil && ses.Workspace != m.session.Workspace {
+		oldWorkspace := m.session.Workspace
+		if m.agent != nil {
+			m.agent.SetWorkingDir(ses.Workspace)
+		}
+		debug.Log("tui", "switchToSession: switched agent workingDir from %q to %q", oldWorkspace, ses.Workspace)
+	}
+
 	// Release old session lock and acquire new one.
 	if m.sessionLockSwitch != nil {
 		m.sessionLockSwitch(ses.ID)
 	}
 	// Rebind cron scheduler to the new session's store path.
+	// Use the session's workspace for migration, not the current r.workingDir.
 	if m.sessionCronSwitch != nil {
 		m.sessionCronSwitch(ses.ID)
 	}

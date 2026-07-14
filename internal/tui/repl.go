@@ -219,10 +219,18 @@ func (r *REPL) switchSessionLock(newSessionID string) {
 }
 
 func (r *REPL) switchSessionCron(newSessionID string) {
+	r.switchSessionCronWithWorkspace(newSessionID, r.workingDir)
+}
+
+// switchSessionCronWithWorkspace rebinds the cron scheduler to a new session,
+// using the provided workspaceDir for migration. This is used when switching
+// sessions, including cross-workspace switches where the workspace may differ
+// from r.workingDir.
+func (r *REPL) switchSessionCronWithWorkspace(newSessionID, workspaceDir string) {
 	if r.cronScheduler != nil {
 		sessionPath, legacyPath := agentruntime.CronStorePaths(newSessionID)
-		r.cronScheduler.SetSession(sessionPath, legacyPath, r.workingDir)
-		debug.Log("repl", "switchSessionCron: rebound cron scheduler to session %s", newSessionID)
+		r.cronScheduler.SwitchSession(sessionPath, legacyPath, workspaceDir)
+		debug.Log("repl", "switchSessionCron: rebound cron scheduler to session %s (workspace=%s)", newSessionID, workspaceDir)
 	}
 }
 
@@ -1341,10 +1349,13 @@ func (r *REPL) createSession() {
 			}
 		}
 
-		// Bind cron scheduler to this session for persistence
+		// Bind cron scheduler to this session for persistence.
+		// Use SwitchSession (not SetSession) because createSession may be
+		// called as a fallback after loadSession fails, where the scheduler
+		// may already be bound to a previous session.
 		if r.cronScheduler != nil {
 			sessionPath, legacyPath := agentruntime.CronStorePaths(ses.ID)
-			r.cronScheduler.SetSession(sessionPath, legacyPath, r.workingDir)
+			r.cronScheduler.SwitchSession(sessionPath, legacyPath, r.workingDir)
 		}
 
 		debug.Log("repl", "startup timing repl.createSession total=%s", time.Since(start).Round(time.Millisecond))
@@ -1388,6 +1399,19 @@ func (r *REPL) loadSession(id string) {
 	if compacted {
 		r.model.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restored session was oversized (%d tokens), truncated to %d tokens to fit context window", beforeTokens, afterTokens))
 	}
+
+	// Switch CWD if the session belongs to a different workspace.
+	if ses.Workspace != "" && ses.Workspace != r.workingDir {
+		oldDir := r.workingDir
+		r.workingDir = ses.Workspace
+		if r.agent != nil {
+			r.agent.SetWorkingDir(ses.Workspace)
+		}
+		debug.Log("repl", "loadSession: switched workingDir from %q to %q (session workspace)", oldDir, ses.Workspace)
+	}
+
+	// Bind cron scheduler to this session (stop old timers, load new jobs).
+	r.switchSessionCronWithWorkspace(ses.ID, r.workingDir)
 
 	// This overrides the global default_mode for this session only.
 	if ses.PermissionMode != "" {
