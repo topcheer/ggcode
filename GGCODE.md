@@ -264,7 +264,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **IM** (1, in `builtin.go`): `im` — status (list adapters), mute/unmute (drop/reconnect adapter), disable/enable, send (with `auto_start` for muted/disabled adapters). Always allowed in all permission modes. Manager injected post-registration via `im.NewToolManagerAdapter()`.
 **Screenshot** (1, in `builtin.go`): `screenshot` — capture full screen, specific display, window (by title/app name), or screen region. Supports cursor inclusion, delay, PNG/JPEG format, auto-resize. Actions: `capture` (default), `list_displays`, `list_windows`. Platform implementations in `internal/image/screenshot_{platform}.go`.
 **Mobile Device** (1, in `builtin.go`): `mobile_device` — Control native mobile apps on iOS Simulator or Android Emulator/Device. Actions: devices (list), boot, install, launch, snapshot (UI tree), screenshot, tap, type, swipe, press (hardware keys), logs, close, list_apps.
-**Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`
+**Other**: `sleep`, `notebook_edit`, `enter_worktree`, `exit_worktree`, `runtime` (query session ID, IM adapters, mobile status, provider info)
 **Task** (6, in `cmd/ggcode/root.go`): `task_create`, `task_get`, `task_list`, `task_update`, `task_stop`, `task_output` — structured task tracking within a session
 **Config** (1, in `builtin.go`): `config` — read, write, list, or delete configuration settings with dot-notation keys
 **Debug** (1, in `builtin.go`): `debug_log` — read recent debug log entries or export to file
