@@ -40,7 +40,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "claude-cli",
 			DisplayName:    "Claude CLI",
 			UATemplate:     "claude-cli/{version} (individual, cli)",
-			DefaultVersion: "2.1.126",
+			DefaultVersion: "2.1.209",
 			ExtraHeaders: map[string]string{
 				"x-app":             "cli",
 				"anthropic-version": "2023-06-01",
@@ -50,7 +50,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "codex-cli",
 			DisplayName:    "Codex CLI",
 			UATemplate:     "codex-cli/{version}",
-			DefaultVersion: "0.128.0",
+			DefaultVersion: "0.144.4",
 			ExtraHeaders: map[string]string{
 				"anthropic-version": "2023-06-01",
 			},
@@ -59,19 +59,19 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "gemini-cli",
 			DisplayName:    "Gemini CLI",
 			UATemplate:     "gemini-cli/{version}",
-			DefaultVersion: "0.40.1",
+			DefaultVersion: "0.50.0",
 		},
 		{
 			ID:             "opencode",
 			DisplayName:    "OpenCode",
 			UATemplate:     "opencode/{version}",
-			DefaultVersion: "1.14.35",
+			DefaultVersion: "1.17.20",
 		},
 		{
 			ID:             "copilot",
 			DisplayName:    "GitHub Copilot",
 			UATemplate:     "GithubCopilot/{version}",
-			DefaultVersion: "1.364.0",
+			DefaultVersion: "1.388.0",
 			ExtraHeaders: map[string]string{
 				"Openai-Intent": "conversation-edits",
 				"x-initiator":   "agent",
@@ -81,7 +81,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "cline",
 			DisplayName:    "Cline",
 			UATemplate:     "Cline/{version}",
-			DefaultVersion: "3.39.1",
+			DefaultVersion: "4.0.8",
 		},
 		{
 			ID:             "aider",
@@ -97,25 +97,25 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "cursor",
 			DisplayName:    "Cursor",
 			UATemplate:     "cursor/{version}",
-			DefaultVersion: "3.1",
+			DefaultVersion: "3.11.19",
 		},
 		{
 			ID:             "roo-code",
 			DisplayName:    "Roo Code",
 			UATemplate:     "roo-cline/{version}",
-			DefaultVersion: "3.53.0",
+			DefaultVersion: "3.54.0",
 		},
 		{
 			ID:             "kilocode",
 			DisplayName:    "KiloCode",
 			UATemplate:     "kilocode/{version}",
-			DefaultVersion: "7.2.26",
+			DefaultVersion: "7.4.7",
 		},
 		{
 			ID:             "openclaw",
 			DisplayName:    "OpenClaw",
 			UATemplate:     "openclaw/{version}",
-			DefaultVersion: "2026.4.14",
+			DefaultVersion: "2026.7.1",
 		},
 	}
 }

@@ -19,7 +19,7 @@ import (
 
 const (
 	// claudeCLIVersion is the version we masquerade as.
-	claudeCLIVersion = "2.1.92"
+	claudeCLIVersion = "2.1.209"
 )
 
 // OpenAIProvider implements Provider using the OpenAI-compatible API.
