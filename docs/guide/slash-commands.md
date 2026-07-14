@@ -99,7 +99,6 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/review [file]` | Review code changes (harness review) |
 | `/reflect` | Trigger agent self-reflection on recent runs |
 | `/branch` / `/fork` | Branch/fork current session |
-| `/pc` | Open provider configuration panel |
 
 ## IM-Specific Commands
 
