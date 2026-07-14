@@ -170,7 +170,16 @@ func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 	if binding.BoundAt.IsZero() {
 		binding.BoundAt = time.Now()
 	}
-	all[compositeKey(binding.Workspace, binding.Adapter)] = binding
+	key := compositeKey(binding.Workspace, binding.Adapter)
+	// Preserve LastSessionID from the file if it was recently updated by
+	// another instance (e.g. via UnmuteBinding/EnableBinding). Without this,
+	// a persistBinding call (triggered by inbound message, context token
+	// update, etc.) would overwrite the file with a stale in-memory
+	// LastSessionID, causing the binding watcher to auto-mute the adapter.
+	if existing, ok := all[key]; ok && existing.LastSessionID != "" && binding.LastSessionID != existing.LastSessionID {
+		binding.LastSessionID = existing.LastSessionID
+	}
+	all[key] = binding
 	return s.writeAllLocked(all)
 }
 
