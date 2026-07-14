@@ -1,24 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetHooks, SaveHooks } from '../../wailsjs/go/main/App'
+import { hooks } from '../../wailsjs/go/models'
 
-export interface Hook {
+interface HookData {
   match?: string
   type?: string
   command?: string
   url?: string
-  method?: string
-  headers?: Record<string, string>
-  timeout?: string
   secret?: string
   inject_output?: boolean
-}
-
-export interface HookConfig {
-  on_user_message?: Hook[]
-  pre_tool_use?: Hook[]
-  post_tool_use?: Hook[]
-  on_agent_stop?: Hook[]
-  on_stream_stop?: Hook[]
 }
 
 const EVENT_DEFS = [
@@ -30,16 +20,16 @@ const EVENT_DEFS = [
 ] as const
 
 export function HooksSettings() {
-  const [config, setConfig] = useState<HookConfig>({})
+  const [config, setConfig] = useState<Record<string, HookData[]>>({})
   const [editingEvent, setEditingEvent] = useState<string | null>(null)
   const [editingIdx, setEditingIdx] = useState<number>(-1)
-  const [editForm, setEditForm] = useState<Hook>({})
+  const [editForm, setEditForm] = useState<HookData>({})
   const [message, setMessage] = useState('')
 
   const loadHooks = useCallback(async () => {
     try {
       const cfg = await GetHooks()
-      setConfig(cfg || {})
+      setConfig(cfg as any || {})
     } catch (e) {
       setMessage(`Error loading hooks: ${e}`)
     }
@@ -47,9 +37,9 @@ export function HooksSettings() {
 
   useEffect(() => { loadHooks() }, [loadHooks])
 
-  const save = async (newConfig: HookConfig) => {
+  const save = async (newConfig: Record<string, HookData[]>) => {
     try {
-      await SaveHooks(newConfig)
+      await SaveHooks(newConfig as any)
       setConfig(newConfig)
       setMessage('Hooks saved')
     } catch (e) {
@@ -57,12 +47,12 @@ export function HooksSettings() {
     }
   }
 
-  const getHooks = (eventKey: string): Hook[] => {
-    return (config as any)[eventKey] || []
+  const getHooks = (eventKey: string): HookData[] => {
+    return config[eventKey] || []
   }
 
-  const setHooks = (eventKey: string, hooks: Hook[]) => {
-    const newConfig = { ...config, [eventKey]: hooks }
+  const setHooks = (eventKey: string, hooksList: HookData[]) => {
+    const newConfig = { ...config, [eventKey]: hooksList }
     save(newConfig)
   }
 
