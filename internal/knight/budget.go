@@ -131,11 +131,6 @@ func (b *Budget) usageFileAt(t time.Time) string {
 	return filepath.Join(b.dir, "usage-"+t.Format("2006-01-02")+".jsonl")
 }
 
-// usageFile returns the path to today's usage JSONL file.
-func (b *Budget) usageFile() string {
-	return b.usageFileAt(time.Now())
-}
-
 // ensureLoadedAt reads usage from disk for the given date if not already done.
 func (b *Budget) ensureLoadedAt(now time.Time) {
 	today := now.Format("2006-01-02")

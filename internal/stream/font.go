@@ -238,44 +238,6 @@ func FindSystemFonts() []FontSearchResult {
 // Returns empty string if none found.
 // findBestMonoFont finds the best monospace font on the system with wide Unicode coverage.
 // Prefers fonts that cover ASCII + symbols + CJK in a single font.
-func findBestMonoFont() string {
-	// Candidates in priority order — must be true monospace with broad glyph coverage
-	candidates := []string{
-		// macOS
-		"/System/Library/Fonts/Monaco.ttf",
-		"/System/Library/Fonts/SFNSMono.ttf",
-		// Linux — Noto Sans Mono CJK (covers CJK + ASCII in monospace)
-		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-		"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-		"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-		"/usr/share/fonts/opentype/noto/NotoSansMonoCJK-Regular.ttc",
-		"/usr/share/fonts/noto-cjk/NotoSansMonoCJK-Regular.ttc",
-		// Linux — DejaVu Sans Mono (good ASCII/symbols, no CJK)
-		"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-		"/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
-		// Linux — Liberation Mono
-		"/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-		"/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
-		// Windows
-		"C:\\Windows\\Fonts\\consola.ttf", // Consolas
-		"C:\\Windows\\Fonts\\cour.ttf",    // Courier New
-		"C:\\Windows\\Fonts\\lucon.ttf",   // Lucida Console
-	}
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	// Search system font list as last resort
-	fonts := FindSystemFonts()
-	for _, f := range fonts {
-		if !f.IsCJK {
-			return f.Path
-		}
-	}
-	return ""
-}
-
 func FindCJKFont() string {
 	fonts := FindSystemFonts()
 	for _, f := range fonts {

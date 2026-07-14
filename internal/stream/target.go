@@ -234,20 +234,3 @@ func (t *Target) maskURL() string {
 }
 
 // maskURLForLog returns a URL with the stream key partially visible for debug logging.
-func (t *Target) maskURLForLog() string {
-	idx := len(t.url)
-	for i := len(t.url) - 1; i >= 0; i-- {
-		if t.url[i] == '/' {
-			idx = i
-			break
-		}
-	}
-	if idx < len(t.url) {
-		key := t.url[idx+1:]
-		if len(key) > 8 {
-			return t.url[:idx+1] + key[:4] + "..." + key[len(key)-4:]
-		}
-		return t.url[:idx+1] + "***"
-	}
-	return t.url
-}

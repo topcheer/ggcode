@@ -121,16 +121,3 @@ func (b *bucketBudget) rolloverLocked(now time.Time) {
 
 // snapshot returns a copy of the current per-bucket usage and caps for the
 // rolling day; useful for /knight status diagnostics.
-func (b *bucketBudget) snapshot(now time.Time) map[budgetBucket][2]int {
-	out := map[budgetBucket][2]int{}
-	if b == nil {
-		return out
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.rolloverLocked(now)
-	for bucket, cap := range b.bucketCap {
-		out[bucket] = [2]int{b.used[bucket], cap}
-	}
-	return out
-}

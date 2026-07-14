@@ -410,11 +410,6 @@ type fileMatch struct {
 	line    string
 }
 
-type fileCount struct {
-	path  string
-	count int
-}
-
 func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (Result, error) {
 	// Collect files to search
 	tracked := gitTrackedFiles(ctx, args.Path)
