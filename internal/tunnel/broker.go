@@ -623,10 +623,6 @@ func (b *Broker) markRelayReady() {
 	_ = b.session.SendServerReady(b.AuthorityEpoch())
 }
 
-func (b *Broker) resetSessionPreservingActiveText() {
-	b.resetSessionAndEnqueue(false)
-}
-
 func (b *Broker) resetSessionAndEnqueue(clearActive bool) {
 	b.resetSession()
 	b.resetProjectionAndEnqueue(clearActive)
@@ -1654,17 +1650,6 @@ func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
 	b.outMu.Unlock()
 	b.outCond.Signal()
 	b.recordEvent(msg)
-}
-
-func (b *Broker) trackSend(eventID string) <-chan struct{} {
-	ch := make(chan struct{})
-	b.waitMu.Lock()
-	if b.sendWaiters == nil {
-		b.sendWaiters = make(map[string]chan struct{})
-	}
-	b.sendWaiters[eventID] = ch
-	b.waitMu.Unlock()
-	return ch
 }
 
 func (b *Broker) signalSent(eventID string) {

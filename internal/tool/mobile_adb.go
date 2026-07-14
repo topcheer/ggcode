@@ -18,8 +18,6 @@ type androidBackend struct {
 	adbPath string
 }
 
-func (a *androidBackend) cleanup() {}
-
 func (a *androidBackend) defaultDevice() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

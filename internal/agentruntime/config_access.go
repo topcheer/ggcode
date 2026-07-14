@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1081,28 +1080,6 @@ func truncate(s string, maxLen int) string {
 }
 
 // getHarnessConfig reads the project-level .ggcode/harness.yaml.
-func (a *configAccess) getHarnessConfig(key string) (string, error) {
-	harnessPath := filepath.Join(a.workingDir, ".ggcode", "harness.yaml")
-	data, err := os.ReadFile(harnessPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "(no project harness config)", nil
-		}
-		return "", fmt.Errorf("reading harness config: %w", err)
-	}
-	return string(data), nil
-}
-
-// setHarnessConfig writes the project-level .ggcode/harness.yaml.
-func (a *configAccess) setHarnessConfig(key, value string) error {
-	dir := filepath.Join(a.workingDir, ".ggcode")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating .ggcode dir: %w", err)
-	}
-	harnessPath := filepath.Join(dir, "harness.yaml")
-	return os.WriteFile(harnessPath, []byte(value), 0644)
-}
-
 // ============================================================================
 // Model Discovery
 // ============================================================================
