@@ -825,5 +825,3 @@ func writeRPCError(w http.ResponseWriter, id json.RawMessage, rpcErr *JSONRPCErr
 		Error:   rpcErr,
 	})
 }
-
-const maxConcurrentTasks = 5

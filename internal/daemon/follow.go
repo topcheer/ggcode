@@ -577,26 +577,6 @@ func formatSearchCount(lang Lang, result string, isError bool) string {
 	return "    " + ansiFgGreen + text + ansiReset + nl
 }
 
-// formatCommandBody renders command execution body (without header).
-func formatCommandBody(lang Lang, rawArgs, result string, isError bool) string {
-	var args struct {
-		Command string `json:"command"`
-	}
-	_ = rawArgs
-	output := strings.TrimSpace(result)
-	if output == "" {
-		return ""
-	}
-
-	var sb strings.Builder
-	body, _ := chat.FormatBody(output, 76, 5)
-	for _, line := range strings.Split(body, "\n") {
-		_ = args
-		sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
-	}
-	return sb.String()
-}
-
 // formatMCPToolBody renders MCP tool body (without header).
 func formatMCPToolBody(lang Lang, toolName, rawArgs, result string, isError bool) string {
 	_ = lang
@@ -631,25 +611,6 @@ func summarizeToolResult(result string, maxLen int) string {
 	return ""
 }
 
-// summarizeMCPArgs produces a brief summary of MCP tool arguments.
-func summarizeMCPArgs(rawArgs string, maxLen int) string {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || len(args) == 0 {
-		return ""
-	}
-	// Show first string-valued arg
-	for k, v := range args {
-		if s, ok := v.(string); ok && s != "" && k != "context" && k != "system_prompt" {
-			s = compactSingleLine(s)
-			if len(s) > maxLen {
-				s = s[:maxLen-3] + "..."
-			}
-			return s
-		}
-	}
-	return ""
-}
-
 // prettifyToolName converts a tool name to a readable form.
 func prettifyToolName(name string) string {
 	name = strings.ReplaceAll(name, "-", " ")
@@ -662,17 +623,6 @@ func prettifyToolName(name string) string {
 		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
 	return strings.Join(parts, " ")
-}
-
-// compactSingleLine collapses whitespace and newlines.
-func compactSingleLine(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	for strings.Contains(s, "  ") {
-		s = strings.ReplaceAll(s, "  ", " ")
-	}
-	return strings.TrimSpace(s)
 }
 
 // renderMarkdown renders markdown text to ANSI-colored terminal output.

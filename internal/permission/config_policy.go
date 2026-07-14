@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // DefaultMode is the default permission mode if not specified.
@@ -354,10 +353,6 @@ func extractCommand(input json.RawMessage) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func truncateStr(s string, maxLen int) string {
-	return util.Truncate(s, maxLen)
 }
 
 func newOptionalPathSandbox(allowedDirs []string) *PathSandbox {
