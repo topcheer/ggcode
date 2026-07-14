@@ -86,6 +86,10 @@ export function GetEndpoints(arg1) {
   return window['go']['main']['App']['GetEndpoints'](arg1);
 }
 
+export function GetHooks() {
+  return window['go']['main']['App']['GetHooks']();
+}
+
 export function GetIMPlatformRegistry() {
   return window['go']['main']['App']['GetIMPlatformRegistry']();
 }
@@ -292,6 +296,10 @@ export function SaveAPIKey(arg1, arg2, arg3) {
 
 export function SaveDefaultMode(arg1) {
   return window['go']['main']['App']['SaveDefaultMode'](arg1);
+}
+
+export function SaveHooks(arg1) {
+  return window['go']['main']['App']['SaveHooks'](arg1);
 }
 
 export function SaveIMAdapter(arg1, arg2) {

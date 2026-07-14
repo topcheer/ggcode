@@ -47,6 +47,8 @@ export function GetEndpointDetails(arg1:string,arg2:string):Promise<wailskit.End
 
 export function GetEndpoints(arg1:string):Promise<Array<wailskit.EndpointInfo>>;
 
+export function GetHooks():Promise<wailskit.HookConfigJSON>;
+
 export function GetIMPlatformRegistry():Promise<Array<wailskit.IMPlatformMeta>>;
 
 export function GetImpersonationPresets():Promise<Array<wailskit.ImpersonationPresetInfo>>;
@@ -150,6 +152,8 @@ export function SaveA2AEnabled(arg1:boolean):Promise<void>;
 export function SaveAPIKey(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SaveDefaultMode(arg1:string):Promise<void>;
+
+export function SaveHooks(arg1:wailskit.HookConfigJSON):Promise<void>;
 
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
 

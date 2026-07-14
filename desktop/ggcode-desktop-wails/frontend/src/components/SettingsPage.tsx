@@ -5,6 +5,7 @@ import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import { useTranslation, type Locale, LOCALE_LABELS } from '../i18n'
 import { ViewMode } from '../types'
 import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
+import { HooksSettings } from './HooksSettings'
 
 interface Props {
   onBack: () => void
@@ -15,7 +16,7 @@ interface Props {
   showToast?: (type: 'success' | 'error' | 'info', message: string) => void
 }
 
-type SettingsTab = 'provider' | 'agent' | 'appearance' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp'
+type SettingsTab = 'provider' | 'agent' | 'appearance' | 'impersonation' | 'addEndpoint' | 'integrations' | 'diagnostics' | 'lsp' | 'hooks'
 
 interface ImpersonationPreset {
   id: string
@@ -385,6 +386,7 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
     { id: 'appearance', label: t('settings.appearance') },
     { id: 'integrations', label: t('settings.integrations') },
     { id: 'diagnostics', label: t('settings.diagnostics') },
+    { id: 'hooks', label: 'Hooks' },
     { id: 'impersonation', label: t('settings.impersonate') },
     { id: 'addEndpoint', label: '+ ' + t('settings.endpoint') },
   ]
@@ -967,6 +969,11 @@ export function SettingsPage({ onBack, onNavigate, onOpenContext, onOpenShare, o
               {saving ? t('settings.saving') : t('settings.impersonateApply')}
             </button>
           </>
+        )}
+
+        {/* Hooks Tab */}
+        {tab === 'hooks' && (
+          <HooksSettings />
         )}
 
         {/* Add Endpoint Tab */}

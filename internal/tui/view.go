@@ -200,7 +200,7 @@ func (m Model) isAnyPanelOpen() bool {
 		m.whatsappPanel != nil || m.streamPanel != nil ||
 		m.inspectorPanel != nil || m.harnessContextPrompt != nil ||
 		m.harnessPanel != nil || m.lanChatPanel != nil ||
-		m.skillsPanel != nil
+		m.skillsPanel != nil || m.hooksPanel != nil
 }
 
 func (m Model) currentSelection() (string, string, string) {

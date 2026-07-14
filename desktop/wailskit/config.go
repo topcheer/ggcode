@@ -487,9 +487,35 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 // Ensure unused imports are referenced.
 var (
 	_ = time.Duration(0)
-	_ = hooks.HookConfig{}
 	_ = stream.StreamConfig{}
 )
+
+// HookConfigJSON is a JSON-serializable wrapper for hooks.HookConfig.
+type HookConfigJSON = hooks.HookConfig
+
+// GetHooks returns the current hooks configuration.
+func (b *ChatBridge) GetHooks() hooks.HookConfig {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cfg == nil {
+		return hooks.HookConfig{}
+	}
+	return b.cfg.Hooks
+}
+
+// SaveHooks saves the hooks configuration.
+func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cfg == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	b.cfg.Hooks = cfg
+	if b.agent != nil {
+		b.agent.SetHookConfig(cfg)
+	}
+	return b.cfg.Save()
+}
 
 // ─── Custom Endpoint ───────────────────────────────────
 

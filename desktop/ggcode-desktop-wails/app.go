@@ -747,6 +747,22 @@ func (a *App) UpdateConfig(values map[string]interface{}) error {
 	return nil
 }
 
+// GetHooks returns the current hooks configuration.
+func (a *App) GetHooks() (wailskit.HookConfigJSON, error) {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.GetHooks(), nil
+	}
+	return wailskit.HookConfigJSON{}, nil
+}
+
+// SaveHooks saves the hooks configuration.
+func (a *App) SaveHooks(cfg wailskit.HookConfigJSON) error {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.SaveHooks(cfg)
+	}
+	return fmt.Errorf("chat bridge not available")
+}
+
 // GetVendors returns available vendor names.
 func (a *App) GetVendors() []string {
 	return wailskit.VendorNames()

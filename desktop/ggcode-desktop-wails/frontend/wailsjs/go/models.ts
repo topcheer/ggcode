@@ -354,7 +354,53 @@ export namespace swarm {
 		    return a;
 		}
 	}
+
 	
+	export class Hook {
+	    match?: string;
+	    type?: string;
+	    command?: string;
+	    url?: string;
+	    method?: string;
+	    headers?: Record<string, string>;
+	    timeout?: string;
+	    secret?: string;
+	    inject_output?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        const result = new Hook();
+	        result.match = source["match"];
+	        result.type = source["type"];
+	        result.command = source["command"];
+	        result.url = source["url"];
+	        result.method = source["method"];
+	        result.headers = source["headers"];
+	        result.timeout = source["timeout"];
+	        result.secret = source["secret"];
+	        result.inject_output = source["inject_output"];
+	        return result;
+	    }
+	}
+	
+	export class HookConfigJSON {
+	    on_user_message?: Hook[];
+	    pre_tool_use?: Hook[];
+	    post_tool_use?: Hook[];
+	    on_agent_stop?: Hook[];
+	    on_stream_stop?: Hook[];
+	
+	    static createFrom(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        const result = new HookConfigJSON();
+	        if (source["on_user_message"]) result.on_user_message = source["on_user_message"].map((a:any) => Hook.createFrom(a));
+	        if (source["pre_tool_use"]) result.pre_tool_use = source["pre_tool_use"].map((a:any) => Hook.createFrom(a));
+	        if (source["post_tool_use"]) result.post_tool_use = source["post_tool_use"].map((a:any) => Hook.createFrom(a));
+	        if (source["on_agent_stop"]) result.on_agent_stop = source["on_agent_stop"].map((a:any) => Hook.createFrom(a));
+	        if (source["on_stream_stop"]) result.on_stream_stop = source["on_stream_stop"].map((a:any) => Hook.createFrom(a));
+	        return result;
+	    }
+	}
 
 }
 

@@ -181,6 +181,7 @@ type Model struct {
 	pendingDeviceCodes              []deviceCodeInfo
 	skillsPanel                     *skillsPanelState
 	statsPanel                      *statsPanelState
+	hooksPanel                      *hooksPanelState
 	inspectorPanel                  *inspectorPanelState
 	swarmMgr                        *swarm.Manager
 	acpClientMgr                    *acpclient.ClientManager
@@ -1131,6 +1132,7 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 
 func (m *Model) hasActivePanel() bool {
 	return m.modelPanel != nil ||
+		m.hooksPanel != nil ||
 		m.providerPanel != nil ||
 		m.tgPanel != nil ||
 		m.qqPanel != nil ||

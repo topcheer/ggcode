@@ -12,7 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
-	"github.com/topcheer/ggcode/internal/hooks"
+
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
@@ -319,65 +319,9 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// handleHooksCommand displays the current hook configuration in the chat.
+// handleHooksCommand opens the hooks configuration panel.
 func (m *Model) handleHooksCommand() tea.Cmd {
-	cfg := hooks.HookConfig{}
-	if m.agent != nil {
-		cfg = m.agent.GetHookConfig()
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Hooks:\n\n")
-
-	events := []struct {
-		name  string
-		hooks []hooks.Hook
-	}{
-		{"on_user_message", cfg.OnUserMessage},
-		{"pre_tool_use", cfg.PreToolUse},
-		{"post_tool_use", cfg.PostToolUse},
-		{"on_agent_stop", cfg.OnAgentStop},
-		{"on_stream_stop", cfg.OnStreamStop},
-	}
-
-	total := 0
-	for _, ev := range events {
-		if len(ev.hooks) == 0 {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("%s (%d):\n", ev.name, len(ev.hooks)))
-		for i, h := range ev.hooks {
-			hookType := h.HasType()
-			detail := ""
-			switch hookType {
-			case hooks.HookTypeHTTP:
-				detail = fmt.Sprintf("url=%s", h.URL)
-			default:
-				detail = fmt.Sprintf("cmd=%s", h.Command)
-			}
-			inject := ""
-			if h.InjectOutput {
-				inject = " [inject]"
-			}
-			sb.WriteString(fmt.Sprintf("  [%d] %s | %s | match=%q%s\n", i, hookType, detail, h.Match, inject))
-			total++
-		}
-		sb.WriteString("\n")
-	}
-
-	if total == 0 {
-		sb.WriteString("(no hooks configured — see ggcode.example.yaml for examples)")
-	}
-
-	// Show validation errors if any
-	if errs := hooks.ValidateHooks(cfg); len(errs) > 0 {
-		sb.WriteString("\n⚠ Validation errors:\n")
-		for _, e := range errs {
-			sb.WriteString("  - " + e + "\n")
-		}
-	}
-
-	m.chatWriteSystem(nextSystemID(), sb.String())
+	m.openHooksPanel()
 	return nil
 }
 
