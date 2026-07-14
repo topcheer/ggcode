@@ -12,7 +12,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.3.151`](docs/releases/v1.3.151.md) |
+| Latest documented release | [`v1.3.152`](docs/releases/v1.3.152.md) |
 
 ## Build & Validation
 
@@ -56,8 +56,8 @@ desktop/               Desktop GUI application (Wails-based)
   ggcode-desktop-wails/ Wails desktop app — React frontend, Go backend
   wailskit/            Shared Go backend for Wails desktop (ChatBridge, config, tunnel)
 ggcode-relay/          Standalone relay server for mobile tunnel (WebSocket, SQLite event persistence)
-internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
-  agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
+internal/              706 Go source files (~220k LOC non-test, ~152k LOC test, ~372k total)
+  agent/               Core agent loop, tool execution, autopilot, compaction, memory, validation (agent.go + split files)
   agentruntime/        Interactive runtime core: tool registry assembly, tunnel host, session restore, startup assets, subagent/swarm tunnel bridges, save_memory tool registration, config access
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
   webui/               WebUI HTTP server + WebSocket chat, SPA, config/session REST API, ChatBridge interface
@@ -125,8 +125,9 @@ config/                MCP preset configuration (mcporter.json)
   - **Progressive tool-result clearing + tool-use input clearing** (`agent_precompact.go`) — mechanical context recovery at 50%/65%/75% fill thresholds with keepN 12/8/4; clears old edit/write inputs at the 75% tier.
   - **Trajectory monitoring** — `overseer.go` (5 deterministic modes: spam, read-only stall, stuck file, error escalation, drift with progressive 20/40/60-iter levels), `loop_detect.go` (exact duplicate + 4/7/10 progressive error streak), `repetition_tracker.go` (failed-edit clusters per file), `confidence.go` (holistic 6-signal trajectory scorer), `budget_guard.go` (per-step token-cost trend watch).
   - **Failure learning** — `error_classifier.go` (10-category type-specific guidance on first error), `ratchet.go` + `ratchet_reactive.go` (learned error rules matched proactively and reactively in tool results), `verify_hint.go` (periodic build reminders after source edits, reset when agent runs verify commands).
-  - **Reliability** — `circuit_breaker.go` (3-failure trip / 30s open / 2-success half-open), `dead_letter.go` (failed-tool-call capture for end-of-run review), `cache_keepalive.go` (Anthropic prompt-cache warming pings every 270s during idle).
-  - **Experience capture** — `playbook.go` (strategy pattern learning from successful runs), `reflection.go` (run-level self-assessment), `perf_stats.go` (unified `/perf` stats view).
+  - **Reliability / efficiency** — `cache_keepalive.go` (Anthropic prompt-cache warming pings every 270s during idle), `message_validation.go` (validates and repairs LLM message lists before they are sent to the provider, especially after loading old sessions without checkpoints).
+  - **Context calibration** — `internal/context/token_calibrator.go` (self-calibrating character/token ratios from API usage feedback to improve token estimates and compaction thresholds).
+  - **Experience capture** — `playbook.go` (strategy pattern learning from successful runs), `reflection.go` (run-level self-assessment).
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
 - **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`. **Mode is session-scoped**: switching mode saves to `session.PermissionMode` (persisted in JSONL meta record), not to global config. New sessions default to `cfg.DefaultMode` (or `supervised` if unset). Resuming a session restores its saved mode.
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses JSON files for event/snapshot storage.
@@ -423,4 +424,6 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Cron `queue_if_busy`**: `cron_create` supports `queue_if_busy` (default false). When true, the prompt is queued and runs after the current task finishes instead of being skipped when the agent is busy. Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json`; one-shot reminders are in-memory only.
 - **Cron pause/resume/update/get**: `cron_pause` suspends a job's timer without deleting its configuration. `cron_resume` reactivates a paused job (recomputes NextFire from now). Both are idempotent. Paused jobs persist across restarts. `cron_update` modifies cron expression, prompt, and/or queue_if_busy in-place (job ID stays the same, timer auto-reschedules). `cron_get` shows full job details including complete prompt text (allowed in plan mode).
 - **Cron session switching**: When switching sessions (TUI `/session`, desktop session picker), the cron scheduler calls `SwitchSession` — stops all existing timers, clears all current jobs, and loads jobs from the new session's store file. This ensures cron jobs don't leak across sessions. Cross-workspace session switches also rebind the working directory.
-- **Prompt cache keepalive**: After an agent run completes, a background timer pings the provider every 270s (Anthropic TTL=300s) to keep the prompt cache warm during idle. Saves ~83K tokens per idle-resume. Max 12 touches (~54 min coverage), then auto-stops. Only enabled for Anthropic (prompt caching provider). Cancelled on new user input.
+- **MCP read-only mode**: MCP servers support a `read_only: true` config flag. When enabled, write-type tool calls (write/edit/delete/create/update/execute/run/shell/move/upload/deploy, etc.) are blocked with an error result. Tool descriptions append "(read-only)". Implemented in `internal/mcp/readonly.go`.
+- **LLM message validation**: Before any message list is sent to the provider, `message_validation.go` validates role ordering and repairs missing fields (e.g., assistant messages without content, tool_use blocks without matching tool_results). This is especially important after loading old sessions that may not have checkpoint records. Invalid messages are fixed in-place; if repair is not possible, a descriptive error is returned to the agent.
+- **Token estimation self-calibration**: `internal/context/token_calibrator.go` adjusts the fixed `len/4` heuristic by observing actual API usage per script. ASCII and CJK ratios are bounded and updated incrementally so context fill calculations, budget guard, and clearing thresholds become more accurate over a session.
