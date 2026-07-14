@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { GetHooks, SaveHooks, TestHookMatch } from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
@@ -29,6 +29,27 @@ export function HooksSettings() {
   const [message, setMessage] = useState('')
   const [testInput, setTestInput] = useState('')
   const [testResult, setTestResult] = useState<{ matched: boolean; error: string } | null>(null)
+  const testTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Auto-evaluate regex tester with debounce
+  useEffect(() => {
+    if (testTimer.current) clearTimeout(testTimer.current)
+    const mode = editForm.match_mode || 'glob'
+    const pattern = editForm.match || '*'
+    if (!pattern || pattern === '*') {
+      setTestResult(null)
+      return
+    }
+    testTimer.current = setTimeout(async () => {
+      try {
+        const result = await TestHookMatch(mode, pattern, testInput, '')
+        setTestResult({ matched: result.matched, error: result.error || '' })
+      } catch (e) {
+        setTestResult({ matched: false, error: String(e) })
+      }
+    }, 300)
+    return () => { if (testTimer.current) clearTimeout(testTimer.current) }
+  }, [editForm.match_mode, editForm.match, testInput])
 
   const loadHooks = useCallback(async () => {
     try {
@@ -161,7 +182,6 @@ export function HooksSettings() {
                   style={inputStyle}
                   placeholder={t('settings.hooksTesterPlaceholder')}
                 />
-                <button style={btnSmall} onClick={runTest}>{t('settings.hooksTestBtn')}</button>
               </div>
               {testResult && (
                 <div style={{ fontSize: '13px' }}>
