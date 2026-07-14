@@ -26,12 +26,6 @@ func (m Model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
-	if m.fileBrowser != nil {
-		return tea.NewView(m.renderFileBrowser())
-	}
-	if m.previewPanel != nil {
-		return tea.NewView(m.renderPreviewPanel())
-	}
 	header := ""
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()

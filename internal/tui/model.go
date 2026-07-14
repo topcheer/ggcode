@@ -184,19 +184,18 @@ type Model struct {
 	inspectorPanel                  *inspectorPanelState
 	swarmMgr                        *swarm.Manager
 	acpClientMgr                    *acpclient.ClientManager
-	previewPanel                    *previewPanelState
-	fileBrowser                     *fileBrowserState
-	harnessPanel                    *harnessPanelState
-	harnessContextPrompt            *harnessContextPromptState
-	impersonatePanel                *impersonatePanelState
-	lanChatPanel                    *lanChatPanelState
-	lanChatHub                      *lanchat.Hub
-	lanChatNotice                   string
-	lanChatUnread                   int
-	lanChatPendingComplete          string // message ID to send "completed" receipt when agent finishes
-	qrOverlay                       *qrOverlayState
-	tunnelStarting                  bool
-	tunnelGeneration                uint64
+
+	harnessPanel           *harnessPanelState
+	harnessContextPrompt   *harnessContextPromptState
+	impersonatePanel       *impersonatePanelState
+	lanChatPanel           *lanChatPanelState
+	lanChatHub             *lanchat.Hub
+	lanChatNotice          string
+	lanChatUnread          int
+	lanChatPendingComplete string // message ID to send "completed" receipt when agent finishes
+	qrOverlay              *qrOverlayState
+	tunnelStarting         bool
+	tunnelGeneration       uint64
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -1131,9 +1130,7 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 }
 
 func (m *Model) hasActivePanel() bool {
-	return m.fileBrowser != nil ||
-		m.previewPanel != nil ||
-		m.modelPanel != nil ||
+	return m.modelPanel != nil ||
 		m.providerPanel != nil ||
 		m.tgPanel != nil ||
 		m.qqPanel != nil ||

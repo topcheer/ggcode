@@ -89,22 +89,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// Route mouse wheel to the active panel's viewport if one is open.
 		// MouseWheelMsg implements the MouseMsg interface, so it must appear
 		// BEFORE case tea.MouseMsg in this type switch to be matched here.
-		if m.fileBrowser != nil && m.fileBrowser.preview != nil {
-			if msg.Button == tea.MouseWheelUp {
-				m.fileBrowser.preview.viewport.ScrollUp(3)
-			} else {
-				m.fileBrowser.preview.viewport.ScrollDown(3)
-			}
-			return m, nil
-		}
-		if m.previewPanel != nil {
-			if msg.Button == tea.MouseWheelUp {
-				m.previewPanel.viewport.ScrollUp(3)
-			} else {
-				m.previewPanel.viewport.ScrollDown(3)
-			}
-			return m, nil
-		}
 		// Default: scroll the main conversation.
 		if m.chatList != nil && m.chatList.Len() > 0 {
 			if msg.Button == tea.MouseWheelUp {
@@ -116,12 +100,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		if m.fileBrowser != nil {
-			return m.handleFileBrowserMouse(msg)
-		}
-		if m.previewPanel != nil {
-			return m.handlePreviewMouse(msg)
-		}
 		// Option/Alt+mouse: release mouse to terminal for native text selection
 		return m, nil
 

@@ -1090,19 +1090,6 @@ func TestScenario_UserOpensIMPanels(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: File browser opened with ctrl+f
-// ---------------------------------------------------------------------------
-
-func TestScenario_UserOpensFileBrowser(t *testing.T) {
-	m := newTestModel()
-	updated, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+f"})
-	m = updated.(Model)
-	if m.fileBrowser == nil {
-		t.Error("expected fileBrowser opened after ctrl+f")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Scenario: shouldExecuteWhileBusy function
 // ---------------------------------------------------------------------------
 

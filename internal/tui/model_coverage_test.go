@@ -573,18 +573,6 @@ func TestCloseActivePanel_SkillsPanel(t *testing.T) {
 	}
 }
 
-func TestCloseActivePanel_PreviewPanel(t *testing.T) {
-	m := newTestModel()
-	// previewPanel is managed via the file browser; it's not in closeActivePanel's
-	// switch. Verify that setting it without other panels returns false.
-	m.previewPanel = &previewPanelState{}
-	// previewPanel is not handled by closeActivePanel — it has its own close path.
-	// This test documents that behavior.
-	if m.closeActivePanel() {
-		t.Error("expected false: previewPanel is not closed by closeActivePanel")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // drainPendingInterrupt
 // ---------------------------------------------------------------------------

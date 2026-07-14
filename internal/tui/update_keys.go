@@ -53,10 +53,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 		return m, nil
 	}
-	if msg.String() == "ctrl+f" {
-		m.toggleFileBrowser()
-		return m, nil
-	}
+
 	// Iteration 1: Ctrl+\ toggles compact mode (hide/show sidebar)
 	if msg.String() == "ctrl+\\" {
 		m.compactMode = !m.compactMode
@@ -83,13 +80,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		m.handleClearChat()
 		return m, nil
 	}
-	if m.fileBrowser != nil {
-		return m.handleFileBrowserKey(msg)
-	}
-	if m.previewPanel != nil {
-		return m.handlePreviewKey(msg)
-	}
-
 	if msg.String() == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
 		return m, nil
 	}
@@ -379,11 +369,6 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		case "esc", "ctrl+c":
 			return m, m.handleHarnessCheckpointConfirm(false)
 		}
-		return m, nil
-	}
-
-	if msg.String() == "esc" && m.previewPanel != nil && !m.subAgentFollow.isActive() && !m.shellMode && !m.chatMode {
-		m.closePreviewPanel()
 		return m, nil
 	}
 

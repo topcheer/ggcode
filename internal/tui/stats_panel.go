@@ -15,9 +15,31 @@ type statsPanelState struct {
 }
 
 func (m *Model) openStatsPanel() {
-	panel := &statsPanelState{viewport: newPreviewViewport()}
+	panel := &statsPanelState{viewport: newViewport()}
 	m.statsPanel = panel
 	m.syncStatsPanelViewport(true)
+}
+
+func newViewport() ViewportModel {
+	vp := NewViewportModel(1, 1)
+	vp.autoFollow = false
+	return vp
+}
+
+func (m Model) panelContentWidth() int {
+	width := m.viewWidth() - m.terminalRightMargin() - 4
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
+func (m Model) panelContentHeight() int {
+	height := m.viewHeight() - 5
+	if height < 3 {
+		return 3
+	}
+	return height
 }
 
 func (m *Model) closeStatsPanel() {
@@ -28,8 +50,8 @@ func (m *Model) syncStatsPanelViewport(initial bool) {
 	if m.statsPanel == nil {
 		return
 	}
-	width := m.previewContentWidth()
-	height := m.previewContentHeight()
+	width := m.panelContentWidth()
+	height := m.panelContentHeight()
 	if width < 1 {
 		width = 1
 	}
@@ -52,7 +74,7 @@ func (m Model) renderStatsPanel() string {
 	if m.statsPanel == nil {
 		return ""
 	}
-	width := m.previewContentWidth()
+	width := m.panelContentWidth()
 	contentWidth := max(12, width)
 	meta := statsPanelText(m.currentLanguage(), "session")
 	if scroll := m.statsPanel.viewport.ScrollIndicatorStyle(); scroll != "" {

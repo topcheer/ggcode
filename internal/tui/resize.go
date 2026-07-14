@@ -27,14 +27,13 @@ func (m *Model) handleResize(width, height int) {
 	}
 	m.input.SetWidth(inputWidth)
 	m.syncQuestionnaireInputWidth()
-	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
+	prewarmMarkdownRenderers(m.panelContentWidth())
 	// Update conversation panel dimensions on resize so chatList re-renders
 	// correctly at the new terminal size.
 	m.syncConversationViewport()
 	// chatList items cache by width — will re-render automatically on next Render()
-	m.syncPreviewViewport(false)
 	m.syncStatsPanelViewport(false)
-	m.syncFileBrowser(false)
+
 }
 
 // composerHeight returns the textarea height based on the number of lines
