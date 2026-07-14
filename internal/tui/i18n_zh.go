@@ -1234,7 +1234,61 @@ func zhCatalog(key string) string {
 	case "slash.diff":
 		return "在聊天中显示 git diff（支持 --cached、<文件>、--stat）"
 	case "slash.hooks":
-		return "显示已配置的 hooks（所有事件、类型、匹配规则）"
+		return "打开 hooks 配置面板"
+	case "hooks.title":
+		return "Hooks 配置"
+	case "hooks.events":
+		return "事件"
+	case "hooks.hooks":
+		return "Hooks"
+	case "hooks.noHooks":
+		return "（此事件暂无 hooks）"
+	case "hooks.add":
+		return "+ 添加 Hook"
+	case "hooks.delete":
+		return "删除"
+	case "hooks.edit":
+		return "编辑"
+	case "hooks.toggleInject":
+		return "切换注入"
+	case "hooks.close":
+		return "Esc: 关闭"
+	case "hooks.event.onUserMessage":
+		return "用户消息时"
+	case "hooks.event.preToolUse":
+		return "工具使用前"
+	case "hooks.event.postToolUse":
+		return "工具使用后"
+	case "hooks.event.onAgentStop":
+		return "Agent 停止时"
+	case "hooks.event.onStreamStop":
+		return "流停止时"
+	case "hooks.field.match":
+		return "匹配 (* 匹配全部)"
+	case "hooks.field.type":
+		return "类型 (command/http)"
+	case "hooks.field.command":
+		return "命令"
+	case "hooks.field.url":
+		return "URL"
+	case "hooks.field.secret":
+		return "密钥"
+	case "hooks.field.inject":
+		return "注入输出 (true/false)"
+	case "hooks.msg.noSelect":
+		return "未选择 hook"
+	case "hooks.msg.deleted":
+		return "hook 已删除"
+	case "hooks.msg.cancelled":
+		return "编辑已取消"
+	case "hooks.msg.added":
+		return "hook 已添加"
+	case "hooks.msg.updated":
+		return "hook 已更新"
+	case "hooks.msg.toggled":
+		return "inject_output 已切换"
+	case "hooks.msg.saved":
+		return "hooks 已保存到配置"
 	case "slash.cost":
 		return "显示本次会话的 token 用量和预估费用"
 	case "slash.review":

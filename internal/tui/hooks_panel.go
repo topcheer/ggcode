@@ -36,21 +36,25 @@ var hookEventNames = []string{
 	"on_stream_stop",
 }
 
-var hookEventLabels = []string{
-	"On User Message",
-	"Pre Tool Use",
-	"Post Tool Use",
-	"On Agent Stop",
-	"On Stream Stop",
+func (m *Model) hookEventLabels() []string {
+	return []string{
+		tr(m.language, "hooks.event.onUserMessage"),
+		tr(m.language, "hooks.event.preToolUse"),
+		tr(m.language, "hooks.event.postToolUse"),
+		tr(m.language, "hooks.event.onAgentStop"),
+		tr(m.language, "hooks.event.onStreamStop"),
+	}
 }
 
-var hookEditFieldLabels = []string{
-	"Match (* for all)",
-	"Type (command/http)",
-	"Command",
-	"URL",
-	"Secret",
-	"Inject Output (true/false)",
+func (m *Model) hookEditFieldLabels() []string {
+	return []string{
+		tr(m.language, "hooks.field.match"),
+		tr(m.language, "hooks.field.type"),
+		tr(m.language, "hooks.field.command"),
+		tr(m.language, "hooks.field.url"),
+		tr(m.language, "hooks.field.secret"),
+		tr(m.language, "hooks.field.inject"),
+	}
 }
 
 func (m *Model) openHooksPanel() {
@@ -144,7 +148,7 @@ func (m Model) renderHooksPanel() string {
 	rightWidth := width - leftWidth - 3
 
 	// Event list
-	for i, label := range hookEventLabels {
+	for i, label := range m.hookEventLabels() {
 		hooksList := m.getEventHooks(i)
 		count := len(hooksList)
 		marker := "  "
@@ -164,7 +168,7 @@ func (m Model) renderHooksPanel() string {
 	// Right column: hooks for selected event
 	hooksList := m.getEventHooks(p.selectedEvent)
 	if len(hooksList) == 0 {
-		sb.WriteString("  (no hooks configured for this event)\n")
+		sb.WriteString("  " + tr(m.language, "hooks.noHooks") + "\n")
 	} else {
 		for i, h := range hooksList {
 			marker := "  "
@@ -217,10 +221,11 @@ func (m Model) renderHooksEditForm() string {
 	}
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")).Render(title))
 	sb.WriteString("\n\n")
-	sb.WriteString(fmt.Sprintf("Event: %s\n\n", hookEventLabels[p.selectedEvent]))
+	eventLabels := m.hookEventLabels()
+	sb.WriteString(fmt.Sprintf("%s: %s\n\n", tr(m.language, "hooks.events"), eventLabels[p.selectedEvent]))
 
 	values := []string{f.match, f.hookType, f.command, f.url, f.secret, fmt.Sprintf("%v", f.injectOutput)}
-	for i, label := range hookEditFieldLabels {
+	for i, label := range m.hookEditFieldLabels() {
 		marker := "  "
 		if i == p.fieldIdx {
 			marker = "▶ "
@@ -284,7 +289,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "e":
 		hooksList := m.getEventHooks(p.selectedEvent)
 		if p.selectedHook >= len(hooksList) {
-			p.message = "no hook selected"
+			p.message = tr(m.language, "hooks.msg.noSelect")
 			break
 		}
 		h := hooksList[p.selectedHook]
@@ -303,7 +308,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "d":
 		hooksList := m.getEventHooks(p.selectedEvent)
 		if p.selectedHook >= len(hooksList) {
-			p.message = "no hook selected"
+			p.message = tr(m.language, "hooks.msg.noSelect")
 			break
 		}
 		hooksList = append(hooksList[:p.selectedHook], hooksList[p.selectedHook+1:]...)
@@ -311,7 +316,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if p.selectedHook >= len(hooksList) && p.selectedHook > 0 {
 			p.selectedHook--
 		}
-		p.message = "hook deleted"
+		p.message = tr(m.language, "hooks.msg.deleted")
 
 	case "enter":
 		// toggle inject_output on selected hook
@@ -319,7 +324,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if p.selectedHook < len(hooksList) {
 			hooksList[p.selectedHook].InjectOutput = !hooksList[p.selectedHook].InjectOutput
 			m.setEventHooks(p.selectedEvent, hooksList)
-			p.message = "inject_output toggled"
+			p.message = tr(m.language, "hooks.msg.toggled")
 		}
 	}
 
@@ -333,11 +338,11 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		p.editMode = false
-		p.message = "edit cancelled"
+		p.message = tr(m.language, "hooks.msg.cancelled")
 
 	case "tab":
 		p.fieldIdx++
-		if p.fieldIdx >= len(hookEditFieldLabels) {
+		if p.fieldIdx >= len(m.hookEditFieldLabels()) {
 			p.fieldIdx = 0
 		}
 
@@ -356,11 +361,11 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if p.editingNew {
 			hooksList = append(hooksList, h)
 			p.selectedHook = len(hooksList) - 1
-			p.message = "hook added"
+			p.message = tr(m.language, "hooks.msg.added")
 		} else {
 			if p.selectedHook < len(hooksList) {
 				hooksList[p.selectedHook] = h
-				p.message = "hook updated"
+				p.message = tr(m.language, "hooks.msg.updated")
 			}
 		}
 		m.setEventHooks(p.selectedEvent, hooksList)

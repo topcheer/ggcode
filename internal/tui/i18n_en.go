@@ -1222,7 +1222,61 @@ func enCatalog(key string) string {
 	case "slash.diff":
 		return "Show git diff in chat (supports --cached, <file>, --stat)"
 	case "slash.hooks":
-		return "Show configured hooks (all events, types, match patterns)"
+		return "Open hooks configuration panel"
+	case "hooks.title":
+		return "Hooks Configuration"
+	case "hooks.events":
+		return "Events"
+	case "hooks.hooks":
+		return "Hooks"
+	case "hooks.noHooks":
+		return "(no hooks configured for this event)"
+	case "hooks.add":
+		return "+ Add Hook"
+	case "hooks.delete":
+		return "Delete"
+	case "hooks.edit":
+		return "Edit"
+	case "hooks.toggleInject":
+		return "Toggle Inject"
+	case "hooks.close":
+		return "Esc: Close"
+	case "hooks.event.onUserMessage":
+		return "On User Message"
+	case "hooks.event.preToolUse":
+		return "Pre Tool Use"
+	case "hooks.event.postToolUse":
+		return "Post Tool Use"
+	case "hooks.event.onAgentStop":
+		return "On Agent Stop"
+	case "hooks.event.onStreamStop":
+		return "On Stream Stop"
+	case "hooks.field.match":
+		return "Match (* for all)"
+	case "hooks.field.type":
+		return "Type (command/http)"
+	case "hooks.field.command":
+		return "Command"
+	case "hooks.field.url":
+		return "URL"
+	case "hooks.field.secret":
+		return "Secret"
+	case "hooks.field.inject":
+		return "Inject Output (true/false)"
+	case "hooks.msg.noSelect":
+		return "no hook selected"
+	case "hooks.msg.deleted":
+		return "hook deleted"
+	case "hooks.msg.cancelled":
+		return "edit cancelled"
+	case "hooks.msg.added":
+		return "hook added"
+	case "hooks.msg.updated":
+		return "hook updated"
+	case "hooks.msg.toggled":
+		return "inject_output toggled"
+	case "hooks.msg.saved":
+		return "hooks saved to config"
 	case "slash.cost":
 		return "Show session token usage and estimated cost"
 	case "slash.review":
