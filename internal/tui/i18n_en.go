@@ -1277,6 +1277,12 @@ func enCatalog(key string) string {
 		return "inject_output toggled"
 	case "hooks.msg.saved":
 		return "hooks saved to config"
+	case "hooks.addTitle":
+		return " Add Hook "
+	case "hooks.editTitle":
+		return " Edit Hook "
+	case "hooks.editHelp":
+		return "\n [Enter] save  [Tab] next field  [Esc] cancel"
 	case "slash.cost":
 		return "Show session token usage and estimated cost"
 	case "slash.review":

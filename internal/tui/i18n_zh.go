@@ -1289,6 +1289,12 @@ func zhCatalog(key string) string {
 		return "inject_output 已切换"
 	case "hooks.msg.saved":
 		return "hooks 已保存到配置"
+	case "hooks.addTitle":
+		return " 添加 Hook "
+	case "hooks.editTitle":
+		return " 编辑 Hook "
+	case "hooks.editHelp":
+		return "\n [Enter] 保存  [Tab] 切换字段  [Esc] 取消"
 	case "slash.cost":
 		return "显示本次会话的 token 用量和预估费用"
 	case "slash.review":

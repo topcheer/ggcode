@@ -215,9 +215,9 @@ func (m Model) renderHooksEditForm() string {
 	f := p.editFields
 
 	var sb strings.Builder
-	title := " Add Hook "
+	title := tr(m.language, "hooks.addTitle")
 	if !p.editingNew {
-		title = " Edit Hook "
+		title = tr(m.language, "hooks.editTitle")
 	}
 	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")).Render(title))
 	sb.WriteString("\n\n")
@@ -242,7 +242,7 @@ func (m Model) renderHooksEditForm() string {
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("\n [Enter] save  [Tab] next field  [Esc] cancel")
+	sb.WriteString(tr(m.language, "hooks.editHelp"))
 	return sb.String()
 }
 
