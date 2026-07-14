@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-07-14
+> Last updated: 2026-07-15
 
 ## Overview
 
@@ -14,7 +14,7 @@ The core agent loop is complemented by several subsystems:
 
 - **Harness control plane** (`ggcode harness ...`): scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work with dependency-gated backlogs, binds tasks to bounded contexts, summarizes queue health per context, exposes owner-centric actionable inboxes and batch actions, creates isolated git worktrees, persists delivery evidence, and exposes review/approval, promotion, and release-batch loops — all built around the existing runtime rather than forking a second agent architecture.
 - **A2A mesh**: Multiple ggcode instances discover each other, authenticate via multiple schemes (API key, OAuth2+PKCE, Device Flow, OIDC, mTLS), and call tools across instances transparently via MCP bridge. Optional mDNS LAN discovery.
-- **IM gateway**: Remote coding via Telegram, QQ, Discord, Slack, DingTalk, Feishu, WeCom, WhatsApp, and more with slash commands for adapter management.
+- **IM gateway**: Remote coding via 16 IM platforms (QQ, Telegram, Discord, Slack, DingTalk, Feishu, WeCom, WeChat, WhatsApp, Signal, Matrix, Mattermost, IRC, Nostr, Twitch, PC) with slash commands for adapter management.
 - **Mobile relay**: WebSocket tunnel broker that records and replays agent events to mobile clients via a standalone relay server, enabling mobile/remote interaction with running sessions.
 - **Desktop GUI**: Wails-based application (React frontend + Go backend) with visual chat, IM integration, tool approval dialogs, session sidebar, and LSP language server status panel.
 
@@ -85,6 +85,14 @@ internal/
     agent_precompact.go    # Pre-compaction heuristics and context inference
     agent_memory.go        # Memory management helpers (project/auto memory)
     agent_tool.go          # Tool execution, diff confirmation, pre/post hooks
+    agent_prompt_inject.go  # Dynamic system prompt injection (lanchat peers, playbook hints)
+    # Optimization layers (see Agent Optimization Stack below):
+    # speculate.go, memoize.go, budget_guard.go, cache_keepalive.go,
+    # error_classifier.go, confidence.go, playbook.go, ratchet.go,
+    # ratchet_reactive.go, verify_hint.go, tool_output_guard.go,
+    # parallel_tools.go, overseer.go, loop_detect.go,
+    # repetition_tracker.go, reflection.go, verify.go,
+    # autopilot_strategist.go, todo_check.go
 
   agentruntime/            # Unified runtime layer for desktop, daemon, and TUI
     config_access.go       # Config read/write accessors shared across surfaces
@@ -260,6 +268,7 @@ internal/
     irc_adapter.go         # IRC adapter
     nostr_adapter.go       # Nostr adapter
     twitch_adapter.go      # Twitch adapter
+    pc_adapter.go           # PC (webhook-based) adapter
     stt/                   # Speech-to-text support for IM voice messages
 
   tunnel/                  # Tunnel broker for mobile relay
@@ -460,9 +469,13 @@ internal/
 
   lanchat/               # LAN Chat P2P messaging between ggcode instances
     hub.go                 # Hub: message routing, presence, identity
-    mdns.go                # mDNS discovery (_ggcode._tcp)
-    transport.go           # TCP/UDP transport with fallback
+    types.go               # Core types (Message, Participant, Nickname)
+    handlers.go            # Message handlers
+    udp_transport.go       # TCP/UDP transport with fallback (mDNS via transport)
     store.go               # Message persistence (session JSONL)
+    nicknames.go           # Nickname management
+    attachment.go          # File attachment support
+    peers_prompt.go        # Peer list prompt generation
 
   uiusage/                 # UI usage display
     display.go             # Token usage display formatting for UI surfaces

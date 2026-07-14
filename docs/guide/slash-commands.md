@@ -160,4 +160,13 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Ctrl+C` | Cancel current operation |
 | `Ctrl+D` | Exit ggcode |
 | `Ctrl+R` | Compact conversation |
+| `Ctrl+L` | Clear screen (equivalent to `/clear`) |
+| `Ctrl+G` | Cycle reasoning effort level |
+| `Ctrl+\` | Toggle compact mode (hide/show sidebar) |
+| `Ctrl+T` | Toggle config save scope (global ↔ instance) |
+| `Ctrl+X` | Open terminal pane menu (tmux/Ghostty/Warp/Kitty/iTerm2) |
+| `Ctrl+Shift+C` | Copy last assistant response to clipboard |
+| `Shift+Tab` | Cycle permission mode (supervised → plan → auto → bypass → autopilot) |
+| `Alt+Up` / `Alt+K` | Cycle to previous session |
+| `Alt+Down` / `Alt+J` | Cycle to next session |
 | `Esc Esc` (double) | Force quit (skip cleanup) |
