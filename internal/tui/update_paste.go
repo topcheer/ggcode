@@ -1,8 +1,14 @@
 package tui
 
 import (
+	"runtime"
+
 	tea "charm.land/bubbletea/v2"
 )
+
+type textPasteMsg struct {
+	Content string
+}
 
 // handlePaste handles the tea.PasteMsg case.
 func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -216,8 +222,14 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		}
 		return m, cmd
 	}
+	// Forward paste to main input.
+	if runtime.GOOS == "windows" {
+		// On Windows terminals Ctrl+V is usually intercepted and delivered as a
+		// PasteMsg. Try reading a clipboard image first; if the clipboard holds
+		// text instead, fall back to a plain text paste.
+		return m, m.handleClipboardPasteFallback(msg)
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
-
 }

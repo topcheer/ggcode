@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/image"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -584,5 +585,64 @@ func TestPCPanelCreateModePaste(t *testing.T) {
 	}
 	if strings.Contains(m.input.Value(), "session-label") {
 		t.Fatal("expected main input to NOT receive paste when PC panel create mode is active")
+	}
+}
+
+// --- Windows main input image-paste fallback ---
+
+func TestHandleClipboardPasteFallback_AttachesImage(t *testing.T) {
+	m := setupModelForPaste()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		img := image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10}
+		return imageAttachedMsg{
+			placeholder: image.Placeholder("ggcode-image-cafe.png", img),
+			img:         img,
+			filename:    "ggcode-image-cafe.png",
+			sourcePath:  "clipboard",
+		}, nil
+	}
+
+	cmd := m.handleClipboardPasteFallback(tea.PasteMsg{Content: ""})
+	if cmd == nil {
+		t.Fatal("expected fallback command")
+	}
+	msg := cmd()
+	attached, ok := msg.(imageAttachedMsg)
+	if !ok {
+		t.Fatalf("expected imageAttachedMsg, got %T", msg)
+	}
+	if attached.filename != "ggcode-image-cafe.png" {
+		t.Fatalf("unexpected filename %q", attached.filename)
+	}
+}
+
+func TestHandleClipboardPasteFallback_FallsBackToText(t *testing.T) {
+	m := setupModelForPaste()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		return imageAttachedMsg{}, image.ErrClipboardImageUnavailable
+	}
+
+	cmd := m.handleClipboardPasteFallback(tea.PasteMsg{Content: "hello from clipboard"})
+	if cmd == nil {
+		t.Fatal("expected fallback command")
+	}
+	msg := cmd()
+	fallback, ok := msg.(textPasteMsg)
+	if !ok {
+		t.Fatalf("expected textPasteMsg, got %T", msg)
+	}
+	if fallback.Content != "hello from clipboard" {
+		t.Fatalf("expected text content preserved, got %q", fallback.Content)
+	}
+}
+
+func TestTextPasteMsgHandledByUpdate(t *testing.T) {
+	m := setupModelForPaste()
+
+	updated, _ := m.Update(textPasteMsg{Content: "pasted text fallback"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.input.Value(), "pasted text fallback") {
+		t.Fatalf("expected main input to contain text paste fallback, got %q", m.input.Value())
 	}
 }

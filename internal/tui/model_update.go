@@ -639,6 +639,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.pendingImages = append(m.pendingImages, msg)
 		return m, nil
 
+	case textPasteMsg:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(tea.PasteMsg{Content: msg.Content})
+		return m, cmd
+
 	case statusMsg:
 		if m.runCanceled || !m.loading {
 			return m, nil

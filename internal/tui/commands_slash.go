@@ -413,6 +413,27 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 	}
 }
 
+// handleClipboardPasteFallback is used for tea.PasteMsg on Windows where the
+// Ctrl+V keypress is intercepted by the terminal. It attempts to load a
+// clipboard image; if the clipboard contains text instead, it falls back to a
+// plain text paste message.
+func (m *Model) handleClipboardPasteFallback(original tea.PasteMsg) tea.Cmd {
+	return func() tea.Msg {
+		loader := m.clipboardLoader
+		if loader == nil {
+			loader = loadClipboardImage
+		}
+		msg, err := loader()
+		if err == nil {
+			return msg
+		}
+		if errors.Is(err, image.ErrClipboardImageUnavailable) {
+			return textPasteMsg{Content: original.Content}
+		}
+		return systemNotifyMsg{Text: fmt.Sprintf(m.t("image.clipboard_failed"), err)}
+	}
+}
+
 func (m *Model) handleRestartCommand(text string) tea.Cmd {
 	// Check for "debug" argument
 	parts := strings.Fields(text)
