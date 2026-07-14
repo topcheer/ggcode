@@ -313,7 +313,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Plugin interface**: Plugins must implement `plugin.Plugin` (Name, Tools, Init)
 - **Commit style**: Conventional commits — `fix:`, `feat:`, `chore:`, `docs:`, `ci:`
 - **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected; only `vendor`/`endpoint`/`vendors` schema is supported
-- **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl` with checkpoint support after summarize compaction. Meta records persist session-scoped preferences: `permission_mode` and `sidebar_visible` (using `*bool` to distinguish unset from explicitly-false).
+- **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl` with checkpoint support after summarize compaction. Per-message timestamps recorded in each JSONL message record (backfilled to 6 hours ago for sessions created before the timestamp feature). Meta records persist session-scoped preferences: `permission_mode` and `sidebar_visible` (using `*bool` to distinguish unset from explicitly-false).
 - **Storage**: Harness uses JSON files for events/snapshots; sessions use JSONL format
 - **Token persistence**: OAuth2 tokens cached to `~/.ggcode/oauth-tokens/{provider}-{clientID}.json` with 0600 permissions; per-client isolation prevents overwrites between instances
 - **Mute is in-memory**: IM adapter mute state is not persisted to the binding store — daemon restart recovers all adapters

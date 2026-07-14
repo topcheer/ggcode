@@ -442,6 +442,7 @@ internal/
                            #   Meta record persists: permission_mode, sidebar_visible (*bool),
                            #   title, workspace, vendor, endpoint, model, token usage.
                            #   Checkpoint support for summarize compaction.
+                           #   Per-message timestamps with auto-backfill for legacy sessions.
     lock.go                # Session file locking (cross-platform)
     lock_unix.go           # Unix flock-based locking
     lock_windows.go        # Windows LockFileEx-based locking
@@ -535,7 +536,7 @@ CI alignment: `scripts/dev/verify-ci.sh` mirrors the CI pipeline and clears prov
 - **MCP client**: Spawns fresh process per tool call (`callToolStandalone`); HTTP transport supports OAuth 2.1 with automatic metadata discovery, dynamic client registration, device flow, and token refresh
 - **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai), Copilot (custom transport on top of the provider abstraction)
 - **IM routing**: IM events are fanned out to all bound adapters; per-channel echo suppression skips the originating adapter for user mirror messages
-- **Session format**: JSONL with index.json metadata; checkpoints recorded inline after compaction
+- **Session format**: JSONL with index.json metadata; checkpoints recorded inline after compaction; per-message timestamps in each message record (auto-backfilled to 6 hours ago for pre-timestamp sessions on load)
 - **A2A multi-auth**: Server advertises enabled auth schemes in agent card; client auto-negotiates the strongest available. Auth middleware validates each scheme independently. Multiple schemes can coexist.
 - **Token cache**: OAuth2/OIDC tokens cached at `~/.ggcode/oauth-tokens/{provider}-{clientID[:12]}.json` with per-client isolation. Same client_id = shared token; different client_id = isolated.
 - **IM mute**: In-memory only (not persisted to binding store). `MuteAllExcept(adapter)` prevents self-mute race. Daemon restart recovers all adapters.
