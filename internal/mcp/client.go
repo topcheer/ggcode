@@ -669,27 +669,6 @@ func extractAllSSEData(body []byte) [][]byte {
 	return events
 }
 
-func extractSSEData(body []byte) []byte {
-	scanner := bufio.NewScanner(bytes.NewReader(body))
-	// MCP responses can have very large data lines (e.g., GitHub returns 100K+ tool lists).
-	// The default bufio.MaxScanTokenSize (64KB) is too small.
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	var dataLines []string
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "data:"):
-			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		case strings.TrimSpace(line) == "" && len(dataLines) > 0:
-			return []byte(strings.Join(dataLines, "\n"))
-		}
-	}
-	if len(dataLines) == 0 {
-		return nil
-	}
-	return []byte(strings.Join(dataLines, "\n"))
-}
-
 func cloneStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil

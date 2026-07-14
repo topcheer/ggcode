@@ -332,18 +332,6 @@ func parseReleaseSources(raw string) []releaseSource {
 	return out
 }
 
-func parseReleaseSource(raw string) releaseSource {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return releaseSource{}
-	}
-	repoPath := "/" + owner + "/" + repo
-	if strings.Contains(raw, repoPath) {
-		return releaseSource{baseURL: raw}
-	}
-	return releaseSource{proxyPrefix: raw + "/"}
-}
-
 func parseReleaseSourceCandidates(raw string) []releaseSource {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {

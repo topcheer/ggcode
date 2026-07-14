@@ -5,8 +5,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // sanitizationRule is a single regex-based replacement applied to scenario text
@@ -69,6 +67,3 @@ func truncateSanitized(s string, max int) string {
 
 // atomicTruncateLog rewrites the scenario log; exposed for ClearSkillScenarios
 // future variants. Currently unused outside tests.
-func atomicTruncateLog(path string) error {
-	return util.AtomicWriteFile(path, []byte{}, 0600)
-}

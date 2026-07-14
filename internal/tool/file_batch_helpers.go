@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,12 +54,6 @@ type MultiFileEditContent struct {
 	FailedPaths  []string                  `json:"failed_paths"`
 	SkippedPaths []string                  `json:"skipped_paths"`
 	Results      []MultiFileEditFileResult `json:"results"`
-}
-
-func parseMultiFileEditContent(content string) (MultiFileEditContent, error) {
-	var out MultiFileEditContent
-	err := json.Unmarshal([]byte(content), &out)
-	return out, err
 }
 
 func cleanAbsolutePath(path string) (string, error) {

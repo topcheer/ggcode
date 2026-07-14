@@ -215,10 +215,9 @@ func (t Grep) Execute(ctx context.Context, input json.RawMessage) (Result, error
 // ── rg (ripgrep) path ────────────────────────────────────────────
 
 var (
-	rgPath    string
-	rgOnce    sync.Once
-	rgInstall sync.Once
-	rgTrying  atomic.Bool // prevent concurrent install attempts
+	rgPath   string
+	rgOnce   sync.Once
+	rgTrying atomic.Bool // prevent concurrent install attempts
 )
 
 func rgAvailable() bool {
