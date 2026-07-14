@@ -1,8 +1,8 @@
 # Multi-Agent Execution Modes
 
-> Last updated: 2026-05-09
+> Last updated: 2026-07-15
 
-ggcode has three mechanisms for delegating work to independent agents. Each differs in isolation level, tool access, and workspace semantics.
+ggcode has multiple mechanisms for delegating work to independent agents. Each differs in isolation level, tool access, and workspace semantics.
 
 ## Quick Comparison
 
@@ -187,3 +187,6 @@ run.go ExecuteTask():
 | Isolated change with review/promotion, git safety | **Harness Worker** |
 | Need MCP tools that aren't connected yet | **Swarm Teammate** (live registry) or **Harness Worker** (fresh process) |
 | Need git isolation / code review | **Harness Worker** only |
+| Real-time question/coordination with other ggcode instances on LAN | **LAN Chat** (`lanchat` tool) |
+| Fire-and-forget code editing in another workspace | **A2A Remote** (`a2a_remote` tool) |
+| Delegate to external CLI agent (Claude, Codex, Copilot, etc.) | **Delegate** (`delegate` tool) |

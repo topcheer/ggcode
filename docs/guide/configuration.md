@@ -177,6 +177,29 @@ is saved to the session's metadata — not to this config file. This means:
 
 See [Permission Modes](./modes.md) for details.
 
+## Hooks
+
+Configure lifecycle hooks for security policies, auto-formatting, CI/CD triggers, audit logging, and custom automation:
+
+```yaml
+hooks:
+  on_user_message:
+    - match: "*"
+      type: http
+      url: "https://audit.example.com/log"
+
+  pre_tool_use:
+    - match: "run_command(rm -rf *)"
+      command: "echo 'blocked' >&2; exit 2"
+
+  post_tool_use:
+    - match: "write_file|edit_file"
+      command: "gofmt -w ${FILE_PATH}"
+      inject_output: true
+```
+
+See [Hooks](./hooks.md) for the full guide (5 events, match patterns, command/http types, payload schema).
+
 ## Cron Jobs
 
 Cron jobs support a `queue_if_busy` parameter (default: `false`):
