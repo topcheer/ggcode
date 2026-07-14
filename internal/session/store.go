@@ -188,6 +188,40 @@ const MaxTunnelEvents = 2000
 // to inform the agent that earlier context was truncated.
 const MaxContextMessages = 200
 
+// messageHasToolResult reports whether msg contains a tool_result block.
+func messageHasToolResult(msg provider.Message) bool {
+	for _, b := range msg.Content {
+		if b.Type == "tool_result" {
+			return true
+		}
+	}
+	return false
+}
+
+// messageHasToolUse reports whether msg contains a tool_use block.
+func messageHasToolUse(msg provider.Message) bool {
+	for _, b := range msg.Content {
+		if b.Type == "tool_use" {
+			return true
+		}
+	}
+	return false
+}
+
+// isOrphanToolMessage reports whether msg would be an invalid first message
+// for the LLM context because it is part of a tool_use/tool_result pair whose
+// other half was truncated away. Extending the context window backward over
+// such messages keeps the paired tool_use and tool_result together.
+func isOrphanToolMessage(msg provider.Message) bool {
+	if msg.Role == "user" && messageHasToolResult(msg) {
+		return true
+	}
+	if msg.Role == "assistant" && messageHasToolUse(msg) {
+		return true
+	}
+	return false
+}
+
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
 func NewJSONLStore(dir string) (*JSONLStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -844,7 +878,19 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	if len(ses.ContextMessages) == 0 {
 		if len(ses.Messages) > MaxContextMessages {
 			omitted := len(ses.Messages) - MaxContextMessages
-			ses.ContextMessages = ses.Messages[len(ses.Messages)-MaxContextMessages:]
+			start := len(ses.Messages) - MaxContextMessages
+			// Avoid starting the context with an orphan tool_result or tool_use.
+			// If the first message at the truncation boundary is a user
+			// tool_result, extend backward to include its paired assistant
+			// tool_use (and the user prompt that triggered it, if necessary).
+			// LLM APIs require tool_use and tool_result to appear as a pair;
+			// leaving half of the pair at the start of context causes validation
+			// errors on the next agent turn.
+			for start > 0 && isOrphanToolMessage(ses.Messages[start]) {
+				start--
+				omitted--
+			}
+			ses.ContextMessages = ses.Messages[start:]
 			// Prepend a system note so the agent knows earlier context was truncated,
 			// rather than silently losing the conversation beginning.
 			ses.ContextMessages = append([]provider.Message{{

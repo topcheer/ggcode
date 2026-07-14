@@ -835,7 +835,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 
-		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
+		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), toolDefs, onEvent)
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
