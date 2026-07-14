@@ -824,15 +824,19 @@ func TestCancelActiveRun_CancelsSubAgents(t *testing.T) {
 	// is cancelled or timeout.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		sa, _ := m.subAgentMgr.Get("sa-1")
-		if sa.Status == subagent.StatusCancelled {
+		snap, ok := m.subAgentMgr.SnapshotByID("sa-1")
+		if ok && snap.Status == subagent.StatusCancelled {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	sa, _ := m.subAgentMgr.Get("sa-1")
-	if sa.Status != subagent.StatusCancelled {
-		t.Errorf("expected sub-agent cancelled after cancelActiveRun, got %s", sa.Status)
+	snap, ok := m.subAgentMgr.SnapshotByID("sa-1")
+	if !ok || snap.Status != subagent.StatusCancelled {
+		if ok {
+			t.Errorf("expected sub-agent cancelled after cancelActiveRun, got %s", snap.Status)
+		} else {
+			t.Errorf("expected sub-agent cancelled after cancelActiveRun, agent not found")
+		}
 	}
 }
 

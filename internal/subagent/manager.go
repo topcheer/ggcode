@@ -493,6 +493,14 @@ func (sa *SubAgent) closeDone() {
 	}
 }
 
+// isGoroutineStarted reports whether the agent's goroutine has actually started.
+// Caller must NOT hold sa.mu.
+func (sa *SubAgent) isGoroutineStarted() bool {
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	return sa.goroutineStarted
+}
+
 // CancelAll cancels all pending or running sub-agents, then waits up to
 // cancelAllTimeout for each Running sub-agent's goroutine to actually
 // terminate. Returns the number cancelled.
@@ -521,7 +529,7 @@ func (m *Manager) CancelAll() int {
 			// Only wait on agents whose goroutine was actually started by Run().
 			// SetCancel() transitions Pending→Running but doesn't start a goroutine;
 			// only Run() sets goroutineStarted=true.
-			if sa.goroutineStarted && sa.done != nil {
+			if sa.isGoroutineStarted() && sa.done != nil {
 				doneChs = append(doneChs, sa.done)
 			}
 		}
