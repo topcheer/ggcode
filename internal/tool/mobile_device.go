@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -448,13 +447,4 @@ func imageResult(data []byte, format string, quality int, desc string) Result {
 		Content: desc,
 		Images:  []ResultImage{{MIME: mime, Base64: base64.StdEncoding.EncodeToString(data)}},
 	}
-}
-
-func screenshotFromFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read screenshot: %w", err)
-	}
-	os.Remove(path)
-	return data, nil
 }

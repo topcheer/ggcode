@@ -204,9 +204,6 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 		numWorkers = len(files)
 	}
 
-	type match struct {
-		line string
-	}
 	var (
 		results      []string
 		totalMatches int64

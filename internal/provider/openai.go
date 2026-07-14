@@ -139,14 +139,6 @@ func (t *headerInjectingTransport) UpdateHeaders(newHeaders http.Header) {
 
 // claudeCLIHeaders returns the set of HTTP headers that mimic the official
 // claude-cli client, allowing compatible API providers to recognize the client.
-func claudeCLIHeaders() http.Header {
-	h := make(http.Header)
-	h.Set("User-Agent", fmt.Sprintf("claude-cli/%s (individual, cli)", claudeCLIVersion))
-	h.Set("x-app", "cli")
-	h.Set("anthropic-version", "2023-06-01")
-	return h
-}
-
 // NewOpenAIProvider creates a new OpenAI provider.
 func NewOpenAIProvider(apiKey string, model string, maxTokens int) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)

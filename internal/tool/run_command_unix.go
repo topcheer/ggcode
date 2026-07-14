@@ -42,10 +42,6 @@ func configureCommandCancellation(cmd *exec.Cmd) {
 	cmd.WaitDelay = commandWaitDelay
 }
 
-func signalCommandTree(rootPID int, sig syscall.Signal) error {
-	return signalCommandTargets(snapshotCommandTargets(rootPID), sig)
-}
-
 func snapshotCommandTargets(rootPID int) commandTargets {
 	targets := commandTargets{
 		rootPID:     rootPID,

@@ -489,9 +489,3 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 }
 
 // formatWindow formats a context window size for display.
-func formatWindow(n int) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.0fM", float64(n)/1_000_000)
-	}
-	return fmt.Sprintf("%dK", n/1000)
-}
