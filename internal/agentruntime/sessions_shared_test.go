@@ -84,7 +84,7 @@ func TestRegisterCronTools(t *testing.T) {
 	defer scheduler.Shutdown()
 	RegisterCronTools(registry, scheduler)
 
-	for _, name := range []string{"cron_create", "cron_delete", "cron_list"} {
+	for _, name := range []string{"cron_create", "cron_delete", "cron_list", "cron_update", "cron_pause", "cron_resume", "cron_get"} {
 		if _, ok := registry.Get(name); !ok {
 			t.Fatalf("expected %s to be registered", name)
 		}

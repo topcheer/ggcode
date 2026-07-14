@@ -49,6 +49,10 @@ func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {
 	_ = registry.Register(tool.CronCreateTool{Scheduler: scheduler})
 	_ = registry.Register(tool.CronDeleteTool{Scheduler: scheduler})
 	_ = registry.Register(tool.CronListTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronUpdateTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronPauseTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronResumeTool{Scheduler: scheduler})
+	_ = registry.Register(tool.CronGetTool{Scheduler: scheduler})
 }
 
 func NewACPClientManager(
