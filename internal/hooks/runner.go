@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,7 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 	if env.Event == EventOnAgentStop || env.Event == EventOnStreamStop {
 		payload := BuildPayload(env)
 		for _, h := range hooks {
-			if !matchAny(h.Match, env.ToolName, env.RawInput) {
+			if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
 				continue
 			}
 			h := h // capture for goroutine
@@ -73,7 +74,7 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 	var injectedOutput strings.Builder
 
 	for _, h := range hooksList {
-		if !matchAny(h.Match, env.ToolName, env.RawInput) {
+		if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
 			continue
 		}
 		result := executeHook(h, env, payload)
@@ -281,7 +282,18 @@ func RunStreamStopHooks(cfg HookConfig, env HookEnv) {
 // matchAny checks if a hook's match pattern applies.
 // For non-tool events (on_user_message, on_agent_stop, on_stream_stop),
 // toolName is empty and only "*" / "" patterns match.
-func matchAny(pattern, toolName, rawInput string) bool {
+func matchAny(mode, pattern, toolName, rawInput string) bool {
+	if mode == "regex" {
+		combined := toolName
+		if rawInput != "" {
+			combined += " " + rawInput
+		}
+		matched, err := regexp.MatchString(pattern, combined)
+		if err != nil {
+			return false
+		}
+		return matched
+	}
 	if pattern == "" || pattern == "*" {
 		return true
 	}

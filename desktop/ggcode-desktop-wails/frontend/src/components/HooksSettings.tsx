@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { GetHooks, SaveHooks } from '../../wailsjs/go/main/App'
+import { GetHooks, SaveHooks, TestHookMatch } from '../../wailsjs/go/main/App'
 import { useTranslation } from '../i18n'
 
 interface HookData {
   match?: string
+  match_mode?: string
   type?: string
   command?: string
   url?: string
@@ -26,6 +27,8 @@ export function HooksSettings() {
   const [editingIdx, setEditingIdx] = useState<number>(-1)
   const [editForm, setEditForm] = useState<HookData>({})
   const [message, setMessage] = useState('')
+  const [testInput, setTestInput] = useState('')
+  const [testResult, setTestResult] = useState<{ matched: boolean; error: string } | null>(null)
 
   const loadHooks = useCallback(async () => {
     try {
@@ -60,7 +63,9 @@ export function HooksSettings() {
   const startAdd = (eventKey: string) => {
     setEditingEvent(eventKey)
     setEditingIdx(-1)
-    setEditForm({ match: '*', type: 'command' })
+    setEditForm({ match: '*', match_mode: 'glob', type: 'command' })
+    setTestResult(null)
+    setTestInput('')
   }
 
   const startEdit = (eventKey: string, idx: number) => {
@@ -68,6 +73,8 @@ export function HooksSettings() {
     setEditingEvent(eventKey)
     setEditingIdx(idx)
     setEditForm({ ...hooks[idx] })
+    setTestResult(null)
+    setTestInput('')
   }
 
   const saveHook = () => {
@@ -94,26 +101,81 @@ export function HooksSettings() {
     setHooks(eventKey, hooks)
   }
 
+  const runTest = async () => {
+    const mode = editForm.match_mode || 'glob'
+    const pattern = editForm.match || '*'
+    try {
+      const result = await TestHookMatch(mode, pattern, testInput, '')
+      setTestResult({ matched: result.matched, error: result.error || '' })
+    } catch (e) {
+      setTestResult({ matched: false, error: String(e) })
+    }
+  }
+
   const eventLabels = EVENT_KEYS.map(e => ({ ...e, label: t(e.labelKey as any) }))
 
   if (editingEvent) {
     const evLabel = eventLabels.find(e => e.key === editingEvent)?.label || editingEvent
     const isEdit = editingIdx >= 0
+    const isRegex = (editForm.match_mode || 'glob') === 'regex'
     return (
       <div style={{ padding: '16px', maxWidth: '600px' }}>
         <h3 style={{ marginBottom: '16px' }}>
-          {t('settings.hooksEditTitle', { 0: isEdit ? t('settings.hooksEditBtn' as any) : t('settings.hooksAddBtn' as any), 1: evLabel })}
+          {isEdit ? t('settings.hooksEditBtn') : t('settings.hooksAddBtn')} — {evLabel}
         </h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksMatch')}</span>
-            <input
-              value={editForm.match || ''}
-              onChange={e => setEditForm({ ...editForm, match: e.target.value })}
-              style={inputStyle}
-              placeholder="*"
-            />
-          </label>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksMatch')}</span>
+              <input
+                value={editForm.match || ''}
+                onChange={e => setEditForm({ ...editForm, match: e.target.value })}
+                style={inputStyle}
+                placeholder={isRegex ? '^git.*push$' : '* or write_file or run_command(rm *)'}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '120px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksMatchMode')}</span>
+              <select
+                value={editForm.match_mode || 'glob'}
+                onChange={e => setEditForm({ ...editForm, match_mode: e.target.value })}
+                style={inputStyle}
+              >
+                <option value="glob">glob</option>
+                <option value="regex">regex</option>
+              </select>
+            </label>
+          </div>
+          {isRegex && (
+            <div style={{
+              padding: '10px', borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+            }}>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                {t('settings.hooksTesterTitle')}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+                <input
+                  value={testInput}
+                  onChange={e => setTestInput(e.target.value)}
+                  style={inputStyle}
+                  placeholder={t('settings.hooksTesterPlaceholder')}
+                />
+                <button style={btnSmall} onClick={runTest}>{t('settings.hooksTestBtn')}</button>
+              </div>
+              {testResult && (
+                <div style={{ fontSize: '13px' }}>
+                  {testResult.error ? (
+                    <span style={{ color: 'var(--color-danger)' }}>{t('settings.hooksTestError', { 0: testResult.error })}</span>
+                  ) : testResult.matched ? (
+                    <span style={{ color: 'var(--color-success)' }}>{t('settings.hooksTestMatched')}</span>
+                  ) : (
+                    <span style={{ color: 'var(--text-tertiary)' }}>{t('settings.hooksTestNotMatched')}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{t('settings.hooksType')}</span>
             <select
@@ -204,7 +266,11 @@ export function HooksSettings() {
                       <span style={{ color: 'var(--text-secondary)' }}>{h.type || 'command'}</span>
                       {' | '}
                       <span>{h.type === 'http' ? (h.url || '') : (h.command || '')}</span>
-                      {h.match && h.match !== '*' && <span style={{ color: 'var(--text-tertiary)' }}> | match={h.match}</span>}
+                      {h.match && h.match !== '*' && (
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {' | '}match{h.match_mode === 'regex' ? '(regex)' : ''}={h.match}
+                        </span>
+                      )}
                       {h.inject_output && <span style={{ color: 'var(--color-primary)' }}> [inject]</span>}
                     </div>
                     <div style={{ display: 'flex', gap: '4px' }}>

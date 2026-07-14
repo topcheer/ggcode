@@ -2,6 +2,7 @@ export namespace hooks {
 	
 	export class Hook {
 	    match: string;
+	    match_mode: string;
 	    type: string;
 	    command: string;
 	    url: string;
@@ -18,6 +19,7 @@ export namespace hooks {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.match = source["match"];
+	        this.match_mode = source["match_mode"];
 	        this.type = source["type"];
 	        this.command = source["command"];
 	        this.url = source["url"];
@@ -953,6 +955,20 @@ export namespace wailskit {
 	        this.toolDetail = source["toolDetail"];
 	        this.isError = source["isError"];
 	        this.streaming = source["streaming"];
+	    }
+	}
+	export class TestHookMatchResult {
+	    matched: boolean;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TestHookMatchResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.matched = source["matched"];
+	        this.error = source["error"];
 	    }
 	}
 	export class TestEndpointResult {

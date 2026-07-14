@@ -1253,6 +1253,8 @@ func enCatalog(key string) string {
 		return "On Stream Stop"
 	case "hooks.field.match":
 		return "Match (* for all)"
+	case "hooks.field.matchMode":
+		return "Match Mode (glob/regex)"
 	case "hooks.field.type":
 		return "Type (command/http)"
 	case "hooks.field.command":

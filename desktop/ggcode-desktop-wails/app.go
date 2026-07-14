@@ -763,6 +763,14 @@ func (a *App) SaveHooks(cfg wailskit.HookConfigJSON) error {
 	return fmt.Errorf("chat bridge not available")
 }
 
+// TestHookMatch tests a hook match pattern against a tool name and raw input.
+func (a *App) TestHookMatch(mode, pattern, toolName, rawInput string) wailskit.TestHookMatchResult {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.TestHookMatch(mode, pattern, toolName, rawInput)
+	}
+	return wailskit.TestHookMatchResult{Error: "chat bridge not available"}
+}
+
 // GetVendors returns available vendor names.
 func (a *App) GetVendors() []string {
 	return wailskit.VendorNames()

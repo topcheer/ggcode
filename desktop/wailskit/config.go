@@ -517,6 +517,21 @@ func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 	return b.cfg.Save()
 }
 
+// TestHookMatchResult is the result of testing a hook match pattern.
+type TestHookMatchResult struct {
+	Matched bool   `json:"matched"`
+	Error   string `json:"error,omitempty"`
+}
+
+// TestHookMatch tests a hook match pattern against a tool name and raw input.
+func (b *ChatBridge) TestHookMatch(mode, pattern, toolName, rawInput string) TestHookMatchResult {
+	matched, err := hooks.TestMatch(mode, pattern, toolName, rawInput)
+	if err != nil {
+		return TestHookMatchResult{Matched: false, Error: err.Error()}
+	}
+	return TestHookMatchResult{Matched: matched}
+}
+
 // ─── Custom Endpoint ───────────────────────────────────
 
 // TestEndpointResult is the result of testing an endpoint connection.

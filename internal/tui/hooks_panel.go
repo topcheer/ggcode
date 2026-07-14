@@ -21,6 +21,7 @@ type hooksPanelState struct {
 
 type hookEditFields struct {
 	match        string
+	matchMode    string // "glob" or "regex"
 	hookType     string // "command" or "http"
 	command      string
 	url          string
@@ -49,6 +50,7 @@ func (m *Model) hookEventLabels() []string {
 func (m *Model) hookEditFieldLabels() []string {
 	return []string{
 		tr(m.language, "hooks.field.match"),
+		tr(m.language, "hooks.field.matchMode"),
 		tr(m.language, "hooks.field.type"),
 		tr(m.language, "hooks.field.command"),
 		tr(m.language, "hooks.field.url"),
@@ -187,7 +189,11 @@ func (m Model) renderHooksPanel() string {
 			if h.InjectOutput {
 				inject = " [inject]"
 			}
-			line := fmt.Sprintf("%s[%d] %s | match=%s%s\n     %s", marker, i, hookType, h.Match, inject, detail)
+			modeLabel := ""
+			if h.MatchMode == "regex" {
+				modeLabel = "(regex)"
+			}
+			line := fmt.Sprintf("%s[%d] %s | match%s=%s%s\n     %s", marker, i, hookType, modeLabel, h.Match, inject, detail)
 			if i == p.selectedHook {
 				line = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(line)
 			}
@@ -224,7 +230,7 @@ func (m Model) renderHooksEditForm() string {
 	eventLabels := m.hookEventLabels()
 	sb.WriteString(fmt.Sprintf("%s: %s\n\n", tr(m.language, "hooks.events"), eventLabels[p.selectedEvent]))
 
-	values := []string{f.match, f.hookType, f.command, f.url, f.secret, fmt.Sprintf("%v", f.injectOutput)}
+	values := []string{f.match, f.matchMode, f.hookType, f.command, f.url, f.secret, fmt.Sprintf("%v", f.injectOutput)}
 	for i, label := range m.hookEditFieldLabels() {
 		marker := "  "
 		if i == p.fieldIdx {
@@ -283,7 +289,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "a":
 		p.editMode = true
 		p.editingNew = true
-		p.editFields = hookEditFields{match: "*", hookType: "command"}
+		p.editFields = hookEditFields{match: "*", matchMode: "glob", hookType: "command"}
 		p.fieldIdx = 0
 
 	case "e":
@@ -297,6 +303,7 @@ func (m *Model) handleHooksPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		p.editingNew = false
 		p.editFields = hookEditFields{
 			match:        h.Match,
+			matchMode:    h.MatchMode,
 			hookType:     string(h.HasType()),
 			command:      h.Command,
 			url:          h.URL,
@@ -350,6 +357,7 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Save hook
 		h := hooks.Hook{
 			Match:        f.match,
+			MatchMode:    f.matchMode,
 			Type:         hooks.HookType(f.hookType),
 			Command:      f.command,
 			URL:          f.url,
@@ -391,14 +399,16 @@ func (m *Model) appendHookEditChar(ch string) {
 	case 0:
 		f.match += ch
 	case 1:
-		f.hookType += ch
+		f.matchMode += ch
 	case 2:
-		f.command += ch
+		f.hookType += ch
 	case 3:
-		f.url += ch
+		f.command += ch
 	case 4:
-		f.secret += ch
+		f.url += ch
 	case 5:
+		f.secret += ch
+	case 6:
 		// toggle true/false on any key
 		f.injectOutput = !f.injectOutput
 	}
@@ -413,18 +423,22 @@ func (m *Model) deleteHookEditChar() {
 			f.match = f.match[:len(f.match)-1]
 		}
 	case 1:
+		if len(f.matchMode) > 0 {
+			f.matchMode = f.matchMode[:len(f.matchMode)-1]
+		}
+	case 2:
 		if len(f.hookType) > 0 {
 			f.hookType = f.hookType[:len(f.hookType)-1]
 		}
-	case 2:
+	case 3:
 		if len(f.command) > 0 {
 			f.command = f.command[:len(f.command)-1]
 		}
-	case 3:
+	case 4:
 		if len(f.url) > 0 {
 			f.url = f.url[:len(f.url)-1]
 		}
-	case 4:
+	case 5:
 		if len(f.secret) > 0 {
 			f.secret = f.secret[:len(f.secret)-1]
 		}

@@ -1265,6 +1265,8 @@ func zhCatalog(key string) string {
 		return "流停止时"
 	case "hooks.field.match":
 		return "匹配 (* 匹配全部)"
+	case "hooks.field.matchMode":
+		return "匹配模式 (glob/regex)"
 	case "hooks.field.type":
 		return "类型 (command/http)"
 	case "hooks.field.command":

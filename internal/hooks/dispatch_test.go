@@ -376,19 +376,19 @@ func TestBuildPayload_OnUserMessage(t *testing.T) {
 // --- matchAny tests ---
 
 func TestMatchAny_Wildcard(t *testing.T) {
-	if !matchAny("*", "", "") {
+	if !matchAny("glob", "*", "", "") {
 		t.Error("* should match everything")
 	}
-	if !matchAny("", "", "") {
+	if !matchAny("glob", "", "", "") {
 		t.Error("empty pattern should match everything")
 	}
 }
 
 func TestMatchAny_ToolSpecific(t *testing.T) {
-	if !matchAny("write_file", "write_file", "") {
+	if !matchAny("glob", "write_file", "write_file", "") {
 		t.Error("should match exact tool name")
 	}
-	if matchAny("write_file", "read_file", "") {
+	if matchAny("glob", "write_file", "read_file", "") {
 		t.Error("should not match different tool name")
 	}
 }

@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -16,6 +17,7 @@ const (
 // Hook represents a single hook bound to one event.
 type Hook struct {
 	Match        string            `yaml:"match" json:"match"`                 // glob/pipe/func-call match pattern. "*" matches all.
+	MatchMode    string            `yaml:"match_mode" json:"match_mode"`       // "glob" (default) or "regex"
 	Type         HookType          `yaml:"type" json:"type"`                   // "command" (default) or "http"
 	Command      string            `yaml:"command" json:"command"`             // shell command (type=command)
 	URL          string            `yaml:"url" json:"url"`                     // webhook URL (type=http)
@@ -112,6 +114,13 @@ func ValidateHooks(cfg HookConfig) []string {
 				errs = append(errs, fmt.Sprintf("%s: match is required", prefix))
 			}
 
+			// Validate regex mode
+			if h.MatchMode == "regex" {
+				if _, err := regexp.Compile(h.Match); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: invalid regex: %v", prefix, err))
+				}
+			}
+
 			// Timeout format check
 			if h.Timeout != "" {
 				if _, err := time.ParseDuration(h.Timeout); err != nil {
@@ -133,4 +142,23 @@ func ValidateHooks(cfg HookConfig) []string {
 	validate("on_stream_stop", cfg.OnStreamStop)
 
 	return errs
+}
+
+// TestMatch tests a match pattern against a tool name and raw input.
+// Returns whether the pattern matches and any regex compilation error.
+// Used by the desktop UI regex tester.
+func TestMatch(mode, pattern, toolName, rawInput string) (bool, error) {
+	if mode == "regex" {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return false, fmt.Errorf("invalid regex: %w", err)
+		}
+		combined := toolName
+		if rawInput != "" {
+			combined += " " + rawInput
+		}
+		return re.MatchString(combined), nil
+	}
+	// For glob mode, reuse the internal matcher
+	return matchAny(mode, pattern, toolName, rawInput), nil
 }
