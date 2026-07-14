@@ -156,8 +156,6 @@ export function SaveDefaultMode(arg1:string):Promise<void>;
 
 export function SaveHooks(arg1:hooks.HookConfig):Promise<void>;
 
-export function TestHookMatch(arg1:string,arg2:string,arg3:string,arg4:string):Promise<wailskit.TestHookMatchResult>;
-
 export function SaveIMAdapter(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SelectDirectory():Promise<string>;
@@ -191,6 +189,8 @@ export function StopShare():Promise<void>;
 export function SwitchModel(arg1:string):Promise<void>;
 
 export function TestEndpointConnection(arg1:string,arg2:string,arg3:string):Promise<wailskit.TestEndpointResult>;
+
+export function TestHookMatch(arg1:string,arg2:string,arg3:string,arg4:string):Promise<wailskit.TestHookMatchResult>;
 
 export function TestIMConnection(arg1:string):Promise<void>;
 

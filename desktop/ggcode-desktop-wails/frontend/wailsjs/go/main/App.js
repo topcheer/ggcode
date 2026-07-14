@@ -302,10 +302,6 @@ export function SaveHooks(arg1) {
   return window['go']['main']['App']['SaveHooks'](arg1);
 }
 
-export function TestHookMatch(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['TestHookMatch'](arg1, arg2, arg3, arg4);
-}
-
 export function SaveIMAdapter(arg1, arg2) {
   return window['go']['main']['App']['SaveIMAdapter'](arg1, arg2);
 }
@@ -372,6 +368,10 @@ export function SwitchModel(arg1) {
 
 export function TestEndpointConnection(arg1, arg2, arg3) {
   return window['go']['main']['App']['TestEndpointConnection'](arg1, arg2, arg3);
+}
+
+export function TestHookMatch(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['TestHookMatch'](arg1, arg2, arg3, arg4);
 }
 
 export function TestIMConnection(arg1) {

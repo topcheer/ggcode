@@ -957,20 +957,6 @@ export namespace wailskit {
 	        this.streaming = source["streaming"];
 	    }
 	}
-	export class TestHookMatchResult {
-	    matched: boolean;
-	    error: string;
-
-	    static createFrom(source: any = {}) {
-	        return new TestHookMatchResult(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.matched = source["matched"];
-	        this.error = source["error"];
-	    }
-	}
 	export class TestEndpointResult {
 	    ok: boolean;
 	    message: string;
@@ -987,6 +973,20 @@ export namespace wailskit {
 	        this.message = source["message"];
 	        this.models = source["models"];
 	        this.modelCount = source["modelCount"];
+	    }
+	}
+	export class TestHookMatchResult {
+	    matched: boolean;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestHookMatchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.matched = source["matched"];
+	        this.error = source["error"];
 	    }
 	}
 	export class VendorPresetInfo {
