@@ -58,6 +58,7 @@ desktop/               Desktop GUI application (Wails-based)
 ggcode-relay/          Standalone relay server for mobile tunnel (WebSocket, SQLite event persistence)
 internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
+  agentruntime/        Interactive runtime core: tool registry assembly, tunnel host, session restore, startup assets, subagent/swarm tunnel bridges, save_memory tool registration, config access
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
   webui/               WebUI HTTP server + WebSocket chat, SPA, config/session REST API, ChatBridge interface
   im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, outbound routing, daemon bridge with slash commands (/listim, /muteim, /muteall, /muteself, /restart)
@@ -75,6 +76,8 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   knight/              Knight background agent: autonomous code monitoring, daily token budget
   a2a/                 Agent-to-Agent protocol: server (multi-auth), client (auto-negotiate), registry, MCP bridge, E2E mesh test
   acp/                 Agent Client Protocol support (JetBrains, Zed, ACP-compatible editors)
+  acpclient/           ACP client manager for connecting to remote ACP-compatible agents
+  lanchat/             LAN peer discovery and chat: mDNS/UDP transport, hub, participant presence, message history, attachments
   lsp/                 LSP client integration (gopls, rust-analyzer, clangd, etc.) with auto-discovery, config overrides, and scoped install (user/global/project)
   commands/            Slash command registry (bundled + loaded), usage formatting, skill templates
   context/             Conversation context window management and tokenization (imported as `ctxpkg`)
@@ -86,6 +89,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   plugin/              External tool plugins (command-based, MCP-based)
   hooks/               Pre/post hooks runner (5 events: on_user_message, pre/post_tool_use, on_agent_stop, on_stream_stop; command + HTTP types; glob + regex match modes; HMAC-signed JSON payload)
   cost/                Token usage tracking + billing-type detection (per-token, subscription/coding plan, free; endpoint-based coding plan lookup)
+  metrics/             Token/cost metrics collection and usage summaries
   auth/                Full auth stack: GitHub Copilot token mgmt, OAuth2 PKCE/Device Flow, OIDC Discovery, JWT validation (HS256/RS256/ECDSA), JWKS polling, token introspection, token cache with per-client isolation
   chat/                Chat utilities and shared types
   markdown/            Markdown rendering helpers
@@ -258,7 +262,7 @@ Available in any IM channel connected to a ggcode daemon:
 
 Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and `internal/tui/repl.go` (additional tools):
 
-**File operations**: `read_file`, `multi_file_read`, `write_file`, `edit_file`, `multi_edit_file`, `multi_file_edit`, `list_directory`, `search_files`, `glob`
+**File operations**: `read_file`, `multi_file_read`, `write_file`, `multi_file_write`, `edit_file`, `multi_edit_file`, `multi_file_edit`, `list_directory`, `search_files`, `glob`
 **Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
 **VCS/Git** (11): `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_blame`, `git_show`, `git_branch_list`, `git_remote`, `git_stash`, `git_stash_list`. Tools auto-detect the repository type via `internal/vcs/` and dispatch to the correct backend. Supported VCS: **Git** (primary), **Mercurial** (hg), **Subversion** (svn), **Jujutsu** (jj). Detection walks up the directory tree for `.git`/`.hg`/`.svn`/`.jj` metadata dirs. Tool names remain `git_*` for backward compatibility — they work for all VCS types internally.
 **Web** (2): `web_fetch`, `web_search`
@@ -267,6 +271,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **LSP**: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_diagnostics`, `lsp_rename`, `lsp_code_actions`, `lsp_implementation`, `lsp_prepare_call_hierarchy`, `lsp_incoming_calls`, `lsp_outgoing_calls`. Servers are auto-detected from PATH and workspace files; user-configurable via `lsp_servers` in config. Desktop app Settings > Integrations > Language Servers shows detection status and one-click install (scope: user > global > project).
 **Productivity** (4): `ask_user`, `todo_write`, `switch_mode` (in `builtin.go`), `save_memory` (in `agentruntime/interactive_core.go`)
 **Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
+**A2A / Remote** (1, registered in `cmd/ggcode/root.go`): `a2a_remote` — delegate a code-editing task to a remote ggcode instance via A2A protocol. Target is identified by project name (e.g. 'order-service', 'user-service').
 **Swarm** (11, registered in `cmd/ggcode/root.go`): `team_create`, `team_delete`, `teammate_spawn`, `teammate_shutdown`, `teammate_list`, `teammate_results`, `swarm_task_create`, `swarm_task_claim`, `swarm_task_complete`, `swarm_task_list`, `send_message`
 **MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
 **Cron** (7, registered in `cmd/ggcode/root.go`): `cron_create`, `cron_delete`, `cron_list`, `cron_update`, `cron_pause`, `cron_resume`, `cron_get`
@@ -279,7 +284,7 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 **Task** (6, in `cmd/ggcode/root.go`): `task_create`, `task_get`, `task_list`, `task_update`, `task_stop`, `task_output` — structured task tracking within a session
 **Config** (1, in `builtin.go`): `config` — read, write, list, or delete configuration settings with dot-notation keys
 **Debug** (1, in `builtin.go`): `debug_log` — read recent debug log entries or export to file
-**Delegate** (1, in `builtin.go`): `delegate` — delegate tasks to external AI coding agents (Claude, Codex, Copilot, Cursor, Gemini, etc.)
+**Delegate** (1, registered in `cmd/ggcode/root.go` via `agentruntime.RegisterDelegateTool`): `delegate` — delegate tasks to external AI coding agents (Claude, Codex, Copilot, Cursor, Gemini, etc.)
 **Terminal** (5, in `builtin.go`): `tmux`, `ghostty`, `warp`, `kitty`, `iterm2` — manage terminal panes, tabs, and windows for supported terminal emulators
 
 ### Slash Commands
@@ -364,6 +369,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - The `copilot` protocol uses GitHub's OAuth flow (not API key) — handled by `internal/auth/`
 - Agent tools (`spawn_agent`, `wait_agent`, `list_agents`) are defined in `internal/tool/` but registered in `internal/tui/repl.go`, not in `builtin.go`
 - `save_memory` is registered in `agentruntime/interactive_core.go` (not in `RegisterBuiltinTools`); `skill` is registered at startup in `cmd/ggcode/root.go`
+- `a2a_remote` (A2A remote delegation) and `delegate` (external AI agents) are both registered in `cmd/ggcode/root.go` (not in `builtin.go`)
 - `ask_user` and `todo_write` are in `builtin.go`; `save_memory` is separate (needs auto-memory reference)
 - `a2a.api_key` (legacy top-level) still works but `a2a.auth.api_key` takes priority — `a2aAPIKey()` helper resolves both
 - GitHub OAuth Apps are **confidential clients** — `client_secret` is required for token exchange even with PKCE; Device Flow does not need it
