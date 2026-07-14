@@ -353,7 +353,7 @@ function EditAdapterDialog({ adapter, platform, fields, setFields, onSave, onCan
 
       {error && <div style={{ color: 'var(--color-error)', fontSize: 12 }}>{error}</div>}
 
-      {platform?.fields.map(f => (
+      {platform?.fields?.map(f => (
         <label key={f.key} style={{ display: 'block' }}>
           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{f.label}</span>
           <input
