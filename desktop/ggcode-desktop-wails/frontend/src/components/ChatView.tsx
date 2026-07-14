@@ -2424,32 +2424,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
           </button>
         )}
 
-        {/* Context pill */}
-        {statusBar.contextTotal > 0 && (
-          <span style={{
-            padding: '2px 8px', borderRadius: 10,
-            background: 'var(--color-card)',
-            border: '1px solid var(--color-border)',
-            fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            {formatTokens(statusBar.contextUsed)} / {formatTokens(statusBar.contextTotal)}
-            <span style={{
-              width: 48, height: 4, borderRadius: 2,
-              background: 'var(--color-surface)', display: 'inline-block',
-              position: 'relative', overflow: 'hidden',
-            }}>
-              <span style={{
-                position: 'absolute', left: 0, top: 0,
-              width: `${Math.max(statusBar.usagePercent, 1)}%`, height: '100%',
-                borderRadius: 2,
-              background: statusBar.usagePercent > 80 ? 'var(--color-error)'
-                : statusBar.usagePercent > 50 ? 'var(--color-warning)'
-                  : 'var(--color-success)',
-              }} />
-            </span>
-          </span>
-        )}
+        {/* Context usage is shown in the bottom StatusBar — removed redundant header pill */}
 
         {messages.length > 0 && (
           (() => {
