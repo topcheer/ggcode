@@ -1435,9 +1435,15 @@ func (a *App) bindCurrentIMSession() {
 		return
 	}
 	if ses := a.chat.CurrentSession(); ses != nil {
+		// Use the session's workspace, not a.workDir, so cross-workspace
+		// session switches correctly rebind IM to the session's workspace.
+		imWorkspace := ses.Workspace
+		if imWorkspace == "" {
+			imWorkspace = a.workDir
+		}
 		a.imManager.BindSession(im.SessionBinding{
 			SessionID: ses.ID,
-			Workspace: a.workDir,
+			Workspace: imWorkspace,
 		})
 		// Register instance now that session ID is available.
 		// This enables session-scoped IM binding ownership: each instance

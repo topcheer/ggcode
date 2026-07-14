@@ -70,6 +70,12 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// Reset view state so stale streaming/autocomplete state doesn't leak.
 	m.resetConversationView()
 
+	// Capture old workspace BEFORE SetSession overwrites m.session.
+	oldWorkspace := ""
+	if m.session != nil {
+		oldWorkspace = m.session.Workspace
+	}
+
 	// Clear and restore agent context.
 	if m.agent != nil {
 		m.agent.Clear()
@@ -79,8 +85,9 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	m.SetSession(ses, m.sessionStore)
 
 	// Switch CWD if the session belongs to a different workspace.
-	if ses.Workspace != "" && m.session != nil && ses.Workspace != m.session.Workspace {
-		oldWorkspace := m.session.Workspace
+	// Note: must compare against oldWorkspace (captured before SetSession),
+	// because SetSession sets m.session = ses, making ses.Workspace == m.session.Workspace.
+	if ses.Workspace != "" && oldWorkspace != "" && ses.Workspace != oldWorkspace {
 		if m.agent != nil {
 			m.agent.SetWorkingDir(ses.Workspace)
 		}
