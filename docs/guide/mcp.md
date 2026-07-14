@@ -68,6 +68,22 @@ The default config includes these servers:
 
 > **Note:** The `playwright` MCP preset has been removed. Use the built-in `browser` tool instead — it provides Go-native Chrome DevTools Protocol (CDP) automation with no Node.js or Playwright dependency. See the Tools section in `GGCODE.md` for details.
 
+## Read-Only Mode
+
+You can lock any MCP server to read-only operations by setting `read_only: true` in its configuration. This is useful for giving the agent access to a data source (e.g., docs, search, database queries) without allowing it to make changes.
+
+```yaml
+mcp_servers:
+  my-docs:
+    name: my-docs
+    type: stdio
+    command: npx
+    args: ["-y", "@example/mcp-server-docs"]
+    read_only: true
+```
+
+When `read_only: true`, ggcode blocks any MCP tool whose name contains a write/create/delete/execute keyword, including: `write`, `edit`, `delete`, `remove`, `create`, `update`, `insert`, `set`, `put`, `post`, `patch`, `execute`, `run`, `exec`, `shell`, `move`, `rename`, `upload`, `install`, `deploy`. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
+
 ## Auto-Start
 
 MCP servers start automatically when ggcode launches. If a server fails to start, a warning is shown in the TUI.

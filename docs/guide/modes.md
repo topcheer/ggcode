@@ -104,7 +104,7 @@ The active mode is shown in the TUI status bar:
 
 ## Switching Mid-Session
 
-Switch modes without restarting using the `/mode` slash command:
+Switch modes without restarting using the `/mode` slash command, or press `Shift+Tab` in the TUI to cycle through modes in order:
 
 ```
 /mode supervised

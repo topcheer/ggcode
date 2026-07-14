@@ -159,7 +159,7 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Esc` | Cancel current operation / exit shell/chat mode / go back |
 | `Ctrl+C` | Cancel current operation |
 | `Ctrl+D` | Exit ggcode |
-| `Ctrl+R` | Compact conversation |
+| `Ctrl+R` | Toggle sidebar visibility |
 | `Ctrl+L` | Clear screen (equivalent to `/clear`) |
 | `Ctrl+G` | Cycle reasoning effort level |
 | `Ctrl+\` | Toggle compact mode (hide/show sidebar) |
@@ -169,4 +169,4 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Shift+Tab` | Cycle permission mode (supervised → plan → auto → bypass → autopilot) |
 | `Alt+Up` / `Alt+K` | Cycle to previous session |
 | `Alt+Down` / `Alt+J` | Cycle to next session |
-| `Esc Esc` (double) | Force quit (skip cleanup) |
+| `Esc Esc` (double) | Trigger `/undo` (checkpoint rollback) |
