@@ -243,14 +243,23 @@ internal/
     ask_user_format.go     # ask_user questionnaire formatting for IM
     ask_user_parse.go      # Parse IM responses back to ask_user answers
     tool_format.go         # Unified tool result formatting for all IM adapters
+    markdown_strip.go     # Platform-specific markdown conversion (Signal, Slack, Discord)
+    message_split.go       # Per-platform message splitting with size limits
     telegram_adapter.go    # Telegram adapter
     qq_adapter.go          # QQ adapter
     discord_adapter.go     # Discord adapter
     slack_adapter.go       # Slack adapter
     dingtalk_adapter.go    # DingTalk (DingDing) adapter
     feishu_adapter.go      # Feishu (Lark) adapter
+    wechat_adapter.go      # WeChat adapter
     wecom_adapter.go       # WeCom (Enterprise WeChat) adapter
     whatsapp_adapter.go    # WhatsApp adapter
+    signal_adapter.go      # Signal adapter
+    matrix_adapter.go      # Matrix adapter
+    mattermost_adapter.go  # Mattermost adapter
+    irc_adapter.go         # IRC adapter
+    nostr_adapter.go       # Nostr adapter
+    twitch_adapter.go      # Twitch adapter
     stt/                   # Speech-to-text support for IM voice messages
 
   tunnel/                  # Tunnel broker for mobile relay
@@ -441,6 +450,19 @@ internal/
 
   tmux/                    # Tmux client utilities
     client.go              # Tmux command wrapper for pane/window management
+
+  runfile/               # Port file management for external process discovery
+    runfile.go             # Write/read ~/.ggcode/run/<sessionID>.json
+
+  vcs/                   # Multi-VCS abstraction (auto-detect git/hg/svn/jj)
+    vcs.go                 # VCS interface and auto-detection
+    git.go                 # Git backend
+
+  lanchat/               # LAN Chat P2P messaging between ggcode instances
+    hub.go                 # Hub: message routing, presence, identity
+    mdns.go                # mDNS discovery (_ggcode._tcp)
+    transport.go           # TCP/UDP transport with fallback
+    store.go               # Message persistence (session JSONL)
 
   uiusage/                 # UI usage display
     display.go             # Token usage display formatting for UI surfaces
@@ -697,8 +719,6 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Superseded reads | `manager.go` (context) | Headroom | Compact stale re-reads of same file |
 | Tool output guard | `tool_output_guard.go` | Chroma context fill study | Progressive truncation by context fill % |
 | Budget guard | `budget_guard.go` | BAGEN (arXiv:2606.00198) | Per-step token cost trend monitoring |
-| Circuit breaker | `circuit_breaker.go` | Cordum pattern | Hard stop after 3 consecutive tool failures |
-| Dead letter queue | `dead_letter.go` | Enterprise pattern | Capture failed tool calls for end-of-run review |
 | Error classifier | `error_classifier.go` | AgentDebug (arXiv:2509.25370) | 10-category error-specific guidance on first error |
 | Confidence scorer | `confidence.go` | HTC (arXiv:2601.15778) | Holistic 6-signal trajectory quality metric |
 | Error streak | `loop_detect.go` | SICA (arXiv:2504.15228) | Progressive guidance at 4/7/10 consecutive errors |
@@ -710,6 +730,9 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Constraint pinning | `manager.go` (context) | Governance Decay (arXiv:2606.22528) | Preserve user constraints across compaction |
 | Reasoning block compaction | `manager.go` (context) | Anthropic thinking API docs | Clear old reasoning blocks (keep N=3) |
 | Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
+| Prompt cache keepalive | `cache_keepalive.go` | Aider pattern | Ping provider every 270s during idle to keep cache warm (Anthropic only) |
+| Token calibration | `token_calibrator.go` (context) | — | Self-calibrating char/token ratio using API feedback |
+| MCP read-only mode | `readonly.go` (mcp) | Devin enterprise | Per-server read_only flag blocks write-type tool calls |
 
 ### Context Window Management Pipeline
 
