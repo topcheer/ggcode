@@ -396,6 +396,7 @@ type jsonlRecord struct {
 	UpdatedAt            time.Time           `json:"updated_at,omitempty"`
 	TunnelEventsComplete bool                `json:"tunnel_events_complete,omitempty"`
 	Message              *provider.Message   `json:"message,omitempty"`
+	Timestamp            time.Time           `json:"timestamp,omitempty"` // per-message timestamp (for message records)
 	TunnelEvent          *TunnelEvent        `json:"tunnel_event,omitempty"`
 	CostJSON             json.RawMessage     `json:"cost,omitempty"`
 	// UsageEntry: per-turn usage record (type == "usage").
@@ -505,7 +506,7 @@ func (s *JSONLStore) Save(ses *Session) error {
 	// Message records
 	for i := range ses.Messages {
 		msg := ses.Messages[i]
-		rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+		rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg, Timestamp: time.Now()}
 		if err := enc.Encode(rec); err != nil {
 			f.Close()
 			os.Remove(tmp)
@@ -687,6 +688,14 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("reading session %s: %w", id, err)
+	}
+	f.Close() // close read handle before potential backfill rewrite
+
+	// Backfill timestamps for historical sessions (created before timestamp feature).
+	// If the first message has no timestamp, all messages get set to 6 hours ago.
+	// If the first message already has a timestamp, the session is skipped.
+	if len(allMessages) > 0 && allMessages[0].Timestamp.IsZero() {
+		s.backfillTimestamps(id)
 	}
 
 	// Apply metadata from meta records (always the latest meta wins)
@@ -1313,7 +1322,7 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg, Timestamp: time.Now()}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
 	}
@@ -1348,7 +1357,7 @@ func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) err
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg, Timestamp: time.Now()}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
 	}
@@ -1372,7 +1381,7 @@ func (s *JSONLStore) AppendMessagesBatchToDisk(ses *Session, msgs []provider.Mes
 
 	recs := make([]jsonlRecord, len(msgs))
 	for i, msg := range msgs {
-		recs[i] = jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+		recs[i] = jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg, Timestamp: time.Now()}
 	}
 	if err := appendRecordLines(path, recs); err != nil {
 		return err
@@ -1979,6 +1988,88 @@ func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.M
 		return
 	}
 	debug.Log("session", "backfillIDsAsync: backfilled IDs in session %s", sessionID)
+}
+
+// backfillTimestamps adds timestamps to message records that don't have one.
+// All backfilled messages get the same timestamp: 6 hours ago.
+// If the first message already has a timestamp, the entire session is skipped.
+// This is called from loadSession for historical sessions created before
+// the timestamp feature was added.
+func (s *JSONLStore) backfillTimestamps(sessionID string) {
+	path := s.sessionPath(sessionID)
+
+	f, err := os.Open(path)
+	if err != nil {
+		debug.Log("session", "backfillTimestamps: open failed: %v", err)
+		return
+	}
+
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	f.Close()
+	if err := sc.Err(); err != nil {
+		debug.Log("session", "backfillTimestamps: scan failed: %v", err)
+		return
+	}
+
+	// Check first message record — if it already has a timestamp, skip entirely.
+	firstMsgHasTimestamp := false
+	for _, line := range lines {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type == "message" {
+			firstMsgHasTimestamp = !rec.Timestamp.IsZero()
+			break
+		}
+	}
+	if firstMsgHasTimestamp {
+		return
+	}
+
+	backfillTime := time.Now().Add(-6 * time.Hour)
+	changed := false
+	for i, line := range lines {
+		var rec jsonlRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec.Type != "message" || !rec.Timestamp.IsZero() {
+			continue
+		}
+		rec.Timestamp = backfillTime
+		if data, err := json.Marshal(rec); err == nil {
+			lines[i] = string(data)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return
+	}
+
+	tmp := path + ".tsbackfill.tmp"
+	dstF, err := os.Create(tmp)
+	if err != nil {
+		debug.Log("session", "backfillTimestamps: create temp failed: %v", err)
+		return
+	}
+	for _, line := range lines {
+		dstF.WriteString(line + "\n")
+	}
+	dstF.Close()
+
+	if err := os.Rename(tmp, path); err != nil {
+		debug.Log("session", "backfillTimestamps: rename failed: %v", err)
+		os.Remove(tmp)
+		return
+	}
+	debug.Log("session", "backfillTimestamps: backfilled timestamps in session %s", sessionID)
 }
 
 // dedupMessageRecords removes duplicate message records, keeping only the
