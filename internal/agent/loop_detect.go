@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -201,14 +200,4 @@ func (a *Agent) resetLoopDetector() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.loopDetector.reset()
-}
-
-// toolCallSummary returns a short human-readable summary of a tool call for
-// logging purposes.
-func toolCallSummary(tc provider.ToolCallDelta) string {
-	argStr := string(tc.Arguments)
-	if len(argStr) > 80 {
-		argStr = argStr[:77] + "..."
-	}
-	return fmt.Sprintf("%s(%s)", tc.Name, strings.TrimSpace(argStr))
 }

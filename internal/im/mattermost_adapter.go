@@ -430,8 +430,6 @@ func (a *mattermostAdapter) hasMention(text string) bool {
 	return false
 }
 
-var mentionRegex = regexp.MustCompile(`(?i)@\S+`)
-
 func (a *mattermostAdapter) stripMention(text string) string {
 	// Strip @bot_username and @bot_user_id mentions
 	for _, pattern := range []string{a.botUsername, a.botUserID} {

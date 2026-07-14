@@ -31,10 +31,6 @@ func IsStdoutDead() bool {
 // stdoutHealthInterval is how often we check if stdout is still writable.
 const stdoutHealthInterval = 2 * time.Second
 
-// stdoutProbeTimeout is the write deadline for the stdout health probe.
-// If a tiny write takes longer than this, stdout is considered dead.
-const stdoutProbeTimeout = 500 * time.Millisecond
-
 // startStdoutHealthMonitor watches stdout for writability. When stdout
 // becomes unwritable (display sleep, terminal closed, SSH disconnect),
 // it sets stdoutDead=true and sends displaySleepMsg to the program.

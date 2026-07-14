@@ -449,14 +449,6 @@ func extractFileHint(toolName string, args []byte) string {
 	return ""
 }
 
-// overseerAnalysisTiming returns a human-readable description of the overseer
-// configuration for debugging.
-func overseerAnalysisTiming() string {
-	return fmt.Sprintf("interval=%d spam>%d stall>%d fileStuck>%d drift>%d(%d/%d/%d)",
-		overseerInterval, spamThreshold, stallThreshold, fileStuckThreshold,
-		driftThreshold, driftThreshold, driftThreshold*2, driftThreshold*3)
-}
-
 // Compile-time assertion that time is used (for the duration tracking we may
 // add later for time-based overseer checks).
 var _ = time.Second

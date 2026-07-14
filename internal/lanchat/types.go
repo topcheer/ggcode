@@ -169,10 +169,6 @@ const (
 	// of a multi-fragment message before discarding the partial assembly.
 	udpFragmentTimeout = 5 * time.Second
 
-	// udpFailThreshold is the number of consecutive failures before marking
-	// a transport as unavailable for a peer.
-	udpFailThreshold = 3
-
 	// udpMulticastAddr is the multicast group for UDP fallback transport.
 	// Uses the same group as mDNS discovery for simplicity.
 	udpMulticastAddr = "224.0.0.251:5354" // separate port from mDNS (5353)
