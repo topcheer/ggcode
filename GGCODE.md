@@ -84,7 +84,7 @@ internal/              488 Go source files (~149k LOC non-test, ~120k LOC test)
   vcs/                 Multi-VCS abstraction: auto-detect (git/hg/svn/jj), dispatch SCM operations
   permission/          Permission modes + per-tool policy enforcement + sandbox + dangerous tool classification
   plugin/              External tool plugins (command-based, MCP-based)
-  hooks/               Pre/post hooks runner (5 events: agent start/stop, stream start/stop, tool use; command + HTTP types; HMAC-signed JSON payload)
+  hooks/               Pre/post hooks runner (5 events: on_user_message, pre/post_tool_use, on_agent_stop, on_stream_stop; command + HTTP types; glob + regex match modes; HMAC-signed JSON payload)
   cost/                Token usage tracking + billing-type detection (per-token, subscription/coding plan, free; endpoint-based coding plan lookup)
   auth/                Full auth stack: GitHub Copilot token mgmt, OAuth2 PKCE/Device Flow, OIDC Discovery, JWT validation (HS256/RS256/ECDSA), JWKS polling, token introspection, token cache with per-client isolation
   chat/                Chat utilities and shared types
@@ -151,7 +151,7 @@ Key concepts:
 - **`allowed_dirs`**: Directories the agent may access
 - **`max_iterations`**: Agent loop limit per user turn (0 = unlimited)
 - **`im.output_mode`**: IM tool result delivery granularity: `verbose` (default), `quiet`, `summary`
-- **`hooks`**: Lifecycle hooks for 5 events (`on_agent_start`, `on_agent_stop`, `on_stream_start`, `on_stream_stop`, `on_tool_use`). Each event accepts a list of hooks with `type: command` or `type: http`. Payload via stdin. HTTP hooks support HMAC-SHA256 signature. See [`docs/guide/hooks.md`](docs/guide/hooks.md).
+- **`hooks`**: Lifecycle hooks for 5 events (`on_user_message`, `pre_tool_use`, `post_tool_use`, `on_agent_stop`, `on_stream_stop`). Each event accepts a list of hooks with `type: command` or `type: http`. Match patterns support `glob` (default) or `regex` mode via `match_mode` field. Payload via stdin. HTTP hooks support HMAC-SHA256 signature. See [`docs/guide/hooks.md`](docs/guide/hooks.md).
 - **`a2a.auth`**: A2A server authentication — multiple schemes can be enabled simultaneously:
   - **`a2a.auth.api_key`**: Shared secret (simplest)
   - **`a2a.auth.api_keys`**: List of additional keys — any match authenticates. Supports `${ENV_VAR}` expansion per entry.

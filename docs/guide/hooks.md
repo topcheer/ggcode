@@ -135,6 +135,17 @@ Fields populated per event:
 
 Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`), use `*` to match all.
 
+### Match Modes
+
+Hooks support two match modes, controlled by the optional `match_mode` field:
+
+| Mode | Description | Default |
+|------|-------------|---------|
+| `glob` | Glob patterns with pipe-separated OR and argument matching | Yes |
+| `regex` | Go regexp patterns matched against `toolName + " " + rawInput` | No |
+
+### Glob Patterns (default)
+
 | Pattern | Description |
 |---------|-------------|
 | `write_file` | Exact tool name |
@@ -143,6 +154,19 @@ Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-t
 | `run_command(git commit*)` | Tool name + argument substring |
 | `run_command(*)` | Tool name + any arguments |
 | `*` | Match everything |
+
+### Regex Patterns
+
+When `match_mode: regex`, the `match` field is compiled as a Go regexp and tested against the concatenation of the tool name and raw input (separated by a space). This allows complex matching like alternation, anchors, and character classes.
+
+| Pattern | Description |
+|---------|-------------|
+| `write_file|edit_file` | Match either tool (regex alternation) |
+| `^run_command\s+git\s+(push|force)` | Match git push/force commands |
+| `delete|remove|drop` | Match any tool with these keywords in input |
+| `.*` | Match everything (equivalent to `*` in glob) |
+
+> **Note:** Invalid regex patterns will cause hook validation to fail at startup. The desktop UI includes a regex tester for interactive validation.
 
 ## Configuration
 
@@ -160,6 +184,9 @@ hooks:
       type: http
       url: "https://security.example.com/scan"
       timeout: "5s"
+    - match: "^run_command\s+git\s+(push|force)"
+      match_mode: regex
+      command: "echo 'git push/force blocked' >&2; exit 2"
 
   post_tool_use:
     - match: "write_file|edit_file"
@@ -180,7 +207,8 @@ hooks:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `match` | Yes | Match pattern |
+| `match` | Yes | Match pattern (glob or regex) |
+| `match_mode` | No | `glob` (default) or `regex` |
 | `type` | No | `command` (default) or `http` |
 | `command` | command | Shell command string |
 | `url` | http | Webhook URL |

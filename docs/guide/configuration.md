@@ -191,6 +191,9 @@ hooks:
   pre_tool_use:
     - match: "run_command(rm -rf *)"
       command: "echo 'blocked' >&2; exit 2"
+    - match: "^run_command\\s+git\\s+(push|force)"
+      match_mode: regex
+      command: "echo 'git push/force blocked' >&2; exit 2"
 
   post_tool_use:
     - match: "write_file|edit_file"

@@ -353,9 +353,9 @@ internal/
   extract/                 # Content extraction
     extract.go             # File content extraction utilities
 
-  hooks/                   # Pre/post execution hooks
-    hook.go                # Hook struct
-    runner.go              # HookRunner: executes pre/post tool hooks
+  hooks/                   # Pre/post execution hooks (5 events, glob+regex match modes, command+HTTP types)
+    hook.go                # Hook struct, HookConfig, ValidateHooks, TestMatch
+    runner.go              # HookRunner: executes pre/post tool hooks, matchAny (glob/regex)
 
   harness/                 # Harness control plane
     config.go              # Harness config model and defaults
