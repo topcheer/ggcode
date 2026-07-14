@@ -64,26 +64,27 @@ type Agent struct {
 	precompact                 *precompactState
 	precompactCooldownUntil    time.Time // earliest next precompact; guarded by mu
 	shutdownCtx                context.Context
-	shutdownCancel             context.CancelFunc  // cancels on Close()
-	probeKey                   string              // "vendor|baseURL|model" for context window auto-detection
-	autopilotGoal              string              // current autopilot goal text; empty when no goal is active
-	autopilotGoalAsked         bool                // true after the goal-collection instruction has been injected
-	autopilotGoalSet           bool                // true after the user has confirmed a goal (goal text is non-empty)
-	autopilotStrategistCount   int                 // number of strategist calls this run (safety valve)
-	reflectionFunc             ReflectionFunc      // called after each run with accumulated stats
-	loopDetector               loopDetector        // tracks consecutive identical tool calls to detect stuck loops
-	errorClassifier            *ErrorClassifier    // immediate type-specific guidance on tool errors (AgentDebug-inspired)
-	overseer                   *overseerState      // deterministic async-overseer: trajectory analysis for stuck/drift/spam
-	repetition                 *repetitionTracker  // semantic-level repetition detection for failed edit clusters
-	speculator                 *speculator         // pattern-aware speculative tool execution (PASTE-inspired)
-	toolMemo                   *toolMemo           // read-only tool result memoization (ToolCaching-inspired)
-	confidence                 *confidenceState    // holistic trajectory confidence scoring (HTC-inspired)
-	budgetGuard                *budgetGuardState   // per-step token cost trend monitoring (BAGEN-inspired)
-	postEditVerify             postEditVerifyState // tracks source-code edits to inject periodic verification hints
-	systemPromptInjector       func() string       // returns extra system prompt text to inject (e.g. lanchat peer warnings)
-	baseSystemPrompt           string              // the fully built static system prompt; used as reset base for dynamic injection
-	onVerifyProgress           func(text string)   // called during async verification (status updates)
-	onVerifyResult             func(VerifyResult)  // called when async verification completes
+	shutdownCancel             context.CancelFunc   // cancels on Close()
+	probeKey                   string               // "vendor|baseURL|model" for context window auto-detection
+	autopilotGoal              string               // current autopilot goal text; empty when no goal is active
+	autopilotGoalAsked         bool                 // true after the goal-collection instruction has been injected
+	autopilotGoalSet           bool                 // true after the user has confirmed a goal (goal text is non-empty)
+	autopilotStrategistCount   int                  // number of strategist calls this run (safety valve)
+	reflectionFunc             ReflectionFunc       // called after each run with accumulated stats
+	loopDetector               loopDetector         // tracks consecutive identical tool calls to detect stuck loops
+	errorClassifier            *ErrorClassifier     // immediate type-specific guidance on tool errors (AgentDebug-inspired)
+	overseer                   *overseerState       // deterministic async-overseer: trajectory analysis for stuck/drift/spam
+	repetition                 *repetitionTracker   // semantic-level repetition detection for failed edit clusters
+	speculator                 *speculator          // pattern-aware speculative tool execution (PASTE-inspired)
+	toolMemo                   *toolMemo            // read-only tool result memoization (ToolCaching-inspired)
+	confidence                 *confidenceState     // holistic trajectory confidence scoring (HTC-inspired)
+	budgetGuard                *budgetGuardState    // per-step token cost trend monitoring (BAGEN-inspired)
+	cacheKeepalive             *cacheKeepaliveState // prompt cache warming pings during idle (Anthropic)
+	postEditVerify             postEditVerifyState  // tracks source-code edits to inject periodic verification hints
+	systemPromptInjector       func() string        // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	baseSystemPrompt           string               // the fully built static system prompt; used as reset base for dynamic injection
+	onVerifyProgress           func(text string)    // called during async verification (status updates)
+	onVerifyResult             func(VerifyResult)   // called when async verification completes
 	mu                         sync.RWMutex
 }
 
@@ -125,6 +126,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolMemo:         newToolMemo(),
 		confidence:       newConfidenceState(),
 		budgetGuard:      newBudgetGuardState(),
+		cacheKeepalive:   newCacheKeepaliveState(),
 		errorClassifier:  NewErrorClassifier(),
 	}
 	a.syncContextManagerProviderLocked()
@@ -267,6 +269,7 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 // Close releases resources held by the agent, including cancelling any
 // in-flight pre-compact operations. Should be called on shutdown.
 func (a *Agent) Close() {
+	a.cacheKeepalive.stopIdle()
 	a.CancelPreCompact()
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
@@ -580,6 +583,10 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
 
+	// Stop any background cache-keepalive pings — the user is sending a new
+	// message, so the cache will be refreshed naturally by this request.
+	a.cacheKeepalive.stopIdle()
+
 	// Start tracking messages added during this run for session persistence.
 	// persistFullSessionMessages() will use this to know which messages
 	// were added by the agent and need to be appended to the JSONL file.
@@ -647,6 +654,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// This prevents unbounded context growth in autopilot sessions where
 		// the summarization LLM call keeps failing.
 		a.maybeFallbackCheckpoint()
+
+		// Start background prompt-cache keepalive pings for Anthropic.
+		// Sends a minimal request every 270s to keep the prompt cache warm
+		// during idle, saving ~83K tokens when the user resumes.
+		// Skipped on cancellation or when provider doesn't support caching.
+		if !isCancelled && err == nil {
+			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+				msgs := cm.Messages()
+				a.cacheKeepalive.startIdle(a.provider, msgs, a.tools.ToDefinitions())
+			}
+		}
 	}()
 
 	a.contextManager.Add(provider.Message{
