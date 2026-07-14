@@ -2,50 +2,12 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/provider"
 )
-
-// maybeInjectProjectMemoryForTool inspects a tool call's arguments for file paths
-// that might have associated project memory files (AGENTS.md, GGCODE.md, etc.)
-// not yet loaded. If found, it injects the memory content into the conversation
-// and returns true, signaling the caller to discard pending tool results and
-// restart the iteration.
-func (a *Agent) maybeInjectProjectMemoryForTool(tc provider.ToolCallDelta, pendingToolResults []provider.ContentBlock) bool {
-	content, files, target := a.pendingProjectMemoryForTool(tc)
-	if len(files) == 0 || strings.TrimSpace(content) == "" {
-		return false
-	}
-	if len(pendingToolResults) > 0 {
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: pendingToolResults,
-		})
-	}
-	a.contextManager.Add(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
-	})
-	targetLabel := target
-	if targetLabel == "" {
-		targetLabel = "the pending path"
-	}
-	a.contextManager.Add(provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
-		}},
-	})
-	a.SetProjectMemoryFiles(files)
-	debug.Log("agent", "injected path-scoped project memory for %s (%d files)", targetLabel, len(files))
-	return true
-}
 
 // pendingProjectMemoryForTool scans a tool call's arguments for candidate file
 // paths and returns the content of any unloaded project memory files found.

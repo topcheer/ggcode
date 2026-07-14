@@ -76,15 +76,6 @@ func ReadProjectMemoryFiles(paths []string) (content string, files []string, err
 	return strings.TrimSpace(content), files, nil
 }
 
-func isProjectMemoryFile(name string) bool {
-	for _, candidate := range ProjectMemoryFilenames {
-		if name == candidate {
-			return true
-		}
-	}
-	return false
-}
-
 func readFileSafe(p string) (string, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {

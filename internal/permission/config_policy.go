@@ -289,10 +289,6 @@ func isWriteFileTool(name string) bool {
 	return false
 }
 
-func isModeControlTool(name string) bool {
-	return name == "enter_plan_mode" || name == "exit_plan_mode"
-}
-
 func isCommandTool(name string) bool {
 	switch name {
 	case "run_command", "start_command", "write_command_input", "tmux", "ghostty", "warp", "kitty", "iterm2":

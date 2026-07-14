@@ -76,11 +76,6 @@ const (
 	maxSummaryOutputRatio  = 0.05
 	maxSummaryOutputTokens = 12000
 
-	// Post-compaction target: fixed absolute size, not proportional.
-	// After compaction the context should be roughly system + summary ≈ 20K.
-	// For small context windows, cap at 25% of the window.
-	compactTargetFixed = 30000
-
 	defaultOutputReserveRatio = 0.10
 	maxOutputReserveRatio     = 0.25
 	safetyMarginRatio         = 0.05
@@ -1747,17 +1742,6 @@ Format: Use clear sections with bullet points. Be specific with names, paths, an
 		return "", fmt.Errorf("summarization returned empty text")
 	}
 	return "", fmt.Errorf("summarization returned empty text")
-}
-
-func (m *Manager) compactTargetTokens() int {
-	target := compactTargetFixed
-	if cw := m.contextWindow; cw > 0 && target > cw/4 {
-		target = cw / 4 // cap at 25% for small context windows
-	}
-	if target < minSummaryReserve {
-		return minSummaryReserve
-	}
-	return target
 }
 
 // summaryReserveTokens returns the token budget reserved for the summary

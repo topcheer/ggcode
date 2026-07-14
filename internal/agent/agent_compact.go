@@ -323,36 +323,6 @@ func compactErrorReason(err error) string {
 	return text
 }
 
-// forceCompactAndPause compacts the conversation unconditionally, used by the
-// autopilot loop guard to break out of repetitive continuation loops.
-func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.StreamEvent)) error {
-	debug.Log("agent", "autopilot loop guard triggered; compacting and pausing")
-	tokens := a.contextManager.TokenCount()
-
-	// Capture last message ID BEFORE compaction for checkpoint.
-	var lastMsgID string
-	if msgs := a.contextManager.Messages(); len(msgs) > 0 {
-		lastMsgID = msgs[len(msgs)-1].ID
-	}
-
-	compacted, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
-	if err != nil {
-		return err
-	}
-	if !compacted {
-		if err := a.contextManager.Summarize(ctx, a.provider); err != nil {
-			return err
-		}
-		compacted = true
-	}
-	newTokens := a.contextManager.TokenCount()
-	debug.Log("agent", "autopilot loop guard: compact completed (%d → %d tokens)", tokens, newTokens)
-	// Always save checkpoint for forced compaction — it's initiator-driven
-	// and represents a deliberate state transition.
-	a.maybeSaveCheckpoint(lastMsgID)
-	return nil
-}
-
 // maybeSaveCheckpoint triggers the checkpoint callback if one is registered.
 // This persists the compacted message state so --resume can skip re-compacting.
 func (a *Agent) maybeSaveCheckpoint(lastMsgID ...string) {
