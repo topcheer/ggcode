@@ -294,16 +294,76 @@ Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and
 | Command | Description |
 |---------|-------------|
 | `/help` | Show help (categorized: Session, Model, Development, Integrations, System) |
-| `/cost` | Session token usage + estimated cost or coding plan name |
-| `/diff` | Git diff in chat (`--cached`, `--stat`, `<file>`) |
-| `/hooks` | View configured hooks + validation status |
-| `/mode` | Show or switch permission mode |
+| `/sessions` | List and resume sessions |
+| `/resume` | Resume a specific session |
+| `/session` | Session list / switch / new |
+| `/branch` | Branch/fork current session |
+| `/clear` | Clear current conversation |
 | `/compact` | Trigger context compaction |
+| `/context` | Show context window usage and details |
+| `/copy` | Copy conversation to clipboard |
+| `/export [path]` | Export session to file |
+| `/stats` | Open session statistics panel |
+| `/cost` | Session token usage + estimated cost or coding plan name |
+| `/exit` | Exit ggcode |
+| `/restart` | Restart ggcode (preserves current session) |
+| `/update` | Check and install updates |
 | `/model` | Switch model |
 | `/vendor` | Switch vendor/endpoint |
+| `/provider [vendor] [endpoint]` | Show or switch LLM provider |
+| `/impersonate [provider/model]` | Impersonate a provider/model for testing |
+| `/pc` | Open provider config panel |
+| `/lang [en\|zh-CN]` | Switch interface language |
+| `/stream` | Toggle stream mode |
+| `/mode` | Show or switch permission mode |
+| `/config` | Configuration management |
+| `/allow [tool]` | Permanently allow a tool |
+| `/init` | Create `GGCODE.md` project memory file |
+| `/memory` | Manage project memory |
+| `/rules` | Manage ratchet rules (learned error patterns) |
+| `/undo` | Undo last file changes |
+| `/redo` | Redo previously undone file changes |
+| `/checkpoints` | Show available checkpoints |
+| `/hooks` | View configured hooks + validation status |
+| `/cron [subcommand]` | Manage scheduled cron jobs (list, create, delete, pause, resume, get, update) |
 | `/mcp` | MCP server management |
-| `/session` | Session list / switch / new |
-| `/clear` | Clear current conversation |
+| `/im` | Show IM adapter status |
+| `/skills` | Manage skills |
+| `/plugins` | Manage plugins |
+| `/image` | Image handling |
+| `/todo` | View/manage todo list |
+| `/status` | Show current status |
+| `/files` | Open file browser |
+| `/inspector [filter]` | Open inspector panel |
+| `/diff [file]` | Git diff in chat (`--cached`, `--stat`, `<file>`) |
+| `/edit` | Edit last user message and resubmit |
+| `/retry` | Retry last agent turn |
+| `/regenerate` | Regenerate last response |
+| `/chat` | Open LAN Chat panel |
+| `/nick [name][@role][@team]` | Set or show LAN Chat identity |
+| `/tunnel` | Start sharing session via mobile relay tunnel |
+| `/unshare` | Stop sharing |
+| `/harness [subcommand]` | Run harness commands |
+| `/knight` | Knight auto-evolution |
+| `/tmux` | Manage tmux session |
+| `/bug` | Report a bug |
+| `/review [file]` | Review code changes (harness review) |
+| `/reflect` | Trigger agent self-reflection on recent runs |
+| `/qq` | QQ adapter management |
+| `/telegram` / `/tg` | Telegram adapter management |
+| `/discord` | Discord adapter management |
+| `/feishu` / `/lark` | Feishu/Lark adapter management |
+| `/slack` | Slack adapter management |
+| `/dingtalk` / `/ding` | DingTalk adapter management |
+| `/wechat` | WeChat adapter management |
+| `/wecom` | WeCom adapter management |
+| `/mattermost` / `/mm` | Mattermost adapter management |
+| `/matrix` | Matrix adapter management |
+| `/signal` | Signal adapter management |
+| `/irc` | IRC adapter management |
+| `/nostr` | Nostr adapter management |
+| `/whatsapp` / `/wa` | WhatsApp adapter management |
+| `/twitch` | Twitch adapter management |
 
 Plus dynamically registered MCP-adapted tools and external plugin tools.
 
