@@ -170,6 +170,88 @@ func TestProviderPanelEditInputPaste(t *testing.T) {
 	}
 }
 
+func TestProviderPanelNewVendorWizardPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.SetConfig(&config.Config{
+		Vendor:   "test",
+		Endpoint: "default",
+		Vendors: map[string]config.VendorConfig{
+			"test": {
+				Endpoints: map[string]config.EndpointConfig{
+					"default": {Protocol: "openai"},
+				},
+			},
+		},
+	})
+	m.openProviderPanel()
+	// Simulate entering the new-vendor API key step.
+	ti := textinput.New()
+	ti.Focus()
+	m.providerPanel.newVendorInput = ti
+	m.providerPanel.newVendorStep = newVendorStepAPIKey
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "sk-test-key-123"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.providerPanel.newVendorInput.Value(), "sk-test-key-123") {
+		t.Fatalf("expected newVendorInput to contain pasted text, got %q", m.providerPanel.newVendorInput.Value())
+	}
+}
+
+func TestProviderPanelNewEndpointWizardPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.SetConfig(&config.Config{
+		Vendor:   "test",
+		Endpoint: "default",
+		Vendors: map[string]config.VendorConfig{
+			"test": {
+				Endpoints: map[string]config.EndpointConfig{
+					"default": {Protocol: "openai"},
+				},
+			},
+		},
+	})
+	m.openProviderPanel()
+	// Simulate entering the new-endpoint API key step.
+	ti := textinput.New()
+	ti.Focus()
+	m.providerPanel.newVendorInput = ti
+	m.providerPanel.newEndpointStep = newEndpointStepAPIKey
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "sk-test-key-123"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.providerPanel.newVendorInput.Value(), "sk-test-key-123") {
+		t.Fatalf("expected newVendorInput to contain pasted text, got %q", m.providerPanel.newVendorInput.Value())
+	}
+}
+
+func TestProviderPanelProtocolStepPasteIgnored(t *testing.T) {
+	m := setupModelForPaste()
+	m.SetConfig(&config.Config{
+		Vendor:   "test",
+		Endpoint: "default",
+		Vendors: map[string]config.VendorConfig{
+			"test": {
+				Endpoints: map[string]config.EndpointConfig{
+					"default": {Protocol: "openai"},
+				},
+			},
+		},
+	})
+	m.openProviderPanel()
+	// On the protocol step there is no text input to receive paste.
+	m.providerPanel.newVendorStep = newVendorStepProtocol
+	m.input.Focus()
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "should-not-crash"})
+	m = updated.(Model)
+	// Reaching here without panic is sufficient; paste should fall through to main input.
+	if !strings.Contains(m.input.Value(), "should-not-crash") {
+		t.Fatalf("expected paste to fall through to main input, got %q", m.input.Value())
+	}
+}
+
 // --- Harness panel paste (existing path, regression test) ---
 
 func TestHarnessPanelActionInputPaste(t *testing.T) {

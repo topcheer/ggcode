@@ -24,6 +24,12 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 			syncModelSelection(&m.providerPanel.modelIndex, m.providerPanel.models, m.providerPanel.modelFilter)
 			return m, cmd
 		}
+		if (m.providerPanel.newVendorStep > 0 && m.providerPanel.newVendorStep != newVendorStepProtocol) ||
+			(m.providerPanel.newEndpointStep > 0 && m.providerPanel.newEndpointStep != newEndpointStepProtocol) {
+			var cmd tea.Cmd
+			m.providerPanel.newVendorInput, cmd = m.providerPanel.newVendorInput.Update(msg)
+			return m, cmd
+		}
 	}
 	if m.modelPanel != nil && m.modelPanel.filter.Focused() {
 		var cmd tea.Cmd
