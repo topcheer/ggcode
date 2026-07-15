@@ -51,7 +51,13 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	}
 	agentInst.SetProvider(prov)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
+	agentInst.SetSupportsVision(resolved.SupportsVision)
 	agentInst.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
+
+	// Inject session ID into provider HTTP headers.
+	if ss, ok := prov.(provider.SessionIDSetter); ok {
+		ss.SetSessionID(agentInst.SessionID())
+	}
 }
 
 // SyncVendorEndpointToGlobal ensures a vendor/endpoint definition exists in

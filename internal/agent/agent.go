@@ -540,6 +540,13 @@ func (a *Agent) WorkingDir() string {
 	return a.workingDir
 }
 
+// SessionID returns the current session ID.
+func (a *Agent) SessionID() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sessionID
+}
+
 // SetSessionID sets the current session ID and propagates it to the todo tool
 // and context manager so both read/write from the same session-scoped path.
 func (a *Agent) SetSessionID(id string) {

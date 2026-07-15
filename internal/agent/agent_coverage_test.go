@@ -136,6 +136,64 @@ func TestAgent_SetSupportsVision(t *testing.T) {
 	}
 }
 
+func TestEnsureMessagesSendable_StripsImagesWhenVisionDisabled(t *testing.T) {
+	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
+	a.SetSupportsVision(false)
+
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock("call_1", "browser", json.RawMessage(`{}`)),
+		}},
+		{Role: "user", Content: []provider.ContentBlock{
+			provider.ToolResultWithImages("call_1", "browser", "screenshot taken", []provider.ContentImage{
+				{MIME: "image/png", Base64: "iVBORw0KGgo="},
+			}, false),
+		}},
+	}
+
+	result := a.ensureMessagesSendable(msgs)
+
+	// Should have 2 messages: assistant + user
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
+	}
+
+	// The tool_result should still exist but without images
+	tr := result[1].Content[0]
+	if tr.Type != "tool_result" {
+		t.Fatalf("expected tool_result, got %s", tr.Type)
+	}
+	if len(tr.Images) != 0 {
+		t.Fatalf("expected images stripped, got %d images", len(tr.Images))
+	}
+	if tr.Output != "screenshot taken" {
+		t.Fatalf("expected text output preserved, got %s", tr.Output)
+	}
+}
+
+func TestEnsureMessagesSendable_KeepsImagesWhenVisionEnabled(t *testing.T) {
+	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
+	a.SetSupportsVision(true)
+
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			provider.ToolUseBlock("call_1", "browser", json.RawMessage(`{}`)),
+		}},
+		{Role: "user", Content: []provider.ContentBlock{
+			provider.ToolResultWithImages("call_1", "browser", "screenshot taken", []provider.ContentImage{
+				{MIME: "image/png", Base64: "iVBORw0KGgo="},
+			}, false),
+		}},
+	}
+
+	result := a.ensureMessagesSendable(msgs)
+
+	tr := result[1].Content[0]
+	if len(tr.Images) != 1 {
+		t.Fatalf("expected 1 image preserved, got %d", len(tr.Images))
+	}
+}
+
 func TestAgent_UpdateSystemPrompt(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "original", 1)
 	msgs := a.ContextManager().Messages()

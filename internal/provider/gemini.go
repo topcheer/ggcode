@@ -65,6 +65,17 @@ func (p *GeminiProvider) Name() string {
 	return "gemini"
 }
 
+// SetSessionID injects the session ID into outgoing requests via a custom
+// HTTP header (GGCode-SessionID).
+func (p *GeminiProvider) SetSessionID(sessionID string) {
+	if sessionID == "" || p.transport == nil {
+		return
+	}
+	existing := p.transport.snapshotHeaders()
+	existing.Set("GGCode-SessionID", sessionID)
+	p.transport.UpdateHeaders(existing)
+}
+
 // UpdateRuntimeHeaders updates the injected headers at runtime.
 func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {

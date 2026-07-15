@@ -126,6 +126,18 @@ func (t *headerInjectingTransport) UpdateHeaders(newHeaders http.Header) {
 	t.mu.Unlock()
 }
 
+// snapshotHeaders returns a copy of the current headers so callers can
+// safely modify and re-set them.
+func (t *headerInjectingTransport) snapshotHeaders() http.Header {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	cp := make(http.Header, len(t.headers))
+	for k, vs := range t.headers {
+		cp[k] = append([]string(nil), vs...)
+	}
+	return cp
+}
+
 // claudeCLIHeaders returns the set of HTTP headers that mimic the official
 // claude-cli client, allowing compatible API providers to recognize the client.
 // NewOpenAIProvider creates a new OpenAI provider.
@@ -194,6 +206,17 @@ func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
 		p.transport.UpdateHeaders(headers)
 	}
+}
+
+// SetSessionID injects the session ID into outgoing requests via a custom
+// HTTP header (GGCode-SessionID).
+func (p *OpenAIProvider) SetSessionID(sessionID string) {
+	if sessionID == "" || p.transport == nil {
+		return
+	}
+	existing := p.transport.snapshotHeaders()
+	existing.Set("GGCode-SessionID", sessionID)
+	p.transport.UpdateHeaders(existing)
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {

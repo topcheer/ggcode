@@ -150,6 +150,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"glm-5":                                              {ContextWindow: 204800, MaxOutputTokens: 65536},
 	"glm-5-turbo":                                        {ContextWindow: 200000, MaxOutputTokens: 128000},
 	"glm-5.1":                                            {ContextWindow: 204800, MaxOutputTokens: 65536},
+	"glm-5.2":                                            {ContextWindow: 204800, MaxOutputTokens: 65536},
 	"google-gemma-3-27b-it":                              {ContextWindow: 198000, MaxOutputTokens: 16384, SupportsVision: true},
 	"google-gemma-4-26b-a4b-it":                          {ContextWindow: 256000, MaxOutputTokens: 8192, SupportsVision: true},
 	"google-gemma-4-31b-it":                              {ContextWindow: 256000, MaxOutputTokens: 8192, SupportsVision: true},

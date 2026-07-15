@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -15,10 +16,12 @@ import (
 
 // AnthropicProvider implements Provider using the Anthropic SDK.
 type AnthropicProvider struct {
-	client    anthropic.Client
-	model     string
-	maxTokens int
-	cap       *adaptiveCap
+	client     anthropic.Client
+	model      string
+	maxTokens  int
+	cap        *adaptiveCap
+	transport  *headerInjectingTransport // kept for runtime header updates
+	calibrator *tokenCountCalibrator     // periodic real-API token calibration
 }
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
@@ -43,27 +46,35 @@ func (p *AnthropicProvider) effectiveMaxTokens() int {
 
 // NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
-	opts := anthropicProviderOptions(apiKey, "")
-	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: newProviderHTTPTransport()}))
-	client := anthropic.NewClient(opts...)
-	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d", model, maxTokens)
-	return &AnthropicProvider{
-		client:    client,
-		model:     model,
-		maxTokens: maxTokens,
-	}
+	return newAnthropicProvider(apiKey, model, maxTokens, "")
 }
 
 // NewAnthropicProviderWithBaseURL creates a new Anthropic provider with a custom base URL.
 func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *AnthropicProvider {
+	return newAnthropicProvider(apiKey, model, maxTokens, baseURL)
+}
+
+func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *AnthropicProvider {
+	headers := BuildHeadersForProvider("anthropic")
+	for key, values := range vendorSpecificAuthHeaders(baseURL, apiKey) {
+		for _, value := range values {
+			headers.Set(key, value)
+		}
+	}
+	transport := &headerInjectingTransport{
+		base:    newProviderHTTPTransport(),
+		headers: headers,
+	}
 	opts := anthropicProviderOptions(apiKey, baseURL)
-	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: newProviderHTTPTransport()}))
+	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
 	client := anthropic.NewClient(opts...)
 	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
 	return &AnthropicProvider{
-		client:    client,
-		model:     model,
-		maxTokens: maxTokens,
+		client:     client,
+		model:      model,
+		maxTokens:  maxTokens,
+		transport:  transport,
+		calibrator: newTokenCountCalibrator(),
 	}
 }
 
@@ -92,6 +103,24 @@ func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
 
 func (p *AnthropicProvider) Name() string {
 	return "anthropic"
+}
+
+// UpdateRuntimeHeaders updates the injected headers at runtime.
+func (p *AnthropicProvider) UpdateRuntimeHeaders(headers http.Header) {
+	if p.transport != nil {
+		p.transport.UpdateHeaders(headers)
+	}
+}
+
+// SetSessionID injects the session ID into outgoing requests via a custom
+// HTTP header (GGCode-SessionID).
+func (p *AnthropicProvider) SetSessionID(sessionID string) {
+	if sessionID == "" || p.transport == nil {
+		return
+	}
+	existing := p.transport.snapshotHeaders()
+	existing.Set("GGCode-SessionID", sessionID)
+	p.transport.UpdateHeaders(existing)
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
@@ -303,7 +332,164 @@ func anthropicUsage(usage anthropic.Usage) TokenUsage {
 }
 
 func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
-	return estimateTokensForMessages(messages), nil
+	estimated := estimateTokensForMessages(messages)
+
+	// Fast path: if calibrator is nil or disabled, return local estimate.
+	if p.calibrator == nil {
+		return estimated, nil
+	}
+
+	// Check if we should trigger a calibration.
+	p.calibrator.mu.Lock()
+	needCalibration := p.calibrator.shouldCalibrate()
+	isFirst := p.calibrator.lastCalibrate.IsZero()
+	p.calibrator.mu.Unlock()
+
+	if !needCalibration {
+		// Apply the learned ratio to the local estimate.
+		return int(float64(estimated) * p.calibrator.currentRatio()), nil
+	}
+
+	// First calibration: synchronous with a longer timeout.
+	if isFirst {
+		calCtx, cancel := context.WithTimeout(ctx, calibrateFirstTimeout)
+		defer cancel()
+		realTokens, err := p.remoteCountTokens(calCtx, messages)
+		if err != nil {
+			debug.Log("provider-calibrator", "first calibration failed: %v", err)
+			p.calibrator.disable()
+			return estimated, nil
+		}
+		p.calibrator.applyResult(estimated, realTokens)
+		debug.Log("provider-calibrator", "first calibration OK: estimated=%d real=%d ratio=%.3f", estimated, realTokens, p.calibrator.currentRatio())
+		return realTokens, nil
+	}
+
+	// Subsequent calibrations: async, non-blocking.
+	// Return ratio-adjusted estimate immediately, update ratio in background.
+	result := int(float64(estimated) * p.calibrator.currentRatio())
+	safego.Go("provider.calibrateTokens", func() {
+		calCtx, cancel := context.WithTimeout(context.Background(), calibrateAsyncTimeout)
+		defer cancel()
+		realTokens, err := p.remoteCountTokens(calCtx, messages)
+		if err != nil {
+			debug.Log("provider-calibrator", "async calibration failed: %v", err)
+			return // transient errors don't disable
+		}
+		p.calibrator.applyResult(estimated, realTokens)
+		debug.Log("provider-calibrator", "async calibration OK: estimated=%d real=%d ratio=%.3f", estimated, realTokens, p.calibrator.currentRatio())
+	})
+	return result, nil
+}
+
+// remoteCountTokens calls the Anthropic count_tokens API for accurate token counts.
+func (p *AnthropicProvider) remoteCountTokens(ctx context.Context, messages []Message) (int, error) {
+	params := p.buildCountTokensParams(messages)
+	resp, err := p.client.Messages.CountTokens(ctx, params)
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "404") || strings.Contains(errStr, "403") ||
+			strings.Contains(errStr, "not found") {
+			p.calibrator.disable()
+		}
+		return 0, err
+	}
+	return int(resp.InputTokens), nil
+}
+
+// buildCountTokensParams converts internal messages to the Anthropic
+// MessageCountTokensParams format, reusing the same block-conversion logic
+// as buildParams but without tool definitions or max_tokens.
+func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic.MessageCountTokensParams {
+	var msgParams []anthropic.MessageParam
+	type sysBlock struct {
+		text string
+	}
+	var systemBlocks []sysBlock
+	for _, m := range messages {
+		if m.Role == "system" {
+			for _, b := range m.Content {
+				if b.Type == "text" && b.Text != "" {
+					systemBlocks = append(systemBlocks, sysBlock{text: b.Text})
+				}
+			}
+			continue
+		}
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
+		for _, b := range m.Content {
+			switch b.Type {
+			case "text":
+				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+			case "image":
+				blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
+			case "tool_use":
+				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
+			case "tool_result":
+				if len(b.Images) > 0 && !b.IsError {
+					var content []anthropic.ToolResultBlockParamContentUnion
+					for _, img := range b.Images {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfImage: &anthropic.ImageBlockParam{
+								Source: anthropic.ImageBlockParamSourceUnion{
+									OfBase64: &anthropic.Base64ImageSourceParam{
+										Data:      img.Base64,
+										MediaType: anthropic.Base64ImageSourceMediaType(img.MIME),
+									},
+								},
+							},
+						})
+					}
+					if b.Output != "" {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfText: &anthropic.TextBlockParam{Text: b.Output},
+						})
+					}
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfToolResult: &anthropic.ToolResultBlockParam{
+							ToolUseID: b.ToolID,
+							Content:   content,
+						},
+					})
+				} else {
+					blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
+				}
+			case "thinking":
+				if b.ThinkingSignature != "" {
+					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
+				}
+			case "redacted_thinking":
+				if b.ThinkingData != "" {
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
+				}
+			}
+		}
+		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
+		// Prepend system blocks into first user message (same as buildParams).
+		if m.Role == "user" && len(systemBlocks) > 0 {
+			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(systemBlocks))
+			for i, sb := range systemBlocks {
+				var text string
+				if i == 0 {
+					text = "[System]\n" + sb.text
+				} else {
+					text = sb.text
+				}
+				if i == len(systemBlocks)-1 {
+					text += "\n[End System]"
+				}
+				block := anthropic.NewTextBlock(text)
+				newBlocks = append(newBlocks, block)
+			}
+			systemBlocks = nil
+			newBlocks = append(newBlocks, blocks...)
+			param.Content = newBlocks
+		}
+		msgParams = append(msgParams, param)
+	}
+	return anthropic.MessageCountTokensParams{
+		Model:    p.model,
+		Messages: msgParams,
+	}
 }
 
 func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {

@@ -221,3 +221,9 @@ func BuildHeadersForProvider(protocol string) http.Header {
 type HeaderMutable interface {
 	UpdateRuntimeHeaders(headers http.Header)
 }
+
+// SessionIDSetter is implemented by providers that can embed a session ID
+// header into outgoing LLM requests.
+type SessionIDSetter interface {
+	SetSessionID(sessionID string)
+}

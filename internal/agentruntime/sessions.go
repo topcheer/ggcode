@@ -243,31 +243,29 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		msgs = ses.Messages
 	}
 
-	if ses.CheckpointTokens > 0 && ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
-		cpCount := ses.CheckpointMessageCount
+	if ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
+		// Only load messages from the last checkpoint onward. Messages
+		// before the checkpoint have been replaced by a compaction summary.
+		msgs = msgs[ses.CheckpointMessageCount:]
+	}
 
-		// 1. Add checkpoint messages (their tokens are estimated by Add(),
-		//    but we'll override with the real value next).
-		for _, msg := range msgs[:cpCount] {
-			agentInst.AddMessage(msg)
-		}
+	// Load messages via Add() (accumulates local token estimates).
+	for _, msg := range msgs {
+		agentInst.AddMessage(msg)
+	}
 
-		// 2. Set baseline to the real checkpoint token count.
-		//    This replaces the estimate; baselineDelta resets to 0.
-		if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
+	// Use the last real usage entry as the token baseline. This is more
+	// accurate than local estimation and replaces the old checkpoint-tokens
+	// approach. The first real LLM call after restore will refine it via
+	// RecordUsage. Fall back to CheckpointTokens if no usage history exists.
+	if cm, ok := agentInst.ContextManager().(*ctxpkg.Manager); ok {
+		if n := len(ses.UsageHistory); n > 0 {
+			last := ses.UsageHistory[n-1]
+			if last.Usage.InputTokens > 0 {
+				cm.SetCheckpointBaseline(last.Usage.InputTokens + last.Usage.OutputTokens)
+			}
+		} else if ses.CheckpointTokens > 0 {
 			cm.SetCheckpointBaseline(ses.CheckpointTokens)
-		}
-
-		// 3. Add post-checkpoint messages. Since baselineAvailable=true,
-		//    each Add() increments baselineDelta with its estimated tokens.
-		//    Final: tokenCount = checkpoint_tokens + post-checkpoint estimate.
-		for _, msg := range msgs[cpCount:] {
-			agentInst.AddMessage(msg)
-		}
-	} else {
-		// No checkpoint — load all with estimation.
-		for _, msg := range msgs {
-			agentInst.AddMessage(msg)
 		}
 	}
 

@@ -906,3 +906,79 @@ func TestParseNickRoleTeamEmptyParts(t *testing.T) {
 			nick, role, team, "alice", "frontend", DefaultTeam)
 	}
 }
+
+// TestHandleIncomingMessage_FiresOnInboundDM verifies that HandleIncomingMessage
+// (the HTTP transport path) fires the onInboundDM callback for non-broadcast DMs.
+// Previously this callback was only fired from handleReceiveMessageData (UDP path),
+// causing the rate limiter to never reset when messages arrived via HTTP.
+func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
+
+	var gotInbound atomic.Value // string
+	hub.SetOnInboundDM(func(fromNodeID string) {
+		gotInbound.Store(fromNodeID)
+	})
+
+	// Send a non-broadcast DM from node-bob to self
+	msg := Message{
+		ID:         "msg-1",
+		FromNodeID: "node-bob",
+		FromNick:   "bob_dev",
+		FromRole:   RoleAgent,
+		ToNodeID:   hub.NodeID(),
+		Content:    "hello",
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	hub.HandleIncomingMessage(msg)
+
+	// Wait briefly for the async safego.Go callback
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v := gotInbound.Load(); v != nil && v.(string) == "node-bob" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	v := gotInbound.Load()
+	if v == nil {
+		t.Fatal("onInboundDM was not fired for non-broadcast DM via HandleIncomingMessage")
+	}
+	if v.(string) != "node-bob" {
+		t.Errorf("onInboundDM received fromNodeID=%q, want node-bob", v.(string))
+	}
+}
+
+// TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM verifies that
+// broadcast messages do NOT trigger the onInboundDM callback.
+func TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
+
+	var fired atomic.Bool
+	hub.SetOnInboundDM(func(fromNodeID string) {
+		fired.Store(true)
+	})
+
+	// Send a broadcast message
+	msg := Message{
+		ID:         "msg-broadcast",
+		FromNodeID: "node-bob",
+		FromNick:   "bob_dev",
+		FromRole:   RoleAgent,
+		ToNodeID:   "", // broadcast
+		Content:    "announcement",
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	hub.HandleIncomingMessage(msg)
+
+	// Wait briefly to see if callback fires
+	time.Sleep(100 * time.Millisecond)
+
+	if fired.Load() {
+		t.Fatal("onInboundDM should NOT fire for broadcast messages")
+	}
+}

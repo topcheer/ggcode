@@ -1226,6 +1226,7 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	autoApproveCb := h.onAutoApprove
 	callback := h.onMessage
 	approvalCb := h.onApprovalReq
+	inboundDMCb := h.onInboundDM
 	h.mu.Unlock()
 
 	// Fire onMessage callback for regular messages only.
@@ -1234,6 +1235,15 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// firing onMessage here would cause duplicate rendering in the UI.
 	if callback != nil && !needsApproval {
 		safego.Go("lanchat.messageCallback", func() { callback(msg) })
+	}
+
+	// Fire onInboundDM callback for non-broadcast messages so the rate
+	// limiter can reset the DM cooldown for the sender. This is critical
+	// for the HTTP transport path — without it, the agent can never reply
+	// to an inbound DM without waiting for the full cooldown to expire.
+	if !msg.IsBroadcast() && inboundDMCb != nil {
+		fromID := msg.FromNodeID
+		safego.Go("lanchat.onInboundDM", func() { inboundDMCb(fromID) })
 	}
 
 	// Broadcast messages (no specific recipient) are fire-and-forget.
