@@ -296,14 +296,6 @@ func isCommandTool(name string) bool {
 	return false
 }
 
-func extractFilePath(input json.RawMessage) (string, bool) {
-	paths := extractFilePaths(input)
-	if len(paths) == 0 {
-		return "", false
-	}
-	return paths[0], true
-}
-
 func extractFilePaths(input json.RawMessage) []string {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(input, &m); err != nil {

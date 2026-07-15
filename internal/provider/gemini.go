@@ -25,15 +25,6 @@ type GeminiProvider struct {
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
-func (p *GeminiProvider) effectiveMaxTokens() int {
-	if p.cap != nil {
-		if v := p.cap.Get(); v > 0 {
-			return v
-		}
-	}
-	return p.maxTokens
-}
-
 // NewGeminiProvider creates a new Gemini provider.
 func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvider, error) {
 	return NewGeminiProviderWithBaseURL(apiKey, model, maxTokens, "")

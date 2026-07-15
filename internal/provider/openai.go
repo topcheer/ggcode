@@ -59,17 +59,6 @@ func (p *OpenAIProvider) probeChat(ctx context.Context, messages []Message) erro
 	return err
 }
 
-// effectiveMaxTokens returns the value to send on the next request.
-// Priority: adaptive cap > static maxTokens > 0 (omit).
-func (p *OpenAIProvider) effectiveMaxTokens() int {
-	if p.cap != nil {
-		if v := p.cap.Get(); v > 0 {
-			return v
-		}
-	}
-	return p.maxTokens
-}
-
 func (p *OpenAIProvider) applyReasoningEffort(req *openai.ChatCompletionRequest) bool {
 	if p.reasoningEffort == "" {
 		return false
