@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -159,8 +158,6 @@ func modelFilterConsumesKey(msg string) bool {
 		return true
 	}
 }
-
-func itoa(v int) string { return strconv.Itoa(v) }
 
 func indexOfInt(values []int, target int) int {
 	for i, value := range values {
