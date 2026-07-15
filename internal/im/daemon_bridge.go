@@ -272,17 +272,6 @@ func (b *DaemonBridge) notifyUserMessage(content []provider.ContentBlock) {
 	}
 }
 
-func (b *DaemonBridge) tryQueueInterruption(content []provider.ContentBlock, logPrefix string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.cancelFunc == nil {
-		return false
-	}
-	debug.Log("daemon-bridge", "%squeuing interruption: %s", logPrefix, truncateStr(extractText(content), 80))
-	b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
-	return true
-}
-
 // tryQueueOrBeginRun atomically checks if the agent is busy and either
 // queues the interruption or begins a new run slot. This eliminates the
 // TOCTOU window between tryQueueInterruption and beginRunSlot.
@@ -311,25 +300,6 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 	})
 	b.cancelFunc = cancel
 	return ctx, false
-}
-
-func (b *DaemonBridge) beginRunSlot() context.Context {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	ctx2, cancel := context.WithCancel(context.Background())
-	b.pendingInterruptions = b.pendingInterruptions[:0]
-	b.agent.SetInterruptionHandler(func() string {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if len(b.pendingInterruptions) == 0 {
-			return ""
-		}
-		msg := b.pendingInterruptions[0]
-		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return extractText(msg.Content)
-	})
-	b.cancelFunc = cancel
-	return ctx2
 }
 
 func (b *DaemonBridge) finishRunSlot() {

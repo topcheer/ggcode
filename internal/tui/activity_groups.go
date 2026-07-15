@@ -66,49 +66,6 @@ func (m *Model) chatCancelAllRunningTools() []finalizedToolInfo {
 	return m.chatFinalizeRunningTools(chat.StatusCanceled, "Cancelled", true)
 }
 
-// isLiveSubAgentStatus returns true for subagent statuses that indicate active work.
-func isLiveSubAgentStatus(status subagent.Status) bool {
-	switch status {
-	case subagent.StatusPending, subagent.StatusRunning:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m Model) subAgentActivitySummary(sa *subagent.SubAgent) string {
-	if summary := strings.TrimSpace(sa.ProgressSummary); summary != "" {
-		return summary
-	}
-	if sa.CurrentTool != "" {
-		present := describeTool(m.currentLanguage(), sa.CurrentTool, sa.CurrentArgs)
-		return util.FirstNonEmpty(present.Activity, formatToolInline(present.DisplayName, present.Detail))
-	}
-	switch sa.CurrentPhase {
-	case "writing":
-		return m.t("status.writing")
-	case "thinking":
-		return m.t("status.thinking")
-	case "completed":
-		if m.currentLanguage() == LangZhCN {
-			return "已完成"
-		}
-		return "Completed"
-	case "failed":
-		if m.currentLanguage() == LangZhCN {
-			return "已失败"
-		}
-		return "Failed"
-	case "pending":
-		if m.currentLanguage() == LangZhCN {
-			return "等待开始"
-		}
-		return "Pending"
-	default:
-		return m.t("status.thinking")
-	}
-}
-
 func localizeSubAgentStatus(lang Language, status subagent.Status) string {
 	switch status {
 	case subagent.StatusPending:
