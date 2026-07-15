@@ -766,15 +766,6 @@ func renderHarnessPanelInput(input textinput.Model, focused bool, width int) str
 	return control.View()
 }
 
-func renderHarnessHintsBox(content string, width, height int) string {
-	content = clipHarnessPanelText(content, width, height)
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(height).
-		Foreground(lipgloss.Color("8")).
-		Render(content)
-}
-
 func clipHarnessPanelText(content string, width, height int) string {
 	if width <= 0 {
 		width = 1

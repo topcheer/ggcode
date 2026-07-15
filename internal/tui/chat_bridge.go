@@ -39,18 +39,6 @@ func (m *Model) chatWriteSystem(id, text string) {
 	}
 }
 
-// chatUpdateSystemText updates the text of an existing system message.
-func (m *Model) chatUpdateSystemText(id, text string) {
-	if m.chatList == nil {
-		return
-	}
-	if item := m.chatList.FindByID(id); item != nil {
-		if s, ok := item.(*chat.SystemItem); ok {
-			s.SetText(text)
-		}
-	}
-}
-
 // chatAppendSystemText appends text to an existing system message.
 func (m *Model) chatAppendSystemText(id, text string) {
 	if m.chatList == nil {

@@ -1,12 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -396,19 +392,6 @@ func listGeminiModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([
 	return result, nil
 }
 
-func fetchFirstModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
-	switch resolved.Protocol {
-	case "openai", "copilot":
-		return fetchOpenAIModel(ctx, resolved)
-	case "anthropic":
-		return fetchAnthropicModel(ctx, resolved)
-	case "gemini":
-		return fetchGeminiModel(ctx, resolved)
-	default:
-		return "", fmt.Errorf("unsupported protocol: %s", resolved.Protocol)
-	}
-}
-
 func fetchOpenAIModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
 	cfg := openai.DefaultConfig(resolved.APIKey)
 	if resolved.BaseURL != "" {
@@ -655,67 +638,4 @@ func truncateErr(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
-}
-
-// probeRoundTripper captures HTTP request/response for verbose mode.
-// Not used in current implementation but available for future enhancement.
-type probeRoundTripper struct {
-	base    http.RoundTripper
-	reqBody *bytes.Buffer
-}
-
-func (t *probeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Capture request body
-	var reqBody string
-	if req.Body != nil {
-		body, _ := io.ReadAll(req.Body)
-		reqBody = string(body)
-		req.Body = io.NopCloser(bytes.NewReader(body))
-	}
-	t.reqBody.WriteString(reqBody)
-
-	resp, err := t.base.RoundTrip(req)
-	if err != nil {
-		return resp, err
-	}
-
-	// Capture response body
-	if resp.Body != nil {
-		body, _ := io.ReadAll(resp.Body)
-		_ = body // store for verbose output
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-	}
-
-	return resp, nil
-}
-
-// maskHeaders masks sensitive values in HTTP headers for display.
-func maskHeaders(h http.Header) map[string][]string {
-	masked := make(map[string][]string)
-	for k, vs := range h {
-		lk := strings.ToLower(k)
-		if strings.Contains(lk, "auth") || strings.Contains(lk, "key") || strings.Contains(lk, "token") || strings.Contains(lk, "secret") {
-			masked[k] = []string{"***"}
-		} else {
-			masked[k] = vs
-		}
-	}
-	return masked
-}
-
-// formatJSON pretty-prints JSON bytes, truncating to maxLen.
-func formatJSON(data []byte, maxLen int) string {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, data, "", "  "); err != nil {
-		s := string(data)
-		if len(s) > maxLen {
-			return s[:maxLen] + "..."
-		}
-		return s
-	}
-	s := buf.String()
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
-	}
-	return s
 }
