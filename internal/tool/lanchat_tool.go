@@ -679,6 +679,9 @@ func (t LanChatTool) doSend(ctx context.Context, content string, toNodeIDs []str
 
 	if sent == 0 {
 		errMsg := fmt.Sprintf("failed to send to any recipient: %s", strings.Join(errors, "; "))
+		if len(rateLimited) > 0 {
+			errMsg += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
+		}
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(resolved)
 		}
@@ -791,6 +794,9 @@ func (t LanChatTool) doBroadcastAll(ctx context.Context, content string, asAgent
 	}
 	if sent == 0 {
 		errMsg := fmt.Sprintf("Failed to broadcast to any recipient: %s", strings.Join(errors, "; "))
+		if len(rateLimited) > 0 {
+			errMsg += fmt.Sprintf("\nRate-limited recipients skipped:\n%s", strings.Join(rateLimited, "\n"))
+		}
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(allowed)
 		}
@@ -897,6 +903,9 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 			"Failed to send to any member of team %q: %s",
 			team, strings.Join(errors, "; "),
 		)
+		if len(rateLimited) > 0 {
+			errMsg += fmt.Sprintf("\nRate-limited members skipped:\n%s", strings.Join(rateLimited, "\n"))
+		}
 		if asAgent {
 			errMsg += t.sharedWorkspaceHint(members)
 		}
