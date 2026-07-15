@@ -22,13 +22,6 @@ func (m *Model) emitIMEvent(event im.OutboundEvent) {
 	m.imEmitter.EmitEvent(event)
 }
 
-func (m *Model) triggerIMTyping() {
-	if m.imEmitter == nil {
-		return
-	}
-	m.imEmitter.TriggerTyping()
-}
-
 func (m *Model) emitIMText(text string) {
 	if m.imEmitter == nil {
 		return
@@ -60,22 +53,6 @@ func (m *Model) emitIMStatus(status string) {
 		return
 	}
 	m.imEmitter.EmitStatus(status)
-}
-
-func (m *Model) emitIMStatusMsg(msg statusMsg) {
-	status := m.formatIMStatus(msg)
-	if status == "" {
-		return
-	}
-	m.emitIMStatus(status)
-}
-
-func (m *Model) emitIMSubAgentStatus() {
-	status := m.currentSubAgentIMStatus()
-	if status == "" {
-		return
-	}
-	m.emitIMStatus(status)
 }
 
 func (m *Model) formatIMStatus(msg statusMsg) string {
@@ -173,10 +150,6 @@ func (m *Model) pendingIMStreamText() string {
 		return ""
 	}
 	return strings.TrimSpace(m.streamBuffer.String())
-}
-
-func (m *Model) emitIMRoundProgress(text string) {
-	_ = text
 }
 
 func (m *Model) emitIMRoundSummary(text string, toolCalls, toolSuccesses, toolFailures int) {

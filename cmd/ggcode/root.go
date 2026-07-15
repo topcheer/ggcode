@@ -1311,24 +1311,6 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	return srv, a2aReg, handler, nil
 }
 
-// reportDiscoveredInstances logs discovered ggcode instances at startup.
-func reportDiscoveredInstances(a2aReg *a2a.Registry) {
-	others, err := a2aReg.Discover()
-	if err != nil {
-		debug.Log("a2a", "discover failed: %v", err)
-		return
-	}
-	if len(others) > 0 {
-		debug.Log("a2a", "discovered %d other ggcode instance(s)", len(others))
-		for _, inst := range others {
-			name := filepath.Base(inst.Workspace)
-			debug.Log("a2a", "  - %s → %s", name, inst.Endpoint)
-		}
-	} else {
-		debug.Log("a2a", "no other instances found")
-	}
-}
-
 func init() {
 	debug.Init()
 }
