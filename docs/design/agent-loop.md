@@ -55,8 +55,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 
 ## Reliability
 
-- `circuit_breaker.go` — hard circuit breaker after 3 consecutive tool failures.
-- `dead_letter.go` — capture failed tool calls for end-of-run review.
+- `message_validation.go` — validates and repairs LLM message lists before sending to the provider (especially after loading old sessions without checkpoints).
 - `cache_keepalive.go` — Anthropic prompt-cache warming pings during idle.
 
 See also `docs/ARCHITECTURE.md` for the full subsystem layout and `docs/design/context-management.md` for context management details.
