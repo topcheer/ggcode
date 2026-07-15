@@ -1130,56 +1130,6 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 	return nil
 }
 
-func (b *DaemonBridge) handleProviderCommand(parts []string) error {
-	b.mu.Lock()
-	fn := b.onProviderSwitch
-	b.mu.Unlock()
-	if fn == nil {
-		b.emitter.EmitText("❌ Provider switching not available in this mode.")
-		return nil
-	}
-
-	vendor := ""
-	endpoint := ""
-	if len(parts) > 1 {
-		vendor = parts[1]
-	}
-	if len(parts) > 2 {
-		endpoint = parts[2]
-	}
-
-	summary, err := fn(vendor, endpoint, "")
-	if err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
-		return nil
-	}
-	b.emitter.EmitText(summary)
-	return nil
-}
-
-func (b *DaemonBridge) handleModelCommand(parts []string) error {
-	b.mu.Lock()
-	fn := b.onProviderSwitch
-	b.mu.Unlock()
-	if fn == nil {
-		b.emitter.EmitText("❌ Model switching not available in this mode.")
-		return nil
-	}
-
-	model := ""
-	if len(parts) > 1 {
-		model = parts[1]
-	}
-
-	summary, err := fn("", "", model)
-	if err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
-		return nil
-	}
-	b.emitter.EmitText(summary)
-	return nil
-}
-
 // resolveEffectiveOutputMode returns the output mode considering the
 // platform-specific defaults. If any bound adapter's platform requires
 // a different mode (e.g. WeChat -> summary), that overrides the global mode.
