@@ -1759,21 +1759,6 @@ func (c *daemonTunnelShareController) cancelCurrentRun() {
 	c.setStatus(tunnel.StatusIdle, "cancelled")
 }
 
-func (c *daemonTunnelShareController) currentOrNextMsgID() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.currentMsgID == "" && c.broker != nil {
-		c.currentMsgID = c.broker.NextMessageID()
-	}
-	return c.currentMsgID
-}
-
-func (c *daemonTunnelShareController) markMainStreamActive() {
-	c.mu.Lock()
-	c.needsFinalize = true
-	c.mu.Unlock()
-}
-
 func (c *daemonTunnelShareController) rolloverMainStream(force bool) {
 	if c == nil || c.broker == nil {
 		return

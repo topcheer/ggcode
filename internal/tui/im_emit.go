@@ -3,14 +3,11 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/util"
-	"slices"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/subagent"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // IM emission methods delegate to the shared im.IMEmitter.
@@ -53,96 +50,6 @@ func (m *Model) emitIMStatus(status string) {
 		return
 	}
 	m.imEmitter.EmitStatus(status)
-}
-
-func (m *Model) formatIMStatus(msg statusMsg) string {
-	activity := strings.TrimSpace(msg.Activity)
-	toolSummary := strings.TrimSpace(formatToolInline(msg.ToolName, msg.ToolArg))
-	thinking := strings.TrimSpace(m.t("status.thinking"))
-	writing := strings.TrimSpace(m.t("status.writing"))
-	if toolSummary == "" && (activity == thinking || activity == writing) {
-		return ""
-	}
-
-	lang := m.currentLanguage()
-	switch {
-	case toolSummary != "" && (activity == "" || activity == thinking || activity == writing):
-		return localizeIMProgress(lang, toolSummary)
-	case activity != "":
-		return localizeIMProgress(lang, activity)
-	case toolSummary != "":
-		return localizeIMProgress(lang, toolSummary)
-	default:
-		return ""
-	}
-}
-
-// localizeIMProgress applies language-specific localization to an IM progress string.
-// This wraps the shared im.LocalizeIMProgress for TUI's Language type.
-func localizeIMProgress(lang Language, text string) string {
-	var tl im.ToolLanguage
-	switch lang {
-	case LangZhCN:
-		tl = im.ToolLangZhCN
-	default:
-		tl = im.ToolLangEn
-	}
-	return im.LocalizeIMProgress(tl, text)
-}
-
-func (m *Model) currentSubAgentIMStatus() string {
-	if m.subAgentMgr == nil {
-		return ""
-	}
-	live := make([]*subagent.SubAgent, 0)
-	for _, sa := range m.subAgentMgr.List() {
-		if sa == nil || !isLiveSubAgentStatus(sa.Status) {
-			continue
-		}
-		live = append(live, sa)
-	}
-	if len(live) == 0 {
-		return ""
-	}
-	slices.SortFunc(live, func(a, b *subagent.SubAgent) int {
-		aTime := firstNonZeroTime(a.StartedAt, a.CreatedAt)
-		bTime := firstNonZeroTime(b.StartedAt, b.CreatedAt)
-		switch {
-		case aTime.After(bTime):
-			return -1
-		case aTime.Before(bTime):
-			return 1
-		default:
-			return strings.Compare(a.ID, b.ID)
-		}
-	})
-	sa := live[0]
-	summary := strings.TrimSpace(m.subAgentActivitySummary(sa))
-	if summary == "" {
-		return ""
-	}
-	task := strings.TrimSpace(util.FirstNonEmpty(sa.DisplayTask, sa.Task))
-	switch m.currentLanguage() {
-	case LangZhCN:
-		if task == "" {
-			return "子任务：" + summary
-		}
-		return "子任务「" + task + "」：" + summary
-	default:
-		if task == "" {
-			return "Sub-agent: " + summary
-		}
-		return "Sub-agent \"" + task + "\": " + summary
-	}
-}
-
-func firstNonZeroTime(values ...time.Time) time.Time {
-	for _, value := range values {
-		if !value.IsZero() {
-			return value
-		}
-	}
-	return time.Time{}
 }
 
 func (m *Model) pendingIMStreamText() string {
