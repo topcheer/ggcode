@@ -20,33 +20,6 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 )
 
-func (m *Model) listSessions() tea.Cmd {
-	return func() tea.Msg {
-		if m.sessionStore == nil {
-			return streamMsg(m.t("session.store_missing"))
-		}
-		sessions, err := m.sessionStore.List()
-		if err != nil {
-			return streamMsg(m.t("session.list_failed", err))
-		}
-		if len(sessions) == 0 {
-			return streamMsg(m.t("session.none"))
-		}
-		var b strings.Builder
-		b.WriteString(m.t("session.list.title"))
-		for i, s := range sessions {
-			title := s.Title
-			if title == "" {
-				title = m.t("session.untitled")
-			}
-			updated := s.UpdatedAt.Format(time.RFC3339)
-			b.WriteString(m.t("session.list.item", i+1, s.ID, title, updated))
-		}
-		b.WriteString(m.t("session.list.hint"))
-		return streamMsg(b.String())
-	}
-}
-
 func (m *Model) resumeSession(id string) tea.Cmd {
 	return func() tea.Msg {
 		if m.sessionStore == nil {

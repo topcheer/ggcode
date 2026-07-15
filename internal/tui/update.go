@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
@@ -147,11 +146,4 @@ func (m *Model) applyUpdateCheckResult(msg updateCheckResultMsg) {
 	}
 	m.updateError = ""
 	m.updateInfo = msg.Result
-}
-
-func formatUpdateVersionLine(current, latest string) string {
-	if strings.TrimSpace(latest) == "" {
-		return current
-	}
-	return fmt.Sprintf("%s -> %s", current, latest)
 }

@@ -75,15 +75,6 @@ func (m Model) harnessPanelLeftWidth(totalWidth int) int {
 	return width
 }
 
-func (m *Model) renderHarnessPanelList(items []string, selected int, focused bool, width int) string {
-	contentWidth := max(8, width-4)
-	clipped := make([]string, 0, len(items))
-	for _, item := range items {
-		clipped = append(clipped, util.Truncate(item, contentWidth))
-	}
-	return m.renderProviderList(clipped, selected, focused)
-}
-
 func (m *Model) harnessPanelPreview() string {
 	panel := m.harnessPanel
 	if panel == nil {
@@ -773,28 +764,6 @@ func renderHarnessPanelInput(input textinput.Model, focused bool, width int) str
 		control.Blur()
 	}
 	return control.View()
-}
-
-func renderHarnessActionInputBox(section int, input textinput.Model, focused bool, width int, lang Language) string {
-	if harnessPanelNeedsInput(section) {
-		return lipgloss.NewStyle().
-			Width(width).
-			Height(3).
-			Render(renderHarnessPanelInput(input, focused, width))
-	}
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(3).
-		Foreground(lipgloss.Color("8")).
-		Render(clipHarnessPanelText(tr(lang, "harness.hint.primary.none"), width, 3))
-}
-
-func renderHarnessPreviewBox(content string, width, height int) string {
-	content = clipHarnessPanelText(content, width, height)
-	return lipgloss.NewStyle().
-		Width(width).
-		Height(height).
-		Render(content)
 }
 
 func renderHarnessHintsBox(content string, width, height int) string {
