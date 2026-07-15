@@ -679,16 +679,20 @@ See [`docs/a2a-auth.md`](a2a-auth.md) for the full authentication guide.
 
 ### Auto-Compact Strategy
 
-The agent monitors conversation token usage and triggers compaction when it approaches the model's context window limit. Compaction has two levels:
+The agent monitors conversation token usage and triggers a multi-stage pipeline when context approaches the model's limit. The pipeline favors cheap mechanical operations first and only falls back to an LLM call when necessary:
 
-1. **Microcompact** — Truncates large tool results by preserving the first 10 and last 5 lines, with individual lines truncated to 200 characters. This is fast and cheap but only saves tokens from tool output.
+1. **Superseded-read compaction** — replaces stale re-reads of the same file with placeholders before tier-based clearing (safest, mechanical).
+2. **Progressive tool-result clearing** — at 50%/65%/75% of the compaction threshold, replaces older non-error `tool_result` outputs with placeholders while keeping the last 12/8/4 results respectively.
+3. **Tool-use input clearing** — truncates the matching `tool_use` Input arguments (>200 chars) to minimal placeholders after the corresponding result has been cleared.
+4. **Precompact (background)** — when tokens reach the **precompact threshold** (99% of the usable prompt budget: context window minus output reserve and safety margin), an LLM summarizes the conversation in a background goroutine. The result is applied atomically at the next safe run boundary.
+5. **Reactive compact (synchronous)** — if a prompt-too-long error occurs, a compact is attempted immediately; if no precompact result is ready, a local truncation fallback is used.
 
-2. **Summarize** — When microcompact is insufficient, older messages are replaced with an LLM-generated summary. The summary prompt is optimized for coding contexts: it preserves key decisions, file paths, code structure, error resolutions, and pending work. Tool results in the summary payload are pre-truncated to 500 characters to prevent the summary request itself from triggering context overflow.
-
-Thresholds:
-- With usage baseline: 75% of context window triggers compaction
-- Without baseline: 65% triggers compaction
-- Target after compaction: 55% of context window
+Thresholds and heuristics:
+- The compaction threshold is 99% of the usable prompt budget. The default budget reserves 10% of the context window for output (up to 25% when configured) and a 5% safety margin.
+- The summary output is capped at 5% of the context window, with a hard maximum of 12,000 tokens.
+- The background precompact goroutine has a 180-second timeout and a 6-second start delay to avoid rate-limit collisions with the main LLM turn.
+- Mechanical clearing tiers are skipped if the estimated token savings are below 2% of the threshold (cache-break awareness).
+- A fallback checkpoint is forced when the conversation exceeds 500 messages even if compaction fails.
 
 ### Session Checkpoints
 
@@ -741,8 +745,6 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Ratchet rules | `ratchet.go`, `ratchet_reactive.go` | SICA | Learn error patterns from failures, inject preventively |
 | Strategy playbook | `playbook.go` | ACE (ICLR 2026) | Learn successful tool patterns, inject as hints |
 | Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Post-edit build reminders with smart reset |
-| Constraint pinning | `manager.go` (context) | Governance Decay (arXiv:2606.22528) | Preserve user constraints across compaction |
-| Reasoning block compaction | `manager.go` (context) | Anthropic thinking API docs | Clear old reasoning blocks (keep N=3) |
 | Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
 | Prompt cache keepalive | `cache_keepalive.go` | Aider pattern | Ping provider every 270s during idle to keep cache warm (Anthropic only) |
 | Token calibration | `token_calibrator.go` (context) | — | Self-calibrating char/token ratio using API feedback |
@@ -755,9 +757,8 @@ When context approaches the compaction threshold, a multi-stage pipeline activat
 1. **Superseded reads compaction** — replace stale re-reads of same file (safest, mechanical)
 2. **Tool-result clearing tiers** — at 50%/65%/75% of threshold, replace old tool_result outputs
 3. **Tool-use input clearing** — truncate old edit/write Input args matching cleared results
-4. **Reasoning block compaction** — clear old thinking/reasoning_content from assistant turns
-5. **Precompact (background)** — LLM-based summarization in background goroutine
-6. **Reactive compact (synchronous)** — if precompact fails, truncation as fallback
+4. **Precompact (background)** — LLM-based summarization in background goroutine
+5. **Reactive compact (synchronous)** — if precompact fails, truncation as fallback
 
 ## WebUI Architecture
 

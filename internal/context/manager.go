@@ -33,6 +33,7 @@ type ContextManager interface {
 	// SummaryMsgID returns the ID of the most recent summary message, or "".
 	SummaryMsgID() string
 	ContextWindow() int
+	OutputReserve() int
 	SetContextWindow(n int)
 	SetOutputReserve(n int)
 	RecordUsage(usage provider.TokenUsage)
@@ -43,6 +44,10 @@ type ContextManager interface {
 	Clear()
 	UsageRatio() float64
 	AutoCompactThreshold() int
+	// SetToolDefinitionOverhead tells the manager how many tokens the tool
+	// definitions (schemas + names + descriptions) consume. This is added to
+	// the dynamic prompt overhead when calculating AutoCompactThreshold.
+	SetToolDefinitionOverhead(tokens int)
 	ReconcileToolCalls() bool
 }
 
@@ -67,10 +72,6 @@ type CompactResult struct {
 }
 
 const (
-	// Compaction trigger: 99% of usable budget. Leaves a small margin so the
-	// last LLM turn before compaction can still fit.
-	summarizeThreshold = 0.99
-
 	// Summary output cap: 5% of contextWindow, but capped at a fixed
 	// absolute maximum. For 200K context → 10K; for 1M context → 12K (not 50K).
 	maxSummaryOutputRatio  = 0.05
@@ -86,34 +87,45 @@ const (
 )
 
 func AutoCompactThresholdRatio() float64 {
-	return summarizeThreshold
+	// Obsolete; kept for API compatibility. The Manager uses a dynamic
+	// overhead derived from the current system prompt and output reserve.
+	return 0
 }
 
+// AutoCompactThresholdTokens returns a conservative threshold for callers that
+// do not have a Manager instance. It assumes no system prompt and only reserves
+// the effective output reserve for the given context window.
 func AutoCompactThresholdTokens(contextWindow int) int {
 	if contextWindow <= 0 {
 		return 0
 	}
-	return int(float64(contextWindow) * summarizeThreshold)
+	m := &Manager{contextWindow: contextWindow}
+	threshold := contextWindow - m.fixedPromptOverheadLocked()
+	if threshold < minSummaryReserve {
+		return minSummaryReserve
+	}
+	return threshold
 }
 
 // Manager implements ContextManager.
 type Manager struct {
-	mu                sync.Mutex
-	messages          []provider.Message
-	version           int64              // incremented on every mutation, enables cheap change detection
-	runAdded          []provider.Message // messages added via Add() since last StartRunTracking()
-	runAddedIDs       map[string]bool    // IDs of messages in runAdded, for dedup
-	tokens            int
-	contextWindow     int
-	outputReserve     int
-	baselineTokens    int
-	baselineDelta     int
-	baselineAvailable bool
-	provider          provider.Provider
-	todoPath          string
-	onUsage           func(provider.TokenUsage)
-	calibrator        *TokenCalibrator
-	onPersist         func(msg provider.Message) // called on every Add() for real-time JSONL persistence
+	mu                     sync.Mutex
+	messages               []provider.Message
+	version                int64              // incremented on every mutation, enables cheap change detection
+	runAdded               []provider.Message // messages added via Add() since last StartRunTracking()
+	runAddedIDs            map[string]bool    // IDs of messages in runAdded, for dedup
+	tokens                 int
+	contextWindow          int
+	outputReserve          int
+	baselineTokens         int
+	baselineDelta          int
+	baselineAvailable      bool
+	provider               provider.Provider
+	todoPath               string
+	onUsage                func(provider.TokenUsage)
+	calibrator             *TokenCalibrator
+	onPersist              func(msg provider.Message) // called on every Add() for real-time JSONL persistence
+	toolDefinitionOverhead int                        // tokens reserved for tool definitions (set by Agent)
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -545,6 +557,8 @@ func (m *Manager) CompactSnapshot() CompactSnapshot {
 }
 
 func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (CompactResult, error) {
+	debug.Log("ctx", "CompactSnapshot.Compact: START snapshotMsgs=%d contextWindow=%d outputReserve=%d",
+		len(s.Messages), s.ContextWindow, s.OutputReserve)
 	scratch := NewManager(s.ContextWindow)
 	scratch.SetOutputReserve(s.OutputReserve)
 	scratch.SetProvider(prov)
@@ -552,7 +566,9 @@ func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (C
 	scratch.mu.Lock()
 	scratch.messages = append([]provider.Message(nil), s.Messages...)
 	scratch.recalcTokens()
+	scratchTokensBefore := scratch.tokens
 	scratch.mu.Unlock()
+	debug.Log("ctx", "CompactSnapshot.Compact: scratch tokens before summarize=%d", scratchTokensBefore)
 
 	// Force summarization — the caller (precompact) already determined
 	// that compaction is needed based on the LIVE token count (calibrated
@@ -562,10 +578,22 @@ func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (C
 	// a Changed=false result that ApplyCompactResult rejects.
 	beforeVersion := scratch.version
 	if err := scratch.Summarize(ctx, prov); err != nil {
+		debug.Log("ctx", "CompactSnapshot.Compact: Summarize FAILED: %v", err)
 		return CompactResult{}, err
 	}
 	after, tokens := scratch.MessagesAndTokenCount()
 	changed := scratch.version != beforeVersion
+	summaryChars, summaryToks, summaryMsgCount := 0, 0, 0
+	for _, msg := range after {
+		if msg.Role == "system" && len(msg.Content) > 0 && strings.Contains(msg.Content[0].Text, "[Previous conversation summary]") {
+			text := msg.Content[0].Text
+			summaryChars = len(text)
+			summaryToks = EstimateTokens(text)
+			summaryMsgCount++
+		}
+	}
+	debug.Log("ctx", "CompactSnapshot.Compact: DONE scratchTokens=%d→%d resultMsgs=%d changed=%t summaryMsgCount=%d summaryChars=%d summaryEstimatedTokens=%d",
+		scratchTokensBefore, tokens, len(after), changed, summaryMsgCount, summaryChars, summaryToks)
 	return CompactResult{
 		Messages:   after,
 		TokenCount: tokens,
@@ -589,10 +617,12 @@ func contentFingerprint(m provider.Message) uint64 {
 
 func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactResult) (bool, int) {
 	if !result.Changed || len(result.Messages) == 0 {
+		debug.Log("ctx", "ApplyCompactResult: REJECT result.changed=%t result.msgs=%d", result.Changed, len(result.Messages))
 		return false, m.TokenCount()
 	}
 
 	m.mu.Lock()
+	liveTokensBefore := m.tokenCountLocked()
 
 	// Find the last message from the snapshot in live messages using its ID.
 	// Everything after that message is "extra" (arrived during compaction)
@@ -628,6 +658,8 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	if extraStart > len(m.messages) {
 		extraStart = len(m.messages)
 	}
+	debug.Log("ctx", "ApplyCompactResult: liveMsgs=%d snapshot.OrigLen=%d snapshot.LastMsgID=%s extraStart=%d result.msgs=%d",
+		len(m.messages), snapshot.OrigLen, snapshot.LastMsgID, extraStart, len(result.Messages))
 
 	// Detect (but do NOT reject) messages that changed within the snapshot
 	// range.  The compaction summary is a lossy compression of the
@@ -679,6 +711,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	m.messages = newMsgs
 	m.version++
 	m.recalcTokens()
+	liveTokensAfter := m.tokenCountLocked()
 
 	// The compaction summary message must be persisted to JSONL immediately
 	// so that checkpoint restore can find it by ID even if the run is
@@ -703,8 +736,8 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		}
 	}
 
-	debug.Log("ctx", "ApplyCompactResult: applied snapshot msgs=%d compacted=%d extra=%d tokens=%d",
-		snapshot.OrigLen, len(result.Messages), len(extra), m.tokenCountLocked())
+	debug.Log("ctx", "ApplyCompactResult: APPLIED liveTokensBefore=%d liveTokensAfter=%d snapshotMsgs=%d compacted=%d extra=%d resultTokenCount=%d",
+		liveTokensBefore, liveTokensAfter, snapshot.OrigLen, len(result.Messages), len(extra), result.TokenCount)
 
 	// Trigger onPersist outside the lock for the summary message.
 	persistFn := m.onPersist
@@ -744,6 +777,13 @@ func (m *Manager) SetOutputReserve(n int) {
 	m.outputReserve = n
 }
 
+// OutputReserve returns the raw (user-configured) output reserve value.
+func (m *Manager) OutputReserve() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.outputReserve
+}
+
 // SetCheckpointBaseline sets the initial token baseline from a session
 // checkpoint. This avoids inflated token counts on session restore where
 // the local estimator (len/4) diverges significantly from real token counts.
@@ -761,19 +801,19 @@ func (m *Manager) SetCheckpointBaseline(tokens int) {
 }
 
 func (m *Manager) RecordUsage(usage provider.TokenUsage) {
-	if usage.InputTokens <= 0 {
+	if usage.InputTokens <= 0 && usage.OutputTokens <= 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	oldBaseline := m.baselineTokens
-	m.baselineTokens = usage.InputTokens
+	m.baselineTokens = usage.InputTokens + usage.OutputTokens
 	m.baselineDelta = 0
 	m.baselineAvailable = true
-	// Feed calibration sample: compare our estimate with actual API tokens
+	// Feed calibration sample: compare our estimate with actual API input tokens.
 	m.calibrator.RecordSample(m.tokens, usage.InputTokens)
 	debug.Log("ctx", "RecordUsage: input=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
-		usage.InputTokens, usage.OutputTokens, oldBaseline, usage.InputTokens, m.tokens, usage.InputTokens-m.tokens)
+		usage.InputTokens, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
 }
 
 func (m *Manager) Clear() {
@@ -811,6 +851,16 @@ func (m *Manager) AutoCompactThreshold() int {
 	return m.autoCompactThresholdLocked()
 }
 
+// SetToolDefinitionOverhead records the token cost of the tool definitions
+// (schemas, names, descriptions) that the Agent will pass to the provider.
+// This overhead is included in fixedPromptOverheadLocked so the compact
+// threshold reflects the actual space unavailable for conversation messages.
+func (m *Manager) SetToolDefinitionOverhead(tokens int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.toolDefinitionOverhead = tokens
+}
+
 func (m *Manager) PromptBudget() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -836,11 +886,12 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 		return err
 	}
-	debug.Log("ctx", "Summarize: summary generated, len=%d chars", len(summaryText))
+	debug.Log("ctx", "Summarize: summary generated, len=%d chars limit=%d", len(summaryText), m.summaryReserveTokens())
 
 	stateText := m.buildPostCompactState(plan.allMsgs)
 
 	m.mu.Lock()
+	oldTokens := m.tokenCountLocked()
 	// Collect any messages that arrived during summarization (TOCTOU fix)
 	var extraMsgs []provider.Message
 	if len(m.messages) > plan.origLen {
@@ -880,35 +931,20 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	m.messages = newMsgs
 	m.version++
 	m.recalcTokens()
-	debug.Log("ctx", "Summarize: msgs=%d→%d tokens=%d", oldLen, len(newMsgs), m.tokenCountLocked())
+	debug.Log("ctx", "Summarize: msgs=%d→%d oldTokens=%d newTokens=%d summaryChars=%d summaryEstimatedTokens=%d extraMsgs=%d stateTextChars=%d",
+		oldLen, len(newMsgs), oldTokens, m.tokenCountLocked(), len(summaryText), EstimateTokens(summaryText), len(extraMsgs), len(stateText))
 	m.mu.Unlock()
 	return nil
 }
 
-// CheckAndSummarize triggers summarization if usage ratio >= threshold.
+// CheckAndSummarize runs Summarize unconditionally. The caller is expected
+// to have already decided compaction is needed (e.g., a prompt-too-long error
+// or the token count exceeding the auto-compact threshold). Removing the
+// threshold check here guarantees that once the trigger fires, we always
+// attempt LLM-based compression.
 func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error) {
-	tokenCount := m.TokenCount()
-	threshold := m.AutoCompactThreshold()
-	budget := func() int {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.usablePromptBudgetLocked()
-	}()
-	ratio := m.UsageRatio()
-	debug.Log("ctx", "CheckAndSummarize: tokens=%d threshold=%d budget=%d ratio=%.3f contextWindow=%d — %s",
-		tokenCount, threshold, budget, ratio, m.ContextWindow(),
-		func() string {
-			if tokenCount < threshold {
-				return "SKIP (below threshold)"
-			}
-			return "TRIGGERED"
-		}())
+	debug.Log("ctx", "CheckAndSummarize: tokens=%d contextWindow=%d threshold=%d ratio=%.2f", m.TokenCount(), m.ContextWindow(), m.AutoCompactThreshold(), m.UsageRatio())
 
-	if tokenCount < threshold {
-		return false, nil
-	}
-
-	debug.Log("ctx", "CheckAndSummarize: calling Summarize (tokens=%d)", tokenCount)
 	beforeVersion := m.version
 	err := m.Summarize(ctx, prov)
 	if err != nil {
@@ -916,7 +952,7 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 		return false, err
 	}
 	summaryChanged := m.version != beforeVersion
-	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d→%d changed=%t",
+	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d changed=%t",
 		m.TokenCount(), len(m.Messages()), summaryChanged)
 	return summaryChanged, nil
 }
@@ -1594,9 +1630,12 @@ func (m *Manager) countTokens(msg provider.Message) int {
 		defer cancel()
 		if n, err := m.provider.CountTokens(ctx, []provider.Message{msg}); err == nil && n > 0 {
 			return n
+		} else if err != nil {
+			debug.Log("ctx", "countTokens: provider.CountTokens failed (%v), falling back to heuristic", err)
 		}
 	}
 	n := m.estimateTokens(msg)
+	debug.Log("ctx", "countTokens: heuristic estimate=%d blocks=%d role=%s", n, len(msg.Content), msg.Role)
 	return n
 }
 
@@ -1733,13 +1772,19 @@ Format: Use clear sections with bullet points. Be specific with names, paths, an
 		if onUsage != nil {
 			onUsage(resp.Usage)
 		}
-
+		summaryText := ""
 		for _, block := range resp.Message.Content {
 			if block.Type == "text" && block.Text != "" {
-				return block.Text, nil
+				summaryText = block.Text
+				break
 			}
 		}
-		return "", fmt.Errorf("summarization returned empty text")
+		if summaryText == "" {
+			return "", fmt.Errorf("summarization returned empty text")
+		}
+		debug.Log("ctx", "summarizeMessages: summary len=%d chars estimated=%d tokens limit=%d usage=%+v",
+			len(summaryText), EstimateTokens(summaryText), summaryTokenLimit, resp.Usage)
+		return summaryText, nil
 	}
 	return "", fmt.Errorf("summarization returned empty text")
 }
@@ -1768,15 +1813,43 @@ func (m *Manager) tokenCountLocked() int {
 			return total
 		}
 	}
-	return m.tokens
+	// Without a real LLM usage baseline, estimate everything we send to the
+	// provider: conversation messages plus the tool definitions overhead.
+	return m.tokens + m.toolDefinitionOverhead
+}
+
+// fixedPromptOverheadLocked returns the tokens that are not available for
+// conversation messages: the current system prompt, the output reserve, and
+// the tool-definition overhead set by the Agent. It is recalculated on each call
+// so it tracks a dynamically updated system prompt (e.g. ratchet rules injected
+// at runtime).
+func (m *Manager) fixedPromptOverheadLocked() int {
+	overhead := m.effectiveOutputReserveLocked()
+	overhead += m.toolDefinitionOverhead
+	if len(m.messages) > 0 && m.messages[0].Role == "system" {
+		overhead += m.estimateTokens(m.messages[0])
+	}
+	debug.Log("ctx", "fixedPromptOverhead: outputReserve=%d toolDefOverhead=%d systemMsg=%d total=%d contextWindow=%d",
+		m.effectiveOutputReserveLocked(), m.toolDefinitionOverhead, overhead-m.effectiveOutputReserveLocked()-m.toolDefinitionOverhead, overhead, m.contextWindow)
+	return overhead
 }
 
 func (m *Manager) autoCompactThresholdLocked() int {
-	budget := m.usablePromptBudgetLocked()
-	if budget <= 0 {
+	if m.contextWindow <= 0 {
+		debug.Log("ctx", "autoCompactThreshold: contextWindow=0 → threshold=0")
 		return 0
 	}
-	return int(float64(budget) * summarizeThreshold)
+	// Always leave room for the model's maximum output tokens. The simple
+	// rule: compact once conversation fills contextWindow - maxOutputTokens.
+	reserve := m.effectiveOutputReserveLocked()
+	threshold := m.contextWindow - reserve
+	result := threshold
+	if threshold < minSummaryReserve {
+		result = minSummaryReserve
+	}
+	debug.Log("ctx", "autoCompactThreshold: contextWindow=%d outputReserve=%d rawThreshold=%d finalThreshold=%d",
+		m.contextWindow, reserve, threshold, result)
+	return result
 }
 
 func (m *Manager) usablePromptBudgetLocked() int {
@@ -1795,6 +1868,7 @@ func (m *Manager) usablePromptBudgetLocked() int {
 
 func (m *Manager) effectiveOutputReserveLocked() int {
 	if m.contextWindow <= 0 {
+		debug.Log("ctx", "effectiveOutputReserve: contextWindow=0 → reserve=0")
 		return 0
 	}
 	floor := minInt(8192, maxInt(512, m.contextWindow/10))
@@ -1809,6 +1883,8 @@ func (m *Manager) effectiveOutputReserveLocked() int {
 	if reserve > ceiling {
 		reserve = ceiling
 	}
+	debug.Log("ctx", "effectiveOutputReserve: contextWindow=%d userReserve=%d floor=%d ceiling=%d effective=%d",
+		m.contextWindow, m.outputReserve, floor, ceiling, reserve)
 	return reserve
 }
 

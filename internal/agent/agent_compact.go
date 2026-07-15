@@ -161,19 +161,19 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 }
 
 // maybeAutoCompact keeps the hot LLM path non-blocking. When token usage
-// exceeds 97.5% of the context window, it schedules a background precompact
-// (LLM summarization). If precompact succeeds, the next turn will consume
-// the result and shrink the context. If precompact fails or is too slow,
-// reactive compact (PTL recovery) handles it synchronously.
+// exceeds the auto-compact threshold (contextWindow - fixedPromptOverhead), it
+// schedules a background precompact (LLM summarization). If precompact succeeds,
+// the next turn will consume the result and shrink the context. If precompact
+// fails or is too slow, reactive compact (PTL recovery) handles it synchronously.
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
-	ratio := a.contextManager.UsageRatio()
 	tokens := a.contextManager.TokenCount()
+	threshold := a.contextManager.AutoCompactThreshold()
 
-	debug.Log("agent", "maybeAutoCompact: tokens=%d ratio=%.3f maxTokens=%d",
-		tokens, ratio, a.contextManager.ContextWindow())
+	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d maxTokens=%d",
+		tokens, threshold, a.contextManager.ContextWindow())
 
-	// Trigger precompact at 97.5% of context window
-	if ratio < precompactTriggerRatio {
+	// Trigger precompact when message tokens reach the fixed-overhead threshold.
+	if tokens < threshold {
 		return nil
 	}
 
@@ -201,12 +201,10 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	a.precompactCooldownUntil = time.Now().Add(precompactCooldown)
 	a.mu.Unlock()
 
-	debug.Log("agent", "maybeAutoCompact: scheduling background precompact tokens=%d ratio=%.3f cooldown=%s", tokens, ratio, precompactCooldown)
+	debug.Log("agent", "maybeAutoCompact: scheduling background precompact tokens=%d threshold=%d cooldown=%s", tokens, threshold, precompactCooldown)
 	a.StartPreCompact()
 	return nil
 }
-
-const precompactTriggerRatio = 0.975
 
 func (a *Agent) ensurePromptSendable() {
 	if a.promptBudget() <= 0 {

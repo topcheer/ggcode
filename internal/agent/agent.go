@@ -579,6 +579,20 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
 }
 
+// estimateToolDefinitionOverhead approximates the tokens consumed by the tool
+// definitions (names + descriptions + JSON schemas) that are passed to the
+// provider on every request. This is added to the context manager's dynamic
+// prompt overhead so compaction decisions account for the real prompt size.
+func estimateToolDefinitionOverhead(defs []provider.ToolDefinition) int {
+	total := 0
+	for _, d := range defs {
+		total += len(d.Name)
+		total += len(d.Description)
+		total += len(d.Parameters)
+	}
+	return total / 4
+}
+
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
@@ -742,6 +756,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
+	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
+		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
+	}
 	reactiveCompactRetries := 0
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
@@ -1159,7 +1176,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if threshold > 0 {
 					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
 					if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
-						debug.Log("agent", "tool output guarded: tool=%s fill=%.0f%% %d→%d bytes", tc.Name, fillRatio*100, len(result.Content), len(truncated))
+						debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
 						result.Content = truncated
 					}
 				}

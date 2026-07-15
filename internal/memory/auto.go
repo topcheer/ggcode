@@ -48,6 +48,36 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// LoadIndex loads all memory file keys and returns a formatted index (titles
+// only) plus the list of file paths. This is much lighter than LoadAll(), which
+// includes full file contents.
+func (am *AutoMemory) LoadIndex() (string, []string, error) {
+	entries, err := os.ReadDir(am.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+
+	var keys, files []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		key := strings.TrimSuffix(e.Name(), ".md")
+		keys = append(keys, key)
+		files = append(files, filepath.Join(am.dir, e.Name()))
+	}
+	sort.Strings(keys)
+
+	var builder strings.Builder
+	for _, key := range keys {
+		builder.WriteString(fmt.Sprintf("- %s\n", key))
+	}
+	return strings.TrimSpace(builder.String()), files, nil
+}
+
 // LoadAll loads all memory files and returns their combined content.
 func (am *AutoMemory) LoadAll() (string, []string, error) {
 	entries, err := os.ReadDir(am.dir)

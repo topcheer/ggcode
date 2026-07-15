@@ -17,8 +17,7 @@ Key responsibilities:
 - `CompactSupersededReads()` — replace stale re-reads of the same file.
 - `ClearOldToolResults(keepN)` — replace old tool_result outputs with placeholders.
 - `ClearOldToolUseInputs()` — truncate old edit/write Input arguments.
-- `ClearOldReasoningBlocks(keepN)` — clear old thinking/reasoning_content blocks.
-- `extractConstraints()` / `buildPostCompactState()` — preserve user constraint sentences across compaction.
+- `buildPostCompactState(msgs)` — build a short post-compact state string (recent files + todo summary).
 
 ## Token Estimation
 
@@ -31,9 +30,8 @@ When context fills up, the following pipeline runs in order:
 1. **Superseded reads compaction** — replace earlier reads of the same file with placeholders. Safest because the newer read already has current content.
 2. **Tool-result clearing tiers** — at 50%, 65%, and 75% of the compaction threshold, progressively replace older `tool_result` outputs. Keeps the last `N` results intact (`12` / `8` / `4`).
 3. **Tool-use input clearing** — truncate old `tool_use` Input arguments whose matching results have been cleared.
-4. **Reasoning block compaction** — clear old `thinking`/`reasoning_content` blocks from assistant turns, keeping the last 3. Skips tool-call turns that require reasoning_content for correctness.
-5. **Background precompact** — `agent_precompact.go` starts an LLM summarization in a background goroutine with a 6-second delay and 180-second timeout.
-6. **Reactive compact fallback** — if precompact fails or context is still too high, `agent_compact.go` performs synchronous truncation as a fallback.
+4. **Background precompact** — `agent_precompact.go` starts an LLM summarization in a background goroutine with a 6-second delay and 180-second timeout. It triggers when token count reaches the precompact threshold (99% of the usable prompt budget).
+5. **Reactive compact fallback** — if precompact fails or context is still too high, `agent_compact.go` performs synchronous truncation as a fallback.
 
 ## Context-Fill-Aware Output Guard
 
@@ -48,9 +46,13 @@ When context fills up, the following pipeline runs in order:
 
 Error results are never truncated.
 
-## Constraint Pinning
+## Compaction Threshold
 
-To prevent compaction from silently dropping user constraints, `extractConstraints()` scans user messages for sentences containing constraint keywords (`must`, `never`, `always`, `don't`, `important`, `constraint`, `rule`, etc., plus Chinese equivalents). These are deduplicated and re-injected as a system message after compaction via `buildPostCompactState()`.
+The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt budget. The usable budget is `contextWindow - outputReserve - safetyMargin`. Defaults: 10% output reserve (capped at 25% if configured), 5% safety margin, and a minimum of 64 tokens. This means the default trigger for a 128k-window manager is roughly 84% of the total context window, but it varies with the configured output reserve.
+
+## Post-Compact State
+
+`buildPostCompactState()` currently preserves the most recent file paths (up to 5) and a todo summary, if any. It does **not** currently preserve arbitrary user constraint sentences across compaction; those still live only in the summarization prompt and the summarized text.
 
 ## Persistent Storage
 

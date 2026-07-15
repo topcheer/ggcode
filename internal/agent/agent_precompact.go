@@ -40,47 +40,7 @@ const (
 	// precompactStartDelay staggers the compression LLM call away from the
 	// agent's regular LLM turn to avoid API rate-limit collisions.
 	precompactStartDelay = 6 * time.Second
-
-	// Progressive tool-result clearing tiers. Instead of a single aggressive
-	// pass, we clear in graduated steps as context fills up. This spreads
-	// the loss of detail across multiple thresholds rather than losing many
-	// results all at once, keeping more recent context intact longer.
-	//
-	// This is the "tool-result clearing" technique from Anthropic's context
-	// engineering research (2025-2026), extended with progressive tiers
-	// inspired by the ACE (Agentic Context Engineering) framework.
-	//
-	// Each tier: [trigger fraction, keepN, clearInputs]
-	// - trigger: fraction of compaction threshold to activate
-	// - keepN: number of most-recent tool results to preserve
-	// - clearInputs: also truncate tool_use Input arguments
 )
-
-// clearTier defines one level of progressive tool-result clearing.
-type clearTier struct {
-	trigger     float64 // fraction of compaction threshold to activate
-	keepN       int     // number of most-recent tool results to preserve
-	clearInputs bool    // also truncate tool_use Input arguments
-}
-
-// toolClearTiers defines the progressive clearing schedule.
-var toolClearTiers = []clearTier{
-	{trigger: 0.50, keepN: 12, clearInputs: false}, // gentle: early bloat detection
-	{trigger: 0.65, keepN: 8, clearInputs: false},  // moderate: trim older results
-	{trigger: 0.75, keepN: 4, clearInputs: true},   // aggressive: also clear tool_use inputs
-}
-
-// cacheAwareMinSavingsFraction is the minimum estimated token savings
-// (as a fraction of the compaction threshold) required to justify a
-// clearing tier. Below this, the prompt cache prefix disruption from
-// in-place mutations exceeds the token savings.
-//
-// TokenPilot (arXiv:2606.17016) found that cache breaks from context
-// mutations cost ~1.5-3x the nominal token savings when the saved
-// fraction is small. Setting this to 0.02 (2%) means clearing is
-// skipped unless it would save at least 2% of the threshold (~4K
-// tokens for a 200K threshold).
-const cacheAwareMinSavingsFraction = 0.02
 
 // precompactDelayCtx is the delay applied before the background compression
 // request fires. Tests override this to zero for fast execution.
@@ -157,50 +117,17 @@ func (a *Agent) StartPreCompact() {
 	threshold := cm.AutoCompactThreshold()
 	tokens := cm.TokenCount()
 
-	// Progressive tool-result clearing: try cheap mechanical clearing first.
-	// Walk through tiers from gentle to aggressive. Each tier clears more
-	// aggressively (fewer kept results). Idempotent — already-cleared
-	// results are skipped, so re-running a tier is a no-op.
+	// Superseded read compaction: compact any file reads that have been
+	// superseded by a later read of the same file. This is the safest
+	// mechanical operation because the newer read always has more current
+	// content (Headroom-inspired context deduplication).
 	if threshold > 0 {
 		if mgr, ok := cm.(*ctxpkg.Manager); ok {
-			// Superseded read compaction: before the tiered clearing, compact
-			// any file reads that have been superseded by a later read of the
-			// same file. This is the safest mechanical operation because the
-			// newer read always has more current content (Headroom-inspired
-			// context deduplication).
-			if freed := mgr.CompactSupersededReads(); freed > 0 {
+			freed := mgr.CompactSupersededReads()
+			debug.Log("precompact", "SUPERSEDED: freed %d tokens from superseded reads, tokens now %d (threshold=%d)",
+				freed, tokens, threshold)
+			if freed > 0 {
 				tokens = cm.TokenCount()
-				debug.Log("precompact", "SUPERSEDED: freed %d tokens from superseded reads, tokens now %d (threshold=%d)",
-					freed, tokens, threshold)
-			}
-			for _, tier := range toolClearTiers {
-				if tokens < int(float64(threshold)*tier.trigger) {
-					break // not yet at this tier's trigger point
-				}
-				// TokenPilot-inspired cache-break awareness: estimate
-				// savings before mutating. If trivial, skip to preserve
-				// prompt cache prefix stability.
-				estimated := mgr.EstimateClearableTokens(tier.keepN)
-				minSavings := int(float64(threshold) * cacheAwareMinSavingsFraction)
-				if estimated < minSavings {
-					debug.Log("precompact", "SKIP TIER %.0f%%: estimated savings %d < cache-break minimum %d (preserving cache prefix)",
-						tier.trigger*100, estimated, minSavings)
-					continue
-				}
-				freed := mgr.ClearOldToolResults(tier.keepN)
-				if freed > 0 {
-					tokens = cm.TokenCount()
-					debug.Log("precompact", "CLEARED(tier %.0f%%): freed %d tokens from tool results (keepN=%d), tokens now %d (threshold=%d)",
-						tier.trigger*100, freed, tier.keepN, tokens, threshold)
-				}
-				if tier.clearInputs {
-					freedInput := mgr.ClearOldToolUseInputs()
-					if freedInput > 0 {
-						tokens = cm.TokenCount()
-						debug.Log("precompact", "CLEARED(tier %.0f%%): freed %d tokens from tool_use inputs, tokens now %d (threshold=%d)",
-							tier.trigger*100, freedInput, tokens, threshold)
-					}
-				}
 			}
 		}
 	}
@@ -229,7 +156,8 @@ func (a *Agent) StartPreCompact() {
 	a.precompact = pc
 	a.mu.Unlock()
 
-	debug.Log("precompact", "START: tokens=%d threshold=%d", tokens, threshold)
+	debug.Log("precompact", "START: tokens=%d threshold=%d ratio=%.2f snapshotMsgs=%d snapshotLastMsgID=%s snapshotVersion=%d",
+		tokens, threshold, float64(tokens)/float64(threshold), len(snapshot.Messages), snapshot.LastMsgID, snapshot.Version)
 
 	safego.Go("agent.precompact.run", func() {
 		// Capture pc locally — never touch a.precompact directly from this
@@ -250,6 +178,7 @@ func (a *Agent) StartPreCompact() {
 				debug.Log("precompact", "CANCELLED before delay completed")
 				return
 			case <-time.After(d):
+				debug.Log("precompact", "delay completed (%s), sending compaction request", d)
 			}
 		}
 

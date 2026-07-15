@@ -16,6 +16,8 @@ type RuntimeStatusProvider interface {
 	RuntimeEndpoint() string
 	RuntimeModel() string
 	RuntimeLanguage() string
+	RuntimeContextWindow() int
+	RuntimeMaxTokens() int
 	RuntimeIMAdapters() []RuntimeIMAdapterInfo
 	RuntimeMobile() RuntimeMobileInfo
 }
@@ -92,6 +94,12 @@ func (f runtimeStatusFormatter) String() string {
 	b = append(b, fmt.Sprintf("  Endpoint: %s\n", p.RuntimeEndpoint())...)
 	b = append(b, fmt.Sprintf("  Model: %s\n", p.RuntimeModel())...)
 	b = append(b, fmt.Sprintf("  Language: %s\n", p.RuntimeLanguage())...)
+	if cw := p.RuntimeContextWindow(); cw > 0 {
+		b = append(b, fmt.Sprintf("  Context window: %d\n", cw)...)
+	}
+	if mt := p.RuntimeMaxTokens(); mt > 0 {
+		b = append(b, fmt.Sprintf("  Max output tokens: %d\n", mt)...)
+	}
 
 	// IM adapters
 	adapters := p.RuntimeIMAdapters()

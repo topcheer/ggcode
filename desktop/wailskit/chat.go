@@ -1304,7 +1304,12 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Context window — critical for context compaction (mirrors Fyne line 737-742)
 	agentruntime.ApplyResolvedLimitsToAgent(a, resolved)
-	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, a, func(resp relaycatalog.ResolveResponse) {
+	sessionCW, sessionMT := 0, 0
+	if b.currentSes != nil {
+		sessionCW = b.currentSes.ContextWindow
+		sessionMT = b.currentSes.MaxTokens
+	}
+	agentruntime.StartAsyncRelayModelLimitRefreshWithSession(b.cfg, resolved, a, sessionCW, sessionMT, func(resp relaycatalog.ResolveResponse) {
 		b.mu.Lock()
 		if b.resolved != nil {
 			if resp.ContextWindow > 0 {
@@ -1481,6 +1486,20 @@ func (p *desktopRuntimeProvider) RuntimeLanguage() string {
 		return p.bridge.cfg.Language
 	}
 	return ""
+}
+
+func (p *desktopRuntimeProvider) RuntimeContextWindow() int {
+	if p.bridge.agent != nil && p.bridge.agent.ContextManager() != nil {
+		return p.bridge.agent.ContextManager().ContextWindow()
+	}
+	return 0
+}
+
+func (p *desktopRuntimeProvider) RuntimeMaxTokens() int {
+	if p.bridge.agent != nil && p.bridge.agent.ContextManager() != nil {
+		return p.bridge.agent.ContextManager().OutputReserve()
+	}
+	return 0
 }
 
 func (p *desktopRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
@@ -3099,7 +3118,12 @@ func (b *ChatBridge) SwitchModel(model string) error {
 		agentruntime.SyncVendorEndpointToGlobal(b.cfg, b.cfg.Vendor, b.cfg.Endpoint)
 	}
 
-	agentruntime.StartAsyncRelayModelLimitRefresh(b.cfg, resolved, a, func(resp relaycatalog.ResolveResponse) {
+	sessionCW2, sessionMT2 := 0, 0
+	if b.currentSes != nil {
+		sessionCW2 = b.currentSes.ContextWindow
+		sessionMT2 = b.currentSes.MaxTokens
+	}
+	agentruntime.StartAsyncRelayModelLimitRefreshWithSession(b.cfg, resolved, a, sessionCW2, sessionMT2, func(resp relaycatalog.ResolveResponse) {
 		b.mu.Lock()
 		if b.resolved != nil {
 			if resp.ContextWindow > 0 {

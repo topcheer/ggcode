@@ -352,12 +352,34 @@ func (m *Model) tryActivateCurrentSelection() error {
 	}
 	if m.agent != nil {
 		agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
-		agentruntime.StartAsyncRelayModelLimitRefresh(m.config, resolved, m.agent, nil)
+		m.applySessionLevelLimits()
+		sessionCW, sessionMT := 0, 0
+		if m.session != nil {
+			sessionCW = m.session.ContextWindow
+			sessionMT = m.session.MaxTokens
+		}
+		agentruntime.StartAsyncRelayModelLimitRefreshWithSession(m.config, resolved, m.agent, sessionCW, sessionMT, nil)
 		// Silently probe actual context window in background
 		m.startContextProbe()
 	}
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	return nil
+}
+
+// applySessionLevelLimits re-applies session-scoped context_window and max_tokens
+// overrides on top of the endpoint defaults. This must be called after
+// ApplyProviderToAgent (which sets endpoint-level defaults) to preserve
+// user-edited values from the model panel.
+func (m *Model) applySessionLevelLimits() {
+	if m.agent == nil || m.agent.ContextManager() == nil || m.session == nil {
+		return
+	}
+	if m.session.ContextWindow > 0 {
+		m.agent.ContextManager().SetContextWindow(m.session.ContextWindow)
+	}
+	if m.session.MaxTokens > 0 {
+		m.agent.ContextManager().SetOutputReserve(m.session.MaxTokens)
+	}
 }
 
 // ensureProviderSync rebuilds the agent's provider from the current config
@@ -374,7 +396,13 @@ func (m *Model) ensureProviderSync() {
 		return
 	}
 	agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
-	agentruntime.StartAsyncRelayModelLimitRefresh(m.config, resolved, m.agent, nil)
+	m.applySessionLevelLimits()
+	sessionCW, sessionMT := 0, 0
+	if m.session != nil {
+		sessionCW = m.session.ContextWindow
+		sessionMT = m.session.MaxTokens
+	}
+	agentruntime.StartAsyncRelayModelLimitRefreshWithSession(m.config, resolved, m.agent, sessionCW, sessionMT, nil)
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	m.syncSessionSelection()
 	// Silently probe actual context window in background

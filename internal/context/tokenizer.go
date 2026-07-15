@@ -1,18 +1,18 @@
 package context
 
 // EstimateTokens provides a rough token estimation.
-// Uses ~4 chars/token for ASCII and ~1.5 chars/token for CJK, which matches
+// Uses ~3.5 chars/token for ASCII and ~1.5 chars/token for CJK, which matches
 // common BPE tokenizer behavior more closely than a flat len/4.
 //
 // Fast path: for pure-ASCII text (the common case for code/logs), it uses
-// a simple len/4 calculation without iterating every rune. This is 5-10x
+// a simple len/3.5 calculation without iterating every rune. This is 5-10x
 // faster than the rune-iteration approach on large strings.
 // Slow path: only iterates runes when non-ASCII bytes are detected.
 func EstimateTokens(text string) int {
 	// Fast path: if all bytes are ASCII (< 128), skip rune iteration entirely.
 	if !stringsHasNonASCII(text) {
-		// Pure ASCII: ~4 bytes/token.
-		return len(text)/4 + 1
+		// Pure ASCII: ~3.5 bytes/token.
+		return int(float64(len(text))/3.5) + 1
 	}
 
 	// Mixed ASCII/CJK: must iterate runes to count CJK characters.
@@ -25,8 +25,8 @@ func EstimateTokens(text string) int {
 			ascii++
 		}
 	}
-	// ASCII: ~4 chars/token, CJK: ~1.5 chars/token
-	return ascii/4 + cjk*2/3 + 1
+	// ASCII: ~3.5 chars/token, CJK: ~1.5 chars/token
+	return int(float64(ascii)/3.5) + cjk*2/3 + 1
 }
 
 // EstimateTokensCalibrated uses calibrator ratios if available for a more

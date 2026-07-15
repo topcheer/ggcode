@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Context-fill-aware tool output truncation.
@@ -40,6 +42,7 @@ const (
 // Returns the (possibly truncated) content.
 func guardToolOutput(content string, contextFill float64) string {
 	if contextFill < contextFillModerate {
+		debug.Log("context-guard", "no-truncation fill=%.2f len=%d", contextFill, len(content))
 		return content
 	}
 
@@ -52,10 +55,13 @@ func guardToolOutput(content string, contextFill float64) string {
 	}
 
 	if len(content) <= limit {
+		debug.Log("context-guard", "below-limit fill=%.2f limit=%d len=%d", contextFill, limit, len(content))
 		return content
 	}
 
-	return truncateHeadTail(content, limit)
+	truncated := truncateHeadTail(content, limit)
+	debug.Log("context-guard", "truncated fill=%.2f limit=%d before=%d after=%d", contextFill, limit, len(content), len(truncated))
+	return truncated
 }
 
 // truncateHeadTail keeps the first ~40% and last ~50% of content, with a

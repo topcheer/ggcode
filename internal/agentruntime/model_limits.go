@@ -24,14 +24,29 @@ func ApplyResolvedLimitsToAgent(agentInst *agent.Agent, resolved *config.Resolve
 	}
 }
 
+// StartAsyncRelayModelLimitRefresh fetches the real context_window / max_output_tokens
+// from the relay catalog and applies them to the agent. sessionCW and sessionMT are
+// session-level overrides (0 = not set); when non-zero they are re-applied AFTER the
+// relay catalog values so that user-edited limits from the model panel are not
+// clobbered by the async background refresh.
 func StartAsyncRelayModelLimitRefresh(cfg *config.Config, resolved *config.ResolvedEndpoint, agentInst *agent.Agent, onApplied func(relaycatalog.ResolveResponse)) {
+	startAsyncRelayModelLimitRefreshWithSession(cfg, resolved, agentInst, 0, 0, onApplied)
+}
+
+// StartAsyncRelayModelLimitRefreshWithSession is like StartAsyncRelayModelLimitRefresh
+// but re-applies session-level overrides after the relay catalog values are set.
+func StartAsyncRelayModelLimitRefreshWithSession(cfg *config.Config, resolved *config.ResolvedEndpoint, agentInst *agent.Agent, sessionCW, sessionMT int, onApplied func(relaycatalog.ResolveResponse)) {
+	startAsyncRelayModelLimitRefreshWithSession(cfg, resolved, agentInst, sessionCW, sessionMT, onApplied)
+}
+
+func startAsyncRelayModelLimitRefreshWithSession(cfg *config.Config, resolved *config.ResolvedEndpoint, agentInst *agent.Agent, sessionCW, sessionMT int, onApplied func(relaycatalog.ResolveResponse)) {
 	if cfg == nil || resolved == nil || agentInst == nil {
 		return
 	}
 	ep := cfg.ActiveEndpointConfig()
 	allowContextOverride := ep == nil || ep.ContextWindow <= 0
 	allowMaxTokenOverride := ep == nil || ep.MaxTokens <= 0
-	if !allowContextOverride && !allowMaxTokenOverride {
+	if !allowContextOverride && !allowMaxTokenOverride && sessionCW <= 0 && sessionMT <= 0 {
 		return
 	}
 	expectedVendor := strings.TrimSpace(resolved.VendorID)
@@ -74,6 +89,16 @@ func StartAsyncRelayModelLimitRefresh(cfg *config.Config, resolved *config.Resol
 		}
 		if allowMaxTokenOverride && resp.MaxOutputTokens > 0 {
 			agentInst.ContextManager().SetOutputReserve(resp.MaxOutputTokens)
+			applied = true
+		}
+		// Re-apply session-level overrides so user-edited values from the
+		// model panel are not clobbered by relay catalog defaults.
+		if sessionCW > 0 {
+			agentInst.ContextManager().SetContextWindow(sessionCW)
+			applied = true
+		}
+		if sessionMT > 0 {
+			agentInst.ContextManager().SetOutputReserve(sessionMT)
 			applied = true
 		}
 		if applied && onApplied != nil {

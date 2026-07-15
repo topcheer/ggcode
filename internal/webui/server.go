@@ -73,6 +73,8 @@ type RuntimeStatus struct {
 	Endpoint       string          `json:"endpoint"`
 	Model          string          `json:"model"`
 	Language       string          `json:"language"`
+	ContextWindow  int             `json:"context_window"`
+	MaxTokens      int             `json:"max_tokens"`
 	IMAdapters     []IMAdapterInfo `json:"im_adapters"`
 	MobileConn     MobileConnInfo  `json:"mobile"`
 }

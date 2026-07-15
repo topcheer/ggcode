@@ -363,3 +363,25 @@ func (c *Config) RemoveVendor(name string) error {
 	delete(c.Vendors, name)
 	return nil
 }
+
+// SetEndpointModelLimits persists context_window and max_tokens to the
+// endpoint config in the global config file. A value of 0 means "unset"
+// and will clear the field. The config is saved to the global scope.
+func (c *Config) SetEndpointModelLimits(vendor, endpoint string, contextWindow, maxTokens int) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+	}
+	ep.ContextWindow = contextWindow
+	ep.MaxTokens = maxTokens
+	vc.Endpoints[endpoint] = ep
+	c.Vendors[vendor] = vc
+	return c.SaveScoped("global")
+}

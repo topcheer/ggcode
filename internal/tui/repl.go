@@ -352,6 +352,20 @@ func (p *tuiRuntimeProvider) RuntimeLanguage() string {
 	return ""
 }
 
+func (p *tuiRuntimeProvider) RuntimeContextWindow() int {
+	if p.repl.model.agent != nil && p.repl.model.agent.ContextManager() != nil {
+		return p.repl.model.agent.ContextManager().ContextWindow()
+	}
+	return 0
+}
+
+func (p *tuiRuntimeProvider) RuntimeMaxTokens() int {
+	if p.repl.model.agent != nil && p.repl.model.agent.ContextManager() != nil {
+		return p.repl.model.agent.ContextManager().OutputReserve()
+	}
+	return 0
+}
+
 func (p *tuiRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {
 	if p.repl.model.imManager == nil {
 		return nil
@@ -621,6 +635,10 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		m.Endpoint = r.cfg.Endpoint
 		m.Model = r.cfg.Model
 		m.Language = r.cfg.Language
+	}
+	if r.model.agent != nil && r.model.agent.ContextManager() != nil {
+		m.ContextWindow = r.model.agent.ContextManager().ContextWindow()
+		m.MaxTokens = r.model.agent.ContextManager().OutputReserve()
 	}
 
 	// IM adapter status

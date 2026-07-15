@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,28 @@ func TestAutoMemory_SaveAndLoad(t *testing.T) {
 	}
 	if content == "" {
 		t.Error("expected non-empty content")
+	}
+}
+
+func TestAutoMemory_LoadIndex(t *testing.T) {
+	tmpDir := t.TempDir()
+	am := &AutoMemory{dir: tmpDir}
+
+	am.SaveMemory("alpha", "alpha content")
+	am.SaveMemory("beta", "beta content")
+
+	index, files, err := am.LoadIndex()
+	if err != nil {
+		t.Fatalf("LoadIndex: %v", err)
+	}
+	if len(files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(files))
+	}
+	if strings.Contains(index, "alpha content") || strings.Contains(index, "beta content") {
+		t.Error("LoadIndex should not include file contents")
+	}
+	if !strings.Contains(index, "- alpha") || !strings.Contains(index, "- beta") {
+		t.Errorf("LoadIndex should list memory titles; got: %s", index)
 	}
 }
 

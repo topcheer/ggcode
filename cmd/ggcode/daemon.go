@@ -257,6 +257,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
+	if rTool, ok := registry.Get("runtime"); ok {
+		if rt, ok := rTool.(tool.RuntimeTool); ok {
+			if dp, ok := rt.Provider.(*daemonRuntimeProvider); ok {
+				dp.agent = ag
+			}
+		}
+	}
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
@@ -1216,6 +1223,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			st.Model = cfg.Model
 			st.Language = cfg.Language
 		}
+		if ag != nil && ag.ContextManager() != nil {
+			st.ContextWindow = ag.ContextManager().ContextWindow()
+			st.MaxTokens = ag.ContextManager().OutputReserve()
+		}
 		// IM adapters
 		if imMgr != nil {
 			snap := imMgr.Snapshot()
@@ -2053,6 +2064,7 @@ type daemonRuntimeProvider struct {
 	cfg    *config.Config
 	imMgr  *im.Manager
 	bridge *im.DaemonBridge
+	agent  *agent.Agent
 }
 
 func (p *daemonRuntimeProvider) RuntimeSessionID() string {
@@ -2095,6 +2107,20 @@ func (p *daemonRuntimeProvider) RuntimeLanguage() string {
 		return p.cfg.Language
 	}
 	return ""
+}
+
+func (p *daemonRuntimeProvider) RuntimeContextWindow() int {
+	if p.agent != nil && p.agent.ContextManager() != nil {
+		return p.agent.ContextManager().ContextWindow()
+	}
+	return 0
+}
+
+func (p *daemonRuntimeProvider) RuntimeMaxTokens() int {
+	if p.agent != nil && p.agent.ContextManager() != nil {
+		return p.agent.ContextManager().OutputReserve()
+	}
+	return 0
 }
 
 func (p *daemonRuntimeProvider) RuntimeIMAdapters() []tool.RuntimeIMAdapterInfo {

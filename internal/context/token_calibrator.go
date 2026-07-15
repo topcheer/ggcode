@@ -2,10 +2,12 @@ package context
 
 import (
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const (
-	defaultASCIIRatio   = 4.0 // chars per token for ASCII text
+	defaultASCIIRatio   = 3.5 // chars per token for ASCII text
 	defaultCJKRatio     = 1.5 // chars per token for CJK text
 	calibWarmupSamples  = 5   // samples before calibration starts
 	calibAdjustInterval = 3   // adjust every N samples after warmup
@@ -39,6 +41,7 @@ func NewTokenCalibrator() *TokenCalibrator {
 // adjusts at fixed intervals to avoid overreacting to individual samples.
 func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens int) {
 	if actualTokens <= 0 || estimatedTokens <= 0 {
+		debug.Log("context-calibrator", "sample-skipped estimated=%d actual=%d", estimatedTokens, actualTokens)
 		return
 	}
 	c.mu.Lock()
@@ -48,28 +51,25 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens int) {
 
 	// Warmup: don't adjust during first few samples
 	if c.samples <= calibWarmupSamples {
+		debug.Log("context-calibrator", "warmup sample=%d estimated=%d actual=%d ratio=%.3f/%.3f",
+			c.samples, estimatedTokens, actualTokens, c.asciiRatio, c.cjkRatio)
 		return
 	}
 
 	// Only adjust every Nth sample after warmup
 	if (c.samples-calibWarmupSamples)%calibAdjustInterval != 0 {
+		debug.Log("context-calibrator", "sample=%d estimated=%d actual=%d ratio=%.3f/%.3f (no-adjust)",
+			c.samples, estimatedTokens, actualTokens, c.asciiRatio, c.cjkRatio)
 		return
 	}
 
 	// Compute the correction factor: if estimated < actual, the ratio
 	// (chars/token) is too high, so we need to decrease it.
-	// ratio_correction = estimated / actual
-	// New ratio = old ratio * (estimated / actual)
-	// When estimated < actual → factor < 1 → ratio decreases (correctly)
-	// When estimated > actual → factor > 1 → ratio increases (correctly)
 	factor := float64(estimatedTokens) / float64(actualTokens)
-
-	// Incremental averaging: weight decreases with more samples
-	// alpha = 1.0 / (1 + (samples - warmup) / interval)
-	// First adjustment: alpha=1 (full replace), second: alpha=0.5, etc.
 	adjustmentNum := (c.samples - calibWarmupSamples) / calibAdjustInterval
 	alpha := 1.0 / float64(adjustmentNum)
 
+	oldASCIIRatio, oldCJKRatio := c.asciiRatio, c.cjkRatio
 	newASCIIRatio := c.asciiRatio * (1 - alpha + alpha*factor)
 	newCJKRatio := c.cjkRatio * (1 - alpha + alpha*factor)
 
@@ -89,6 +89,8 @@ func (c *TokenCalibrator) RecordSample(estimatedTokens, actualTokens int) {
 
 	c.asciiRatio = newASCIIRatio
 	c.cjkRatio = newCJKRatio
+	debug.Log("context-calibrator", "adjusted sample=%d estimated=%d actual=%d factor=%.3f alpha=%.3f ascii=%.3f→%.3f cjk=%.3f→%.3f",
+		c.samples, estimatedTokens, actualTokens, factor, alpha, oldASCIIRatio, newASCIIRatio, oldCJKRatio, newCJKRatio)
 }
 
 // ASCIICharsPerToken returns the calibrated chars/token ratio for ASCII text.

@@ -345,6 +345,21 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 
+		// Also persist to endpoint config so new sessions inherit these values.
+		// Only update the field actually being edited; preserve the other
+		// endpoint value so that e.g. setting max_tokens does not overwrite
+		// an existing endpoint context_window.
+		cw, mt := ep.ContextWindow, ep.MaxTokens
+		if field == "context_window" {
+			cw = n
+		} else if field == "max_tokens" {
+			mt = n
+		}
+		if err := m.config.SetEndpointModelLimits(vendor, endpoint, cw, mt); err != nil {
+			panel.message = fmt.Sprintf("endpoint config save failed: %v", err)
+			return *m, nil
+		}
+
 		// Apply to running agent immediately
 		if m.agent != nil && m.agent.ContextManager() != nil {
 			switch field {
@@ -352,13 +367,19 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				if n > 0 {
 					m.agent.ContextManager().SetContextWindow(n)
 				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
-					agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+					// Only reset context window, don't clobber max_tokens
+					if resolved.ContextWindow > 0 {
+						m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
+					}
 				}
 			case "max_tokens":
 				if n > 0 {
 					m.agent.ContextManager().SetOutputReserve(n)
 				} else if resolved, _, err := agentruntime.ResolveCurrentSelection(m.config); err == nil {
-					agentruntime.ApplyResolvedLimitsToAgent(m.agent, resolved)
+					// Only reset max_tokens, don't clobber context window
+					if resolved.MaxTokens > 0 {
+						m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+					}
 				}
 			}
 		}
