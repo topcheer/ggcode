@@ -435,10 +435,6 @@ func renderProviderPanelSection(title, body string, width, height int) string {
 		Render(header + "\n" + bodyStyle.Render(body))
 }
 
-func providerPanelColumnsHeight(viewHeight int) int {
-	return min(28, max(16, viewHeight-12))
-}
-
 func providerPanelVendorBodyRows(vendorCount int) int {
 	return providerPanelListBodyRows(vendorCount, 4, 12, 1)
 }

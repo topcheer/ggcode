@@ -538,34 +538,6 @@ func renderQQShareQRCode(link string) (string, error) {
 	return rendered, nil
 }
 
-func wrapQQLink(text string, width int) string {
-	text = strings.TrimSpace(text)
-	if text == "" || width <= 0 {
-		return text
-	}
-	runes := []rune(text)
-	if len(runes) <= width {
-		return text
-	}
-	lines := make([]string, 0, (len(runes)+width-1)/width)
-	for start := 0; start < len(runes); start += width {
-		end := start + width
-		if end > len(runes) {
-			end = len(runes)
-		}
-		lines = append(lines, string(runes[start:end]))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func indentQQBlock(text, prefix string) string {
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	for i := range lines {
-		lines[i] = prefix + lines[i]
-	}
-	return strings.Join(lines, "\n")
-}
-
 func (m *Model) ensureQQBotBinding(adapter string) error {
 	if err := m.ensureQQRuntime(true); err != nil {
 		return err
@@ -604,13 +576,6 @@ func (m Model) qqRuntimeStatus() string {
 func maxQQ(v, min int) int {
 	if v < min {
 		return min
-	}
-	return v
-}
-
-func minQQ(v, max int) int {
-	if v > max {
-		return max
 	}
 	return v
 }

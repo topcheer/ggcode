@@ -766,18 +766,6 @@ func renderHarnessPanelInput(input textinput.Model, focused bool, width int) str
 	return control.View()
 }
 
-func clipHarnessPanelText(content string, width, height int) string {
-	if width <= 0 {
-		width = 1
-	}
-	content = truncateLines(content, height)
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = util.Truncate(line, width)
-	}
-	return strings.Join(lines, "\n")
-}
-
 func harnessPanelPathLabel(root, path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
