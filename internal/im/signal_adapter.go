@@ -283,20 +283,6 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 	}
 }
 
-func (a *signalAdapter) handleSSEEvent(ctx context.Context, eventType, data string) {
-	if data == "" {
-		return
-	}
-
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(data), &envelope); err != nil {
-		debug.Log("signal", "adapter=%s invalid SSE JSON: %v", a.name, err)
-		return
-	}
-
-	a.processEnvelope(ctx, envelope)
-}
-
 // ---------------------------------------------------------------------------
 // Message processing
 // ---------------------------------------------------------------------------

@@ -282,16 +282,6 @@ func readStdin() ([]byte, error) {
 	return data, nil
 }
 
-// registryToolNames extracts tool names from the registry.
-func registryToolNames(r *tool.Registry) []string {
-	tools := r.List()
-	names := make([]string, len(tools))
-	for i, t := range tools {
-		names[i] = t.Name()
-	}
-	return names
-}
-
 // buildPipePrompt builds the prompt with optional image from stdin.
 func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.ContentBlock) {
 	if stdinData == nil {

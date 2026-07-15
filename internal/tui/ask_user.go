@@ -460,15 +460,6 @@ func (qs *questionnaireState) applyParsedAnswers(parsed []im.ParsedQuestionAnswe
 	}
 }
 
-// splitNonEmptyLines delegates to the shared implementation in the im package.
-func splitNonEmptyLines(text string) []string {
-	return im.SplitNonEmptyLines(text)
-}
-
-func parseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, string, error) {
-	return im.ParseRemoteQuestionnaireAnswer(raw, question)
-}
-
 func normalizeRemoteAnswerToken(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
 	s = strings.ReplaceAll(s, " ", "")

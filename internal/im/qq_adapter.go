@@ -1282,38 +1282,6 @@ func (a *qqAdapter) sendImageFromBase64(ctx context.Context, chatType, channelID
 	return a.sendMediaMessage(ctx, path, chatType, fileInfo, replyTo, replySeq)
 }
 
-// sendImageFromURL downloads an image from a URL and sends it as a media message.
-func (a *qqAdapter) sendImageFromURL(ctx context.Context, chatType, channelID, imageURL, replyTo string, replySeq int) error {
-	debug.Log("qq", "adapter=%s downloading image from URL: %s", a.name, truncateStr(imageURL, 120))
-	data, mimeType, err := a.downloadImageURL(ctx, imageURL)
-	if err != nil {
-		return fmt.Errorf("download image %s: %w", truncateStr(imageURL, 60), err)
-	}
-	// Validate it's an image
-	if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && decoded.MIME != "" {
-		mimeType = decoded.MIME
-	}
-	if !strings.HasPrefix(mimeType, "image/") {
-		return fmt.Errorf("downloaded content is not an image: %s", mimeType)
-	}
-	b64 := base64.StdEncoding.EncodeToString(data)
-	return a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, replySeq)
-}
-
-// sendImageFromLocal reads a local file and sends it as a media message.
-func (a *qqAdapter) sendImageFromLocal(ctx context.Context, chatType, channelID, filePath, replyTo string, replySeq int) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("read local image %s: %w", filePath, err)
-	}
-	decoded, err := imagepkg.Decode(data)
-	if err != nil {
-		return fmt.Errorf("decode local image %s: %w", filePath, err)
-	}
-	b64 := imagepkg.EncodeBase64(decoded)
-	return a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, replySeq)
-}
-
 func (a *qqAdapter) downloadImageURL(ctx context.Context, imageURL string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
