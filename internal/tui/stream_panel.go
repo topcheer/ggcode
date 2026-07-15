@@ -586,7 +586,3 @@ func (m *Model) persistStreamConfig() {
 		m.streamPanel.message = fmt.Sprintf("config save failed: %v", err)
 	}
 }
-
-func activeGreen(s string) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render(s)
-}

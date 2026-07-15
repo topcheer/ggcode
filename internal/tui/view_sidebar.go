@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/metrics"
-	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/uiusage"
 	"github.com/topcheer/ggcode/internal/util"
@@ -504,13 +503,6 @@ func sidebarTaskTrackerHint(lang Language) string {
 	return "Active-session task tracker (newest started first)"
 }
 
-func sidebarTaskTrackerMore(lang Language, remaining int) string {
-	if lang == LangZhCN {
-		return fmt.Sprintf("… 还有 %d 项", remaining)
-	}
-	return fmt.Sprintf("… %d more", remaining)
-}
-
 func (m Model) renderSidebarSectionTitle(title string) string {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color("111")).
@@ -575,45 +567,6 @@ func fitDisplayWidth(s string, maxWidth int) string {
 		currentWidth += rw
 	}
 	return b.String()
-}
-
-func sidebarModeApprovalKey(mode permission.PermissionMode) string {
-	switch mode {
-	case permission.PlanMode:
-		return "mode.approval.none"
-	case permission.AutoMode:
-		return "mode.approval.none"
-	case permission.BypassMode:
-		return "mode.approval.critical"
-	case permission.AutopilotMode:
-		return "mode.approval.none"
-	default:
-		return "mode.approval.ask"
-	}
-}
-
-func sidebarModeToolsKey(mode permission.PermissionMode) string {
-	switch mode {
-	case permission.PlanMode:
-		return "mode.tools.readonly"
-	case permission.AutoMode:
-		return "mode.tools.safe"
-	case permission.BypassMode:
-		return "mode.tools.open"
-	case permission.AutopilotMode:
-		return "mode.tools.open"
-	default:
-		return "mode.tools.rules"
-	}
-}
-
-func sidebarModeAgentKey(mode permission.PermissionMode) string {
-	switch mode {
-	case permission.AutopilotMode:
-		return "mode.agent.autocontinue"
-	default:
-		return "mode.agent.waits"
-	}
 }
 
 type sidebarContextStatLine struct {
