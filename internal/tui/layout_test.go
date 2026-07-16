@@ -2212,7 +2212,7 @@ func TestAgentErrMsgFormatsAnthropicSerializationFailure(t *testing.T) {
 	m = next.(Model)
 
 	output := renderedOutput(&m)
-	if !strings.Contains(output, "消息格式不兼容") {
+	if !strings.Contains(output, "incompatible message format") {
 		t.Fatalf("expected friendly anthropic serialization message, got %q", output)
 	}
 	if strings.Contains(output, "anthropic.ContentBlockParamUnion") {
@@ -2232,12 +2232,13 @@ func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
 	m = next.(Model)
 
 	output := renderedOutput(&m)
-	// UserFacingError returns a generic Chinese message for unrecognized errors.
+	// UserFacingError returns a generic English message for unrecognized errors
+	// (test model defaults to English language).
 	// Verify that internal "chat error:" prefix is stripped from the output.
 	if strings.Contains(output, "chat error:") {
 		t.Fatalf("expected internal chat error prefix to be removed, got %q", output)
 	}
-	if !strings.Contains(output, "请求失败") {
+	if !strings.Contains(output, "Request failed") {
 		t.Fatalf("expected generic failure message, got %q", output)
 	}
 }

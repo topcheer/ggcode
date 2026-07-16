@@ -12,7 +12,11 @@ func formatUserFacingError(lang Language, err error) string {
 		}
 		return "Error"
 	}
-	msg := provider.UserFacingError(err)
+	langStr := "en"
+	if lang == LangZhCN {
+		langStr = "zh-CN"
+	}
+	msg := provider.UserFacingErrorLang(err, langStr)
 	if msg == "" {
 		if lang == LangZhCN {
 			return "错误"

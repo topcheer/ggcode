@@ -218,7 +218,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		model := panel.models[panel.selected]
 		if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, model); err != nil {
-			panel.message = err.Error()
+			panel.message = formatUserFacingError(m.currentLanguage(), err)
 			return *m, nil
 		}
 		if err := m.tryActivateCurrentSelection(); err != nil {

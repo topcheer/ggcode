@@ -13,12 +13,22 @@ import (
 )
 
 // UserFacingError translates a technical provider/API error into a concise,
-// human-readable message suitable for display in the TUI or IM.
+// human-readable message in Chinese.
+//
+// Deprecated: Use UserFacingErrorLang for language-aware error messages.
+// This function is kept for backward compatibility with callers that don't
+// have a language context (e.g. tunnel_host, daemon_bridge).
+func UserFacingError(err error) string {
+	return UserFacingErrorLang(err, "zh-CN")
+}
+
+// UserFacingErrorLang translates a technical provider/API error into a concise,
+// human-readable message in the specified language ("zh-CN" or "en").
 //
 // It strips SDK-specific noise, maps HTTP status codes to friendly text, and
 // falls back to a generic message so users never see raw stack traces or
 // protocol details.
-func UserFacingError(err error) string {
+func UserFacingErrorLang(err error, lang string) string {
 	if err == nil {
 		return ""
 	}
@@ -29,72 +39,116 @@ func UserFacingError(err error) string {
 		inner = err
 	}
 
+	zh := lang != "en" // default to Chinese for anything other than "en"
+
 	// ---- Auth / permission errors (never retried) ----
 	if hasHTTPStatus(err, http.StatusUnauthorized) {
-		return "API 密钥无效或未配置，请检查你的 API Key 设置"
+		if zh {
+			return "API 密钥无效或未配置，请检查你的 API Key 设置"
+		}
+		return "Invalid or missing API key. Please check your API key configuration"
 	}
 	if hasHTTPStatus(err, http.StatusForbidden) {
-		return "无权访问该接口，请确认你的账号权限和 API Key"
+		if zh {
+			return "无权访问该接口，请确认你的账号权限和 API Key"
+		}
+		return "Access denied. Please verify your account permissions and API key"
 	}
 	if hasHTTPStatus(err, http.StatusNotFound) {
-		return "接口不存在 (404)，请检查 Base URL 和模型名称是否正确"
+		if zh {
+			return "接口不存在 (404)，请检查 Base URL 和模型名称是否正确"
+		}
+		return "Endpoint not found (404). Please check your Base URL and model name"
 	}
 
 	// ---- Rate limiting ----
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
-		return "请求太频繁，服务端已限流，请稍后重试"
+		if zh {
+			return "请求太频繁，服务端已限流，请稍后重试"
+		}
+		return "Rate limited by the server. Please retry shortly"
 	}
 
 	// ---- Server errors ----
 	if hasHTTPStatus(err, http.StatusBadGateway) ||
 		hasHTTPStatus(err, http.StatusServiceUnavailable) ||
 		hasHTTPStatus(err, http.StatusGatewayTimeout) {
-		return "服务暂时不可用，请稍后重试"
+		if zh {
+			return "服务暂时不可用，请稍后重试"
+		}
+		return "Service temporarily unavailable. Please retry shortly"
 	}
 	if code := extractHTTPStatus(err); code >= 500 {
-		return fmt.Sprintf("服务端错误 (%d)，请稍后重试", code)
+		if zh {
+			return fmt.Sprintf("服务端错误 (%d)，请稍后重试", code)
+		}
+		return fmt.Sprintf("Server error (%d). Please retry shortly", code)
 	}
 
 	// ---- Context / timeout errors ----
 	if errors.Is(err, context.Canceled) || errors.Is(inner, context.Canceled) {
-		return "请求已取消"
+		if zh {
+			return "请求已取消"
+		}
+		return "Request cancelled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(inner, context.DeadlineExceeded) {
-		return "请求超时，请稍后重试"
+		if zh {
+			return "请求超时，请稍后重试"
+		}
+		return "Request timed out. Please retry shortly"
 	}
 
 	// ---- Network errors ----
 	var netErr net.Error
 	if errors.As(err, &netErr) || errors.As(inner, &netErr) {
-		return "网络连接失败，请检查网络设置后重试"
+		if zh {
+			return "网络连接失败，请检查网络设置后重试"
+		}
+		return "Network connection failed. Please check your network settings"
 	}
 
 	// ---- Anthropic serialization error ----
 	raw := err.Error()
 	if isAnthropicSerializationError(raw) {
-		return "发送请求失败：消息格式不兼容。请尝试 /compact 后重试"
+		if zh {
+			return "发送请求失败：消息格式不兼容。请尝试 /compact 后重试"
+		}
+		return "Request failed: incompatible message format. Try /compact and retry"
 	}
 
 	// ---- Context window / prompt too long ----
 	if strings.Contains(raw, "context_window") || strings.Contains(raw, "context length") ||
 		strings.Contains(raw, "max_tokens") || strings.Contains(raw, "prompt too long") ||
 		strings.Contains(raw, "token limit") {
-		return "对话内容过长，已超出模型上下文限制。请尝试 /compact 或缩短对话"
+		if zh {
+			return "对话内容过长，已超出模型上下文限制。请尝试 /compact 或缩短对话"
+		}
+		return "Conversation too long, exceeds model context limit. Try /compact or start a new session"
 	}
 
 	// ---- 400 Bad Request ----
 	if hasHTTPStatus(err, http.StatusBadRequest) {
-		return "请求参数错误 (400)，请尝试 /compact 或重新开始对话"
+		if zh {
+			return "请求参数错误 (400)，请尝试 /compact 或重新开始对话"
+		}
+		return "Bad request (400). Try /compact or start a new session"
 	}
 
 	// ---- Generic HTTP errors ----
 	if code := extractHTTPStatus(err); code > 0 {
-		return fmt.Sprintf("请求失败 (%d)，请稍后重试", code)
+		if zh {
+			return fmt.Sprintf("请求失败 (%d)，请稍后重试", code)
+		}
+		return fmt.Sprintf("Request failed (%d). Please retry shortly", code)
 	}
 
 	// ---- Connection refused / DNS ----
 	if strings.Contains(raw, "connection refused") || strings.Contains(raw, "no such host") {
-		return "无法连接到 API 服务器，请检查网络和 Base URL 设置"
+		if zh {
+			return "无法连接到 API 服务器，请检查网络和 Base URL 设置"
+		}
+		return "Cannot connect to the API server. Please check your network and Base URL"
 	}
 
 	// ---- Fallback: generic message, strip provider noise ----
@@ -111,10 +165,16 @@ func UserFacingError(err error) string {
 		}
 	}
 	if msg != "" && msg != raw {
-		return "请求失败：" + msg
+		if zh {
+			return "请求失败：" + msg
+		}
+		return "Request failed: " + msg
 	}
 
-	return "请求失败，请稍后重试"
+	if zh {
+		return "请求失败，请稍后重试"
+	}
+	return "Request failed. Please retry shortly"
 }
 
 // hasHTTPStatus checks whether err (or any wrapped error) carries the given
