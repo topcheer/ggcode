@@ -294,7 +294,11 @@ type Model struct {
 	// sessionCronSwitch is called when /clear or /sessions switches sessions.
 	// The REPL registers this callback to rebind the cron scheduler to the
 	// new session's store path, so cron jobs persist to the correct session.
-	sessionCronSwitch     func(newSessionID string)
+	sessionCronSwitch func(newSessionID string)
+	// sessionUpdateCallback is called whenever SetSession changes the active
+	// session. The REPL registers this to update its thread-safe currentSession
+	// pointer so persistHandler/checkpointHandler write to the correct JSONL file.
+	sessionUpdateCallback func(ses *session.Session)
 	harnessRunProject     *harness.Project
 	harnessRunGoal        string
 	harnessRunTaskID      string
@@ -806,6 +810,12 @@ func (m *Model) SetCronScheduler(s *cron.Scheduler) {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	// Notify REPL so its thread-safe currentSession pointer stays in sync.
+	// This ensures persistHandler/checkpointHandler write to the correct
+	// JSONL file even after /clear switches to a new session.
+	if m.sessionUpdateCallback != nil {
+		m.sessionUpdateCallback(ses)
+	}
 	// Propagate session ID to agent so todos are scoped to this session.
 	if m.agent != nil {
 		m.agent.SetSessionID(ses.ID)

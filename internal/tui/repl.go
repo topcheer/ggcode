@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,6 +72,8 @@ type REPL struct {
 	agentBusy           atomic.Bool
 	preExecCleanup      func() // called before syscall.Exec restart/tmux-enter
 	cronScheduler       *cron.Scheduler
+	currentSessionMu    sync.RWMutex
+	currentSession      *session.Session // thread-safe, updated by setCurrentSession
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -98,6 +101,9 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	// lock, acquire a new one, and rebind the cron scheduler.
 	r.model.sessionLockSwitch = r.switchSessionLock
 	r.model.sessionCronSwitch = r.switchSessionCron
+	// Register session update callback so persistHandler/checkpointHandler
+	// always see the correct session (r.model is a value snapshot, not live).
+	r.model.sessionUpdateCallback = r.setCurrentSession
 	return r
 }
 
@@ -216,6 +222,23 @@ func (r *REPL) switchSessionLock(newSessionID string) {
 		r.sessionLock = newLock
 		debug.Log("repl", "switchSessionLock: acquired lock on new session %s", newSessionID)
 	}
+}
+
+// setCurrentSession updates the thread-safe current session pointer. Called
+// by the Bubble Tea model whenever the session changes (via callback).
+func (r *REPL) setCurrentSession(ses *session.Session) {
+	r.currentSessionMu.Lock()
+	r.currentSession = ses
+	r.currentSessionMu.Unlock()
+}
+
+// getCurrentSession returns the thread-safe current session pointer.
+// Used by persistHandler and checkpointHandler to get the LIVE session
+// instead of the stale r.model snapshot.
+func (r *REPL) getCurrentSession() *session.Session {
+	r.currentSessionMu.RLock()
+	defer r.currentSessionMu.RUnlock()
+	return r.currentSession
 }
 
 func (r *REPL) switchSessionCron(newSessionID string) {
@@ -1129,7 +1152,11 @@ func (r *REPL) Run() error {
 		}
 		mu := r.model.sessionMutex()
 		mu.Lock()
-		ses := r.model.Session()
+		// Use getCurrentSession — returns the LIVE session pointer.
+		ses := r.getCurrentSession()
+		if ses == nil {
+			ses = r.model.Session()
+		}
 		if ses == nil {
 			mu.Unlock()
 			return
@@ -1164,10 +1191,10 @@ func (r *REPL) Run() error {
 		if r.store == nil {
 			return
 		}
-		mu := r.model.sessionMutex()
-		mu.Lock()
-		ses := r.model.Session()
-		mu.Unlock()
+		// Use getCurrentSession — it returns the LIVE session pointer
+		// (updated atomically on /clear, /sessions switch), not the stale
+		// r.model snapshot which always points to the initial session.
+		ses := r.getCurrentSession()
 		if ses == nil {
 			return
 		}
