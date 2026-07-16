@@ -697,40 +697,33 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
 	}
+	// Defer binding persistence to a single call at the end, instead of
+	// persisting twice (once for ChannelID, once for LastInboundMessageID).
+	needPersist := false
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
 		newChannelID := strings.TrimSpace(msg.Envelope.ChannelID)
-		if m.bindingStore != nil {
-			probe := *binding
-			probe.ChannelID = newChannelID
-			if err := m.persistBinding(probe); err != nil {
-				m.mu.Unlock()
-				return err
-			}
-		}
 		binding.ChannelID = newChannelID
 		changed = true
+		needPersist = true
 	}
 	if binding.ChannelID != "" && msg.Envelope.ChannelID != binding.ChannelID {
 		m.mu.Unlock()
 		return ErrInboundChannelDenied
 	}
 	if inboundID := strings.TrimSpace(msg.Envelope.MessageID); inboundID != "" {
-		if m.bindingStore != nil {
-			probe := *binding
-			probe.LastInboundMessageID = inboundID
-			probe.LastInboundAt = msg.Envelope.ReceivedAt
-			probe.PassiveReplyCount = 0
-			probe.PassiveReplyStartedAt = time.Time{}
-			if err := m.persistBinding(probe); err != nil {
-				m.mu.Unlock()
-				return err
-			}
-		}
 		binding.LastInboundMessageID = inboundID
 		binding.LastInboundAt = msg.Envelope.ReceivedAt
 		binding.PassiveReplyCount = 0
 		binding.PassiveReplyStartedAt = time.Time{}
 		changed = true
+		needPersist = true
+	}
+	// Single persist call covering both ChannelID and LastInboundMessageID changes.
+	if needPersist && m.bindingStore != nil {
+		if err := m.persistBinding(*binding); err != nil {
+			m.mu.Unlock()
+			return err
+		}
 	}
 	var snapshot StatusSnapshot
 	var cb func(StatusSnapshot)

@@ -1507,18 +1507,18 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 // --- Internal helpers ---
 
 func (a *Agent) emitUsage(usage provider.TokenUsage) {
-	a.mu.Lock()
+	a.mu.RLock()
 	fn := a.onUsage
-	a.mu.Unlock()
+	a.mu.RUnlock()
 	if fn != nil {
 		fn(usage)
 	}
 }
 
 func (a *Agent) emitMetric(m metrics.MetricEvent) {
-	a.mu.Lock()
+	a.mu.RLock()
 	fn := a.onMetric
-	a.mu.Unlock()
+	a.mu.RUnlock()
 	if fn != nil {
 		fn(m)
 	}
