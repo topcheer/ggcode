@@ -106,7 +106,7 @@ func buildNamedAgentHint(workingDir string) string {
 	sb.WriteString("## Named Subagents\n")
 	sb.WriteString("The following named subagent templates are available in this workspace. ")
 	sb.WriteString("Use `use_namedagent` to invoke any of them for specialized tasks. ")
-	sb.WriteString("Use `create_namedagent` to define new ones. Use `list_namedagent` to refresh this list.\n\n")
+	sb.WriteString("Use `create_namedagent` to define new ones, `delete_namedagent` to remove them, and `list_namedagent` to refresh this list.\n\n")
 	for _, tmpl := range templates {
 		modelInfo := ""
 		if tmpl.Model != "" {

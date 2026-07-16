@@ -28,6 +28,8 @@ func TestSaveLoadSidebarAndPermissionMode(t *testing.T) {
 	if err := store.Save(ses); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	// Save no longer writes meta — need to append it explicitly.
+	_ = store.AppendMetaToDisk(ses)
 
 	loaded, err := store.Load("test-sidebar-persist")
 	if err != nil {

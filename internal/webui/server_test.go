@@ -209,7 +209,11 @@ func TestSessionsListWithSessions(t *testing.T) {
 	}
 	ses1.CreatedAt = time.Now().Add(-2 * time.Hour)
 	ses1.UpdatedAt = time.Now().Add(-1 * time.Hour)
-	store.Save(ses1)
+	_ = store.Save(ses1)
+	_ = store.AppendMetaToDisk(ses1)
+	if len(ses1.Messages) > 0 {
+		_ = store.AppendMessagesBatchToDisk(ses1, ses1.Messages)
+	}
 
 	ses2 := &session.Session{
 		ID:        "20260401-130000",
@@ -223,7 +227,11 @@ func TestSessionsListWithSessions(t *testing.T) {
 	}
 	ses2.CreatedAt = time.Now().Add(-30 * time.Minute)
 	ses2.UpdatedAt = time.Now()
-	store.Save(ses2)
+	_ = store.Save(ses2)
+	_ = store.AppendMetaToDisk(ses2)
+	if len(ses2.Messages) > 0 {
+		_ = store.AppendMessagesBatchToDisk(ses2, ses2.Messages)
+	}
 
 	ses3 := &session.Session{
 		ID:        "20260401-140000",
@@ -237,7 +245,11 @@ func TestSessionsListWithSessions(t *testing.T) {
 	}
 	ses3.CreatedAt = time.Now()
 	ses3.UpdatedAt = time.Now()
-	store.Save(ses3)
+	_ = store.Save(ses3)
+	_ = store.AppendMetaToDisk(ses3)
+	if len(ses3.Messages) > 0 {
+		_ = store.AppendMessagesBatchToDisk(ses3, ses3.Messages)
+	}
 
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
@@ -318,7 +330,11 @@ func TestSessionDetail(t *testing.T) {
 	}
 	ses.CreatedAt = time.Now()
 	ses.UpdatedAt = time.Now()
-	store.Save(ses)
+	_ = store.Save(ses)
+	_ = store.AppendMetaToDisk(ses)
+	if len(ses.Messages) > 0 {
+		_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
+	}
 
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)

@@ -111,6 +111,8 @@ func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
 	if err := store.Save(ses); err != nil {
 		t.Fatalf("save session: %v", err)
 	}
+	_ = store.AppendMetaToDisk(ses)
+	_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
 
 	m := newTestModel()
 	m.sessionStore = store
@@ -3636,6 +3638,12 @@ func TestUsageTurnIndexRestoresFromSession(t *testing.T) {
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
+	// Save no longer writes meta/usage — append explicitly.
+	_ = store.AppendMetaToDisk(ses)
+	for _, entry := range ses.UsageHistory {
+		_ = store.AppendUsageEntry(ses, entry)
+	}
+	_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {

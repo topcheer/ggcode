@@ -539,6 +539,29 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})
 
+	// Named subagent templates (persisted per-workspace)
+	tmplStore := subagent.NewTemplateStore(r.model.agent.WorkingDir())
+	debug.Log("tui", "SetSubAgentManager: registering named agent tools, workingDir=%s", r.model.agent.WorkingDir())
+	if err := tools.Register(tool.CreateNamedAgentTool{Store: tmplStore}); err != nil {
+		debug.Log("tui", "Register create_namedagent FAILED: %v", err)
+	}
+	if err := tools.Register(tool.DeleteNamedAgentTool{Store: tmplStore}); err != nil {
+		debug.Log("tui", "Register delete_namedagent FAILED: %v", err)
+	}
+	if err := tools.Register(tool.ListNamedAgentTool{Store: tmplStore}); err != nil {
+		debug.Log("tui", "Register list_namedagent FAILED: %v", err)
+	}
+	tools.Register(tool.UseNamedAgentTool{
+		Store:               tmplStore,
+		Manager:             mgr,
+		Provider:            prov,
+		Tools:               tools,
+		AgentFactory:        factory,
+		WorkingDir:          r.model.agent.WorkingDir(),
+		OnUsage:             r.recordSessionUsage,
+		SystemPromptBuilder: r.systemPromptBuilder,
+	})
+
 	// Notify TUI on live updates and completion.
 	mgr.SetOnUpdate(func(sa *subagent.SubAgent) {
 		r.sendProgramMsgs(subAgentUpdateMsg{AgentID: sa.ID})
@@ -1230,6 +1253,13 @@ func (r *REPL) Run() error {
 	if err == nil && r.store != nil && r.model.session != nil {
 		// Persist new messages on clean exit (incremental, no full rewrite).
 		r.model.persistFullSessionMessages()
+		// Clean up empty session files — sessions without any user interaction
+		// are deleted to avoid cluttering the sessions directory.
+		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
+			if err := jsonlStore.CleanupIfEmpty(r.model.session); err != nil {
+				debug.Log("repl", "exit cleanup: failed to delete empty session: %v", err)
+			}
+		}
 	}
 
 	// Release the session lock so another instance can resume this session.

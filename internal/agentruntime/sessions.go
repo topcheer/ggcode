@@ -171,16 +171,9 @@ func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
 	return store.Delete(ses.ID)
 }
 
-// SaveSessionMessages overwrites ses.Messages with the given messages and
-// does a FULL Save() rewrite of the JSONL file.
-//
-// ⚠️ WARNING: This is a destructive operation. If `messages` is the compacted
-// version from agent.Messages(), all pre-compaction message records will be
-// permanently lost from the JSONL file.
-//
-// In the TUI path, prefer persistFullSessionMessages() (incremental append).
-// This function is retained for the desktop non-compaction path and initial
-// session creation only.
+// SaveSessionMessages updates ses.Messages and persists the session to disk
+// using incremental appends (no full rewrite). Messages are written via
+// AppendMessagesBatchToDisk, meta via AppendMetaToDisk.
 func SaveSessionMessages(store session.Store, ses *session.Session, messages []provider.Message) error {
 	if store == nil || ses == nil {
 		return nil
@@ -192,6 +185,7 @@ func SaveSessionMessages(store session.Store, ses *session.Session, messages []p
 		return store.Delete(ses.ID)
 	}
 
+	// Set title from first user message if not already set.
 	if ses.Title == "" || ses.Title == "New session" {
 		for _, msg := range ses.Messages {
 			if msg.Role != "user" {
@@ -206,12 +200,26 @@ func SaveSessionMessages(store session.Store, ses *session.Session, messages []p
 					text = string([]rune(text)[:57]) + "..."
 				}
 				ses.Title = text
-				return store.Save(ses)
+				break
+			}
+			if ses.Title != "" && ses.Title != "New session" {
+				break
 			}
 		}
 	}
 
-	return store.Save(ses)
+	// Touch file + update index.
+	if err := store.Save(ses); err != nil {
+		return err
+	}
+	// Write meta + messages incrementally.
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
+			return err
+		}
+		return jsonlStore.AppendMessagesBatchToDisk(ses, ses.Messages)
+	}
+	return nil
 }
 
 func SaveAgentSessionSnapshot(store session.Store, ses *session.Session, agentInst *agent.Agent) error {

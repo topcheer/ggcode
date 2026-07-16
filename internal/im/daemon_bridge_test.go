@@ -290,6 +290,10 @@ func TestDaemonBridgeMetricsResumeTurnIndex(t *testing.T) {
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
+	_ = store.AppendMetaToDisk(ses)
+	for _, ev := range ses.Metrics {
+		_ = store.AppendMetric(ses, ev)
+	}
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {

@@ -15,6 +15,24 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// saveFullForTest writes a complete session to disk for test setup.
+// It mimics the old Save() full-rewrite behavior. Production code should
+// use incremental Append* methods instead.
+func saveFullForTest(t *testing.T, store *JSONLStore, ses *Session) {
+	t.Helper()
+	_ = store.Save(ses)
+	_ = store.AppendMetaToDisk(ses)
+	if len(ses.Messages) > 0 {
+		_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
+	}
+	for _, entry := range ses.UsageHistory {
+		_ = store.AppendUsageEntry(ses, entry)
+	}
+	for _, ev := range ses.Metrics {
+		_ = store.AppendMetric(ses, ev)
+	}
+}
+
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -47,9 +65,7 @@ func TestSaveLoad(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi there!"}}},
 	}
 
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
@@ -78,14 +94,14 @@ func TestList(t *testing.T) {
 	ses1.Title = "First"
 	ses1.Workspace = "/tmp/workspace-a"
 	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
-	store.Save(ses1)
+	saveFullForTest(t, store, ses1)
 	// Ensure different second to get unique ID
 	time.Sleep(1100 * time.Millisecond)
 	ses2 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses2.Title = "Second"
 	ses2.Workspace = "/tmp/workspace-b"
 	ses2.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}}}
-	store.Save(ses2)
+	saveFullForTest(t, store, ses2)
 
 	list, err := store.List()
 	if err != nil {
@@ -105,7 +121,7 @@ func TestAppendMessage(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	msg := provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Follow up"}}}
 	if err := store.AppendMessage(ses, msg); err != nil {
@@ -125,7 +141,7 @@ func TestAppendMessageGeneratesUTF8SafeTitle(t *testing.T) {
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = ""
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	text := "这是一个很长很长的中文标题这是一个很长很长的中文标题这是一个很长很长的中文标题这是一个很长很长的中文标题"
 	msg := provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: text}}}
@@ -161,9 +177,7 @@ func TestSaveLoadTunnelEvents(t *testing.T) {
 	}
 	ses.TunnelEventsComplete = true
 
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
@@ -186,7 +200,7 @@ func TestExportMarkdown(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	md, err := store.ExportMarkdown(ses.ID)
 	if err != nil {
@@ -203,7 +217,7 @@ func TestDelete(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	if err := store.Delete(ses.ID); err != nil {
 		t.Fatal(err)
@@ -220,7 +234,7 @@ func TestCleanupOlderThan(t *testing.T) {
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "cleanup test"}}}}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	removed, err := store.CleanupOlderThan(time.Now().Add(24 * time.Hour))
 	if err != nil {
@@ -244,7 +258,7 @@ func TestAppendCheckpoint(t *testing.T) {
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Append a checkpoint with compacted messages
 	compacted := []provider.Message{
@@ -305,7 +319,7 @@ func TestLoadWithoutCheckpoint(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "msg2"}}},
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg3"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Load without any checkpoint — should return all 3 messages
 	loaded, err := store.Load(ses.ID)
@@ -329,7 +343,7 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "original msg"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// First checkpoint: write summary to JSONL, then checkpoint with ID
 	cp1Summary := provider.Message{ID: "msg_cp1_summary", Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}}
@@ -382,7 +396,7 @@ func TestLoadWithEmptyCheckpoint(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Append checkpoint with empty summary_msg_id — simulates a checkpoint
 	// with no summary (e.g. truncation-only). Should be treated as no checkpoint.
@@ -435,7 +449,7 @@ func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "original"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Append checkpoint — no messages after it, simulating a crash
 	// immediately after compaction. Summary messages are written to JSONL
@@ -491,7 +505,7 @@ func TestAppendCheckpointUpdatesIndex(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg"}}},
 	}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	originalUpdatedAt := ses.UpdatedAt
 	time.Sleep(10 * time.Millisecond) // ensure time difference
@@ -569,31 +583,31 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 	}
 }
 
-func TestSaveSkipsEmptySession(t *testing.T) {
+func TestSaveCreatesEmptySessionFile(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "default", "model")
-	// No messages — Save should not create a file.
+	// Save is now a safe no-op that ensures file exists + updates index.
+	// Empty session cleanup happens on Delete or exit, not on Save.
 	if err := store.Save(ses); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, ses.ID+".jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("session file should exist after Save: %v", err)
+	}
+	// Delete should clean up empty sessions.
+	if err := store.Delete(ses.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("empty session file should not exist")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "index.json")); !os.IsNotExist(err) {
-		t.Errorf("empty session save should not create an index file")
-	}
-	// List should not include it
-	list, _ := store.List()
-	if len(list) != 0 {
-		t.Errorf("List returned %d sessions, want 0", len(list))
+		t.Errorf("empty session file should be deleted")
 	}
 }
 
-func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
+func TestDeleteCleansUpEmptySession(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "ggcode_test_*")
 	defer os.RemoveAll(dir)
 
@@ -601,16 +615,17 @@ func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
 	// Save a session with messages first.
 	ses := NewSession("zai", "default", "model")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}}}
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 	path := filepath.Join(dir, ses.ID+".jsonl")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Fatal("file should exist after save with messages")
 	}
-	// Now save the same session with messages cleared (simulating empty exit).
-	ses.Messages = nil
-	store.Save(ses)
+	// Delete should remove the session file.
+	if err := store.Delete(ses.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("file should be deleted after saving empty session")
+		t.Error("file should be deleted")
 	}
 }
 
@@ -680,9 +695,7 @@ func TestAppendMetaToDiskPersistsTokenUsage(t *testing.T) {
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "default", "model")
 	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	ses.TokenUsage = provider.TokenUsage{InputTokens: 42, OutputTokens: 9, CacheRead: 18, CacheWrite: 3}
 	if err := store.AppendMetaToDisk(ses); err != nil {
@@ -706,7 +719,7 @@ func TestListCleansUpEmptySessions(t *testing.T) {
 	// Create a session with messages.
 	ses1 := NewSession("zai", "default", "model")
 	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "keep me"}}}}
-	store.Save(ses1)
+	saveFullForTest(t, store, ses1)
 
 	// Manually create an empty session file (simulating crash before cleanup).
 	ses2 := NewSession("zai", "default", "model")
@@ -770,9 +783,7 @@ func TestAppendUsageEntry_PersistsAndLoads(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	entry1 := UsageEntry{
 		Timestamp: time.Now().Truncate(time.Second),
@@ -857,9 +868,7 @@ func TestAppendUsageEntry_SurvivesCheckpoint(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	// Add usage entry before checkpoint
 	entry1 := UsageEntry{
@@ -927,9 +936,7 @@ func TestSaveLoad_WithUsageHistory(t *testing.T) {
 		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 2, Model: "glm-5-turbo", Usage: provider.TokenUsage{InputTokens: 300, OutputTokens: 80}},
 	}
 
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
@@ -958,9 +965,7 @@ func TestAppendMetric_PersistsAndLoads(t *testing.T) {
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	m1 := metrics.MetricEvent{
 		Timestamp: time.Now().Truncate(time.Second),
@@ -1060,9 +1065,7 @@ func TestSaveLoad_WithMetrics(t *testing.T) {
 		{Timestamp: time.Now().Truncate(time.Second), TurnIndex: 1, Type: "tool", ToolName: "glob", ToolSuccess: true, ToolDuration: 20 * time.Millisecond},
 	}
 
-	if err := store.Save(ses); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses)
 
 	loaded, err := store.Load(ses.ID)
 	if err != nil {
@@ -1105,7 +1108,7 @@ func TestAppendMessagesBatchToDisk(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Append 5 messages in a batch.
 	msgs := []provider.Message{
@@ -1138,7 +1141,7 @@ func TestAppendMessagesBatchToDiskEmpty(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Empty batch should be a no-op.
 	if err := store.AppendMessagesBatchToDisk(ses, nil); err != nil {
@@ -1157,7 +1160,7 @@ func TestAppendMessagesBatchToDiskMixedWithSingle(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	store.Save(ses)
+	saveFullForTest(t, store, ses)
 
 	// Single append first.
 	store.AppendMessageToDisk(ses, provider.Message{

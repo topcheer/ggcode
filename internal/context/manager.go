@@ -1763,7 +1763,8 @@ Focus on preserving:
 - File paths that were read, created, or modified
 - Code structure: function/class names, signatures, key variables, configuration values
 - Errors encountered and how they were resolved
-- Incomplete or pending work the assistant was about to do
+- Incomplete or pending work the assistant was about to do, including any todo/task list status
+- Active background tasks (running commands, spawned sub-agents) with their IDs — these survive compaction and can be checked via list_commands/list_agents, but their IDs and purpose must be preserved in the summary
 - User preferences or constraints mentioned
 - **User requests** — the verbatim user requests are provided at the top of the payload; preserve them near-verbatim in a "User Requests" section
 

@@ -113,6 +113,7 @@ func NewSubAgentManager(
 	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(workingDir)
 	_ = registry.Register(tool.CreateNamedAgentTool{Store: tmplStore})
+	_ = registry.Register(tool.DeleteNamedAgentTool{Store: tmplStore})
 	_ = registry.Register(tool.ListNamedAgentTool{Store: tmplStore})
 	_ = registry.Register(tool.UseNamedAgentTool{
 		Store:               tmplStore,

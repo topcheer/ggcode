@@ -46,12 +46,17 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 		return
 	}
 
-	// Save the session we are leaving (if different from target) so unsaved
-	// usage/metrics messages are not lost.
+	// Flush final metadata for the session we are leaving (if different from
+	// target). Messages are already on disk via AppendMessageToDisk — calling
+	// Save() would overwrite them because ses.Messages lacks agent replies.
 	if m.session != nil && m.session.ID != ses.ID && m.sessionStore != nil {
 		oldSes := m.session
 		oldStore := m.sessionStore
-		safego.Go("tui.applyResumedSession.saveOld", func() { _ = oldStore.Save(oldSes) })
+		safego.Go("tui.applyResumedSession.metaFlush", func() {
+			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
+				_ = jsonlStore.AppendMetaToDisk(oldSes)
+			}
+		})
 	}
 
 	// Delegate to the shared session-switching helper (isNew=false for resumed sessions).

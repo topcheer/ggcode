@@ -406,7 +406,11 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 		}
 		ses.CreatedAt = time.Now().Add(-time.Duration(5-i) * time.Hour)
 		ses.UpdatedAt = time.Now().Add(-time.Duration(5-i) * time.Hour)
-		store.Save(ses)
+		_ = store.Save(ses)
+		_ = store.AppendMetaToDisk(ses)
+		if len(ses.Messages) > 0 {
+			_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
+		}
 	}
 
 	// 3. List shows all 5
@@ -471,7 +475,11 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 		}
 		ses.CreatedAt = time.Now()
 		ses.UpdatedAt = time.Now()
-		store.Save(ses)
+		_ = store.Save(ses)
+		_ = store.AppendMetaToDisk(ses)
+		if len(ses.Messages) > 0 {
+			_ = store.AppendMessagesBatchToDisk(ses, ses.Messages)
+		}
 	}
 
 	cfg := config.DefaultConfig()

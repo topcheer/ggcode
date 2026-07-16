@@ -102,7 +102,9 @@ type UsageEntry struct {
 
 // Store is the interface for session persistence.
 type Store interface {
-	// Save persists the current state of a session (atomic write).
+	// Save creates the session file if it doesn't exist and updates the
+	// session index. It does NOT write messages — use AppendMessageToDisk
+	// or AppendMessagesBatchToDisk for that.
 	Save(s *Session) error
 
 	// Load retrieves a session by ID.
@@ -477,16 +479,17 @@ func (s *Session) HasUserInteraction() bool {
 // Save writes the full session as a JSONL file (atomic).
 // If the session has no user interaction, the file is deleted instead.
 //
-// ⚠️ WARNING: Save() REWRITES the entire JSONL file from scratch using
-// ses.Messages. If ses.Messages has been replaced by compacted messages
-// (e.g. via agent.Messages()), all pre-compaction message records will
-// be PERMANENTLY LOST.
+// Save creates the JSONL file if it doesn't exist. It does NOT write messages
+// or update the session index — the index is populated on the first
+// AppendMessageToDisk or AppendMetaToDisk call, when the title and message
+// count are meaningful.
 //
-// For incremental message persistence after each agent turn, use
-// AppendMessageToDisk() instead. Save() should only be used for:
-//   - Initial session creation
-//   - Full metadata refresh
-//   - Desktop non-compaction path (with explicit guard)
+// This method is intentionally a safe no-op for existing sessions to prevent
+// data loss from the full-rewrite pattern. Messages are persisted incrementally
+// via AppendMessageToDisk (called by PersistHandler on every contextManager.Add).
+//
+// To persist messages explicitly (e.g. for /branch), use AppendMessagesBatchToDisk.
+// To update metadata, use AppendMetaToDisk.
 func (s *JSONLStore) Save(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -494,119 +497,18 @@ func (s *JSONLStore) Save(ses *Session) error {
 
 	path := s.sessionPath(ses.ID)
 
-	// No user interaction — remove the file and index entry instead of saving.
-	if !ses.HasUserInteraction() {
-		if err := os.Remove(path); err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return fmt.Errorf("removing empty session file: %w", err)
-		}
-		return s.removeFromIndex(ses.ID)
-	}
-
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	// Create the file if it doesn't exist (touch). The session index is NOT
+	// updated here — a new session with title "New session" and 0 messages
+	// would pollute the index. The index is populated on the first
+	// AppendMessageToDisk call, which also carries the auto-generated title.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return fmt.Errorf("creating session file: %w", err)
 	}
-	enc := json.NewEncoder(f)
-	enc.SetEscapeHTML(false)
+	f.Close()
 
-	// Meta record
-	meta := jsonlRecord{
-		Type:                 "meta",
-		SessionID:            ses.ID,
-		Title:                ses.Title,
-		Workspace:            ses.Workspace,
-		Vendor:               ses.Vendor,
-		Endpoint:             ses.Endpoint,
-		Model:                ses.Model,
-		TokenUsage:           ses.TokenUsage,
-		CreatedAt:            ses.CreatedAt,
-		UpdatedAt:            ses.UpdatedAt,
-		TunnelEventsComplete: ses.TunnelEventsComplete,
-		PermissionMode:       ses.PermissionMode,
-		SidebarVisible:       ses.SidebarVisible,
-		ContextWindow:        ses.ContextWindow,
-		MaxTokens:            ses.MaxTokens,
-	}
-	if err := enc.Encode(meta); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("encoding meta: %w", err)
-	}
-
-	// Message records
-	for i := range ses.Messages {
-		msg := ses.Messages[i]
-		rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg, Timestamp: time.Now()}
-		if err := enc.Encode(rec); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("encoding message %d: %w", i, err)
-		}
-	}
-
-	// Tunnel events are NO LONGER persisted to session JSONL.
-	// They are stored in the projection store (~/.ggcode/mobile-projection/).
-	// Old JSONL files may contain tunnel_event lines — loadSession skips them.
-
-	// Cost record (if present)
-	if len(ses.CostJSON) > 0 {
-		costRec := jsonlRecord{Type: "cost", SessionID: ses.ID, CostJSON: ses.CostJSON}
-		if err := enc.Encode(costRec); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("encoding cost: %w", err)
-		}
-	}
-
-	// Usage history records
-	for i := range ses.UsageHistory {
-		entry := ses.UsageHistory[i]
-		rec := jsonlRecord{Type: "usage", SessionID: ses.ID, UsageEntry: &entry}
-		if err := enc.Encode(rec); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("encoding usage %d: %w", i, err)
-		}
-	}
-
-	// Metric records
-	for i := range ses.Metrics {
-		m := ses.Metrics[i]
-		rec := jsonlRecord{Type: "metric", SessionID: ses.ID, MetricEvent: &m}
-		if err := enc.Encode(rec); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("encoding metric %d: %w", i, err)
-		}
-	}
-
-	// Sync before Close to ensure data reaches disk before the atomic rename.
-	// Without this, a crash after Close but before the OS flushes dirty pages
-	// could leave the renamed file empty or partially written.
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		debug.Log("session", "Save: failed to sync temp file for session %s: %v", ses.ID, err)
-		return fmt.Errorf("syncing temp file: %w", err)
-	}
-
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		debug.Log("session", "Save: failed to close temp file for session %s: %v", ses.ID, err)
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmp, s.sessionPath(ses.ID)); err != nil {
-		debug.Log("session", "Save: failed to rename session file for %s: %v", ses.ID, err)
-		return fmt.Errorf("renaming session file: %w", err)
-	}
-
-	debug.Log("session", "Save: wrote session %s (%d messages)", ses.ID, len(ses.Messages))
-	return s.updateIndex(ses)
+	debug.Log("session", "Save: ensured file exists for session %s (no index update)", ses.ID)
+	return nil
 }
 
 // Load reads a session from its JSONL file.
@@ -1157,6 +1059,15 @@ func (s *JSONLStore) Delete(id string) error {
 		return err
 	}
 	return s.removeFromIndex(id)
+}
+
+// CleanupIfEmpty deletes the session file if it has no user interaction.
+// Called on exit to avoid leaving empty session files on disk.
+func (s *JSONLStore) CleanupIfEmpty(ses *Session) error {
+	if ses.HasUserInteraction() {
+		return nil
+	}
+	return s.Delete(ses.ID)
 }
 
 // LatestForWorkspace returns the most recently updated session for the

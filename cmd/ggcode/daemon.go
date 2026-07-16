@@ -1454,6 +1454,11 @@ loop:
 	// new messages incrementally during the session. Just update meta.
 	_ = store.AppendMetaToDisk(ses)
 
+	// Clean up empty session files on exit.
+	if err := store.CleanupIfEmpty(ses); err != nil {
+		debug.Log("daemon", "exit cleanup: failed to delete empty session: %v", err)
+	}
+
 	// Release session lock on exit
 	if sessionLock != nil {
 		sessionLock.Release()

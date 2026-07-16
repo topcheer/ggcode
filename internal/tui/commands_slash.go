@@ -24,11 +24,20 @@ import (
 // handleClearChat creates a new session, clears the conversation view,
 // and notifies any connected mobile client.
 func (m *Model) handleClearChat() {
-	// Save current session first.
+	// Flush final metadata for the old session. Messages were already
+	// persisted incrementally via AppendMessageToDisk (PersistHandler),
+	// so we must NOT call Save() here — Save() rewrites the entire JSONL
+	// from ses.Messages, which only contains user submissions (not the
+	// agent replies that were written directly to disk). Calling Save()
+	// would overwrite and PERMANENTLY DELETE all agent/tool messages.
 	if m.session != nil && m.sessionStore != nil {
 		oldSes := m.session
 		oldStore := m.sessionStore
-		safego.Go("tui.clearChat.sessionSave", func() { _ = oldStore.Save(oldSes) })
+		safego.Go("tui.clearChat.metaFlush", func() {
+			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
+				_ = jsonlStore.AppendMetaToDisk(oldSes)
+			}
+		})
 	}
 
 	// Create new session.
@@ -39,9 +48,9 @@ func (m *Model) handleClearChat() {
 		model = m.config.Model
 	}
 	ses := session.NewSession(vendor, endpoint, model)
-	if m.sessionStore != nil {
-		m.sessionStore.Save(ses)
-	}
+	// No need to call Save here — the JSONL file is created lazily on the
+	// first AppendMessageToDisk call when the user sends their first message.
+	// Calling Save would just create an empty file.
 
 	// Switch agent, view, lock, cron, and tunnel to the new session.
 	m.switchToSession(ses, true)
@@ -499,10 +508,16 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 		return nil
 	}
 
-	// Save the current session first to ensure all state is flushed.
+	// Flush final metadata for the current session before branching.
+	// Messages are already on disk via AppendMessageToDisk — Save() would
+	// overwrite them because ses.Messages lacks agent replies.
 	oldSes := m.session
 	oldStore := m.sessionStore
-	safego.Go("tui.branch.sessionSave", func() { _ = oldStore.Save(oldSes) })
+	safego.Go("tui.branch.metaFlush", func() {
+		if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
+			_ = jsonlStore.AppendMetaToDisk(oldSes)
+		}
+	})
 
 	// Create the branched session with copied data (cannot copy Session by
 	// value because it contains a sync.RWMutex).
@@ -547,11 +562,30 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 	}
 	branched.Title = "Branch: " + origTitle
 
-	// Persist the new session.
-	if err := m.sessionStore.Save(branched); err != nil {
-		m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
-		m.chatListScrollToBottom()
-		return nil
+	// Persist the new session: touch file + update index, then write messages
+	// and metadata explicitly (Save no longer writes messages).
+	if jsonlStore, ok := m.sessionStore.(*session.JSONLStore); ok {
+		if err := jsonlStore.Save(branched); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
+			m.chatListScrollToBottom()
+			return nil
+		}
+		if err := jsonlStore.AppendMetaToDisk(branched); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
+			m.chatListScrollToBottom()
+			return nil
+		}
+		if err := jsonlStore.AppendMessagesBatchToDisk(branched, branched.Messages); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
+			m.chatListScrollToBottom()
+			return nil
+		}
+	} else {
+		if err := m.sessionStore.Save(branched); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("branch.save_failed", err))
+			m.chatListScrollToBottom()
+			return nil
+		}
 	}
 
 	// Switch to the branched session.

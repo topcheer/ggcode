@@ -127,9 +127,7 @@ func TestLatestForWorkspace(t *testing.T) {
 	ses1.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 	}
-	if err := store.Save(ses1); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses1)
 
 	// Small delay to ensure different UpdatedAt.
 	time.Sleep(10 * time.Millisecond)
@@ -139,18 +137,14 @@ func TestLatestForWorkspace(t *testing.T) {
 	ses2.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
 	}
-	if err := store.Save(ses2); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses2)
 
 	ses3 := NewSession("vendor", "endpoint", "model")
 	ses3.Workspace = "/tmp/ws-b"
 	ses3.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "other"}}},
 	}
-	if err := store.Save(ses3); err != nil {
-		t.Fatal(err)
-	}
+	saveFullForTest(t, store, ses3)
 
 	// ws-a should return ses2 (most recently updated).
 	latest, err := store.LatestForWorkspace("/tmp/ws-a")
@@ -193,7 +187,7 @@ func TestLatestForWorkspace_EmptySession(t *testing.T) {
 	// Create a session with no messages.
 	ses1 := NewSession("vendor", "endpoint", "model")
 	ses1.Workspace = "/tmp/ws-empty"
-	store.Save(ses1)
+	saveFullForTest(t, store, ses1)
 
 	// Should return nil — no session with messages.
 	latest, err := store.LatestForWorkspace("/tmp/ws-empty")

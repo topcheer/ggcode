@@ -44,6 +44,12 @@ func NewTemplateStore(workspace string) *TemplateStore {
 	}
 }
 
+// TemplateDir returns the on-disk directory where templates are stored.
+// Exposed for testing and diagnostics.
+func (s *TemplateStore) TemplateDir() string {
+	return s.dir
+}
+
 // Save creates or updates a template by name.
 func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 	if err := os.MkdirAll(s.dir, 0755); err != nil {

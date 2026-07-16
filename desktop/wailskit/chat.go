@@ -2940,6 +2940,20 @@ func (b *ChatBridge) Close() {
 	// Clean up ephemeral empty session before shutting down.
 	b.cleanupEphemeralSession()
 
+	// Also clean up any non-ephemeral session that has no user interaction
+	// (e.g. user created a new session via UI but never sent a message).
+	b.mu.Lock()
+	ses := b.currentSes
+	store := b.sessionStore
+	b.mu.Unlock()
+	if ses != nil && store != nil {
+		if jsonlStore, ok := store.(*session.JSONLStore); ok {
+			if err := jsonlStore.CleanupIfEmpty(ses); err != nil {
+				log.Printf("[chat] Close: cleanup empty session failed: %v", err)
+			}
+		}
+	}
+
 	// Release session lock so other instances can load it.
 	b.mu.Lock()
 	if b.sessionLock != nil {

@@ -135,6 +135,61 @@ func (t CreateNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 		tmpl.Name, verb, tmpl.Description, toolInfo, mcpInfo, modelInfo)}, nil
 }
 
+// DeleteNamedAgentTool implements the delete_namedagent tool.
+type DeleteNamedAgentTool struct {
+	Store *subagent.TemplateStore
+}
+
+func (t DeleteNamedAgentTool) Name() string { return "delete_namedagent" }
+
+func (t DeleteNamedAgentTool) Description() string {
+	return `Delete a named subagent template from the current workspace.
+
+This permanently removes the template. It cannot be undone.
+The template will no longer appear in the system prompt or be callable via use_namedagent.
+
+Use list_namedagent to see available templates before deleting.`
+}
+
+func (t DeleteNamedAgentTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"name": {
+				"type": "string",
+				"description": "Name of the subagent template to delete (e.g., 'code-reviewer')"
+			}
+		},
+		"required": ["name"]
+	}`)
+}
+
+func (t DeleteNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	if t.Store == nil {
+		return Result{IsError: true, Content: "delete_namedagent: template store not available"}, nil
+	}
+	var args struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if strings.TrimSpace(args.Name) == "" {
+		return Result{IsError: true, Content: "name is required"}, nil
+	}
+
+	// Verify the template exists before deleting for a better error message.
+	if _, err := t.Store.Load(args.Name); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("named subagent '%s' not found", args.Name)}, nil
+	}
+
+	if err := t.Store.Delete(args.Name); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to delete template: %v", err)}, nil
+	}
+
+	return Result{Content: fmt.Sprintf("Named subagent '%s' deleted successfully.", args.Name)}, nil
+}
+
 // ListNamedAgentTool implements the list_namedagent tool.
 type ListNamedAgentTool struct {
 	Store *subagent.TemplateStore
