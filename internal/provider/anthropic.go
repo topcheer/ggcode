@@ -24,6 +24,18 @@ type AnthropicProvider struct {
 	calibrator *tokenCountCalibrator     // periodic real-API token calibration
 }
 
+// CloneWithModel returns a shallow copy of this provider with a different model.
+func (p *AnthropicProvider) CloneWithModel(model string) Provider {
+	return &AnthropicProvider{
+		client:     p.client,
+		model:      model,
+		maxTokens:  p.maxTokens,
+		cap:        p.cap,
+		transport:  p.transport,
+		calibrator: p.calibrator,
+	}
+}
+
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 

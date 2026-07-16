@@ -34,6 +34,21 @@ type OpenAIProvider struct {
 	transport       *headerInjectingTransport // kept for runtime header updates
 }
 
+// CloneWithModel returns a shallow copy of this provider with a different model.
+// Used by named subagents to run with a model override.
+func (p *OpenAIProvider) CloneWithModel(model string) Provider {
+	return &OpenAIProvider{
+		client:          p.client,
+		model:           model,
+		maxTokens:       p.maxTokens,
+		cap:             p.cap,
+		reasoningEffort: p.reasoningEffort,
+		name:            p.name,
+		baseURL:         p.baseURL,
+		transport:       p.transport,
+	}
+}
+
 // SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
 // Used by NewProvider to share learned state across reconstructions.
 func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }

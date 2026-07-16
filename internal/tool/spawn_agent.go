@@ -63,12 +63,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 		},
 		"model": {
 			"type": "string",
-			"enum": [
-				"sonnet",
-				"opus",
-				"haiku"
-			],
-			"description": "Optional model override for the sub-agent"
+			"description": "Optional model name override for the sub-agent (any model available on the current endpoint)"
 		},
 		"subagent_type": {
 			"type": "string",

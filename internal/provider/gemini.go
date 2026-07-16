@@ -22,6 +22,17 @@ type GeminiProvider struct {
 	transport *headerInjectingTransport // kept for runtime header updates
 }
 
+// CloneWithModel returns a shallow copy of this provider with a different model.
+func (p *GeminiProvider) CloneWithModel(model string) Provider {
+	return &GeminiProvider{
+		client:    p.client,
+		model:     model,
+		maxTokens: p.maxTokens,
+		cap:       p.cap,
+		transport: p.transport,
+	}
+}
+
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 

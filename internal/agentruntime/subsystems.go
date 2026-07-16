@@ -109,6 +109,21 @@ func NewSubAgentManager(
 	})
 	_ = registry.Register(tool.WaitAgentTool{Manager: mgr})
 	_ = registry.Register(tool.ListAgentsTool{Manager: mgr})
+
+	// Named subagent templates (persisted per-workspace)
+	tmplStore := subagent.NewTemplateStore(workingDir)
+	_ = registry.Register(tool.CreateNamedAgentTool{Store: tmplStore})
+	_ = registry.Register(tool.ListNamedAgentTool{Store: tmplStore})
+	_ = registry.Register(tool.UseNamedAgentTool{
+		Store:               tmplStore,
+		Manager:             mgr,
+		Provider:            prov,
+		Tools:               registry,
+		AgentFactory:        agentFactory,
+		WorkingDir:          workingDir,
+		OnUsage:             onUsage,
+		SystemPromptBuilder: systemPromptBuilder,
+	})
 	return mgr
 }
 

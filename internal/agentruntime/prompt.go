@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -83,7 +84,37 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
 	}
 	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem)
+
+	// Named subagent templates
+	namedAgentInfo := buildNamedAgentHint(workingDir)
+	if namedAgentInfo != "" {
+		prompt += "\n\n" + namedAgentInfo
+	}
+
 	return prompt, promptSkillRefs
+}
+
+// buildNamedAgentHint reads named subagent templates from disk and returns
+// a prompt section listing them. Returns empty string if none exist.
+func buildNamedAgentHint(workingDir string) string {
+	store := subagent.NewTemplateStore(workingDir)
+	templates, err := store.List()
+	if err != nil || len(templates) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## Named Subagents\n")
+	sb.WriteString("The following named subagent templates are available in this workspace. ")
+	sb.WriteString("Use `use_namedagent` to invoke any of them for specialized tasks. ")
+	sb.WriteString("Use `create_namedagent` to define new ones. Use `list_namedagent` to refresh this list.\n\n")
+	for _, tmpl := range templates {
+		modelInfo := ""
+		if tmpl.Model != "" {
+			modelInfo = fmt.Sprintf(" (model: %s)", tmpl.Model)
+		}
+		sb.WriteString(fmt.Sprintf("- **%s**: %s%s\n", tmpl.Name, tmpl.Description, modelInfo))
+	}
+	return sb.String()
 }
 
 // SubAgentPromptContext holds the context needed to build a sub-agent or teammate
