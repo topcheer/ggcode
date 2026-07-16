@@ -24,6 +24,27 @@ import (
 // handleClearChat creates a new session, clears the conversation view,
 // and notifies any connected mobile client.
 func (m *Model) handleClearChat() {
+	// Block /clear while agent or sub-agents are running — same guard as
+	// applyResumedSession. Without this, running sub-agent results would
+	// be routed to the new session after completion.
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("session.switch_blocked_running"))
+		return
+	}
+
+	// Cancel any running sub-agents and swarm teammates before switching.
+	// Their results belong to the old session and must not pollute the new one.
+	if m.subAgentMgr != nil {
+		safego.Go("tui.clearChat.cancelSubAgents", func() {
+			m.subAgentMgr.CancelAll()
+		})
+	}
+	if m.swarmMgr != nil {
+		safego.Go("tui.clearChat.cancelSwarm", func() {
+			m.swarmMgr.CancelAll()
+		})
+	}
+
 	// Flush final metadata for the old session. Messages were already
 	// persisted incrementally via AppendMessageToDisk (PersistHandler),
 	// so we must NOT call Save() here — Save() rewrites the entire JSONL
@@ -88,6 +109,11 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// Clear and restore agent context.
 	if m.agent != nil {
 		m.agent.Clear()
+		// Clear checkpoints from the old session to prevent cross-session
+		// undo leaks (/undo in new session would revert old session's edits).
+		if cpMgr := m.agent.CheckpointManager(); cpMgr != nil {
+			cpMgr.Clear()
+		}
 		agentruntime.RestoreSessionIntoAgent(m.agent, ses)
 	}
 

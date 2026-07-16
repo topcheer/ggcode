@@ -611,7 +611,12 @@ func (b *ChatBridge) cleanupEphemeralSession() {
 	b.mu.Unlock()
 
 	if ephemeral && ses != nil && store != nil {
-		_ = agentruntime.DeleteSessionIfEmpty(store, ses)
+		if err := agentruntime.DeleteSessionIfEmpty(store, ses); err != nil {
+			log.Printf("[chat] cleanupEphemeralSession: delete failed: %v", err)
+		} else {
+			// Session was deleted — clear orphaned IM bindings.
+			im.ClearSessionBindingsGlobal(ses.ID)
+		}
 	}
 	// Release lock.
 	if b.sessionLock != nil {

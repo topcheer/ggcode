@@ -881,6 +881,15 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.bindTunnelProjectionSession()
 	m.bindIMSession()
 	m.announceTunnelActiveSession()
+	// Rebind LAN Chat to the new session so messages/history persist to the
+	// correct session-scoped store. Without this, /clear and /sessions switches
+	// leave lanChatHub bound to the old session ID.
+	if m.lanChatHub != nil && ses.ID != "" {
+		m.lanChatHub.SetSessionID(
+			filepath.Join(config.ConfigDir(), "lanchat"),
+			ses.ID,
+		)
+	}
 	// If detectAndAutoMute was skipped during SetIMManager (because session
 	// was nil at that point), call it now that we have a session. This happens
 	// in the normal startup sequence: InitRuntime → SetIMManager (session nil)

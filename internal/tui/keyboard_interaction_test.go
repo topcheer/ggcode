@@ -923,19 +923,24 @@ func TestScenario_UserRunsQuitCommand(t *testing.T) {
 func TestScenario_UserRunsClearCommand(t *testing.T) {
 	m := newTestModel()
 	m.chatWriteSystem(nextSystemID(), "some existing content\nmore content")
-	m.loading = true
 
 	cmd := m.handleCommand("/clear")
 	if cmd != nil {
 		t.Error("expected nil cmd after /clear")
 	}
-	if m.loading {
-		t.Error("expected loading=false after /clear")
-	}
 	// /clear now creates a new session and writes a system message.
 	// Verify chatList was cleared and then received the new-session message.
 	if m.chatList == nil || m.chatList.Len() == 0 {
 		t.Error("expected session.new system message after /clear")
+	}
+
+	// /clear while loading should be blocked.
+	m2 := newTestModel()
+	m2.chatWriteSystem(nextSystemID(), "content before clear")
+	m2.loading = true
+	_ = m2.handleCommand("/clear")
+	if !m2.loading {
+		t.Error("expected loading=true (blocked) when /clear while agent running")
 	}
 }
 
