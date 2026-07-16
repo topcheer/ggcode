@@ -1304,8 +1304,13 @@ func (r *REPL) Run() error {
 		// Clean up empty session files — sessions without any user interaction
 		// are deleted to avoid cluttering the sessions directory.
 		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
+			wasDeleted := !exitSes.HasUserInteraction()
 			if err := jsonlStore.CleanupIfEmpty(exitSes); err != nil {
 				debug.Log("repl", "exit cleanup: failed to delete empty session: %v", err)
+			} else if wasDeleted && r.imManager != nil {
+				// Session was deleted — clear any IM adapter bindings that
+				// reference this session to prevent orphaned bindings.
+				r.imManager.ClearSessionBindings(exitSes.ID)
 			}
 		}
 	}

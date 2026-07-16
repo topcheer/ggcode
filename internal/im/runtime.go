@@ -510,6 +510,58 @@ func (m *Manager) UnbindSession() {
 	}
 }
 
+// ClearSessionBindings removes the LastSessionID from all bindings that
+// reference the given sessionID. This is used during exit cleanup when a
+// session is deleted (e.g. empty session after /clear) to prevent orphaned
+// IM adapter bindings — without this, the binding's LastSessionID points
+// to a deleted session and no new ggcode instance will auto-claim it.
+func (m *Manager) ClearSessionBindings(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	store := m.bindingStore
+	if store == nil {
+		return
+	}
+	clearSessionBindingsFromStore(store, sessionID)
+}
+
+// ClearSessionBindingsGlobal is a standalone helper that operates directly
+// on the default binding store file. Used by codepaths that don't hold a
+// reference to im.Manager (e.g. desktop ChatBridge.Close).
+func ClearSessionBindingsGlobal(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	path, err := DefaultBindingsPath()
+	if err != nil {
+		return
+	}
+	store, err := NewJSONFileBindingStore(path)
+	if err != nil {
+		debug.Log("im", "ClearSessionBindingsGlobal: could not open store: %v", err)
+		return
+	}
+	clearSessionBindingsFromStore(store, sessionID)
+}
+
+func clearSessionBindingsFromStore(store BindingStore, sessionID string) {
+	all, err := store.List()
+	if err != nil {
+		debug.Log("im", "clearSessionBindingsFromStore: List failed: %v", err)
+		return
+	}
+	for _, b := range all {
+		if b.LastSessionID == sessionID {
+			if err := store.UpdateSessionID(b.Workspace, b.Adapter, ""); err != nil {
+				debug.Log("im", "clearSessionBindingsFromStore: UpdateSessionID(%s) failed: %v", b.Adapter, err)
+			} else {
+				debug.Log("im", "clearSessionBindingsFromStore: cleared LastSessionID for adapter %s (was %s)", b.Adapter, sessionID)
+			}
+		}
+	}
+}
+
 func (m *Manager) ActiveSession() *SessionBinding {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

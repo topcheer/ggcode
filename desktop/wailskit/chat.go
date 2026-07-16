@@ -2948,8 +2948,13 @@ func (b *ChatBridge) Close() {
 	b.mu.Unlock()
 	if ses != nil && store != nil {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
+			wasDeleted := !ses.HasUserInteraction()
 			if err := jsonlStore.CleanupIfEmpty(ses); err != nil {
 				log.Printf("[chat] Close: cleanup empty session failed: %v", err)
+			} else if wasDeleted {
+				// Session was deleted — clear IM adapter bindings that
+				// reference this session to prevent orphaned adapters.
+				im.ClearSessionBindingsGlobal(ses.ID)
 			}
 		}
 	}
