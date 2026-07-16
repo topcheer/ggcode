@@ -109,23 +109,25 @@ func AutoCompactThresholdTokens(contextWindow int) int {
 
 // Manager implements ContextManager.
 type Manager struct {
-	mu                     sync.Mutex
-	messages               []provider.Message
-	version                int64              // incremented on every mutation, enables cheap change detection
-	runAdded               []provider.Message // messages added via Add() since last StartRunTracking()
-	runAddedIDs            map[string]bool    // IDs of messages in runAdded, for dedup
-	tokens                 int
-	contextWindow          int
-	outputReserve          int
-	baselineTokens         int
-	baselineDelta          int
-	baselineAvailable      bool
-	provider               provider.Provider
-	todoPath               string
-	onUsage                func(provider.TokenUsage)
-	calibrator             *TokenCalibrator
-	onPersist              func(msg provider.Message) // called on every Add() for real-time JSONL persistence
-	toolDefinitionOverhead int                        // tokens reserved for tool definitions (set by Agent)
+	mu                       sync.Mutex
+	messages                 []provider.Message
+	version                  int64              // incremented on every mutation, enables cheap change detection
+	runAdded                 []provider.Message // messages added via Add() since last StartRunTracking()
+	runAddedIDs              map[string]bool    // IDs of messages in runAdded, for dedup
+	tokens                   int
+	contextWindow            int
+	outputReserve            int
+	baselineTokens           int
+	baselineDelta            int
+	baselineAvailable        bool
+	provider                 provider.Provider
+	providerCountChecked     bool // whether providerCountSupportsRPC has been determined
+	providerCountSupportsRPC bool // cached: does provider.CountTokens do real RPC?
+	todoPath                 string
+	onUsage                  func(provider.TokenUsage)
+	calibrator               *TokenCalibrator
+	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
+	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -1652,13 +1654,41 @@ func normalizeFilePath(p string) string {
 
 // countTokens uses the provider's token counting API when available,
 // falling back to heuristic estimation.
+//
+// To avoid creating a context.WithTimeout on every call (which happens on
+// every Add() — potentially hundreds of times per session), we cache whether
+// the provider actually does RPC in CountTokens. OpenAI and Gemini use pure
+// local estimation, so after the first probe we skip context creation entirely.
 func (m *Manager) countTokens(msg provider.Message) int {
 	if m.provider != nil {
+		// Fast path: if we've already determined the provider doesn't do RPC,
+		// skip context creation and go straight to estimation.
+		if m.providerCountChecked && !m.providerCountSupportsRPC {
+			n := m.estimateTokens(msg)
+			debug.Log("ctx", "countTokens: heuristic estimate=%d blocks=%d role=%s (cached fast path)", n, len(msg.Content), msg.Role)
+			return n
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), tokenCountTimeout)
 		defer cancel()
-		if n, err := m.provider.CountTokens(ctx, []provider.Message{msg}); err == nil && n > 0 {
+		start := time.Now()
+		n, err := m.provider.CountTokens(ctx, []provider.Message{msg})
+		elapsed := time.Since(start)
+		if err == nil && n > 0 {
+			// If the call completed in <1ms, it's local estimation (no RPC).
+			// Cache this so future calls skip context creation.
+			if !m.providerCountChecked && elapsed < time.Millisecond {
+				m.providerCountChecked = true
+				m.providerCountSupportsRPC = false
+				debug.Log("ctx", "countTokens: provider uses local estimation (elapsed=%v), caching fast path", elapsed)
+			}
 			return n
 		} else if err != nil {
+			// Provider returned error — likely doesn't support CountTokens RPC.
+			// Cache this to avoid retrying on every Add().
+			if !m.providerCountChecked {
+				m.providerCountChecked = true
+				m.providerCountSupportsRPC = false
+			}
 			debug.Log("ctx", "countTokens: provider.CountTokens failed (%v), falling back to heuristic", err)
 		}
 	}

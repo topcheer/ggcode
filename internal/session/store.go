@@ -1945,10 +1945,23 @@ func (s *JSONLStore) backfillIDs(sessionID string, updates map[string]provider.M
 		debug.Log("session", "backfillIDsAsync: create temp failed: %v", err)
 		return
 	}
+	writeErr := false
 	for _, line := range lines {
-		dstF.WriteString(line + "\n")
+		if _, err := dstF.WriteString(line + "\n"); err != nil {
+			debug.Log("session", "backfillIDsAsync: write failed: %v", err)
+			writeErr = true
+			break
+		}
+	}
+	if err := dstF.Sync(); err != nil {
+		debug.Log("session", "backfillIDsAsync: sync failed: %v", err)
+		writeErr = true
 	}
 	dstF.Close()
+	if writeErr {
+		os.Remove(tmp)
+		return
+	}
 
 	if err := os.Rename(tmp, path); err != nil {
 		debug.Log("session", "backfillIDsAsync: rename failed: %v", err)
@@ -2027,10 +2040,23 @@ func (s *JSONLStore) backfillTimestamps(sessionID string) {
 		debug.Log("session", "backfillTimestamps: create temp failed: %v", err)
 		return
 	}
+	writeErr := false
 	for _, line := range lines {
-		dstF.WriteString(line + "\n")
+		if _, err := dstF.WriteString(line + "\n"); err != nil {
+			debug.Log("session", "backfillTimestamps: write failed: %v", err)
+			writeErr = true
+			break
+		}
+	}
+	if err := dstF.Sync(); err != nil {
+		debug.Log("session", "backfillTimestamps: sync failed: %v", err)
+		writeErr = true
 	}
 	dstF.Close()
+	if writeErr {
+		os.Remove(tmp)
+		return
+	}
 
 	if err := os.Rename(tmp, path); err != nil {
 		debug.Log("session", "backfillTimestamps: rename failed: %v", err)
