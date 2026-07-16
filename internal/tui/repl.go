@@ -682,6 +682,14 @@ func (r *REPL) RuntimeStatus() webui.RuntimeStatus {
 		m.Model = r.cfg.Model
 		m.Language = r.cfg.Language
 	}
+	// Use getCurrentSession for the live session, not the stale r.model snapshot.
+	ses := r.getCurrentSession()
+	if ses != nil {
+		m.Workspace = ses.Workspace
+		m.PermissionMode = ses.PermissionMode
+	}
+	// agent is a pointer field — even in the stale r.model copy, it points
+	// to the same agent object (agent is never replaced after init).
 	if r.model.agent != nil && r.model.agent.ContextManager() != nil {
 		m.ContextWindow = r.model.agent.ContextManager().ContextWindow()
 		m.MaxTokens = r.model.agent.ContextManager().OutputReserve()
@@ -1271,19 +1279,32 @@ func (r *REPL) Run() error {
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
 	}
+	// Sync final model state from Bubble Tea so exit cleanup uses the
+	// correct session (r.model is a stale snapshot from before Run()).
+	if m, ok := finalModel.(Model); ok {
+		r.model = m
+	}
+
+	// Use getCurrentSession for the live session pointer (works even if
+	// r.model sync above failed due to type assertion).
+	exitSes := r.getCurrentSession()
+	if exitSes == nil {
+		exitSes = r.model.session // fallback to finalModel sync
+	}
+
 	if r.model.acpClientMgr != nil {
 		r.model.acpClientMgr.CloseAll()
 	}
 	if r.model.instanceDetect != nil {
 		r.model.instanceDetect.Unregister()
 	}
-	if err == nil && r.store != nil && r.model.session != nil {
+	if err == nil && r.store != nil && exitSes != nil {
 		// Persist new messages on clean exit (incremental, no full rewrite).
 		r.model.persistFullSessionMessages()
 		// Clean up empty session files — sessions without any user interaction
 		// are deleted to avoid cluttering the sessions directory.
 		if jsonlStore, ok := r.store.(*session.JSONLStore); ok {
-			if err := jsonlStore.CleanupIfEmpty(r.model.session); err != nil {
+			if err := jsonlStore.CleanupIfEmpty(exitSes); err != nil {
 				debug.Log("repl", "exit cleanup: failed to delete empty session: %v", err)
 			}
 		}
