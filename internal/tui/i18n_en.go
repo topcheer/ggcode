@@ -1476,14 +1476,20 @@ Session & History:
   /clear             Clear conversation history
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)
+  /redo              Redo previously undone file changes
   /checkpoints       List all file edit checkpoints
+  /retry             Retry the last agent run (recover from transient errors)
+  /edit              Edit and resubmit your last message
   /regenerate        Discard last response and regenerate (alias: /regen)
   /branch            Fork current conversation into a new session (alias: /fork)
+  /stats             Show session statistics panel
 
 Model & Provider:
   /model [name]      Open model panel or switch directly
   /provider [vendor] Open provider manager
+  /impersonate [p/m] Test a provider/model without switching config
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /stream            Toggle stream output mode
 
 Development:
   /diff [opts]       Show git diff in chat (--cached, --stat, <file>)
@@ -1492,10 +1498,15 @@ Development:
   /cost              Show session token usage and estimated cost
   /context           Show context window usage breakdown
   /hooks             Show configured hooks
+  /rules             Manage learned error rules (ratchet patterns)
+  /allow [tool]      Permanently allow a tool in current mode
+  /files             Open fullscreen file browser with preview
+  /inspector [filt]  Open inspector panel (tool calls, context, metrics)
   /init              Generate GGCODE.md from the current project
   /harness ...       Run harness control-plane commands
   /todo              View todo list
   /todo clear        Clear todo list
+  /reflect           Trigger agent self-reflection on recent runs
 
 Integrations:
   /im                Open unified IM channels panel
@@ -1505,6 +1516,10 @@ Integrations:
   /memory            Show loaded memory files
   /agents            List sub-agents
   /cron <sub>        Manage scheduled jobs (list|get|pause|resume|pauseall|resumeall)
+  /chat              Open LAN Chat panel
+  /nick [name@role]  Set LAN Chat identity
+  /tunnel            Start mobile tunnel sharing
+  /unshare           Stop mobile tunnel sharing
 
 System:
   /lang [code]       Choose or switch interface language

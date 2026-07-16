@@ -64,9 +64,9 @@ func UserFacingErrorLang(err error, lang string) string {
 	// ---- Rate limiting ----
 	if hasHTTPStatus(err, http.StatusTooManyRequests) {
 		if zh {
-			return "请求太频繁，服务端已限流，请稍后重试"
+			return "请求太频繁，服务端已限流。输入 /retry 重试"
 		}
-		return "Rate limited by the server. Please retry shortly"
+		return "Rate limited by the server. Type /retry to resend"
 	}
 
 	// ---- Server errors ----
@@ -94,18 +94,18 @@ func UserFacingErrorLang(err error, lang string) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(inner, context.DeadlineExceeded) {
 		if zh {
-			return "请求超时，请稍后重试"
+			return "请求超时。输入 /retry 重试"
 		}
-		return "Request timed out. Please retry shortly"
+		return "Request timed out. Type /retry to resend"
 	}
 
 	// ---- Network errors ----
 	var netErr net.Error
 	if errors.As(err, &netErr) || errors.As(inner, &netErr) {
 		if zh {
-			return "网络连接失败，请检查网络设置后重试"
+			return "网络连接失败，请检查网络设置后输入 /retry 重试"
 		}
-		return "Network connection failed. Please check your network settings"
+		return "Network connection failed. Check your network settings and type /retry"
 	}
 
 	// ---- Anthropic serialization error ----

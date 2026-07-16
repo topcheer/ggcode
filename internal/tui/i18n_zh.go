@@ -1486,14 +1486,20 @@ func zhCatalog(key string) string {
   /clear             清空对话历史
   /compact           手动压缩对话历史
   /undo              撤销最近一次文件修改（回滚检查点）
+  /redo              重做已撤销的文件修改
   /checkpoints       列出所有文件修改检查点
+  /retry             重试上一次 Agent 运行（从临时错误中恢复）
+  /edit              编辑并重新提交上一条消息
   /regenerate        丢弃最近回复并重新生成（别名: /regen）
   /branch            将当前对话分叉到新会话（别名: /fork）
+  /stats             显示会话统计面板
 
 模型与供应商：
   /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
+  /impersonate [p/m] 测试供应商/模型而不切换配置
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /stream            切换流式输出模式
 
 开发工具：
   /diff [opts]       在聊天中显示 git diff（--cached、--stat、<文件>）
@@ -1502,10 +1508,15 @@ func zhCatalog(key string) string {
   /cost              显示本次会话 token 用量和预估费用
   /context           显示上下文窗口使用情况
   /hooks             显示已配置的 hooks
+  /rules             管理学到的错误规则（ratchet 模式）
+  /allow [tool]      在当前模式中永久允许某个工具
+  /files             打开全屏文件浏览器（含预览）
+  /inspector [filt]  打开检查器面板（工具调用、上下文、指标）
   /init              基于当前项目生成 GGCODE.md
   /harness ...       运行 harness 控制面命令
   /todo              查看 todo 列表
   /todo clear        清空 todo 列表
+  /reflect           触发 Agent 对近期运行的自省
 
 集成：
   /im                打开统一 IM 渠道面板
@@ -1515,6 +1526,10 @@ func zhCatalog(key string) string {
   /memory            显示已加载记忆
   /agents            列出子 Agent
   /cron <sub>        管理定时任务 (list|get|pause|resume|pauseall|resumeall)
+  /chat              打开局域网聊天面板
+  /nick [name@role]  设置局域网聊天身份
+  /tunnel            开启手机隧道共享
+  /unshare           停止手机隧道共享
 
 系统：
   /lang [code]       选择或切换界面语言
