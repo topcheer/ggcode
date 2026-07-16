@@ -806,14 +806,42 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Guard: if InputTokens is 0 (provider fallback didn't fill it in),
+	// do NOT overwrite the baseline — otherwise context usage collapses
+	// to just OutputTokens, showing an absurdly small number in the TUI.
+	if usage.InputTokens <= 0 {
+		debug.Log("ctx", "RecordUsage: skipping baseline update — InputTokens=%d OutputTokens=%d (missing input tokens)",
+			usage.InputTokens, usage.OutputTokens)
+		return
+	}
 	oldBaseline := m.baselineTokens
-	m.baselineTokens = usage.InputTokens + usage.OutputTokens
+	// baselineTokens represents the starting point for the NEXT request's
+	// input token count. The next request will include the previous turn's
+	// output (assistant response) as part of its input, so we add OutputTokens
+	// to get the correct next-request input baseline.
+	//
+	// CacheRead semantics differ by provider protocol:
+	//   - Anthropic: InputTokens is NON-cached only; CacheRead is ADDITIVE.
+	//     Total input = InputTokens + CacheRead.
+	//   - OpenAI/Gemini: InputTokens ALREADY includes cached tokens;
+	//     CacheRead is an informational subset (PromptTokensTotal == InputTokens).
+	//
+	// We detect the Anthropic case by checking whether CacheRead > 0 AND
+	// InputTokens < PromptTokensTotal (meaning InputTokens is not the full
+	// prompt). This avoids double-counting for OpenAI/Gemini.
+	totalInput := usage.InputTokens
+	if usage.CacheRead > 0 && usage.PromptTokensTotal > usage.InputTokens {
+		// Anthropic semantics: CacheRead is additive
+		totalInput = usage.InputTokens + usage.CacheRead
+	}
+	m.baselineTokens = totalInput + usage.OutputTokens
 	m.baselineDelta = 0
 	m.baselineAvailable = true
 	// Feed calibration sample: compare our estimate with actual API input tokens.
-	m.calibrator.RecordSample(m.tokens, usage.InputTokens)
-	debug.Log("ctx", "RecordUsage: input=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
-		usage.InputTokens, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
+	// Use totalInput (including cache read) for accurate calibration.
+	m.calibrator.RecordSample(m.tokens, totalInput)
+	debug.Log("ctx", "RecordUsage: input=%d cache_read=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
+		usage.InputTokens, usage.CacheRead, usage.OutputTokens, oldBaseline, m.baselineTokens, m.tokens, m.baselineTokens-m.tokens)
 }
 
 func (m *Manager) Clear() {

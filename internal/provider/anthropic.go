@@ -244,9 +244,20 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "message_delta":
 						outputTokens = int(event.Usage.OutputTokens)
-						inputTokens = int(event.Usage.InputTokens)
-						cacheWriteTokens = int(event.Usage.CacheCreationInputTokens)
-						cacheReadTokens = int(event.Usage.CacheReadInputTokens)
+						// message_delta in the Anthropic SSE protocol only carries
+						// output_tokens reliably. input_tokens here is often 0 or
+						// just the non-cached portion. Do NOT overwrite inputTokens
+						// (and cache tokens) from message_start unless message_delta
+						// actually provides a non-zero value.
+						if event.Usage.InputTokens > 0 && inputTokens == 0 {
+							inputTokens = int(event.Usage.InputTokens)
+						}
+						if event.Usage.CacheCreationInputTokens > 0 {
+							cacheWriteTokens = int(event.Usage.CacheCreationInputTokens)
+						}
+						if event.Usage.CacheReadInputTokens > 0 {
+							cacheReadTokens = int(event.Usage.CacheReadInputTokens)
+						}
 						// Check stop_reason for truncation / policy errors.
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
@@ -261,6 +272,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "message_start":
 						inputTokens = int(event.Message.Usage.InputTokens)
+						debug.Log("anthropic", "message_start usage: input_tokens=%d output_tokens=%d cache_read=%d cache_write=%d",
+							event.Message.Usage.InputTokens, event.Message.Usage.OutputTokens,
+							event.Message.Usage.CacheReadInputTokens, event.Message.Usage.CacheCreationInputTokens)
 						cacheWriteTokens = int(event.Message.Usage.CacheCreationInputTokens)
 						cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
 					}
@@ -311,8 +325,18 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		}
 
 		if usage == nil {
+			// Fallback: estimate InputTokens from the messages themselves,
+			// same as the OpenAI provider does. Without this, InputTokens=0
+			// would cause RecordUsage to collapse the baseline to just
+			// OutputTokens, making the TUI context usage display absurdly small.
+			inputTokens, estErr := p.CountTokens(ctx, messages)
+			if estErr != nil {
+				inputTokens = 0
+			}
 			usage = &TokenUsage{
-				OutputTokens: estimateTokensFromChars(outputChars),
+				InputTokens:       inputTokens,
+				OutputTokens:      estimateTokensFromChars(outputChars),
+				PromptTokensTotal: inputTokens,
 			}
 		}
 		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}

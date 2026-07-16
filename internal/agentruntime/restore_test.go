@@ -71,25 +71,33 @@ func TestRestoreSessionMessagesLoaded(t *testing.T) {
 	}
 }
 
-// TestRestoreSessionWithCheckpoint verifies the two-phase restore sets
-// the checkpoint baseline correctly.
+// TestRestoreSessionWithCheckpoint verifies that ALL ContextMessages
+// (including the summary) are loaded into the agent context, and the
+// checkpoint baseline is set correctly.
+//
+// This test guards against a regression where CheckpointMessageCount
+// was used to slice ContextMessages, accidentally skipping ALL messages
+// because CheckpointMessageCount == len(ContextMessages).
 func TestRestoreSessionWithCheckpoint(t *testing.T) {
 	reg := tool.NewRegistry()
 	ag := agent.NewAgent(nil, reg, "system", 10)
 
+	// Simulate the real structure produced by loadSession:
+	// ContextMessages = [summary_system_msg, ...post-checkpoint user/assistant msgs]
 	cpMsgs := []provider.Message{
-		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "system prompt"}}},
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nsystem prompt"}}},
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "checkpoint user msg"}}},
 	}
 	postMsgs := []provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "post checkpoint"}}},
 	}
+	allMsgs := append(append([]provider.Message{}, cpMsgs...), postMsgs...)
 
 	ses := &session.Session{
 		ID:                     "test-cp-session",
-		ContextMessages:        append(append([]provider.Message{}, cpMsgs...), postMsgs...),
+		ContextMessages:        allMsgs,
 		CheckpointTokens:       50000,
-		CheckpointMessageCount: len(cpMsgs),
+		CheckpointMessageCount: len(allMsgs), // loadSession sets this to len(ContextMessages)
 	}
 
 	RestoreSessionIntoAgent(ag, ses)
@@ -97,6 +105,29 @@ func TestRestoreSessionWithCheckpoint(t *testing.T) {
 	// runAdded must still be empty.
 	if runAdded := ag.AddedSinceRunStart(); len(runAdded) != 0 {
 		t.Fatalf("runAdded should be empty after checkpoint restore, got %d", len(runAdded))
+	}
+
+	// ALL ContextMessages must be loaded into the agent — not just the
+	// post-checkpoint slice. CheckpointMessageCount must NOT cause slicing
+	// of ContextMessages (it was already built checkpoint-aware by loadSession).
+	loadedMsgs := ag.Messages()
+	// The agent prepends its own system prompt, so we expect system + allMsgs.
+	// Verify all non-system messages from the session are present.
+	expectedNonSystem := 0
+	for _, m := range allMsgs {
+		if m.Role != "system" {
+			expectedNonSystem++
+		}
+	}
+	actualNonSystem := 0
+	for _, m := range loadedMsgs {
+		if m.Role != "system" {
+			actualNonSystem++
+		}
+	}
+	if actualNonSystem != expectedNonSystem {
+		t.Fatalf("expected %d non-system messages loaded, got %d (loaded %d total msgs)",
+			expectedNonSystem, actualNonSystem, len(loadedMsgs))
 	}
 
 	// Token count should reflect checkpoint baseline.

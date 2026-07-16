@@ -243,11 +243,15 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 		msgs = ses.Messages
 	}
 
-	if ses.CheckpointMessageCount > 0 && ses.CheckpointMessageCount <= len(msgs) {
-		// Only load messages from the last checkpoint onward. Messages
-		// before the checkpoint have been replaced by a compaction summary.
-		msgs = msgs[ses.CheckpointMessageCount:]
-	}
+	// ContextMessages is already the checkpoint-aware slice: it contains
+	// [summary_msg, ...post-checkpoint messages]. Load ALL of them — do NOT
+	// slice by CheckpointMessageCount (that would skip the entire context).
+	//
+	// The legacy code that needed CheckpointMessageCount slicing was for the
+	// old format where ContextMessages was built from ses.Messages (all records)
+	// and CheckpointMessageCount was used to skip pre-checkpoint messages.
+	// With the new format, loadSession() already builds ContextMessages
+	// correctly from summary_msg_id + last_msg_id, so no slicing is needed.
 
 	// Load messages via Add() (accumulates local token estimates).
 	for _, msg := range msgs {
