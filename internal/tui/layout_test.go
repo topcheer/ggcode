@@ -1208,6 +1208,7 @@ func TestStreamingViewFollowsLatestOutput(t *testing.T) {
 		next, _ := m.Update(streamMsg(fmt.Sprintf("line %03d\n", i)))
 		m = next.(Model)
 	}
+	m.flushPendingStream()
 
 	view := m.View().Content
 	if !strings.Contains(view, "line 079") {
@@ -2716,6 +2717,7 @@ func TestCompactionStatusRendersOnOwnLine(t *testing.T) {
 
 	m.appendStreamChunk("partial reply")
 	m.appendStreamChunk("Compressing context...\n")
+	m.flushPendingStream()
 
 	got := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(got, "partial reply") || !strings.Contains(got, "Compressing context...") {

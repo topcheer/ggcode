@@ -65,6 +65,9 @@ func (m *Model) chatUpdateAssistantText(id, text string) {
 
 // chatFinishAssistant marks the assistant as done streaming.
 func (m *Model) chatFinishAssistant(id string) {
+	// Final flush: ensure all buffered text is pushed to the UI before
+	// marking the assistant item as finished.
+	m.flushStreamToUI()
 	if m.chatList == nil {
 		return
 	}

@@ -214,6 +214,8 @@ type Model struct {
 	viewport ViewportModel
 
 	streamBuffer        *bytes.Buffer
+	streamLastRender    time.Time // throttle UI updates during streaming
+	streamPendingFlush  bool      // true when buffered text hasn't been flushed to UI
 	shellBuffer         *bytes.Buffer
 	shellOutputID       string // ID of the system message for shell command output
 	shellOutputIDs      map[string]struct{}

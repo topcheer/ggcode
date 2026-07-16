@@ -3,9 +3,17 @@ package tui
 import (
 	"bytes"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/chat"
 )
+
+// streamRenderInterval is the minimum time between UI updates during streaming.
+// Without throttling, every tiny chunk invalidates the markdown render cache
+// and triggers a full re-render on the next View() frame — causing visible
+// lag on long outputs. 50ms (~20fps) is smooth enough for reading while
+// cutting render work by 5-10x compared to per-chunk updates.
+const streamRenderInterval = 50 * time.Millisecond
 
 func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
@@ -34,8 +42,36 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
 	}
-	m.chatUpdateAssistantText(m.currentAssistantID(), m.streamBuffer.String())
+	// Throttle UI updates: only flush to AssistantItem when enough time has
+	// elapsed since the last render. This prevents per-chunk markdown
+	// re-rendering which causes lag on long outputs.
+	now := time.Now()
+	m.streamPendingFlush = true
+	if now.Sub(m.streamLastRender) >= streamRenderInterval {
+		m.flushStreamToUI()
+	}
 	m.chatListScrollToBottom()
+}
+
+// flushStreamToUI pushes the buffered stream text to the AssistantItem and
+// marks the render as done. Called by appendStreamChunk (throttled) and
+// chatFinishAssistant (final flush).
+func (m *Model) flushStreamToUI() {
+	if m.streamBuffer == nil {
+		return
+	}
+	m.chatUpdateAssistantText(m.currentAssistantID(), m.streamBuffer.String())
+	m.streamLastRender = time.Now()
+	m.streamPendingFlush = false
+}
+
+// flushPendingStream forces a UI flush if there's unflushed buffered text.
+// Called on spinner tick to ensure pending content eventually appears even
+// if no new chunks arrive.
+func (m *Model) flushPendingStream() {
+	if m.streamPendingFlush && m.streamBuffer != nil {
+		m.flushStreamToUI()
+	}
 }
 
 func (m *Model) localizedStreamStatus(chunk string) (string, bool) {

@@ -149,6 +149,7 @@ func TestTextDoesNotAccumulateAcrossTurns(t *testing.T) {
 	// Turn 2: text
 	next, _ = m.handleAgentStreamMsg(agentStreamMsg{RunID: 7, Text: "world"}, nil)
 	m = next
+	m.flushPendingStream()
 	id2 := m.currentAssistantID()
 
 	if id1 == id2 {

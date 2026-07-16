@@ -191,6 +191,8 @@ func (m *Model) resetConversationView() {
 	m.chatReset()
 	m.streamBuffer = nil
 	m.streamPrefixWritten = false
+	m.streamLastRender = time.Time{}
+	m.streamPendingFlush = false
 	m.setLoading(false)
 	m.statusActivity = ""
 	m.statusToolName = ""
