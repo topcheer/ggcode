@@ -164,6 +164,9 @@ func (m *Manager) SetProvider(p provider.Provider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.provider = p
+	// Reset countTokens cache — new provider may have different RPC capability.
+	m.providerCountChecked = false
+	m.providerCountSupportsRPC = false
 }
 
 func (m *Manager) Add(msg provider.Message) {
