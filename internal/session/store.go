@@ -1717,7 +1717,11 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		return 0, fmt.Errorf("creating migration temp file: %w", err)
 	}
 	for i, line := range lines {
-		dstF.WriteString(line + "\n")
+		if _, err := dstF.WriteString(line + "\n"); err != nil {
+			dstF.Close()
+			os.Remove(tmp)
+			return 0, fmt.Errorf("migration write: %w", err)
+		}
 		// Insert summary message right after the checkpoint record.
 		if i == lastOldCpIdx {
 			summaryRec := jsonlRecord{
@@ -1725,7 +1729,11 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 				Message: lastOldCpSummary,
 			}
 			if data, err := json.Marshal(summaryRec); err == nil {
-				dstF.WriteString(string(data) + "\n")
+				if _, err := dstF.WriteString(string(data) + "\n"); err != nil {
+					dstF.Close()
+					os.Remove(tmp)
+					return 0, fmt.Errorf("migration summary write: %w", err)
+				}
 				migrated++
 			}
 		}
@@ -1735,7 +1743,10 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 		os.Remove(tmp)
 		return 0, fmt.Errorf("migration sync: %w", err)
 	}
-	dstF.Close()
+	if err := dstF.Close(); err != nil {
+		os.Remove(tmp)
+		return 0, fmt.Errorf("migration close: %w", err)
+	}
 
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

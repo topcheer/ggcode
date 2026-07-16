@@ -1529,11 +1529,17 @@ func zhCatalog(key string) string {
 键盘快捷键：
   Tab                在补全或确认选项中切换
   Shift+Tab          反向切换补全，否则切换权限模式
+  Ctrl+G             切换推理深度（关闭/低/中/高）
   Ctrl+R             切换侧边栏
-  Ctrl+N/P           新建/上一个会话
-  Ctrl+T             打开隧道（手机共享）
-  Enter              发送消息 / 应用当前选择
+  Ctrl+\             切换紧凑模式（全宽对话）
+  Ctrl+L             新建会话（等同 /clear）
+  Ctrl+N             切换子 Agent 跟随面板
+  Ctrl+T             切换配置保存范围（全局/实例）
+  Ctrl+Shift+C       复制最后一条助手回复到剪贴板
   Esc                取消补全 / 在空闲 shell 模式下退出命令模式
+  Esc Esc            回退：撤销最近的文件更改（500ms 内双击）
+  Alt+↑/↓            切换会话
+  Enter              发送消息 / 应用当前选择
   ↑/↓                 浏览命令历史（或补全）
   PgUp/PgDn          滚动对话输出
   Ctrl+C             取消当前活动；空闲时先清空输入，再次按下退出

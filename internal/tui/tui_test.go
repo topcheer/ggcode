@@ -574,7 +574,7 @@ func TestHelpText(t *testing.T) {
 		}
 	}
 	// Keyboard shortcuts should be documented
-	for _, key := range []string{"Ctrl+R", "Ctrl+N/P", "Ctrl+T"} {
+	for _, key := range []string{"Ctrl+R", "Ctrl+G", "Ctrl+N", "Ctrl+T"} {
 		if !strings.Contains(h, key) {
 			t.Errorf("expected %s in help text keyboard shortcuts", key)
 		}

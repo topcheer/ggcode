@@ -1519,11 +1519,17 @@ System:
 Keyboard shortcuts:
   Tab                Cycle autocomplete or approval choices
   Shift+Tab          Reverse cycle autocomplete, otherwise toggle permission mode
+  Ctrl+G             Cycle reasoning effort (off/low/medium/high)
   Ctrl+R             Toggle sidebar
-  Ctrl+N/P           New/previous session
-  Ctrl+T             Open tunnel (mobile sharing)
-  Enter              Send message / apply current selection
+  Ctrl+\             Toggle compact mode (full-width chat)
+  Ctrl+L             Start new session (same as /clear)
+  Ctrl+N             Toggle sub-agent follow panel
+  Ctrl+T             Toggle config save scope (global/instance)
+  Ctrl+Shift+C       Copy last assistant response to clipboard
   Esc                Cancel autocomplete / exit idle shell mode
+  Esc Esc            Rewind: undo last file changes (within 500ms)
+  Alt+Up/Down        Cycle through sessions
+  Enter              Send message / apply current selection
   Up/Down            Browse command history (or autocomplete)
   PgUp/PgDn          Scroll conversation output
   Ctrl+C             Cancel current activity, otherwise clear input then press again to exit
