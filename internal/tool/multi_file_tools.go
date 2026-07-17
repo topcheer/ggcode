@@ -465,37 +465,69 @@ func (t MultiFileEdit) parseInput(input json.RawMessage) (string, []multiFileEdi
 }
 
 func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileEdit, []MultiFileEditFileResult, bool) {
+	type planResult struct {
+		oldContent string
+		newContent string
+		applied    int
+		errMsg     string
+	}
+	planResults := make([]planResult, len(entries))
+
+	// Read files + plan edits concurrently.
+	// Each entry's read + planTextEdits is independent — no data dependency between entries.
+	concurrency := 5
+	if len(entries) < concurrency {
+		concurrency = len(entries)
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, entry := range entries {
+		wg.Add(1)
+		go func(idx int, e multiFileEditEntry) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if t.SandboxCheck != nil && !t.SandboxCheck(e.Path) {
+				planResults[idx] = planResult{errMsg: "Error: path not allowed by sandbox policy"}
+				return
+			}
+			data, err := os.ReadFile(e.Path)
+			if err != nil {
+				planResults[idx] = planResult{errMsg: fmt.Sprintf("error reading file: %v", err)}
+				return
+			}
+			oldContent := string(data)
+			newContent, applied, msg := planTextEdits(oldContent, e.Edits)
+			if msg != "" {
+				planResults[idx] = planResult{errMsg: msg}
+				return
+			}
+			planResults[idx] = planResult{oldContent: oldContent, newContent: newContent, applied: applied}
+		}(i, entry)
+	}
+	wg.Wait()
+
+	// Assemble results in order.
 	plans := make([]PlannedFileEdit, 0, len(entries))
 	results := make([]MultiFileEditFileResult, len(entries))
 	hasFailures := false
 	for i, entry := range entries {
 		results[i].Path = entry.Path
-		if t.SandboxCheck != nil && !t.SandboxCheck(entry.Path) {
+		pr := planResults[i]
+		if pr.errMsg != "" {
 			results[i].Status = "error"
-			results[i].Error = "Error: path not allowed by sandbox policy"
+			results[i].Error = pr.errMsg
 			hasFailures = true
 			continue
 		}
-		data, err := os.ReadFile(entry.Path)
-		if err != nil {
-			results[i].Status = "error"
-			results[i].Error = fmt.Sprintf("error reading file: %v", err)
-			hasFailures = true
-			continue
-		}
-		oldContent := string(data)
-		newContent, applied, msg := planTextEdits(oldContent, entry.Edits)
-		if msg != "" {
-			results[i].Status = "error"
-			results[i].Error = msg
-			hasFailures = true
-			continue
-		}
+		results[i].Status = "planned"
+		results[i].AppliedEditCount = pr.applied
 		plans = append(plans, PlannedFileEdit{
 			Path:             entry.Path,
-			OldContent:       oldContent,
-			NewContent:       newContent,
-			AppliedEditCount: applied,
+			OldContent:       pr.oldContent,
+			NewContent:       pr.newContent,
+			AppliedEditCount: pr.applied,
 		})
 	}
 	return plans, results, hasFailures
