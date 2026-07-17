@@ -1996,3 +1996,50 @@ func TestMaybeSetAutopilotGoalFromLLMOutput(t *testing.T) {
 		t.Fatalf("goal should not change after first set, got %q", got)
 	}
 }
+
+func TestSummarizeToolUse(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		input    string
+		want     string
+	}{
+		{name: "with_path", toolName: "read_file", input: `{"path": "/foo/bar.go"}`, want: `[Tool Call: read_file(path=/foo/bar.go)]`},
+		{name: "with_command", toolName: "run_command", input: `{"command": "go test ./..."}`, want: `[Tool Call: run_command(command=go test ./...)]`},
+		{name: "with_pattern", toolName: "grep", input: `{"pattern": "TODO", "path": "/src"}`, want: `[Tool Call: grep(path=/src)]`},
+		{name: "no_relevant_key", toolName: "some_tool", input: `{"foo": "bar"}`, want: `[Tool Call: some_tool]`},
+		{name: "invalid_json", toolName: "broken", input: `not json`, want: `[Tool Call: broken]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := summarizeToolUse(tc.toolName, json.RawMessage(tc.input))
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSummarizeToolResult(t *testing.T) {
+	// Normal result
+	got := summarizeToolResult("run_command", "PASS\nok  github.com/topcheer/ggcode 1.0s", false)
+	if !strings.Contains(got, "OK") || !strings.Contains(got, "PASS") {
+		t.Fatalf("expected OK tag and PASS content, got %q", got)
+	}
+	// Error result
+	got = summarizeToolResult("run_command", "exit code 1: FAIL", true)
+	if !strings.Contains(got, "ERROR") || !strings.Contains(got, "FAIL") {
+		t.Fatalf("expected ERROR tag and FAIL content, got %q", got)
+	}
+	// Empty result
+	got = summarizeToolResult("some_tool", "", false)
+	if got != "" {
+		t.Fatalf("expected empty for empty output, got %q", got)
+	}
+	// Long result truncation
+	long := strings.Repeat("x", 600)
+	got = summarizeToolResult("read_file", long, false)
+	if !strings.Contains(got, "...") {
+		t.Fatalf("expected truncation indicator, got %q", got)
+	}
+}

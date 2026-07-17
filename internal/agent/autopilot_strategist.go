@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -89,10 +90,14 @@ What should the agent do next?`, goal, contextStr, lastAssistantText)
 	return result, nil
 }
 
-// extractStrategistContext builds a text-only view of the conversation for
+// extractStrategistContext builds a condensed view of the conversation for
 // the strategist. It finds the compaction summary (if any) and then includes
-// all subsequent messages, stripping every tool_use and tool_result block so
-// only conversational text (user instructions, assistant explanations) remains.
+// all subsequent messages, converting tool_use/tool_result blocks into short
+// summaries so the strategist can see what was done and what happened.
+//
+// Without tool results, the strategist cannot judge whether a goal is actually
+// achieved — it would only see the assistant's claims ("tests pass now") with
+// no evidence.
 //
 // If no compaction summary exists yet, it falls back to the last 20 messages.
 func (a *Agent) extractStrategistContext() string {
@@ -120,7 +125,7 @@ func (a *Agent) extractStrategistContext() string {
 			if block.Type == "text" {
 				b.WriteString("--- Earlier Conversation Summary ---\n")
 				b.WriteString(block.Text)
-				b.WriteString("\n\n--- Recent Conversation (tool calls omitted) ---\n")
+				b.WriteString("\n\n--- Recent Conversation ---\n")
 				break
 			}
 		}
@@ -132,23 +137,34 @@ func (a *Agent) extractStrategistContext() string {
 			start = 0
 		}
 		msgs = msgs[start:]
-		b.WriteString("--- Conversation (tool calls omitted) ---\n")
+		b.WriteString("--- Conversation ---\n")
 	}
 
 	for _, msg := range msgs {
-		var textParts []string
+		var parts []string
 		for _, block := range msg.Content {
-			if block.Type == "text" {
+			switch block.Type {
+			case "text":
 				t := strings.TrimSpace(block.Text)
 				if t != "" {
-					textParts = append(textParts, t)
+					parts = append(parts, t)
+				}
+			case "tool_use":
+				// Summarize what tool was called with what key params.
+				summary := summarizeToolUse(block.ToolName, block.Input)
+				parts = append(parts, summary)
+			case "tool_result":
+				// Include a truncated view of the tool output.
+				summary := summarizeToolResult(block.ToolName, block.Output, block.IsError)
+				if summary != "" {
+					parts = append(parts, summary)
 				}
 			}
 		}
-		if len(textParts) == 0 {
+		if len(parts) == 0 {
 			continue
 		}
-		text := strings.Join(textParts, "\n")
+		text := strings.Join(parts, "\n")
 		// Truncate very long individual messages to keep the strategist input manageable.
 		const maxMsgLen = 3000
 		if len(text) > maxMsgLen {
@@ -171,4 +187,46 @@ func (a *Agent) extractStrategistContext() string {
 	}
 
 	return strings.TrimSpace(b.String())
+}
+
+// summarizeToolUse produces a one-line summary of a tool call for the
+// strategist context. It shows the tool name and key parameters.
+func summarizeToolUse(toolName string, input json.RawMessage) string {
+	var m map[string]any
+	if err := json.Unmarshal(input, &m); err != nil {
+		return fmt.Sprintf("[Tool Call: %s]", toolName)
+	}
+	// Extract the most relevant parameter (path, command, pattern, etc).
+	keys := []string{"path", "file_path", "command", "pattern", "url", "query", "name", "agent", "task"}
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > 200 {
+				s = s[:200] + "..."
+			}
+			return fmt.Sprintf("[Tool Call: %s(%s=%s)]", toolName, key, s)
+		}
+	}
+	return fmt.Sprintf("[Tool Call: %s]", toolName)
+}
+
+// summarizeToolResult produces a truncated summary of a tool result for the
+// strategist context. It includes enough of the output to evidence success or
+// failure without consuming excessive tokens.
+func summarizeToolResult(toolName, output string, isError bool) string {
+	if output == "" {
+		return ""
+	}
+	tag := "OK"
+	if isError {
+		tag = "ERROR"
+	}
+	// Keep first 500 chars of output — enough to see test results, error
+	// messages, file content headers, etc.
+	maxOut := 500
+	runes := []rune(output)
+	if len(runes) > maxOut {
+		return fmt.Sprintf("[Tool Result %s: %s...]", tag, string(runes[:maxOut]))
+	}
+	return fmt.Sprintf("[Tool Result %s: %s]", tag, string(runes))
 }
