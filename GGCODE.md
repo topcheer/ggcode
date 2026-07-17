@@ -108,7 +108,7 @@ internal/              706 Go source files (~220k LOC non-test, ~152k LOC test, 
   util/                Shell quoting, text truncation
 docs/                  Architecture docs, design docs, release notes, A2A auth guide, user guides, site content
 npm/                   npm wrapper package (installs GitHub Release binary)
-python/                Python wrapper (PyPI: ggcode)
+python/                Deprecated PyPI wrapper (no longer published)
 scripts/               Release scripts, site scripts
 config/                MCP preset configuration (mcporter.json)
 ```
@@ -417,7 +417,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **GoReleaser** (`.goreleaser.yaml`): Builds for linux/darwin/windows on amd64/arm64 with `CGO_ENABLED=0`. Produces tar.gz, zip (Windows), and packages (deb, rpm, apk, ipk, archlinux). SBOMs included.
 - **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
 - **npm** (`npm/`): Wrapper that installs the GitHub Release binary
-- **Python** (`python/`): PyPI package `ggcode`
+- **Python** (`python/`): Deprecated PyPI wrapper (no longer published)
 - **Release notes** (`docs/releases/`): Tag-specific Markdown files used directly as GitHub Release bodies
 
 ## Common Gotchas

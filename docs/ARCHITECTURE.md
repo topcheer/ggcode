@@ -507,7 +507,7 @@ mobile/                    # Mobile application (Flutter)
     android/               # Android platform code + fastlane
 
 npm/                       # npm wrapper package (installs GitHub Release binary)
-python/                    # Python wrapper (PyPI: ggcode)
+python/                    # Deprecated PyPI wrapper (no longer published)
 
 scripts/                   # Build, release, and development scripts
   dev/                     # Development helpers (verify-ci.sh)

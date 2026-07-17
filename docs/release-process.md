@@ -9,7 +9,7 @@ The repository uses a **tag-driven release flow**:
 1. Prepare the release commit on `main`.
 2. Push `main`.
 3. Create and push a tag named `vX.Y.Z`.
-4. GitHub Actions publishes binaries, OS packages, wrapper packages, and the static download mirror.
+4. GitHub Actions publishes binaries, OS packages, and the static download mirror.
 
 The main release workflow is `.github/workflows/release.yml`. It triggers on:
 
@@ -25,8 +25,6 @@ At a minimum, check these files before tagging:
 | GitHub release notes body | `docs/releases/vX.Y.Z.md` |
 | Release notes index pointer | `docs/releases/README.md` |
 | Project quick reference pointer | `GGCODE.md` |
-| npm wrapper version | `npm/package.json` |
-| Python wrapper version | `python/pyproject.toml` |
 
 Notes:
 
@@ -62,10 +60,8 @@ https://github.com/topcheer/ggcode/compare/vPREV...vNEXT
 
 For a normal release, bump these version references together:
 
-1. `npm/package.json` → `"version": "X.Y.Z"`
-2. `python/pyproject.toml` → `version = "X.Y.Z"`
-3. `GGCODE.md` → latest documented release pointer
-4. `docs/releases/README.md` → current release notes pointer
+1. `GGCODE.md` → latest documented release pointer
+2. `docs/releases/README.md` → current release notes pointer
 
 ### 3.3 Run CI-aligned local validation
 
@@ -357,52 +353,7 @@ It also generates:
 - `checksums.txt`
 - SBOMs for archive artifacts
 
-## 7. Wrapper package publishing
-
-The Git tag triggers two separate wrapper-package workflows.
-
-### 7.1 npm wrapper
-
-Workflow:
-
-```text
-.github/workflows/npm.yml
-```
-
-Behavior:
-
-1. reads `npm/package.json`
-2. skips publish if the version starts with `0.0.0`
-3. skips publish if that exact version already exists on npm
-4. runs `npm pack --quiet`
-5. runs `npm publish --access public --provenance=false`
-
-Important:
-
-- If `npm/package.json` is not bumped, the workflow will skip or fail to give you the intended new wrapper release.
-
-### 7.2 Python wrapper
-
-Workflow:
-
-```text
-.github/workflows/publish-pypi.yml
-```
-
-Behavior:
-
-1. reads `python/pyproject.toml`
-2. skips publish if the version starts with `0.0.0`
-3. skips publish if that exact version already exists on PyPI
-4. installs `build`
-5. runs `python3 -m build` in `python/`
-6. publishes `python/dist` with `pypa/gh-action-pypi-publish`
-
-Important:
-
-- If `python/pyproject.toml` is not bumped, PyPI will not receive the new wrapper version.
-
-## 8. Static site publishing outside a release
+## 7. Static site publishing outside a release
 
 The repository also has `.github/workflows/site-release.yml`.
 
@@ -413,7 +364,7 @@ This is separate from the normal release flow and is used when:
 
 It publishes the static site branch while preserving the existing `docs/site/downloads/latest` directory unless explicitly rebuilding from release artifacts.
 
-## 9. How release notes are chosen
+## 8. How release notes are chosen
 
 Release notes are resolved by `scripts/release/render-notes.sh`.
 
@@ -432,37 +383,33 @@ The fallback changelog excludes commits whose subjects start with:
 - `chore:`
 - `style:`
 
-## 10. Recommended operator checklist
+## 9. Recommended operator checklist
 
 Use this checklist for every real release:
 
 1. Finish code changes.
 2. Create `docs/releases/vX.Y.Z.md`.
-3. Bump `npm/package.json`.
-4. Bump `python/pyproject.toml`.
-5. Update `GGCODE.md` release pointer.
-6. Update `docs/releases/README.md` current pointer.
-7. **If mobile changes are included**: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
-8. Run `make verify-ci`.
-9. Review `git status`.
-10. Commit `release: vX.Y.Z`.
-11. Push `main`.
-12. Create and push tag `vX.Y.Z`.
-12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
+3. Update `GGCODE.md` release pointer.
+4. Update `docs/releases/README.md` current pointer.
+5. **If mobile changes are included**: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
+6. Run `make verify-ci`.
+7. Review `git status`.
+8. Commit `release: vX.Y.Z`.
+9. Push `main`.
+10. Create and push tag `vX.Y.Z`.
+11. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
     - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
     - `CI` (build → vet → test)
-    - `npm`
-    - `Publish PyPI`
     - `CodeQL` (security scan)
-13. If any workflow fails:
+12. If any workflow fails:
     - `gh run view <run-id> --log-failed` to identify root cause
     - Fix the issue locally, commit, push to `main`
     - **Delete the tag** (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`) and **re-tag** on the fix commit
-    - Re-monitor all workflows from step 12
-14. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
-15. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
+    - Re-monitor all workflows from step 11
+13. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
+14. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
 
-## 11. Recommended monitoring commands
+## 10. Recommended monitoring commands
 
 Useful commands after pushing a tag:
 
@@ -479,20 +426,9 @@ If a job fails and you need details:
 gh run view <run-id> --log-failed
 ```
 
-## 12. Common failure modes
+## 11. Common failure modes
 
-### 12.1 Forgot to bump wrapper versions
-
-Symptom:
-
-- GitHub Release succeeds
-- npm / PyPI workflow skips publish or does not publish the expected version
-
-Fix:
-
-- bump `npm/package.json` and `python/pyproject.toml` before tagging
-
-### 12.2 Release notes point at the wrong version
+### 11.1 Release notes point at the wrong version
 
 Symptom:
 
@@ -502,7 +438,7 @@ Fix:
 
 - update both pointers as part of the release commit
 
-### 12.3 Local checks pass, commit still fails
+### 11.2 Local checks pass, commit still fails
 
 Symptom:
 
@@ -519,11 +455,11 @@ Fix:
 - re-stage any gofmt changes
 - rerun `make verify-ci`
 
-### 12.4 Tag exists but the release content is wrong
+### 11.3 Tag exists but the release content is wrong
 
 Symptom:
 
-- the workflow publishes an unintended release body or old wrapper versions
+- the workflow publishes an unintended release body
 
 Cause:
 
@@ -533,7 +469,7 @@ Fix:
 
 - the safest path is usually a follow-up patch release with a new tag
 
-### 12.5 CI or Release workflow fails on pre-existing vet/lint issues
+### 11.4 CI or Release workflow fails on pre-existing vet/lint issues
 
 Symptom:
 
@@ -562,7 +498,7 @@ git push origin vX.Y.Z
 
 - re-monitor all workflows until every one reaches `completed` / `success`
 
-### 12.6 Tag was moved after workflows already started
+### 11.5 Tag was moved after workflows already started
 
 Symptom:
 
@@ -590,7 +526,7 @@ git push origin vX.Y.Z
 
 - treat failures from the superseded workflow run as expected; monitor only the newest run for the final tag commit
 
-## 13. Manual packaging runs
+## 12. Manual packaging runs
 
 The `Release` workflow supports `workflow_dispatch` with `package_version`.
 
@@ -601,15 +537,13 @@ In manual mode:
 - release-note editing is skipped
 - the job is best treated as a packaging / validation path, not a real release
 
-## 14. Source of truth
+## 13. Source of truth
 
 If this document and the automation disagree, trust the code in:
 
 1. `.github/workflows/release.yml`
-2. `.github/workflows/npm.yml`
-3. `.github/workflows/publish-pypi.yml`
-4. `.github/workflows/site-release.yml`
-5. `.goreleaser.yaml`
-6. `scripts/dev/verify-ci.sh`
-7. `scripts/release/render-notes.sh`
-8. `scripts/release/publish-site-branch.sh`
+2. `.github/workflows/site-release.yml`
+3. `.goreleaser.yaml`
+4. `scripts/dev/verify-ci.sh`
+5. `scripts/release/render-notes.sh`
+6. `scripts/release/publish-site-branch.sh`
