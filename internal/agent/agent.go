@@ -956,6 +956,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Fall through to normal return — can't drive autonomously.
 				} else if result.Complete {
 					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
+					// Strip the "GOAL_ACHIEVED" sentinel; the rest is the
+					// strategist's summary of what was accomplished.
+					summary := result.Guidance
+					if len(summary) >= 13 && strings.EqualFold(summary[:13], "GOAL_ACHIEVED") {
+						summary = strings.TrimSpace(summary[13:])
+					}
+					msg := "[Strategist: goal achieved — autopilot complete.]"
+					if summary != "" {
+						msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
+					}
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
 					a.clearAutopilotGoal()
 					return nil
 				} else if result.Guidance != "" {
