@@ -3461,7 +3461,7 @@ func (b *ChatBridge) refreshSystemPrompt() {
 	if pam := memory.NewProjectAutoMemory(b.workingDir); pam != nil {
 		projectAutoMem = pam
 	}
-	startupAssets := agentruntime.LoadInteractiveStartupAssets(b.workingDir, autoMem, projectAutoMem)
+	startupAssets := agentruntime.LoadInteractiveStartupAssets(b.workingDir, autoMem)
 	b.mu.Lock()
 	mode := b.permissionMode
 	b.mu.Unlock()

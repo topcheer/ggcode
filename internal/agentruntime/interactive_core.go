@@ -70,7 +70,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
 
-	startupAssets := LoadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
+	startupAssets := LoadInteractiveStartupAssets(workingDir, autoMem)
 	commandMgr := startupAssets.CommandManager
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return BuildMCPSkillCommands(mcpMgr.SnapshotMCP())

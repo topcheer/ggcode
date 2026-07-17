@@ -16,41 +16,27 @@ import (
 )
 
 type StartupAssets struct {
-	AutoContent        string
-	AutoFiles          []string
-	ProjectAutoContent string
-	CommandManager     *commands.Manager
+	AutoFiles      []string
+	CommandManager *commands.Manager
 }
 
 func LoadInteractiveStartupAssets(
 	workingDir string,
 	autoMem *memory.AutoMemory,
-	projectAutoMem *memory.AutoMemory,
 ) StartupAssets {
 	var (
-		autoContent        string
-		autoFiles          []string
-		projectAutoContent string
-		commandMgr         *commands.Manager
+		autoFiles  []string
+		commandMgr *commands.Manager
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 
 	safego.Go("agentruntime.startup.autoMem", func() {
 		defer wg.Done()
 		start := time.Now()
-		autoContent, autoFiles, _ = autoMem.LoadAll()
+		_, autoFiles, _ = autoMem.LoadIndex()
 		debug.Log("agentruntime", "startup assets autoMem files=%d duration=%s", len(autoFiles), time.Since(start).Round(time.Millisecond))
-	})
-
-	safego.Go("agentruntime.startup.projectAutoMem", func() {
-		defer wg.Done()
-		start := time.Now()
-		if projectAutoMem != nil {
-			projectAutoContent, _, _ = projectAutoMem.LoadAll()
-		}
-		debug.Log("agentruntime", "startup assets projectAutoMem enabled=%v bytes=%d duration=%s", projectAutoMem != nil, len(projectAutoContent), time.Since(start).Round(time.Millisecond))
 	})
 
 	safego.Go("agentruntime.startup.commands", func() {
@@ -70,10 +56,8 @@ func LoadInteractiveStartupAssets(
 	}
 
 	return StartupAssets{
-		AutoContent:        autoContent,
-		AutoFiles:          autoFiles,
-		ProjectAutoContent: projectAutoContent,
-		CommandManager:     commandMgr,
+		AutoFiles:      autoFiles,
+		CommandManager: commandMgr,
 	}
 }
 
