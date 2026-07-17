@@ -73,6 +73,13 @@ func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *
 			headers.Set(key, value)
 		}
 	}
+	// OpenRouter-specific headers for attribution and ranking.
+	if isOpenRouterEndpoint(baseURL) {
+		headers.Set("HTTP-Referer", "https://ggcode.dev")
+		headers.Set("X-Title", "GGCode")
+		headers.Set("X-OpenRouter-Title", "GGCode")
+		headers.Set("X-OpenRouter-Categories", "cli-agent,programming-app")
+	}
 	transport := &headerInjectingTransport{
 		base:    newProviderHTTPTransport(),
 		headers: headers,

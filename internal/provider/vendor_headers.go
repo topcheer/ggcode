@@ -26,3 +26,12 @@ func isXiaomiMiMoBaseURL(baseURL string) bool {
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
 	return host == "xiaomimimo.com" || strings.HasSuffix(host, ".xiaomimimo.com")
 }
+
+func isOpenRouterEndpoint(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host == "openrouter.ai" || strings.HasSuffix(host, ".openrouter.ai")
+}

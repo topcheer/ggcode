@@ -177,6 +177,13 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 			extraHeaders.Set(key, value)
 		}
 	}
+	// OpenRouter-specific headers for attribution and ranking.
+	if isOpenRouterEndpoint(config.BaseURL) {
+		extraHeaders.Set("HTTP-Referer", "https://ggcode.dev")
+		extraHeaders.Set("X-Title", "GGCode")
+		extraHeaders.Set("X-OpenRouter-Title", "GGCode")
+		extraHeaders.Set("X-OpenRouter-Categories", "cli-agent,programming-app")
+	}
 	var baseTransport http.RoundTripper
 	if hc, ok := config.HTTPClient.(*http.Client); ok && hc != nil && hc.Transport != nil {
 		baseTransport = hc.Transport
