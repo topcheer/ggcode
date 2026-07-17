@@ -432,7 +432,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	trace.Mark("build interactive runtime core")
 
 	projectMemoryLoader := func() (string, []string, error) {
-		return memory.LoadProjectMemory(workingDir)
+		files, err := memory.ProjectMemoryFilesForPath(workingDir)
+		if err != nil {
+			return "", nil, err
+		}
+		return memory.BuildProjectMemoryHint(files), files, nil
 	}
 	var skillUsageHandler func(provider.TokenUsage)
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {

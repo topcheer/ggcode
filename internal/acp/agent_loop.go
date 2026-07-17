@@ -177,22 +177,25 @@ func NewAgentLoop(
 	return al
 }
 
-// loadProjectMemory loads project memory files (GGCODE.md, AGENTS.md, etc.)
-// and injects them as a system message into the agent's context.
+// loadProjectMemory injects a project memory index hint as a system message
+// into the agent's context. Full content is loaded on demand via read_file.
 func (al *AgentLoop) loadProjectMemory() {
-	content, files, err := memory.LoadProjectMemory(al.session.CWD)
+	files, err := memory.ProjectMemoryFilesForPath(al.session.CWD)
 	if err != nil {
 		debug.Log("acp", "project memory load failed: %v", err)
 		return
 	}
-	if content == "" {
+	if len(files) == 0 {
 		return
 	}
 	al.agent.SetProjectMemoryFiles(files)
-	al.agent.AddMessage(provider.Message{
-		Role:    "system",
-		Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
-	})
+	hint := memory.BuildProjectMemoryHint(files)
+	if hint != "" {
+		al.agent.AddMessage(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: hint}},
+		})
+	}
 	debug.Log("acp", "loaded %d project memory files", len(files))
 }
 

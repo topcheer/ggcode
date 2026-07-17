@@ -72,8 +72,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	core.StartBackgroundServices()
 	defer core.Close()
 
-	// Load project memory documents.
-	projectMem, projectMemFiles, _ := memory.LoadProjectMemory(workingDir)
+	// Load project memory file list (for path-triggered dynamic loading).
+	projectMemFiles, _ := memory.ProjectMemoryFilesForPath(workingDir)
 
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem
@@ -101,8 +101,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	buildCurrentSystemPrompt := func() string {
 		gitStatus := detectGitStatus(workingDir)
 		systemPrompt := agentruntime.BuildInteractiveSystemPrompt(cfg, workingDir, mode, registry, commandMgr, autoMem, projectAutoMem, gitStatus, "")
-		if projectMem != "" {
-			systemPrompt += "\n\n## Project Memory\n" + projectMem
+		if hint := memory.BuildProjectMemoryHint(projectMemFiles); hint != "" {
+			systemPrompt += "\n\n" + hint
 		}
 		return systemPrompt
 	}

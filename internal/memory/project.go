@@ -116,3 +116,36 @@ func listProjectMemoryFiles(dir string) []string {
 	}
 	return files
 }
+
+// BuildProjectMemoryHint constructs an index-based system prompt section from
+// project memory file paths. Only file names are included — the LLM is
+// instructed to load full content via read_file when relevant. This keeps the
+// system prompt small regardless of how large the memory files are.
+func BuildProjectMemoryHint(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var names []string
+	seen := make(map[string]struct{})
+	for _, f := range files {
+		name := filepath.Base(f)
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Project Memory\n")
+	b.WriteString("⚠️ IMPORTANT: Project Memory files contain critical project conventions, rules, and constraints that you MUST follow. They are NOT loaded into context automatically.\n\n")
+	b.WriteString("The following project memory files exist and should be loaded with read_file when relevant to the current task (e.g. before editing code, configuring the project, or making architectural decisions):\n\n")
+	for _, name := range names {
+		b.WriteString("  - " + name + "\n")
+	}
+	b.WriteString("\nDo NOT assume you know the project's conventions from training data — always read the relevant memory file first when the task touches that area.")
+	return b.String()
+}

@@ -337,7 +337,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.agent.SetProjectMemoryFiles(msg.Files)
 			m.agent.AddMessage(provider.Message{
 				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + msg.Content}},
+				Content: []provider.ContentBlock{{Type: "text", Text: msg.Content}},
 			})
 		}
 		if m.pendingSubmissionCount() > 0 && !m.loading {
