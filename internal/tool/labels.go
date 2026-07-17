@@ -502,6 +502,12 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return describeListNamedAgentResult(trimmed), true
 	case "use_namedagent":
 		return describeUseNamedAgentResult(rawArgs, trimmed), true
+	case "multi_file_read":
+		return describeMultiFileReadResult(trimmed), true
+	case "multi_file_write":
+		return describeMultiFileWriteResult(trimmed), true
+	case "multi_file_edit":
+		return describeMultiFileEditResult(rawArgs, trimmed), true
 	}
 
 	if pres, ok := describeExternalWrappedResult(trimmed); ok {
@@ -1837,4 +1843,98 @@ func describeUseNamedAgentResult(rawArgs, result string) ToolResultPresentation 
 		summary = "Started agent " + name
 	}
 	return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "text"}
+}
+
+// describeMultiFileReadResult formats the multi_file_read result.
+// Result format: "[multi_file_read summary] requested=N succeeded=N failed=N skipped=N\n\n=== FILE: path ===\n..."
+func describeMultiFileReadResult(result string) ToolResultPresentation {
+	// Extract counts from the summary line
+	reqCount := extractIntField(result, "requested=")
+	succCount := extractIntField(result, "succeeded=")
+	failCount := extractIntField(result, "failed=")
+	skipCount := extractIntField(result, "skipped=")
+	if reqCount == 0 {
+		return ToolResultPresentation{Summary: "Read files", Payload: result, PayloadMode: "text"}
+	}
+	summary := fmt.Sprintf("Read %d/%d files", succCount, reqCount)
+	if failCount > 0 {
+		summary += fmt.Sprintf(", %d failed", failCount)
+	}
+	if skipCount > 0 {
+		summary += fmt.Sprintf(", %d skipped", skipCount)
+	}
+	return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "text"}
+}
+
+// describeMultiFileWriteResult formats the multi_file_write result.
+// Result format: "[multi_file_write] requested=N written=N failed=N\n  ✓ path (N bytes)\n..."
+func describeMultiFileWriteResult(result string) ToolResultPresentation {
+	lines := nonEmptyTrimmedLines(result)
+	written := extractIntField(result, "written=")
+	failed := extractIntField(result, "failed=")
+	requested := extractIntField(result, "requested=")
+	if requested == 0 {
+		return ToolResultPresentation{Summary: "Wrote files", Payload: result, PayloadMode: "text"}
+	}
+	summary := fmt.Sprintf("Wrote %d/%d files", written, requested)
+	if failed > 0 {
+		summary += fmt.Sprintf(", %d failed", failed)
+	}
+	// Extract the file list from result lines
+	var fileList []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "✓") || strings.HasPrefix(line, "✗") {
+			fileList = append(fileList, line)
+		}
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     strings.Join(fileList, "\n"),
+		PayloadMode: "text",
+	}
+}
+
+// describeMultiFileEditResult formats the multi_file_edit result.
+// Result is JSON with a Summary field and per-file Results array.
+func describeMultiFileEditResult(rawArgs, result string) ToolResultPresentation {
+	var data struct {
+		Summary      string `json:"summary"`
+		Applied      bool   `json:"applied"`
+		WrittenFiles int    `json:"writtenFiles"`
+		FailedFiles  int    `json:"failedFiles"`
+	}
+	if json.Unmarshal([]byte(result), &data) == nil && data.Summary != "" {
+		// Count files from rawArgs
+		args := parseToolArgs(rawArgs)
+		fileCount := 0
+		if files, ok := args["files"].([]any); ok {
+			fileCount = len(files)
+		}
+		summary := data.Summary
+		if fileCount > 0 && !strings.Contains(summary, "file") {
+			summary = fmt.Sprintf("%d files: ", fileCount) + summary
+		}
+		return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "json"}
+	}
+	// Fallback: raw text
+	return ToolResultPresentation{Summary: "Edited files", Payload: result, PayloadMode: "text"}
+}
+
+// extractIntField extracts an integer value from "field=N" pattern in text.
+func extractIntField(text, prefix string) int {
+	idx := strings.Index(text, prefix)
+	if idx < 0 {
+		return 0
+	}
+	rest := text[idx+len(prefix):]
+	n := 0
+	for _, c := range rest {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	return n
 }

@@ -164,6 +164,35 @@ func (t *BaseToolItem) RenderBody(width int) string {
 func (t *BaseToolItem) renderFileLineCount() string {
 	var lines int
 
+	// For multi_file_write, count lines from files[].content in rawArgs
+	if t.rawArgs != "" {
+		var multiArgs struct {
+			Files []struct {
+				Content string `json:"content"`
+			} `json:"files"`
+		}
+		if json.Unmarshal([]byte(t.rawArgs), &multiArgs) == nil && len(multiArgs.Files) > 0 {
+			for _, f := range multiArgs.Files {
+				if f.Content == "" {
+					continue
+				}
+				lines += strings.Count(f.Content, "\n")
+				if !strings.HasSuffix(f.Content, "\n") {
+					lines++
+				}
+			}
+			if lines > 0 {
+				var text string
+				if strings.HasPrefix(t.lang, "zh") {
+					text = fmt.Sprintf("%d行", lines)
+				} else {
+					text = fmt.Sprintf("%d lines", lines)
+				}
+				return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + text)
+			}
+		}
+	}
+
 	// For write_file, count lines from content arg in rawArgs
 	if t.rawArgs != "" {
 		var args struct {
@@ -212,11 +241,29 @@ func (t *BaseToolItem) renderEditDiff() string {
 			OldText string `json:"old_text"`
 			NewText string `json:"new_text"`
 		} `json:"edits"`
+		Files []struct {
+			Edits []struct {
+				OldText string `json:"old_text"`
+				NewText string `json:"new_text"`
+			} `json:"edits"`
+		} `json:"files"`
 	}
 	_ = json.Unmarshal([]byte(t.rawArgs), &args)
 
 	var added, removed int
-	if len(args.Edits) > 0 {
+	if len(args.Files) > 0 {
+		// multi_file_edit: files[].edits[]
+		for _, f := range args.Files {
+			for _, e := range f.Edits {
+				if e.OldText != "" {
+					removed += len(strings.Split(e.OldText, "\n"))
+				}
+				if e.NewText != "" {
+					added += len(strings.Split(e.NewText, "\n"))
+				}
+			}
+		}
+	} else if len(args.Edits) > 0 {
 		for _, e := range args.Edits {
 			if e.OldText != "" {
 				removed += len(strings.Split(e.OldText, "\n"))
@@ -564,7 +611,7 @@ func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles
 	b.rawArgs = rawArgs
 	// Determine body mode based on tool name (not displayName, which may be a description string)
 	switch toolName {
-	case "edit_file", "multi_edit_file":
+	case "edit_file", "multi_edit_file", "multi_file_edit":
 		b.fileBodyMode = "editdiff"
 	default:
 		b.fileBodyMode = "linecount"
@@ -733,8 +780,10 @@ func classifyTool(name string) toolCategory {
 		return catBash
 	case "read_file", "Read", "view", "View",
 		"write_file", "Write",
+		"multi_file_read",
+		"multi_file_write",
 		"edit_file", "Edit", "multiEdit", "MultiEdit",
-		"multi_edit_file", "notebook_edit":
+		"multi_edit_file", "multi_file_edit", "notebook_edit":
 		return catFile
 	case "search_files", "grep", "Grep", "glob", "Glob", "find":
 		return catSearch

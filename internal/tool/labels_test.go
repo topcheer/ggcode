@@ -914,3 +914,61 @@ func TestDescribeToolResultNamedAgent(t *testing.T) {
 		t.Errorf("summary = %q", pres.Summary)
 	}
 }
+
+func TestDescribeToolResultMultiFile(t *testing.T) {
+	// multi_file_read
+	pres, ok := DescribeToolResult(
+		"multi_file_read",
+		`{"files":[{"path":"/a.go"},{"path":"/b.go"}]}`,
+		"[multi_file_read summary] requested=2 succeeded=2 failed=0 skipped=0\n\n=== FILE: /a.go ===\n     1\thello\n[end file]\n\n=== FILE: /b.go ===\n     1\tworld\n[end file]",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "Read 2/2 files" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// multi_file_read with failures
+	pres, ok = DescribeToolResult(
+		"multi_file_read",
+		`{"files":[{"path":"/a.go"},{"path":"/missing.go"}]}`,
+		"[multi_file_read summary] requested=2 succeeded=1 failed=1 skipped=0",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "Read 1/2 files, 1 failed" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// multi_file_write
+	pres, ok = DescribeToolResult(
+		"multi_file_write",
+		`{"files":[{"path":"/a.go","content":"hello\n"},{"path":"/b.go","content":"world\n"}]}`,
+		"[multi_file_write] requested=2 written=2 failed=0\n  ✓ /a.go (6 bytes)\n  ✓ /b.go (6 bytes)\n",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "Wrote 2/2 files" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// multi_file_edit (JSON result)
+	pres, ok = DescribeToolResult(
+		"multi_file_edit",
+		`{"files":[{"path":"/a.go","edits":[{"old_text":"foo","new_text":"bar"}]}]}`,
+		`{"applied":true,"summary":"Requested 1 files: 1 written, 0 failed, 0 skipped","writtenFiles":1,"failedFiles":0}`,
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !strings.Contains(pres.Summary, "1 written") {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+}
