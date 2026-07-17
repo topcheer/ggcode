@@ -494,6 +494,14 @@ func DescribeToolResult(toolName, rawArgs, result string, isError bool) (ToolRes
 		return describeMobileDeviceResult(rawArgs, trimmed, isError), true
 	case "browser":
 		return describeBrowserResult(rawArgs, trimmed, isError), true
+	case "create_namedagent":
+		return describeCreateNamedAgentResult(rawArgs, trimmed), true
+	case "delete_namedagent":
+		return describeDeleteNamedAgentResult(rawArgs, trimmed), true
+	case "list_namedagent":
+		return describeListNamedAgentResult(trimmed), true
+	case "use_namedagent":
+		return describeUseNamedAgentResult(rawArgs, trimmed), true
 	}
 
 	if pres, ok := describeExternalWrappedResult(trimmed); ok {
@@ -1754,4 +1762,79 @@ func compactPreview(s string) string {
 		return s[:57] + "..."
 	}
 	return s
+}
+
+// describeCreateNamedAgentResult formats the create_namedagent result into structured fields.
+func describeCreateNamedAgentResult(rawArgs, result string) ToolResultPresentation {
+	args := parseToolArgs(rawArgs)
+	name := argStr(args, "name")
+	verb := "Created"
+	if strings.Contains(result, "updated successfully") {
+		verb = "Updated"
+	}
+	summary := fmt.Sprintf("%s agent %s", verb, name)
+
+	// Parse the multi-line result into structured fields
+	var lines []string
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Use use_namedagent") {
+			continue
+		}
+		// Skip the first summary line
+		if strings.Contains(line, "successfully") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     strings.Join(lines, "\n"),
+		PayloadMode: "text",
+	}
+}
+
+// describeDeleteNamedAgentResult formats the delete_namedagent result.
+func describeDeleteNamedAgentResult(rawArgs, result string) ToolResultPresentation {
+	args := parseToolArgs(rawArgs)
+	name := argStr(args, "name")
+	summary := "Deleted agent"
+	if name != "" {
+		summary = "Deleted agent " + name
+	}
+	return ToolResultPresentation{Summary: summary}
+}
+
+// describeListNamedAgentResult formats the list_namedagent result with a count summary.
+func describeListNamedAgentResult(result string) ToolResultPresentation {
+	if strings.Contains(result, "No named subagent templates") {
+		return ToolResultPresentation{Summary: "0 agents"}
+	}
+	lines := nonEmptyTrimmedLines(result)
+	count := 0
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			count++
+		}
+	}
+	if count == 0 {
+		return ToolResultPresentation{Summary: compactSingleLine(result), Payload: result, PayloadMode: "text"}
+	}
+	summary := pluralizeEn(count, "agent")
+	return ToolResultPresentation{
+		Summary:     summary,
+		Payload:     result,
+		PayloadMode: "text",
+	}
+}
+
+// describeUseNamedAgentResult formats the use_namedagent result.
+func describeUseNamedAgentResult(rawArgs, result string) ToolResultPresentation {
+	args := parseToolArgs(rawArgs)
+	name := argStr(args, "name")
+	summary := "Started agent"
+	if name != "" {
+		summary = "Started agent " + name
+	}
+	return ToolResultPresentation{Summary: summary, Payload: result, PayloadMode: "text"}
 }

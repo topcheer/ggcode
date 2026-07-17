@@ -825,3 +825,92 @@ func TestDescribeToolResultExternalWrappers(t *testing.T) {
 		}
 	})
 }
+
+func TestDescribeToolResultNamedAgent(t *testing.T) {
+	// create_namedagent
+	pres, ok := DescribeToolResult(
+		"create_namedagent",
+		`{"name":"code-reviewer","description":"Reviews code","system_prompt":"You review code."}`,
+		"Named subagent 'code-reviewer' created successfully.\nDescription: Reviews code\nTools: all (minus blocked)\nMCP servers: none\nModel: inherited from parent\n\nUse use_namedagent to invoke it with a task.",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !strings.Contains(pres.Summary, "Created agent code-reviewer") {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+	if !strings.Contains(pres.Payload, "Description: Reviews code") {
+		t.Errorf("payload = %q", pres.Payload)
+	}
+
+	// create_namedagent (update)
+	pres, ok = DescribeToolResult(
+		"create_namedagent",
+		`{"name":"code-reviewer","description":"Updated"}`,
+		"Named subagent 'code-reviewer' updated successfully.\nDescription: Updated\nTools: all (minus blocked)\nMCP servers: none\nModel: inherited from parent",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !strings.Contains(pres.Summary, "Updated agent code-reviewer") {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// delete_namedagent
+	pres, ok = DescribeToolResult(
+		"delete_namedagent",
+		`{"name":"old-agent"}`,
+		"Named subagent 'old-agent' deleted successfully.",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "Deleted agent old-agent" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// list_namedagent (with entries)
+	pres, ok = DescribeToolResult(
+		"list_namedagent",
+		`{}`,
+		"Named subagent templates (2):\n\n- **architect**: System design (tools: all tools, model: inherited)\n- **backend-dev**: API implementation (tools: all tools, model: inherited)\n\nUse use_namedagent to invoke any of these with a task.",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "2 agents" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// list_namedagent (empty)
+	pres, ok = DescribeToolResult(
+		"list_namedagent",
+		`{}`,
+		"No named subagent templates found in this workspace. Use create_namedagent to create one.",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "0 agents" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+
+	// use_namedagent
+	pres, ok = DescribeToolResult(
+		"use_namedagent",
+		`{"name":"architect","task":"design API"}`,
+		"Named subagent 'architect' started with ID: agent-abc123\nUse wait_agent or list_agents to monitor progress.",
+		false,
+	)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if pres.Summary != "Started agent architect" {
+		t.Errorf("summary = %q", pres.Summary)
+	}
+}
