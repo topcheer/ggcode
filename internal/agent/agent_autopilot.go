@@ -43,6 +43,10 @@ func (a *Agent) clearGoalIfNotAutopilot() {
 // The instruction is designed so the LLM itself judges whether the user's
 // prompt is clear enough to adopt directly as a goal, or whether it needs
 // clarification via ask_user. No programmatic heuristic is applied.
+//
+// The LLM must declare the goal using a "GOAL:" sentinel line so the
+// agent runtime can extract it for the strategist and GOAL_COMPLETE
+// detection.
 func (a *Agent) maybeInjectAutopilotGoalCollection() {
 	if a.currentMode() != permission.AutopilotMode {
 		return
@@ -63,10 +67,61 @@ func (a *Agent) maybeInjectAutopilotGoalCollection() {
 			Text: "You are entering autopilot mode.\n\n" +
 				"Review the user's message above. If it already describes a clear, specific task that you can work on autonomously, adopt it as your goal and start working immediately. Do NOT ask for confirmation — the user chose autopilot mode because they want autonomous execution.\n\n" +
 				"Only use `ask_user` if the user's intent is genuinely ambiguous and you cannot reasonably infer what they want. In that case, ask a single concise question to clarify the goal.\n\n" +
+				"**Declaring your goal (required):** Before starting work, output a line in this exact format:\n" +
+				"```\nGOAL: <one-sentence description of what you will achieve>\n```\n" +
+				"This goal line will be parsed by the runtime to track progress. Place it at the top of your response, before any work begins.\n\n" +
 				"Once the goal is set, work toward it fully autonomously. Do not pause for step-by-step approval.\n" +
 				"When you believe the goal is achieved, end your response with \"GOAL_COMPLETE\" on its own line.",
 		}},
 	})
+}
+
+// extractGoalFromText checks if the LLM's output contains a "GOAL:" line
+// and extracts the goal text. Returns the goal and true if found.
+// Expected format: a line starting with "GOAL:" (case-insensitive), the
+// rest of the line is the goal description.
+func extractGoalFromText(text string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) > 5 {
+			upper := strings.ToUpper(trimmed[:5])
+			if upper == "GOAL:" {
+				goal := strings.TrimSpace(trimmed[5:])
+				if goal != "" {
+					return goal, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// maybeSetAutopilotGoalFromLLMOutput scans the LLM's text output for a
+// "GOAL:" declaration line and sets the autopilot goal if one is found
+// and no goal has been set yet. This is called on every LLM response
+// (both text-only and tool-call turns) to capture the goal as early as
+// possible.
+func (a *Agent) maybeSetAutopilotGoalFromLLMOutput(text string) {
+	if a.currentMode() != permission.AutopilotMode {
+		return
+	}
+	a.mu.Lock()
+	if a.autopilotGoalSet {
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
+	goal, found := extractGoalFromText(text)
+	if !found {
+		return
+	}
+
+	a.mu.Lock()
+	a.autopilotGoal = goal
+	a.autopilotGoalSet = true
+	a.mu.Unlock()
+	debug.Log("agent", "autopilot goal extracted from LLM output: %s", goal)
 }
 
 // SetAutopilotGoal stores the confirmed goal text. Called by the

@@ -1954,3 +1954,56 @@ func TestAutopilotGoalClearedOnModeSwitch(t *testing.T) {
 		t.Fatal("expected no goal after re-entering autopilot")
 	}
 }
+
+func TestExtractGoalFromText(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+		ok   bool
+	}{
+		{name: "simple", text: "GOAL: fix the bug", want: "fix the bug", ok: true},
+		{name: "lowercase", text: "goal: lowercase version", want: "lowercase version", ok: true},
+		{name: "multiline", text: "Let me start.\nGOAL: refactor auth\nNow working...", want: "refactor auth", ok: true},
+		{name: "no goal line", text: "Just working on stuff", want: "", ok: false},
+		{name: "empty goal", text: "GOAL: ", want: "", ok: false},
+		{name: "code_block_context", text: "```go\nGOAL: not in code\n```", want: "not in code", ok: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := extractGoalFromText(tc.text)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			if got != tc.want {
+				t.Fatalf("goal = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMaybeSetAutopilotGoalFromLLMOutput(t *testing.T) {
+	a := NewAgent(nil, tool.NewRegistry(), "", 5)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	// Before: no goal.
+	if a.hasAutopilotGoal() {
+		t.Fatal("expected no goal initially")
+	}
+
+	// LLM outputs a GOAL declaration.
+	a.maybeSetAutopilotGoalFromLLMOutput("GOAL: optimize the database layer")
+
+	if !a.hasAutopilotGoal() {
+		t.Fatal("expected goal to be set after LLM output")
+	}
+	if got := a.getAutopilotGoal(); got != "optimize the database layer" {
+		t.Fatalf("goal = %q, want %q", got, "optimize the database layer")
+	}
+
+	// Subsequent GOAL lines should not override the first.
+	a.maybeSetAutopilotGoalFromLLMOutput("GOAL: different goal")
+	if got := a.getAutopilotGoal(); got != "optimize the database layer" {
+		t.Fatalf("goal should not change after first set, got %q", got)
+	}
+}
