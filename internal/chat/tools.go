@@ -845,6 +845,14 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 				item.markdownBody = true
 			}
 		}
+		// Named agent tools: header label already carries the key info,
+		// suppress verbose multi-line result body.
+		switch ctx.ToolName {
+		case "create_namedagent", "delete_namedagent", "use_namedagent":
+			item.suppressBody = true
+		case "list_namedagent":
+			item.suppressBody = true
+		}
 		return item
 	}
 }
