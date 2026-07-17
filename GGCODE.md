@@ -107,7 +107,7 @@ internal/              706 Go source files (~220k LOC non-test, ~152k LOC test, 
   version/             Build-time version/commit/date (injected via ldflags)
   util/                Shell quoting, text truncation
 docs/                  Architecture docs, design docs, release notes, A2A auth guide, user guides, site content
-npm/                   npm wrapper package (installs GitHub Release binary)
+npm/                   Deprecated npm wrapper (no longer published)
 python/                Deprecated PyPI wrapper (no longer published)
 scripts/               Release scripts, site scripts
 config/                MCP preset configuration (mcporter.json)
@@ -403,21 +403,17 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 
 - **⚠️ Release checklist — EVERY item must be done before tagging:**
   1. Create `docs/releases/vX.Y.Z.md`
-  2. Bump `npm/package.json` → `"version": "X.Y.Z"`
-  3. Bump `python/pyproject.toml` → `version = "X.Y.Z"`
-  4. Bump mobile: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` (updates 4 files: `.build-number`, `pubspec.yaml`, `build.gradle.kts`, `Info.plist`)
-  5. Update `GGCODE.md` → latest documented release pointer
-  6. Update `docs/releases/README.md` → current release notes pointer
-  7. Run `make verify-ci` or equivalent
-  8. Stage ALL changed files including mobile (4 files from step 4)
-  9. Commit: `release: vX.Y.Z`
-  10. Push `main`
-  11. Create and push tag `vX.Y.Z`
-  12. Monitor GitHub Actions until ALL workflows pass
+  2. Bump mobile: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` (updates 4 files: `.build-number`, `pubspec.yaml`, `build.gradle.kts`, `Info.plist`)
+  3. Update `GGCODE.md` → latest documented release pointer
+  4. Update `docs/releases/README.md` → current release notes pointer
+  5. Run `make verify-ci` or equivalent
+  6. Stage ALL changed files including mobile (4 files from step 2)
+  7. Commit: `release: vX.Y.Z`
+  8. Push `main`
+  9. Create and push tag `vX.Y.Z`
+  10. Monitor GitHub Actions until ALL workflows pass
 - **GoReleaser** (`.goreleaser.yaml`): Builds for linux/darwin/windows on amd64/arm64 with `CGO_ENABLED=0`. Produces tar.gz, zip (Windows), and packages (deb, rpm, apk, ipk, archlinux). SBOMs included.
 - **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
-- **npm** (`npm/`): Wrapper that installs the GitHub Release binary
-- **Python** (`python/`): Deprecated PyPI wrapper (no longer published)
 - **Release notes** (`docs/releases/`): Tag-specific Markdown files used directly as GitHub Release bodies
 
 ## Common Gotchas
