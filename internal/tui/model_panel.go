@@ -227,6 +227,8 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		m.syncSessionSelection()
 		m.closeModelPanel()
+		// Provide visual feedback that the model switch succeeded.
+		m.chatWriteSystem(nextSystemID(), m.t("panel.model.switched", model))
 		return *m, nil
 	}
 	return *m, nil
