@@ -70,8 +70,7 @@ func (a *Agent) maybeInjectAutopilotGoalCollection() {
 				"**Declaring your goal (required):** Before starting work, output a line in this exact format:\n" +
 				"```\nGOAL: <one-sentence description of what you will achieve>\n```\n" +
 				"This goal line will be parsed by the runtime to track progress. Place it at the top of your response, before any work begins.\n\n" +
-				"Once the goal is set, work toward it fully autonomously. Do not pause for step-by-step approval.\n" +
-				"When you believe the goal is achieved, end your response with \"GOAL_COMPLETE\" on its own line.",
+				"Once the goal is set, work toward it fully autonomously. Do not pause for step-by-step approval.",
 		}},
 	})
 }
@@ -155,14 +154,4 @@ func (a *Agent) clearAutopilotGoal() {
 	a.autopilotGoal = ""
 	a.autopilotGoalSet = false
 	debug.Log("agent", "autopilot goal cleared")
-}
-
-// isAutopilotGoalComplete checks if the LLM's text declares the goal
-// complete via the GOAL_COMPLETE sentinel.
-func (a *Agent) isAutopilotGoalComplete(text string) bool {
-	if !a.hasAutopilotGoal() {
-		return false
-	}
-	upper := strings.ToUpper(text)
-	return strings.Contains(upper, "GOAL_COMPLETE")
 }

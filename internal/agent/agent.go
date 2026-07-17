@@ -936,14 +936,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if len(toolCalls) == 0 {
 			a.contextManager.Add(resp.Message)
 
-			// Autopilot Goal achievement check: if the LLM declares the goal
-			// complete, clear the goal and stop.
-			if a.isAutopilotGoalComplete(textBuf) {
-				debug.Log("agent", "Iteration %d: autopilot goal declared complete", i+1)
-				a.clearAutopilotGoal()
-				return nil
-			}
-
 			if a.injectPendingInterruptions() {
 				continue
 			}

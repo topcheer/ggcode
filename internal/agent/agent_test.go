@@ -1896,16 +1896,13 @@ func TestRunStreamEmitsReasoningMetric(t *testing.T) {
 }
 
 func TestAutopilotGoalLifecycle(t *testing.T) {
-	// Test the full lifecycle: goal not set → set → check → complete → cleared.
+	// Test the full lifecycle: goal not set → set → cleared.
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 
 	// Initially no goal
 	if a.hasAutopilotGoal() {
 		t.Fatal("expected no goal initially")
-	}
-	if a.isAutopilotGoalComplete("anything") {
-		t.Fatal("isAutopilotGoalComplete should be false when no goal")
 	}
 
 	// Set goal
@@ -1915,14 +1912,6 @@ func TestAutopilotGoalLifecycle(t *testing.T) {
 	}
 	if a.getAutopilotGoal() != "Fix all failing tests in the auth module" {
 		t.Fatalf("unexpected goal: %s", a.getAutopilotGoal())
-	}
-
-	// GOAL_COMPLETE detection
-	if !a.isAutopilotGoalComplete("All tests pass.\nGOAL_COMPLETE") {
-		t.Fatal("expected GOAL_COMPLETE to be detected")
-	}
-	if a.isAutopilotGoalComplete("Still working on it") {
-		t.Fatal("expected no false positive on GOAL_COMPLETE")
 	}
 
 	// Clear goal
