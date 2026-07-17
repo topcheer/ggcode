@@ -21,7 +21,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - name: Check npm release version
         id: release
@@ -50,6 +49,6 @@ jobs:
       - name: Publish npm package
         if: steps.release.outputs.publish == 'true'
         working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          echo "registry=https://registry.npmjs.org" > .npmrc
+          npm publish
