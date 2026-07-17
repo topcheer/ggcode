@@ -61,10 +61,9 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			"You are in autopilot mode — work autonomously until the Goal is fully achieved.\n" +
 			"\n" +
 			"**Goal-directed execution:**\n" +
-			"- At the start of each autopilot session, you will be asked to define a Goal and confirm it with the user via `ask_user`.\n" +
+			"- At the start of each autopilot session, you will be asked to declare your goal. Work toward it fully autonomously.\n" +
 			"- The Goal defines what 'done' looks like. All your work must serve this Goal.\n" +
-			"- When you have fully achieved the Goal, end your response with exactly \"GOAL_COMPLETE\" on its own line, then provide a brief summary.\n" +
-			"- Do not declare GOAL_COMPLETE unless the Goal is genuinely achieved and verified.\n" +
+			"- A separate strategist process monitors your progress and decides when the Goal is achieved. Keep working until then.\n" +
 			"\n" +
 			"**Staying on task:**\n" +
 			"- Keep your work strictly within the scope of the Goal. Do not start tangential improvements, refactoring, or cleanup unless they are prerequisites.\n" +

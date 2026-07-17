@@ -883,7 +883,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		reactiveCompactRetries = 0
 
 		// Autopilot: extract GOAL: declaration from LLM output as early as
-		// possible, so the strategist and GOAL_COMPLETE detection are active
+		// possible, so the strategist detection is active
 		// for subsequent iterations.
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
 

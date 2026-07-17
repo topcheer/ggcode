@@ -45,7 +45,7 @@ func (a *Agent) clearGoalIfNotAutopilot() {
 // clarification via ask_user. No programmatic heuristic is applied.
 //
 // The LLM must declare the goal using a "GOAL:" sentinel line so the
-// agent runtime can extract it for the strategist and GOAL_COMPLETE
+// agent runtime can extract it for the strategist.
 // detection.
 func (a *Agent) maybeInjectAutopilotGoalCollection() {
 	if a.currentMode() != permission.AutopilotMode {
