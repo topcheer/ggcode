@@ -794,7 +794,9 @@ func (m *Model) startContextProbe() {
 				if m.session != nil && m.session.ContextWindow == 0 {
 					m.session.ContextWindow = r.ContextWindow
 					if m.sessionStore != nil {
-						_ = m.sessionStore.AppendMetaToDisk(m.session)
+						if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+							debug.Log("tui", "contextWindow persist: %v", err)
+						}
 					}
 				}
 			} else {
@@ -868,7 +870,9 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	// Persist session meta to JSONL so TokenUsage, vendor, model etc.
 	// match the current in-memory state.
 	if m.sessionStore != nil {
-		_ = m.sessionStore.AppendMetaToDisk(m.session)
+		if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+			debug.Log("tui", "session restore meta persist: %v", err)
+		}
 	}
 	// Probe context window for the restored model/endpoint. Different sessions
 	// may use different models with different context window sizes.
@@ -949,7 +953,9 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage) {
 	// goroutines, so ordering is safe.
 	safego.Go("session.usage", func() {
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			_ = jsonlStore.AppendMetaToDisk(ses)
+			if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
+				debug.Log("tui", "async meta persist: %v", err)
+			}
 			_ = jsonlStore.AppendUsageEntry(ses, entry)
 		} else {
 			_ = store.Save(ses)

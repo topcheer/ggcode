@@ -471,7 +471,9 @@ func (m *Manager) BindSession(binding SessionBinding) {
 		}
 	}
 
-	_ = m.reloadBindingLocked()
+	if err := m.reloadBindingLocked(); err != nil {
+		debug.Log("im", "BindSession: reloadBindingLocked failed: %v", err)
+	}
 	// Stop any previous watcher and start a new one with the updated session.
 	// This ensures the watcher has the correct sessionID for ownership checks.
 	prevCancel := m.bindingWatcherCancel

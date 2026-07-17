@@ -56,7 +56,9 @@ func (m *Model) handleClearChat() {
 		oldStore := m.sessionStore
 		safego.Go("tui.clearChat.metaFlush", func() {
 			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
-				_ = jsonlStore.AppendMetaToDisk(oldSes)
+				if err := jsonlStore.AppendMetaToDisk(oldSes); err != nil {
+					debug.Log("tui", "clearChat oldSes meta persist: %v", err)
+				}
 			}
 		})
 	}
@@ -541,7 +543,9 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 	oldStore := m.sessionStore
 	safego.Go("tui.branch.metaFlush", func() {
 		if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
-			_ = jsonlStore.AppendMetaToDisk(oldSes)
+			if err := jsonlStore.AppendMetaToDisk(oldSes); err != nil {
+				debug.Log("tui", "branch oldSes meta persist: %v", err)
+			}
 		}
 	})
 

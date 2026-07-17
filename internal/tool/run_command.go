@@ -258,7 +258,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Inject Co-Authored-By trailer for git commit commands
 	if isGitCommitCommand(args.Command) {
 		args.Command = injectCoAuthorTrailer(args.Command)
-		cmd, _, _ = util.NewShellCommandContext(cmdCtx, args.Command)
+		newCmd, _, cmdErr := util.NewShellCommandContext(cmdCtx, args.Command)
+		if cmdErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", cmdErr)}, nil
+		}
+		cmd = newCmd
 		configureCommandCancellation(cmd)
 		if t.WorkingDir != "" {
 			cmd.Dir = t.WorkingDir

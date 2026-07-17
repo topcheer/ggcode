@@ -66,7 +66,9 @@ func (m *Model) persistSidebarPreference() {
 		visible := m.sidebarVisible
 		m.session.SidebarVisible = &visible
 		if m.sessionStore != nil {
-			_ = m.sessionStore.AppendMetaToDisk(m.session)
+			if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+				debug.Log("tui", "persistSidebarPreference: %v", err)
+			}
 		}
 	}
 }
@@ -417,7 +419,9 @@ func (m *Model) syncSessionSelection() {
 	m.session.Endpoint = m.config.Endpoint
 	m.session.Model = m.config.Model
 	if m.sessionStore != nil {
-		_ = m.sessionStore.AppendMetaToDisk(m.session)
+		if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+			debug.Log("tui", "persistModelChange: %v", err)
+		}
 	}
 }
 
