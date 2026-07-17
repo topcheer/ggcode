@@ -50,4 +50,11 @@ jobs:
       - name: Publish npm package
         if: steps.release.outputs.publish == 'true'
         working-directory: npm
-        run: npm publish
+        env:
+          # Remove the .npmrc that setup-node creates with GITHUB_TOKEN.
+          # With trusted publishing configured on npmjs.com, npm CLI
+          # authenticates via OIDC — no auth token needed.
+          NODE_AUTH_TOKEN: ''
+        run: |
+          rm -f "$NPM_CONFIG_USERCONFIG"
+          npm publish
