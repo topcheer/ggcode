@@ -24,7 +24,7 @@ type StartCommandTool struct {
 func (t StartCommandTool) Name() string { return "start_command" }
 
 func (t StartCommandTool) Description() string {
-	return "Start a shell command in the background. Use this for long-running, streaming, or interactive commands; prefer run_command for quick one-shot commands. Commands run in the workspace working directory. Use read_command_output or wait_command with the returned job_id to monitor progress, write_command_input to answer prompts, and stop_command to cancel. Defaults to a 30-minute timeout. Set detach=true for long-running services (dev servers, watchers) that should run without any timeout — the process runs until it exits naturally or is stopped manually."
+	return "Start a shell command in the background for long-running, streaming, or interactive commands. Prefer run_command for quick one-shot commands. Use read_command_output/wait_command with the returned job_id to monitor, write_command_input for stdin, stop_command to cancel. Defaults to 30-minute timeout. Set detach=true for long-running services (dev servers, watchers) with no timeout."
 }
 
 func (t StartCommandTool) Parameters() json.RawMessage {
@@ -33,7 +33,7 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 	"properties": {
 		"command": {
 			"type": "string",
-			"description": "Shell command to execute in the background in the workspace working directory. Use start_command for long-running, streaming, or interactive commands; prefer run_command for quick one-shot commands. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Start dev server' or '# Run linter'). This comment is shown as the activity label in the UI."
+			"description": "Shell command to execute in the background. Start with a '# ' comment line describing its purpose (shown as activity label in the UI)."
 		},
 		"description": {
 			"type": "string",

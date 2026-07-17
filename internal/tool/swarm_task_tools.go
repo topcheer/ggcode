@@ -21,12 +21,7 @@ type SwarmTaskCreateTool struct {
 
 func (t SwarmTaskCreateTool) Name() string { return "swarm_task_create" }
 func (t SwarmTaskCreateTool) Description() string {
-	return "Create a task on a team's shared task board so work is visible, coordinated, and easy to hand off. " +
-		"Set assignee when there is a clear best owner. With assignee set, the task is recorded on the board and pushed directly to that teammate's inbox for immediate execution; do not also call swarm_task_claim for that task. " +
-		"Leave assignee empty only when no specific teammate is known; idle teammates are notified and may claim the pending board task themselves. " +
-		"Before creating a new task, make sure the work is not already tracked on the board. " +
-		"Use this for real handoffs, help requests, or distinct follow-up work — not duplicate reminders. " +
-		"Do not use send_message to repeat a task that already has an assignee unless you have new material information."
+	return "Create a task on a team's shared task board for coordinated, handoff-ready work. Set assignee to deliver directly to a teammate's inbox (do not also call swarm_task_claim). Leave assignee empty only when no specific teammate is known. Do not duplicate existing tracked tasks or use send_message to repeat an assigned task."
 }
 func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

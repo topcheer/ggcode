@@ -22,16 +22,7 @@ func (t CreateNamedAgentTool) Description() string {
 	return `Define or update a named subagent template with a custom system prompt, tool restrictions, and model override.
 
 Named subagents are persisted per-workspace and can be reused across sessions with use_namedagent.
-They are ideal for recurring specialized roles like code review, test generation, or documentation.
-
-Template fields:
-- name: Unique identifier (e.g., "code-reviewer", "test-writer")
-- description: One-line summary of what this subagent does
-- system_prompt: Complete instructions defining the subagent's role, expertise, and constraints
-- tools: Optional allowlist of built-in tool names. If omitted, all tools are available (minus blocked ones)
-- blocked_tools: Optional denylist of tool names to exclude (applied after tools allowlist)
-- mcp_servers: Optional list of MCP server names whose tools should be included
-- model: Optional model name override (any model on the current endpoint). Empty inherits parent's model`
+They are ideal for recurring specialized roles like code review, test generation, or documentation.`
 }
 
 func (t CreateNamedAgentTool) Parameters() json.RawMessage {

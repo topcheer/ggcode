@@ -12,7 +12,7 @@ func TestTmuxToolSchemaExposesLifecycleActions(t *testing.T) {
 	if got, want := tool.Name(), "tmux"; got != want {
 		t.Fatalf("Name() = %q, want %q", got, want)
 	}
-	for _, want := range []string{"create panes", "capture pane output", "refresh managed pane state", "close panes"} {
+	for _, want := range []string{"pane creation", "output capture", "close"} {
 		if !strings.Contains(tool.Description(), want) {
 			t.Fatalf("Description() should mention %q, got %q", want, tool.Description())
 		}

@@ -11,13 +11,13 @@ import (
 
 func TestRunCommandDescriptionClarifiesQuickVsBackground(t *testing.T) {
 	tool := RunCommand{}
-	for _, want := range []string{"quick one-shot", "prefer start_command", "interactive commands"} {
+	for _, want := range []string{"quick one-shot", "prefer start_command", "30-minute timeout"} {
 		if !containsAny(tool.Description(), want) {
 			t.Fatalf("run_command description should mention %q, got %q", want, tool.Description())
 		}
 	}
 	params := string(tool.Parameters())
-	for _, want := range []string{"quick one-shot commands", "prefer start_command", "# Run tests"} {
+	for _, want := range []string{"# "} {
 		if !containsAny(params, want) {
 			t.Fatalf("run_command schema should mention %q, got %s", want, params)
 		}

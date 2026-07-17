@@ -34,7 +34,7 @@ func (w *WarpTool) Clone() Tool {
 func (w *WarpTool) Name() string { return "warp" }
 
 func (w *WarpTool) Description() string {
-	return "Manage Warp terminal panes, tabs, and windows when running inside Warp: inspect status, create splits, new tabs, new agent tabs, navigate panes/tabs, send text input, send key events, toggle pane zoom, and interact with Warp blocks (select, copy, share). Use this when the user asks to manage terminal panes in Warp."
+	return "Manage Warp terminal panes, tabs, and windows when running inside Warp. Supports splits, navigation, text/keys, zoom, and Warp blocks (select, copy, share). Use when the user asks to manage terminal panes in Warp."
 }
 
 func (w *WarpTool) Parameters() json.RawMessage {

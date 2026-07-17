@@ -22,7 +22,7 @@ type DebugLogTool struct{}
 func (t DebugLogTool) Name() string { return "debug_log" }
 
 func (t DebugLogTool) Description() string {
-	return "Read recent entries from the in-memory debug log ring buffer, or export them to a temp file. Useful for diagnosing internal issues such as provider errors, agent loop behavior, IM adapter problems, or harness failures. The ring buffer captures all debug.Log calls regardless of GGCODE_DEBUG setting. Use action=\"export\" to write filtered logs to a temp file for sharing or archival. Returns formatted log lines with timestamps."
+	return "Read recent entries from the in-memory debug log ring buffer, or export to a temp file. Captures all debug.Log calls regardless of GGCODE_DEBUG setting. Use action=\"export\" to write filtered logs for sharing. Returns formatted log lines with timestamps."
 }
 
 func (t DebugLogTool) Parameters() json.RawMessage {

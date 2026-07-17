@@ -42,7 +42,7 @@ func (k *KittyTool) Clone() Tool {
 func (k *KittyTool) Name() string { return "kitty" }
 
 func (k *KittyTool) Description() string {
-	return "Manage Kitty terminal windows, tabs, and panes when running inside Kitty: inspect status, list windows/tabs as JSON, create splits/tabs/windows with optional commands, focus/close/resize windows by ID, send text input, send key events, get screen text contents, manage tab titles, perform arbitrary Kitty actions (zoom, scroll, layout switching), and reload config. Kitty's remote control protocol provides structured JSON output and per-window targeting on ALL platforms. Use this when the user asks to manage terminal panes in Kitty."
+	return "Manage Kitty terminal windows, tabs, and panes when running inside Kitty. Supports splits, text/keys, screen capture, zoom, layout switching, and config reload via Kitty's remote control protocol. Use when the user asks to manage terminal panes in Kitty."
 }
 
 func (k *KittyTool) Parameters() json.RawMessage {

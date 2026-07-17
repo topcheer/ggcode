@@ -34,7 +34,7 @@ func (g *GhosttyTool) Clone() Tool {
 func (g *GhosttyTool) Name() string { return "ghostty" }
 
 func (g *GhosttyTool) Description() string {
-	return "Manage Ghostty terminal panes, tabs, and windows when running inside Ghostty: inspect status, list surfaces, create splits with optional commands, run commands in panes, focus/navigate between splits, send text input, send key events, and trigger Ghostty actions (zoom, resize, equalize, etc). Use this when the user asks to manage terminal panes in Ghostty."
+	return "Manage Ghostty terminal panes, tabs, and windows when running inside Ghostty. Supports splits, text/keys, zoom, resize, and actions via Ghostty's IPC. Use when the user asks to manage terminal panes in Ghostty."
 }
 
 func (g *GhosttyTool) Parameters() json.RawMessage {

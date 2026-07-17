@@ -31,7 +31,7 @@ func (t *TmuxTool) Clone() Tool {
 func (t *TmuxTool) Name() string { return "tmux" }
 
 func (t *TmuxTool) Description() string {
-	return "Manage tmux panes and workspace layouts from inside a tmux session: inspect status, create panes, setup/save layouts, capture pane output, refresh managed pane state, focus panes, and close panes. Use this when the user asks to run or inspect work in tmux rather than ordinary shell commands."
+	return "Manage tmux panes and workspace layouts from inside a tmux session. Supports status, pane creation, layout setup/save, output capture, focus, and close. Use when the user asks to run or inspect work in tmux."
 }
 
 func (t *TmuxTool) Parameters() json.RawMessage {

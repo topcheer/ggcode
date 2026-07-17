@@ -90,9 +90,8 @@ func TestSwarmTaskCreateToolDescriptionEmphasizesCoordination(t *testing.T) {
 	desc := SwarmTaskCreateTool{}.Description()
 	for _, want := range []string{
 		"shared task board",
-		"clear best owner",
-		"not already tracked on the board",
-		"distinct follow-up work",
+		"Set assignee to deliver directly",
+		"Do not duplicate existing tracked tasks",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("expected description to contain %q, got %q", want, desc)
@@ -384,7 +383,7 @@ func TestSwarmTaskCreateTool_NoAssigneeNotifiesIdleRunners(t *testing.T) {
 
 func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
 	createDesc := SwarmTaskCreateTool{}.Description()
-	for _, want := range []string{"directly to that teammate's inbox", "do not also call swarm_task_claim", "idle teammates are notified"} {
+	for _, want := range []string{"deliver directly to a teammate's inbox", "do not also call swarm_task_claim", "Leave assignee empty"} {
 		if !strings.Contains(createDesc, want) {
 			t.Fatalf("swarm_task_create description should mention %q, got %q", want, createDesc)
 		}

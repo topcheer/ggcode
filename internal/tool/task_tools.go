@@ -20,7 +20,7 @@ type TaskCreateTool struct {
 
 func (t TaskCreateTool) Name() string { return "task_create" }
 func (t TaskCreateTool) Description() string {
-	return "Create a structured task to track work within the session. Use for meaningful multi-step work, dependencies, or handoff-ready follow-up; use todo_write for a lightweight personal checklist and swarm_task_create for assigning work to teammates. Returns the task ID for task_update, task_get, or dependency links."
+	return "Create a structured task to track work within the session. Use for meaningful multi-step work, dependencies, or handoff-ready follow-up. Use todo_write for lightweight checklists, swarm_task_create for teammate assignments."
 }
 func (t TaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

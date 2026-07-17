@@ -62,8 +62,8 @@ func TestCommandJobPollingNoDuplicateLines(t *testing.T) {
 }
 
 func TestCommandJobToolDescriptionsExplainPollingSemantics(t *testing.T) {
-	if !strings.Contains(StartCommandTool{}.Description(), "workspace working directory") {
-		t.Fatalf("start_command description should explain working directory, got %q", StartCommandTool{}.Description())
+	if !strings.Contains(StartCommandTool{}.Description(), "read_command_output") {
+		t.Fatalf("start_command description should explain polling, got %q", StartCommandTool{}.Description())
 	}
 	if !strings.Contains(ReadCommandOutputTool{}.Description(), "since_line") || !strings.Contains(ReadCommandOutputTool{}.Description(), "tail_lines") {
 		t.Fatalf("read_command_output description should explain polling semantics, got %q", ReadCommandOutputTool{}.Description())

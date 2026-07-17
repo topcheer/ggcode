@@ -85,7 +85,7 @@ func TestEnterPlanMode_FromAutopilot(t *testing.T) {
 func TestEnterPlanModeDescriptionMatchesReadOnlyPolicy(t *testing.T) {
 	tool := EnterPlanModeTool{}
 	desc := tool.Description()
-	for _, want := range []string{"multi_file_read", "LSP", "git", "web_fetch", "list_commands", "read_command_output", "wait_command", "Writes and shell execution are denied"} {
+	for _, want := range []string{"read-only", "LSP", "git", "web", "writes and shell execution are denied"} {
 		if !contains(desc, want) {
 			t.Fatalf("enter_plan_mode description should mention %q, got %q", want, desc)
 		}

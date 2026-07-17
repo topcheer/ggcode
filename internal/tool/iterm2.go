@@ -43,7 +43,7 @@ func (t *Iterm2Tool) Clone() Tool {
 func (t *Iterm2Tool) Name() string { return "iterm2" }
 
 func (t *Iterm2Tool) Description() string {
-	return "Manage iTerm2 terminal sessions, tabs, panes, and windows when running inside iTerm2: inspect status, list windows/tabs/sessions, create splits/tabs/windows with optional commands, focus/close/select sessions, send text input, send key events, resize splits, capture screen contents, set session titles, switch profiles, set badges, toggle input broadcasting, manage marks, clear buffers, and trigger menu actions. iTerm2's AppleScript dictionary provides rich automation on macOS. Use this when the user asks to manage terminal panes in iTerm2."
+	return "Manage iTerm2 terminal sessions, tabs, panes, and windows when running inside iTerm2. Supports splits, text input, key events, screen capture, profiles, and more via AppleScript. Use when the user asks to manage terminal panes in iTerm2."
 }
 
 func (t *Iterm2Tool) Parameters() json.RawMessage {

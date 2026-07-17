@@ -154,12 +154,12 @@ func TestCommandJobManagerWriteInputFailsForStoppedJob(t *testing.T) {
 
 func TestCommandJobToolDescriptionsGuideInteractiveUse(t *testing.T) {
 	start := StartCommandTool{}
-	for _, want := range []string{"long-running, streaming, or interactive", "prefer run_command for quick one-shot commands", "write_command_input to answer prompts"} {
+	for _, want := range []string{"long-running, streaming, or interactive", "Prefer run_command for quick one-shot", "write_command_input for stdin"} {
 		if !strings.Contains(start.Description(), want) {
 			t.Fatalf("start_command description should mention %q, got %q", want, start.Description())
 		}
 	}
-	if !strings.Contains(string(start.Parameters()), "prefer run_command for quick one-shot commands") {
+	if !strings.Contains(string(start.Parameters()), "# ") {
 		t.Fatalf("start_command schema should guide quick commands, got %s", string(start.Parameters()))
 	}
 

@@ -27,10 +27,7 @@ type UseNamedAgentTool struct {
 func (t UseNamedAgentTool) Name() string { return "use_namedagent" }
 
 func (t UseNamedAgentTool) Description() string {
-	return `Invoke a named subagent template to execute a task. The subagent runs with its predefined system prompt, tools, and model.
-
-Returns an agent_id that can be used with wait_agent and list_agents to monitor progress and retrieve results.
-Each invocation is a fresh session — no conversation history is persisted between invocations.`
+	return `Invoke a named subagent template to execute a task. Returns an agent_id for use with wait_agent/list_agents. Each invocation is a fresh session with no persisted history.`
 }
 
 func (t UseNamedAgentTool) Parameters() json.RawMessage {
