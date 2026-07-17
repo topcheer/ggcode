@@ -980,6 +980,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						}},
 					})
 					continue
+				} else {
+					// Strategist returned empty guidance (not complete, not error).
+					// This can happen with content-filtered or malformed API responses.
+					debug.Log("agent", "Iteration %d: strategist returned empty guidance", i+1)
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance — autopilot stopping]"})
+					a.clearAutopilotGoal()
+					return nil
 				}
 			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
 				// Strategist call budget exhausted — notify and stop.
