@@ -74,22 +74,6 @@ Download the `.zip` from [GitHub Releases](https://github.com/topcheer/ggcode/re
 
 ---
 
-## Package Managers
-
-### npm
-
-```bash
-npm install -g @ggcode-cli/ggcode
-```
-
-### PyPI
-
-```bash
-pip install ggcode
-```
-
----
-
 ## Build From Source
 
 ### Prerequisites

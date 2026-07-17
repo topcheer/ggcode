@@ -160,7 +160,6 @@
     macos: "curl -fsSL https://ggcode.dev/install.sh | bash",
     windows: "irm https://ggcode.dev/install.ps1 | iex",
     brew: "brew install topcheer/ggcode/ggcode",
-    npm: "npm install -g @ggcode-cli/ggcode",
   };
 
   var tabs = document.querySelectorAll(".tab");
