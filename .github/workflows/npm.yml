@@ -50,9 +50,4 @@ jobs:
       - name: Publish npm package
         if: steps.release.outputs.publish == 'true'
         working-directory: npm
-        env:
-          # Clear NODE_AUTH_TOKEN — setup-node auto-injects GITHUB_TOKEN
-          # which breaks OIDC trusted publishing. With trusted publishing
-          # configured on npm, npm publish authenticates via OIDC alone.
-          NODE_AUTH_TOKEN: ''
-        run: npm publish --provenance
+        run: npm publish
