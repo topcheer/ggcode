@@ -383,6 +383,40 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "List Agents",
 		},
 
+		// Named agent tools
+		{
+			name: "use_namedagent with name", toolName: "use_namedagent",
+			rawArgs:     `{"name":"architect","task":"design the API"}`,
+			wantName:    "Run Agent: architect",
+			wantDetail:  "design the API",
+			wantDisplay: "Run Agent: architect design the API",
+		},
+		{
+			name: "use_namedagent no name", toolName: "use_namedagent",
+			rawArgs:     `{"task":"do something"}`,
+			wantName:    "Run Named Agent",
+			wantDetail:  "do something",
+			wantDisplay: "Run Named Agent do something",
+		},
+		{
+			name: "create_namedagent", toolName: "create_namedagent",
+			rawArgs:     `{"name":"code-reviewer"}`,
+			wantName:    "Create Agent: code-reviewer",
+			wantDisplay: "Create Agent: code-reviewer",
+		},
+		{
+			name: "delete_namedagent", toolName: "delete_namedagent",
+			rawArgs:     `{"name":"old-agent"}`,
+			wantName:    "Delete Agent: old-agent",
+			wantDisplay: "Delete Agent: old-agent",
+		},
+		{
+			name: "list_namedagent", toolName: "list_namedagent",
+			rawArgs:     `{}`,
+			wantName:    "List Agents",
+			wantDisplay: "List Agents",
+		},
+
 		// Unknown / MCP tools
 		{
 			name: "unknown tool", toolName: "my_mcp_tool",

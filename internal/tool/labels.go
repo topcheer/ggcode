@@ -262,6 +262,27 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Worktree", displayTarget(argStr(args, "name")))
 	case "exit_worktree":
 		return toolPres("Exit Worktree", displayTarget(argStr(args, "action")))
+	case "use_namedagent":
+		name := argStr(args, "name")
+		task := argStr(args, "task")
+		if name != "" {
+			return toolPres("Run Agent: "+name, compactPreview(task))
+		}
+		return toolPres("Run Named Agent", compactPreview(task))
+	case "create_namedagent":
+		name := argStr(args, "name")
+		if name != "" {
+			return toolPres("Create Agent: "+name, "")
+		}
+		return toolPres("Create Agent", "")
+	case "delete_namedagent":
+		name := argStr(args, "name")
+		if name != "" {
+			return toolPres("Delete Agent: "+name, "")
+		}
+		return toolPres("Delete Agent", "")
+	case "list_namedagent":
+		return toolPres("List Agents", "")
 	case "a2a_send_task":
 		return toolPres("A2A", displayTarget(argStr(args, "target")))
 	case "read_mcp_resource":

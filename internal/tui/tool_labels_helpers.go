@@ -190,6 +190,14 @@ func localizedToolLabel(lang Language, action string) string {
 			return "任务列表"
 		case "a2a_cancel_task":
 			return "取消任务"
+		case "use_namedagent":
+			return "运行命名代理"
+		case "create_namedagent":
+			return "创建命名代理"
+		case "delete_namedagent":
+			return "删除命名代理"
+		case "list_namedagent":
+			return "命名代理列表"
 		}
 	default:
 		switch action {
@@ -321,6 +329,14 @@ func localizedToolLabel(lang Language, action string) string {
 			return "List Tasks"
 		case "a2a_cancel_task":
 			return "Cancel Task"
+		case "use_namedagent":
+			return "Run Agent"
+		case "create_namedagent":
+			return "Create Agent"
+		case "delete_namedagent":
+			return "Delete Agent"
+		case "list_namedagent":
+			return "List Agents"
 		}
 	}
 	return localizedGenericToolName(lang, action)
@@ -435,6 +451,14 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "正在列出任务..."
 			case "a2a_cancel_task":
 				return "正在取消任务..."
+			case "use_namedagent":
+				return "正在运行命名代理..."
+			case "create_namedagent":
+				return "正在创建命名代理..."
+			case "delete_namedagent":
+				return "正在删除命名代理..."
+			case "list_namedagent":
+				return "正在列出命名代理..."
 			}
 		default:
 			switch action {
@@ -542,6 +566,14 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Listing tasks..."
 			case "a2a_cancel_task":
 				return "Canceling task..."
+			case "use_namedagent":
+				return "Running named agent..."
+			case "create_namedagent":
+				return "Creating named agent..."
+			case "delete_namedagent":
+				return "Deleting named agent..."
+			case "list_namedagent":
+				return "Listing named agents..."
 			}
 		}
 	}

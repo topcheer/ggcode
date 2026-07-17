@@ -441,6 +441,47 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      "",
 			Activity:    localizedToolActivity(lang, "swarm_task_list", ""),
 		}
+	case "use_namedagent":
+		name := argString(args, "name")
+		task := argString(args, "task")
+		label := localizedToolLabel(lang, "use_namedagent")
+		if name != "" {
+			label = fmt.Sprintf("%s: %s", label, name)
+		}
+		return toolPresentation{
+			DisplayName: label,
+			Detail:      compactSingleLine(task),
+			Activity:    label,
+		}
+	case "create_namedagent":
+		name := argString(args, "name")
+		label := localizedToolLabel(lang, "create_namedagent")
+		if name != "" {
+			label = fmt.Sprintf("%s: %s", label, name)
+		}
+		return toolPresentation{
+			DisplayName: label,
+			Detail:      "",
+			Activity:    label,
+		}
+	case "delete_namedagent":
+		name := argString(args, "name")
+		label := localizedToolLabel(lang, "delete_namedagent")
+		if name != "" {
+			label = fmt.Sprintf("%s: %s", label, name)
+		}
+		return toolPresentation{
+			DisplayName: label,
+			Detail:      "",
+			Activity:    label,
+		}
+	case "list_namedagent":
+		label := localizedToolLabel(lang, "list_namedagent")
+		return toolPresentation{
+			DisplayName: label,
+			Detail:      "",
+			Activity:    label,
+		}
 	case "list_mcp_capabilities":
 		server := argString(args, "server")
 		return toolPresentation{
