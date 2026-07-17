@@ -254,12 +254,11 @@ func (b *budgetGuardState) maybeWarn(contextWindow, currentTokens int) string {
 
 	return fmt.Sprintf(
 		"[budget guard: token cost escalation detected] %s.\n"+
-			"This trajectory is consuming increasing tokens per step, which often indicates "+
-			"backtracking or an approach that isn't converging. Consider:\n"+
-			"1. Summarize what you've accomplished so far\n"+
-			"2. Identify the specific blocker preventing progress\n"+
-			"3. Switch to a more targeted approach (fewer, smaller operations)\n"+
-			"4. If the task cannot be completed, report what's blocking it instead of continuing to consume budget",
+			"Token usage per step is increasing. To work more efficiently within the remaining context budget:\n"+
+			"1. Keep responses concise — avoid repeating information already stated\n"+
+			"2. Batch related operations into fewer steps instead of one-at-a-time\n"+
+			"3. Avoid re-reading files or running searches you've already done\n"+
+			"4. Focus on the most direct path to completing the current task",
 		reasonStr,
 	)
 }
