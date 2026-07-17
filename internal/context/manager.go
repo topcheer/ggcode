@@ -86,12 +86,6 @@ const (
 	tokenCountTimeout         = 100 * time.Millisecond
 )
 
-func AutoCompactThresholdRatio() float64 {
-	// Obsolete; kept for API compatibility. The Manager uses a dynamic
-	// overhead derived from the current system prompt and output reserve.
-	return 0
-}
-
 // AutoCompactThresholdTokens returns a conservative threshold for callers that
 // do not have a Manager instance. It assumes no system prompt and only reserves
 // the effective output reserve for the given context window.
