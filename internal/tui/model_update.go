@@ -28,9 +28,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	}()
 
 	m.syncAsyncStateCaches()
-	// Flush pending stream text on every tick — ensures throttled content
-	// appears within one tick (150ms) of the last chunk arriving.
-	m.flushPendingStream()
 	model = m
 	// Handle spinner ticks first
 	var spinnerCmd tea.Cmd
