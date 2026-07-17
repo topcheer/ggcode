@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
 type MultiFileRead struct {
@@ -106,38 +107,65 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
 	}
 
+	// Read all files concurrently for better I/O throughput.
+	// Each file read is independent (stat + readfile + content processing),
+	// so parallelizing them turns N sequential I/O operations into ~ceil(N/concurrency) batches.
+	type readResult struct {
+		index int
+		block string
+	}
+	results := make([]readResult, len(reqs))
+	concurrency := 5
+	if len(reqs) < concurrency {
+		concurrency = len(reqs)
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, req := range reqs {
+		wg.Add(1)
+		go func(idx int, r readReq) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var block string
+			if t.SandboxCheck != nil && !t.SandboxCheck(r.Path) {
+				block = formatMultiFileReadErrorBlock(r.Path, "Error: path not allowed by sandbox policy")
+			} else {
+				text, err := readTextContentAtPath(r.Path, r.Offset, r.Limit, readFileRangeOptions{
+					defaultLimit: defaultMultiFileReadLimit,
+					moreHint:     "Use multi_file_read or read_file with a narrower range for more.",
+				})
+				if err != nil {
+					block = formatMultiFileReadErrorBlock(r.Path, err.Error())
+				} else {
+					block = formatMultiFileReadFileBlock(r.Path, text)
+				}
+			}
+			results[idx] = readResult{index: idx, block: block}
+		}(i, req)
+	}
+	wg.Wait()
+
+	// Assemble output in original order with cumulative limit enforcement.
 	var body strings.Builder
 	succeeded, failed, skipped := 0, 0, 0
 	currentLines, currentBytes := 0, 0
 	limitReached := false
-	for i, req := range reqs {
+	for i := range reqs {
 		if limitReached {
-			body.WriteString(formatMultiFileReadSkippedBlock(req.Path))
+			body.WriteString(formatMultiFileReadSkippedBlock(reqs[i].Path))
 			skipped++
 			continue
 		}
 
-		var block string
-		if t.SandboxCheck != nil && !t.SandboxCheck(req.Path) {
-			block = formatMultiFileReadErrorBlock(req.Path, "Error: path not allowed by sandbox policy")
-		} else {
-			text, err := readTextContentAtPath(req.Path, req.Offset, req.Limit, readFileRangeOptions{
-				defaultLimit: defaultMultiFileReadLimit,
-				moreHint:     "Use multi_file_read or read_file with a narrower range for more.",
-			})
-			if err != nil {
-				block = formatMultiFileReadErrorBlock(req.Path, err.Error())
-			} else {
-				block = formatMultiFileReadFileBlock(req.Path, text)
-			}
-		}
-
+		block := results[i].block
 		blockLines := strings.Count(block, "\n")
 		blockBytes := len(block)
 		if currentLines+blockLines > maxMultiFileReadTotalLines || currentBytes+blockBytes > maxMultiFileReadTotalBytes {
 			limitReached = true
-			for _, remaining := range reqs[i:] {
-				body.WriteString(formatMultiFileReadSkippedBlock(remaining.Path))
+			for j := i; j < len(reqs); j++ {
+				body.WriteString(formatMultiFileReadSkippedBlock(reqs[j].Path))
 				skipped++
 			}
 			break
