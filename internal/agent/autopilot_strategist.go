@@ -152,7 +152,10 @@ func (a *Agent) extractStrategistContext() string {
 		// Truncate very long individual messages to keep the strategist input manageable.
 		const maxMsgLen = 3000
 		if len(text) > maxMsgLen {
-			text = text[:maxMsgLen] + "... [truncated]"
+			runes := []rune(text)
+			if len(runes) > maxMsgLen {
+				text = string(runes[:maxMsgLen]) + "... [truncated]"
+			}
 		}
 
 		switch msg.Role {

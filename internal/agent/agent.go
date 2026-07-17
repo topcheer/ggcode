@@ -947,10 +947,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// goal, call an independent LLM to analyze the full conversation
 			// context and decide what the agent should do next. This replaces
 			// the old deterministic text-pattern-matching autopilot logic.
-			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
+			const maxAutopilotStrategistCalls = 10
+			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
 				a.autopilotStrategistCount++
-				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d)", i+1, a.autopilotStrategistCount)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount)})
+				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d/%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
 
 				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
 				if sErr != nil {
