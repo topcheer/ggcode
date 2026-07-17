@@ -1,59 +1,11 @@
-# ggcode Python wrapper
+# ggcode (Python wrapper) — DEPRECATED
 
-`ggcode` on PyPI bootstraps the native `ggcode` terminal agent from GitHub Releases.
+> **This package is deprecated.** The Python wrapper is no longer maintained.
+> Please use one of the [recommended installation methods](https://github.com/topcheer/ggcode#installation) instead.
 
-When the bootstrap runs, it installs the real binary into a stable CLI location instead of keeping
-it in a wrapper-managed cache:
+This package bootstraps the native `ggcode` terminal agent from GitHub Releases.
 
-- macOS / Linux: prefers `/usr/local/bin`, falls back to `~/.local/bin`
-- Windows: prefers `%USERPROFILE%\\AppData\\Local\\Programs\\ggcode\\bin`, falls back to `%USERPROFILE%\\.local\\bin`
-
-If that directory is not already on `PATH`, the bootstrap updates your PATH configuration and asks
-you to reopen the terminal so future `ggcode` launches resolve directly to the native binary.
-
-## Install
-
-```bash
-pip install ggcode
-```
-
-Then run:
-
-```bash
-ggcode
-```
-
-If you ever need to rerun the bootstrap flow explicitly, you can also use:
-
-```bash
-ggcode-bootstrap
-```
-
-## What it does
-
-- Detects your operating system and CPU architecture
-- Downloads the latest matching `ggcode` archive from GitHub Releases
-- Verifies the archive against `checksums.txt`
-- Installs the real binary into a stable PATH location
-- Updates PATH so future `ggcode` launches bypass the Python wrapper
-
-## Pin a specific ggcode release
-
-By default, the wrapper always resolves the latest `ggcode` release.
-
-To force a specific release, set `GGCODE_INSTALL_VERSION`:
-
-```bash
-GGCODE_INSTALL_VERSION=vX.Y.Z ggcode
-```
-
-or:
-
-```bash
-GGCODE_INSTALL_VERSION=X.Y.Z ggcode
-```
-
-## Other install methods
+## Recommended install methods
 
 ### Homebrew (macOS / Linux)
 

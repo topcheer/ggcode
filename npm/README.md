@@ -1,82 +1,11 @@
-# @ggcode-cli/ggcode
+# ggcode (npm wrapper) — DEPRECATED
 
-`@ggcode-cli/ggcode` installs the native `ggcode` binary from GitHub Releases.
+> **This package is deprecated.** The npm wrapper is no longer maintained.
+> Please use one of the [recommended installation methods](https://github.com/topcheer/ggcode#installation) instead.
 
-During package installation it downloads the matching release archive, verifies it, and places the
-real `ggcode` executable in a stable CLI location:
+This npm package installs the native `ggcode` binary from GitHub Releases.
 
-- macOS / Linux: prefers `/usr/local/bin`, falls back to `~/.local/bin`
-- Windows: prefers `%USERPROFILE%\\AppData\\Local\\Programs\\ggcode\\bin`, falls back to `%USERPROFILE%\\.local\\bin`
-
-If that directory is not on `PATH`, the installer updates your shell/user PATH and asks you to
-reopen the terminal. The npm package keeps a separate `ggcode-bootstrap` helper command for manual
-repair, but normal usage should be the real `ggcode` binary.
-
-## Install
-
-For normal CLI usage, install it globally:
-
-```bash
-npm install -g @ggcode-cli/ggcode
-```
-
-Then run:
-
-```bash
-ggcode
-```
-
-If the native install needs to be retried manually, run:
-
-```bash
-ggcode-bootstrap
-```
-
-## What it does
-
-- Detects your platform and architecture
-- Downloads the latest matching `ggcode` binary from GitHub Releases
-- Verifies the downloaded archive with `checksums.txt`
-- Installs the real binary into a stable PATH location
-- Updates `PATH` when needed so future `ggcode` launches bypass the wrapper
-
-## Pin a specific ggcode release
-
-By default, the wrapper always resolves the latest `ggcode` release.
-
-If you need to pin a specific release, set `GGCODE_INSTALL_VERSION`:
-
-```bash
-GGCODE_INSTALL_VERSION=vX.Y.Z ggcode
-```
-
-or:
-
-```bash
-GGCODE_INSTALL_VERSION=X.Y.Z ggcode
-```
-
-## TLS / Corporate proxy
-
-The installer verifies TLS certificates by default.
-
-If you are behind a corporate proxy with a custom CA certificate that Node.js does not trust, you have two options:
-
-1. **Recommended** — add your CA to Node's trust store:
-
-   ```bash
-   NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem npm install -g @ggcode-cli/ggcode
-   ```
-
-2. **Not recommended** — disable TLS verification entirely:
-
-   ```bash
-   GGCODE_INSECURE_TLS=1 npm install -g @ggcode-cli/ggcode
-   ```
-
-   This prints a security warning and makes the download vulnerable to man-in-the-middle attacks.
-
-## Other install methods
+## Recommended install methods
 
 ### Homebrew (macOS / Linux)
 
