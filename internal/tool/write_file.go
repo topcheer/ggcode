@@ -58,16 +58,6 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	// Warn the agent if overwriting an existing file with content.
-	// write_file fully replaces the file; edit_file should be used for
-	// targeted modifications to existing files.
-	if info, err := os.Stat(args.Path); err == nil && info.Size() > 0 && info.Mode().IsRegular() {
-		return Result{
-			IsError: true,
-			Content: fmt.Sprintf("File already exists (%d bytes). write_file will OVERWRITE all existing content. Use edit_file or multi_edit_file for targeted changes to existing files. If full replacement is intended, retry write_file.", info.Size()),
-		}, nil
-	}
-
 	// Create parent directories so weak LLMs don't have to issue an extra
 	// run_command(mkdir) call for new files in fresh subdirectories.
 	if dir := filepath.Dir(args.Path); dir != "" && dir != "." {
