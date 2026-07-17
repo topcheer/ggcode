@@ -16,6 +16,28 @@ func TestVendorSpecificAuthHeaders_OtherHostsStayEmpty(t *testing.T) {
 	}
 }
 
+func TestIsOpenRouterEndpoint(t *testing.T) {
+	tests := []struct {
+		baseURL string
+		want    bool
+	}{
+		{baseURL: "https://openrouter.ai/api/v1", want: true},
+		{baseURL: "https://openrouter.ai", want: true},
+		{baseURL: "https://api.openrouter.ai/v1", want: true},
+		{baseURL: "https://api.openai.com/v1", want: false},
+		{baseURL: "https://api.anthropic.com", want: false},
+		{baseURL: "", want: false},
+		{baseURL: "not a url", want: false},
+		// Ensure lookalike domain is not matched.
+		{baseURL: "https://openrouter.ai.evil.com/v1", want: false},
+	}
+	for _, tc := range tests {
+		if got := isOpenRouterEndpoint(tc.baseURL); got != tc.want {
+			t.Errorf("isOpenRouterEndpoint(%q) = %v, want %v", tc.baseURL, got, tc.want)
+		}
+	}
+}
+
 func TestIsXiaomiMiMoBaseURL(t *testing.T) {
 	tests := []struct {
 		baseURL string

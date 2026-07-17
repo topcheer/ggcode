@@ -248,6 +248,49 @@ func TestLoadProjectMemory_DoesNotScanArbitraryWorkingDirSubtrees(t *testing.T) 
 	}
 }
 
+func TestBuildProjectMemoryHint_EmptyReturnsEmpty(t *testing.T) {
+	if got := BuildProjectMemoryHint(nil); got != "" {
+		t.Fatalf("nil input should return empty string, got %q", got)
+	}
+	if got := BuildProjectMemoryHint([]string{}); got != "" {
+		t.Fatalf("empty slice should return empty string, got %q", got)
+	}
+}
+
+func TestBuildProjectMemoryHint_SingleFile(t *testing.T) {
+	got := BuildProjectMemoryHint([]string{"/repo/GGCODE.md"})
+	for _, want := range []string{"## Project Memory", "GGCODE.md", "read_file"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint should contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestBuildProjectMemoryHint_MultipleFiles(t *testing.T) {
+	got := BuildProjectMemoryHint([]string{
+		"/repo/GGCODE.md",
+		"/repo/CLAUDE.md",
+		"/repo/AGENTS.md",
+	})
+	for _, want := range []string{"GGCODE.md", "CLAUDE.md", "AGENTS.md"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint should contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestBuildProjectMemoryHint_DeduplicatesByBaseName(t *testing.T) {
+	got := BuildProjectMemoryHint([]string{
+		"/repo/GGCODE.md",
+		"/repo/sub/GGCODE.md",
+	})
+	// Should only appear once since both have the same base name.
+	count := strings.Count(got, "GGCODE.md")
+	if count != 1 {
+		t.Fatalf("expected GGCODE.md to appear once (deduplicated), got %d occurrences", count)
+	}
+}
+
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
 }
