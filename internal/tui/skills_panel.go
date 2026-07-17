@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -43,10 +44,13 @@ func summarizeDescription(desc string) string {
 	}
 	desc = strings.TrimSpace(desc)
 	// If still too long (>80 chars), don't show it
-	if len([]rune(desc)) > 80 {
-		// Try to truncate at last space before 80
-		if idx := strings.LastIndexByte(string([]rune(desc)[:80]), ' '); idx > 40 {
-			desc = string([]rune(desc)[:idx]) + "..."
+	if runes := []rune(desc); len(runes) > 80 {
+		// Try to truncate at last space before 80 runes
+		truncStr := string(runes[:80])
+		if byteIdx := strings.LastIndexByte(truncStr, ' '); byteIdx > 40 {
+			// byteIdx is a byte offset in truncStr; convert to rune count
+			runeIdx := utf8.RuneCountInString(truncStr[:byteIdx])
+			desc = string(runes[:runeIdx]) + "..."
 		} else {
 			return ""
 		}
