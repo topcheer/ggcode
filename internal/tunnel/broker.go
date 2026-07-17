@@ -27,6 +27,7 @@ import (
 //   - Relay owns per-client replay; broker only emits the canonical event stream.
 type Broker struct {
 	session        *Session
+	callbackMu     sync.RWMutex
 	onCommand      func(cmd GatewayMessage)
 	onConnect      func(info RelayConnectedState)
 	replayProvider func() []GatewayMessage
@@ -152,8 +153,11 @@ func NewBroker(sess *Session) *Broker {
 	// Handle incoming messages from mobile
 	if sess != nil {
 		sess.OnMessage(func(msg GatewayMessage) {
-			if b.onCommand != nil {
-				b.onCommand(msg)
+			b.callbackMu.RLock()
+			fn := b.onCommand
+			b.callbackMu.RUnlock()
+			if fn != nil {
+				fn(msg)
 			}
 		})
 		sess.OnConnected(func(info RelayConnectedState) {
@@ -373,10 +377,14 @@ func (b *Broker) replayActiveReasoning(active map[string]reasoningEntry) {
 // ─── Lifecycle ───
 
 func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
+	b.callbackMu.Lock()
+	defer b.callbackMu.Unlock()
 	b.onCommand = fn
 }
 
 func (b *Broker) OnRelayConnected(fn func(info RelayConnectedState)) {
+	b.callbackMu.Lock()
+	defer b.callbackMu.Unlock()
 	b.onConnect = fn
 }
 
@@ -677,8 +685,11 @@ func (b *Broker) StopSharingGracefully(timeout time.Duration) {
 }
 
 func (b *Broker) handleRelayConnected(info RelayConnectedState) {
-	if b.onConnect != nil {
-		b.onConnect(info)
+	b.callbackMu.RLock()
+	fn := b.onConnect
+	b.callbackMu.RUnlock()
+	if fn != nil {
+		fn(info)
 	}
 	currentSessionID, currentGeneration := b.sessionState()
 	if info.Role == "client" {
@@ -1637,10 +1648,11 @@ func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
 		return
 	}
 	data := append(json.RawMessage(nil), ev.Data...)
+	sid := b.SessionID()
 	b.outMu.Lock()
 	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
-		SessionID: b.SessionID(),
+		SessionID: sid,
 		EventID:   fmt.Sprintf("ev-%09d", eventNum),
 		StreamID:  ev.StreamID,
 		Type:      ev.Type,
@@ -1688,13 +1700,17 @@ func (b *Broker) enqueueWithBytes(eventType, streamID string, dataBytes []byte, 
 	if eventType == "" {
 		return GatewayMessage{}, nil
 	}
+	// Read session-scoped fields before acquiring outMu to avoid
+	// nested locking (outMu → sessionMu.RLock).
+	sid := b.SessionID()
+	epoch := b.AuthorityEpoch()
 	b.outMu.Lock()
 	eventNum := b.nextEvent.Add(1)
 	msg := GatewayMessage{
-		SessionID:      b.SessionID(),
+		SessionID:      sid,
 		EventID:        fmt.Sprintf("ev-%09d", eventNum),
 		StreamID:       streamID,
-		AuthorityEpoch: b.AuthorityEpoch(),
+		AuthorityEpoch: epoch,
 		Type:           eventType,
 		Data:           dataBytes,
 	}
