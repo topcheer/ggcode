@@ -16,10 +16,8 @@ func (t MultiEditFile) Name() string { return "multi_edit_file" }
 
 func (t MultiEditFile) Description() string {
 	return "Apply multiple find-and-replace edits to a single file in one call. " +
-		"Each edit follows the same rules as edit_file: the best practice is to paste the numbered lines directly from read_file into each old_text, because the tool uses those line numbers as anchors. Without line-number anchors, every old_text must match the file byte-for-byte (indentation, line endings) and must be UNIQUE in the file. " +
-		"Edits must not overlap. All edits are applied atomically — if any single edit fails, the file is left unchanged. " +
-		"All old_text matches are resolved against the ORIGINAL file, not after earlier edits in the same call. Always read_file first. " +
-		"Use this instead of repeated edit_file calls when changing multiple sites in one file (e.g. renaming a symbol)."
+		"Same matching rules as edit_file (use numbered lines from read_file as anchors). " +
+		"All edits resolve against the ORIGINAL file and must not overlap. Applied atomically — if any fails, the file is unchanged."
 }
 
 func (t MultiEditFile) Parameters() json.RawMessage {

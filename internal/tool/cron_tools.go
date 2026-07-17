@@ -18,11 +18,9 @@ type CronCreateTool struct {
 
 func (t CronCreateTool) Name() string { return "cron_create" }
 func (t CronCreateTool) Description() string {
-	return "Create a scheduled job that enqueues a prompt at specified intervals. " +
-		"Use cron format (e.g. '*/5 * * * *' for every 5 minutes). " +
-		"Set recurring=false for one-shot reminders. Only recurring jobs are persisted across restarts; one-shot reminders are in-memory and will be lost if the process exits before they fire. " +
-		"By default (queue_if_busy=false), if the agent is busy when the job fires, the prompt is skipped — use this for non-critical periodic checks. " +
-		"Set queue_if_busy=true for important tasks that must run even if the agent is busy (the prompt will queue and run after the current task finishes)."
+	return "Create a scheduled job that enqueues a prompt at cron-specified intervals. " +
+		"Set recurring=false for one-shot reminders (in-memory only, not persisted). " +
+		"queue_if_busy=false (default) skips if agent is busy; true queues the prompt for later."
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -209,9 +207,7 @@ type CronUpdateTool struct {
 
 func (t CronUpdateTool) Name() string { return "cron_update" }
 func (t CronUpdateTool) Description() string {
-	return "Update an existing scheduled cron job by ID. Only the fields you provide will be changed; " +
-		"omitted fields keep their current value. The job's timer is automatically rescheduled if the cron expression changes. " +
-		"The job ID remains the same — no need to delete and recreate."
+	return "Update an existing scheduled cron job by ID. Only provided fields change; timer auto-reschedules on cron expression change. Job ID stays the same."
 }
 func (t CronUpdateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -302,8 +298,7 @@ type CronPauseTool struct {
 
 func (t CronPauseTool) Name() string { return "cron_pause" }
 func (t CronPauseTool) Description() string {
-	return "Pause a scheduled cron job temporarily. The job's timer is stopped but the job configuration is preserved. " +
-		"Use cron_resume to reactivate it. Pausing is useful when you want to temporarily disable a periodic task without losing the cron expression or prompt."
+	return "Pause a scheduled cron job temporarily. Timer stops but configuration is preserved. Use cron_resume to reactivate."
 }
 func (t CronPauseTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

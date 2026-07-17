@@ -13,9 +13,9 @@ func TestGitReadOnlyDescriptionsClarifyInspectionUse(t *testing.T) {
 		desc string
 		want []string
 	}{
-		{"git_log", GitLog{}.Description(), []string{"Read-only inspection", "recent changes", "before editing"}},
-		{"git_branch_list", GitBranchList{}.Description(), []string{"Read-only inspection", "remote=true", "expected branch"}},
-		{"git_remote", GitRemote{}.Description(), []string{"Read-only inspection", "fetch/push", "upstream repository"}},
+		{"git_log", GitLog{}.Description(), []string{"recent changes", "before editing"}},
+		{"git_branch_list", GitBranchList{}.Description(), []string{"remote=true"}},
+		{"git_remote", GitRemote{}.Description(), []string{"fetch/push"}},
 	}
 	for _, tc := range cases {
 		for _, want := range tc.want {
@@ -28,7 +28,7 @@ func TestGitReadOnlyDescriptionsClarifyInspectionUse(t *testing.T) {
 
 func TestGitDiffDescriptionRemindsInspection(t *testing.T) {
 	desc := GitDiff{}.Description()
-	for _, want := range []string{"inspect exactly what changed", "before staging or committing", "specific file diffs"} {
+	for _, want := range []string{"inspect changes", "before staging or committing", "file-specific diffs"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("git_diff description should mention %q, got %q", want, desc)
 		}

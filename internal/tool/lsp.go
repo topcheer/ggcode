@@ -498,7 +498,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 	return []Tool{
 		lspPositionTool{
 			name:         "lsp_hover",
-			description:  "Get hover/type information for the symbol at a specific file position using a locally installed LSP server when available. Prefer this over text search for semantic questions.",
+			description:  "Get hover/type information for the symbol at a specific file position. Prefer this over text search for semantic questions.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
@@ -518,7 +518,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPositionTool{
 			name:         "lsp_definition",
-			description:  "Go to definition for the symbol at a specific file position using a locally installed LSP server. Prefer this over text search for supported languages.",
+			description:  "Go to definition for the symbol at a specific file position. Prefer this over text search for supported languages.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
@@ -542,7 +542,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPositionTool{
 			name:         "lsp_references",
-			description:  "Find references for the symbol at a specific file position using a locally installed LSP server.",
+			description:  "Find references for the symbol at a specific file position.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
@@ -566,7 +566,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPathTool{
 			name:         "lsp_symbols",
-			description:  "List document symbols for a source file using a locally installed LSP server.",
+			description:  "List document symbols for a source file.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
@@ -586,7 +586,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspWorkspaceQueryTool{
 			name:        "lsp_workspace_symbols",
-			description: "Search workspace symbols using a locally installed LSP server instead of broad text search when semantic symbol lookup is available.",
+			description: "Search workspace symbols instead of broad text search when semantic symbol lookup is available.",
 			workingDir:  workingDir,
 			exec: func(ctx context.Context, workspace, query string) (string, error) {
 				symbols, err := lsp.WorkspaceSymbols(ctx, workspace, query)
@@ -605,7 +605,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPathTool{
 			name:         "lsp_diagnostics",
-			description:  "Get diagnostics for a source file using a locally installed LSP server, including publishDiagnostics when the server pushes them.",
+			description:  "Get diagnostics for a source file, including publishDiagnostics when the server pushes them.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
@@ -629,7 +629,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspRangeTool{
 			name:         "lsp_code_actions",
-			description:  "List available code actions for a source range using a locally installed LSP server.",
+			description:  "List available code actions for a source range.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, rng lsp.Range) (string, error) {
@@ -659,7 +659,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspRenameTool{
 			name:         "lsp_rename",
-			description:  "Rename a symbol using a locally installed LSP server and apply the returned workspace edits to allowed files.",
+			description:  "Rename a symbol and apply the returned workspace edits to allowed files.",
 			workingDir:   workingDir,
 			readSandbox:  readSandbox,
 			writeSandbox: writeSandbox,
@@ -676,7 +676,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPositionTool{
 			name:         "lsp_implementation",
-			description:  "Find implementations of an interface or abstract method at a specific file position using a locally installed LSP server.",
+			description:  "Find implementations of an interface or abstract method at a specific file position.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
@@ -700,7 +700,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		},
 		lspPositionTool{
 			name:         "lsp_prepare_call_hierarchy",
-			description:  "Prepare call hierarchy items for the symbol at a specific file position using a locally installed LSP server. Returns items that can be used with lsp_incoming_calls and lsp_outgoing_calls.",
+			description:  "Prepare call hierarchy items for the symbol at a specific file position. Returns items that can be used with lsp_incoming_calls and lsp_outgoing_calls.",
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {

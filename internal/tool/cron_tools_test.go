@@ -11,7 +11,7 @@ import (
 
 func TestCronToolDescriptionsClarifyPersistenceAndLoadedState(t *testing.T) {
 	createDesc := CronCreateTool{}.Description()
-	for _, want := range []string{"recurring=false", "Only recurring jobs are persisted", "one-shot reminders are in-memory"} {
+	for _, want := range []string{"recurring=false", "not persisted", "not persisted"} {
 		if !strings.Contains(createDesc, want) {
 			t.Fatalf("cron_create description should mention %q, got %q", want, createDesc)
 		}
@@ -264,13 +264,13 @@ func TestCronCreateTool_ExecuteFiresOneShot(t *testing.T) {
 
 func TestCronCreateToolDescriptionClarifiesPersistence(t *testing.T) {
 	desc := CronCreateTool{}.Description()
-	for _, want := range []string{"Only recurring jobs are persisted", "one-shot reminders are in-memory"} {
+	for _, want := range []string{"not persisted", "not persisted"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("cron_create description should mention %q, got %q", want, desc)
 		}
 	}
 	params := string(CronCreateTool{}.Parameters())
-	for _, want := range []string{"Only recurring jobs are persisted", "recurring=false jobs are never persisted"} {
+	for _, want := range []string{"never persisted", "recurring=false jobs are never persisted"} {
 		if !strings.Contains(params, want) {
 			t.Fatalf("cron_create schema should mention %q, got %s", want, params)
 		}

@@ -384,7 +384,7 @@ type TaskOutputTool struct {
 
 func (t TaskOutputTool) Name() string { return "task_output" }
 func (t TaskOutputTool) Description() string {
-	return "Get the output of a background task (subagent or shell command) by its task ID. This is for background execution IDs, not structured session task IDs from task_create. Returns the result if completed, or partial output if still running; for shell jobs, prefer read_command_output or wait_command when you have the command job ID."
+	return "Get output of a background task (subagent or shell command) by task ID. Returns result if completed, partial output if running. For shell jobs, prefer read_command_output/wait_command with the command job ID."
 }
 func (t TaskOutputTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

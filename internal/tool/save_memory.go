@@ -29,10 +29,7 @@ func (t *SaveMemoryTool) SetAfterSave(fn func()) {
 
 func (t *SaveMemoryTool) Name() string { return "save_memory" }
 func (t *SaveMemoryTool) Description() string {
-	return "Save a useful pattern or experience to persistent memory for future sessions." +
-		" Default scope is 'project' — use this for project-specific knowledge (e.g. build commands, architecture decisions, debugging tips)." +
-		" Only use scope='global' for truly universal, cross-project patterns (e.g. language-level best practices)." +
-		" Be careful with global: it is loaded into EVERY project's system prompt, so prefer 'project' unless you are certain the knowledge applies universally."
+	return "Save a pattern or experience to persistent memory for future sessions. Default scope='project' for project-specific knowledge; use scope='global' sparingly — it loads into EVERY project's system prompt."
 }
 
 func (t *SaveMemoryTool) Parameters() json.RawMessage {

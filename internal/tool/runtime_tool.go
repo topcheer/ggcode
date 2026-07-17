@@ -48,16 +48,7 @@ type RuntimeTool struct {
 func (t RuntimeTool) Name() string { return "runtime" }
 
 func (t RuntimeTool) Description() string {
-	return "Query runtime status information about the current ggcode instance. " +
-		"Returns session ID, permission mode, provider (vendor/endpoint/model), language, " +
-		"IM adapter status (platform, online, muted, channel), and mobile tunnel connection status.\n\n" +
-		"Use this to understand the current runtime environment, such as:\n" +
-		"- Which session you are running in\n" +
-		"- What permission mode is active (supervised, plan, auto, bypass, autopilot)\n" +
-		"- Whether IM adapters are connected and which channels are bound\n" +
-		"- Whether a mobile device is connected via tunnel\n" +
-		"- The current LLM provider and model\n\n" +
-		"This tool is read-only and always allowed in every permission mode."
+	return "Query runtime status: session ID, permission mode, provider/model, language, IM adapter status, and mobile tunnel connection. Read-only, always allowed."
 }
 
 func (t RuntimeTool) Parameters() json.RawMessage {

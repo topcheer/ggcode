@@ -92,7 +92,7 @@ func TestAskUserToolExecutesWithNormalizedRequest(t *testing.T) {
 func TestAskUserToolDescriptionDiscouragesUnnecessaryQuestions(t *testing.T) {
 	tool := NewAskUserTool()
 	desc := tool.Description()
-	for _, want := range []string{"material clarification", "answer will change what you do next", "no safe best guess"} {
+	for _, want := range []string{"material clarification", "answer changes what you do next", "no safe best guess"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("ask_user description should mention %q, got %q", want, desc)
 		}

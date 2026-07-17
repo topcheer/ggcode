@@ -18,11 +18,8 @@ type MultiFileWrite struct {
 func (t MultiFileWrite) Name() string { return "multi_file_write" }
 
 func (t MultiFileWrite) Description() string {
-	return "Write content to multiple files in one call, creating each file if missing or fully OVERWRITING any existing file at that path. " +
-		"Parent directories are created automatically if they do not exist. " +
-		"Prefer edit_file or multi_edit_file when modifying existing files — write_file destroys all current content. " +
-		"Keep batches small and use absolute paths. Default mode is atomic: if any file fails to write, no files are written. " +
-		"Use mode=partial_success only when mixed write outcomes are acceptable."
+	return "Write content to multiple files in one call, creating or overwriting each file. " +
+		"Prefer edit_file when modifying existing files. Default mode is atomic; use mode=partial_success for mixed outcomes."
 }
 
 func (t MultiFileWrite) Parameters() json.RawMessage {

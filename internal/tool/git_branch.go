@@ -13,7 +13,7 @@ type GitBranchList struct{ WorkingDir string }
 func (t GitBranchList) Name() string { return "git_branch_list" }
 
 func (t GitBranchList) Description() string {
-	return "List local Git branches in a repository. Read-only inspection tool; set remote=true to show remote-tracking branches. Use this before branch-sensitive work or when checking whether you are on the expected branch."
+	return "List local Git branches. Set remote=true for remote-tracking branches. Use before branch-sensitive work."
 }
 
 func (t GitBranchList) Parameters() json.RawMessage {

@@ -12,7 +12,7 @@ type SleepTool struct{}
 
 func (t SleepTool) Name() string { return "sleep" }
 func (t SleepTool) Description() string {
-	return "Sleep for a specified duration (maximum 30 minutes). Use when waiting for time to pass, such as checking back later or giving an external system time to update. Prefer wait_command/read_command_output when you have a background job ID, and prefer sleep over run_command for plain delays."
+	return "Sleep for a specified duration (max 30 minutes). Prefer wait_command when you have a background job ID."
 }
 func (t SleepTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

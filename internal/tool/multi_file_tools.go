@@ -17,11 +17,9 @@ type MultiFileRead struct {
 func (t MultiFileRead) Name() string { return "multi_file_read" }
 
 func (t MultiFileRead) Description() string {
-	return "Read multiple existing text files or extracted document text in one call before a coordinated multi-file edit. " +
-		"Recommended workflow: use multi_file_read first, then copy the numbered lines you want to change directly into multi_file_edit old_text. " +
-		"Output uses deterministic file blocks like `=== FILE: /abs/path ===`, numbered `cat -n` style lines (`   42\\t<content>`), and `[end file]`, so weak models can copy/paste anchors instead of reconstructing text. " +
-		"Images and binary files are not supported here; use read_file on one file at a time for images or rich media. " +
-		"Keep batches small, paths absolute and unique, and use offset/limit to narrow large files."
+	return "Read multiple files in one call before a coordinated multi-file edit. " +
+		"Output uses `=== FILE: path ===` blocks with numbered lines; copy them into multi_file_edit old_text. " +
+		"For images or rich media, use read_file instead. Keep batches small with absolute, unique paths."
 }
 
 func (t MultiFileRead) Parameters() json.RawMessage {

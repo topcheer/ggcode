@@ -40,18 +40,8 @@ func (t *SwitchModeTool) Name() string { return "switch_mode" }
 
 func (t *SwitchModeTool) Description() string {
 	return "Switch the permission mode to control how tool calls are authorized. " +
-		"Use this proactively when the situation calls for a different trust level.\n\n" +
-		"Modes:\n" +
-		"- supervised: Default. Asks for confirmation on most tools. Use when you want the user to review actions.\n" +
-		"- plan: Read-only. Only allows read/search/inspect tools. Use for exploration and code review without modifications.\n" +
-		"- auto: Allows safe operations, denies dangerous ones automatically. Good for routine coding tasks.\n" +
-		"- bypass: Allows almost everything without asking. Use when the user has explicitly trusted the task.\n" +
-		"- autopilot: Bypass permissions + continues autonomously when you would normally stop for input. Use for long-running autonomous tasks.\n\n" +
-		"Guidelines:\n" +
-		"- Default to supervised or auto unless the user requests otherwise.\n" +
-		"- Switch to plan when exploring unfamiliar code to avoid accidental modifications.\n" +
-		"- Only switch to bypass or autopilot when the user explicitly asks for it or the task clearly requires autonomous execution.\n" +
-		"- This tool is always allowed in every mode (including plan mode)."
+		"Modes: supervised (default, asks confirmation), plan (read-only), auto (safe ops auto-allowed), bypass (almost everything), autopilot (bypass + autonomous). " +
+		"Default to supervised or auto; only use bypass/autopilot when the user explicitly requests it. Always allowed in every mode."
 }
 
 func (t *SwitchModeTool) Parameters() json.RawMessage {

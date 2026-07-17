@@ -16,7 +16,7 @@ import (
 
 func TestWebFetchDescriptionClarifiesNonInteractiveUse(t *testing.T) {
 	desc := WebFetch{}.Description()
-	for _, want := range []string{"does not summarize or transform", "interactive or login-required", "browser automation"} {
+	for _, want := range []string{"Does not summarize", "interactive/login pages", "browser automation"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("web_fetch description should mention %q, got %q", want, desc)
 		}
@@ -259,7 +259,7 @@ func TestWebFetch_PromptIsPrependedNotExecuted(t *testing.T) {
 }
 
 func TestWebToolDescriptions_ClarifyLLMResponsibilities(t *testing.T) {
-	if !strings.Contains(WebFetch{}.Description(), "does not summarize") {
+	if !strings.Contains(WebFetch{}.Description(), "Does not summarize") {
 		t.Fatalf("web_fetch description should clarify prompt is not executed, got %q", WebFetch{}.Description())
 	}
 	if !strings.Contains(WebSearch{}.Description(), "not full page contents") || !strings.Contains(WebSearch{}.Description(), "web_fetch") {

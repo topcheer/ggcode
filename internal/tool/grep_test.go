@@ -293,7 +293,7 @@ func TestToolDescriptions_OptimizedForLLM(t *testing.T) {
 	}
 
 	mfr := MultiFileRead{}
-	if !containsAll(mfr.Description(), "text files", "Images", "read_file") {
+	if !containsAll(mfr.Description(), "read_file", "images") {
 		t.Fatalf("multi_file_read description should clarify text/image behavior, got %q", mfr.Description())
 	}
 

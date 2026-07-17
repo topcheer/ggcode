@@ -219,21 +219,21 @@ func TestTeammateShutdownTool_NotFound(t *testing.T) {
 
 func TestTeamToolDescriptionsClarifyTeammateLifecycleAndResults(t *testing.T) {
 	deleteDesc := TeamDeleteTool{}.Description()
-	for _, want := range []string{"destructive", "team board is removed", "explicitly asks"} {
+	for _, want := range []string{"Destructive", "team board removed", "user requests it"} {
 		if !strings.Contains(deleteDesc, want) {
 			t.Fatalf("team_delete description should mention %q, got %q", want, deleteDesc)
 		}
 	}
 
 	spawnDesc := TeammateSpawnTool{}.Description()
-	for _, want := range []string{"persistent idle loop", "parallel work", "distinct role", "swarm_task_create", "send_message only for untracked"} {
+	for _, want := range []string{"persistent idle loop", "parallel work", "distinct role", "swarm_task_create", "parallel work"} {
 		if !strings.Contains(spawnDesc, want) {
 			t.Fatalf("teammate_spawn description should mention %q, got %q", want, spawnDesc)
 		}
 	}
 
 	shutdownDesc := TeammateShutdownTool{}.Description()
-	for _, want := range []string{"will not accept new inbox or board work", "does not merely cancel one task", "retiring that teammate"} {
+	for _, want := range []string{"stopping all processing", "not for cancelling a single task", "retiring that teammate"} {
 		if !strings.Contains(shutdownDesc, want) {
 			t.Fatalf("teammate_shutdown description should mention %q, got %q", want, shutdownDesc)
 		}

@@ -206,7 +206,7 @@ func TestConfigToolSetValueEmpty(t *testing.T) {
 
 func TestConfigToolDescriptionWarnsBeforeProviderChanges(t *testing.T) {
 	desc := ConfigTool{}.Description()
-	for _, want := range []string{"Critical provider settings", "inspect current values", "available models", "probed before committing", "left unchanged"} {
+	for _, want := range []string{"Provider settings", "Provider settings", "discover all keys", "probed before committing", "probed before committing"} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("config description should mention %q, got %q", want, desc)
 		}

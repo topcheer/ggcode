@@ -16,14 +16,11 @@ type EditFile struct {
 func (t EditFile) Name() string { return "edit_file" }
 
 func (t EditFile) Description() string {
-	return "Edit a file by replacing one occurrence of old_text with new_text. " +
-		"Rules for high success rate: " +
-		"(1) ALWAYS read_file first to get the exact current content. " +
-		"(2) Best practice: copy the relevant numbered lines directly from read_file into old_text. The tool understands read_file prefixes like \"   42\\t\" and uses them as anchors, which is especially helpful for single-line edits and duplicate text. " +
-		"(3) If you do not use line-number anchors, old_text must still match the file byte-for-byte INCLUDING indentation (tabs vs spaces) and line endings. " +
-		"(4) Without line-number anchors, old_text must be UNIQUE in the file; otherwise include 1-3 lines of surrounding context or set replace_all=true. " +
-		"(5) On failure, the error message lists hints (indent style, near-matches with whitespace visualised, matching line numbers) — read them and adjust before retrying. " +
-		"For multiple edits to the same file in one round-trip, prefer multi_edit_file."
+	return "Edit a file by replacing old_text with new_text. " +
+		"ALWAYS read_file first. Copy the numbered lines from read_file output directly into old_text as anchors. " +
+		"Without anchors, old_text must match byte-for-byte (indentation, line endings) and be unique in the file. " +
+		"On failure, the error shows hints (indent style, near-matches, line numbers) — adjust and retry. " +
+		"For multiple edits to the same file, prefer multi_edit_file."
 }
 
 func (t EditFile) Parameters() json.RawMessage {

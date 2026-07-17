@@ -15,11 +15,11 @@ func TestSendMessageToolDescriptionsClarifyWorkerSemantics(t *testing.T) {
 	desc := tool.Description()
 	for _, want := range []string{
 		"swarm teammates",
-		"task-like work",
+		"delivers to inbox",
 		"prefer swarm_task_create",
-		"sub-agent runs",
-		"mailbox",
-		"spawn a new sub-agent",
+		"sub-agents (agent-*)",
+		"unreliable for new work",
+		"spawn a new agent",
 		"best-effort broadcast",
 	} {
 		if !strings.Contains(desc, want) {

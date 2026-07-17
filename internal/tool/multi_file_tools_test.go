@@ -11,7 +11,7 @@ import (
 
 func TestMultiFileToolDescriptionsClarifyAnchorsAndAtomicity(t *testing.T) {
 	readDesc := MultiFileRead{}.Description()
-	for _, want := range []string{"copy/paste anchors", "paths absolute and unique", "offset/limit"} {
+	for _, want := range []string{"numbered lines", "absolute, unique paths"} {
 		if !strings.Contains(readDesc, want) {
 			t.Fatalf("multi_file_read description should mention %q, got %q", want, readDesc)
 		}

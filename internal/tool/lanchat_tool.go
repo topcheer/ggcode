@@ -220,32 +220,15 @@ func (t LanChatTool) Name() string { return "lanchat" }
 
 func (t LanChatTool) Description() string {
 	return "Send and receive messages on the LAN Chat network connecting ggcode instances on the local network. " +
-		"This is the PRIMARY tool for real-time collaboration with other ggcode users and their agents on the LAN. " +
-		"Triggers: user mentions another participant by name or nick (e.g. \"check what mdns is doing\", \"ask ggai about...\"), " +
-		"messages prefixed with [LAN Chat from <nick>], or any reference to LAN participants.\n" +
-		"Do NOT use send_message (that is for swarm teammates) or delegate/a2a_remote (those are for headless code-edit delegation to other workspaces, not for asking questions).\n" +
-		"\nANTINOISE RULES (critical for efficient collaboration):\n" +
-		"- Do NOT broadcast unless the user explicitly asks to notify everyone. Broadcasts force ALL agents to process your message, creating noise cascades.\n" +
-		"- Do NOT send confirmation/acknowledgment messages (\"got it\", \"will do\", \"thanks\"). Just do the work silently.\n" +
-		"- Do NOT reply to a LAN Chat message unless you have meaningful information to share (results, answers, blocking issues). Acknowledgments are noise.\n" +
-		"- Before sending, check action='list' for agent_busy status. Do NOT message busy agents unless it's urgent — they'll see your message after their current task.\n" +
-		"- Send to the specific person you need (action='send' with their node_id or nick), not a team broadcast. Only broadcast for announcements that truly need everyone.\n" +
-		"- One message per task. Do NOT send follow-up pings asking \"are you done?\" — check back with action='list' or wait for their response.\n" +
-		"- If you receive a broadcast or team message that is not directed at you specifically, do NOT reply unless you have actionable information.\n" +
-		"\nNick format: nicks are composed as <name>_<role> (e.g. 'alice_frontend', 'mdns_developer'). " +
-		"When a user says 'ask mdns', match the participant whose nick starts with 'mdns' — the full nick is 'mdns_developer' but you should use the node_id from list, not the nick, as the 'to' field.\n" +
-		"\nMessaging actions (choose by scope):\n" +
-		"- 'send' (to=<node_id OR nick>): DM one or more participants. You can use the participant's nick (e.g. \"dd_dev_agent\" or prefix \"dd\") or node_id. Multiple recipients: comma-separated.\n" +
-		"- 'broadcast': broadcast to members of YOUR OWN team. Use ONLY for announcements that need everyone's attention.\n" +
-		"- 'broadcast_all': broadcast to ALL participants on the entire LAN. Almost NEVER appropriate — use only for critical announcements.\n" +
-		"- 'send_team' (team=<name>): broadcast to all members of a SPECIFIC team. Prefer targeted DMs over this.\n" +
-		"\nAgent availability: each participant in the 'list' output has an 'agent_busy' field (true/false). " +
-		"Always check this before messaging. Prefer idle agents (agent_busy=false). " +
-		"If the only relevant agent is busy, send your message once and wait — do not re-send or ping.\n" +
-		"\nWhen to use lanchat vs a2a_remote:\n" +
-		"- lanchat: real-time communication — asking a specific question, coordinating a specific task, reporting results.\n" +
-		"- a2a_remote: headless code-editing delegation — fire-and-forget tasks with a specific code instruction.\n" +
-		"- When in doubt, use a targeted DM (action='send') to the specific person you need."
+		"PRIMARY tool for real-time collaboration with other users and agents on the LAN. " +
+		"Do NOT use send_message (for swarm teammates) or a2a_remote (for headless code-edit delegation).\n\n" +
+		"ANTINOISE RULES:\n" +
+		"- Prefer targeted DMs (action='send') over broadcasts. Only broadcast when the user explicitly asks.\n" +
+		"- Do NOT send acknowledgments (\"got it\", \"thanks\"). Do the work silently.\n" +
+		"- Check action='list' for agent_busy status before messaging. Don't message busy agents unless urgent.\n" +
+		"- One message per task. No follow-up pings — check action='list' or wait.\n\n" +
+		"Actions: list, send (DM), broadcast (your team), broadcast_all (everyone), send_team, history, pending, approve, reject, set_identity. " +
+		"Nick format: <name>_<role>. Use node_id from list as 'to' field, not nick."
 }
 
 func (t LanChatTool) Parameters() json.RawMessage {

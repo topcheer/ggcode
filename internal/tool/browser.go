@@ -81,10 +81,7 @@ func (b *Browser) Close() error {
 }
 
 func (b *Browser) Description() string {
-	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JavaScript support without Node.js or Playwright. " +
-		"Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. " +
-		"Supports multiple Chrome profiles (each with separate cookies/sessions) and multiple tabs per profile. " +
-		"Requires Chrome/Chromium installed. For simple non-JS page fetching, use web_fetch instead."
+	return "Go-native browser automation via Chrome DevTools Protocol. Full SPA/JS support without Node.js or Playwright. Supports multiple Chrome profiles and tabs. Requires Chrome/Chromium. For simple non-JS page fetching, use web_fetch."
 }
 
 func (b *Browser) Parameters() json.RawMessage {

@@ -9,7 +9,7 @@ import (
 
 func TestSleepToolDescriptionClarifiesDelayUse(t *testing.T) {
 	tool := SleepTool{}
-	for _, want := range []string{"maximum 30 minutes", "prefer sleep over run_command", "wait_command/read_command_output"} {
+	for _, want := range []string{"max 30 minutes", "Prefer wait_command"} {
 		if !containsAny(tool.Description(), want) {
 			t.Fatalf("sleep description should mention %q, got %q", want, tool.Description())
 		}

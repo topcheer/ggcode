@@ -37,10 +37,7 @@ type screenshotRegion struct {
 func (ScreenshotTool) Name() string { return "screenshot" }
 
 func (ScreenshotTool) Description() string {
-	return "Capture a screenshot of the entire screen, a specific display, a window (by title or app name), or a screen region. " +
-		"Use action=\"list_displays\" to see available monitors, action=\"list_windows\" to see capturable windows. " +
-		"The screenshot is returned as an image for visual analysis. " +
-		"Supports cursor inclusion, delay, PNG/JPEG format, and auto-resize to control context window usage."
+	return "Capture a screenshot: full screen, specific display, window (by title/app), or region. Use action=list_displays or list_windows to discover targets. Returned as image for visual analysis."
 }
 
 func (ScreenshotTool) Parameters() json.RawMessage {

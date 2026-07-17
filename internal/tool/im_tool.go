@@ -63,23 +63,11 @@ type IMTool struct {
 func (t IMTool) Name() string { return "im" }
 
 func (t IMTool) Description() string {
-	return "Manage IM (Instant Messaging) adapters and send messages to bound channels. " +
-		"Supports Telegram, Discord, Slack, DingTalk, Feishu, WeChat, IRC, Matrix, QQ, Nostr, Signal, WhatsApp, Mattermost, and Twitch.\n\n" +
-		"Actions:\n" +
-		"- 'status': List all IM adapters with health, platform, muted/disabled state, and channel binding info for the current workspace.\n" +
-		"- 'mute': Mute a specific adapter. Drops the connection (inbound and outbound messages stop). The binding stays so the adapter can be quickly resumed.\n" +
-		"- 'unmute': Unmute a previously muted adapter. Reconnects and resumes message flow.\n" +
-		"- 'disable': Disable a specific adapter. Moves the binding to disabled state and drops the connection. More aggressive than mute.\n" +
-		"- 'enable': Re-enable a previously disabled adapter. Reconnects.\n" +
-		"- 'send': Send a text message to a specific adapter's bound channel.\n" +
-		"  - By default the adapter must be active (unmuted + enabled + healthy).\n" +
-		"  - Set auto_start=true to automatically unmute/enable a muted/disabled adapter before sending.\n" +
-		"  - When auto_start=true, checks if other instances in the same workspace already have this adapter active. If so, does NOT start a competing connection (would cause conflicts) — instead reports the situation.\n\n" +
-		"Guidelines:\n" +
-		"- Check 'status' first to see which adapters are configured and their current state.\n" +
-		"- 'mute' drops the connection just like 'disable', but keeps the binding in the active list for faster restoration.\n" +
-		"- 'send' only delivers to the adapter's bound channel — you cannot specify an arbitrary recipient.\n" +
-		"- This tool is always allowed in every permission mode."
+	return "Manage IM adapters (Telegram, Discord, Slack, DingTalk, Feishu, etc.) and send messages to bound channels. " +
+		"Actions: status, mute/unmute, disable/enable, send. " +
+		"mute drops connection but keeps binding for fast restore; disable moves binding to disabled state. " +
+		"send with auto_start=true auto-enables a muted adapter (checks for conflicts first). " +
+		"Always allowed in every permission mode."
 }
 
 func (t IMTool) Parameters() json.RawMessage {

@@ -25,7 +25,7 @@ func TestTaskToolDescriptionsClarifyScope(t *testing.T) {
 	}
 
 	outputTool := TaskOutputTool{}
-	for _, want := range []string{"not structured session task IDs", "read_command_output or wait_command"} {
+	for _, want := range []string{"read_command_output/wait_command"} {
 		if !containsAny(outputTool.Description(), want) {
 			t.Fatalf("task_output description should mention %q, got %q", want, outputTool.Description())
 		}

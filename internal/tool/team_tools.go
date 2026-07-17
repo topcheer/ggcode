@@ -76,7 +76,7 @@ type TeamDeleteTool struct {
 
 func (t TeamDeleteTool) Name() string { return "team_delete" }
 func (t TeamDeleteTool) Description() string {
-	return "Delete a team and shutdown all its teammates. This is destructive for the team lifecycle: teammates stop processing tasks and the team board is removed. Use only when the team's work is complete or the user explicitly asks to delete it."
+	return "Delete a team and shutdown all teammates. Destructive: teammates stop, team board removed. Use only when work is complete or user requests it."
 }
 func (t TeamDeleteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -123,7 +123,7 @@ type TeammateSpawnTool struct {
 
 func (t TeammateSpawnTool) Name() string { return "teammate_spawn" }
 func (t TeammateSpawnTool) Description() string {
-	return "Spawn a teammate (worker agent) in a team. The teammate enters a persistent idle loop that consumes inbox messages and pending board tasks. Spawn teammates only when parallel work or a distinct role is useful; prefer swarm_task_create for tracked assignments, and use send_message only for untracked follow-ups or lightweight task-like messages. Returns teammate info."
+	return "Spawn a teammate (worker agent) in a team with a persistent idle loop consuming inbox/board tasks. Spawn for parallel work or distinct roles; prefer swarm_task_create for tracked assignments."
 }
 func (t TeammateSpawnTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -263,7 +263,7 @@ type TeammateShutdownTool struct {
 
 func (t TeammateShutdownTool) Name() string { return "teammate_shutdown" }
 func (t TeammateShutdownTool) Description() string {
-	return "Shutdown a specific teammate. The teammate will stop processing tasks and will not accept new inbox or board work. This does not merely cancel one task; use it only when retiring that teammate."
+	return "Shutdown a specific teammate, stopping all processing. Use when retiring that teammate, not for cancelling a single task."
 }
 func (t TeammateShutdownTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

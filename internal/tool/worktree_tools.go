@@ -20,11 +20,8 @@ type EnterWorktree struct {
 func (t EnterWorktree) Name() string { return "enter_worktree" }
 
 func (t EnterWorktree) Description() string {
-	return "Create an isolated git worktree. Returns the path to the new worktree directory. " +
-		"Use this when the user explicitly asks to work in a worktree, or when you need to test changes " +
-		"without affecting the current working directory. The worktree is created under .ggcode/worktrees/ " +
-		"with a new branch from HEAD. After creation, use the returned path as the working_dir for file " +
-		"and command operations to work inside the worktree."
+	return "Create an isolated git worktree under .ggcode/worktrees/ with a new branch from HEAD. " +
+		"Use the returned path as working_dir for operations inside the worktree."
 }
 
 func (t EnterWorktree) Parameters() json.RawMessage {

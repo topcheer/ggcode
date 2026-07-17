@@ -32,21 +32,10 @@ type ConfigTool struct {
 
 func (t ConfigTool) Name() string { return "config" }
 func (t ConfigTool) Description() string {
-	return "Read, write, list, or delete configuration settings. " +
-		"Supports dot-notation keys across all config files: " +
-		"core (vendor/endpoint/model/language), api_key, vendors, mcp_servers, im, a2a, knight, harness, oauth_tokens. " +
-		"Omit value to read a setting; empty string values are treated as reads to avoid accidental clearing. " +
-		"Critical provider settings (vendor/endpoint/model/api_key) affect whether ggcode can talk to the model. Before changing them, inspect current values and available models with list=true, vendors.<name>.endpoints.<ep>.models, or vendors.<name>.endpoints.<ep>.discover_models. " +
-		"Provider-affecting changes are probed before committing; if the probe fails, the existing working configuration is left unchanged. " +
-		"Key patterns for model management: " +
-		"'vendors.<name>.endpoints.<ep>.models' (static list), " +
-		"'vendors.<name>.endpoints.<ep>.discover_models' (live API discovery). " +
-		"Config is saved in two scopes: 'global' (shared config, written to the config file the app was loaded from) " +
-		"and 'instance' (per-workspace config in ~/.ggcode/instances/{hash}/). " +
-		"Use 'scope' key to read or switch the current save scope (e.g. set scope=instance to save per-project). " +
-		"Instance scope is ideal for project-specific vendor/endpoint/model overrides. " +
-		"Secrets (API keys, tokens) are stored in keys.env, never in the main YAML, and are not echoed in set results. " +
-		"Use list=true to discover all keys."
+	return "Read, write, list, or delete configuration settings with dot-notation keys. " +
+		"Omit value to read; empty strings are treated as reads. " +
+		"Provider settings (vendor/endpoint/model/api_key) are probed before committing. " +
+		"Secrets stored in keys.env, not YAML. Use list=true to discover all keys."
 }
 func (t ConfigTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

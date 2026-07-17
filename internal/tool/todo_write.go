@@ -82,7 +82,8 @@ func (t *TodoWrite) currentPath() string {
 
 func (t *TodoWrite) Name() string { return "todo_write" }
 func (t *TodoWrite) Description() string {
-	return "Track work progress with a persistent todo list. Use for genuinely multi-step work, not every micro-step. IMPORTANT: Once you create todos, you MUST update their status as work progresses — mark tasks `in_progress` when starting, and `done` when completed. Do NOT create todos and then forget to update them. Keep the list current at every meaningful milestone."
+	return "Track work progress with a persistent todo list for genuinely multi-step work. " +
+		"IMPORTANT: Mark tasks in_progress when starting and done when completed. Keep the list current at every milestone."
 }
 
 func (t *TodoWrite) Parameters() json.RawMessage {

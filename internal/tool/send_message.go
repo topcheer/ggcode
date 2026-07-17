@@ -18,11 +18,10 @@ type SendMessageTool struct {
 
 func (t SendMessageTool) Name() string { return "send_message" }
 func (t SendMessageTool) Description() string {
-	return "Send an asynchronous message or lightweight task to another worker. " +
-		"For swarm teammates (tm-*), the message is delivered to the teammate inbox as task-like work; use teammate_results for the latest completed output, and prefer swarm_task_create for tracked work. " +
-		"For sub-agent runs (agent-*), delivery only writes to that run's mailbox and should not be treated as a reliable way to assign new work or get a response; spawn a new sub-agent with the full task instead. " +
-		"Use to='*' only for best-effort broadcast to currently running sub-agents and active teammates; it is not tracked and may not produce a result. " +
-		"When sending to a swarm teammate, provide team_id when known; if omitted for a tm-* recipient, the tool searches all teams for that teammate."
+	return "Send an async message or lightweight task to another worker. " +
+		"For swarm teammates (tm-*): delivers to inbox; prefer swarm_task_create for tracked work. " +
+		"For sub-agents (agent-*): unreliable for new work — spawn a new agent instead. " +
+		"to='*' for best-effort broadcast (not tracked). Provide team_id when known."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
