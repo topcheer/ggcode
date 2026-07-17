@@ -56,7 +56,10 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 		return fmt.Errorf("create subagent dir: %w", err)
 	}
 	now := time.Now()
-	if t.CreatedAt.IsZero() {
+	// Preserve CreatedAt from existing template on updates
+	if existing, err := s.Load(t.Name); err == nil && !existing.CreatedAt.IsZero() {
+		t.CreatedAt = existing.CreatedAt
+	} else if t.CreatedAt.IsZero() {
 		t.CreatedAt = now
 	}
 	t.UpdatedAt = now
@@ -66,6 +69,16 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 	}
 	path := filepath.Join(s.dir, sanitizeName(t.Name)+".json")
 	return os.WriteFile(path, data, 0644)
+}
+
+// LoadExisting checks if a template exists and returns it with a boolean
+// indicating existence. Unlike Load, it does not return an error for missing templates.
+func (s *TemplateStore) LoadExisting(name string) (NamedAgentTemplate, bool) {
+	t, err := s.Load(name)
+	if err != nil {
+		return NamedAgentTemplate{}, false
+	}
+	return t, true
 }
 
 // Load reads a template by name. Returns error if not found.

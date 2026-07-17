@@ -219,3 +219,68 @@ func TestDeleteNamedAgentTool_DeleteOneOfMultiple(t *testing.T) {
 		t.Errorf("expected 'test-writer', got %q", templates[0].Name)
 	}
 }
+
+func TestCreateNamedAgentTool_CreatedVsUpdated(t *testing.T) {
+	store, _ := setupDeleteTestStore(t)
+	tool := CreateNamedAgentTool{Store: store}
+
+	// First save should say "created"
+	input, _ := json.Marshal(map[string]string{
+		"name":          "reviewer",
+		"description":   "Code reviewer",
+		"system_prompt": "You review code.",
+	})
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(result.Content, "created") {
+		t.Errorf("expected 'created', got: %s", result.Content)
+	}
+
+	// Second save should say "updated"
+	input2, _ := json.Marshal(map[string]string{
+		"name":          "reviewer",
+		"description":   "Updated reviewer",
+		"system_prompt": "You review code thoroughly.",
+	})
+	result2, err := tool.Execute(context.Background(), input2)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(result2.Content, "updated") {
+		t.Errorf("expected 'updated', got: %s", result2.Content)
+	}
+
+	// Verify CreatedAt was preserved, not reset
+	tmpl, err := store.Load("reviewer")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if tmpl.Description != "Updated reviewer" {
+		t.Errorf("expected updated description, got: %s", tmpl.Description)
+	}
+}
+
+func TestTemplateStore_LoadExisting(t *testing.T) {
+	dir := t.TempDir()
+
+	// Use NewTemplateStore with a known workspace path
+	store := subagent.NewTemplateStore(dir)
+
+	// Non-existent
+	_, exists := store.LoadExisting("nope")
+	if exists {
+		t.Error("expected false for non-existent template")
+	}
+
+	// Create and check
+	store.Save(subagent.NamedAgentTemplate{Name: "test", Description: "d", SystemPrompt: "p"})
+	tmpl, exists := store.LoadExisting("test")
+	if !exists {
+		t.Error("expected true for existing template")
+	}
+	if tmpl.Name != "test" {
+		t.Errorf("expected name 'test', got %q", tmpl.Name)
+	}
+}

@@ -108,9 +108,12 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 					}
 				}
 			}
+			// If t.Tools is nil, we can't enumerate all tools, so blocked_tools
+			// can't be applied here — they will still be filtered in BuildToolSet
+			// below via the cloned registry's Unregister calls.
 		} else {
 			// Both allowlist and denylist: filter allowlist
-			filtered := allowedTools[:0]
+			filtered := make([]string, 0, len(allowedTools))
 			for _, name := range allowedTools {
 				if !sliceContains(tmpl.BlockedTools, name) {
 					filtered = append(filtered, name)

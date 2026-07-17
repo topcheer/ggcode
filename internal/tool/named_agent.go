@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/subagent"
 )
@@ -107,14 +106,15 @@ func (t CreateNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 		MCPServers:   args.MCPServers,
 		Model:        args.Model,
 	}
+
+	// Check existence BEFORE save to determine created vs updated
+	_, isUpdate := t.Store.LoadExisting(tmpl.Name)
 	if err := t.Store.Save(tmpl); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save template: %v", err)}, nil
 	}
 
-	// Check if this was an update or creation
-	existing, _ := t.Store.Load(tmpl.Name)
 	verb := "created"
-	if !existing.CreatedAt.IsZero() && existing.UpdatedAt.After(existing.CreatedAt) && time.Since(existing.CreatedAt) > 5*time.Second {
+	if isUpdate {
 		verb = "updated"
 	}
 
