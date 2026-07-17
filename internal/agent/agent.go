@@ -953,6 +953,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
 				if sErr != nil {
 					debug.Log("agent", "autopilot strategist failed: %v", sErr)
+					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist unavailable (%v) — autopilot stopping]", sErr)})
 					// Fall through to normal return — can't drive autonomously.
 				} else if result.Complete {
 					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
@@ -980,6 +981,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					continue
 				}
+			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() {
+				// Strategist call budget exhausted — notify and stop.
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget exhausted (%d/%d) — autopilot stopping]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
+				a.clearAutopilotGoal()
+				return nil
 			}
 
 			// Check for incomplete todos before finishing. If the agent
