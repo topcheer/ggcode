@@ -55,7 +55,7 @@ func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	} else {
 		dir = filepath.Dir(absPath)
 	}
-	return listProjectMemoryFiles(dir), nil
+	return append(globalProjectMemoryFiles(), listProjectMemoryFiles(dir)...), nil
 }
 
 // ReadProjectMemoryFiles reads project memory files in order and returns their
@@ -118,9 +118,9 @@ func listProjectMemoryFiles(dir string) []string {
 }
 
 // BuildProjectMemoryHint constructs an index-based system prompt section from
-// project memory file paths. Only file names are included — the LLM is
-// instructed to load full content via read_file when relevant. This keeps the
-// system prompt small regardless of how large the memory files are.
+// project memory file paths. For files in the working directory, only the base
+// name is shown. For files outside the working directory (e.g. ~/.ggcode/),
+// the full absolute path is shown so the agent can locate them via read_file.
 func BuildProjectMemoryHint(files []string) string {
 	if len(files) == 0 {
 		return ""
@@ -128,12 +128,17 @@ func BuildProjectMemoryHint(files []string) string {
 	var names []string
 	seen := make(map[string]struct{})
 	for _, f := range files {
-		name := filepath.Base(f)
-		if _, ok := seen[name]; ok {
+		var label string
+		if isOutsideWorkingDir(f) {
+			label = f // full path for global files
+		} else {
+			label = filepath.Base(f)
+		}
+		if _, ok := seen[label]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		names = append(names, name)
+		seen[label] = struct{}{}
+		names = append(names, label)
 	}
 	if len(names) == 0 {
 		return ""
@@ -148,4 +153,21 @@ func BuildProjectMemoryHint(files []string) string {
 	}
 	b.WriteString("\nDo NOT assume you know the project's conventions from training data — always read the relevant memory file first when the task touches that area.")
 	return b.String()
+}
+
+// isOutsideWorkingDir returns true if the file path is not under the current
+// working directory. This is used to decide whether to show the full path
+// (for global files like ~/.ggcode/GGCODE.md) or just the base name.
+func isOutsideWorkingDir(absPath string) bool {
+	wd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	wd = filepath.Clean(wd)
+	absPath = filepath.Clean(absPath)
+	rel, err := filepath.Rel(wd, absPath)
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(rel, "..")
 }

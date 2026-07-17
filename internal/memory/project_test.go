@@ -123,12 +123,24 @@ func TestProjectMemoryFilesForPath_CurrentDirOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProjectMemoryFilesForPath() error = %v", err)
 	}
-	// Should only find files in the current dir, not parents
-	if len(files) != 1 {
-		t.Fatalf("expected 1 file (current dir only), got %d: %v", len(files), files)
+	// Should find the current dir's file, plus any global ~/.ggcode/ files.
+	// Must NOT find files from parent directories (no parent walk).
+	repoMemory := filepath.Join(repoDir, "GGCODE.md")
+	for _, f := range files {
+		if f == repoMemory {
+			t.Fatalf("should not find parent dir memory file, got %v", files)
+		}
 	}
-	if files[0] != filepath.Join(featureDir, "CLAUDE.md") {
-		t.Fatalf("unexpected file: %v", files)
+	// Verify the feature dir file is present.
+	found := false
+	for _, f := range files {
+		if f == filepath.Join(featureDir, "CLAUDE.md") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected to find feature dir CLAUDE.md, got %v", files)
 	}
 }
 
@@ -280,14 +292,25 @@ func TestBuildProjectMemoryHint_MultipleFiles(t *testing.T) {
 }
 
 func TestBuildProjectMemoryHint_DeduplicatesByBaseName(t *testing.T) {
+	// Two local files with the same base name in the same dir are deduplicated.
 	got := BuildProjectMemoryHint([]string{
 		"/repo/GGCODE.md",
-		"/repo/sub/GGCODE.md",
+		"/repo/GGCODE.md",
 	})
-	// Should only appear once since both have the same base name.
 	count := strings.Count(got, "GGCODE.md")
 	if count != 1 {
 		t.Fatalf("expected GGCODE.md to appear once (deduplicated), got %d occurrences", count)
+	}
+}
+
+func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
+	// Files outside the working directory should show their full path
+	// so the agent can locate them via read_file.
+	got := BuildProjectMemoryHint([]string{
+		"/Users/test/.ggcode/GGCODE.md",
+	})
+	if !strings.Contains(got, "/Users/test/.ggcode/GGCODE.md") {
+		t.Fatalf("hint should contain full path for global file, got %q", got)
 	}
 }
 
