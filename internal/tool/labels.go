@@ -1899,10 +1899,7 @@ func describeMultiFileWriteResult(result string) ToolResultPresentation {
 // Result is JSON with a Summary field and per-file Results array.
 func describeMultiFileEditResult(rawArgs, result string) ToolResultPresentation {
 	var data struct {
-		Summary      string `json:"summary"`
-		Applied      bool   `json:"applied"`
-		WrittenFiles int    `json:"writtenFiles"`
-		FailedFiles  int    `json:"failedFiles"`
+		Summary string `json:"summary"`
 	}
 	if json.Unmarshal([]byte(result), &data) == nil && data.Summary != "" {
 		// Count files from rawArgs
