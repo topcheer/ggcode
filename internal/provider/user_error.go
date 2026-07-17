@@ -151,6 +151,33 @@ func UserFacingErrorLang(err error, lang string) string {
 		return "Cannot connect to the API server. Please check your network and Base URL"
 	}
 
+	// ---- Stream finish_reason / stop_reason errors ----
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "finish_reason=length") || strings.Contains(lower, "stop_reason=max_tokens") || strings.Contains(lower, "finish_reason=max_tokens") {
+		if zh {
+			return "回复被截断（超出最大输出长度）。可尝试增加 max_tokens 或缩短问题"
+		}
+		return "Response truncated (max output length reached). Try increasing max_tokens or shortening your prompt"
+	}
+	if strings.Contains(lower, "content_filter") || strings.Contains(lower, "stop_reason=refusal") || strings.Contains(lower, "finish_reason=sensitive") {
+		if zh {
+			return "回复被内容过滤器拦截"
+		}
+		return "Response blocked by content filter"
+	}
+	if strings.Contains(lower, "finish_reason=network_error") {
+		if zh {
+			return "网络错误导致流式传输中断，请输入 /retry 重试"
+		}
+		return "Network error interrupted the stream. Type /retry to resend"
+	}
+	if strings.Contains(lower, "context_window_exceeded") || strings.Contains(lower, "prompt too long: model context window exceeded") {
+		if zh {
+			return "对话内容过长，已超出模型上下文限制。请尝试 /compact 或缩短对话"
+		}
+		return "Conversation too long, exceeds model context limit. Try /compact or start a new session"
+	}
+
 	// ---- Fallback: generic message, strip provider noise ----
 	msg := raw
 	for _, prefix := range []string{

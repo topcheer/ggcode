@@ -48,13 +48,16 @@ func TestWriteFileOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content)
+	// write_file returns an error when overwriting an existing non-empty file,
+	// prompting the agent to use edit_file instead or retry if intentional.
+	if !result.IsError {
+		t.Fatalf("expected overwrite warning error, got success: %s", result.Content)
 	}
 
+	// File should not be modified when overwrite protection triggers.
 	data, _ := os.ReadFile(fp)
-	if string(data) != "new content" {
-		t.Errorf("content mismatch: %q", string(data))
+	if string(data) != "old content" {
+		t.Errorf("file should not be modified during overwrite warning, got %q", string(data))
 	}
 }
 
