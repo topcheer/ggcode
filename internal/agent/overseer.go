@@ -440,8 +440,8 @@ func extractFileHint(toolName string, args []byte) string {
 		end := strings.IndexByte(rest, '"')
 		if end > 0 {
 			hint := rest[:end]
-			if len(hint) > 80 {
-				hint = hint[:77] + "..."
+			if len([]rune(hint)) > 80 {
+				hint = string([]rune(hint)[:77]) + "..."
 			}
 			return hint
 		}

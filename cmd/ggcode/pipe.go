@@ -419,8 +419,8 @@ func runPipeHarness(result *harness.AutoRunResult, prompt string) int {
 	}
 
 	displayPrompt := prompt
-	if len(prompt) > 60 {
-		displayPrompt = prompt[:57] + "..."
+	if len([]rune(prompt)) > 60 {
+		displayPrompt = string([]rune(prompt)[:57]) + "..."
 	}
 	fmt.Fprintf(os.Stderr, "🔀 Harness auto-run: %s\n", displayPrompt)
 

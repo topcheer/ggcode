@@ -402,7 +402,7 @@ func simplifyAndroidClass(class string) string {
 	last := parts[len(parts)-1]
 	last = strings.TrimSuffix(last, "View")
 	last = strings.TrimSuffix(last, "Layout")
-	last = strings.ToLower(last[:1]) + last[1:]
+	last = strings.ToLower(string([]rune(last)[:1])) + string([]rune(last)[1:])
 	return last
 }
 

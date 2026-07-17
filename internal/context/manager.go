@@ -2079,8 +2079,8 @@ func formatToolInputForSummary(input []byte, maxLen int) string {
 		}
 		s := fmt.Sprintf("%v", val)
 		s = strings.ReplaceAll(s, "\n", " ")
-		if len(s) > 80 {
-			s = s[:77] + "..."
+		if len([]rune(s)) > 80 {
+			s = string([]rune(s)[:77]) + "..."
 		}
 		parts = append(parts, fmt.Sprintf("%s=%q", key, s))
 		delete(m, key) // remove so we don't double-report
@@ -2095,8 +2095,8 @@ func formatToolInputForSummary(input []byte, maxLen int) string {
 			continue
 		}
 		s = strings.ReplaceAll(s, "\n", " ")
-		if len(s) > 60 {
-			s = s[:57] + "..."
+		if len([]rune(s)) > 60 {
+			s = string([]rune(s)[:57]) + "..."
 		}
 		if s == "" {
 			continue

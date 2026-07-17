@@ -283,8 +283,8 @@ func (t CronUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		sb.WriteString(fmt.Sprintf("  Next fire: %s\n", job.NextFire.Format("2006-01-02 15:04 MST")))
 	}
 	promptPreview := job.Prompt
-	if len(promptPreview) > 80 {
-		promptPreview = promptPreview[:80] + "..."
+	if len([]rune(promptPreview)) > 80 {
+		promptPreview = string([]rune(promptPreview)[:80]) + "..."
 	}
 	for _, line := range strings.Split(promptPreview, "\n") {
 		if strings.TrimSpace(line) != "" {

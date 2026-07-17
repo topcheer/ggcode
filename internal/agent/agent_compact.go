@@ -315,8 +315,8 @@ func compactErrorReason(err error) string {
 	text = strings.TrimPrefix(text, "summarization call failed: ")
 	text = strings.TrimPrefix(text, "auto-summarize failed: ")
 	text = strings.ReplaceAll(text, "\n", " ")
-	if len(text) > 120 {
-		text = text[:117] + "..."
+	if len([]rune(text)) > 120 {
+		text = string([]rune(text)[:117]) + "..."
 	}
 	return text
 }

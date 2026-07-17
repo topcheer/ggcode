@@ -644,7 +644,7 @@ func maskAPIKey(key string) string {
 	if len(key) <= 8 {
 		return "***"
 	}
-	return key[:3] + "***" + key[len(key)-3:]
+	return string([]rune(key)[:3]) + "***" + string([]rune(key)[len([]rune(key))-3:])
 }
 
 // FetchModelsForEndpoint dynamically discovers models from an API endpoint.

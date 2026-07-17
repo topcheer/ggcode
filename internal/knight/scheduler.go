@@ -1485,8 +1485,8 @@ func formatKnightTaskOutput(output string) string {
 	if output == "" {
 		return "task completed without a report"
 	}
-	if len(output) > 1500 {
-		output = strings.TrimSpace(output[:1500]) + "\n…"
+	if len([]rune(output)) > 1500 {
+		output = strings.TrimSpace(string([]rune(output)[:1500])) + "\n…"
 	}
 	return output
 }

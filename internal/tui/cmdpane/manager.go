@@ -268,8 +268,8 @@ func (m *Manager) WriteHeader(command, description string) {
 		header += fmt.Sprintf("\033[2m# %s\033[0m\n", description)
 	}
 	cmdDisplay := command
-	if len(cmdDisplay) > 500 {
-		cmdDisplay = cmdDisplay[:497] + "..."
+	if len([]rune(cmdDisplay)) > 500 {
+		cmdDisplay = string([]rune(cmdDisplay)[:497]) + "..."
 	}
 	header += fmt.Sprintf("\033[33m$ %s\033[0m\n", cmdDisplay)
 	_, _ = m.logFile.WriteString(header)

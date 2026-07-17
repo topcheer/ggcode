@@ -280,8 +280,8 @@ func defaultTmuxSessionName(workspace string) string {
 	if base == "" {
 		return "ggcode"
 	}
-	if len(base) > 48 {
-		base = base[:48]
+	if len([]rune(base)) > 48 {
+		base = string([]rune(base)[:48])
 		base = strings.TrimRight(base, "-")
 	}
 	return "ggcode-" + base

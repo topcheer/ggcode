@@ -102,8 +102,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		inputText := argStr(args, "input")
 		jobID := argStr(args, "job_id")
 		if inputText != "" {
-			if len(inputText) > 60 {
-				inputText = inputText[:57] + "…"
+			if len([]rune(inputText)) > 60 {
+				inputText = string([]rune(inputText)[:57]) + "…"
 			}
 			detail := "→ " + inputText
 			if jobID != "" {
@@ -192,8 +192,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Sleep", d.String())
 	case "spawn_agent":
 		desc := strings.TrimSpace(argStr(args, "description"))
-		if len(desc) > 60 {
-			desc = desc[:57] + "..."
+		if len([]rune(desc)) > 60 {
+			desc = string([]rune(desc)[:57]) + "..."
 		}
 		if desc == "" {
 			desc = "Spawn Agent"
@@ -335,7 +335,7 @@ func prettifyToolName(name string) string {
 	parts := strings.Split(name, "_")
 	for i, p := range parts {
 		if len(p) > 0 {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+			parts[i] = strings.ToUpper(string([]rune(p)[:1])) + string([]rune(p)[1:])
 		}
 	}
 	return strings.Join(parts, " ")
@@ -766,8 +766,8 @@ func describeLanchatHistoryResult(trimmed string) (ToolResultPresentation, bool)
 	for _, m := range msgs {
 		// Compact content preview: single line, max ~50 chars.
 		preview := compactSingleLine(m.Body)
-		if len(preview) > 50 {
-			preview = preview[:50] + "..."
+		if len([]rune(preview)) > 50 {
+			preview = string([]rune(preview)[:50]) + "..."
 		}
 
 		// Format: "  HH:MM:SS  nick → target   preview..."
@@ -1293,8 +1293,8 @@ func onlyKnownKeys(raw map[string]any, allowed ...string) bool {
 func compactSingleLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 120 {
-		return s[:120] + "..."
+	if len([]rune(s)) > 120 {
+		return string([]rune(s)[:120]) + "..."
 	}
 	return s
 }
@@ -1350,8 +1350,8 @@ func askUserTarget(args map[string]any) string {
 	}
 	// Try to extract a short prompt summary
 	if prompt, ok := args["prompt"].(string); ok && prompt != "" {
-		if len(prompt) > 60 {
-			return prompt[:57] + "…"
+		if len([]rune(prompt)) > 60 {
+			return string([]rune(prompt)[:57]) + "…"
 		}
 		return prompt
 	}
@@ -1361,8 +1361,8 @@ func askUserTarget(args map[string]any) string {
 				return title
 			}
 			if prompt, ok := first["prompt"].(string); ok {
-				if len(prompt) > 60 {
-					return prompt[:57] + "…"
+				if len([]rune(prompt)) > 60 {
+					return string([]rune(prompt)[:57]) + "…"
 				}
 				return prompt
 			}
@@ -1742,8 +1742,8 @@ func extractHTMLTitle(s string) string {
 		return ""
 	}
 	title := strings.TrimSpace(s[start+7 : start+end])
-	if len(title) > 60 {
-		return title[:57] + "..."
+	if len([]rune(title)) > 60 {
+		return string([]rune(title)[:57]) + "..."
 	}
 	return title
 }
@@ -1758,8 +1758,8 @@ func pluralizeEn(n int, word string) string {
 
 func compactPreview(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) > 60 {
-		return s[:57] + "..."
+	if len([]rune(s)) > 60 {
+		return string([]rune(s)[:57]) + "..."
 	}
 	return s
 }

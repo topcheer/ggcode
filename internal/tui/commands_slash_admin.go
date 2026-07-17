@@ -290,7 +290,7 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 			}
 			masked := "****"
 			if len(apiKeyValue) > 8 {
-				masked = apiKeyValue[:4] + strings.Repeat("*", len(apiKeyValue)-8) + apiKeyValue[len(apiKeyValue)-4:]
+				masked = string([]rune(apiKeyValue)[:4]) + strings.Repeat("*", len([]rune(apiKeyValue))-8) + string([]rune(apiKeyValue)[len([]rune(apiKeyValue))-4:])
 			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 API key set for %s: %s", scope, masked))
 			if err := m.reloadActiveProvider(); err != nil {
@@ -975,7 +975,7 @@ func (m *Model) handleConfigAddEndpoint(args []string) tea.Cmd {
 	if apiKey != "" {
 		masked := "****"
 		if len(apiKey) > 8 {
-			masked = apiKey[:4] + strings.Repeat("*", len(apiKey)-8) + apiKey[len(apiKey)-4:]
+			masked = string([]rune(apiKey)[:4]) + strings.Repeat("*", len([]rune(apiKey))-8) + string([]rune(apiKey)[len([]rune(apiKey))-4:])
 		}
 		msg += fmt.Sprintf(", apikey=%s", masked)
 	}

@@ -905,8 +905,8 @@ func shortenPath(path string) string {
 		return path
 	}
 	prefix := dir
-	if len(prefix) > 10 {
-		prefix = prefix[:10]
+	if len([]rune(prefix)) > 10 {
+		prefix = string([]rune(prefix)[:10])
 	}
 	return prefix + ".../" + base
 }

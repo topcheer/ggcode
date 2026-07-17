@@ -1880,8 +1880,8 @@ func messageFingerprint(msg *provider.Message) string {
 			sb.WriteString(c.ToolID)
 			// Cap output in fingerprint to bound memory for large results
 			out := c.Output
-			if len(out) > 200 {
-				out = out[:200]
+			if len([]rune(out)) > 200 {
+				out = string([]rune(out)[:200])
 			}
 			sb.WriteString(out)
 		default:

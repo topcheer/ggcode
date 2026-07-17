@@ -43,10 +43,10 @@ func summarizeDescription(desc string) string {
 	}
 	desc = strings.TrimSpace(desc)
 	// If still too long (>80 chars), don't show it
-	if len(desc) > 80 {
+	if len([]rune(desc)) > 80 {
 		// Try to truncate at last space before 80
-		if idx := strings.LastIndexByte(desc[:80], ' '); idx > 40 {
-			desc = desc[:idx] + "..."
+		if idx := strings.LastIndexByte(string([]rune(desc)[:80]), ' '); idx > 40 {
+			desc = string([]rune(desc)[:idx]) + "..."
 		} else {
 			return ""
 		}

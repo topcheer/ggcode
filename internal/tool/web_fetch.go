@@ -150,8 +150,8 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		}
 		errText := stripHTML(string(errBody))
 		// Truncate non-200 response bodies to keep context usage minimal
-		if len(errText) > 2000 {
-			errText = errText[:2000] + "\n... [error body truncated]"
+		if len([]rune(errText)) > 2000 {
+			errText = string([]rune(errText)[:2000]) + "\n... [error body truncated]"
 		}
 		finalURL := resp.Request.URL.String()
 		msg := fmt.Sprintf("HTTP %d: %s\nFinal URL: %s", resp.StatusCode, resp.Status, finalURL)
@@ -167,8 +167,8 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	text := stripHTML(string(body))
-	if len(text) > 50000 {
-		text = text[:50000] + "\n... [truncated]"
+	if len([]rune(text)) > 50000 {
+		text = string([]rune(text)[:50000]) + "\n... [truncated]"
 	}
 
 	// Include final URL if redirected (helpful for shortened URLs, etc.)

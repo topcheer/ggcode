@@ -266,10 +266,10 @@ func isPromotionIgnoredPath(path string) bool {
 
 func truncatePromotionMessage(goal string) string {
 	goal = strings.TrimSpace(goal)
-	if len(goal) <= 72 {
+	if len([]rune(goal)) <= 72 {
 		return goal
 	}
-	return strings.TrimSpace(goal[:72])
+	return strings.TrimSpace(string([]rune(goal)[:72]))
 }
 
 func FormatPromotionList(tasks []*Task) string {

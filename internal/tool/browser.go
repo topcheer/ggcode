@@ -564,8 +564,8 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 			sb.WriteString("]")
 			if r["text"] != "" {
 				text := r["text"]
-				if len(text) > 200 {
-					text = text[:197] + "..."
+				if len([]rune(text)) > 200 {
+					text = string([]rune(text)[:197]) + "..."
 				}
 				sb.WriteString(" " + text)
 			}
@@ -631,8 +631,8 @@ func (b *Browser) doEvaluate(ctx context.Context, profile, session, expression s
 	}
 
 	resultStr := formatJSResult(result)
-	if len(resultStr) > 50000 {
-		resultStr = resultStr[:50000] + "\n... [truncated]"
+	if len([]rune(resultStr)) > 50000 {
+		resultStr = string([]rune(resultStr)[:50000]) + "\n... [truncated]"
 	}
 	return Result{Content: fmt.Sprintf("Result:\n%s", resultStr)}, nil
 }
@@ -693,8 +693,8 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 		if text == "" {
 			text = "(no text)"
 		}
-		if len(text) > 80 {
-			text = text[:77] + "..."
+		if len([]rune(text)) > 80 {
+			text = string([]rune(text)[:77]) + "..."
 		}
 		sb.WriteString(fmt.Sprintf("  %d. %s\n     → %s\n", i+1, text, l.Href))
 	}

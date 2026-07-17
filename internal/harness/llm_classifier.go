@@ -61,8 +61,8 @@ func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) 
 	}
 
 	// Truncate very long inputs to control cost
-	if len(input) > 2000 {
-		input = input[:2000]
+	if len([]rune(input)) > 2000 {
+		input = string([]rune(input)[:2000])
 	}
 
 	userPrompt := fmt.Sprintf("User input: %q", input)

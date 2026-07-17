@@ -411,8 +411,8 @@ func (t *Iterm2Tool) executeInput(sessionID, text string) Result {
 		label = "current session"
 	}
 	preview := text
-	if len(preview) > 100 {
-		preview = preview[:100] + "..."
+	if len([]rune(preview)) > 100 {
+		preview = string([]rune(preview)[:100]) + "..."
 	}
 	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s", label, preview)}
 }
@@ -670,8 +670,8 @@ func (t *Iterm2Tool) executeBadge(sessionID, badgeText string) Result {
 	}
 
 	preview := badgeText
-	if len(preview) > 60 {
-		preview = preview[:57] + "..."
+	if len([]rune(preview)) > 60 {
+		preview = string([]rune(preview)[:57]) + "..."
 	}
 	return Result{Content: fmt.Sprintf("iterm2 badge set: %s", preview)}
 }

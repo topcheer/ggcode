@@ -198,7 +198,7 @@ func (t *LanChatTool) displayName(nodeID string) string {
 	}
 	// Node not in participants list — show a short prefix instead of the full long ID
 	if len(nodeID) > 16 {
-		return nodeID[:16] + "..."
+		return string([]rune(nodeID)[:16]) + "..."
 	}
 	return nodeID
 }

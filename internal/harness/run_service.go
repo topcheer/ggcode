@@ -179,8 +179,8 @@ func shortNoteSuggestion(task *Task) string {
 		return "--note \"lgtm\""
 	}
 	goal := task.Goal
-	if len(goal) > 40 {
-		goal = goal[:37] + "..."
+	if len([]rune(goal)) > 40 {
+		goal = string([]rune(goal)[:37]) + "..."
 	}
 	return fmt.Sprintf("--note \"approved: %s\"", goal)
 }

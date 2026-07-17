@@ -47,8 +47,8 @@ func sanitizeCandidateName(raw string) string {
 	s = nameAllowedRune.ReplaceAllString(s, "-")
 	s = nameMultiDash.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
-	if len(s) > 60 {
-		s = strings.Trim(s[:60], "-")
+	if len([]rune(s)) > 60 {
+		s = strings.Trim(string([]rune(s)[:60]), "-")
 	}
 	return s
 }

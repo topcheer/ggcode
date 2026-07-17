@@ -330,8 +330,8 @@ func (k *KittyTool) executeInput(windowID int, text string) Result {
 		label = "current window"
 	}
 	preview := text
-	if len(preview) > 100 {
-		preview = preview[:100] + "..."
+	if len([]rune(preview)) > 100 {
+		preview = string([]rune(preview)[:100]) + "..."
 	}
 	return Result{Content: fmt.Sprintf("kitty input sent to %s: %s", label, preview)}
 }
@@ -592,8 +592,8 @@ func (k *KittyTool) executeGetText(windowID int) Result {
 	}
 
 	// Truncate very long output for readability
-	if len(out) > 5000 {
-		out = out[:5000] + "\n... (truncated, use list to get window IDs)"
+	if len([]rune(out)) > 5000 {
+		out = string([]rune(out)[:5000]) + "\n... (truncated, use list to get window IDs)"
 	}
 
 	return Result{Content: fmt.Sprintf("kitty screen text from %s:\n%s", label, out)}

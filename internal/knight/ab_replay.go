@@ -76,8 +76,8 @@ func computeABReplayScore(candidate *SkillEntry, candidateBody string, baselineB
 			break
 		}
 		task := s.task
-		if len(task) > 160 {
-			task = task[:160] + "..."
+		if len([]rune(task)) > 160 {
+			task = string([]rune(task)[:160]) + "..."
 		}
 		res.TopMatchedTasks = append(res.TopMatchedTasks, task)
 	}

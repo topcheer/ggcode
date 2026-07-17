@@ -1018,7 +1018,7 @@ func maskPlaintext(s string) string {
 	if len(s) <= 8 {
 		return "****"
 	}
-	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
+	return string([]rune(s)[:4]) + strings.Repeat("*", len([]rune(s))-8) + string([]rune(s)[len([]rune(s))-4:])
 }
 
 func redactMCPServer(srv config.MCPServerConfig) config.MCPServerConfig {

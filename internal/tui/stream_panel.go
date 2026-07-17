@@ -468,7 +468,7 @@ func (m *Model) renderStreamPanelRight(w int) string {
 			masked := "not set"
 			if t.Key != "" {
 				if len(t.Key) > 8 {
-					masked = t.Key[:4] + "..." + t.Key[len(t.Key)-4:]
+					masked = string([]rune(t.Key)[:4]) + "..." + string([]rune(t.Key)[len([]rune(t.Key))-4:])
 				} else {
 					masked = "****"
 				}

@@ -698,8 +698,8 @@ func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, captio
 	}
 	if caption != "" {
 		cap := caption
-		if len(cap) > 1024 {
-			cap = cap[:1024]
+		if len([]rune(cap)) > 1024 {
+			cap = string([]rune(cap)[:1024])
 		}
 		if a.parseMode == "" {
 			msg := tgmd.Convert(cap)
@@ -749,8 +749,8 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 
 	if caption != "" {
 		cap := caption
-		if len(cap) > 1024 {
-			cap = cap[:1024]
+		if len([]rune(cap)) > 1024 {
+			cap = string([]rune(cap)[:1024])
 		}
 		if a.parseMode == "" {
 			msg := tgmd.Convert(cap)

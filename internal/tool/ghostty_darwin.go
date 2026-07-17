@@ -404,8 +404,8 @@ end tell`, escapeAS(text), spec)
 		label = "current terminal"
 	}
 	preview := text
-	if len(preview) > 100 {
-		preview = preview[:100] + "..."
+	if len([]rune(preview)) > 100 {
+		preview = string([]rune(preview)[:100]) + "..."
 	}
 	return Result{Content: fmt.Sprintf("ghostty input sent to %s: %s", label, preview)}
 }

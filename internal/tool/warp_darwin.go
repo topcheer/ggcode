@@ -72,8 +72,8 @@ func (w *WarpTool) executeInput(text string) Result {
 	}
 	w.sendKeys(text)
 	preview := text
-	if len(preview) > 60 {
-		preview = preview[:60] + "..."
+	if len([]rune(preview)) > 60 {
+		preview = string([]rune(preview)[:60]) + "..."
 	}
 	return Result{Content: fmt.Sprintf("warp: input sent: %s", preview)}
 }

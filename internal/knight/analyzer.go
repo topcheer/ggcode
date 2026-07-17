@@ -455,8 +455,8 @@ func (sa *SessionAnalyzer) CollectProjectConventions() string {
 			continue
 		}
 		content := string(data)
-		if len(content) > 2000 {
-			content = content[:2000] + "\n... (truncated)"
+		if len([]rune(content)) > 2000 {
+			content = string([]rune(content)[:2000]) + "\n... (truncated)"
 		}
 		conventions = append(conventions, fmt.Sprintf("=== %s ===\n%s", f, content))
 	}

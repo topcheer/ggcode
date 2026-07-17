@@ -908,7 +908,7 @@ func maskSecret(s string) string {
 	if len(s) <= 8 {
 		return "****"
 	}
-	return s[:4] + strings.Repeat("*", len(s)-4)
+	return string([]rune(s)[:4]) + strings.Repeat("*", len([]rune(s))-4)
 }
 
 func sortedKeys(m map[string]interface{}) []string {

@@ -960,7 +960,7 @@ func redactSecret(value string) string {
 	if len(value) <= 8 {
 		return "[redacted]"
 	}
-	return value[:4] + "..." + value[len(value)-4:]
+	return string([]rune(value)[:4]) + "..." + string([]rune(value)[len([]rune(value))-4:])
 }
 
 // TriggerTyping adds a thumbs-up reaction to the latest inbound message,

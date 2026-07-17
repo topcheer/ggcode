@@ -1491,7 +1491,7 @@ func daemonToolDisplayName(toolName, rawArgs string) string {
 		if part == "" {
 			continue
 		}
-		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+		parts[i] = strings.ToUpper(string([]rune(part)[:1])) + string([]rune(part)[1:])
 	}
 	return strings.Join(parts, " ")
 }
