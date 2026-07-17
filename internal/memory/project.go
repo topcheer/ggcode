@@ -101,7 +101,10 @@ func globalProjectMemoryFiles() []string {
 	globalDir := config.HomeDir()
 	var files []string
 	for _, name := range ProjectMemoryFilenames {
-		files = append(files, filepath.Join(globalDir, ".ggcode", name))
+		path := filepath.Join(globalDir, ".ggcode", name)
+		if _, err := os.Stat(path); err == nil {
+			files = append(files, path)
+		}
 	}
 	return files
 }
