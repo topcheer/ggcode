@@ -326,3 +326,39 @@ func resetInMemoryModelDiscoveryCache() {
 	modelDiscoveryCacheLoaded = false
 	modelDiscoveryCache = map[string]modelDiscoveryCacheEntry{}
 }
+
+// TestDiscoverModelsExpandsEnvRefKey reproduces the bug where a freshly-added
+// endpoint's API key is stored as an env reference (e.g. ${ZAI_TEEE_API_KEY})
+// and DiscoverModels rejected it with "no API key configured" because the
+// reference was never expanded. DiscoverModels must expand ${VAR} references
+// against the process environment before validating the key.
+func TestDiscoverModelsExpandsEnvRefKey(t *testing.T) {
+	resetModelDiscoveryCacheForTests(t)
+	const envVar = "ZAI_TEEE_API_KEY"
+	os.Unsetenv(envVar)
+	os.Setenv(envVar, "sk-real-from-env")
+	defer os.Unsetenv(envVar)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-real-from-env" {
+			t.Errorf("expected bearer sk-real-from-env, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"},{"id":"model-b"}]}`))
+	}))
+	defer server.Close()
+
+	models, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
+		VendorID:   "zai",
+		EndpointID: "teee",
+		Protocol:   "openai",
+		BaseURL:    server.URL + "/v1",
+		APIKey:     "${" + envVar + "}", // raw env ref, not pre-expanded
+	})
+	if err != nil {
+		t.Fatalf("DiscoverModels should expand the env ref and succeed, got: %v", err)
+	}
+	if len(models) != 2 {
+		t.Errorf("expected 2 models, got %d: %v", len(models), models)
+	}
+}

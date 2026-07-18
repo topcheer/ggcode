@@ -50,6 +50,10 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 	if resolved == nil {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
+	// Expand ${VAR} references in the API key so a freshly-saved key (stored as
+	// an env reference like ${ZAI_TEEE_API_KEY}) resolves to its real value here,
+	// matching how ResolveActiveEndpoint resolves keys for normal requests.
+	resolved.APIKey = config.ExpandEnv(resolved.APIKey)
 	if !hasUsableAPIKey(resolved.APIKey) && !isLocalBaseURL(resolved.BaseURL) {
 		return nil, fmt.Errorf("endpoint %q has no API key configured", resolved.EndpointID)
 	}

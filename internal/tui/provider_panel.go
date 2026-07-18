@@ -1184,7 +1184,10 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 				EndpointID: endpointID,
 				Protocol:   endpoint.Protocol,
 				BaseURL:    endpoint.BaseURL,
-				APIKey:     resolveAPIKey(endpoint.APIKey, vc.APIKey),
+				// Expand ${VAR} references so the actual key value (set via
+				// os.Setenv when the user saved it) is used for discovery,
+				// not the raw "${...}" reference string.
+				APIKey: config.ExpandEnv(resolveAPIKey(endpoint.APIKey, vc.APIKey)),
 			}
 		}
 
