@@ -91,7 +91,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		"action": {
 			"type": "string",
 			"description": "Browser action to perform.",
-			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status"]
+			"enum": ["navigate", "click", "type", "extract", "screenshot", "evaluate", "wait", "links", "scroll", "back", "content", "close", "status", "select", "hover", "press"]
 		},
 		"url": {
 			"type": "string",
@@ -112,6 +112,14 @@ func (b *Browser) Parameters() json.RawMessage {
 		"text": {
 			"type": "string",
 			"description": "Text to type into the selected element (for 'type' action). For form fields, clears existing content first."
+		},
+		"value": {
+			"type": "string",
+			"description": "Value to select in a dropdown (for 'select' action). Matches by option value or visible text."
+		},
+		"key": {
+			"type": "string",
+			"description": "Key to press (for 'press' action). Supports: Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Space, or a single character."
 		},
 		"expression": {
 			"type": "string",
@@ -146,6 +154,8 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		Session     string `json:"session"`
 		Selector    string `json:"selector"`
 		Text        string `json:"text"`
+		Value       string `json:"value"`
+		Key         string `json:"key"`
 		Expression  string `json:"expression"`
 		WaitFor     string `json:"wait_for"`
 		WaitTimeout int    `json:"wait_timeout"`
@@ -204,6 +214,24 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	case "links":
 		return b.doLinks(ctx, args.Profile, args.Session, args.Headless)
+
+	case "select":
+		if args.Selector == "" {
+			return Result{IsError: true, Content: "selector is required for select action"}, nil
+		}
+		return b.doSelect(ctx, args.Profile, args.Session, args.Selector, args.Value, args.WaitFor, args.WaitTimeout, args.Headless)
+
+	case "hover":
+		if args.Selector == "" {
+			return Result{IsError: true, Content: "selector is required for hover action"}, nil
+		}
+		return b.doHover(ctx, args.Profile, args.Session, args.Selector, args.Headless)
+
+	case "press":
+		if args.Key == "" {
+			return Result{IsError: true, Content: "key is required for press action"}, nil
+		}
+		return b.doPress(ctx, args.Profile, args.Session, args.Key, args.Headless)
 
 	case "scroll":
 		return b.doScroll(ctx, args.Profile, args.Session, args.Selector, args.Headless)
@@ -679,7 +707,9 @@ func (b *Browser) doLinks(ctx context.Context, profile, session string, headless
 
 	var sb strings.Builder
 	var currentURL string
-	_ = chromedp.Run(tab.ctx, chromedp.Location(&currentURL))
+	locCtx, locCancel := context.WithTimeout(tab.ctx, 5*time.Second)
+	_ = chromedp.Run(locCtx, chromedp.Location(&currentURL))
+	locCancel()
 	sb.WriteString(fmt.Sprintf("Links on %s (%d total):\n\n", currentURL, len(links)))
 	for i, l := range links {
 		if i >= 200 {
@@ -799,10 +829,12 @@ func (b *Browser) doStatus() (Result, error) {
 		for sessID, tab := range p.tabs {
 			var url, title string
 			if tab.ctx.Err() == nil {
-				_ = chromedp.Run(tab.ctx,
+				statusCtx, statusCancel := context.WithTimeout(tab.ctx, 5*time.Second)
+				_ = chromedp.Run(statusCtx,
 					chromedp.Location(&url),
 					chromedp.Title(&title),
 				)
+				statusCancel()
 			}
 			status := "active"
 			if tab.ctx.Err() != nil {
@@ -876,6 +908,161 @@ func formatJSResult(result interface{}) string {
 		data, _ := json.MarshalIndent(result, "", "  ")
 		return string(data)
 	}
+}
+
+// doSelect selects an option in a <select> dropdown element.
+func (b *Browser) doSelect(ctx context.Context, profile, session, selector, value, waitFor string, waitTimeout int, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
+	defer cancel()
+
+	actions := []chromedp.Action{
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+	}
+
+	// Try to set the value via JS — this handles both value and visible text matching
+	js := fmt.Sprintf(`(() => {
+		const sel = document.querySelector(%q);
+		if (!sel) return { ok: false, error: 'element not found' };
+		for (const opt of sel.options) {
+			if (opt.value === %q || opt.text.trim() === %q) {
+				sel.value = opt.value;
+				opt.selected = true;
+				sel.dispatchEvent(new Event('change', { bubbles: true }));
+				return { ok: true, value: opt.value, text: opt.text.trim() };
+			}
+		}
+		return { ok: false, error: 'option not found', available: Array.from(sel.options).map(o => o.value + ':' + o.text.trim()) };
+	})()`, selector, value, value)
+
+	var selResult map[string]interface{}
+	actions = append(actions, chromedp.Evaluate(js, &selResult))
+	if waitFor != "" {
+		actions = append(actions, chromedp.WaitVisible(waitFor, chromedp.ByQuery))
+	}
+
+	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("select failed: %v", err)}, nil
+	}
+
+	if ok, _ := selResult["ok"].(bool); !ok {
+		errMsg, _ := selResult["error"].(string)
+		if avail, ok := selResult["available"].([]interface{}); ok && len(avail) > 0 {
+			var opts []string
+			for _, a := range avail {
+				opts = append(opts, fmt.Sprintf("  - %v", a))
+			}
+			return Result{IsError: true, Content: fmt.Sprintf("select failed: %s. Available options:\n%s", errMsg, strings.Join(opts, "\n"))}, nil
+		}
+		return Result{IsError: true, Content: fmt.Sprintf("select failed: %s", errMsg)}, nil
+	}
+
+	selectedText, _ := selResult["text"].(string)
+	return Result{Content: fmt.Sprintf("Selected '%s' (%s) in %s", value, selectedText, selector)}, nil
+}
+
+// doHover hovers over an element to trigger menus, tooltips, etc.
+func (b *Browser) doHover(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 15*time.Second)
+	defer cancel()
+
+	// Use chromedp.EmulateHover via JS dispatchEvent for reliability
+	js := fmt.Sprintf(`(() => {
+		const el = document.querySelector(%q);
+		if (!el) return false;
+		el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+		el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+		el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+		return true;
+	})()`, selector)
+
+	actions := []chromedp.Action{
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.Evaluate(js, nil),
+	}
+
+	if err := chromedp.Run(timeoutCtx, actions...); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("hover failed: %v", err)}, nil
+	}
+
+	return Result{Content: fmt.Sprintf("Hovered over: %s", selector)}, nil
+}
+
+// doPress simulates a keyboard key press on the focused element or the page.
+func (b *Browser) doPress(ctx context.Context, profile, session, key string, headless *bool) (Result, error) {
+	tab, err := b.getSession(profile, session, headless)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(tab.ctx, 10*time.Second)
+	defer cancel()
+
+	// Map common key names to CDP key values
+	keyMap := map[string]string{
+		"enter":      "\r",
+		"tab":        "\t",
+		"escape":     "\x1b",
+		"backspace":  "\x08",
+		"space":      " ",
+		"arrowup":    "\ue003", // chromedp doesn't use these, but we keep for reference
+		"arrowdown":  "\ue004",
+		"arrowleft":  "\ue005",
+		"arrowright": "\ue006",
+	}
+
+	lowerKey := strings.ToLower(key)
+	var cdpKey string
+	if mapped, ok := keyMap[lowerKey]; ok {
+		cdpKey = mapped
+	} else if len(key) == 1 {
+		cdpKey = key
+	} else {
+		// For named special keys not in the simple map, use chromedp.KeyEvent
+		// which dispatches via Input.dispatchKeyEvent for proper key codes.
+		var keyEvent chromedp.Action
+		switch lowerKey {
+		case "arrowup":
+			keyEvent = chromedp.KeyEvent("ArrowUp")
+		case "arrowdown":
+			keyEvent = chromedp.KeyEvent("ArrowDown")
+		case "arrowleft":
+			keyEvent = chromedp.KeyEvent("ArrowLeft")
+		case "arrowright":
+			keyEvent = chromedp.KeyEvent("ArrowRight")
+		case "delete":
+			keyEvent = chromedp.KeyEvent("Delete")
+		case "home":
+			keyEvent = chromedp.KeyEvent("Home")
+		case "end":
+			keyEvent = chromedp.KeyEvent("End")
+		case "pageup":
+			keyEvent = chromedp.KeyEvent("PageUp")
+		case "pagedown":
+			keyEvent = chromedp.KeyEvent("PageDown")
+		default:
+			return Result{IsError: true, Content: fmt.Sprintf("unsupported key: %s (supported: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, or single characters)", key)}, nil
+		}
+		if err := chromedp.Run(timeoutCtx, keyEvent); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("key press failed: %v", err)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Pressed key: %s", key)}, nil
+	}
+
+	if err := chromedp.Run(timeoutCtx, chromedp.SendKeys("", cdpKey)); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("key press failed: %v", err)}, nil
+	}
+
+	return Result{Content: fmt.Sprintf("Pressed key: %s", key)}, nil
 }
 
 // findChromeUserDataDir locates the system Chrome user data directory.
